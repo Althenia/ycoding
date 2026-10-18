@@ -1,4 +1,4 @@
-export const CONTRACT_DIGEST = "0fe958beeab10d225c6c64e56607fbe03ebc2a881dae3f1b1f9f0c27341b58da"
+export const CONTRACT_DIGEST = "bfc16bca1c5be5cf8c7fb25589400ff50396a54eba3c70f75444c8ab16c6cedc"
 export const messages = {
   "ycoding.v5.Empty": {
     oneofs: 0,
@@ -1141,6 +1141,7 @@ export const messages = {
         required: false,
         repeated: false,
         target: "ycoding.v5.IdentifierList",
+        maxCount: 500,
       },
     ],
   },
@@ -4257,19 +4258,6 @@ export const messages = {
         repeated: false,
         target: "ycoding.v5.Shell_Info_time",
       },
-      {
-        tag: 12,
-        name: "queuePosition",
-        type: 4,
-        required: false,
-        repeated: false,
-        target: "",
-        constraints: {
-          integerMin: "1",
-          integerMax: "9007199254740991",
-          domainObligations: ["packages/schema/src/shell.ts#Shell.Info"],
-        },
-      },
     ],
   },
   "ycoding.v5.Shell_Info_metadata": {
@@ -4323,17 +4311,6 @@ export const messages = {
       {
         tag: 2,
         name: "completed",
-        type: 1,
-        required: false,
-        repeated: false,
-        target: "",
-        constraints: {
-          domainObligations: ["packages/schema/src/shell.ts#Shell.Info"],
-        },
-      },
-      {
-        tag: 3,
-        name: "queued",
         type: 1,
         required: false,
         repeated: false,
@@ -37514,6 +37491,14 @@ export const messages = {
         repeated: false,
         target: "ycoding.v5.session_status_Result_failed",
       },
+      {
+        tag: 5,
+        name: "lost",
+        type: 11,
+        required: false,
+        repeated: false,
+        target: "ycoding.v5.session_status_Result_lost",
+      },
     ],
   },
   "ycoding.v5.session_status_Result_running": {
@@ -37571,6 +37556,24 @@ export const messages = {
     ],
   },
   "ycoding.v5.session_status_Result_failed": {
+    oneofs: 0,
+    fields: [
+      {
+        tag: 1,
+        name: "items",
+        type: 11,
+        required: false,
+        repeated: true,
+        target: "ycoding.v5.LosslessString",
+        constraints: {
+          utf16Min: 0,
+          utf16Max: 9007199254740991,
+          domainObligations: ["packages/cli/src/remote-operations.ts#run"],
+        },
+      },
+    ],
+  },
+  "ycoding.v5.session_status_Result_lost": {
     oneofs: 0,
     fields: [
       {
@@ -42812,124 +42815,6 @@ export const messages = {
       },
     ],
   },
-  "ycoding.v5.PublicEvent_shell_updated": {
-    oneofs: 0,
-    fields: [
-      {
-        tag: 1,
-        name: "id",
-        type: 11,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.LosslessString",
-        constraints: {
-          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
-        },
-      },
-      {
-        tag: 2,
-        name: "created",
-        type: 1,
-        required: true,
-        repeated: false,
-        target: "",
-        constraints: {
-          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
-        },
-      },
-      {
-        tag: 3,
-        name: "metadata",
-        type: 11,
-        required: false,
-        repeated: false,
-        target: "ycoding.v5.PublicEvent_shell_updated_metadata",
-      },
-      {
-        tag: 4,
-        name: "sourceEpoch",
-        type: 11,
-        required: false,
-        repeated: false,
-        target: "ycoding.v5.LosslessString",
-        constraints: {
-          utf16Min: 1,
-          domainObligations: ["packages/schema/src/event-manifest.ts#ServerDefinitions"],
-        },
-      },
-      {
-        tag: 5,
-        name: "type",
-        type: 14,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.PublicEvent_shell_updated_type",
-      },
-      {
-        tag: 6,
-        name: "location",
-        type: 11,
-        required: false,
-        repeated: false,
-        target: "ycoding.v5.Location_Ref",
-      },
-      {
-        tag: 7,
-        name: "data",
-        type: 11,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.PublicEvent_shell_updated_data",
-      },
-    ],
-  },
-  "ycoding.v5.PublicEvent_shell_updated_metadata": {
-    oneofs: 0,
-    fields: [
-      {
-        tag: 1,
-        name: "entries",
-        type: 11,
-        required: false,
-        repeated: true,
-        target: "ycoding.v5.PublicEvent_shell_updated_metadataEntry",
-      },
-    ],
-  },
-  "ycoding.v5.PublicEvent_shell_updated_metadataEntry": {
-    oneofs: 0,
-    fields: [
-      {
-        tag: 1,
-        name: "key",
-        type: 11,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.LosslessString",
-      },
-      {
-        tag: 2,
-        name: "value",
-        type: 11,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.Value",
-      },
-    ],
-  },
-  "ycoding.v5.PublicEvent_shell_updated_data": {
-    oneofs: 0,
-    fields: [
-      {
-        tag: 1,
-        name: "info",
-        type: 11,
-        required: true,
-        repeated: false,
-        target: "ycoding.v5.Shell_Info",
-      },
-    ],
-  },
   "ycoding.v5.PublicEvent_shell_exited": {
     oneofs: 0,
     fields: [
@@ -47060,15 +46945,6 @@ export const messages = {
         required: false,
         repeated: false,
         target: "ycoding.v5.PublicEvent_shell_created",
-        group: 0,
-      },
-      {
-        tag: 116,
-        name: "shell_updated",
-        type: 11,
-        required: false,
-        repeated: false,
-        target: "ycoding.v5.PublicEvent_shell_updated",
         group: 0,
       },
       {
@@ -64849,7 +64725,7 @@ export const enums = {
     1048576, 524288, 1048576, 131072, 32, 16384, 30000, 1048576, 33554432, 64, 2, 32, 64, 120, 500, 10000, 500, 262144,
     20971520, 41943040, 64, 600000,
   ],
-  "ycoding.v5.CollectionLimit": [500, 500, 500, 500, 500, 200, 64, 100, 100, 100],
+  "ycoding.v5.CollectionLimit": [500, 500, 500, 500, 500, 500, 200, 64, 100, 100, 100],
   "ycoding.v5.CodePointLimit": [120, 120, 120, 120],
   "ycoding.v5.TextPredicate": [1, 2, 4],
   "ycoding.v5.FieldTextPolicy": [7, 7, 7, 7],
@@ -64895,7 +64771,7 @@ export const enums = {
   "ycoding.v5.Pty_status": [1, 2],
   "ycoding.v5.Pty_exitReason": [1, 2, 3],
   "ycoding.v5.Pty_control_owner": [1, 2, 3],
-  "ycoding.v5.Shell_Info_status": [1, 2, 3, 4, 5, 6],
+  "ycoding.v5.Shell_Info_status": [1, 2, 3, 4, 5],
   "ycoding.v5.FileDiff_Info_status": [1, 2, 3],
   "ycoding.v5.Form_When_op": [1, 2],
   "ycoding.v5.Form_StringField_type": [1],
@@ -64936,7 +64812,7 @@ export const enums = {
   "ycoding.v5.Session_Message_Skill_type": [1],
   "ycoding.v5.Session_Message_SkillDeactivation_reason": [1],
   "ycoding.v5.Session_Message_Shell_type": [1],
-  "ycoding.v5.Session_Message_Shell_status": [1, 2, 3, 4, 5, 6],
+  "ycoding.v5.Session_Message_Shell_status": [1, 2, 3, 4, 5],
   "ycoding.v5.Session_Message_Assistant_type": [1],
   "ycoding.v5.Session_Message_Assistant_Text_type": [1],
   "ycoding.v5.Session_Message_Assistant_Text_phase": [1, 2],
@@ -65200,9 +65076,8 @@ export const enums = {
   "ycoding.v5.PublicEvent_pty_exited_data_reason": [1, 2],
   "ycoding.v5.PublicEvent_pty_deleted_type": [1],
   "ycoding.v5.PublicEvent_shell_created_type": [1],
-  "ycoding.v5.PublicEvent_shell_updated_type": [1],
   "ycoding.v5.PublicEvent_shell_exited_type": [1],
-  "ycoding.v5.PublicEvent_shell_exited_data_status": [1, 2, 3, 4, 5, 6],
+  "ycoding.v5.PublicEvent_shell_exited_data_status": [1, 2, 3, 4, 5],
   "ycoding.v5.PublicEvent_shell_deleted_type": [1],
   "ycoding.v5.PublicEvent_question_asked_type": [1],
   "ycoding.v5.PublicEvent_question_replied_type": [1],

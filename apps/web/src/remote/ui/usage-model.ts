@@ -156,8 +156,9 @@ export function modelIdentity(
   if (model)
     return {
       providerID: model.providerID,
-      provider: providerHeading(providers.find((item) => item.providerID === model.providerID) ?? { label: model.providerID })
-        .name,
+      provider: providerHeading(
+        providers.find((item) => item.providerID === model.providerID) ?? { label: model.providerID },
+      ).name,
       model: `${model.id}${model.variant ? ` · selected effort ${model.variant}` : ""}${model.profile ? ` · profile ${model.profile}` : ""}`,
     }
   const parts = key.split("/")
@@ -223,7 +224,8 @@ export function providerDistribution(
     const current = grouped.get(providerID)
     grouped.set(providerID, {
       value: (current?.value ?? 0) + value,
-      cost: current?.cost === undefined && price.cost === undefined ? undefined : (current?.cost ?? 0) + (price.cost ?? 0),
+      cost:
+        current?.cost === undefined && price.cost === undefined ? undefined : (current?.cost ?? 0) + (price.cost ?? 0),
       costCoverage:
         current === undefined
           ? price.costCoverage
@@ -364,7 +366,8 @@ export function quotaWindow(window: UsageWindow, now: number) {
           : seconds >= 3600
             ? `Resets in ${Math.ceil(seconds / 3600)} ${Math.ceil(seconds / 3600) === 1 ? "hour" : "hours"}`
             : `Resets in ${Math.ceil(seconds / 60)} ${Math.ceil(seconds / 60) === 1 ? "minute" : "minutes"}`
-  return { used, limit, remaining, fill, pace, reset }
+  const exhausted = window.unlimited !== true && ((fill !== undefined && fill >= 100) || window.remaining === 0)
+  return { used, limit, remaining, fill, pace, reset, exhausted }
 }
 
 export type Spend = {

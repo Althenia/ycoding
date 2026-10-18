@@ -2,6 +2,7 @@ export * as QuestionTool from "./question"
 
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { ToolFailure } from "@ycoding-ai/ai"
+import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { Effect, Schema } from "effect"
 import { Form } from "../form"
 import { Permission } from "../permission"
@@ -30,7 +31,13 @@ export const Input = Schema.Struct({
   questions: Schema.NonEmptyArray(Question.Prompt).annotate({ description: "Questions to ask" }),
 })
 
-export const Output = Schema.Struct({ answers: Schema.Array(Question.Answer) })
+export const Output = Schema.Struct({
+  answers: Schema.Array(Question.Answer),
+  automatic: Schema.Literal(true).pipe(Schema.optional),
+  timedOutAfterSeconds: Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.optional),
+  deferredItemID: SessionReview.ID.pipe(Schema.optional),
+  reviewFull: Schema.Literal(true).pipe(Schema.optional),
+})
 export type Output = typeof Output.Type
 
 export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("QuestionTool.CancelledError", {}) {
@@ -42,10 +49,25 @@ export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("Q
 export const toModelOutput = (
   questions: ReadonlyArray<Question.Prompt>,
   answers: ReadonlyArray<Question.Answer>,
+  timedOutAfterSeconds?: number,
+  deferredItemID?: string,
+  reviewFull?: boolean,
+  automatic?: true,
 ) => {
-  const formatted = questions.map((question, index) =>
-    `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
-  ).join(", ")
+  if (reviewFull)
+    return "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains."
+  if (deferredItemID !== undefined)
+    return `The user is asleep. These questions were added to the user's review box as item ${deferredItemID}; the answer will arrive later as a user message. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.`
+  if (timedOutAfterSeconds !== undefined)
+    return `No answer arrived within ${timedOutAfterSeconds} seconds, so the questions were closed without a user answer. Proceed using your own best judgment.`
+  const formatted = questions
+    .map(
+      (question, index) =>
+        `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
+    )
+    .join(", ")
+  if (automatic)
+    return `Answers were selected automatically, not provided or approved by the user: ${formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
 }
 
@@ -54,49 +76,95 @@ export const Plugin = {
   effect: Effect.fn("QuestionTool.Plugin")(function* (ctx: PluginContext) {
     const forms = yield* Form.Service
     const permission = yield* Permission.Service
-    yield* ctx.tool.transform((draft) => draft.add(name, Tool.make({
-      description,
-      input: Input,
-      output: Output,
-      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers) }],
-      execute: (input, context) => permission.assert({
-        action: "question", resources: ["*"], sessionID: context.sessionID, agent: context.agent,
-        source: { type: "tool", messageID: context.messageID, callID: context.callID },
-      }).pipe(
-        Effect.mapError((error) => new ToolFailure({ message: "Permission denied: question", error })),
-        Effect.andThen(forms.ask({
-          sessionID: context.sessionID,
-          title: "Questions",
-          metadata: { kind: "question", tool: { messageID: context.messageID, callID: context.callID } },
-          fields: [toField(input.questions[0], 0), ...input.questions.slice(1).map((question, index) => toField(question, index + 1))],
-        }).pipe(
-          Effect.orDie,
-          Effect.flatMap((state) => {
-            if (state.status === "cancelled") return Effect.die(new CancelledError())
-            if (state.status === "timed_out") return Effect.fail(new ToolFailure({
-              message: `Question timed out after ${state.seconds} seconds; no answer was received.`,
-            }))
-            if (state.status === "deferred") return Effect.fail(new ToolFailure({
-              message: "Question deferred to the review box; no answer was received.",
-            }))
-            return Effect.succeed({ answers: input.questions.map((_, index): Question.Answer => {
-              const value = state.answer[`q${index}`]
-              if (value === undefined) return []
-              if (typeof value === "object") return Array.from(value)
-              return [String(value)]
-            }) })
+    yield* ctx.tool
+      .transform((draft) =>
+        draft.add(
+          name,
+          Tool.make({
+            description,
+            input: Input,
+            output: Output,
+            toModelOutput: ({ input, output }) => [
+              {
+                type: "text",
+                text: toModelOutput(
+                  input.questions,
+                  output.answers,
+                  output.timedOutAfterSeconds,
+                  output.deferredItemID,
+                  output.reviewFull,
+                  output.automatic,
+                ),
+              },
+            ],
+            execute: (input, context) =>
+              permission
+                .assert({
+                  action: "question",
+                  resources: ["*"],
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.messageID, callID: context.callID },
+                })
+                .pipe(
+                  Effect.mapError((error) => new ToolFailure({ message: "Permission denied: question", error })),
+                  Effect.andThen(
+                    forms
+                      .ask({
+                        sessionID: context.sessionID,
+                        title: "Questions",
+                        metadata: { kind: "question", tool: { messageID: context.messageID, callID: context.callID } },
+                        fields: [
+                          toField(input.questions[0], 0),
+                          ...input.questions.slice(1).map((question, index) => toField(question, index + 1)),
+                        ],
+                      })
+                      .pipe(
+                        Effect.orDie,
+                        Effect.flatMap((state): Effect.Effect<Output> => {
+                          if (state.status === "cancelled") return Effect.die(new CancelledError())
+                          if (state.status === "timed_out")
+                            return Effect.succeed({
+                              answers: input.questions.map((): Question.Answer => []),
+                              timedOutAfterSeconds: state.seconds,
+                            })
+                          if (state.status === "deferred")
+                            return Effect.succeed({
+                              answers: input.questions.map((): Question.Answer => []),
+                              deferredItemID: state.itemID,
+                            })
+                          return Effect.succeed({
+                            ...(state.automatic ? { automatic: true as const } : {}),
+                            answers: input.questions.map((_, index): Question.Answer => {
+                              const value = state.answer[`q${index}`]
+                              if (value === undefined) return []
+                              if (typeof value === "object") return Array.from(value)
+                              return [String(value)]
+                            }),
+                          })
+                        }),
+                      ),
+                  ),
+                ),
           }),
-        )),
-      ),
-    }), { codemode: false })).pipe(Effect.orDie)
+          { codemode: false },
+        ),
+      )
+      .pipe(Effect.orDie)
   }),
 }
 
 function toField(question: Question.Prompt, index: number): Form.Field {
   return {
-    key: `q${index}`, title: question.header, description: question.question,
+    key: `q${index}`,
+    title: question.header,
+    description: question.question,
     type: question.multiple === true ? "multiselect" : "string",
-    options: question.options.map((option) => ({ value: option.label, label: option.label, description: option.description })),
+    options: question.options.map((option) => ({
+      value: option.label,
+      label: option.label,
+      description: option.description,
+    })),
     custom: true,
   }
 }

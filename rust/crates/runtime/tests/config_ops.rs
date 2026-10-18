@@ -675,11 +675,11 @@ async fn prepare_package_cache(roots: config::Roots) -> String {
         fs::write(source.join("tui.js"), "export default 'production fixture'\n").unwrap();
         let directory = roots.cache.join("packages/@fixture/presentation@1.2.3"); fs::create_dir_all(&directory).unwrap();
         fs::write(source.join("empty.npmrc"), "").unwrap();
-        let pack = std::process::Command::new("npm").args(["--offline", "--userconfig", source.join("empty.npmrc").to_str().unwrap(), "pack", "--ignore-scripts", "--json", "--pack-destination", directory.to_str().unwrap()]).current_dir(&source).output().unwrap();
-        assert!(pack.status.success(), "local npm pack failed");
+        let pack = std::process::Command::new("npm").args(["--offline", "--userconfig", source.join("empty.npmrc").to_str().unwrap(), "--cache", roots.tmp.join("npm-cache").to_str().unwrap(), "pack", "--ignore-scripts", "--json", "--pack-destination", directory.to_str().unwrap()]).current_dir(&source).output().unwrap();
+        assert!(pack.status.success(), "local npm pack failed: {}", String::from_utf8_lossy(&pack.stderr));
         let archive = directory.join("distribution.tgz"); fs::rename(directory.join("fixture-presentation-1.2.3.tgz"), &archive).unwrap();
         let install = std::process::Command::new("npm").args(["--offline", "--userconfig", source.join("empty.npmrc").to_str().unwrap(), "--cache", roots.tmp.join("npm-cache").to_str().unwrap(), "install", "--ignore-scripts", "--no-audit", "--no-fund", "--", archive.to_str().unwrap()]).current_dir(&directory).output().unwrap();
-        assert!(install.status.success(), "local npm install failed");
+        assert!(install.status.success(), "local npm install failed: {}", String::from_utf8_lossy(&install.stderr));
         assert!(!directory.join("node_modules/@fixture/presentation/SHOULD_NOT_RUN").exists());
         let digest = ycoding_core::resources::memory::format::sha256(fs::read(archive).unwrap());
         fs::write(directory.join("frontend-package.json"), format!(r#"{{"spec":"@fixture/presentation@1.2.3","name":"@fixture/presentation","version":"1.2.3","digest":"{digest}"}}"#)).unwrap();

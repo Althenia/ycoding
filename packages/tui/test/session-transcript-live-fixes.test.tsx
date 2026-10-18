@@ -77,7 +77,11 @@ const guardrailRequest = {
   standard: true,
 }
 
-const yoloGoal: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } })
+const yoloGoal: SessionAutonomyView = localAutonomyView({
+  mode: "normal",
+  yolo: true,
+  goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
+})
 const yoloTodos: SessionTodoInfo[] = [{ content: "Yolo sidebar todo", status: "in_progress", priority: "medium" }]
 
 const transcript = [
@@ -709,7 +713,8 @@ function routeFor(
     )
       return json({ location, data: [] })
     if (url.pathname === `/api/session/${sessionID}/todo`) return json({ location, data: todos })
-    if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ location, data: localAutonomyView(autonomy) })
+    if (url.pathname === `/api/session/${sessionID}/autonomy`)
+      return json({ location, data: localAutonomyView(autonomy) })
     if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
     if (url.pathname === `/api/session/${sessionID}/guardrail`)
       return json({
@@ -795,11 +800,15 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
   const read = Promise.withResolvers<{ state: "off"; lid: "off" }>()
   const base = routeFor([])
   const screen = await renderScreen({
-    width: 200, height: 50, args: { sessionID }, settle: "asleep",
+    width: 200,
+    height: 50,
+    args: { sessionID },
+    settle: "asleep",
     keepAwake: { get: () => read.promise, set: async () => ({ state: "off" }) },
-    route: async (url) => url.pathname === `/api/session/${sessionID}/autonomy`
-      ? Response.json({ data: localAutonomyView({ mode: "normal", yolo: 0, sleep: {} }) })
-      : base(url),
+    route: async (url) =>
+      url.pathname === `/api/session/${sessionID}/autonomy`
+        ? Response.json({ data: localAutonomyView({ mode: "normal", yolo: 0, sleep: {} }) })
+        : base(url),
   })
   try {
     expect(screen.frame()).not.toContain("machine may sleep")
@@ -813,65 +822,120 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
   }
 })
 
-test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in timestamp order with pending family review last", async (viewID) => {
-  const messages: SessionMessageInfo[] = [
-    { type: "user", id: "msg_before_provenance", text: "CHAT BEFORE REVIEWS", time: { created: 10 } },
-    { type: "user", id: "msg_after_provenance", text: "CHAT AFTER REVIEWS", time: { created: 50 } },
-  ]
-  const base = routeFor(messages)
-  const viewed = { ...session, id: viewID, ...(viewID !== sessionID ? { parentID: sessionID } : {}) }
-  const screen = await renderScreen({
-    width: 200, height: 65, args: { sessionID: viewID }, settle: "FAMILY PENDING REVIEW",
-    route: (url) => {
-      if (url.pathname === `/api/session/${viewID}`) return json({ data: viewed })
-      if (url.pathname === `/api/session/${viewID}/snapshot`) return sessionSnapshot(viewID, messages, { session: viewed })
-      if (/\/guardrail$/.test(url.pathname)) return json({ data: {
-        rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [],
-        decisions: [{ sessionID, created: 30, requestID: "grq_root_order", reply: "once", confidence: 0.87 }],
-        dismissals: [
-          { sessionID, created: 20, eventID: "evt_root_order", ruleID: "standard.review.force-push", confidence: 0.94 },
-          { sessionID: "ses_provenance_child", created: 40, eventID: "evt_child_order", ruleID: "standard.review.project-deletion", confidence: 0.96 },
-        ],
-      } })
-      if (/\/guardrail\/request$/.test(url.pathname)) return json({ data: [{ id: "grq_family_pending", rootSessionID: sessionID, sessionID: "ses_provenance_child", action: "shell", resources: ["pending"], ruleIDs: ["custom-pending"], reason: "FAMILY PENDING REVIEW", standard: false }] })
-      const mapped = new URL(url)
-      mapped.pathname = mapped.pathname.replace(viewID, sessionID)
-      return base(mapped)
-    },
-  })
-  try {
-    const marker = viewID === sessionID ? "not a real match · 0.94" : "not a real match · 0.96"
-    await waitForFrame(screen.frame, marker)
-    const frame = screen.frame()
-    expect(frame).toContain("CHAT BEFORE REVIEWS")
-    expect(frame).toContain("CHAT AFTER REVIEWS")
-    expect(frame.indexOf("CHAT BEFORE REVIEWS")).toBeLessThan(frame.indexOf(marker))
-    expect(frame.indexOf(marker)).toBeLessThan(frame.indexOf("CHAT AFTER REVIEWS"))
-    expect(frame.indexOf("CHAT AFTER REVIEWS")).toBeLessThan(frame.indexOf("FAMILY PENDING REVIEW"))
-    if (viewID === sessionID) {
-      expect(frame.indexOf(marker)).toBeLessThan(frame.indexOf("decision model approved once · 0.87"))
-      expect(frame.indexOf("decision model approved once · 0.87")).toBeLessThan(frame.indexOf("CHAT AFTER REVIEWS"))
-      expect(frame).not.toContain("not a real match · 0.96")
+test.each([sessionID, "ses_provenance_child"])(
+  "renders only %s provenance in timestamp order with pending family review last",
+  async (viewID) => {
+    const messages: SessionMessageInfo[] = [
+      { type: "user", id: "msg_before_provenance", text: "CHAT BEFORE REVIEWS", time: { created: 10 } },
+      { type: "user", id: "msg_after_provenance", text: "CHAT AFTER REVIEWS", time: { created: 50 } },
+    ]
+    const base = routeFor(messages)
+    const viewed = { ...session, id: viewID, ...(viewID !== sessionID ? { parentID: sessionID } : {}) }
+    const screen = await renderScreen({
+      width: 200,
+      height: 65,
+      args: { sessionID: viewID },
+      settle: "FAMILY PENDING REVIEW",
+      route: (url) => {
+        if (url.pathname === `/api/session/${viewID}`) return json({ data: viewed })
+        if (url.pathname === `/api/session/${viewID}/snapshot`)
+          return sessionSnapshot(viewID, messages, { session: viewed })
+        if (/\/guardrail$/.test(url.pathname))
+          return json({
+            data: {
+              rootSessionID: sessionID,
+              profile: "standard",
+              customRules: 0,
+              approvals: 0,
+              blocked: 0,
+              counters: [],
+              invalidFiles: [],
+              decisions: [{ sessionID, created: 30, requestID: "grq_root_order", reply: "once", confidence: 0.87 }],
+              dismissals: [
+                {
+                  sessionID,
+                  created: 20,
+                  eventID: "evt_root_order",
+                  ruleID: "standard.review.force-push",
+                  confidence: 0.94,
+                },
+                {
+                  sessionID: "ses_provenance_child",
+                  created: 40,
+                  eventID: "evt_child_order",
+                  ruleID: "standard.review.project-deletion",
+                  confidence: 0.96,
+                },
+              ],
+            },
+          })
+        if (/\/guardrail\/request$/.test(url.pathname))
+          return json({
+            data: [
+              {
+                id: "grq_family_pending",
+                rootSessionID: sessionID,
+                sessionID: "ses_provenance_child",
+                action: "shell",
+                resources: ["pending"],
+                ruleIDs: ["custom-pending"],
+                reason: "FAMILY PENDING REVIEW",
+                standard: false,
+              },
+            ],
+          })
+        const mapped = new URL(url)
+        mapped.pathname = mapped.pathname.replace(viewID, sessionID)
+        return base(mapped)
+      },
+    })
+    try {
+      const marker = viewID === sessionID ? "not a real match · 0.94" : "not a real match · 0.96"
+      await waitForFrame(screen.frame, marker)
+      const frame = screen.frame()
+      expect(frame).toContain("CHAT BEFORE REVIEWS")
+      expect(frame).toContain("CHAT AFTER REVIEWS")
+      expect(frame.indexOf("CHAT BEFORE REVIEWS")).toBeLessThan(frame.indexOf(marker))
+      expect(frame.indexOf(marker)).toBeLessThan(frame.indexOf("CHAT AFTER REVIEWS"))
+      expect(frame.indexOf("CHAT AFTER REVIEWS")).toBeLessThan(frame.indexOf("FAMILY PENDING REVIEW"))
+      if (viewID === sessionID) {
+        expect(frame.indexOf(marker)).toBeLessThan(frame.indexOf("decision model approved once · 0.87"))
+        expect(frame.indexOf("decision model approved once · 0.87")).toBeLessThan(frame.indexOf("CHAT AFTER REVIEWS"))
+        expect(frame).not.toContain("not a real match · 0.96")
+      }
+      if (viewID !== sessionID) {
+        expect(frame).not.toContain("not a real match · 0.94")
+        expect(frame).not.toContain("decision model approved once · 0.87")
+      }
+    } finally {
+      await screen.dispose()
     }
-    if (viewID !== sessionID) {
-      expect(frame).not.toContain("not a real match · 0.94")
-      expect(frame).not.toContain("decision model approved once · 0.87")
-    }
-  } finally {
-    await screen.dispose()
-  }
-})
+  },
+)
 
 test("restart retains the escalation notice without restoring a pending review, and live escalation appends once", async () => {
   const screen = await renderScreen({
-    width: 160, height: 42, args: { sessionID }, settle: "Decision model escalated",
-    route: routeFor([{ id: "msg_escalation_saved", type: "system", text: "Decision model escalated this guardrail review · choice approve · confidence 0.7", time: { created: 1 } }]),
+    width: 160,
+    height: 42,
+    args: { sessionID },
+    settle: "Decision model escalated",
+    route: routeFor([
+      {
+        id: "msg_escalation_saved",
+        type: "system",
+        text: "Decision model escalated this guardrail review · choice approve · confidence 0.7",
+        time: { created: 1 },
+      },
+    ]),
   })
   try {
     expect(screen.frame()).toContain("0.7")
     expect(screen.frame()).not.toContain("Guardrail blocked")
     await screen.waitForEventStream()
-    const event = { id: "evt_escalation_live", type: "session.guardrail.escalated", created: 100,
+    const event = {
+      id: "evt_escalation_live",
+      type: "session.guardrail.escalated",
+      created: 100,
       durable: { aggregateID: sessionID, seq: 100, version: 1 },
       data: { sessionID, requestID: "grq_escalation_live", choice: "escalate", confidence: 0.4 },
     } satisfies YCodingEvent
@@ -879,7 +943,9 @@ test("restart retains the escalation notice without restoring a pending review, 
     await waitForFrame(screen.frame, "confidence 0.4")
     screen.events.emit(event)
     expect(screen.frame().match(/confidence 0.4/g)).toHaveLength(1)
-  } finally { await screen.dispose() }
+  } finally {
+    await screen.dispose()
+  }
 })
 
 test("family slash commands update autonomy, rehydrate indicators, and render durable decision provenance", async () => {
@@ -893,7 +959,16 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     ruleID: string
     confidence: number
     source?: { messageID: string; callID: string }
-  }> = [{ sessionID, created: 2, eventID: "evt_dismissed_restored", ruleID: "standard.review.force-push", confidence: 0.95, source: { messageID: "msg_restored_tool", callID: "call_restored" } }]
+  }> = [
+    {
+      sessionID,
+      created: 2,
+      eventID: "evt_dismissed_restored",
+      ruleID: "standard.review.force-push",
+      confidence: 0.95,
+      source: { messageID: "msg_restored_tool", callID: "call_restored" },
+    },
+  ]
   const base = routeFor([
     {
       id: "msg_restored_tool",
@@ -905,7 +980,12 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
           type: "tool",
           id: "call_restored",
           name: "shell",
-          state: { status: "completed", input: { command: "git push --force origin main" }, content: [], structured: {} },
+          state: {
+            status: "completed",
+            input: { command: "git push --force origin main" },
+            content: [],
+            structured: {},
+          },
           time: { created: 1, ran: 1, completed: 2 },
         },
       ],
@@ -933,10 +1013,8 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
         if (request.method === "PUT") {
           const value = (await request.json()) as { sleep?: boolean }
           writes.push(value)
-          if (value.sleep === true)
-            autonomy = { ...autonomy, sleep: {} }
-          if (value.sleep === false && autonomy.sleep)
-            autonomy = { ...autonomy, sleep: undefined }
+          if (value.sleep === true) autonomy = { ...autonomy, sleep: {} }
+          if (value.sleep === false && autonomy.sleep) autonomy = { ...autonomy, sleep: undefined }
         }
         return json({ data: localAutonomyView(autonomy) })
       }
@@ -951,12 +1029,29 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
             counters: [],
             invalidFiles: [],
             decisions: [
-              { sessionID, created: 3, requestID: "grq_restored", reply: "once", choice: "approve", confidence: 0.85,
-                grades: [{ choice: "approve", confidence: 0.85, evidence: "A scoped release operation" }, { choice: "reject", confidence: 0.01, evidence: "No destructive effect" }],
+              {
+                sessionID,
+                created: 3,
+                requestID: "grq_restored",
+                reply: "once",
+                choice: "approve",
+                confidence: 0.85,
+                grades: [
+                  { choice: "approve", confidence: 0.85, evidence: "A scoped release operation" },
+                  { choice: "reject", confidence: 0.01, evidence: "No destructive effect" },
+                ],
                 ruleIDs: ["custom.review.release", "standard.review.outside-repository"],
-                source: { messageID: "msg_restored_tool", callID: "call_restored" } },
+                source: { messageID: "msg_restored_tool", callID: "call_restored" },
+              },
               { sessionID, created: 4, requestID: "grq_low", reply: "reject", choice: "approve", confidence: 0.79 },
-              { sessionID, created: 5, requestID: "grq_threshold", reply: "reject", choice: "approve", confidence: 0.799999 },
+              {
+                sessionID,
+                created: 5,
+                requestID: "grq_threshold",
+                reply: "reject",
+                choice: "approve",
+                confidence: 0.799999,
+              },
               { sessionID, created: 6, requestID: "grq_error", reply: "reject" },
             ],
             dismissals,
@@ -983,24 +1078,53 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     expect(screen.frame()).toContain("standard.review.force-push")
     expect(screen.frame()).not.toContain("command git push --force origin main")
     expect(screen.frame()).not.toContain("A scoped release operation")
-    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model approved once")))
+    await screen.mouse.click(
+      4,
+      screen.lines().findIndex((line) => line.includes("decision model approved once")),
+    )
     await frame("rule custom.review.release")
     expect(screen.frame()).toContain("rule standard.review.outside-repository")
     expect(screen.frame()).toContain("command git push --force origin main")
     expect(screen.frame()).toContain("grade approve (selected) 0.85 · A scoped release operation")
     expect(screen.frame()).toContain("grade reject 0.01 · No destructive effect")
     await saveScreenCapture("guardrail-provenance-200", screen)
-    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model approved once")))
-    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("match verifier · not a real match · 0.95")))
+    await screen.mouse.click(
+      4,
+      screen.lines().findIndex((line) => line.includes("decision model approved once")),
+    )
+    await screen.mouse.click(
+      4,
+      screen.lines().findIndex((line) => line.includes("match verifier · not a real match · 0.95")),
+    )
     await frame("command git push --force origin main")
     expect(screen.frame()).toContain("tool shell")
     expect(screen.frame()).toContain("rule standard.review.force-push")
     expect(screen.frame()).toContain("outcome match verifier · not a real match · 0.95")
-    await screen.mouse.click(3, screen.lines().findIndex((line) => line.includes("Message YCoding…")))
+    await screen.mouse.click(
+      3,
+      screen.lines().findIndex((line) => line.includes("Message YCoding…")),
+    )
     await screen.waitForEventStream()
-    const liveDismissal = { sessionID, created: 99, eventID: "evt_dismissed_live", ruleID: "standard.review.git-destructive", confidence: 0.91 }
+    const liveDismissal = {
+      sessionID,
+      created: 99,
+      eventID: "evt_dismissed_live",
+      ruleID: "standard.review.git-destructive",
+      confidence: 0.91,
+    }
     dismissals.push(liveDismissal)
-    screen.events.emit({ id: liveDismissal.eventID, created: 99, type: "session.guardrail.dismissed", durable: { aggregateID: sessionID, seq: 99, version: 1 }, data: { sessionID, reviewSessionID: sessionID, ruleID: liveDismissal.ruleID, confidence: liveDismissal.confidence } } satisfies YCodingEvent)
+    screen.events.emit({
+      id: liveDismissal.eventID,
+      created: 99,
+      type: "session.guardrail.dismissed",
+      durable: { aggregateID: sessionID, seq: 99, version: 1 },
+      data: {
+        sessionID,
+        reviewSessionID: sessionID,
+        ruleID: liveDismissal.ruleID,
+        confidence: liveDismissal.confidence,
+      },
+    } satisfies YCodingEvent)
     await frame("match verifier · not a real match · 0.91")
     expect(screen.colorOf("match verifier")).toBeDefined()
     expect(screen.colorOf("match verifier")).toEqual(screen.colorOf("decision model approved once"))
@@ -1331,8 +1455,7 @@ test("renders a durable guardrail decision when no ephemeral reply arrives", asy
     height: 42,
     args: { sessionID },
     settle: "Message YCoding…",
-    route: (url) =>
-      url.pathname === `/api/session/${sessionID}/review` ? json({ data: [] }) : routeFor([])(url),
+    route: (url) => (url.pathname === `/api/session/${sessionID}/review` ? json({ data: [] }) : routeFor([])(url)),
     data: (data) => (liveData = data),
   })
   try {
@@ -1366,8 +1489,7 @@ test("renders a durable guardrail decision at the design viewport", async () => 
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     settle: "Message YCoding…",
-    route: (url) =>
-      url.pathname === `/api/session/${sessionID}/review` ? json({ data: [] }) : routeFor([])(url),
+    route: (url) => (url.pathname === `/api/session/${sessionID}/review` ? json({ data: [] }) : routeFor([])(url)),
   })
   try {
     await screen.waitForEventStream()
@@ -1568,7 +1690,9 @@ test("bottom-follows a completed compaction tail like normal chat", async () => 
   try {
     const scroll = screen.scrollbox()
     if (!scroll)
-      throw new Error(`missing transcript scrollbox (renderer destroyed: ${screen.renderer.isDestroyed})\n${screen.frame()}`)
+      throw new Error(
+        `missing transcript scrollbox (renderer destroyed: ${screen.renderer.isDestroyed})\n${screen.frame()}`,
+      )
     expect(scroll.scrollHeight).toBeGreaterThan(scroll.viewport.height)
     expect(scroll.scrollTop).toBe(Math.max(0, scroll.scrollHeight - scroll.viewport.height))
     scroll.scrollTo(0)
@@ -1697,7 +1821,8 @@ test("keeps non-subagent activity rows on one marker/label grid with symmetric c
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(transcript, [guardrailRequest]),
-    settle: (screen) => screen.captureCharFrame().includes("project_index") && /!!\s+guardrail/.test(screen.captureCharFrame()),
+    settle: (screen) =>
+      screen.captureCharFrame().includes("project_index") && /!!\s+guardrail/.test(screen.captureCharFrame()),
   })
 
   try {
@@ -1801,30 +1926,31 @@ test("renders one durable lifecycle grammar for execute, exploration, shell, CLI
   }
 }, 60_000)
 
-const questionTranscript = (structured: Record<string, unknown>) => [
-  { id: "msg_user_question", type: "user", text: "Ask me", time: { created: 1 } },
-  {
-    id: "msg_assistant_question",
-    type: "assistant",
-    agent: "build",
-    model: { providerID: "anthropic", id: "claude-opus-5" },
-    content: [
-      {
-        type: "tool",
-        id: "call_question",
-        name: "question",
-        state: {
-          status: "completed",
-          input: { questions: [{ question: "Which rollout plan?", header: "Plan", options: [] }] },
-          content: [{ type: "text", text: "result" }],
-          structured,
+const questionTranscript = (structured: Record<string, unknown>) =>
+  [
+    { id: "msg_user_question", type: "user", text: "Ask me", time: { created: 1 } },
+    {
+      id: "msg_assistant_question",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "anthropic", id: "claude-opus-5" },
+      content: [
+        {
+          type: "tool",
+          id: "call_question",
+          name: "question",
+          state: {
+            status: "completed",
+            input: { questions: [{ question: "Which rollout plan?", header: "Plan", options: [] }] },
+            content: [{ type: "text", text: "result" }],
+            structured,
+          },
+          time: { created: 2, ran: 2, completed: 3 },
         },
-        time: { created: 2, ran: 2, completed: 3 },
-      },
-    ],
-    time: { created: 2, completed: 3 },
-  },
-] as SessionMessageInfo[]
+      ],
+      time: { created: 2, completed: 3 },
+    },
+  ] as SessionMessageInfo[]
 
 for (const mode of ["dark", "light"] as const)
   test(`renders a timed-out question as timed out in ${mode} warning ink, never as answered or unanswered`, async () => {
@@ -1941,7 +2067,11 @@ test("renders a resumed subagent notification once with its own type, not a gene
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(resumed),
-    settle: (screen) => screen.captureCharFrame().split("\n").some((line) => line.includes("subagent") && line.includes("resumed")),
+    settle: (screen) =>
+      screen
+        .captureCharFrame()
+        .split("\n")
+        .some((line) => line.includes("subagent") && line.includes("resumed")),
   })
   try {
     const rows = screen.lines().filter((line) => line.includes("subagent") && line.includes("resumed"))
@@ -2882,51 +3012,81 @@ test("truncates a transcript label with an ellipsis instead of overprinting its 
   }
 }, 60_000)
 
-for (const viewport of [DESIGN_VIEWPORT, NARROW_VIEWPORT]) for (const mode of ["dark", "light"] as const) test(`shows a queue-channel shell in ${mode} info ink at ${viewport.width} columns until it starts as a background shell`, async () => {
-  const started = Date.now() - 3_000
-  const shellID = "sh_queued_typecheck"
-  const screen = await renderScreen({
-    ...viewport,
-    args: { sessionID },
-    config: { theme: { name: "ycoding", mode } },
-    route: routeFor([
-      { id: "msg_queue_user", type: "user", text: "Typecheck in the queue", time: { created: 1 } },
-      {
-        id: "msg_queue_assistant", type: "assistant", agent: "build", model: session.model,
-        content: [
-          { type: "tool", id: "call_queue_shell", name: "shell", state: { status: "completed", input: { command: "bun run queue-check", channel: "queue" }, content: [{ type: "text", text: "The command was added to the machine-wide shell queue at position 2." }], structured: { shellID, truncated: false } }, time: { created: started, ran: started, completed: started + 10 } },
-        ],
-        time: { created: 2 },
-      },
-    ]),
-    settle: "queue-check",
-  })
-  const info = { id: shellID, command: "bun run queue-check", cwd: directory, shell: "/bin/sh", file: `/tmp/${shellID}.out`, metadata: { sessionID }, time: { started } }
-  const row = () => transcriptSlice(screen.lines().find((line) => line.includes("queue-check")) ?? "", viewport.width).trimEnd()
-  try {
-    await screen.waitForEventStream()
-    screen.events.emit({
-      id: "evt_queue_created", created: started + 20, type: "shell.created", location: { directory },
-      data: { info: { ...info, status: "queued", queuePosition: 2 } },
-    } satisfies YCodingEvent)
-    await waitForFrame(screen.frame, "queued #2")
-    expect(row(), screen.frame()).toMatch(/running · queued #2 · \d+[smhdw]$/)
-    expect(screen.colorOf("queued #2")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback.info.default.toInts())
-    screen.events.emit({
-      id: "evt_queue_moved", created: started + 30, type: "shell.updated", location: { directory },
-      data: { info: { ...info, status: "queued", queuePosition: 1 } },
-    } satisfies YCodingEvent)
-    await waitForFrame(screen.frame, "queued #1")
-    expect(screen.colorOf("queued #1")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback.info.default.toInts())
-    screen.events.emit({
-      id: "evt_queue_started", created: started + 40, type: "shell.updated", location: { directory },
-      data: { info: { ...info, status: "running", pid: 4242, time: { started: started + 40, queued: started } } },
-    } satisfies YCodingEvent)
-    await waitForFrame(screen.frame, "background")
-    expect(row()).toMatch(/running · background · \d+[smhdw]$/)
-    expect(screen.colorOf("background")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.subdued.toInts())
-    expect(screen.frame()).not.toContain("queued #")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
+for (const viewport of [DESIGN_VIEWPORT, NARROW_VIEWPORT])
+  for (const mode of ["dark", "light"] as const)
+    test(`shows a running background shell in subdued ${mode} ink at ${viewport.width} columns`, async () => {
+      const started = Date.now() - 3_000
+      const shellID = "sh_background_typecheck"
+      const screen = await renderScreen({
+        ...viewport,
+        args: { sessionID },
+        config: { theme: { name: "ycoding", mode } },
+        route: routeFor([
+          { id: "msg_background_user", type: "user", text: "Typecheck in the background", time: { created: 1 } },
+          {
+            id: "msg_background_assistant",
+            type: "assistant",
+            agent: "build",
+            model: session.model,
+            content: [
+              {
+                type: "tool",
+                id: "call_background_shell",
+                name: "shell",
+                state: {
+                  status: "completed",
+                  input: { command: "bun run background-check", background: true },
+                  content: [{ type: "text", text: "The command is running in the background." }],
+                  structured: { shellID, truncated: false },
+                },
+                time: { created: started, ran: started, completed: started + 10 },
+              },
+            ],
+            time: { created: 2 },
+          },
+        ]),
+        settle: "background-check",
+      })
+      const info = {
+        id: shellID,
+        command: "bun run background-check",
+        cwd: directory,
+        shell: "/bin/sh",
+        file: `/tmp/${shellID}.out`,
+        metadata: { sessionID },
+        time: { started },
+      }
+      const row = () =>
+        transcriptSlice(
+          screen.lines().find((line) => line.includes("background-check")) ?? "",
+          viewport.width,
+        ).trimEnd()
+      try {
+        await screen.waitForEventStream()
+        screen.events.emit({
+          id: "evt_background_created",
+          created: started + 20,
+          type: "shell.created",
+          location: { directory },
+          data: { info: { ...info, status: "running", pid: 4242 } },
+        } satisfies YCodingEvent)
+        await waitForFrame(screen.frame, "running · background")
+        expect(row()).toMatch(/running · background · \d+[smhdw]$/)
+        expect(screen.colorOf("running · background")).toEqual(
+          resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.subdued.toInts(),
+        )
+        screen.events.emit({
+          id: "evt_background_exited",
+          created: started + 40,
+          type: "shell.exited",
+          location: { directory },
+          data: { id: shellID, status: "exited", exit: 0 },
+        } satisfies YCodingEvent)
+        await waitForFrame(() => row(), "done")
+        expect(row()).not.toContain("running")
+        expect(row()).not.toContain("· background")
+
+      } finally {
+        await screen.dispose()
+      }
+    }, 60_000)

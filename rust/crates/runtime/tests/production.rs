@@ -23,7 +23,7 @@ use ycoding_core::{
     },
     ycoding_store::{
         IndexOrder, IndexQuery, KeyPart, Metadata, Options, Store, project,
-        resources::{Request, RequestTable},
+        resources::{Request, RequestTable, ShellTable},
         session::{Document, EventTable, NewEvent, SessionTable},
         tuple_key,
     },
@@ -164,7 +164,7 @@ async fn production_flow() {
     .unwrap();
     std::fs::write(
         root.join("other/ycoding.json"),
-        r#"{"agents":{"god":{"description":"other agent"}},"guardrails":{"max_concurrent_shells":1}}"#,
+        r#"{"agents":{"god":{"description":"other agent"}},"guardrails":{"max_concurrent_shells":2}}"#,
     )
     .unwrap();
     let catalog_file = roots.cache.join("models.json");
@@ -260,9 +260,9 @@ async fn production_flow() {
                 .unwrap(),
             );
             SessionTable::insert(tx, &other)?;
-            for queued in ["ses_queue_interrupt", "ses_queue_remove"] {
+            for background in ["ses_background_interrupt", "ses_background_remove"] {
                 let mut row = other.clone();
-                row.id = queued.into();
+                row.id = background.into();
                 SessionTable::insert(tx, &row)?;
             }
             let mut record = support::record("ses_production");
@@ -1217,58 +1217,67 @@ async fn production_flow() {
         .tools
         .materialize(&other.agents.default().unwrap().permissions);
     let other_shells = other.production.as_ref().unwrap().platform.shell.clone();
-    let session_shells = |session: &str, status: ycoding_core::ycoding_schema::shell::Status| {
+    let session_shells = |session: &str| {
         let session = JsonValue::String(session.into());
         other_shells
             .list()
             .into_iter()
-            .filter(|info| {
-                info.status == status && info.metadata.get(&"sessionID".into()) == Some(&session)
-            })
+            .filter(|info| info.metadata.get(&"sessionID".into()) == Some(&session))
             .map(|info| info.id)
             .collect::<Vec<_>>()
     };
     let _shells = ShellShutdown(other_shells.clone());
     for (session, operation) in [
-        ("ses_queue_interrupt", "session.interrupt"),
-        ("ses_queue_remove", "session.remove"),
+        ("ses_background_interrupt", "session.interrupt"),
+        ("ses_background_remove", "session.remove"),
     ] {
-        let running = other_tools
-            .invoke(
-                "shell",
-                parse_json(r#"{"command":"sleep 30","background":true}"#).unwrap(),
-                Context::new(
-                    session,
-                    "god",
-                    "msg_queue",
-                    &format!("call_{session}_running"),
-                )
-                .unwrap(),
+        let session_id = session::Id::new(session).unwrap();
+        for command in ["first", "second"] {
+            let call_id = format!("call_{session}_{command}");
+            let running = timeout(
+                Duration::from_secs(10),
+                other_tools.invoke(
+                    "shell",
+                    parse_json(r#"{"command":"sleep 60","background":true}"#).unwrap(),
+                    Context::new(session, "god", "msg_background", &call_id).unwrap(),
+                ),
             )
             .await
+            .expect("each background command starts independently")
             .unwrap();
-        assert!(running.error.is_none(), "{:?}", running.error);
-        let queued = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            other_tools.invoke(
-                "shell",
-                parse_json(r#"{"command":"printf queued-never-runs","channel":"queue"}"#).unwrap(),
-                Context::new(
-                    session,
-                    "god",
-                    "msg_queue",
-                    &format!("call_{session}_queued"),
-                )
-                .unwrap(),
-            ),
-        )
-        .await
-        .expect("a queued shell returns while the family slot is held")
-        .unwrap();
-        assert!(queued.error.is_none(), "{:?}", queued.error);
-        assert_eq!(
-            session_shells(session, ycoding_core::ycoding_schema::shell::Status::Queued).len(),
-            1
+            assert!(running.error.is_none(), "{:?}", running.error);
+            assert_eq!(
+                core.execution.jobs().get(&call_id).unwrap().status,
+                ycoding_core::job::Status::Running
+            );
+        }
+        let running = session_shells(session);
+        assert_eq!(running.len(), 2);
+        let receipts = running
+            .iter()
+            .map(|id| {
+                let JsonValue::String(id) = id.encode() else {
+                    panic!("shell ID must encode as a string");
+                };
+                tuple_key(&[KeyPart::String(&id)])
+            })
+            .collect::<Vec<_>>();
+        for receipt in &receipts {
+            let row = store
+                .client()
+                .snapshot()
+                .unwrap()
+                .get::<ShellTable>(receipt)
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.session_id.as_ref(), Some(session_id.as_lossless()));
+            assert_eq!(row.notice_pending, 1);
+        }
+        assert!(
+            core.execution
+                .jobs()
+                .outstanding_sessions()
+                .contains(&session_id)
         );
         let request = match operation {
             "session.interrupt" => v5::SessionInterruptRequest {
@@ -1300,25 +1309,102 @@ async fn production_flow() {
                 result.data
             }
         };
-        assert!(
-            session_shells(session, ycoding_core::ycoding_schema::shell::Status::Queued).is_empty(),
-            "{operation} must cancel the Session's queued shells"
-        );
-        assert!(
-            !core
-                .execution
-                .active()
-                .contains(&session::Id::new(session).unwrap()),
-            "quiet queued-shell cancellation must not wake the Session"
-        );
-        for id in session_shells(
-            session,
-            ycoding_core::ycoding_schema::shell::Status::Running,
-        ) {
-            let _ =
-                tokio::time::timeout(std::time::Duration::from_secs(10), other_shells.remove(&id))
-                    .await;
+        assert_eq!(session_shells(session).len(), 2);
+        for id in &running {
+            assert_eq!(
+                other_shells.get(id).await.unwrap().status,
+                ycoding_core::ycoding_schema::shell::Status::Running,
+                "{operation} must leave detached background commands running"
+            );
         }
+        for command in ["first", "second"] {
+            assert_eq!(
+                core.execution
+                    .jobs()
+                    .get(&format!("call_{session}_{command}"))
+                    .unwrap()
+                    .status,
+                ycoding_core::job::Status::Running
+            );
+        }
+        assert!(
+            core.execution
+                .jobs()
+                .outstanding_sessions()
+                .contains(&session_id)
+        );
+        assert!(core.sessions.pending_list(&session_id).unwrap().is_empty());
+        assert!(
+            !core.execution.active().contains(&session_id),
+            "{operation} must not wake the Session for still-running background work"
+        );
+        assert!(received.is_empty(), "{operation} must not request a model");
+        if operation == "session.interrupt" {
+            assert!(core.sessions.get(&session_id).unwrap().is_some());
+            let _: v5::SessionRemoveResult = support::success(
+                wire.call(
+                    "session.remove",
+                    support::session_scope(session),
+                    v5::SessionRemoveRequest {
+                        params: v5::SessionRemoveRequestParams {
+                            session_id: support::text(session),
+                        },
+                    }
+                    .encode_to_vec(),
+                )
+                .await,
+            );
+        }
+        assert!(core.sessions.get(&session_id).unwrap().is_none());
+        assert_eq!(session_shells(session).len(), 2);
+        for id in &running {
+            timeout(Duration::from_secs(10), other_shells.remove(id))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                other_shells.get(id).await.unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+        }
+        // Detached delivery must discard notices for deleted Sessions and clear both receipts.
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let snapshot = store.client().snapshot().unwrap();
+                if receipts
+                    .iter()
+                    .all(|key| snapshot.get::<ShellTable>(key).unwrap().is_none())
+                    && !core
+                        .execution
+                        .jobs()
+                        .outstanding_sessions()
+                        .contains(&session_id)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background command cleanup did not settle for the deleted Session");
+        for command in ["first", "second"] {
+            assert_eq!(
+                core.execution
+                    .jobs()
+                    .get(&format!("call_{session}_{command}"))
+                    .unwrap()
+                    .status,
+                ycoding_core::job::Status::Cancelled
+            );
+        }
+        assert!(session_shells(session).is_empty());
+        assert!(core.sessions.get(&session_id).unwrap().is_none());
+        assert!(core.sessions.pending_list(&session_id).unwrap().is_empty());
+        assert!(!core.execution.active().contains(&session_id));
+        assert!(
+            received.is_empty(),
+            "background cleanup must not request a model for a deleted Session"
+        );
     }
     let todos = tools
         .invoke(
@@ -1426,7 +1512,28 @@ async fn production_flow() {
                 if error.r#type == "agent.request".into()
         ));
         assert!(received.try_recv().is_err());
-        assert!(core.sessions.model_history(&invalid).unwrap().is_empty());
+        // Context observations precede request validation and remain durable even
+        // when invalid options prevent a Step or provider request from starting.
+        let history = core.sessions.model_history(&invalid).unwrap();
+        assert_eq!(history.len(), 1);
+        let session_message::Info::System(observation) = &history[0].message else {
+            panic!("invalid requests may retain only the Session-state observation");
+        };
+        assert_eq!(
+            observation
+                .metadata
+                .as_ref()
+                .unwrap()
+                .get(&"contextSource".into()),
+            Some(&JsonValue::String("session-state".into()))
+        );
+        let invalid_id = format!("ses_{agent}");
+        assert_eq!(
+            events(&store, &invalid_id, "session.context.observed.1").len(),
+            1
+        );
+        assert!(events(&store, &invalid_id, "session.step.started.1").is_empty());
+        assert!(events(&store, &invalid_id, "session.provider.request.recorded.1").is_empty());
     }
     let definition = ycoding_core::ycoding_schema::project_artifact::Definition::decode(&parse_json(r#"{"kind":"skill","name":"Review","description":"Reusable review","content":"Review the current change."}"#).unwrap()).unwrap();
     let preview = artifacts
@@ -2064,23 +2171,21 @@ impl RefreshFlow<'_> {
             .assert(Input {
                 session_id: id,
                 action: "shell".into(),
-                resources: vec![
-                    format!(
-                        "rm -rf '{}'",
-                        std::fs::canonicalize(self.root.join("project"))
-                            .unwrap()
-                            .display()
-                    )
-                    .into(),
-                ],
+                resources: vec!["git reset --hard".into()],
                 metadata: None,
                 skip_review: false,
                 holder: None,
-                defer_shell: false,
                 source: None,
             })
             .unwrap();
-        let JsonValue::String(request_id) = review.request.as_ref().unwrap().id.encode() else {
+        let request = review.request.as_ref().unwrap();
+        assert!(request.standard);
+        assert_eq!(request.hard_review, Some(true));
+        assert_eq!(
+            request.rule_ids,
+            vec!["standard.review.git-destructive".into()]
+        );
+        let JsonValue::String(request_id) = request.id.encode() else {
             panic!()
         };
         let request_id = support::text(request_id.as_str().unwrap());

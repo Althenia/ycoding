@@ -50,9 +50,9 @@ These exceptions do not approve arbitrary HTTP/SSE application RPC, broaden remo
 
 ## Typed platform delivery
 
-### Queued shell status
+### Shell lifecycle allocations
 
-`Shell_Info.status` includes `queued` at enum value 6. Optional `queuePosition` uses tag 12 and accepts positive safe integers. `Shell_Info_time.queued` uses tag 3 and carries the admission timestamp separately from `started` and `completed`. Existing field tags and status values retain their allocations. `shell.updated` carries the complete `Shell_Info` in the ephemeral PublicEvent branch at tag 116; it has no durable position.
+`Shell_Info.status` describes the process lifecycle without a machine-wide queue state. The retired `queued` enum value 6, `Shell_Info.queuePosition` tag 12, `Shell_Info_time.queued` tag 3, and ephemeral `shell.updated` PublicEvent tag 116 are reserved with their original names and cannot be reused. Existing lifecycle statuses, started/completed timestamps, and shell start/exit events retain their allocations. Family admission waits are internal policy behavior, not queue-position events.
 
 ### Keep-awake status
 

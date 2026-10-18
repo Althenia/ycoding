@@ -65,6 +65,7 @@ pub struct Cursor {
 
 pub struct Composed {
     pub configuration: Arc<config::Configuration>,
+    pub decision: Arc<dyn ycoding_core::process::guardrails::decision::Evaluator>,
     pub models: Arc<model::Resolver>,
     pub credentials: credential::Service,
     pub tools: Arc<Registry>,
@@ -96,7 +97,6 @@ pub struct Composed {
     pending: crate::locations::Pending,
     closed: std::sync::atomic::AtomicBool,
     _registration: Registration,
-    queued_shells: tools::QueuedShells,
     _meeting: Option<Registration>,
     _session_tools: Option<Registration>,
 }
@@ -333,6 +333,23 @@ impl Core {
             service: reviews.clone(),
             limit: review_limit,
         });
+        let timeout_locations = locations.downgrade();
+        let decision_locations = locations.downgrade();
+        let orchestration = orchestration.with_question_policy(
+            Arc::new(move |child| {
+                let (_, services) = timeout_locations.upgrade()?.session(child).ok()?;
+                services
+                    .production
+                    .as_ref()?
+                    .configuration
+                    .latest("question_timeout_seconds")
+                    .cloned()
+            }),
+            Arc::new(move |child| {
+                let (_, services) = decision_locations.upgrade()?.session(child).ok()?;
+                Some(services.production.as_ref()?.decision.clone())
+            }),
+        );
         let _ = factory.orchestration.set(orchestration.clone());
         delivery.bind(orchestration.clone(), execution);
         if started.recover {
@@ -1182,7 +1199,7 @@ impl Factory {
                 .map(|previous| previous.computer.clone())
                 .unwrap_or_else(|| Arc::new(self.globals.computer.service()));
             let pending = services.pending();
-            let (registry, registration, queued_shells) = tools::compose(
+            let (registry, registration) = tools::compose(
                 self,
                 services,
                 prepared.disk.clone(),
@@ -1316,8 +1333,18 @@ impl Factory {
                 executor: self.executor.clone(),
             });
             services.guardrails.clone().with_decision(decisions.clone());
-            services.questions.clone().with_decision(decisions.clone());
-            services.forms.clone().with_decision(decisions);
+            let question_timeout =
+                policy::timeout::seconds(prepared.disk.latest("question_timeout_seconds"));
+            services
+                .questions
+                .clone()
+                .with_timeout_seconds(question_timeout)
+                .with_decision(decisions.clone());
+            services
+                .forms
+                .clone()
+                .with_timeout_seconds(question_timeout)
+                .with_decision(decisions.clone());
             let generate_cursor = cursor_host()?.map(Arc::new);
             let image_analyzer = ycoding_core::session::image_analyzer::Service::new(
                 prepared.disk.clone(),
@@ -1515,6 +1542,7 @@ impl Factory {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             let composed = Composed {
                 configuration: prepared.disk,
+                decision: decisions,
                 models: prepared.models,
                 credentials: self.credentials.clone(),
                 tools: registry,
@@ -1545,7 +1573,6 @@ impl Factory {
                 pending,
                 closed: std::sync::atomic::AtomicBool::new(false),
                 _registration: registration,
-                queued_shells,
                 _meeting: meeting_history,
                 _session_tools: session_registration,
             };
@@ -1899,15 +1926,6 @@ impl execution::Runner for LocationRunner {
         let lease = self.0.clone();
         Box::pin(async move {
             let composed = lease.production.as_ref().expect("production runner");
-            let queued = if matches!(&outcome, Err(run_coordinator::Error::Interrupted(_))) {
-                composed
-                    .cancel_queued_shells(&id)
-                    .await
-                    .map(|_| ())
-                    .map_err(|_| run_coordinator::Error::Closed)
-            } else {
-                Ok(())
-            };
             let lifecycle = match &outcome {
                 Ok(()) => ycoding_core::platform::browser::service::Lifecycle::ExecutionSucceeded,
                 Err(run_coordinator::Error::Interrupted(_)) => {
@@ -1921,7 +1939,6 @@ impl execution::Runner for LocationRunner {
             let released = composed.paired.lifecycle(&browser_id, lifecycle).await;
             let settled = execution::Runner::settled(&composed.runner, id, outcome).await;
             released.map_err(|_| run_coordinator::Error::Closed)?;
-            queued?;
             settled
         })
     }
@@ -2251,16 +2268,6 @@ async fn notifications(
 }
 
 impl Composed {
-    pub(crate) async fn cancel_queued_shells(
-        &self,
-        session: &ycoding_core::ycoding_schema::session::Id,
-    ) -> Result<usize, Failure> {
-        self.queued_shells
-            .cancel(session)
-            .await
-            .map_err(|_| unavailable("queued shell cancellation"))
-    }
-
     async fn stop_tasks(&self) -> Result<(), Failure> {
         self.watch_stop.send_replace(true);
         let tasks = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(PoisonError::into_inner));

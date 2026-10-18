@@ -196,6 +196,32 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
         messages.push(json::object([("role", s("system")), ("content", content)]));
     }
     for message in &request.messages {
+        if let Some(effort) = crate::effort::update(message, crate::effort::Provider::OpenAI) {
+            if crate::effort::mechanism(request) != Some(crate::effort::Provider::OpenAI)
+                || !crate::effort::openrouter_endpoint(&request.model.route.endpoint.base_url)
+                || message.role != Role::System
+                || !message.content.is_empty()
+            {
+                return Err(Error::invalid(
+                    "OpenAI Chat effort update requires a supported OpenRouter endpoint and model",
+                ));
+            }
+            if !images.is_empty() {
+                messages.push(json::object([
+                    ("role", s("user")),
+                    ("content", JsonValue::Array(std::mem::take(&mut images))),
+                ]));
+            }
+            messages.push(json::object([
+                ("role", s("system")),
+                ("content", s("")),
+                (
+                    "configuration_update",
+                    json::object([("reasoning", json::object([("effort", s(effort))]))]),
+                ),
+            ]));
+            continue;
+        }
         if message.role == Role::System {
             let text = openai_shared::wrapped_system(message, "OpenAI Chat")?;
             if !images.is_empty() {

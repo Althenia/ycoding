@@ -58,13 +58,15 @@ export function localAutonomyView(state: AutonomyState): SessionAutonomyView {
   }
 }
 
-export type AutonomyAction = "permissions" | "guardrails" | "questions" | "auto-answer"
+export type AutonomyAction = "permissions" | "guardrails" | "questions"
 export type AutonomyDecisionKind = "you" | "automated" | "unknown"
 
-export function autonomyDecisionKind(view: SessionAutonomyView | undefined, action: AutonomyAction): AutonomyDecisionKind {
+export function autonomyDecisionKind(
+  view: SessionAutonomyView | undefined,
+  action: AutonomyAction,
+): AutonomyDecisionKind {
   if (!view?.effective) return "unknown"
   const effective = view.effective
-  if (action === "auto-answer") return autoAnswerOn(view) ? "automated" : "you"
   if (action === "permissions") {
     if (effective.yolo >= 1) return "automated"
     return effective.asleep ? "automated" : "you"
@@ -89,21 +91,20 @@ export function autonomyLevelDescription(level: YoloLevel) {
 
 export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, action: AutonomyAction) {
   if (action === "guardrails") {
-    if (!view?.effective) return "ordinary · unknown"
+    if (!view?.effective) return "unknown"
     const effective = view.effective
-    if (!effective.guardrailsEnabled) return "ordinary · disabled"
-    if (effective.ordinaryReviewsAuto) return "ordinary · auto"
-    if (effective.modelReviews) return effective.asleep ? "ordinary · model, then review box" : "ordinary · model, then you"
-    return effective.asleep ? "ordinary · review box" : "ordinary · you"
+    if (!effective.guardrailsEnabled) return "disabled"
+    if (effective.ordinaryReviewsAuto) return "auto"
+    if (effective.modelReviews) return effective.asleep ? "model, then review box" : "model, then you"
+    return effective.asleep ? "review box" : "you"
   }
   if (!view?.effective) return "unknown"
   const effective = view.effective
-  if (action === "auto-answer") return autoAnswerOn(view) ? "On" : "Off"
   if (action === "permissions") {
     if (effective.yolo >= 1) return "auto"
     return effective.asleep ? "review box" : "you"
   }
-  if (autoAnswerOn(view)) return "auto · this Session"
+  if (autoAnswerOn(view)) return "auto"
   return effective.asleep ? "review box" : "you"
 }
 

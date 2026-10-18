@@ -132,20 +132,6 @@ impl Ledger {
         self.0.submit(move |tx| ShellTable::insert(tx, &row))?.await
     }
 
-    pub async fn started(&self, id: &Id, pid: u32, started: Option<String>) -> Result<(), Error> {
-        let key = key(&shell_id(id));
-        self.0
-            .submit(move |tx| {
-                if let Some(mut row) = tx.get::<ShellTable>(&key)? {
-                    row.pid = i64::from(pid);
-                    row.process_started = started.map(Into::into);
-                    ShellTable::put(tx, &row)?;
-                }
-                Ok(())
-            })?
-            .await
-    }
-
     pub async fn release(&self, id: &Id) -> Result<(), Error> {
         let key = key(&shell_id(id));
         self.0
@@ -370,6 +356,10 @@ fn started_query(prefix: &[u8]) -> IndexQuery<'_> {
 }
 
 pub fn survivors(row: &Shell, snapshot: &[Process]) -> bool {
+    // PID zero addresses the caller's process group and is never a shell owner.
+    if row.pid <= 0 {
+        return false;
+    }
     if let Some(leader) = snapshot.iter().find(|item| i64::from(item.pid) == row.pid) {
         return row
             .process_started

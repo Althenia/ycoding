@@ -74,7 +74,7 @@ test("the remote client constructor fixes both authenticated roles and keeps cal
 })
 
 test("compiled payload codecs cover exactly the closed remote operation set and every declared typed error", async () => {
-  expect(remotePayloadCodecs.size).toBe(76)
+  expect(remotePayloadCodecs.size).toBe(79)
   expect([...remotePayloadCodecs.keys()].sort()).toEqual(
     remoteDescriptors.map((operation) => operation.diagnosticName).sort(),
   )
@@ -87,6 +87,9 @@ test("compiled payload codecs cover exactly the closed remote operation set and 
   }
   expect(remotePayloadCodecs.has("health.stop")).toBe(false)
   expect(remotePayloadCodecs.has("fs.read")).toBe(false)
+  for (const name of ["incident.report", "incident.recent", "incident.guidance.get"])
+    expect(remotePayloadCodecs.has(name)).toBe(true)
+  expect(remotePayloadCodecs.has("incident.guidance.clear")).toBe(false)
   const payloads = await import("../src/payloads")
   expect(
     Object.values(payloads)

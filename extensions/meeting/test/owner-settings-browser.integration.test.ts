@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawn } from "node:child_process"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { Readable, Writable } from "node:stream"
@@ -108,6 +108,32 @@ test("owner link exposes working Ask model and connector settings while the ordi
     )
     expect(await evaluate(browser.cdp, session, "location.hash")).toBe("")
     expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-panel').hidden")).toBe(false)
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-details').open")).toBe(false)
+    await click(browser.cdp, session, "#owner-details > summary")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-form').checkVisibility()")).toBe(true)
+    for (const step of [
+      { key: "Tab", code: 9, modifiers: 0, focus: "owner-model", open: true },
+      { key: "Tab", code: 9, modifiers: 8, focus: "owner-title", open: true },
+      { key: "Enter", code: 13, modifiers: 0, focus: "owner-title", open: false },
+      { key: "Enter", code: 13, modifiers: 0, focus: "owner-title", open: true },
+    ]) {
+      for (const type of ["keyDown", "keyUp"])
+        await browser.cdp.send(
+          "Input.dispatchKeyEvent",
+          {
+            type,
+            key: step.key,
+            code: step.key,
+            windowsVirtualKeyCode: step.code,
+            modifiers: step.modifiers,
+            ...(step.key === "Enter" && type === "keyDown" ? { text: "\r" } : {}),
+          },
+          session,
+        )
+      await waitDOM(browser.cdp, session, `document.querySelector('#owner-details').open===${step.open}`)
+      expect(await evaluate(browser.cdp, session, "document.activeElement.id")).toBe(step.focus)
+      expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-details').open")).toBe(step.open)
+    }
     expect(await evaluate(browser.cdp, session, "localStorage.length + sessionStorage.length")).toBe(0)
     expect(await evaluate(browser.cdp, session, `document.body.innerText.includes(${JSON.stringify(ownerKey)})`)).toBe(
       false,
@@ -182,6 +208,8 @@ test("owner link exposes working Ask model and connector settings while the ordi
     await navigate(browser.cdp, session, "about:blank")
     await navigate(browser.cdp, session, ownerURL)
     await waitDOM(browser.cdp, session, "document.querySelector('#owner-feedback')?.textContent.includes('Owner settings loaded')")
+    expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-details').open")).toBe(false)
+    await click(browser.cdp, session, "#owner-details > summary")
     expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').disabled")).toBe(false)
     expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-variant').value")).toBe("high")
     await click(browser.cdp, session, "#owner-mcp")
@@ -237,7 +265,9 @@ test("owner link exposes working Ask model and connector settings while the ordi
       await click(browser.cdp, session, "#owner-model")
       expect(await evaluate(browser.cdp, session, "document.querySelector('#owner-model').matches(':open')")).toBe(true)
       expect(await evaluate(browser.cdp, session, "getComputedStyle(document.querySelector('#owner-model'), '::picker(select)').backgroundColor")).toBe(background)
-      await Bun.write(new URL(`../../../.cache/tmp/meeting-owner-${theme}.png`, import.meta.url), Buffer.from(string(record(await browser.cdp.send("Page.captureScreenshot", { format: "png" }, session)).data), "base64"))
+      const screenshots = process.env.YCODING_MEETING_SCREENSHOTS ?? backend.root
+      await mkdir(screenshots, { recursive: true })
+      await Bun.write(path.join(screenshots, `meeting-owner-${theme}.png`), Buffer.from(string(record(await browser.cdp.send("Page.captureScreenshot", { format: "png" }, session)).data), "base64"))
       await browser.cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, session)
       await browser.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 }, session)
       expect(await evaluate(browser.cdp, session, "document.activeElement === document.querySelector('#owner-model') && !document.querySelector('#owner-model').matches(':open')")).toBe(true)
@@ -303,7 +333,7 @@ async function launch() {
     cdp,
     async close() {
       cdp.close()
-      if (child.exitCode === null && child.signalCode === null && child.pid) process.kill(-child.pid, "SIGTERM")
+      if (child.exitCode === null && child.signalCode === null && child.pid) process.kill(-child.pid, "SIGKILL")
       await exited
       await rm(directory, { recursive: true, force: true })
     },

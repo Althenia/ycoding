@@ -5,7 +5,6 @@ use super::{
 use crate::{
     job,
     platform::{self, filesystem},
-    process::guardrails::Reservation,
     resources::config::Configuration,
     tools::{
         context::{Context, Progress, policy::LeafPolicy},
@@ -43,8 +42,6 @@ pub const AUTO_BACKGROUND: Duration = Duration::from_secs(5 * 60);
 pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
 
 const BACKGROUND_STARTED: &str = "The command was moved to the background.";
-const QUEUED_STARTED: &str = "The command was added to the machine-wide shell queue";
-const QUEUED_INSTRUCTION: &str = "It starts when the queue admits it, and its timeout counts from that start. You will be notified automatically when the command finishes. DO NOT sleep, poll, or proactively check on its progress.";
 const BACKGROUND_INSTRUCTION: &str = "You will be notified automatically when the command finishes. DO NOT sleep, poll, or proactively check on its progress.";
 const AUTO_BACKGROUND_STEER: &str = "The foreground shell exceeded 300 seconds and was moved to the background. Continue without waiting; completion will be delivered automatically.";
 
@@ -268,23 +265,6 @@ impl ShellTool {
     pub fn tool_definition(name: &str) -> ToolDefinition {
         definition(name, include_str!("shell.tool.json"))
     }
-
-    pub async fn cancel_queued(&self, session_id: &SessionId) -> io::Result<usize> {
-        let session = session_id.encode();
-        let mut cancelled = 0;
-        for info in self.shell.list() {
-            if info.status != Status::Queued
-                || info.tool_call_id.is_none()
-                || info.metadata.get(&"sessionID".into()) != Some(&session)
-            {
-                continue;
-            }
-            if self.shell.cancel_queued_quiet(&info.id).await? {
-                cancelled += 1;
-            }
-        }
-        Ok(cancelled)
-    }
 }
 
 struct Input {
@@ -293,7 +273,6 @@ struct Input {
     timeout: Option<u64>,
     memory_limit_mb: Option<u64>,
     background: bool,
-    queue: bool,
 }
 
 struct Outcome {
@@ -304,7 +283,6 @@ struct Outcome {
     timeout: bool,
     memory_limit: bool,
     running: bool,
-    queued: bool,
     killed: bool,
     warnings: Vec<String>,
 }
@@ -381,55 +359,31 @@ impl ShellTool {
             JsonValue::Object(metadata) => Some(metadata),
             _ => unreachable!(),
         };
-        let admitted = if input.queue {
-            self.policy
-                .admit_deferred_shell(&context, vec![command.clone().into()], metadata)
-                .await?
-        } else {
-            self.policy
-                .admit(
-                    &context,
-                    "shell",
-                    vec![command.clone().into()],
-                    metadata,
-                    false,
-                )
-                .await?
-        };
+        let admitted = self
+            .policy
+            .admit(
+                &context,
+                "shell",
+                vec![command.clone().into()],
+                metadata,
+                false,
+            )
+            .await?;
         let reservation =
             admitted.map_err(|error| {
                 Failure::message(error.capacity_message().unwrap_or_else(|| {
                     format!("Session guardrail rejected shell command: {command}")
                 }))
             })?;
-        let info = if input.queue {
-            let session = context
-                .session_id
-                .as_lossless()
-                .to_utf8()
-                .unwrap_or_default();
-            match self
-                .shell
-                .enqueue(&mut prepared, &session, reservation.shell_admission())
-                .await
-            {
-                Ok(info) => info,
-                Err(platform::shell::EnqueueError::Full(full)) => {
-                    reservation.release();
-                    return Err(Failure::message(full.to_string()));
-                }
-                Err(_) => {
-                    reservation.release();
-                    return Err(generic());
-                }
-            }
-        } else {
-            self.shell
-                .create(&mut prepared)
-                .await
-                .map_err(|_| generic())?
-        };
+        let info = self
+            .shell
+            .create(&mut prepared)
+            .await
+            .map_err(|_| generic())?;
         let id = info.id.clone();
+        self.shell
+            .retain_until_exit(&id, reservation)
+            .map_err(|_| generic())?;
         let Ok(file) = info.file.to_utf8() else {
             let _ = self.shell.remove(&id).await;
             return Err(generic());
@@ -441,21 +395,9 @@ impl ShellTool {
             timeout,
             memory_limit_mb,
         };
-        if input.queue {
-            return self
-                .detach(
-                    job,
-                    watch,
-                    reservation,
-                    warnings,
-                    Some(info.queue_position.map(|position| position.get())),
-                )
-                .await
-                .map_err(|_| generic());
-        }
         if input.background {
             return self
-                .detach(job, watch, reservation, warnings, None)
+                .detach(job, watch, warnings)
                 .await
                 .map_err(|_| generic());
         }
@@ -495,15 +437,12 @@ impl ShellTool {
                 let mut outcome = settle_shell(&self.shell, &watch)
                     .await
                     .map_err(|_| generic())?;
-                reservation.release();
                 outcome.warnings = warnings;
                 Ok(outcome.into_output())
             }
             Exit::Signal | Exit::Deadline => {
                 let steer = matches!(exit, Exit::Deadline);
-                let detached = self
-                    .detach(job.clone(), watch, reservation, warnings, None)
-                    .await;
+                let detached = self.detach(job.clone(), watch, warnings).await;
                 if steer {
                     self.jobs
                         .deliver(Notice::Steer {
@@ -522,23 +461,16 @@ impl ShellTool {
         &self,
         job: Job,
         watch: Watch,
-        reservation: Reservation,
         warnings: Vec<String>,
-        queued: Option<Option<i64>>,
     ) -> io::Result<ToolOutput> {
         let started = Outcome {
-            output: match queued {
-                None => BACKGROUND_STARTED.into(),
-                Some(None) => format!("{QUEUED_STARTED}."),
-                Some(Some(position)) => format!("{QUEUED_STARTED} at position {position}."),
-            },
+            output: BACKGROUND_STARTED.into(),
             exit: None,
             shell_id: Some(id_text(&watch.id).into()),
             truncated: false,
             timeout: false,
             memory_limit: false,
-            running: queued.is_none(),
-            queued: queued.is_some(),
+            running: true,
             killed: false,
             warnings,
         };
@@ -555,7 +487,6 @@ impl ShellTool {
         let jobs = self.jobs.clone();
         tokio::spawn(async move {
             let settled = settle_shell(&shell, &watch).await;
-            reservation.release();
             let (state, text) = match settled {
                 Ok(outcome) if outcome.killed => ("cancelled", "Command cancelled".into()),
                 Ok(outcome) => ("completed", outcome.output),
@@ -564,14 +495,13 @@ impl ShellTool {
                 }
                 Err(error) => ("error", error.to_string()),
             };
-            let resume = !shell.take_quiet(&watch.id);
             let delivered = jobs
                 .deliver(Notice::Completed {
                     job,
                     shell_id: id_text(&watch.id),
                     state,
                     text,
-                    resume,
+                    resume: true,
                 })
                 .await;
             if delivered
@@ -633,8 +563,6 @@ impl Outcome {
         };
         let model = if self.running {
             BACKGROUND_INSTRUCTION.to_owned()
-        } else if self.queued {
-            QUEUED_INSTRUCTION.to_owned()
         } else if self.timeout {
             "Command timed out before completion.".to_owned()
         } else if self.memory_limit {
@@ -690,12 +618,6 @@ fn parse(input: &JsonValue) -> Result<Input, Failure> {
             None => false,
             Some(JsonValue::Bool(value)) => *value,
             Some(_) => return Err(Failure::message("Invalid tool input: Invalid background")),
-        },
-        queue: match object.get(&"channel".into()) {
-            None => false,
-            Some(JsonValue::String(value)) if value.as_str() == Some("normal") => false,
-            Some(JsonValue::String(value)) if value.as_str() == Some("queue") => true,
-            Some(_) => return Err(Failure::message("Invalid tool input: Invalid channel")),
         },
     })
 }
@@ -784,7 +706,6 @@ async fn settle_shell(shell: &platform::shell::Shell, watch: &Watch) -> io::Resu
         timeout: false,
         memory_limit: false,
         running: false,
-        queued: false,
         killed: settled.status == Status::Killed,
         warnings: Vec::new(),
     };

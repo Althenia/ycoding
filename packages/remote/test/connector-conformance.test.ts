@@ -3,6 +3,7 @@ import {
   create,
   encodeStrict,
   decodeStrict,
+  toBinary,
   encodeLossless,
   decodeLossless,
   SessionAutonomySetSchema,
@@ -11,6 +12,8 @@ import {
   fs_find_ResultSchema,
   session_family_activity_Result_dataItem_activitySchema,
   session_form_list_ResultSchema,
+  session_team_shell_list_Result_dataItemSchema,
+  session_status_ResultSchema,
   ConnectorNoticePageSchema,
   ConnectorNoticeSettlementSchema,
   ConnectorNoticeIDsSchema,
@@ -46,7 +49,7 @@ test("session requirement and workspace placement use existing scope metadata", 
 })
 
 test("relay descriptors are the canonical ordered-lane authority and exclude relay-owned notices", () => {
-  expect(relayDescriptors).toHaveLength(72)
+  expect(relayDescriptors).toHaveLength(75)
   expect(relayDescriptors.every((item) => [MutationClass.READ, MutationClass.MUTATION].includes(item.mutation))).toBe(
     true,
   )
@@ -55,6 +58,86 @@ test("relay descriptors are the canonical ordered-lane authority and exclude rel
     MutationClass.MUTATION,
   )
   expect(relayDescriptors.find((item) => item.diagnosticName === "session.get")!.mutation).toBe(MutationClass.READ)
+})
+
+test("Incident reads preserve role scopes while guidance clearing stays local-only", () => {
+  const expected = [
+    [2064, "incident.report", ScopeKind.MACHINE, []],
+    [2065, "incident.recent", ScopeKind.MACHINE, []],
+    [
+      2066,
+      "incident.guidance.get",
+      ScopeKind.LOCATION,
+      [
+        [PeerRole.REMOTE_CLIENT, [ScopeKind.SESSION]],
+        [PeerRole.RELAY, [ScopeKind.SESSION]],
+      ],
+    ],
+  ]
+  for (const descriptors of [remoteDescriptors, relayDescriptors]) {
+    const incidents = descriptors.filter((item) => item.diagnosticName.startsWith("incident."))
+    expect(
+      incidents.map((item) => [
+        item.operationId,
+        item.diagnosticName,
+        item.scope,
+        item.roleScopes.map((rule) => [rule.role, rule.scopes]),
+      ]),
+    ).toEqual(expected)
+    expect(incidents.every((item) => item.mutation === MutationClass.READ)).toBe(true)
+  }
+  const clear = operations.find((item) => item.diagnosticName === "incident.guidance.clear")!
+  expect([clear.operationId, clear.roles, clear.scope, clear.mutation, clear.roleScopes]).toEqual([
+    2067,
+    [PeerRole.LOCAL_CLIENT],
+    ScopeKind.LOCATION,
+    MutationClass.MUTATION,
+    [],
+  ])
+})
+
+test("Session status preserves absent, empty and populated lost-only classification", () => {
+  const schema = session_status_ResultSchema
+  expect(schema.fields.map((field) => [field.number, field.name])).toEqual([
+    [1, "running"],
+    [2, "attention"],
+    [3, "outstanding"],
+    [4, "failed"],
+    [5, "lost"],
+  ])
+  for (const lost of [undefined, { items: [] }, { items: [encodeLossless("ses_lost")] }]) {
+    const value = create(schema, {
+      running: { items: [] },
+      attention: { items: [encodeLossless("ses_lost")] },
+      lost,
+    })
+    const decoded = decodeStrict(schema, encodeStrict(schema, value))
+    expect(decoded).toEqual(value)
+    expect(decoded.failed).toBeUndefined()
+    expect(decoded.outstanding).toBeUndefined()
+  }
+})
+
+test("team shell metadata preserves process fields and retires scheduler fields", () => {
+  const schema = session_team_shell_list_Result_dataItemSchema
+  expect(schema.fields.map((field) => [field.number, field.name])).toEqual([
+    [1, "id"],
+    [2, "ownerID"],
+    [3, "command"],
+    [4, "status"],
+    [5, "startedAt"],
+    [6, "completedAt"],
+  ])
+  expect(schema.proto.reservedRange.map(({ start, end }) => ({ start, end }))).toContainEqual({ start: 7, end: 8 })
+  expect(schema.proto.reservedName).toContain("queuePosition")
+  const value = create(schema, {
+    id: encodeLossless("sh_child"),
+    ownerID: encodeLossless("ses_child"),
+    command: encodeLossless("echo ready"),
+    status: encodeLossless("running"),
+    startedAt: 0,
+  })
+  expect(decodeStrict(schema, encodeStrict(schema, value))).toEqual(value)
 })
 
 test("Rust/TS remote goal start, resume and stop use the shared autonomy branches", () => {
@@ -137,8 +220,8 @@ test("Rust/TS notice pages reuse foundation Notice while mutation settlement rem
 })
 
 test("remote bindings expose the same closed generated per-role operation allowlists", () => {
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(76)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(72)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
   expect(operationIDsByRole[PeerRole.AGENT]).toEqual([])
   expect(operationIDsByRole[PeerRole.SERVER]).toEqual([])
   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toEqual(

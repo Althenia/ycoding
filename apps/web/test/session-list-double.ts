@@ -104,9 +104,9 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
     order,
     search: fields.search === undefined ? undefined : requireString(fields.search, "search", 200, { allowEmpty: true }),
     searchFields:
-      fields.searchFields === undefined ? undefined : literal(fields.searchFields, ["summary"], "searchFields"),
+      fields.searchFields === undefined ? undefined : literal(fields.searchFields, ["summary"] as const, "searchFields"),
     workspace: fields.workspace === undefined ? undefined : requireString(fields.workspace, "workspace", 128),
-    status: fields.status === undefined ? undefined : literal(fields.status, ["waiting", "running", "idle"], "status"),
+    status: fields.status === undefined ? undefined : literal(fields.status, ["waiting", "running", "idle"] as const, "status"),
     parentID:
       fields.parentID === undefined
         ? undefined
@@ -163,8 +163,9 @@ export function listPage(
     .filter(
       (session) =>
         query.workspace === undefined ||
-        workspaceKey(session.projectID, resolve(session.location.directory), session.location.workspaceID) ===
-          query.workspace,
+        (session.location !== undefined &&
+          workspaceKey(session.projectID, resolve(session.location.directory), session.location.workspaceID) ===
+            query.workspace),
     )
     .filter(
       (session) =>

@@ -858,7 +858,6 @@ fn custom_guardrails_deny_and_unreadable_rules_stay_fail_closed() {
                 metadata: None,
                 skip_review: false,
                 holder: None,
-                defer_shell: false,
                 source: None,
             })
             .is_err()
@@ -917,7 +916,6 @@ async fn filesystem_tools_share_location_paths_policy_and_synthetic_instruction_
             }),
             skip_review: false,
             holder: None,
-            defer_shell: false,
             source: None,
         })
         .unwrap();
@@ -2612,21 +2610,21 @@ async fn ownership_end_cancels_held_generation_requests_and_native_work_without_
             .assert(Input {
                 session_id: id.clone(),
                 action: "shell".into(),
-                resources: vec![
-                    format!(
-                        "rm -rf '{}'",
-                        std::fs::canonicalize(f.directory()).unwrap().display()
-                    )
-                    .into(),
-                ],
+                resources: vec!["git reset --hard".into()],
                 metadata: None,
                 skip_review: false,
                 holder: None,
-                defer_shell: false,
                 source: None,
             })
             .unwrap();
-        let review_id = review.request.unwrap().id;
+        let request = review.request.unwrap();
+        assert!(request.standard);
+        assert_eq!(request.hard_review, Some(true));
+        assert_eq!(
+            request.rule_ids,
+            vec!["standard.review.git-destructive".into()]
+        );
+        let review_id = request.id;
         let reviewed = review.wait.unwrap();
         let computer = held.production.as_ref().unwrap().computer.clone();
         let target = Target::Desktop {

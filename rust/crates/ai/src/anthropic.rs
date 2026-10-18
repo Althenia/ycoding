@@ -45,6 +45,31 @@ impl AnthropicMessages {
     }
 }
 impl Protocol for AnthropicMessages {
+    fn request_headers(
+        &self,
+        request: &Request,
+        mut headers: reqwest::header::HeaderMap,
+    ) -> Result<reqwest::header::HeaderMap, Error> {
+        if crate::effort::mechanism(request) == Some(crate::effort::Provider::Anthropic)
+            && !crate::effort::openrouter_endpoint(&request.model.route.endpoint.base_url)
+        {
+            let mut values = headers
+                .get("anthropic-beta")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>();
+            if !values.contains(&crate::effort::ANTHROPIC_BETA) {
+                values.push(crate::effort::ANTHROPIC_BETA);
+            }
+            let value = reqwest::header::HeaderValue::from_str(&values.join(","))
+                .map_err(|_| Error::invalid("Invalid Anthropic beta header"))?;
+            headers.insert("anthropic-beta", value);
+        }
+        Ok(headers)
+    }
     fn id(&self) -> &'static str {
         "anthropic-messages"
     }
@@ -230,6 +255,26 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
     let mut messages = Vec::new();
     let mut pending = Vec::new();
     for (index, message) in request.messages.iter().enumerate() {
+        if let Some(effort) = crate::effort::update(message, crate::effort::Provider::Anthropic) {
+            let valid = ["low", "medium", "high", "xhigh", "max"].contains(&effort)
+                || crate::effort::openrouter_endpoint(&request.model.route.endpoint.base_url)
+                    && ["none", "minimal"].contains(&effort);
+            if crate::effort::mechanism(request) != Some(crate::effort::Provider::Anthropic)
+                || message.role != Role::System
+                || !message.content.is_empty()
+                || !valid
+            {
+                return Err(Error::invalid(
+                    "Anthropic effort update requires a supported Messages endpoint, model and thinking mode",
+                ));
+            }
+            messages.push(json::object([
+                ("role", s("system")),
+                ("content", JsonValue::Array(vec![])),
+                ("output_config", json::object([("effort", s(effort))])),
+            ]));
+            continue;
+        }
         if message.role == Role::System {
             if !pending.is_empty() {
                 return Err(Error::invalid(

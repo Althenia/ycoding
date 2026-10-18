@@ -20,8 +20,9 @@ export const ShellGroup = HttpApiGroup.make("server.shell")
       .annotateMerge(
         OpenApi.annotations({
           identifier: "shell.list",
-          summary: "List running shell commands",
-          description: "List currently running shell commands for a location. Exited commands are not included.",
+          summary: "List live shell commands",
+          description:
+            "List running shell commands for a location. Exited commands are not included.",
         }),
       ),
   )

@@ -6,14 +6,17 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 use tokio::sync::Notify;
 use ycoding_ai::llm::ToolOutput;
 use ycoding_core::{
-    platform::shell::Shell,
+    platform::{
+        process::{self, GroupSystem, KillSignal, NativeGroupSystem},
+        shell::Shell,
+    },
     resources::config::{Configuration, LoadOptions, Roots},
     tools::{
         builtin::shell::{
@@ -79,6 +82,20 @@ impl Harness {
         Self::with(ToolFixture::new(), config, auto_background).await
     }
     async fn with(fixture: ToolFixture, config: &str, auto_background: Duration) -> Self {
+        Self::with_system(
+            fixture,
+            config,
+            auto_background,
+            Arc::new(NativeGroupSystem),
+        )
+        .await
+    }
+    async fn with_system(
+        fixture: ToolFixture,
+        config: &str,
+        auto_background: Duration,
+        system: Arc<dyn GroupSystem>,
+    ) -> Self {
         fixture.authority.session("ses_tool", None, 0, false, None);
         let store = ycoding_store::Store::disposable(
             ycoding_store::Options::core(),
@@ -101,7 +118,8 @@ impl Harness {
         let shell = Arc::new(
             Shell::new(&roots, fixture.root.clone(), "project", store.client())
                 .await
-                .unwrap(),
+                .unwrap()
+                .with_process_system(system),
         );
         let jobs = Arc::new(Recorder::default());
         let tool = Arc::new(ShellTool {
@@ -249,6 +267,8 @@ async fn definition_input_bounds_and_registry_visibility() {
     assert_eq!(input["properties"]["timeout"]["maximum"], 3_600_000);
     assert_eq!(input["properties"]["memory_limit_mb"]["maximum"], 1_048_576);
     assert_eq!(input["properties"]["background"]["type"], "boolean");
+    assert!(input["properties"].get("channel").is_none());
+    assert!(!description.contains("shell queue"));
     let output = serde_json::from_str::<serde_json::Value>(&stringify_json(
         definition.output_schema.as_ref().unwrap(),
     ))
@@ -1140,4 +1160,153 @@ async fn a_linked_managed_worktree_needs_no_external_directory_approval() {
         1
     );
     harness.finish().await;
+}
+
+#[derive(Debug, Default)]
+struct FailedCleanup(AtomicBool);
+impl GroupSystem for FailedCleanup {
+    fn read(&self) -> process::Members<'_> {
+        Box::pin(async move {
+            if self.0.load(Ordering::Acquire) {
+                return Err(std::io::Error::other("injected process listing failure"));
+            }
+            NativeGroupSystem.read().await
+        })
+    }
+    fn signal(&self, target: i32, signal: KillSignal) -> std::io::Result<()> {
+        NativeGroupSystem.signal(target, signal)
+    }
+}
+
+async fn failed_cleanup_retains_family_slot(background: bool) {
+    let system = Arc::new(FailedCleanup::default());
+    let harness = Harness::with_system(
+        ToolFixture::new().with_guardrail_limits(ycoding_core::process::guardrails::Limits {
+            shells: 1,
+            shell_wait: Duration::from_secs(30),
+            ..Default::default()
+        }),
+        r#"{"shell":"/bin/sh"}"#,
+        AUTO_BACKGROUND,
+        system.clone(),
+    )
+    .await;
+    let tool = harness.tool.clone();
+    let context = harness.fixture.context();
+    let cancellation = context.cancellation.clone();
+    let mut first = Some(tokio::spawn(async move {
+        tool.settle(
+            parse_json(
+                &serde_json::json!({
+                    "command": "exec tail -f /dev/null", "timeout": 0, "background": background,
+                })
+                .to_string(),
+            )
+            .unwrap(),
+            context,
+        )
+        .await
+    }));
+    let info = until(|| harness.shell.list().into_iter().next()).await;
+    if background {
+        first.take().unwrap().await.unwrap().unwrap();
+    } else {
+        // Ensure the foreground wait has begun before cancellation exposes the failure.
+        until(|| (!harness.jobs.foreground.lock().unwrap().is_empty()).then_some(())).await;
+    }
+    system.0.store(true, Ordering::Release);
+    let failed = if background {
+        harness.shell.timeout(&info.id, 1).await.unwrap();
+        until(|| {
+            harness
+                .jobs
+                .notices
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|notice| matches!(notice, Notice::Completed { state: "error", .. }))
+                .then_some(())
+        })
+        .await;
+        true
+    } else {
+        cancellation.cancel();
+        matches!(
+            first.take().unwrap().await.unwrap(),
+            Err(Failure::Cancelled)
+        )
+    };
+    let current = || {
+        harness
+            .fixture
+            .policy
+            .guardrails
+            .status(&harness.fixture.context().session_id)
+            .unwrap()
+            .counters
+            .into_iter()
+            .find(|counter| counter.id.as_str() == Some("shells"))
+            .unwrap()
+            .current
+            .get()
+    };
+    let held_after_failure = current();
+    let tracked_after_failure = harness.shell.get(&info.id).await.unwrap().status;
+    let marker = harness.fixture.root.join("admitted-after-cleanup");
+    let tool = harness.tool.clone();
+    let context =
+        ycoding_core::tools::context::Context::new("ses_tool", "test", "msg_tool", "call_waiting")
+            .unwrap();
+    let command = format!("printf admitted > '{}'", marker.display());
+    let mut second = tokio::spawn(async move {
+        tool.settle(
+            parse_json(&serde_json::json!({"command": command}).to_string()).unwrap(),
+            context,
+        )
+        .await
+    });
+    let blocked = tokio::time::timeout(Duration::from_millis(150), &mut second)
+        .await
+        .is_err();
+    let did_not_spawn = !marker.exists() && harness.shell.list().len() == 1;
+    // Restore process discovery and reap the isolated command before asserting,
+    // including on the expected pre-fix failure path.
+    system.0.store(false, Ordering::Release);
+    harness.shell.remove(&info.id).await.unwrap();
+    if blocked {
+        tokio::time::timeout(Duration::from_secs(10), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+    let released_after_cleanup = current();
+    let ran_after_cleanup = marker.exists();
+    harness.finish().await;
+    assert!(failed);
+    assert_eq!(
+        tracked_after_failure,
+        ycoding_schema::shell::Status::Running
+    );
+    assert_eq!(
+        held_after_failure, 1,
+        "a failed teardown must retain its family slot"
+    );
+    assert!(
+        blocked,
+        "another shell must wait while the failed command remains alive"
+    );
+    assert!(did_not_spawn, "waiting admission must not start a process");
+    assert_eq!(released_after_cleanup, 0);
+    assert!(ran_after_cleanup);
+}
+
+#[tokio::test]
+async fn cancelled_foreground_cleanup_failure_holds_the_family_slot_until_retry() {
+    failed_cleanup_retains_family_slot(false).await;
+}
+
+#[tokio::test]
+async fn detached_timeout_cleanup_failure_holds_the_family_slot_until_retry() {
+    failed_cleanup_retains_family_slot(true).await;
 }

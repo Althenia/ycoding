@@ -195,17 +195,32 @@ impl Fixture {
         custom: ycoding_core::process::guardrails::CustomLayers,
         enabled: bool,
     ) -> ycoding_core::process::guardrails::Guardrails {
+        self.guardrails_with_paths(
+            project,
+            ycoding_core::process::guardrails::Paths {
+                workdir: workdir.to_string_lossy().as_ref().into(),
+                project: workdir.to_string_lossy().as_ref().into(),
+                home: self.temp.home.to_string_lossy().as_ref().into(),
+                tmpdir: None,
+                trusted_paths: vec![],
+            },
+            custom,
+            enabled,
+        )
+    }
+
+    pub fn guardrails_with_paths(
+        &self,
+        project: &str,
+        paths: ycoding_core::process::guardrails::Paths,
+        custom: ycoding_core::process::guardrails::CustomLayers,
+        enabled: bool,
+    ) -> ycoding_core::process::guardrails::Guardrails {
         ycoding_core::process::guardrails::Guardrails::new(
             self.authority(),
             self.permissions(project),
             ycoding_core::process::guardrails::Settings {
-                paths: ycoding_core::process::guardrails::Paths {
-                    workdir: workdir.to_string_lossy().as_ref().into(),
-                    project: workdir.to_string_lossy().as_ref().into(),
-                    home: self.temp.home.to_string_lossy().as_ref().into(),
-                    tmpdir: None,
-                    trusted_paths: vec![],
-                },
+                paths,
                 global_roots: vec![],
                 custom,
                 enabled,

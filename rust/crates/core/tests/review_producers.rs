@@ -179,7 +179,6 @@ fn shell(session: &SessionId, command: &str) -> Input {
         metadata: None,
         skip_review: false,
         holder: None,
-        defer_shell: false,
         source: None,
     }
 }
@@ -629,4 +628,311 @@ fn the_review_policy_reports_the_configured_model_review_switches() {
         }
     );
     assert!(harness.guardrails(16, true).review_policy().decide_reviews);
+}
+
+#[derive(Default)]
+struct HeldFormDecision {
+    entered: tokio::sync::Notify,
+    finish: tokio::sync::Notify,
+}
+
+impl ycoding_core::process::guardrails::decision::Evaluator for HeldFormDecision {
+    fn evaluate<'a>(
+        &'a self,
+        _: JsonValue,
+        invocation: ycoding_core::resources::decision::Invocation<'a>,
+    ) -> ycoding_core::process::guardrails::decision::EvaluateFuture<'a> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            tokio::select! {
+                biased;
+                _ = invocation.cancellation.cancelled() => Err(ycoding_core::resources::decision::Error::Cancelled),
+                _ = self.finish.notified() => Ok(parse_json(r#"{"response":{"answers":[{"name":"f0","type":"choice","choice":true,"confidence":1}]}}"#).unwrap()),
+            }
+        })
+    }
+}
+
+fn boolean_form(session: &SessionId, id: &str) -> form::Info {
+    form::Info::decode(
+        &parse_json(&format!(
+            r#"{{"id":"{id}","sessionID":"{}","title":"Choose","fields":[{{"key":"proceed","type":"boolean","required":true}}]}}"#,
+            text(session.as_lossless())
+        )).unwrap(),
+    ).unwrap()
+}
+
+#[tokio::test]
+async fn sleeping_form_decision_is_invisible_untimed_and_respects_auto_answer_revocation() {
+    let harness = harness();
+    let root = harness.fixture.session("ses_hidden", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let evaluator = Arc::new(HeldFormDecision::default());
+    let forms = harness
+        .forms(16)
+        .with_timeout_seconds(1)
+        .with_decision(evaluator.clone());
+    let info = boolean_form(&root, "frm_hidden");
+    let wait = forms.ask(info.clone()).unwrap();
+    evaluator.entered.notified().await;
+    assert!(forms.has_pending());
+    assert!(forms.list(None).is_empty());
+    assert!(harness.events("form.created").is_empty());
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    assert_eq!(forms.state(&info.id).unwrap(), form::State::Pending);
+    assert!(harness.events("form.timed_out").is_empty());
+    harness
+        .autonomy
+        .set_auto_answer(&root, false)
+        .await
+        .unwrap();
+    evaluator.finish.notify_one();
+    assert!(matches!(wait.await.unwrap(), form::State::Deferred { .. }));
+    assert_eq!(harness.items(&root)[0].deferral.reason, Reason::Disabled);
+    assert!(!forms.has_pending());
+    assert!(harness.events("form.created").is_empty());
+    assert!(harness.events("form.replied").is_empty());
+}
+
+#[tokio::test]
+async fn shutdown_settles_an_invisible_form_decision_without_visible_events_or_reviews() {
+    let harness = harness();
+    let root = harness
+        .fixture
+        .session("ses_shutdown", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let evaluator = Arc::new(HeldFormDecision::default());
+    let forms = harness.forms(16).with_decision(evaluator.clone());
+    let wait = forms.ask(boolean_form(&root, "frm_shutdown")).unwrap();
+    evaluator.entered.notified().await;
+    assert!(forms.shutdown().is_empty());
+    assert_eq!(wait.await.unwrap(), form::State::Cancelled);
+    evaluator.finish.notify_one();
+    tokio::task::yield_now().await;
+    assert!(forms.list(None).is_empty());
+    assert!(harness.events("form.created").is_empty());
+    assert!(harness.events("form.cancelled").is_empty());
+    assert!(harness.events("form.replied").is_empty());
+    assert!(harness.items(&root).is_empty());
+}
+
+#[tokio::test]
+async fn sleeping_inference_reports_a_full_review_box_without_publishing_a_form() {
+    let harness = harness();
+    let root = harness
+        .fixture
+        .session("ses_full_inference", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let evaluator = Arc::new(HeldFormDecision::default());
+    let forms = harness.forms(0).with_decision(evaluator.clone());
+    let info = boolean_form(&root, "frm_full_inference");
+    let wait = forms.ask(info.clone()).unwrap();
+    evaluator.entered.notified().await;
+    harness
+        .autonomy
+        .set_auto_answer(&root, false)
+        .await
+        .unwrap();
+    evaluator.finish.notify_one();
+    assert_eq!(wait.await.unwrap(), form::State::Cancelled);
+    assert!(matches!(
+        forms.failure(&info.id),
+        Some(ycoding_core::tools::policy::forms::Error::ReviewFull { limit: 0 })
+    ));
+    assert!(forms.list(None).is_empty());
+    assert!(harness.events("form.created").is_empty());
+    assert!(harness.events("form.cancelled").is_empty());
+    assert!(harness.items(&root).is_empty());
+}
+
+#[tokio::test]
+async fn session_cancellation_settles_invisible_form_work_without_publishing_it() {
+    let harness = harness();
+    let root = harness
+        .fixture
+        .session("ses_session_cancel", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let evaluator = Arc::new(HeldFormDecision::default());
+    let forms = harness.forms(16).with_decision(evaluator.clone());
+    let wait = forms
+        .ask(boolean_form(&root, "frm_session_cancel"))
+        .unwrap();
+    evaluator.entered.notified().await;
+    assert!(forms.has_pending());
+    assert!(forms.cancel_session(&root).is_empty());
+    assert!(!forms.has_pending());
+    assert_eq!(wait.await.unwrap(), form::State::Cancelled);
+    evaluator.finish.notify_one();
+    tokio::task::yield_now().await;
+    assert!(forms.list(None).is_empty());
+    assert!(harness.events("form.created").is_empty());
+    assert!(harness.events("form.cancelled").is_empty());
+    assert!(harness.events("form.replied").is_empty());
+    assert!(harness.items(&root).is_empty());
+}
+
+#[derive(Default)]
+struct FirstListedDecision(Mutex<Vec<JsonValue>>);
+impl ycoding_core::process::guardrails::decision::Evaluator for FirstListedDecision {
+    fn evaluate<'a>(
+        &'a self,
+        input: JsonValue,
+        _: ycoding_core::resources::decision::Invocation<'a>,
+    ) -> ycoding_core::process::guardrails::decision::EvaluateFuture<'a> {
+        Box::pin(async move {
+            self.0.lock().unwrap().push(input.clone());
+            let JsonValue::Object(input) = input else {
+                panic!()
+            };
+            let Some(JsonValue::Object(request)) = input.get(&"request".into()) else {
+                panic!()
+            };
+            let Some(JsonValue::Array(questions)) = request.get(&"questions".into()) else {
+                panic!()
+            };
+            let answers = questions
+                .iter()
+                .map(|question| {
+                    let JsonValue::Object(question) = question else {
+                        panic!()
+                    };
+                    let Some(JsonValue::Array(choices)) = question.get(&"choices".into()) else {
+                        panic!()
+                    };
+                    let JsonValue::Object(first) = &choices[0] else {
+                        panic!()
+                    };
+                    ycoding_schema::ObjectEncoder::new()
+                        .field("name", question.get(&"name".into()).unwrap())
+                        .field("type", "choice")
+                        .field("choice", first.get(&"value".into()).unwrap())
+                        .field("confidence", &1.0)
+                        .finish()
+                })
+                .collect::<Vec<_>>();
+            Ok(ycoding_schema::ObjectEncoder::new()
+                .field(
+                    "response",
+                    &ycoding_schema::ObjectEncoder::new()
+                        .field("answers", &answers)
+                        .finish(),
+                )
+                .finish())
+        })
+    }
+}
+
+#[tokio::test]
+async fn sleeping_question_and_form_helpers_redact_evidence_and_map_choices_to_original_values() {
+    let harness = harness();
+    let root = harness
+        .fixture
+        .session("ses_redacted_choices", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let evaluator = Arc::new(FirstListedDecision::default());
+    let questions = harness.questions(16).with_decision(evaluator.clone());
+    let mut request = question(
+        &root,
+        "que_redacted",
+        r#"[{"label":"TOKEN=question-choice-secret","description":"Bearer question-description-secret"},{"label":"Safe","description":"Fallback"}]"#,
+    );
+    request.questions[0].question = "Bearer question-evidence-secret".into();
+    let Admission::Pending(wait) = questions.ask(request).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        wait.await.unwrap().unwrap(),
+        vec![vec![LosslessString::from("TOKEN=question-choice-secret")]]
+    );
+    let forms = harness.forms(16).with_decision(evaluator.clone());
+    let info = form::Info::decode(&parse_json(&format!(r#"{{"id":"frm_redacted","sessionID":"{}","title":"Bearer form-evidence-secret","fields":[{{"key":"result","type":"string","required":true,"options":[{{"value":"TOKEN=form-choice-secret","label":"Bearer form-description-secret"}},{{"value":"safe","label":"Safe"}}]}}]}}"#, text(root.as_lossless()))).unwrap()).unwrap();
+    let form::State::Answered(answer) = forms.ask(info).unwrap().await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        answer.0.get(&"result".into()),
+        Some(&JsonValue::String("TOKEN=form-choice-secret".into()))
+    );
+    let calls = evaluator.0.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    for input in &*calls {
+        let sent = ycoding_schema::stringify_json(input);
+        assert!(sent.contains("[redacted]"));
+        for secret in [
+            "question-choice-secret",
+            "question-description-secret",
+            "question-evidence-secret",
+            "form-choice-secret",
+            "form-description-secret",
+            "form-evidence-secret",
+        ] {
+            assert!(!sent.contains(secret), "helper received {secret}");
+        }
+    }
+    assert!(harness.items(&root).is_empty());
+}
+
+#[tokio::test]
+async fn redaction_collisions_defer_without_invoking_a_question_or_form_helper() {
+    let harness = harness();
+    let root = harness
+        .fixture
+        .session("ses_colliding_choices", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let evaluator = Arc::new(FirstListedDecision::default());
+    let questions = harness.questions(16).with_decision(evaluator.clone());
+    let Admission::Pending(wait) = questions.ask(question(&root, "que_collision", r#"[{"label":"TOKEN=alpha-secret","description":"First"},{"label":"TOKEN=beta-secret","description":"Second"}]"#)).unwrap() else { panic!() };
+    assert!(matches!(
+        wait.await.unwrap(),
+        Err(questions::Error::Deferred { .. })
+    ));
+    let forms = harness.forms(16).with_decision(evaluator.clone());
+    let info = form::Info::decode(&parse_json(&format!(r#"{{"id":"frm_collision","sessionID":"{}","title":"Choose","fields":[{{"key":"result","type":"string","required":true,"options":[{{"value":"TOKEN=alpha-secret","label":"First"}},{{"value":"TOKEN=beta-secret","label":"Second"}}]}}]}}"#, text(root.as_lossless()))).unwrap()).unwrap();
+    assert!(matches!(
+        forms.ask(info).unwrap().await.unwrap(),
+        form::State::Deferred { .. }
+    ));
+    assert!(evaluator.0.lock().unwrap().is_empty());
+    let items = harness.items(&root);
+    assert_eq!(items.len(), 2);
+    assert!(
+        items
+            .iter()
+            .all(|item| item.deferral.reason == Reason::Error)
+    );
+}
+
+#[tokio::test]
+async fn oversized_sleeping_question_evidence_never_reaches_the_helper() {
+    let harness = harness();
+    let root = harness
+        .fixture
+        .session("ses_oversized_choice", None, 0, false, None);
+    harness.autonomy.set_auto_answer(&root, true).await.unwrap();
+    asleep(&harness, &root).await;
+    let evaluator = Arc::new(FirstListedDecision::default());
+    let questions = harness.questions(16).with_decision(evaluator.clone());
+    let mut request = question(
+        &root,
+        "que_oversized",
+        r#"[{"label":"Safe","description":"Fallback"}]"#,
+    );
+    request.questions[0].question = "x"
+        .repeat(ycoding_core::resources::decision::judgment::BYTE_LIMIT + 1)
+        .into();
+    let Admission::Pending(wait) = questions.ask(request).unwrap() else {
+        panic!()
+    };
+    assert!(matches!(
+        wait.await.unwrap(),
+        Err(questions::Error::Deferred { .. })
+    ));
+    assert!(evaluator.0.lock().unwrap().is_empty());
+    assert_eq!(harness.items(&root)[0].deferral.reason, Reason::Error);
 }

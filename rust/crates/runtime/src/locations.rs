@@ -144,8 +144,8 @@ impl Pending {
             .cloned()
             .collect::<Vec<_>>();
         !self.permissions.list().is_empty()
-            || !self.questions.list().is_empty()
-            || !self.forms.list(None).is_empty()
+            || self.questions.has_pending()
+            || self.forms.has_pending()
             || sessions.iter().any(|session| {
                 self.guardrails
                     .for_session(session)
@@ -158,10 +158,8 @@ impl Pending {
         }
         self.questions.cancel_session(session);
         self.guardrails.cancel_session(session);
-        for form in self.forms.list(Some(session.as_lossless())) {
-            if self.forms.cancel(&form.id).is_err() {
-                tracing::error!("pending Form cancellation failed");
-            }
+        if !self.forms.cancel_session(session).is_empty() {
+            tracing::error!("pending Form cancellation failed");
         }
         let requests = self
             .reviews
@@ -858,15 +856,6 @@ impl Locations {
         sets
     }
 
-    pub(crate) async fn cancel_queued_shells(&self, session: &session::Id) -> Result<(), Failure> {
-        for services in self.sets() {
-            if let Some(composed) = &services.production {
-                composed.cancel_queued_shells(session).await?;
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) async fn cancel_session(&self, session: &session::Id) -> Result<(), Failure> {
         match &self.0.factory {
             Some(factory) => factory.cancel_session(session).await,
@@ -875,7 +864,6 @@ impl Locations {
     }
 
     pub(crate) async fn release_controls(&self, session: &session::Id) -> Result<(), Failure> {
-        self.cancel_queued_shells(session).await?;
         let locations = self.clone();
         let cancelling = session.clone();
         let isolated = tokio::task::spawn_blocking(move || {

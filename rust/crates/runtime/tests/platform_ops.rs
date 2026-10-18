@@ -1372,64 +1372,49 @@ async fn pty_external_expired_ticket_and_stale_control_are_rejected() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_wire_reports_queue_position_and_removes_queued_shells() {
+async fn shell_wire_lists_concurrent_running_commands_and_removes_them_independently() {
     let fixture = Fixture::new().await;
     let (server, mut client) = fixture.open().await;
-    let enqueue = |command: &'static str| {
-        let fixture = &fixture;
-        async move {
-            let input = ycoding_core::ycoding_schema::shell::CreateInput::decode(
-                &ycoding_core::ycoding_schema::parse_json(&format!(
-                    r#"{{"command":"{command}","timeout":0}}"#
-                ))
-                .unwrap(),
-            )
+    let create = async |command: &str| {
+        let input = ycoding_core::ycoding_schema::shell::CreateInput::decode(
+            &ycoding_core::ycoding_schema::ObjectEncoder::new()
+                .field("command", command)
+                .field("timeout", &0.0)
+                .finish(),
+        )
+        .unwrap();
+        let mut prepared = fixture
+            .platform
+            .shell
+            .prepare(input, &fixture.platform.config)
             .unwrap();
-            let mut prepared = fixture
-                .platform
-                .shell
-                .prepare(input, &fixture.platform.config)
-                .unwrap();
-            fixture
-                .platform
-                .shell
-                .enqueue(&mut prepared, "ses_wire_queue", None)
-                .await
-                .unwrap()
-        }
+        fixture.platform.shell.create(&mut prepared).await.unwrap()
     };
-    let holder = enqueue("sleep 30").await;
-    let waiting = enqueue("printf queued").await;
-    assert_eq!(waiting.status, Status::Queued);
-    let holder_id = text_of(&holder.id);
-    let waiting_id = text_of(&waiting.id);
-    let mut get = async |id: String| {
-        ask::<_, v5::ShellGetResult>(
+    let first = create("sleep 60").await;
+    let second = create("sleep 60").await;
+    assert_eq!(first.status, Status::Running);
+    assert_eq!(second.status, Status::Running);
+    assert_ne!(first.id, second.id);
+    assert_ne!(first.pid, second.pid);
+    let first_id = text_of(&first.id);
+    let second_id = text_of(&second.id);
+    for id in [&first_id, &second_id] {
+        let running: v5::ShellGetResult = ask(
             &mut client,
             "shell.get",
             fixture.scope(),
             v5::ShellGetRequest {
-                params: v5::ShellGetRequestParams { id: text(&id) },
+                params: v5::ShellGetRequestParams { id: text(id) },
                 query: query(fixture.directory(), None),
             },
         )
-        .await
-        .data
-    };
-    for _ in 0..500 {
-        if get(holder_id.clone()).await.status == v5::ShellInfoStatus::Running as i32 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        .await;
+        assert_eq!(running.data.status, v5::ShellInfoStatus::Running as i32);
+        assert!(running.data.pid.is_some());
+        assert!(running.data.exit.is_none());
+        assert!(running.data.time.started > 0.0);
+        assert!(running.data.time.completed.is_none());
     }
-    let running = get(holder_id.clone()).await;
-    assert_eq!(running.status, v5::ShellInfoStatus::Running as i32);
-    assert!(running.queue_position.is_none());
-    assert!(running.time.queued.is_some());
-    let queued = get(waiting_id.clone()).await;
-    assert_eq!(queued.status, v5::ShellInfoStatus::Queued as i32);
-    assert_eq!(queued.queue_position, Some(1));
-    assert!(queued.pid.is_none() && queued.exit.is_none() && queued.time.queued.is_none());
     let list: v5::ShellListResult = ask(
         &mut client,
         "shell.list",
@@ -1447,8 +1432,8 @@ async fn shell_wire_reports_queue_position_and_removes_queued_shells() {
         .collect();
     listed.sort();
     let mut expected = vec![
-        (holder_id.clone(), v5::ShellInfoStatus::Running as i32),
-        (waiting_id.clone(), v5::ShellInfoStatus::Queued as i32),
+        (first_id.clone(), v5::ShellInfoStatus::Running as i32),
+        (second_id.clone(), v5::ShellInfoStatus::Running as i32),
     ];
     expected.sort();
     assert_eq!(listed, expected);
@@ -1458,7 +1443,7 @@ async fn shell_wire_reports_queue_position_and_removes_queued_shells() {
         fixture.scope(),
         v5::ShellRemoveRequest {
             params: v5::ShellRemoveRequestParams {
-                id: text(&waiting_id),
+                id: text(&second_id),
             },
             query: query(fixture.directory(), None),
         },
@@ -1470,25 +1455,59 @@ async fn shell_wire_reports_queue_position_and_removes_queued_shells() {
         fixture.scope(),
         v5::ShellGetRequest {
             params: v5::ShellGetRequestParams {
-                id: text(&waiting_id),
+                id: text(&second_id),
             },
             query: query(fixture.directory(), None),
         },
     )
     .await;
-    assert_eq!(units(&missing.id), waiting_id);
+    assert_eq!(units(&missing.id), second_id);
+    let remaining: v5::ShellGetResult = ask(
+        &mut client,
+        "shell.get",
+        fixture.scope(),
+        v5::ShellGetRequest {
+            params: v5::ShellGetRequestParams {
+                id: text(&first_id),
+            },
+            query: query(fixture.directory(), None),
+        },
+    )
+    .await;
+    assert_eq!(remaining.data.status, v5::ShellInfoStatus::Running as i32);
+    let list: v5::ShellListResult = ask(
+        &mut client,
+        "shell.list",
+        fixture.scope(),
+        v5::ShellListRequest {
+            query: query(fixture.directory(), None),
+        },
+    )
+    .await;
+    assert_eq!(list.data.items.len(), 1);
+    assert_eq!(units(&list.data.items[0].id), first_id);
     let _: v5::ShellRemoveResult = ask(
         &mut client,
         "shell.remove",
         fixture.scope(),
         v5::ShellRemoveRequest {
             params: v5::ShellRemoveRequestParams {
-                id: text(&holder_id),
+                id: text(&first_id),
             },
             query: query(fixture.directory(), None),
         },
     )
     .await;
+    let list: v5::ShellListResult = ask(
+        &mut client,
+        "shell.list",
+        fixture.scope(),
+        v5::ShellListRequest {
+            query: query(fixture.directory(), None),
+        },
+    )
+    .await;
+    assert!(list.data.items.is_empty());
     drop(client);
     server.shutdown().await.unwrap();
     fixture.shutdown().await;

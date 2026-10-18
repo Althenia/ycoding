@@ -495,7 +495,6 @@ async fn session_interrupt(
     let core = invocation.core()?;
     let id = invocation.session(&request.params.session_id)?;
     let _ = core.execution.request_interrupt(&id);
-    core.locations.cancel_queued_shells(&id).await?;
     core.execution.await_idle(&id).await;
     Ok(v5::SessionInterruptResult { data: v5::Empty {} })
 }
@@ -508,7 +507,6 @@ async fn session_remove(
     let id = invocation.session(&request.params.session_id)?;
     crate::session_autonomy::wake_root(core, &id).await?;
     let _ = core.execution.request_interrupt(&id);
-    core.locations.cancel_queued_shells(&id).await?;
     core.execution.await_idle(&id).await;
     core.locations.cancel_session(&id).await?;
     let removed = core

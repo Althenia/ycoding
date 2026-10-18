@@ -83,6 +83,28 @@ fn message(f: &Fixture, index: usize) -> String {
 }
 
 #[tokio::test]
+async fn goal_steers_read_the_current_session_answer_policy() {
+    within(async {
+        let f = Fixture::new(Options {
+            goal: true,
+            ..Options::default()
+        })
+        .await;
+        let service = service(&f, Some(goal::agent()), None);
+        f.provider
+            .reply(Reply::Text("Continue authorized work.".into()));
+        assert!(service.steer(request(&f.id, None)).await.is_some());
+        assert!(message(&f, 0).contains("Automatic answering: disabled"));
+        f.autonomy.set_auto_answer(&f.id, true).await.unwrap();
+        f.provider
+            .reply(Reply::Text("Continue authorized work.".into()));
+        assert!(service.steer(request(&f.id, None)).await.is_some());
+        assert!(message(&f, 1).contains("Automatic answering: enabled"));
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn synthesis_and_start_steer_match_ts_messages_and_leave_the_user_owned_state_unchanged() {
     within(async {
         let f = Fixture::new(Options { goal: true, user: Some("The project uses SQLite.".into()), ..Options::default() }).await;
@@ -97,7 +119,7 @@ async fn synthesis_and_start_steer_match_ts_messages_and_leave_the_user_owned_st
         assert_eq!(message(&f, 0), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nGoal synthesis request:\nFix the migration");
         f.provider.reply(Reply::Text("Inspect the migration next.".into()));
         assert_eq!(service.start(&session, &Goal::new(&text, Some("Fix the migration"), None), &cancellation).await.unwrap(), "Inspect the migration next.");
-        assert_eq!(message(&f, 1), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nUser-proxy steer request:\nActive goal: Repair the migration and verify the suite.\nPhase: start\nCurrent iteration: 0\nLatest assistant response: The build is fixed.\nPreserve the active goal and produce only the next concise user-proxy steer.");
+        assert_eq!(message(&f, 1), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nUser-proxy steer request:\nActive goal: Repair the migration and verify the suite.\nPhase: start\nCurrent iteration: 0\nAutomatic answering: disabled\nLatest assistant response: The build is fixed.\nPreserve the active goal and produce only the next concise user-proxy steer.");
         assert_eq!(f.sessions.context(&f.id).unwrap(), before);
         assert_eq!(f.autonomy.snapshot(&f.id).unwrap(), autonomy);
         assert_eq!(f.sessions.get(&f.id).unwrap().unwrap().tokens.input.get(), 20.0);
@@ -176,7 +198,7 @@ async fn contextual_goal_steer_uses_the_configured_system_and_records_accounting
         let JsonValue::Array(messages) = field(sent, "messages") else { panic!("messages") };
         assert_eq!(text(&field(&messages[0], "content")), "Other system");
         assert!(field(sent, "tools") == JsonValue::Null || field(sent, "tools") == JsonValue::Array(vec![]));
-        assert_eq!(message(&f, 0), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nUser-proxy steer request:\nActive goal: Repair the migration and verify the focused suite.\nPhase: continue\nCurrent iteration: 2\nLatest assistant response: Which migration should I inspect?\nPreserve the active goal and produce only the next concise user-proxy steer.");
+        assert_eq!(message(&f, 0), "Recent conversation context:\nUser: The project uses SQLite.\nAssistant: The build is fixed.\n\nUser-proxy steer request:\nActive goal: Repair the migration and verify the focused suite.\nPhase: continue\nCurrent iteration: 2\nAutomatic answering: disabled\nLatest assistant response: Which migration should I inspect?\nPreserve the active goal and produce only the next concise user-proxy steer.");
         let records = ycoding_store::resources::requests(&f.store.snapshot().unwrap(), f.id.as_lossless(), ycoding_store::IndexOrder::Ascending, None, 10).unwrap();
         let row = &records[0].record;
         assert_eq!((row.source.as_str(), row.agent.as_str(), row.request, row.attempts), (Some("goal"), Some("goal"), 1, 1));

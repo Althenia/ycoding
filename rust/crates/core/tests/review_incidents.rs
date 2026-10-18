@@ -262,7 +262,6 @@ fn shell(session: &SessionId, command: &str, source: Option<&str>) -> Input {
         metadata: None,
         skip_review: false,
         holder: None,
-        defer_shell: false,
         source: source.map(|message| guardrail::Source {
             message_id: session_message_id::Id::new(message).unwrap(),
             call_id: "call_awake".into(),

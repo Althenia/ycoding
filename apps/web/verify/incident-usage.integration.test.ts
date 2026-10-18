@@ -170,6 +170,7 @@ test("guidance is read-only and Session-scoped: no clear control, and the read n
     await wait(page, `!!document.querySelector('.incidents__preview')`)
     expect(await requests(page, "incident.guidance.get")).toEqual([{ provider: "openai", model: "gpt-6-sol" }])
     expect(await page.evaluate<string[]>(`window.incidentRequests().filter((item) => item.operation === 'incident.guidance.get').map((item) => item.sessionID)`)).toEqual(["ses_fixture"])
+    expect(await text(page, ".incidents__guidance")).toContain("Reflects the selected Session’s settings.")
     expect(await page.evaluate<boolean>(`document.querySelector('[data-incident-clear]') === null`)).toBe(true)
     expect(await requests(page, "incident.guidance.clear")).toEqual([])
   } finally { await page.close() }
@@ -191,7 +192,7 @@ test("loading, empty, unsupported, failed, and detail-failure states each speak 
   const old = await open("old")
   try {
     await wait(old, `document.querySelector('.incidents')?.textContent.includes('Update YCoding on this machine to see model incidents.')`)
-    expect(await page_has(old, '.incidents [role="alert"]')).toBe(false)
+    expect(await old.evaluate<boolean>(`!!document.querySelector('.incidents [role="alert"]')`)).toBe(false)
   } finally { await old.close() }
   const failed = await open("error")
   try {

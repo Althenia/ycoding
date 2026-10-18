@@ -464,6 +464,8 @@ message session_team_shell_list_Result_dataItem {
   required LosslessString status = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
   required double startedAt = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" }];
   optional double completedAt = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" }];
+  reserved 7;
+  reserved "queuePosition";
 }
 
 message session_team_shell_kill_Request_payload {
@@ -586,6 +588,7 @@ message session_status_Result {
   required session_status_Result_attention attention = 2;
   optional session_status_Result_outstanding outstanding = 3;
   optional session_status_Result_failed failed = 4;
+  optional session_status_Result_lost lost = 5;
 }
 
 message session_status_Result_running {
@@ -601,6 +604,10 @@ message session_status_Result_outstanding {
 }
 
 message session_status_Result_failed {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
+}
+
+message session_status_Result_lost {
   repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
 }
 

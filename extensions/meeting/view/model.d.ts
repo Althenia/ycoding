@@ -25,6 +25,7 @@ export function ownerBindingStatus(
 ): string
 export function formatSeconds(value: unknown): string
 export function describeView(view: ViewInput): {
+  phase: "setup" | "live" | "finalizing" | "recovery" | "review"
   status: string
   tone: string
   health: string

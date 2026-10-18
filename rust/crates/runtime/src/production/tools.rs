@@ -49,7 +49,7 @@ pub(super) fn compose(
     memory: Arc<memory::Service>,
     platform: &crate::services::PlatformServices,
     handles: Handles<'_>,
-) -> Result<(Arc<Registry>, Registration, QueuedShells), Failure> {
+) -> Result<(Arc<Registry>, Registration), Failure> {
     let directory = std::fs::canonicalize(PathBuf::from(
         services
             .info
@@ -241,21 +241,7 @@ pub(super) fn compose(
     let registration = registry
         .register(entries, registry::Options::direct())
         .map_err(|_| unavailable("built-in tool registration"))?;
-    Ok((registry, registration, QueuedShells(shell)))
-}
-
-pub(crate) struct QueuedShells(Arc<Shell>);
-
-impl QueuedShells {
-    pub(crate) async fn cancel(
-        &self,
-        session: &ycoding_core::ycoding_schema::session::Id,
-    ) -> std::io::Result<usize> {
-        match self.0.tool.get() {
-            Some(tool) => tool.cancel_queued(session).await,
-            None => Ok(0),
-        }
-    }
+    Ok((registry, registration))
 }
 
 struct Shell {

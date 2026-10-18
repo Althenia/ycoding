@@ -19,6 +19,7 @@ const compatibilityPaths = [
 ]
 
 const externalPaths = [
+  /^apps\/web\/src\/assets\/providers\/opencode\.svg$/,
   /^packages\/core\/src\/plugin\/provider\/opencode\.ts$/,
   /^packages\/core\/test\/plugin\/provider-opencode\.test\.ts$/,
   /^packages\/cli\/script\/models-dev\.snapshot\.json$/,

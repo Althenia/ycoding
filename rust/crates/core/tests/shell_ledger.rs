@@ -524,3 +524,24 @@ async fn lost_notice_is_acknowledged_only_by_a_newer_execution_start_and_pruned_
     ledger.reconcile(Duration::ZERO).await.unwrap();
     assert!(row(&fixture, &missing).is_none());
 }
+
+#[tokio::test]
+async fn invalid_process_ids_never_match_surviving_groups_and_are_reconciled_without_signalling() {
+    let fixture = Fixture::default();
+    let ledger = Ledger::new(fixture.store.client());
+    let shell = id("sh_invalid_process");
+    ledger.record(&shell, 0, None, &owner()).await.unwrap();
+    let mut invalid = row(&fixture, &shell).unwrap();
+    let snapshot = [Process {
+        pid: 42,
+        pgid: 0,
+        started: "Wed Oct 14 01:02:03 2026".into(),
+    }];
+    assert!(!ledger::survivors(&invalid, &snapshot));
+    invalid.pid = -1;
+    assert!(!ledger::survivors(&invalid, &snapshot));
+    let report = ledger.reconcile(Duration::from_millis(10)).await.unwrap();
+    assert!(!report.process_list_unavailable);
+    assert!(report.signal_failures.is_empty());
+    assert!(row(&fixture, &shell).is_none());
+}

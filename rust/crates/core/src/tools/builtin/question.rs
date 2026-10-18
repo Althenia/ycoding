@@ -4,7 +4,7 @@ use super::{
 };
 use crate::tools::{
     context::{Context, policy::LeafPolicy},
-    policy::forms::Forms,
+    policy::forms::{Error as FormError, Forms},
     registry::{Failure, Tool, ToolFuture},
 };
 use std::sync::Arc;
@@ -74,6 +74,7 @@ impl Tool for Question {
                                 .collect::<Vec<_>>(),
                         )
                         .field("custom", &true)
+                        .optional("required", &question.options.is_empty().then_some(true))
                         .finish()
                 })
                 .collect::<Vec<_>>();
@@ -104,14 +105,49 @@ impl Tool for Question {
                     .finish(),
             )
             .map_err(invalid)?;
-            let wait = self
-                .forms
-                .ask(form)
-                .map_err(|error| Failure::Defect(format!("{error:?}")))?;
-            let state = tokio::select! { biased; _ = context.cancellation.cancelled() => return Err(Failure::Cancelled), state = wait => state.map_err(|_| Failure::Cancelled)? };
-            let form::State::Answered(answer) = state else {
-                return Err(Failure::Defect("The user dismissed this question".into()));
+            let form_id = form.id.clone();
+            let wait = match self.forms.ask(form) {
+                Ok(wait) => wait,
+                Err(FormError::ReviewFull { .. }) => return Ok(unanswered(questions.len(), "reviewFull", JsonValue::Bool(true), "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains.".into())),
+                Err(error) => return Err(Failure::Defect(format!("{error:?}"))),
             };
+            let state = tokio::select! { biased; _ = context.cancellation.cancelled() => return Err(Failure::Cancelled), state = wait => state.map_err(|_| Failure::Cancelled)? };
+            if let Some(error) = self.forms.failure(&form_id) {
+                if matches!(error, FormError::ReviewFull { .. }) {
+                    return Ok(unanswered(questions.len(), "reviewFull", JsonValue::Bool(true), "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains.".into()));
+                }
+                return Err(Failure::Defect(format!("{error:?}")));
+            }
+            let answer = match state {
+                form::State::Answered(answer) => answer,
+                form::State::TimedOut { seconds } => {
+                    return Ok(unanswered(
+                        questions.len(),
+                        "timedOutAfterSeconds",
+                        ycoding_schema::DomainEncode::encode(&seconds),
+                        format!(
+                            "No answer arrived within {} seconds, so the questions were closed without a user answer. Proceed using your own best judgment.",
+                            seconds.get()
+                        ),
+                    ));
+                }
+                form::State::Deferred { item_id } => {
+                    return Ok(unanswered(
+                        questions.len(),
+                        "deferredItemID",
+                        ycoding_schema::DomainEncode::encode(&item_id),
+                        format!(
+                            "The user is asleep. These questions were added to the user's review box as item {}; the answer will arrive later as a user message. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.",
+                            item_id.as_lossless().to_utf8().unwrap_or_default()
+                        ),
+                    ));
+                }
+                _ => return Err(Failure::Defect("The user dismissed this question".into())),
+            };
+            let automatic = self
+                .forms
+                .answered_automatically(&form_id)
+                .map_err(|error| Failure::Defect(format!("{error:?}")))?;
             let answers = questions
                 .iter()
                 .enumerate()
@@ -154,11 +190,38 @@ impl Tool for Question {
                 .collect::<Vec<_>>()
                 .join(", ");
             Ok(output(
-                ObjectEncoder::new().field("answers", &answers).finish(),
-                format!(
-                    "User has answered your questions: {formatted}. You can now continue with the user's answers in mind."
-                ),
+                ObjectEncoder::new()
+                    .field("answers", &answers)
+                    .optional("automatic", &automatic.then_some(true))
+                    .finish(),
+                if automatic {
+                    format!(
+                        "Answers were selected automatically, not provided or approved by the user: {formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply."
+                    )
+                } else {
+                    format!(
+                        "User has answered your questions: {formatted}. You can now continue with the user's answers in mind."
+                    )
+                },
             ))
         })
     }
+}
+
+fn unanswered(
+    count: usize,
+    key: &str,
+    value: JsonValue,
+    message: String,
+) -> ycoding_ai::llm::ToolOutput {
+    output(
+        ObjectEncoder::new()
+            .field(
+                "answers",
+                &vec![Vec::<ycoding_schema::LosslessString>::new(); count],
+            )
+            .field(key, &value)
+            .finish(),
+        message,
+    )
 }

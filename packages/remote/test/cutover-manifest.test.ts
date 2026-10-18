@@ -9,8 +9,8 @@ const root = path.resolve(import.meta.dir, "../../..")
 
 test("TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source", async () => {
   const manifest = await generateManifest(root)
-  expect(manifest.counts).toEqual({ endpoint: 203, connector: 72, notice: 4 })
-  expect(manifest.members).toHaveLength(279)
+  expect(manifest.counts).toEqual({ endpoint: 207, connector: 75, notice: 4 })
+  expect(manifest.members).toHaveLength(286)
   expect(manifest.unresolved).toEqual([])
   const keys = manifest.members.map((member) => `${member.kind}:${member.name}`)
   expect(new Set(keys).size).toBe(keys.length)
@@ -32,6 +32,16 @@ test("TEST-057 every manifest member has exactly one owner and a live descriptor
   expect(byKind("connector").sort()).toEqual(relay)
   expect([...byKind("connector"), ...byKind("notice")].sort()).toEqual(remote)
   expect(byKind("notice").sort()).toEqual(["notice.list", "notice.read", "notice.readAll", "notice.subscribe"])
+  expect(
+    byKind("endpoint")
+      .filter((name) => name.startsWith("incident."))
+      .sort(),
+  ).toEqual(["incident.guidance.clear", "incident.guidance.get", "incident.recent", "incident.report"])
+  expect(
+    byKind("connector")
+      .filter((name) => name.startsWith("incident."))
+      .sort(),
+  ).toEqual(["incident.guidance.get", "incident.recent", "incident.report"])
 })
 
 test("TEST-057 retired source names are migration evidence, never manifest aliases", async () => {

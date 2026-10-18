@@ -8,15 +8,6 @@ export type CostPresentation = {
   readonly provenance?: "recorded" | "current_catalog"
 }
 
-export type PromptCostLine = { readonly kind: "unit" } | { readonly kind: "loading" | "unreported" }
-
-/** A prompt that is not yet promoted (queued, sending, or failed to send) has no cost line. */
-export function promptCostLine(state: "pending" | "promoted" | "consumed" | undefined, hasUnit: boolean, readState: "loading" | "ready" | "unavailable" | undefined): PromptCostLine | undefined {
-  if (state === undefined || state === "pending") return undefined
-  if (hasUnit) return { kind: "unit" }
-  return { kind: readState === "loading" ? "loading" : "unreported" }
-}
-
 export function accountingPresentation(unit: UsagePromptCostView | UsageTaskCostView, unavailable = false): UnitCostPresentation {
   return {
     inputID: "anchor" in unit ? unit.anchor.inputID : unit.sessionID,
@@ -100,17 +91,82 @@ export function measuredSpeedLines(speed: SpeedPresentation | undefined) {
   ]
 }
 
-export function forecastLines(forecast: ForecastPresentation, now: number, asOf = now) {
-  const amount = (value: number) => forecast.unit === "usd" ? currency(value) : `${count(value)} ${forecast.unit === "percent" ? "percentage points" : forecast.unit}`
-  const state = forecast.state === "unlimited" ? "Unlimited" : forecast.state === "exhausted" ? "Exhausted" : forecast.state === "insufficient" ? "Forecast unavailable" : "Estimated forecast"
+const exactNumber = new Intl.NumberFormat("en-US", { maximumFractionDigits: 20 })
+const exactCurrency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 20 })
+const compactRate = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 })
+
+const tokenRate = (value: number) => {
+  if (value > 0 && value < 1) return "<1"
+  return Math.round(value) < 1000 ? `${Math.round(value)}` : compactRate.format(value).toLowerCase()
+}
+
+export function forecastStatus(forecast: ForecastPresentation, asOf: number) {
+  if (forecast.state === "unlimited") return "Unlimited"
+  if (forecast.state === "exhausted") return "Exhausted"
+  if (forecast.state === "insufficient") {
+    if (forecast.reason?.startsWith("No increase observed")) return "No increase observed"
+    if (forecast.reason && /expired/i.test(forecast.reason)) return "Forecast expired"
+    if (forecast.reason && /stale/i.test(forecast.reason)) return "Forecast stale"
+    return "Forecast unavailable"
+  }
+  if (forecast.exhaustionAt === undefined && forecast.ratePerHour === 0) return "No increase observed"
+  const outcome = forecast.exhaustionAt !== undefined
+    ? `run-out ${forecast.exhaustionAt <= asOf ? "now" : `${new Date(forecast.exhaustionAt).toISOString().slice(0, 16).replace("T", " ")} UTC`}`
+    : forecast.projectedUsedAtReset !== undefined ? `projected ${forecastAmount(forecast, forecast.projectedUsedAtReset)} at reset`
+    : forecast.ratePerHour !== undefined ? `${forecastAmount(forecast, forecast.ratePerHour)}/hour burn` : undefined
+  return ["Estimated", outcome, `${forecast.evidence} evidence`].filter(Boolean).join(" · ")
+}
+
+export function forecastDetails(forecast: ForecastPresentation, now: number, asOf = now) {
   return [
-    state,
-    ...(forecast.ratePerHour === undefined ? [] : [`Quota burn ${amount(forecast.ratePerHour)}/hour`]),
+    ...(forecast.ratePerHour === undefined ? [] : [`Quota burn ${forecastAmount(forecast, forecast.ratePerHour, true)}/hour`]),
     ...(forecast.exhaustionAt === undefined ? [] : [`Estimated exhaustion ${forecast.exhaustionAt <= asOf ? "now" : new Date(forecast.exhaustionAt).toISOString()}`]),
-    ...(forecast.projectedUsedAtReset === undefined ? [] : [`Projected at reset ${amount(forecast.projectedUsedAtReset)}`]),
+    ...(forecast.projectedUsedAtReset === undefined ? [] : [`Projected at reset ${forecastAmount(forecast, forecast.projectedUsedAtReset, true)}`]),
     `${forecast.method === "quota-delta-ema" ? "Recent quota deltas · 15m half-life · 1h horizon" : forecast.method === "window-mean" ? "Window mean" : "No supported method"} · ${forecast.evidence} evidence`,
     ...(forecast.observedFrom === undefined || forecast.observedTo === undefined ? [] : [`Observed ${new Date(forecast.observedFrom).toISOString()} – ${new Date(forecast.observedTo).toISOString()}`]),
-    `Updated ${Math.floor(Math.max(0, now - forecast.updatedAt) / 60_000)}m ago`,
-    ...(forecast.reason ? [forecast.reason] : []),
+    `Updated ${new Date(forecast.updatedAt).toISOString()} (${Math.floor(Math.max(0, now - forecast.updatedAt) / 60_000)}m ago)`,
+    ...(forecast.reason ? [`Reason: ${forecast.reason}`] : []),
   ]
+}
+
+function forecastAmount(forecast: ForecastPresentation, value: number, exact = false) {
+  if (forecast.unit === "usd") return exact ? exactCurrency.format(value) : currency(value)
+  return `${exact ? exactNumber.format(value) : count(value)} ${forecast.unit === "percent" ? "percentage points" : forecast.unit}`
+}
+
+export function providerProvenanceLines(provider: { readonly source: string; readonly stability: string; readonly updatedAt: number }) {
+  const label = (value: string) => value.replaceAll("_", " ").replace("api", "API")
+  return [`Source ${label(provider.source)} · stability ${label(provider.stability)}`, `Updated ${new Date(provider.updatedAt).toISOString()}`]
+}
+
+export type ConsumptionRate = {
+  readonly providerID: string
+  readonly profile?: string
+  readonly modelID?: string
+  readonly observedFrom: number
+  readonly observedTo: number
+  readonly tokensPerMinute: number
+  readonly tokensPerMinute5?: number
+  readonly tokensPerMinute60?: number
+  readonly estimatedUSDPerHour?: number
+  readonly coverage: { readonly pricedRequests: number; readonly unpricedRequests: number }
+}
+
+export function consumptionRow(rate: ConsumptionRate) {
+  const perMinute = (value: number | undefined) => value === undefined ? "unreported" : `${exactNumber.format(value)} tokens/min`
+  const estimate = rate.estimatedUSDPerHour === undefined ? undefined : `${currency(rate.estimatedUSDPerHour)}/hour est.`
+  return {
+    identity: [rate.providerID, rate.modelID, rate.profile ? `profile ${rate.profile}` : "default profile"].filter(Boolean).join(" · "),
+    tokens: `${tokenRate(rate.tokensPerMinute)} tokens/min`,
+    cost: estimate === undefined ? "cost rate unreported" : rate.coverage.unpricedRequests > 0 ? `Known ${estimate} + unreported` : estimate,
+    details: [
+      `Rate ${perMinute(rate.tokensPerMinute)}`,
+      `5m ${perMinute(rate.tokensPerMinute5)} · 60m ${perMinute(rate.tokensPerMinute60)}`,
+      `Estimated cost rate ${rate.estimatedUSDPerHour === undefined ? "unreported" : `${exactCurrency.format(rate.estimatedUSDPerHour)}/hour`}`,
+      costCoverage(rate.coverage),
+      `Observed ${new Date(rate.observedFrom).toISOString()} – ${new Date(rate.observedTo).toISOString()}`,
+      ...(rate.profile === undefined ? ["Profile provider default at request time"] : []),
+      "Recorded requests on this backend; not account quota or generation speed.",
+    ],
+  }
 }

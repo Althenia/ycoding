@@ -105,6 +105,52 @@ test("quota omits unknown values and calculates pace against the elapsed period"
   expect(quotaWindow({ id: "none", label: "Unknown", unit: "count" }, now).used).toBeUndefined()
 })
 
+test("a reported full or empty window is exhausted, while missing limits and partial use never are", () => {
+  const now = 1_000_000
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 100 }, now).exhausted).toBe(true)
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 120 }, now).exhausted).toBe(true)
+  expect(
+    quotaWindow({ id: "credits", label: "Credits", unit: "count", used: 1000, limit: 1000, remaining: 0 }, now)
+      .exhausted,
+  ).toBe(true)
+  expect(quotaWindow({ id: "balance", label: "Balance", unit: "usd", remaining: 0 }, now).exhausted).toBe(true)
+  expect(
+    quotaWindow({ id: "credits", label: "Credits", unit: "usd", remaining: 0, unlimited: true }, now).exhausted,
+  ).toBe(false)
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 100, unlimited: true }, now).exhausted).toBe(
+    false,
+  )
+  expect(quotaWindow({ id: "week", label: "Weekly", unit: "percent", used: 99.9 }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "spend", label: "Spend", unit: "usd", used: 40 }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "daily", label: "Today", unit: "usd", used: 0 }, now).exhausted).toBe(false)
+  expect(quotaWindow({ id: "none", label: "Unknown", unit: "count" }, now).exhausted).toBe(false)
+})
+
+test("provider token distributions preserve free, unpriced, partial and unpaged price coverage", () => {
+  const rows = [
+    { ...row("free/model", 0, "recorded"), costCoverage: { pricedRequests: 2, unpricedRequests: 0 } },
+    { ...row("unknown/model"), costCoverage: { pricedRequests: 0, unpricedRequests: 2 } },
+    { ...row("partial/model", 1, "recorded"), costCoverage: { pricedRequests: 1, unpricedRequests: 1 } },
+  ] as const
+  const total = {
+    ...row("total", 1, "recorded"),
+    logical: 6,
+    physical: 9,
+    tokens: { input: 2700, output: 300, reasoning: 60, cache: { read: 900, write: 120 } },
+    costCoverage: { pricedRequests: 3, unpricedRequests: 3 },
+  }
+  const report = { group: "model" as const, rows, total, rowCount: 3 }
+  const labels = new Map(
+    providerDistribution(report, [], "tokens").segments.map((segment) => [segment.providerID, segment.costLabel]),
+  )
+  expect(labels.get("free")).toBe("$0.00")
+  expect(labels.get("unknown")).toBe("unreported")
+  expect(labels.get("partial")).toBe("Known $1.00 + unreported")
+  const paged = providerDistribution({ ...report, rows: [rows[0], rows[2]], nextOffset: 2 }, [], "tokens")
+  expect(paged.segments.find((segment) => segment.providerID === "other")?.costLabel).toBe("unreported")
+  expect(paged.total).toBe(4080)
+})
+
 test("daily spend uses UTC days, all token buckets, zeroes unknown cost, and labels only catalog estimates", () => {
   const now = Date.UTC(2026, 8, 27, 14)
   const report = {
@@ -424,7 +470,9 @@ test("provider token distributions preserve free, unpriced, partial and unpaged 
     costCoverage: { pricedRequests: 3, unpricedRequests: 3 },
   }
   const report = { group: "model" as const, rows, total, rowCount: 3 }
-  const labels = new Map(providerDistribution(report, [], "tokens").segments.map((item) => [item.providerID, item.costLabel]))
+  const labels = new Map(
+    providerDistribution(report, [], "tokens").segments.map((item) => [item.providerID, item.costLabel]),
+  )
   expect(labels.get("free")).toBe("$0.00")
   expect(labels.get("unknown")).toBe("unreported")
   expect(labels.get("partial")).toBe("Known $1.00 + unreported")
@@ -437,15 +485,28 @@ test("frozen report dimensions and filters preserve provider/profile identity an
   const base = row("mixed", 0)
   expect(
     reportIdentity(
-      { ...base, dimensions: { group: "provider-profile-model", providerID: "openai", modelID: "shared", profileState: "provider-default" } },
+      {
+        ...base,
+        dimensions: {
+          group: "provider-profile-model",
+          providerID: "openai",
+          modelID: "shared",
+          profileState: "provider-default",
+        },
+      },
       [],
     ),
   ).toMatchObject({ providerID: "openai", model: "shared · provider default at request time" })
   expect(
-    reportIdentity({ ...base, dimensions: { group: "profile", providerID: "other", profile: "Work", profileState: "recorded" } }, []),
+    reportIdentity(
+      { ...base, dimensions: { group: "profile", providerID: "other", profile: "Work", profileState: "recorded" } },
+      [],
+    ),
   ).toMatchObject({ providerID: "other", model: "profile Work" })
   expect(reportLabel({ key: "ses_deleted", label: "" }, "session")).toBe("Session ses_deleted · title unreported")
-  expect(reportLabel({ key: "ses_deleted", label: "ses_deleted" }, "session")).toBe("Session ses_deleted · title unreported")
+  expect(reportLabel({ key: "ses_deleted", label: "ses_deleted" }, "session")).toBe(
+    "Session ses_deleted · title unreported",
+  )
   expect(reportLabel({ key: "ses_live", label: "Named session" }, "session")).toBe("Named session")
   const now = Date.UTC(2026, 9, 15)
   expect(
@@ -471,7 +532,9 @@ test("frozen report dimensions and filters preserve provider/profile identity an
   expect(reportKey({ group: "profile", providerID: "openai", profile: "Work" })).not.toBe(
     reportKey({ group: "profile", providerID: "other", profile: "Work" }),
   )
-  expect(reportKey({ group: "model", selectedEffort: "high" })).not.toBe(reportKey({ group: "model", selectedEffort: "low" }))
+  expect(reportKey({ group: "model", selectedEffort: "high" })).not.toBe(
+    reportKey({ group: "model", selectedEffort: "low" }),
+  )
 })
 
 test("report ranges choose the requested window and keep empty filters out of the request", () => {
@@ -481,14 +544,24 @@ test("report ranges choose the requested window and keep empty filters out of th
     from: usageBounds(now, undefined, 7).from,
     to: last30.to,
   })
-  expect(usageReportInputs(now, undefined, { group: "model", range: "custom", from: 10, to: 20 }).breakdown).toMatchObject({ from: 10, to: 20 })
-  const empty = usageReportInputs(now, undefined, { group: "model", providerID: "", profile: "", modelID: "", selectedEffort: "" }).breakdown
+  expect(
+    usageReportInputs(now, undefined, { group: "model", range: "custom", from: 10, to: 20 }).breakdown,
+  ).toMatchObject({ from: 10, to: 20 })
+  const empty = usageReportInputs(now, undefined, {
+    group: "model",
+    providerID: "",
+    profile: "",
+    modelID: "",
+    selectedEffort: "",
+  }).breakdown
   for (const key of ["providerID", "profile", "modelID", "selectedEffort"]) expect(key in empty).toBe(false)
 })
 
 test("report, daily and summary costs keep unknown prices qualified instead of showing complete zero", () => {
   expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 0 } })).toBe("$0.00")
-  expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 1 } })).toBe("Known $0.00 + unreported")
+  expect(reportCostText({ cost: 0, costCoverage: { pricedRequests: 1, unpricedRequests: 1 } })).toBe(
+    "Known $0.00 + unreported",
+  )
   expect(reportCostText({ costCoverage: { pricedRequests: 0, unpricedRequests: 1 } })).toBe("unreported")
   const days = dailySpend(
     {
@@ -518,7 +591,9 @@ test("older connectors reject new report groups and filters, which the page answ
     { group: "day" as const, timeZone: "UTC" },
   ])
     expect(reportNeedsNewerConnector(input)).toBe(true)
-  expect(unsupportedReportMessage({ group: "task" })).toBe("Update YCoding on this machine to use this grouping or filter.")
+  expect(unsupportedReportMessage({ group: "task" })).toBe(
+    "Update YCoding on this machine to use this grouping or filter.",
+  )
   expect(unsupportedReportMessage({ group: "model", providerID: "openai", timeZone: "UTC" })).toBe(
     "Update YCoding on this machine to use this grouping or filter.",
   )
@@ -537,7 +612,11 @@ test("charts without credits keep their baseline and scale", () => {
     [156, 138],
     [156, 138 / 2],
   ])
-  expect(sparklinePoints([0, 4]).split(" ").map((point) => point.split(",")[1])).toEqual(["28.0", "4.0"])
+  expect(
+    sparklinePoints([0, 4])
+      .split(" ")
+      .map((point) => point.split(",")[1]),
+  ).toEqual(["28.0", "4.0"])
   expect(dailyBars([0, 0.2]).bars[1]!.height).toBeCloseTo(138 * 0.2)
 })
 
@@ -553,7 +632,9 @@ test("charges rise and credits fall from one zero line that stays inside the plo
     expect(bar.y).toBeGreaterThanOrEqual(18)
     expect(bar.y + bar.height).toBeLessThanOrEqual(156.0000001)
   }
-  const ys = sparklinePoints([14.5, -7.5, 0]).split(" ").map((point) => Number(point.split(",")[1]))
+  const ys = sparklinePoints([14.5, -7.5, 0])
+    .split(" ")
+    .map((point) => Number(point.split(",")[1]))
   expect(ys[0]).toBeCloseTo(4, 1)
   expect(ys[1]).toBeCloseTo(28, 1)
   expect(ys[2]).toBeGreaterThan(ys[0]!)
@@ -584,7 +665,9 @@ test("all-negative days hang from the top of the plot and zero days stay inside 
     expect(bars[index]!.y + bars[index]!.height).toBeLessThanOrEqual(156)
     expect(bars[index]!.height).toBe(2)
   }
-  const ys = sparklinePoints([0, -1, -3]).split(" ").map((point) => Number(point.split(",")[1]))
+  const ys = sparklinePoints([0, -1, -3])
+    .split(" ")
+    .map((point) => Number(point.split(",")[1]))
   expect(ys[0]).toBeCloseTo(4, 1)
   expect(ys[2]).toBeCloseTo(28, 1)
   expect(Math.min(...ys)).toBeGreaterThanOrEqual(3.95)

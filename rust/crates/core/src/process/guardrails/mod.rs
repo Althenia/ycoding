@@ -617,3 +617,5 @@ fn regex_match_length(value: &LosslessString, pattern: &str) -> Option<usize> {
         .expect("unlimited static guardrail pattern")
         .and_then(|matched| matched.captures[0].as_ref().map(Vec::len))
 }
+
+pub(crate) use service::redact_value;

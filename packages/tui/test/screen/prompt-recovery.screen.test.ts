@@ -499,7 +499,14 @@ test("route disposal does not cancel owned transport or attach its late failure 
   let release!: () => void
   firstRequestGate = new Promise<void>((resolve) => (release = resolve))
   const started = new Promise<void>((resolve) => (firstRequestStarted = resolve))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    sessionReady: true,
+  })
   try {
     await focusComposer(screen)
     await screen.input.typeText("owned after navigation")
@@ -601,7 +608,14 @@ test("every space-separated skill mention reaches prompt admission from the comp
 
 test("a late admission failure retains the submitted input without erasing a new draft or queued send", async () => {
   resetFixture()
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    sessionReady: true,
+  })
   try {
     await focusComposer(screen)
     await screen.input.typeText("first draft admission")
@@ -745,7 +759,14 @@ test("shell rejection retains the draft and restores the local retry without dup
 
 test("discarding failed shell recovery does not replay the command or erase its draft", async () => {
   resetFixture()
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    sessionReady: true,
+  })
   try {
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "pristine recovery palette")
@@ -818,7 +839,14 @@ test("configured command admission releases editing and queues the next prompt w
   let release!: () => void
   commandGate = new Promise<void>((resolve) => (release = resolve))
   const started = new Promise<void>((resolve) => (commandStarted = resolve))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    sessionReady: true,
+  })
   try {
     await focusComposer(screen)
     await screen.input.typeText("/report first argument")
@@ -852,7 +880,14 @@ test("configured command admission releases editing and queues the next prompt w
 
 test("explicit local recovery discard releases a failed head without replaying it or erasing the new draft", async () => {
   resetFixture()
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    sessionReady: true,
+  })
   try {
     await focusComposer(screen)
     await screen.input.typeText("discard failed send")

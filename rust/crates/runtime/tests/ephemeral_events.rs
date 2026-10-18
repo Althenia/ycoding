@@ -355,7 +355,7 @@ async fn policy_producers_deliver_ordered_session_events_and_location_owned_glob
             if !cancel { services.forms.reply(&input.id, form::Answer::decode(&parse_json(r#"{"ok":true}"#).unwrap()).unwrap()).unwrap(); }
             wait.await.unwrap();
         }
-        let input = |resources| ycoding_core::process::guardrails::Input { session_id: session.clone(), action: "shell".into(), resources, metadata: None, skip_review: false, holder: None, defer_shell: false, source: None };
+        let input = |resources| ycoding_core::process::guardrails::Input { session_id: session.clone(), action: "shell".into(), resources, metadata: None, skip_review: false, holder: None, source: None };
         let allowed = services.guardrails.assert(input(vec!["pwd".into()])).unwrap();
         allowed.reservation.unwrap().release();
         let review = services.guardrails.assert(input(vec!["rm -rf /project".into()])).unwrap();

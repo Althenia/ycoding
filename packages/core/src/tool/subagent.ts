@@ -36,15 +36,29 @@ export const Input = Schema.Struct({
   agent: Schema.String.annotate({ description: "The configured agent to run as the subagent" }),
   description: DescriptionText.annotate({ description: "A short description of the subagent's task" }),
   prompt: PromptText.annotate({ description: "The task for the subagent to perform" }),
+  shared_context: Schema.Struct({
+    message_ids: Schema.Array(SessionMessage.ID).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(8),
+      Schema.isUnique(),
+    ),
+  })
+    .annotate({
+      description:
+        "Select 1–8 distinct historical message IDs from the parent Session. Their text is supplied as ordinary user evidence, not as instructions or approvals.",
+    })
+    .pipe(Schema.optional),
   background: Schema.Boolean.pipe(Schema.optional).annotate({
     description: "Deprecated. Subagents always run in the background.",
   }),
   model: CatalogModel.Ref.pipe(Schema.optional).annotate({
     description: "Optional canonical provider, model, and variant override for this child",
   }),
-  timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS)).pipe(Schema.optional).annotate({
-    description: `Optional child runtime timeout in milliseconds (maximum: ${MAX_TIMEOUT_MS}); omission uses ${DEFAULT_TIMEOUT_MS}`,
-  }),
+  timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
+    .pipe(Schema.optional)
+    .annotate({
+      description: `Optional child runtime timeout in milliseconds (maximum: ${MAX_TIMEOUT_MS}); omission uses ${DEFAULT_TIMEOUT_MS}`,
+    }),
 })
 
 export const Output = Schema.Struct({
@@ -111,93 +125,157 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
     input: Input,
     output: Output,
     toModelOutput: ({ output }) => [{ type: "text", text: output.output }],
-    execute: (value, context) => Effect.gen(function* () {
-      const input = yield* Schema.decodeUnknownEffect(Input)(value, { onExcessProperty: "error" }).pipe(
-        Effect.mapError(() => new ToolFailure({ message: "Invalid subagent launch input" })),
-      )
-      const parent = yield* runtime.session.get(context.sessionID).pipe(
-        Effect.mapError((error) => new ToolFailure({ message: `Parent session not found: ${context.sessionID}`, error })),
-      )
-      const depth = yield* parentDepth(parent, runtime.session)
-      const limit = Config.latest(yield* config.entries(), "experimental")?.subagent_depth ?? 1
-      if (depth >= limit)
-        return yield* new ToolFailure({
-          message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
-          metadata: { reason: "depth-limit" },
-        })
-      const prepared = yield* SessionOrchestration.preflight(parent, {
-        agent: Agent.ID.make(input.agent), model: input.model, caller: context.agent,
-      }).pipe(
-        Effect.provideService(Agent.Service, agents),
-        Effect.provideService(SessionRunnerModel.Service, models),
-        Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
-      )
-      yield* SessionOrchestration.authorize(context.sessionID, prepared.target.id, {
-        agent: context.agent, messageID: context.messageID, callID: context.callID,
-      }).pipe(
-        Effect.provideService(Permission.Service, permission),
-        Effect.mapError((error) => new ToolFailure({ message: `Subagent denied: ${prepared.target.id}`, error })),
-      )
-      const reservation = yield* guardrail.assert({
-        sessionID: context.sessionID, action: name, resources: [prepared.target.id],
-        metadata: { description: input.description },
-      }).pipe(Effect.mapError((error) => error._tag === "Guardrail.CapExceededError"
-        ? new ToolFailure({ message: error.message, error, metadata: { reason: "capacity-exceeded" } })
-        : new ToolFailure({ message: `Session guardrail rejected subagent: ${prepared.target.id}`, error })))
-      const child = yield* orchestration.launch({
-        parentID: context.sessionID, parentAssistantMessageID: context.messageID, toolCallID: context.callID,
-        agent: Agent.ID.make(input.agent), description: input.description, prompt: input.prompt,
-        background: true, model: input.model, prepared,
-      }).pipe(
-        Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
-        Effect.onError(() => reservation.release),
-      )
-      const settleFailure = (cause: Cause.Cause<unknown>) => {
-        const error = Cause.pretty(cause)
-        return orchestration.settle(child.sessionID, {
-          type: "failed", error, excerpt: error.slice(0, 16 * 1024),
-        }).pipe(Effect.ignore)
-      }
-      const abortLaunchedTask = (cause: Cause.Cause<unknown>) =>
-        runtime.session.interrupt(child.sessionID).pipe(Effect.exit, Effect.andThen(settleFailure(cause)))
+    execute: (value, context) =>
+      Effect.gen(function* () {
+        const input = yield* Schema.decodeUnknownEffect(Input)(value, { onExcessProperty: "error" }).pipe(
+          Effect.mapError(() => new ToolFailure({ message: "Invalid subagent launch input" })),
+        )
+        const parent = yield* runtime.session
+          .get(context.sessionID)
+          .pipe(
+            Effect.mapError(
+              (error) => new ToolFailure({ message: `Parent session not found: ${context.sessionID}`, error }),
+            ),
+          )
+        const depth = yield* parentDepth(parent, runtime.session)
+        const limit = Config.latest(yield* config.entries(), "experimental")?.subagent_depth ?? 1
+        if (depth >= limit)
+          return yield* new ToolFailure({
+            message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
+            metadata: { reason: "depth-limit" },
+          })
+        const prepared = yield* SessionOrchestration.preflight(parent, {
+          agent: Agent.ID.make(input.agent),
+          model: input.model,
+          caller: context.agent,
+        }).pipe(
+          Effect.provideService(Agent.Service, agents),
+          Effect.provideService(SessionRunnerModel.Service, models),
+          Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
+        )
+        yield* SessionOrchestration.authorize(context.sessionID, prepared.target.id, {
+          agent: context.agent,
+          messageID: context.messageID,
+          callID: context.callID,
+        }).pipe(
+          Effect.provideService(Permission.Service, permission),
+          Effect.mapError((error) => new ToolFailure({ message: `Subagent denied: ${prepared.target.id}`, error })),
+        )
+        const reservation = yield* guardrail
+          .assert({
+            sessionID: context.sessionID,
+            action: name,
+            resources: [prepared.target.id],
+            metadata: { description: input.description },
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error._tag === "Guardrail.CapExceededError"
+                ? new ToolFailure({ message: error.message, error, metadata: { reason: "capacity-exceeded" } })
+                : new ToolFailure({ message: `Session guardrail rejected subagent: ${prepared.target.id}`, error }),
+            ),
+          )
+        const child = yield* orchestration
+          .launch({
+            parentID: context.sessionID,
+            parentAssistantMessageID: context.messageID,
+            toolCallID: context.callID,
+            agent: Agent.ID.make(input.agent),
+            description: input.description,
+            prompt: input.prompt,
+            background: true,
+            model: input.model,
+            prepared,
+          })
+          .pipe(
+            Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
+            Effect.onError(() => reservation.release),
+          )
+        const settleFailure = (cause: Cause.Cause<unknown>) => {
+          const error = Cause.pretty(cause)
+          return orchestration
+            .settle(child.sessionID, {
+              type: "failed",
+              error,
+              excerpt: error.slice(0, 16 * 1024),
+            })
+            .pipe(Effect.ignore)
+        }
+        const abortLaunchedTask = (cause: Cause.Cause<unknown>) =>
+          runtime.session.interrupt(child.sessionID).pipe(Effect.exit, Effect.andThen(settleFailure(cause)))
 
-      yield* projectArtifactSource.activate({
-        kind: "agent", id: input.agent, sessionID: context.sessionID, agentID: Agent.ID.make(input.agent),
-        source: "subagent-launch", messageID: context.messageID, callID: context.callID,
-      }).pipe(Effect.catchCause((cause) => Effect.logWarning("project artifact subagent activation failed", {
-        cause, sessionID: context.sessionID,
-      })))
-      yield* context.progress({ structured: { sessionID: child.sessionID, status: "running" } }).pipe(
-        Effect.tapCause(abortLaunchedTask), Effect.onError(() => reservation.release),
-      )
+        yield* projectArtifactSource
+          .activate({
+            kind: "agent",
+            id: input.agent,
+            sessionID: context.sessionID,
+            agentID: Agent.ID.make(input.agent),
+            source: "subagent-launch",
+            messageID: context.messageID,
+            callID: context.callID,
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("project artifact subagent activation failed", {
+                cause,
+                sessionID: context.sessionID,
+              }),
+            ),
+          )
+        yield* context.progress({ structured: { sessionID: child.sessionID, status: "running" } }).pipe(
+          Effect.tapCause(abortLaunchedTask),
+          Effect.onError(() => reservation.release),
+        )
 
-      const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
-      const run = Effect.scoped(Effect.gen(function* () {
-        yield* repeatProgress(orchestration.send({
-          parentID: context.sessionID, childID: child.sessionID, messageID: SessionMessage.ID.create(),
-          text: progressPrompt, delivery: "steer",
-        })).pipe(Effect.forkScoped)
-        yield* runtime.session.resume(child.sessionID)
-        const text = yield* latestAssistantText(child.sessionID)
-        yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: text.slice(0, 16 * 1024) })
-        return text
-      }).pipe(
-        Effect.onInterrupt(() => runtime.session.interrupt(child.sessionID)),
-        Effect.timeoutOrElse({ duration: timeout, orElse: () => Effect.fail(new Error(`Subagent timed out after ${timeout} ms.`)) }),
-      )).pipe(
-        Effect.tapCause((cause) => Cause.hasInterruptsOnly(cause) ? Effect.void : settleFailure(cause)),
-        Effect.ensuring(reservation.release),
-      )
-      yield* Effect.gen(function* () {
-        const started = yield* runtime.job.start({ id: child.sessionID, type: name, title: input.description, metadata: {}, run })
-        yield* runtime.job.background(started.id)
-      }).pipe(Effect.tapCause(abortLaunchedTask), Effect.onError(() => reservation.release))
-      return { sessionID: child.sessionID, status: "running" as const, output: backgroundStarted(child.sessionID) }
-    }),
+        const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+        const run = Effect.scoped(
+          Effect.gen(function* () {
+            yield* repeatProgress(
+              orchestration.send({
+                parentID: context.sessionID,
+                childID: child.sessionID,
+                messageID: SessionMessage.ID.create(),
+                text: progressPrompt,
+                delivery: "steer",
+              }),
+            ).pipe(Effect.forkScoped)
+            yield* runtime.session.resume(child.sessionID)
+            const text = yield* latestAssistantText(child.sessionID)
+            yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: text.slice(0, 16 * 1024) })
+            return text
+          }).pipe(
+            Effect.onInterrupt(() => runtime.session.interrupt(child.sessionID)),
+            Effect.timeoutOrElse({
+              duration: timeout,
+              orElse: () => Effect.fail(new Error(`Subagent timed out after ${timeout} ms.`)),
+            }),
+          ),
+        ).pipe(
+          Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : settleFailure(cause))),
+          Effect.ensuring(reservation.release),
+        )
+        yield* Effect.gen(function* () {
+          const started = yield* runtime.job.start({
+            id: child.sessionID,
+            type: name,
+            title: input.description,
+            metadata: {},
+            run,
+          })
+          yield* runtime.job.background(started.id)
+        }).pipe(
+          Effect.tapCause(abortLaunchedTask),
+          Effect.onError(() => reservation.release),
+        )
+        return { sessionID: child.sessionID, status: "running" as const, output: backgroundStarted(child.sessionID) }
+      }),
   })
 })
 
-function parentDepth(parent: SessionSchema.Info, sessions: Pick<PluginRuntime.Interface["session"], "get">): Effect.Effect<number, ToolFailure> {
+function parentDepth(
+  parent: SessionSchema.Info,
+  sessions: Pick<PluginRuntime.Interface["session"], "get">,
+): Effect.Effect<number, ToolFailure> {
   if (!parent.parentID) return Effect.succeed(0)
   return sessions.get(parent.parentID).pipe(
     Effect.mapError((error) => new ToolFailure({ message: `Parent session not found: ${parent.parentID}`, error })),

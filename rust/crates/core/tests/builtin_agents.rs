@@ -67,7 +67,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.6,
             "#e67e22",
             include_str!("../../../../packages/core/src/plugin/agent/GSD.md"),
-            "60bc38ba9bf494fd0c5ce465ce3db08c7067e1c12a08c2bdb0562c2693fabc3f",
+            "82c566555171ea46d5c68a57aa219635ff3020b3d56d95dbf43de7b1766bfa6a",
         ),
         (
             "architech",
@@ -76,7 +76,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.5,
             "#3498db",
             include_str!("../../../../packages/core/src/plugin/agent/architech.md"),
-            "1b5cd6c326d88c00e8961b36e99339f956a534c6d9ee2774f9b8b24e225c87e7",
+            "b5fd1eb2aabe89d47c253e29d5f1b061c00d42cb1410a725b7d6df5cf707d18b",
         ),
         (
             "god",
@@ -85,7 +85,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../../../../packages/core/src/plugin/agent/god.md"),
-            "4ceaacb19c5a3f5f9cfdb25658b9ba84d539b5c55813b3f0e03b7d3327b73448",
+            "e2bf2a8daa37d26974a2f299038ac2b6a7e4e9690cb456c07b45ee96acf78119",
         ),
         (
             "yangi",
@@ -94,7 +94,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.5,
             "#2ecc71",
             include_str!("../../../../packages/core/src/plugin/agent/yangi.md"),
-            "de234f2a16a3c106b47c7bc6f05a1596ef1e54629b3dd00314b4edf38928c6c1",
+            "8bb56cc118a0a08f9f403e297b653b581634e5b0e42c14caca3e71af56cabae0",
         ),
         (
             "occam",
@@ -103,7 +103,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.4,
             "#2ecc71",
             include_str!("../../../../packages/core/src/plugin/agent/occam.md"),
-            "8d2f78f9796cd3d54efedc40daa2a18304beb87a672c2fb787e87c4da82efcc8",
+            "dcd8dab36af2ff4899f6397e28af336ff50494684ccd7b25d59f900b7d098bf5",
         ),
         (
             "omoikane",
@@ -112,7 +112,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.5,
             "#3498db",
             include_str!("../../../../packages/core/src/plugin/agent/omoikane.md"),
-            "bcf4c378eaa6d263b3b501f817ba674bdaf26168b53b95b977dbaf2638bb9a8f",
+            "b839075ac28e4e60f1a22615ff9254810d9769b83dca4e49eafa6ed61b07dba1",
         ),
         (
             "wittgenstein",
@@ -121,7 +121,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.4,
             "#95a5a6",
             include_str!("../../../../packages/core/src/plugin/agent/wittgenstein.md"),
-            "4aa40c18744ff151dcef832f49773c2b911d2d21fea8b72ac32aa90e16a152b2",
+            "7d6f7ef014e49dfb0b0075cbcceb0bfe18088d48066defc6ee20f83bc318c45d",
         ),
         (
             "zeus",
@@ -130,7 +130,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             0.6,
             "#f1c40f",
             include_str!("../../../../packages/core/src/plugin/agent/zeus.md"),
-            "87618884b70196e99e9d43b83961237722075b93a847440f15a7de909d43ed42",
+            "7320ec244c2cbf76783528d0c051c061f1e36a6c457f82266f40a34dae428696",
         ),
     ];
     for (id, name, mode, temperature, color, source, digest) in fixtures {
@@ -207,7 +207,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
         (
             "goal",
             "Goal",
-            "5a223c80864faa0cd00127ab869a672ab1235b6ece4c4ddcaad4cfaef9291569",
+            "37452b0447145c92dc52506b58d3bc2cb2a51b43951e56066f308cf3ac0393b4",
         ),
         (
             "prediction",
@@ -222,7 +222,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
         (
             "decision",
             "Decision",
-            "29bedcd10bffa22714a95119c50e433f5f253b9fa9f37297ecc42e95529638f9",
+            "2f5ed653376389e685d93fecf3e6e809330e1183e90268a7f7a71a72f0d72d87",
         ),
         (
             "summary",
@@ -435,7 +435,7 @@ fn user_then_project_overrides_preserve_builtin_identity_and_unspecified_values(
 
 #[test]
 fn main_session_prompts_describe_session_auto_answer_and_goal_authority() {
-    let autonomy = "- Keep autonomy explicit. YOLO 0 is manual; 1 auto-approves ask permissions only; 2 also auto-approves ordinary guardrail reviews while awake. Automatic question, form, and subagent-question answers require only the answering Session's auto-answer toggle, default off, independent of YOLO, goals, and sleep, and never inherited by parent or child Sessions. Goals grant no permission, answer, or review authority. Hard reviews always require a human decision. Explicit permission denies remain denied. Change YOLO only through /yolo or the UI toggle.";
+    let autonomy = "- Keep autonomy explicit. YOLO 1 auto-approves ask permissions only; awake YOLO 2 also auto-approves ordinary guardrail reviews. Automatic question/form/subagent answers require only the answering Session's auto-answer toggle, default off, independent of YOLO, goals, and sleep. Goals grant no permission, answer, or review authority. Model guardrail verification and grading require guardrails.decide_reviews, default false; guardrails.decide_hard_reviews also gates hard-review grading. Enabled standard verification dismisses only false at confidence ≥0.9; uncertainty preserves review, and denies and custom rules are never verified. Enabled grading requires ≥0.9 for ordinary Always, ≥0.8 for approval once (≥0.95 hard), and ≥0.8 for rejection. Conflicting qualifying approval/rejection, a highest escalation grade, no qualifying choice, refusal, error, or timeout asks the user awake or defers asleep. Disabled automation never calls the helper: awake, questions, forms, and guardrail reviews ask the user and child questions go to the parent Session's subagent controls; asleep, they defer to the review box. Sleep never bypasses these gates or auto-approves guardrail reviews through YOLO. Continue independent work without guessing outcomes or retrying deferred actions. Denies remain denied. Human replies retain normal choices and attribution. Change YOLO only through /yolo or the UI toggle.";
     for main in [
         agent::prompts::MAIN.to_owned(),
         ts_template("MAINCHAT_CAPABILITIES"),

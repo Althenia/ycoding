@@ -51,7 +51,7 @@ test("existing discovery, native control, page delivery and TUI consume the real
   const owner = await ownerRequest(ownerCredentials.owner)
   expect(owner.status).toBe(200)
   const settings: unknown = await owner.json()
-  expect(settings).toMatchObject({ models: expect.any(Array) })
+  // The full assertion covers the array shape without Bun's mutating partial matcher.
   expect(settings).toEqual({
     askModel: released,
     analysisModel: "inherit",

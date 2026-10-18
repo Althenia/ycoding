@@ -380,6 +380,35 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
         0
     };
     for message in prune_messages(request).iter().skip(start) {
+        let provider =
+            if crate::effort::update(message, crate::effort::Provider::OpenRouter).is_some() {
+                crate::effort::Provider::OpenRouter
+            } else {
+                crate::effort::Provider::OpenAI
+            };
+        if let Some(effort) = crate::effort::update(message, provider) {
+            if crate::effort::mechanism(request) != Some(provider)
+                || message.role != Role::System
+                || !message.content.is_empty()
+            {
+                return Err(Error::invalid(
+                    "OpenAI effort update requires a supported public GPT-6 Responses request",
+                ));
+            }
+            if input
+                .last()
+                .and_then(|value| get(value, "type"))
+                .and_then(json::text)
+                == Some("configuration_update")
+            {
+                return Err(Error::invalid("OpenAI effort updates cannot be adjacent"));
+            }
+            input.push(json::object([
+                ("type", s("configuration_update")),
+                ("reasoning", json::object([("effort", s(effort))])),
+            ]));
+            continue;
+        }
         if message
             .native
             .as_ref()

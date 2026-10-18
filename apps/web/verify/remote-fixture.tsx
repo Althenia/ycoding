@@ -7,7 +7,6 @@
  * synthetic, so browser checks of layout, streaming, requests, and reconnect can
  * run without a hosted relay or credentials.
  */
-import { accountedTask } from "../test/usage-fixture"
 import { render } from "solid-js/web"
 import { onMount } from "solid-js"
 import { ThemeProvider } from "../src/theme/theme-store"
@@ -57,19 +56,6 @@ const model = { id: "gpt-6", providerID: "openai" } as const
 const sessionID = "ses_fixture"
 /** Recent timestamps keep fixture screenshots readable. */
 const ago = (minutes: number) => Date.now() - minutes * 60_000
-
-function fixtureTaskCost(sessionID: string, variant: string) {
-  const task = accountedTask(sessionID, 0.25, 20)
-  if (variant === "partial")
-    return {
-      ...task,
-      status: "so-far" as const,
-      attribution: "partial" as const,
-      total: { ...task.total, cost: { known: 0.25, pricedRequests: 1, unpricedRequests: 1, provenance: "recorded" as const } },
-    }
-  if (variant === "unreported") return { ...task, total: { ...task.total, cost: { pricedRequests: 0, unpricedRequests: 1 } } }
-  return task
-}
 
 function ok<T>(value: T): RemoteHttpResult<T> {
   return { ok: true, value }
@@ -398,7 +384,7 @@ const defaultMessages = [
           structured: {
             shellID: "sh_bg",
             truncated: false,
-            status: accountParams.has("backgroundShellLifecycle") ? "queued" : "running",
+            status: "running",
           },
           time: { created: ago(35), ran: ago(35), completed: ago(34) },
         },
@@ -1299,13 +1285,13 @@ function createFixtureStore(): Fixture {
     const cursor = typeof input?.cursor === "number" ? input.cursor : 0
     if (shellID === "sh_bg") {
       if (accountParams.has("backgroundShellLifecycle")) {
-        const index = Math.min(backgroundReads++, 2)
-        const lines = ["queued-output\n", "running-output\n", "final-output\n"]
+        const index = Math.min(backgroundReads++, 1)
+        const lines = ["running-output\n", "final-output\n"]
         const cursor = byteLength(lines.slice(0, index + 1).join(""))
         return {
           status: "ok",
           value: {
-            status: ["queued", "running", "exited"][index],
+            status: ["running", "exited"][index],
             data: { output: lines[index], cursor, size: cursor, truncated: false },
           },
         }
@@ -1993,8 +1979,7 @@ function createFixtureStore(): Fixture {
                   id: "sh_team",
                   ownerID: "ses_child",
                   command: "bun test",
-                  status: accountParams.has("queuedTeamShell") ? "queued" : "running",
-                  ...(accountParams.has("queuedTeamShell") ? { queuePosition: 2 } : {}),
+                  status: "running",
                   startedAt: ago(10),
                 },
               ],

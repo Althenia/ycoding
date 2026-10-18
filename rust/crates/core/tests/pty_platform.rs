@@ -191,16 +191,20 @@ async fn pty_runtime_limit_can_interrupt_a_backpressured_input_write() {
         pty.write(&info.id, &owner, 1, 1, Actor::Agent, &"x".repeat(65536)),
     )
     .await;
-    if result.is_err() {
-        unsafe {
-            libc::kill(-(info.pid.get() as i32), libc::SIGKILL);
-        }
-    }
-    pty.shutdown().await.unwrap();
+    let exited = tokio::time::timeout(Duration::from_secs(5), pty.wait(&info.id, &owner)).await;
+    let shutdown = tokio::time::timeout(Duration::from_secs(5), pty.shutdown()).await;
     assert!(
         result.is_ok(),
         "PTY runtime limit must not wait behind an input write"
     );
+    let final_info = exited
+        .expect("PTY runtime limit must settle the owned process")
+        .unwrap();
+    assert_eq!(final_info.status, pty::Status::Exited);
+    assert_eq!(final_info.exit_reason, Some(pty::ExitReason::Timeout));
+    shutdown
+        .expect("PTY shutdown must settle after backpressured input")
+        .unwrap();
 }
 
 #[tokio::test]

@@ -194,14 +194,17 @@ fn startup_upgrades_recognized_native_catalogs_and_preserves_the_first_copy() {
                 .shutdown()
                 .unwrap();
             let copy = backup::upgrade_path(&file);
-            Store::open(&copy, Options::core(), previous)
-                .unwrap()
-                .shutdown()
-                .unwrap();
-            let bytes = std::fs::read(copy).unwrap();
+            let bytes = std::fs::read(&copy).unwrap();
             if let Some(original) = &original_copy {
                 assert_eq!(&bytes, original);
             }
+            // Store::open is writable, so inspect a disposable copy of the preserved backup.
+            let inspection = directory.0.join("inspect-predecessor.redb");
+            std::fs::copy(&copy, &inspection).unwrap();
+            let inspected = Store::open(&inspection, Options::core(), previous).unwrap();
+            assert_eq!(inspected.metadata(), &Metadata::new([17; 16], 1));
+            inspected.shutdown().unwrap();
+            assert_eq!(std::fs::read(&copy).unwrap(), bytes);
             original_copy = Some(bytes);
         }
     }

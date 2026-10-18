@@ -1,7 +1,6 @@
 use super::{CustomLayer, Evaluation, Paths, decision};
 use crate::{
     model_incident::record::{self as incidents, GuardrailInput},
-    platform::shell::queue::{Admission as ShellAdmission, FamilyReservation, Wake},
     session::review::{self, FingerprintInput, GrantKind, OpenInput},
     tools::code_mode::Cancellation,
     tools::policy::{Authority, Effect, Publisher, Reviews, Wait, permissions::Permissions, state},
@@ -11,7 +10,7 @@ use std::{
     ops::Bound,
     sync::{
         Arc, Mutex, OnceLock, Weak,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -37,7 +36,6 @@ pub struct Input {
     pub metadata: Option<JsonObject>,
     pub skip_review: bool,
     pub holder: Option<LosslessString>,
-    pub defer_shell: bool,
     pub source: Option<guardrail::Source>,
 }
 #[derive(Clone, Copy, Debug)]
@@ -188,7 +186,6 @@ struct Pending {
     review: Reservation,
     directories: Vec<LosslessString>,
     holder: Option<LosslessString>,
-    defer_shell: bool,
     source: Option<guardrail::Source>,
     fingerprint: session_review::Fingerprint,
 }
@@ -212,7 +209,6 @@ struct State {
     sequences: BTreeMap<SessionId, u64>,
     pools: BTreeMap<(SessionId, Kind), Pool>,
     next_slot: u64,
-    listeners: BTreeMap<SessionId, BTreeMap<u64, Wake>>,
 }
 struct Inner {
     authority: Authority,
@@ -238,7 +234,6 @@ struct Reserved {
     kind: Option<Kind>,
     slot: u64,
     released: AtomicBool,
-    queue: Option<Arc<ShellQueue>>,
 }
 #[derive(Clone)]
 pub struct Reservation(Arc<Reserved>);
@@ -246,19 +241,13 @@ impl Reservation {
     pub fn release(&self) {
         self.0.release();
     }
-    pub fn shell_admission(&self) -> Option<Arc<dyn ShellAdmission>> {
-        self.0
-            .queue
-            .clone()
-            .map(|queue| queue as Arc<dyn ShellAdmission>)
-    }
-    fn release_unlocked(&self, state: &mut State) -> Option<SessionId> {
+    fn release_unlocked(&self, state: &mut State) {
         if self.0.released.swap(true, Ordering::AcqRel) {
-            return None;
+            return;
         }
-        let kind = self.0.kind?;
-        release_slot(state, &self.0.service, &self.0.root, kind, self.0.slot)
-            .then(|| self.0.root.clone())
+        if let Some(kind) = self.0.kind {
+            release_slot(state, &self.0.service, &self.0.root, kind, self.0.slot);
+        }
     }
 }
 impl Reserved {
@@ -266,25 +255,14 @@ impl Reserved {
         if self.released.swap(true, Ordering::AcqRel) {
             return;
         }
-        if let Some(queue) = &self.queue {
-            queue.close();
-            return;
-        }
         let (Some(service), Some(kind)) = (self.service.upgrade(), self.kind) else {
             return;
         };
-        let wakes = {
-            let mut state = service
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if release_slot(&mut state, &self.service, &self.root, kind, self.slot) {
-                listeners(&state, &self.root)
-            } else {
-                Vec::new()
-            }
-        };
-        wakes.iter().for_each(|wake| wake());
+        let mut state = service
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        release_slot(&mut state, &self.service, &self.root, kind, self.slot);
     }
 }
 impl Drop for Reserved {
@@ -293,193 +271,10 @@ impl Drop for Reserved {
     }
 }
 
-struct ShellQueue {
-    service: Weak<Inner>,
-    root: SessionId,
-    family: String,
-    holder: Option<LosslessString>,
-    closed: AtomicBool,
-    claims: Mutex<Vec<Arc<Claim>>>,
-}
-
-impl ShellQueue {
-    fn close(&self) {
-        self.closed.store(true, Ordering::Release);
-        let claims = std::mem::take(
-            &mut *self
-                .claims
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()),
-        );
-        claims.iter().for_each(|claim| claim.release());
-    }
-}
-
-impl ShellAdmission for ShellQueue {
-    fn family(&self) -> &str {
-        &self.family
-    }
-
-    fn acquire(&self) -> Option<Box<dyn FamilyReservation>> {
-        if self.closed.load(Ordering::Acquire) {
-            return None;
-        }
-        let service = self.service.upgrade()?;
-        let mut state = service
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let key = (self.root.clone(), Kind::Shell);
-        let pool = state.pools.get(&key);
-        if pool.is_some_and(|pool| {
-            !pool.waiters.is_empty() || pool.slots.len() as u64 >= service.settings.limits.shells
-        }) {
-            return None;
-        }
-        let slot = state.next_slot;
-        state.next_slot += 1;
-        state
-            .pools
-            .entry(key)
-            .or_default()
-            .slots
-            .push((slot, self.holder.clone()));
-        advance(&mut state, &self.root);
-        drop(state);
-        let claim = Arc::new(Claim {
-            service: self.service.clone(),
-            root: self.root.clone(),
-            slot,
-            state: AtomicU8::new(CLAIMED),
-        });
-        let mut claims = self
-            .claims
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        claims.retain(|held| held.state.load(Ordering::Acquire) != RELEASED);
-        claims.push(claim.clone());
-        drop(claims);
-        if self.closed.load(Ordering::Acquire) {
-            claim.release();
-            return None;
-        }
-        Some(Box::new(Token(claim)))
-    }
-
-    fn subscribe(&self, wake: Wake) -> Box<dyn FnOnce() + Send> {
-        let Some(service) = self.service.upgrade() else {
-            return Box::new(|| {});
-        };
-        let id = {
-            let mut state = service
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let id = state.next_slot;
-            state.next_slot += 1;
-            state
-                .listeners
-                .entry(self.root.clone())
-                .or_default()
-                .insert(id, wake);
-            id
-        };
-        let (service, root) = (self.service.clone(), self.root.clone());
-        Box::new(move || {
-            let Some(service) = service.upgrade() else {
-                return;
-            };
-            let mut state = service
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if let Some(listeners) = state.listeners.get_mut(&root) {
-                listeners.remove(&id);
-                if listeners.is_empty() {
-                    state.listeners.remove(&root);
-                }
-            }
-        })
-    }
-}
-
-const CLAIMED: u8 = 0;
-const COMMITTED: u8 = 1;
-const RELEASED: u8 = 2;
-
-struct Claim {
-    service: Weak<Inner>,
-    root: SessionId,
-    slot: u64,
-    state: AtomicU8,
-}
-
-impl Claim {
-    fn commit(&self) {
-        let _ =
-            self.state
-                .compare_exchange(CLAIMED, COMMITTED, Ordering::AcqRel, Ordering::Acquire);
-    }
-
-    fn release(&self) {
-        let previous = self.state.swap(RELEASED, Ordering::AcqRel);
-        if previous == RELEASED {
-            return;
-        }
-        let Some(service) = self.service.upgrade() else {
-            return;
-        };
-        let wakes = {
-            let mut state = service
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            release_slot(
-                &mut state,
-                &self.service,
-                &self.root,
-                Kind::Shell,
-                self.slot,
-            );
-            if previous == COMMITTED {
-                listeners(&state, &self.root)
-            } else {
-                Vec::new()
-            }
-        };
-        wakes.iter().for_each(|wake| wake());
-    }
-}
-
-struct Token(Arc<Claim>);
-
-impl FamilyReservation for Token {
-    fn commit(&self) {
-        self.0.commit();
-    }
-    fn release(&self) {
-        self.0.release();
-    }
-}
-
-fn listeners(state: &State, root: &SessionId) -> Vec<Wake> {
-    state
-        .listeners
-        .get(root)
-        .map(|listeners| listeners.values().cloned().collect())
-        .unwrap_or_default()
-}
-
 fn advance(state: &mut State, root: &SessionId) {
     *state.sequences.entry(root.clone()).or_default() += 1;
 }
-fn release_slot(
-    state: &mut State,
-    service: &Weak<Inner>,
-    root: &SessionId,
-    kind: Kind,
-    slot: u64,
-) -> bool {
+fn release_slot(state: &mut State, service: &Weak<Inner>, root: &SessionId, kind: Kind, slot: u64) {
     let key = (root.clone(), kind);
     if let Some(pool) = state.pools.get_mut(&key) {
         pool.slots.retain(|(id, _)| *id != slot);
@@ -491,7 +286,6 @@ fn release_slot(
                 kind: Some(kind),
                 slot: waiter.id,
                 released: AtomicBool::new(false),
-                queue: None,
             }));
             let Err(returned) = waiter.sender.send(Ok(granted)) else {
                 break;
@@ -506,7 +300,6 @@ fn release_slot(
         }
     }
     advance(state, root);
-    kind == Kind::Shell
 }
 fn exceeded(state: &State, root: &SessionId, kind: Kind, limit: u64, waited_ms: u64) -> Error {
     let slots = state
@@ -806,26 +599,7 @@ impl Guardrails {
             kind,
             slot,
             released: AtomicBool::new(false),
-            queue: None,
         })))
-    }
-
-    fn deferred_shell(&self, root: &SessionId, holder: Option<LosslessString>) -> Reservation {
-        Reservation(Arc::new(Reserved {
-            service: Arc::downgrade(&self.0),
-            root: root.clone(),
-            kind: None,
-            slot: 0,
-            released: AtomicBool::new(false),
-            queue: Some(Arc::new(ShellQueue {
-                service: Arc::downgrade(&self.0),
-                root: root.clone(),
-                family: root.as_lossless().to_utf8().unwrap_or_default(),
-                holder,
-                closed: AtomicBool::new(false),
-                claims: Mutex::default(),
-            })),
-        }))
     }
 
     fn full(&self, state: &State, root: &SessionId, kind: Kind) -> bool {
@@ -1169,16 +943,6 @@ impl Guardrails {
                 rule_ids: result.rule_ids,
                 decision: guardrail::Decision::Allow,
             };
-            if action_kind == Some(Kind::Shell) && input.defer_shell {
-                state::emit::<guardrail::Decided>(&self.0.publish, &decided)
-                    .map_err(Error::Publish)?;
-                return Ok(Admission {
-                    effect: Effect::Allow,
-                    request: None,
-                    reservation: Some(self.deferred_shell(&root, input.holder)),
-                    wait: None,
-                });
-            }
             if action_kind == Some(Kind::Shell) && self.full(&state, &root, Kind::Shell) {
                 state::emit::<guardrail::Decided>(&self.0.publish, &decided)
                     .map_err(Error::Publish)?;
@@ -1194,11 +958,7 @@ impl Guardrails {
             }
             let reservation = self.reserve(&mut state, &root, action_kind, input.holder)?;
             if let Err(error) = state::emit::<guardrail::Decided>(&self.0.publish, &decided) {
-                let wakes = reservation
-                    .release_unlocked(&mut state)
-                    .map_or_else(Vec::new, |root| listeners(&state, &root));
-                drop(state);
-                wakes.iter().for_each(|wake| wake());
+                reservation.release_unlocked(&mut state);
                 return Err(Error::Publish(error));
             }
             return Ok(Admission {
@@ -1269,14 +1029,6 @@ impl Guardrails {
                 .unwrap_or_else(|error| error.into_inner());
             *state.approvals.entry(root.clone()).or_default() += 1;
             advance(&mut state, &root);
-            if input.defer_shell && action_kind == Some(Kind::Shell) {
-                return Ok(Admission {
-                    effect: Effect::Allow,
-                    request: None,
-                    reservation: Some(self.deferred_shell(&root, input.holder)),
-                    wait: None,
-                });
-            }
             if action_kind == Some(Kind::Shell) && self.full(&state, &root, Kind::Shell) {
                 let (sender, receiver) = oneshot::channel();
                 let id = self.queue_shell(&mut state, &root, input.holder, None, sender);
@@ -1368,7 +1120,6 @@ impl Guardrails {
                 review,
                 directories,
                 holder: input.holder,
-                defer_shell: input.defer_shell && action_kind == Some(Kind::Shell),
                 source: input.source,
                 fingerprint,
             },
@@ -1543,12 +1294,6 @@ impl Guardrails {
         }
         *state.approvals.entry(root.clone()).or_default() += 1;
         advance(&mut state, &root);
-        if item.defer_shell {
-            let _ = item
-                .sender
-                .send(Ok(self.deferred_shell(&root, item.holder)));
-            return Ok(());
-        }
         let kind = match item.request.action.as_str() {
             Some("shell") => Some(Kind::Shell),
             Some("subagent") => Some(Kind::Subagent),
@@ -1565,13 +1310,9 @@ impl Guardrails {
             return Ok(());
         }
         let reservation = self.reserve(&mut state, &root, kind, item.holder);
-        let freed = match item.sender.send(reservation) {
-            Err(Ok(reservation)) => reservation.release_unlocked(&mut state),
-            _ => None,
-        };
-        let wakes = freed.map_or_else(Vec::new, |root| listeners(&state, &root));
-        drop(state);
-        wakes.iter().for_each(|wake| wake());
+        if let Err(Ok(reservation)) = item.sender.send(reservation) {
+            reservation.release_unlocked(&mut state);
+        }
         Ok(())
     }
 
@@ -2024,7 +1765,7 @@ fn now() -> i64 {
 
 const REDACTED: &str = "[redacted]";
 
-fn redact_value(value: &JsonValue) -> JsonValue {
+pub(crate) fn redact_value(value: &JsonValue) -> JsonValue {
     match value {
         JsonValue::String(value) => JsonValue::String(redact(value)),
         JsonValue::Array(values) => JsonValue::Array(values.iter().map(redact_value).collect()),

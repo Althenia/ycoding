@@ -197,9 +197,13 @@ jobs:
 
       - name: Verify Rust workspace
         if: matrix.suite == 'rust'
+        env:
+          YCODING_MCP_SERVER_ROOT: ${{ github.workspace }}/packages/core/node_modules/@modelcontextprotocol/server
+          YCODING_MCP_FIXTURE_REF: refs/remotes/origin/main
         run: |
           set -euo pipefail
           python3 script/rust-workspace-check.py
+          bun test --cwd packages/core ./test/rust-baseline/immutable.test.ts
           cargo fmt --manifest-path rust/Cargo.toml --all -- --check
           cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings
           cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast

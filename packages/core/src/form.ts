@@ -27,6 +27,8 @@ export type When = Form.When
 export const State = Form.State
 export type State = typeof State.Type
 export type TerminalState = Exclude<State, { readonly status: "pending" }>
+// Automatic provenance belongs to the tool return, not the public Form state.
+export type AskResult = TerminalState & { readonly automatic?: true }
 
 export const Answer = Form.Answer
 export type Answer = typeof Answer.Type
@@ -82,7 +84,7 @@ export interface ListInput {
 
 export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
-  readonly ask: (input: CreateInput) => Effect.Effect<TerminalState, AlreadyExistsError | InvalidFormError>
+  readonly ask: (input: CreateInput) => Effect.Effect<AskResult, AlreadyExistsError | InvalidFormError>
   readonly get: (id: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly state: (id: ID) => Effect.Effect<State, NotFoundError>
@@ -166,7 +168,7 @@ export const layer = Layer.effect(
             yield* events.publish(Event.Replied, { id: form.id, sessionID: form.sessionID, answer })
             yield* Cache.set(forms, form.id, { ...entry, state: next })
             yield* Deferred.succeed(entry.deferred, next)
-            return next
+            return { ...next, automatic: true as const }
           }
           return yield* restore(Deferred.await(entry.deferred)).pipe(
             Effect.onInterrupt(() => Effect.ignore(cancel(form.id))),

@@ -113,7 +113,6 @@ events! {
     PtyExited(pty::ExitedData) => "pty.exited",
     PtyDeleted(pty::DeletedData) => "pty.deleted",
     ShellCreated(shell::CreatedData) => "shell.created",
-    ShellUpdated(shell::UpdatedData) => "shell.updated",
     ShellExited(shell::ExitedData) => "shell.exited",
     ShellDeleted(shell::DeletedData) => "shell.deleted",
     QuestionAsked(question::Request) => "question.asked",

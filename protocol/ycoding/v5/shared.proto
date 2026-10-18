@@ -411,7 +411,8 @@ enum Shell_Info_status {
   SHELL_INFO_STATUS_TIMEOUT = 3;
   SHELL_INFO_STATUS_MEMORY_LIMIT = 4;
   SHELL_INFO_STATUS_KILLED = 5;
-  SHELL_INFO_STATUS_QUEUED = 6;
+  reserved 6;
+  reserved "SHELL_INFO_STATUS_QUEUED";
 }
 
 enum FileDiff_Info_status {
@@ -498,7 +499,8 @@ message Shell_Info {
   required Shell_Info_metadata metadata = 9;
   optional LosslessString toolCallID = 10 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" utf16_min: 1 }];
   required Shell_Info_time time = 11;
-  optional uint64 queuePosition = 12 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" integer_min: "1" integer_max: "9007199254740991" }];
+  reserved 12;
+  reserved "queuePosition";
 }
 
 message Shell_Info_metadata {
@@ -513,7 +515,8 @@ message Shell_Info_metadataEntry {
 message Shell_Info_time {
   required double started = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
   optional double completed = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
-  optional double queued = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/shell.ts#Shell.Info" }];
+  reserved 3;
+  reserved "queued";
 }
 
 message FileDiff_Info {

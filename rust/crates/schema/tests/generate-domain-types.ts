@@ -970,7 +970,6 @@ corpus.push(
   accepted("Shell.Metadata", Shell.Metadata, '{"\\ud800":[null,false]}', '[]'),
   accepted("Shell.Info", Shell.Info, '{"id":"sh_x","status":"running","command":"c","cwd":"","shell":"sh","file":"f","metadata":{},"time":{"started":0}}', '{"id":"sh","status":"running","command":"c","cwd":"","shell":"sh","file":"f","metadata":{},"time":{"started":0}}'),
   accepted("Shell.Event.Created", Shell.Event.Created, '{"id":"evt_","created":0,"type":"shell.created","data":{"info":{"id":"sh_x","status":"running","command":"c","cwd":"","shell":"sh","file":"f","metadata":{},"time":{"started":0}}}}', '{"id":"evt_","created":0,"type":"shell.created","data":{}}'),
-  accepted("Shell.Event.Updated", Shell.Event.Updated, '{"id":"evt_","created":0,"type":"shell.updated","data":{"info":{"id":"sh_x","status":"queued","command":"c","cwd":"","shell":"sh","file":"f","metadata":{},"queuePosition":1,"time":{"started":0,"queued":1}}}}', '{"id":"evt_","created":0,"type":"shell.updated","data":{}}'),
   accepted("Shell.Event.Exited", Shell.Event.Exited, '{"id":"evt_","created":0,"type":"shell.exited","data":{"id":"sh_x","exit":null,"status":"timeout"}}', '{"id":"evt_","created":0,"type":"shell.exited","data":{"id":"sh_x","status":"bad"}}'),
   accepted("Shell.Event.Deleted", Shell.Event.Deleted, '{"id":"evt_","created":0,"type":"shell.deleted","data":{"id":"sh_x"}}', '{"id":"evt_","created":0,"type":"shell.deleted","data":{"id":"bad"}}'),
   accepted("Shell.CreateInput", Shell.CreateInput, '{"command":"x","timeout":0,"memoryLimitMb":1048576}', '{"command":"x","timeout":0,"memoryLimitMb":1048577}'),
@@ -1159,7 +1158,8 @@ appendSamples("Guardrail.Rule", { id: "x", source: "standard", decision: "allow"
 appendSamples("Guardrail.Risk", { level: 0, label: "", score: 0, metric: "confidence" }, { level: 4, label: "", score: 0, metric: "probability" }, { level: -1, label: "", score: 0, metric: "confidence" }, { level: 0, label: "", score: Number.POSITIVE_INFINITY, metric: "confidence" })
 appendSamples("Guardrail.Request", { id: "grq_x", rootSessionID: "ses", sessionID: "ses", action: "", resources: [], ruleIDs: [], reason: "", standard: false }, { id: "grq_x", rootSessionID: "ses", sessionID: "ses", action: "", resources: [], ruleIDs: [], reason: "", standard: false, hardReview: null })
 appendSamples("Shell.MemoryLimitMb", 0, 1048576, -1, 1048577)
-appendSamples("Shell.Time", { started: 0 }, { started: -1.5, completed: 0 }, { started: Number.POSITIVE_INFINITY })
+appendSamples("Shell.Status", "queued")
+appendSamples("Shell.Time", { started: 0, queued: 10 }, { started: 0 }, { started: -1.5, completed: 0 }, { started: Number.POSITIVE_INFINITY })
 appendRawSamples("Shell.Time", '{"started":1e400}', '{"started":0,"completed":1e400}')
 appendSamples("Shell.Info", { id: "sh_x", status: "running", command: "", cwd: "", shell: "", file: "", metadata: {}, toolCallID: "x", time: { started: 0 } }, { id: "sh_x", status: "running", command: "", cwd: "", shell: "", file: "", metadata: {}, toolCallID: "", time: { started: 0 } }, { id: "sh_x", status: "running", command: "", cwd: "", shell: "", file: "", metadata: {}, pid: null, time: { started: 0 } })
 appendSamples("Shell.CreateInput", { command: "", timeout: 0 }, { command: "", timeout: -1 })

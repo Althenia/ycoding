@@ -82,6 +82,14 @@ fn canonical_control_collection_limits() {
             count,
             500,
             v5::Status {
+                lost: Some(v5::IdentifierList { items: ids.clone() }),
+                ..Default::default()
+            },
+        );
+        bounded(
+            count,
+            500,
+            v5::Status {
                 details: Some(v5::AttentionList {
                     items: ids
                         .iter()

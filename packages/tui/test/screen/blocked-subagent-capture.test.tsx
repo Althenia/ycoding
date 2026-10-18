@@ -29,6 +29,7 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     const rows = await captureRoute({
       ...viewport,
       args: { sessionID },
+      sessionReady: true,
       settle: "? awaiting input ·",
       stable:
         viewport.width === 80
@@ -200,7 +201,18 @@ function task(
   question?: string,
 ) {
   const agent = sessionID === "ses_docs" ? "docs-sync" : sessionID === "ses_keymap" ? "keymap-audit" : "test-triage"
-  return { sessionID, parentID, description, agent, model: { providerID: "anthropic", id: "claude-sonnet-5" }, background: true, state, ...(question ? { question: { id: "qst_blocked", text: question, time: now - 242_000 } } : {}), revision: 1, time: { created: now - (5 - order) * 60_000, updated: now } }
+  return {
+    sessionID,
+    parentID,
+    description,
+    agent,
+    model: { providerID: "anthropic", id: "claude-sonnet-5" },
+    background: true,
+    state,
+    ...(question ? { question: { id: "qst_blocked", text: question, time: now - 242_000 } } : {}),
+    revision: 1,
+    time: { created: now - (5 - order) * 60_000, updated: now },
+  }
 }
 
 function guardrail() {

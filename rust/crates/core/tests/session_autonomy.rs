@@ -403,7 +403,7 @@ fn terminal_and_active_goals_render_visible_reminders() {
         lines[0],
         "Active autonomous goal (iteration 2, noProgress 1/3): Finish the bounded task"
     );
-    assert!(lines.contains(&"Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user."));
+    assert!(lines.contains(&"Automatic answering is disabled for this Session. Resolve choices that need no user input yourself; required answers and required human approval remain manual."));
     assert!(State::default().goal_reminder().is_none());
 }
 

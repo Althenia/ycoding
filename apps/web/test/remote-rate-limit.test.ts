@@ -22,7 +22,6 @@ async function harness(count: number, statusGate?: Promise<void>, residentMessag
   const gatedResponses: Promise<void>[] = []
   const eventSequences = new Map<string, number>()
   let clockSkew = 0
-  const promptHold: { promise?: Promise<void> } = {}
   const agent = createAgentPeer(
     () => performance.now() + clockSkew,
     (request, dispatch, peer) => {
@@ -139,7 +138,35 @@ async function harness(count: number, statusGate?: Promise<void>, residentMessag
           return
         }
         if (request.operation === "session.autonomy.get") {
-          peer.result(dispatch, { data: { mode: "normal", yolo: 0 } })
+          peer.result(dispatch, {
+            data: {
+              mode: "normal",
+              yolo: 0,
+              effective: {
+                yolo: 0,
+                asleep: false,
+                guardrailsEnabled: true,
+                ordinaryReviewsAuto: false,
+                modelReviews: false,
+                hardModelReviews: false,
+              },
+            },
+          })
+          return
+        }
+        if (request.operation === "session.guardrail.status") {
+          peer.result(dispatch, {
+            data: {
+              rootSessionID: request.sessionID,
+              profile: "standard",
+              customRules: 0,
+              approvals: 0,
+              blocked: 0,
+              counters: [],
+              invalidFiles: [],
+              decisions: [],
+            },
+          })
           return
         }
         if (request.operation === "session.subagent.list") {
@@ -167,6 +194,7 @@ async function harness(count: number, statusGate?: Promise<void>, residentMessag
             "session.capturedChanges.list",
             "session.permission.list",
             "session.guardrail.request.list",
+            "session.review.list",
           ].includes(request.operation)
         ) {
           peer.result(dispatch, { data: [] })
@@ -182,8 +210,6 @@ async function harness(count: number, statusGate?: Promise<void>, residentMessag
       }
       if (request.operation === "session.status" && statusGate && ++statusReads === 1)
         gatedResponses.push(statusGate.then(respond))
-      else if (request.operation === "session.promptCosts" && promptHold.promise)
-        gatedResponses.push(promptHold.promise.then(respond))
       else void respond()
     },
   )
@@ -298,14 +324,7 @@ async function harness(count: number, statusGate?: Promise<void>, residentMessag
       while (deliveries.length) await Promise.all(deliveries.splice(0))
     },
     lastSequence: (sessionID: string) => eventSequences.get(sessionID) ?? 0,
-    holdPromptCosts: () => {
-      const gate = Promise.withResolvers<void>()
-      promptHold.promise = gate.promise
-      return () => {
-        promptHold.promise = undefined
-        gate.resolve()
-      }
-    },
+
     event: async (sessionID: string, event: Record<string, unknown>) => {
       const branch = PublicEventSchema.fields.find((field) => field.name === String(event.type).replaceAll(".", "_"))
       const durable = branch?.message?.fields.some((field) => field.name === "durable") === true
@@ -577,7 +596,7 @@ describe("remote request budget integration", () => {
     }
   }, 60_000)
 
-  test("continuous accounting events over a full resident page keep prompt-cost reads coalesced inside the relay window", async () => {
+  test("continuous accounting events over a full resident page fetch no prompt costs and stay inside the relay window", async () => {
     const fixture = await harness(10, undefined, 100)
     const observed = observedStore(fixture)
     const store = observed.store
@@ -602,7 +621,6 @@ describe("remote request budget integration", () => {
               batch,
               watermark: store.state().view?.watermark,
               pushed: fixture.lastSequence("ses_0"),
-              promptCostState: store.state().view?.promptCostState,
               ...fixture.diagnostics(),
             }),
             { cause },
@@ -613,29 +631,18 @@ describe("remote request budget integration", () => {
     const settled = () => {
       fixture.ping()
       return (
-        store.state().view?.watermark === fixture.lastSequence("ses_0") && store.state().view?.promptCostState === "ready"
+        store.state().view?.watermark === fixture.lastSequence("ses_0")
       )
     }
     try {
       await store.load()
       await waitFor(() => store.state().sessions.length > 0, 25_000)
       await store.selectSession("ses_0")
-      await waitFor(() => store.state().view?.promptCostState === "ready", 25_000)
-      expect(promptReads()).toHaveLength(1)
-      expect((promptReads()[0]?.input?.inputIDs as string[]).length).toBe(100)
-
-      const release = fixture.holdPromptCosts()
-      await fixture.event("ses_0", accountingEvent(19))
-      await fixture.flushEvents()
-      await waitFor(() => {
-        fixture.ping()
-        return promptReads().length === 2
-      }, 25_000)
+      expect(store.state().view?.messages).toHaveLength(100)
+      expect(promptReads()).toHaveLength(0)
       for (let batch = 0; batch < 20; batch += 1) await deliver(batch)
-      expect(promptReads()).toHaveLength(2)
-      release()
       await waitFor(settled, 25_000)
-      expect(promptReads()).toHaveLength(3)
+      expect(promptReads()).toHaveLength(0)
 
       const admitted = fixture.requests.length
       const started = performance.now()
@@ -650,7 +657,7 @@ describe("remote request budget integration", () => {
       expect(fixture.requests.length - admitted).toBeLessThanOrEqual(
         (WebLimits.maxClientRequestsPerWindow - 3) * windows,
       )
-      expect(promptReads().every((request) => (request.input?.inputIDs as string[]).length <= 100)).toBe(true)
+      expect(promptReads()).toHaveLength(0)
       expect(fixture.closed).toEqual([])
       expect(observed.statuses.filter((kind) => kind === "closed" || kind === "reconnecting")).toEqual([])
       expect(observed.resyncs).toEqual([])

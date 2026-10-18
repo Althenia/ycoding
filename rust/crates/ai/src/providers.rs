@@ -260,6 +260,11 @@ fn router_lower(request: &Request) -> Result<JsonValue, Error> {
             .filter(|value| matches!(value, JsonValue::Object(_)))
             .unwrap_or(&json::empty()),
     );
+    let reasoning = if get(&reasoning, "effort") == Some(&JsonValue::Null) {
+        json::remove(&reasoning, &["effort"])
+    } else {
+        reasoning
+    };
     if matches!(&reasoning,JsonValue::Object(fields) if !fields.is_empty()) {
         json::set(&mut body, "reasoning", reasoning);
     }

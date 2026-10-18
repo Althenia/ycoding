@@ -26,7 +26,15 @@ test("renders each provider quota window with its own reset and derivable progre
       stability: "stable",
       updatedAt: now,
       windows: [
-        { id: "key", label: "Key limit", unit: "usd", used: 3.2, limit: 10, remaining: 6.8, resetAt: now + 60 * 60 * 1_000 },
+        {
+          id: "key",
+          label: "Key limit",
+          unit: "usd",
+          used: 3.2,
+          limit: 10,
+          remaining: 6.8,
+          resetAt: now + 60 * 60 * 1_000,
+        },
         { id: "balance", label: "Balance", unit: "usd", remaining: 50 },
         { id: "daily", label: "Daily", unit: "usd", used: 7.02 },
         { id: "weekly", label: "Weekly", unit: "usd", used: 11.22 },
@@ -36,8 +44,12 @@ test("renders each provider quota window with its own reset and derivable progre
       ],
     },
     {
-      providerID: "github-copilot", label: "Copilot", status: "available", source: "provider_internal_api",
-      stability: "best_effort", updatedAt: now,
+      providerID: "github-copilot",
+      label: "Copilot",
+      status: "available",
+      source: "provider_internal_api",
+      stability: "best_effort",
+      updatedAt: now,
       windows: [
         { id: "credits", label: "AI credits", unit: "percent", used: 42, resetAt: now + 60 * 60 * 1_000 },
         { id: "extra-usage", label: "Extra usage", unit: "count", used: 3 },
@@ -46,18 +58,31 @@ test("renders each provider quota window with its own reset and derivable progre
       ],
     },
     {
-      providerID: "xai", label: "Grok", status: "available", source: "provider_internal_api",
-      stability: "best_effort", updatedAt: now,
+      providerID: "xai",
+      label: "Grok",
+      status: "available",
+      source: "provider_internal_api",
+      stability: "best_effort",
+      updatedAt: now,
       windows: [{ id: "extra-usage", label: "Extra usage", unit: "count", limit: 2500 }],
     },
     {
-      providerID: "zai", label: "Z.ai", status: "available", source: "provider_internal_api",
-      stability: "best_effort", updatedAt: now,
+      providerID: "zai",
+      label: "Z.ai",
+      status: "available",
+      source: "provider_internal_api",
+      stability: "best_effort",
+      updatedAt: now,
       windows: [{ id: "web-searches", label: "Web Searches", unit: "count", used: 12, limit: 100 }],
     },
     {
-      providerID: "openai", label: "Codex", profile: "YCoding local", status: "available",
-      source: "local_session", stability: "stable", updatedAt: now,
+      providerID: "openai",
+      label: "Codex",
+      profile: "YCoding local",
+      status: "available",
+      source: "local_session",
+      stability: "stable",
+      updatedAt: now,
       windows: [{ id: "today", label: "Today", unit: "usd", used: 0 }],
     },
     {
@@ -127,7 +152,8 @@ test("renders each provider quota window with its own reset and derivable progre
     expect(rows.find((row) => row.includes("Extra usage") && !row.includes("cap"))).toContain("3 used")
     expect(rows.find((row) => row.includes("Web Searches"))).toContain("12 / 100 used")
     expect(rows.some((row) => /\d count\b/.test(row))).toBe(false)
-    expect(rows.find((row) => row.includes("Codex · YCoding local"))).toContain("local_session · stable")
+    expect(rows.find((row) => row.includes("Codex · YCoding local"))).not.toContain("local_session")
+    expect(frame).not.toContain("provider_api")
     expect(rows.find((row) => /^\s*Today\s/.test(row))).toContain("$0.00 used")
     expect(rows.find((row) => /^\s*Weekly\s/.test(row))).toContain("$11.22 used")
     expect(rows.find((row) => /^\s*Monthly\s/.test(row))).toContain("$18.45 used")
@@ -142,6 +168,8 @@ test("renders each provider quota window with its own reset and derivable progre
     expect(frame).not.toContain("Monupdated now")
     expect(frame).not.toContain("Weeklyupdated now")
     expect(frame).not.toMatch(/[#-]{3,}/)
+    app.mockInput.pressKey("d")
+    await app.waitForFrame((next) => next.includes("Source local session · Stability stable"))
   } finally {
     app.renderer.destroy()
   }
@@ -157,19 +185,33 @@ test("lists every provider quota before YCoding local Today spend", async () => 
   ])
   const now = 1_000_000
   const localSpend = (providerID: string, label: string, used: number): Snapshot => ({
-    providerID, label, profile: "YCoding local", status: "available", source: "local_session", stability: "stable",
-    updatedAt: now, windows: [{ id: "today", label: "Today", unit: "usd", used }],
+    providerID,
+    label,
+    profile: "YCoding local",
+    status: "available",
+    source: "local_session",
+    stability: "stable",
+    updatedAt: now,
+    windows: [{ id: "today", label: "Today", unit: "usd", used }],
   })
   const snapshots: Snapshot[] = [
     localSpend("anthropic", "Claude", 231.11),
     {
-      providerID: "anthropic", label: "Claude Max", status: "available", source: "provider_internal_api",
-      stability: "best_effort", updatedAt: now,
+      providerID: "anthropic",
+      label: "Claude Max",
+      status: "available",
+      source: "provider_internal_api",
+      stability: "best_effort",
+      updatedAt: now,
       windows: [{ id: "session", label: "Session", unit: "percent", used: 44, resetAt: now + 60 * 60 * 1_000 }],
     },
     {
-      providerID: "openai", label: "Codex Pro", status: "available", source: "provider_internal_api",
-      stability: "best_effort", updatedAt: now,
+      providerID: "openai",
+      label: "Codex Pro",
+      status: "available",
+      source: "provider_internal_api",
+      stability: "best_effort",
+      updatedAt: now,
       windows: [{ id: "weekly", label: "Weekly", unit: "percent", used: 27, resetAt: now + 2 * 60 * 60 * 1_000 }],
     },
     localSpend("openai", "Openai", 601.67),
@@ -197,8 +239,12 @@ test("lists every provider quota before YCoding local Today spend", async () => 
 
   try {
     const rows = app.captureCharFrame().split("\n")
-    const headers = ["Claude Max · updated now", "Codex Pro · updated now", "Claude · YCoding local", "Openai · YCoding local"]
-      .map((header) => rows.findIndex((row) => row.includes(header)))
+    const headers = [
+      "Claude Max · updated now",
+      "Codex Pro · updated now",
+      "Claude · YCoding local",
+      "Openai · YCoding local",
+    ].map((header) => rows.findIndex((row) => row.includes(header)))
     expect(headers.every((index) => index >= 0)).toBe(true)
     expect(headers).toEqual(headers.toSorted((left, right) => left - right))
     expect(rows[headers[2]! + 1]).toContain("Today $231.11 used")
@@ -228,7 +274,13 @@ test("preserves reported account tiers and renders each reported reset without i
       windows: [
         { id: "session", label: "Session", unit: "percent", used: 12, resetAt: now + 60 * 60 * 1_000 },
         { id: "weekly", label: "Weekly all models", unit: "percent", used: 71, resetAt: now + 2 * 60 * 60 * 1_000 },
-        { id: "experimental", label: "Experimental lane", unit: "percent", used: 91, resetAt: now + 3 * 60 * 60 * 1_000 },
+        {
+          id: "experimental",
+          label: "Experimental lane",
+          unit: "percent",
+          used: 91,
+          resetAt: now + 3 * 60 * 60 * 1_000,
+        },
       ],
     },
     {
@@ -262,7 +314,13 @@ test("preserves reported account tiers and renders each reported reset without i
       stability: "stable",
       updatedAt: now,
       windows: [
-        { id: "monthly-ai-credits", label: "Monthly AI credits", unit: "count", used: 45, resetAt: now + 4 * 60 * 60 * 1_000 },
+        {
+          id: "monthly-ai-credits",
+          label: "Monthly AI credits",
+          unit: "count",
+          used: 45,
+          resetAt: now + 4 * 60 * 60 * 1_000,
+        },
         { id: "premium-requests", label: "Premium requests", unit: "percent", used: 91, limit: 100 },
         { id: "free-monthly", label: "Free monthly", unit: "count", remaining: 50 },
       ],
@@ -287,7 +345,9 @@ test("preserves reported account tiers and renders each reported reset without i
     { width: 80, height: 60 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Claude Max") && frame.includes("Codex Pro") && frame.includes("Stream quota"))
+  await app.waitForFrame(
+    (frame) => frame.includes("Claude Max") && frame.includes("Codex Pro") && frame.includes("Stream quota"),
+  )
 
   try {
     const rows = app.captureCharFrame().split("\n")

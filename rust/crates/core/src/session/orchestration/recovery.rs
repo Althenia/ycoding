@@ -91,6 +91,7 @@ impl Service {
                 }
             }
         }
+        self.rearm_waiting_questions_in(&processes).await?;
         Ok(recovered)
     }
 
@@ -530,6 +531,7 @@ impl Service {
                 acted += 1;
             }
         }
+        self.rearm_waiting_questions().await?;
         Ok(acted)
     }
 

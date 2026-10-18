@@ -25,6 +25,8 @@ const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
 const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
 const creditsMode = new URLSearchParams(location.search).get("credits")
 const credits = creditsMode !== null
+const museMode = new URLSearchParams(location.search).get("provider") === "muse"
+const states = forecastMode === "states"
 const providers: UsageProvider[] = [
   {
     providerID: "openai",
@@ -47,7 +49,7 @@ const providers: UsageProvider[] = [
         id: "week",
         label: "Weekly allowance",
         unit: "percent",
-        used: 72,
+        used: states ? 100 : 72,
         resetAt: Date.now() + 3 * 86_400_000,
         periodSeconds: 7 * 86_400,
       },
@@ -158,6 +160,33 @@ const providers: UsageProvider[] = [
     message: "Quota refresh failed.",
   },
 ]
+const museProvider: UsageProvider = {
+  providerID: "muse",
+  label: "Muse (Meta)",
+  profile: "Muse",
+  status: "available",
+  source: "response_stream",
+  stability: "observed",
+  updatedAt: Date.now(),
+  windows: [
+    {
+      id: "window",
+      label: "5-hour window",
+      unit: "percent",
+      used: 35,
+      resetAt: Date.now() + 2 * 3600_000,
+      periodSeconds: 18_000,
+    },
+    {
+      id: "weekly",
+      label: "Weekly",
+      unit: "percent",
+      used: 64,
+      resetAt: Date.now() + 4 * 86_400_000,
+      periodSeconds: 604_800,
+    },
+  ],
+}
 const tokens = longDistribution
   ? { input: 1_000_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
   : { input: 12_400, output: 3_200, reasoning: 1_440, cache: { read: 5_600, write: 320 } }
@@ -261,6 +290,72 @@ const entries = (input: UsageReportInput): UsageReportRow[] =>
         costProvenance: index % 3 === 0 ? "current_catalog" : "recorded",
         costCoverage: { pricedRequests: 41 - index, unpricedRequests: 0 },
       }))
+const insufficient = (reason: string) => ({ state: "insufficient" as const, evidence: "insufficient" as const, reason })
+const stateFor = (providerID: string, windowID: string, asOf: number) => {
+  if (providerID === "openai" && windowID === "session")
+    return {
+      state: "estimated" as const,
+      evidence: "low" as const,
+      method: "quota-delta-ema" as const,
+      ratePerHour: 10.25,
+      exhaustionAt: asOf + 7_200_000,
+      projectedUsedAtReset: 83.5,
+      observedFrom: asOf - 3_600_000,
+      observedTo: asOf,
+    }
+  if (providerID === "openai" && windowID === "week")
+    return { state: "exhausted" as const, evidence: "medium" as const }
+  if (providerID === "anthropic" && windowID === "session") return insufficient("Quota observations are stale")
+  if (providerID === "anthropic" && windowID === "weekly") return insufficient("Quota window has expired")
+  if (providerID === "anthropic") return insufficient("No increase observed")
+  return insufficient("Warming up after restart")
+}
+const localRates = [
+  {
+    providerID: "openai",
+    profile: "Personal",
+    modelID: "gpt-6-sol",
+    observedFrom: 1_700_000_000_000,
+    observedTo: 1_700_003_600_000,
+    tokensPerMinute: 12_345.678,
+    tokensPerMinute5: 15_000.25,
+    tokensPerMinute60: 9_876.5,
+    estimatedUSDPerHour: 1.23456,
+    coverage: { pricedRequests: 40, unpricedRequests: 0 },
+  },
+  {
+    providerID: "provider-with-an-extremely-long-identifier-that-must-wrap-inside-its-row",
+    modelID: "model-with-an-extremely-long-identifier-v2-20260101-preview-extra-long-suffix",
+    observedFrom: 1_700_000_000_000,
+    observedTo: 1_700_003_600_000,
+    tokensPerMinute: 0.4,
+    coverage: { pricedRequests: 0, unpricedRequests: 7 },
+  },
+  {
+    providerID: "anthropic",
+    profile: "Max · Personal",
+    modelID: "claude-opus",
+    observedFrom: 1_700_000_000_000,
+    observedTo: 1_700_003_600_000,
+    tokensPerMinute: 0,
+    tokensPerMinute5: 0,
+    estimatedUSDPerHour: 0.0042,
+    coverage: { pricedRequests: 3, unpricedRequests: 2 },
+  },
+]
+const museRate = [
+  {
+    providerID: "muse",
+    profile: "Muse",
+    modelID: "muse-model",
+    observedFrom: 1_700_000_000_000,
+    observedTo: 1_700_003_600_000,
+    tokensPerMinute: 120,
+    tokensPerMinute5: 180,
+    tokensPerMinute60: 120,
+    coverage: { pricedRequests: 0, unpricedRequests: 3 },
+  },
+]
 const requests: { operation: string; input?: UsageReportInput | { refresh: boolean } }[] = []
 let releasePage: (() => void) | undefined
 let releaseReload: (() => void) | undefined
@@ -421,7 +516,7 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
     return failure("invalid_message", "Unknown usage report group")
   if (refreshCycle && pendingReload) await pendingReload
   if (operation === "providerUsage.list") {
-    quotaSnapshots = none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers
+    quotaSnapshots = museMode ? [museProvider, ...providers] : none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers
     return {
       status: "ok",
       value: {
@@ -441,15 +536,27 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
         source: provider.source,
         stability: provider.stability,
         updatedAt: provider.updatedAt,
-        ...(forecastMode === "past"
+        ...(museMode && provider.providerID === "muse"
           ? {
-              state: "estimated" as const,
-              evidence: "medium" as const,
-              method: "quota-delta-ema" as const,
-              ratePerHour: 10,
-              exhaustionAt: asOf - 60_000,
+              state: "insufficient" as const,
+              evidence: "insufficient" as const,
+              reason: "Muse quota observations are warming up",
             }
-          : { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Warming up after restart" }),
+          : forecastMode === "past"
+            ? {
+                state: "estimated" as const,
+                evidence: "medium" as const,
+                method: "quota-delta-ema" as const,
+                ratePerHour: 10,
+                exhaustionAt: asOf - 60_000,
+              }
+            : states
+              ? stateFor(provider.providerID, window.id, asOf)
+              : {
+                  state: "insufficient" as const,
+                  evidence: "insufficient" as const,
+                  reason: "Warming up after restart",
+                }),
       })),
     )
     return {
@@ -459,7 +566,7 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
         data: {
           asOf,
           localScope: "backend",
-          ...(forecastMode === "rates-absent" ? {} : { localRates: [] }),
+          ...(forecastMode === "rates-absent" ? {} : { localRates: museMode ? [...museRate, ...localRates] : states ? localRates : [] }),
           ...(forecastMode === "quotas-absent" ? {} : { quotas }),
         },
       },

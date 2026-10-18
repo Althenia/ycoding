@@ -3,7 +3,7 @@ import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { TeamAnswerForm } from "./subagent-bar"
 import { LoadingPlaceholder } from "./loading"
-import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, formatElapsed, isActiveSubagent, pinAction, isDeferredQuestion, shellOwnerLabel, taskStateLabel, teamActivityLabel, teamShellCommand, shellRows, shellStatusLabel, taskRows, usageSlots, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
+import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, formatElapsed, isActiveSubagent, pinAction, isDeferredQuestion, shellOwnerLabel, taskStateLabel, teamActivityLabel, teamShellCommand, shellRows, taskRows, usageSlots, type TeamActionOutcome, type TeamPanelData, type TeamShellOutput, type TeamSubagent } from "./team-model"
 import "./team-view.css"
 
 type Tab = "subagents" | "shell" | "side-chats"
@@ -21,7 +21,7 @@ function StateMark(props: { readonly state: TeamSubagent["state"] }): JSX.Elemen
   </span>
 }
 
-const shellMark: Readonly<Record<TeamPanelData["shells"][number]["status"], TeamSubagent["state"]>> = { queued: "waiting", running: "running", exited: "completed", timeout: "failed", "memory-limit": "failed", killed: "cancelled" }
+const shellMark: Readonly<Record<TeamPanelData["shells"][number]["status"], TeamSubagent["state"]>> = { running: "running", exited: "completed", timeout: "failed", "memory-limit": "failed", killed: "cancelled" }
 const usageKeys = ["tokens", "cost", "context", "cache"] as const
 
 function TaskUsage(props: { readonly task: () => TeamSubagent; readonly loading: () => boolean }): JSX.Element {
@@ -96,7 +96,7 @@ export function TeamView(props: {
     const item = confirm()
     if (!item || !controlsAvailable() || props.data().status !== "ready") return false
     return item.kind === "cancel" ? props.data().tasks.some((task) => task.sessionID === item.id && canCancelSubagent(task.state))
-      : props.data().shells.some((shell) => shell.id === item.id && (shell.status === "running" || shell.status === "queued"))
+      : props.data().shells.some((shell) => shell.id === item.id && shell.status === "running")
   }
   const selectTab = (value: Tab) => {
     setTab(value)
@@ -141,7 +141,7 @@ export function TeamView(props: {
     if (!current || current.loading || current.error || tab() !== "shell") return
     const item = props.data().shells.find((entry) => entry.id === current.shellID)
     const status = current.page?.status ?? item?.status
-    const live = status === "running" || status === "queued"
+    const live = status === "running"
     const more = current.page !== undefined && current.page.cursor < current.page.size
     if (!live && !more) return
     const interval = setInterval(() => {
@@ -223,10 +223,10 @@ export function TeamView(props: {
           <ul class="team-view__list"><For each={shells()}>{(id) => id.startsWith("owner:")
             ? <li class="team-view__owner"><h3>{ownerLabel(id.slice(6))}</h3></li>
             : <li class="team-view__shell" data-shell-id={id}>
-            <div class="team-view__row"><span class="team-view__state"><StateMark state={shellMark[shell(id).status]} /><span>{working() === id ? "killing…" : shellStatusLabel(shell(id))}</span></span><strong class="team-view__title team-view__title--code" title={shell(id).command}>{shell(id).command}</strong></div>
+            <div class="team-view__row"><span class="team-view__state"><StateMark state={shellMark[shell(id).status]} /><span>{working() === id ? "killing…" : shell(id).status}</span></span><strong class="team-view__title team-view__title--code" title={shell(id).command}>{shell(id).command}</strong></div>
             <p class="team-view__meta">{formatElapsed(shell(id).startedAt, shell(id).completedAt ?? props.now())}</p>
             <div class="team-view__actions"><button type="button" class="team-view__button" data-action="output" onClick={() => readOutput(shell(id).ownerID, id)}>View output</button>
-              <Show when={shell(id).status === "running" || shell(id).status === "queued"}><button type="button" class="team-view__button team-view__button--danger" data-action="kill" disabled={working() !== undefined} onClick={(event) => setConfirm({ kind: "kill", id, label: shell(id).command, trigger: event.currentTarget })}>Kill</button></Show></div>
+              <Show when={shell(id).status === "running"}><button type="button" class="team-view__button team-view__button--danger" data-action="kill" disabled={working() !== undefined} onClick={(event) => setConfirm({ kind: "kill", id, label: shell(id).command, trigger: event.currentTarget })}>Kill</button></Show></div>
           </li>}</For></ul>
           <Show when={props.data().shellTruncated}><p role="status">Showing a limited family shell list. More shells are available on this machine.</p></Show>
           <Show when={output()}>{(current) => <section class="team-view__output" aria-label="Shell output"><h3>Output</h3><p class="team-view__command"><span>Command</span><code>{teamShellCommand({ command: props.data().shells.find((entry) => entry.id === current().shellID)?.command ?? "" }, current().page)}</code></p><Show when={current().page?.text} fallback={current().loading ? <LoadingPlaceholder kind="output" label="Loading output…" /> : <pre tabindex="0">No output reported.</pre>}>{(text) => <pre tabindex="0">{text()}</pre>}</Show>

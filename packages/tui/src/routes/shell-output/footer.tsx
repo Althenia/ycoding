@@ -2,12 +2,7 @@ import { Show } from "solid-js"
 import type { ShellInfo } from "@ycoding-ai/client"
 import { useTheme } from "../../context/theme"
 
-export function ShellOutputFooter(props: {
-  shell: ShellInfo
-  owner: string
-  onKill?: () => void
-  onBack: () => void
-}) {
+export function ShellOutputFooter(props: { shell: ShellInfo; owner: string; onKill?: () => void; onBack: () => void }) {
   const { theme } = useTheme()
 
   return (
@@ -25,7 +20,7 @@ export function ShellOutputFooter(props: {
       </text>
       <box flexGrow={1} />
       <box flexDirection="row" gap={1}>
-        <Show when={props.shell.status === "running" || props.shell.status === "queued"}>
+        <Show when={props.shell.status === "running"}>
           <text wrapMode="none" fg={theme.text.feedback.info.default} onMouseUp={props.onKill}>
             ⌃x k kill ·
           </text>

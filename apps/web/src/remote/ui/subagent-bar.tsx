@@ -20,7 +20,6 @@ export type SubagentEconomicsView = {
   readonly cacheRead?: number
   readonly cacheWrite?: number
   readonly cost?: number
-  readonly speed?: { readonly label: string; readonly description: string }
 }
 
 export function TeamAnswerForm(props: {

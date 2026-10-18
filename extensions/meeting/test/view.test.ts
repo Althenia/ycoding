@@ -25,13 +25,39 @@ describe("Meeting Passage live view-model", () => {
     expect(describeView({ meeting: { status: "ready" } }).status).toBe("Ready · nothing is recording")
     expect(describeView({ meeting: { status: "recording" } }).status).toBe("REC · Recording")
     expect(describeView({ meeting: { status: "stopping" } }).status).toBe("Finalizing audio")
-    expect(describeView({ meeting: { status: "stopped" }, analysis: { status: "running" } }).status).toBe(
+    expect(describeView({ meeting: { status: "stopped" }, analysis: { status: "analyzing" } }).status).toBe(
       "Finalizing analysis",
     )
     expect(describeView({ meeting: { status: "stopped" }, summary: { final: true, summary: "Ready" } }).status).toBe(
       "Summary ready",
     )
     expect(describeView({}).status).toBe("Waiting for a meeting")
+  })
+
+  test("derives all lifecycle screens from reported state without fabricating analysis completion", () => {
+    for (const [view, phase] of [
+      [{}, "setup"],
+      [{ meeting: { status: "ready" } }, "setup"],
+      [{ meeting: { status: "recording" }, analysis: { status: "analyzing" } }, "live"],
+      [{ meeting: { status: "stopping" }, summary: { final: true } }, "finalizing"],
+      [{ meeting: { status: "stopped" }, analysis: { status: "analyzing" } }, "finalizing"],
+      [{ meeting: { status: "stopped" } }, "review"],
+      [{ meeting: { status: "interrupted" } }, "recovery"],
+      [{ meeting: { status: "interrupted" }, analysis: { status: "analyzing" } }, "recovery"],
+      [{ meeting: { status: "error" } }, "recovery"],
+      [{ meeting: { status: "stopped" }, audio: { error: "failed", backlog: 2 } }, "recovery"],
+      [{ meeting: { status: "stopped" }, analysis: { status: "error" } }, "recovery"],
+    ] as const)
+      expect(describeView(view).phase).toBe(phase)
+    expect(describeView({ meeting: { status: "stopped" }, analysis: { status: "idle" } }).status).toBe(
+      "Capture stopped",
+    )
+    expect(describeView({ meeting: { status: "stopped" }, analysis: { status: "running" } }).status).toBe(
+      "Capture stopped",
+    )
+    expect(describeView({ meeting: { status: "interrupted" }, analysis: { status: "analyzing" } }).status).toBe(
+      "Finalizing analysis",
+    )
   })
 
   test("failed inference exposes retained-audio recovery without claiming capture is active", () => {

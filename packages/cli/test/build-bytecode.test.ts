@@ -5,16 +5,29 @@ import path from "node:path"
 
 test("native builds enable bytecode while retaining minified code-split ESM", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-build-options-"))
+  const runtimePayload = Buffer.from("synthetic bytecode test runtime").toString("base64")
   try {
     const preload = path.join(directory, "capture.js")
     await Bun.write(
       preload,
-      `Bun.build = async (options) => {
+      `import { mock } from "bun:test"
+      const runtimeCalls = []
+      mock.module(${JSON.stringify(path.resolve(import.meta.dir, "../script/runtime.ts"))}, () => ({
+        buildRuntime: async (target) => {
+          runtimeCalls.push(target)
+          return ${JSON.stringify(runtimePayload)}
+        },
+      }))
+      Bun.build = async (options) => {
         console.log("BUILD_OPTIONS=" + JSON.stringify({
           bytecode: options.bytecode,
           format: options.format,
           minify: options.minify,
           splitting: options.splitting,
+        }))
+        console.log("RUNTIME_BUILD=" + JSON.stringify({
+          calls: runtimeCalls,
+          payload: options.define.YCODING_RUNTIME_PAYLOAD,
         }))
         process.exit(0)
       }`,
@@ -49,6 +62,12 @@ test("native builds enable bytecode while retaining minified code-split ESM", as
       format: "esm",
       minify: true,
       splitting: true,
+    })
+    const runtime = stdout.split("\n").find((value) => value.startsWith("RUNTIME_BUILD="))
+    expect(runtime).toBeDefined()
+    expect(JSON.parse(runtime!.slice("RUNTIME_BUILD=".length))).toEqual({
+      calls: [{ os: process.platform, arch: process.arch }],
+      payload: JSON.stringify(runtimePayload),
     })
   } finally {
     await rm(directory, { recursive: true, force: true })

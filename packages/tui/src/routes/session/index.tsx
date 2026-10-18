@@ -150,7 +150,6 @@ import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { activeSkillIDs, sessionSkillContent } from "../../util/session-skills"
 import { isCompactionCheckpoint } from "../../util/session"
-import { shellStatusLabel } from "../shell-output/util"
 import {
   Header,
   headerModelRef,
@@ -495,7 +494,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     setAutonomyResponse({ sessionID, state })
     return true
   }
-  const updateAutonomy = (input: { yolo?: 0 | 1 | 2; goal?: string | null; maxNoProgress?: number; autoAnswer?: boolean }) => {
+  const updateAutonomy = (input: {
+    yolo?: 0 | 1 | 2
+    goal?: string | null
+    maxNoProgress?: number
+    autoAnswer?: boolean
+  }) => {
     const sessionID = route.sessionID
     autonomyRefresh.invalidate()
     const payload = (() => {
@@ -1476,7 +1480,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       run: (input?: string) => {
         const parsed = parseAutoAnswerArg(input?.trim().split(/\s+/)[0])
         if (parsed === null) {
-          toast.show({ message: "Use /auto-answer, /auto-answer on, or /auto-answer off", variant: "error", duration: 3000 })
+          toast.show({
+            message: "Use /auto-answer, /auto-answer on, or /auto-answer off",
+            variant: "error",
+            duration: 3000,
+          })
           return
         }
         if (parsed !== undefined) {
@@ -1514,7 +1522,11 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     },
     {
-      title: !autonomy() ? "Goal: unknown" : autonomy()?.goal?.status === "active" ? "Goal: on (toggle off)" : "Goal: off (toggle on)",
+      title: !autonomy()
+        ? "Goal: unknown"
+        : autonomy()?.goal?.status === "active"
+          ? "Goal: on (toggle off)"
+          : "Goal: off (toggle on)",
       id: "session.autonomy.goal.toggle",
       group: "Session",
       run: () => {
@@ -2164,14 +2176,16 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   </box>
                 )}
               </Show>
-              <Show when={!btw()}><Composer
-                sessionID={route.sessionID}
-                open={composer.open}
-                defaultTab={composer.tab}
-                onClose={() => setComposer("open", false)}
-                onSubagentAnswer={!subagent() ? answerChild : undefined}
-                prompt={composer.open && !disabled() && !answeringChild() ? <SessionPrompt /> : undefined}
-              /></Show>
+              <Show when={!btw()}>
+                <Composer
+                  sessionID={route.sessionID}
+                  open={composer.open}
+                  defaultTab={composer.tab}
+                  onClose={() => setComposer("open", false)}
+                  onSubagentAnswer={!subagent() ? answerChild : undefined}
+                  prompt={composer.open && !disabled() && !answeringChild() ? <SessionPrompt /> : undefined}
+                />
+              </Show>
               <ReviewBox
                 items={reviewItems()}
                 currentSessionID={route.sessionID}
@@ -3784,7 +3798,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
     const shellID = stringValue(toolprops.metadata.shellID)
     const liveShell = display() === "shell" && shellID !== undefined ? data.shell.get(shellID) : undefined
     const background =
-      (display() === "subagent" && isBackgroundSubagent(toolprops.metadata, state.status)) || liveShell !== undefined
+      (display() === "subagent" && isBackgroundSubagent(toolprops.metadata, state.status)) || liveShell?.status === "running"
     const tool =
       display() === "shell"
         ? (command?.command ?? safeToolDetailText(stringValue(input.command) ?? "shell"))
@@ -3820,14 +3834,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
       lifecycle: toolLifecycle(props.part, {
         status: background ? "running" : state.status,
         failed: commandFailed,
-        queued: liveShell?.status === "queued",
-        summary: background
-          ? liveShell?.status === "queued"
-            ? shellStatusLabel(liveShell)
-            : "background"
-          : command
-            ? commandStatus(command.result)
-            : undefined,
+        summary: background ? "background" : command ? commandStatus(command.result) : undefined,
       }),
       details: {
         request: boundedToolDetailLines(state.input),
@@ -4102,7 +4109,6 @@ function toolLifecycle(
     status?: ToolLifecycleInput["status"]
     failed?: boolean
     cancelled?: boolean
-    queued?: boolean
     summary?: string
   } = {},
 ): ToolLifecycleInput {
@@ -4112,7 +4118,6 @@ function toolLifecycle(
     ...(part.state.status === "error" ? { error: part.state.error } : {}),
     ...(options.failed === undefined ? {} : { failed: options.failed }),
     ...(options.cancelled === undefined ? {} : { cancelled: options.cancelled }),
-    ...(options.queued ? { queued: true } : {}),
     ...(options.summary === undefined ? {} : { summary: options.summary }),
   }
 }
@@ -4744,11 +4749,7 @@ function Shell(props: ToolProps) {
     const id = shellID()
     return id ? data.shell.get(id) : undefined
   })
-  const backgroundRunning = createMemo(() => Boolean(liveShell()))
-  const badge = createMemo(() => {
-    const shell = liveShell()
-    return shell?.status === "queued" ? shellStatusLabel(shell) : "Background"
-  })
+  const backgroundRunning = createMemo(() => liveShell()?.status === "running")
   const isRunning = createMemo(() => props.part.state.status === "running" || backgroundRunning())
   const command = createMemo(() => stringValue(props.input.command))
   const [expanded, setExpanded] = createSignal(false)
@@ -4825,9 +4826,7 @@ function Shell(props: ToolProps) {
           </Show>
         </Show>
         <Show when={shellID()}>
-          <StatusBadge color={liveShell()?.status === "queued" ? theme.text.feedback.info.default : undefined}>
-            {badge()}
-          </StatusBadge>
+          <StatusBadge>Background</StatusBadge>
         </Show>
       </box>
     </BlockTool>

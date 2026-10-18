@@ -20,7 +20,13 @@ test("a failed Waiting read leaves Running and recent available and reports Wait
         return { ok: true, value: { running: ["ses_running"], attention: ["ses_waiting"] } }
       if (request.operation !== "session.list" || request.input?.workspace !== undefined) return "default"
       if (request.input?.status === "waiting")
-        return { ok: false, code: "internal_error", message: "Waiting inventory unavailable" }
+        return {
+          wire: (peer, dispatch) =>
+            peer.error(dispatch, "ycoding.v5.InvalidRequestError", {
+              _tag: "InvalidRequestError",
+              message: "Waiting inventory unavailable",
+            }),
+        }
       return { ok: true, value: { data: [root(request.input?.status === "running" ? "running" : "recent", 1)] } }
     },
   })

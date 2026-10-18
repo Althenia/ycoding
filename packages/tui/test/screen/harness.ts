@@ -12,6 +12,7 @@ import type { KeepAwakeStatus } from "../../src/keep-awake"
 import type { RemoteStatus } from "../../src/remote-connector"
 import type { PackageResolver } from "../../src/plugin/context"
 import type { Plugin } from "@ycoding-ai/plugin/tui"
+import { useRoute } from "../../src/context/route"
 
 /**
  * Boots the REAL application against a deterministic fixture server and returns
@@ -37,6 +38,7 @@ export async function renderScreen(input: {
     | string
     | ((screen: Pick<Awaited<ReturnType<typeof createTestRenderer>>, "captureCharFrame" | "captureSpans">) => boolean)
   settlementTimeoutMS?: number
+  sessionReady?: boolean
   config?: Record<string, unknown>
   remote?: { get: () => Promise<RemoteStatus>; set: (enabled: boolean) => Promise<RemoteStatus> }
   keepAwake?: { get: () => Promise<KeepAwakeStatus>; set: (enabled: boolean) => Promise<KeepAwakeStatus> }
@@ -45,6 +47,10 @@ export async function renderScreen(input: {
   packages?: PackageResolver
   builtins?: readonly Plugin.Definition[]
 }) {
+  const sessionID = input.args?.sessionID
+  if (input.sessionReady && !sessionID) throw new Error("Session readiness requires args.sessionID")
+  let observedData: ReturnType<typeof useData> | undefined
+  let observedRoute: ReturnType<typeof useRoute> | undefined
   const { resetRailExpansion } = await import("../../src/routes/session/rail-section")
   resetRailExpansion()
   const setup = await createTestRenderer({
@@ -76,11 +82,13 @@ export async function renderScreen(input: {
 
   const events = createEventStream()
   let restoreData: (() => void) | undefined
-  if (input.data) {
+  if (input.data || input.sessionReady) {
     const data = await import("../../src/context/data")
     const original = { ...data }
     function Probe() {
-      input.data?.(data.useData())
+      observedData = data.useData()
+      if (input.sessionReady) observedRoute = useRoute()
+      input.data?.(observedData)
       return null
     }
     mock.module("../../src/context/data", () => ({
@@ -153,13 +161,38 @@ export async function renderScreen(input: {
     }
   }
 
+  const sessionReady = () => {
+    if (!input.sessionReady) return true
+    if (
+      !sessionID ||
+      !observedData ||
+      observedRoute?.data.type !== "session" ||
+      observedRoute.data.sessionID !== sessionID
+    )
+      return false
+    const session = observedData.session.get(sessionID)
+    if (
+      !session ||
+      !observedData.location.info(session.location) ||
+      observedData.session.message.history(sessionID)?.status !== "ready"
+    )
+      return false
+    if (!findScrollBox(setup.renderer.root)) return false
+    const header =
+      setup
+        .captureCharFrame()
+        .split("\n")
+        .find((line) => line.trim()) ?? ""
+    return !/Loading session|Connecting…|Reconnecting…/.test(header)
+  }
   let frame = setup.captureCharFrame()
   const settled = () => {
     frame = setup.captureCharFrame()
-    return typeof input.settle === "string"
+    const requestedFrame = typeof input.settle === "string"
       ? frame.includes(input.settle) &&
           (!input.settle.startsWith("Message ") || setup.renderer.currentFocusedEditor instanceof TextareaRenderable)
       : input.settle(setup)
+    return requestedFrame && sessionReady()
   }
   let ready = false
   try {
@@ -186,6 +219,11 @@ export async function renderScreen(input: {
       throw new AggregateError([error, cleanupError], "Screen settlement and cleanup failed", { cause: error })
     }
     throw error
+  }
+  if (input.sessionReady && !settled()) {
+    const frame = setup.captureCharFrame()
+    await dispose()
+    throw new Error(`Session ${sessionID} did not reach the requested ready frame:\n${frame}`)
   }
 
   return {

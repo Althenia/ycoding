@@ -157,3 +157,17 @@ test("Bun bundles every Passage asset as text without runtime filesystem lookup"
   expect(output).toContain("getDisplayMedia")
   expect(output).not.toMatch(/Bun\.file|readFileSync|readFile\(/)
 })
+
+test("lifecycle shell keeps Stop in the sticky strip and separates review, diagnostics and owner settings", () => {
+  const page = viewAssets.get("/view")!.body
+  expect(page).toMatch(/id="ownership"[\s\S]*?id="stop"[\s\S]*?<\/section>/)
+  expect(stylesheet).toMatch(/\.ownership\s*\{[^}]*position: sticky;[^}]*top: 0;/)
+  expect(page).toContain('id="stage-finalizing"')
+  expect(page).toContain('id="finalization"')
+  expect(page).toContain('id="review-retained"')
+  expect(page).toContain('id="actions-list"')
+  expect(page).toContain('id="questions-list"')
+  expect(page).toMatch(/<details id="owner-details">/)
+  expect(page).toMatch(/id="runtime-details">\s*<summary>Diagnostics<\/summary>/)
+  expect(page).not.toMatch(/simulated|sim-fail|data-action-id|Load older|progressbar/)
+})

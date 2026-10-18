@@ -233,16 +233,18 @@ test("paged classification keeps waiting-first order when the global status read
 })
 
 test.each([
-  ["invalid_message", 'Unknown input field "around"'],
-  ["invalid_message", 'Unknown input field "before"'],
-  ["internal_error", "Temporary inventory failure"],
-] as const)("a failed anchored refresh preserves ready rows, connection and paging: %s %s", async (code, message) => {
+  ['Unknown input field "around"', "Update YCoding on this machine"],
+  ['Unknown input field "before"', "Update YCoding on this machine"],
+  ["Temporary inventory failure", "Temporary inventory failure"],
+] as const)("a failed anchored refresh preserves ready rows, connection and paging: %s", async (message, notice) => {
   const inventory = Array.from({ length: 100 }, (_, index) => row(`ses_refresh_${index}`, 1_000 - index, 1_000 - index))
   const relay = await startRelayDouble({ handler: (request) => {
     if (request.operation === "workspace.list") return { ok: true, value: { data: [workspace] } }
     if (request.operation === "session.status") return { ok: true, value: { running: [], attention: [] } }
     if (request.operation !== "session.list") return "default"
-    if (request.input?.around !== undefined) return { ok: false, code, message }
+    if (request.input?.around !== undefined) return {
+      wire: (peer, dispatch) => peer.error(dispatch, "ycoding.v5.InvalidRequestError", { _tag: "InvalidRequestError", message }),
+    }
     return { ok: true, value: listPage(inventory, parseListQuery({ ...request.input, workspace: undefined }), new Set(), new Set()) }
   } })
   const store = createRemoteStore({ http: createRemoteHttp({ baseURL: relay.httpURL }), createTransport: (id, handlers) => createRemoteTransport({ url: relay.wsURL(id), handlers }) })
@@ -262,7 +264,7 @@ test.each([
     expect(store.state().connection).toBe(connection)
     expect(store.state().sessions.map((row) => row.id)).toEqual(ids)
     expect([store.state().sessionHasNext, store.state().sessionHasPrevious]).toEqual([next, previous])
-    expect(store.state()).toMatchObject({ sessionListNotice: code === "invalid_message" ? expect.stringContaining("Update YCoding on this machine") : expect.stringContaining(message) })
+    expect(store.state()).toMatchObject({ sessionListNotice: expect.stringContaining(notice) })
     const reads = relay.requests.filter((request) => request.operation === "session.list" && request.input?.workspace !== undefined).length
     await store.nextSessionsPage()
     expect(store.state().sessions).toHaveLength(75)

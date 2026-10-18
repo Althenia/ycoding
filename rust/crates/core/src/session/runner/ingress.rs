@@ -501,6 +501,7 @@ impl Local {
                 metadata_key: String::new(),
                 accounts: Default::default(),
                 states: Default::default(),
+                cache_shared_context: false,
             },
             None,
         );
@@ -874,7 +875,6 @@ impl Local {
                         metadata: Some(metadata),
                         skip_review: false,
                         holder: None,
-                        defer_shell: false,
                         source: None,
                     })
                     .map_err(IngressError::Guardrail)?;

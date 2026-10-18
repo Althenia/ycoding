@@ -105,6 +105,16 @@ describe("public docs allowlist", () => {
 })
 
 describe("documentation index", () => {
+  test("documents ordinary shell resource limits without a shell queue", () => {
+    const resource = findDocPage("configuration/tools")?.sections.find(
+      (section) => section.heading === "Resource limits",
+    )
+    const rows = resource?.blocks.flatMap((block) => (block.kind === "table" ? block.rows : [])) ?? []
+    expect(rows.find((row) => row[0] === "`shell_memory_limit_mb`")?.[3]).toContain("overrides it per call")
+    expect(rows.find((row) => row[0] === "`shell_sandbox`")?.[3]).toContain("isolation")
+    expect(JSON.stringify(DOC_PAGES)).not.toContain("shell_queue")
+  })
+
   test("describes release installation without claiming a signature", () => {
     const install = DOC_INDEX.sections.flatMap((section) =>
       section.blocks.flatMap((block) => (block.kind === "steps" ? block.items : [])),

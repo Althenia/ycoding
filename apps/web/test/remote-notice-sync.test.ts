@@ -625,24 +625,28 @@ describe("device-synced notices through the real relay core", () => {
     const harness = await relayHarness()
     try {
       const frames: unknown[] = []
-      let statuses = 0
+      const statuses: string[][] = []
       const transport = createRemoteTransport({
         url: harness.wsURL,
         handlers: {
           onNotices: (frame) => frames.push(frame),
-          onSessionStatus: () => {
-            statuses++
+          onSessionStatus: (status) => {
+            statuses.push([...status.running])
           },
         },
       })
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
       await harness.status(["ses_a"], [])
+      // Ready reaches this client before the relay receives its confirmation ping.
+      // Observe the running state before sending the completion and idle state.
+      await waitFor(() => statuses.at(-1)?.includes("ses_a") === true)
       await harness.complete(["ses_a"])
       await harness.status([], [])
       await waitFor(() => harness.stored().length === 1)
       await harness.settleDeliveries()
-      await waitFor(() => statuses === 2)
+      await waitFor(() => statuses.at(-1)?.length === 0)
+      expect(harness.receivedOperations).not.toContain("notice.subscribe")
       expect(frames).toEqual([])
       transport.close()
     } finally {

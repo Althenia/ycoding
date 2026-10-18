@@ -2,7 +2,8 @@ export function readCredentials(hash) {
   const values = new URLSearchParams(hash.replace(/^#/, ""))
   const fields = [...values.keys()]
   const credential = /^[0-9a-f]{64}$/
-  if (new Set(fields).size !== fields.length || fields.some((field) => !["key", "owner"].includes(field))) return undefined
+  if (new Set(fields).size !== fields.length || fields.some((field) => !["key", "owner"].includes(field)))
+    return undefined
   const key = values.get("key")
   if (!credential.test(key ?? "")) return undefined
   const owner = values.get("owner")
@@ -86,9 +87,9 @@ export function describeView(view) {
             ? "Ready · nothing is recording"
             : meeting?.status === "stopping"
               ? "Finalizing audio"
-              : ["stopped", "interrupted"].includes(meeting?.status) && view.analysis?.status === "running"
+              : ["stopped", "interrupted"].includes(meeting?.status) && view.analysis?.status === "analyzing"
                 ? "Finalizing analysis"
-                : view.summary?.final
+                : meeting?.status === "stopped" && view.summary?.final
                   ? "Summary ready"
                   : meeting?.status === "interrupted"
                     ? "Capture interrupted"
@@ -98,6 +99,16 @@ export function describeView(view) {
                         ? "Capture stopped"
                         : "Waiting for a meeting"
   return {
+    phase:
+      meeting?.status === "recording"
+        ? "live"
+        : audioFailed || analysisFailed || ["interrupted", "error"].includes(meeting?.status)
+          ? "recovery"
+          : meeting?.status === "stopping" || (meeting?.status === "stopped" && view.analysis?.status === "analyzing")
+            ? "finalizing"
+            : meeting?.status === "stopped"
+              ? "review"
+              : "setup",
     status,
     tone: audioFailed || analysisFailed || view.health?.status === "error" ? "error" : degraded ? "warning" : "ready",
     health: view.health?.warning

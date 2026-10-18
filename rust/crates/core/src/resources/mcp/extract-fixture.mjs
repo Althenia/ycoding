@@ -14,9 +14,10 @@ const server =
   path.join(process.env.HOME, ".bun/install/cache/@modelcontextprotocol/server@2.3.1@@@1")
 const manifest = await Bun.file(path.join(server, "package.json")).json()
 if (manifest.version !== "2.3.1") throw new Error("MCP fixtures require @modelcontextprotocol/server 2.3.1")
+const sourceRef = process.env.YCODING_MCP_FIXTURE_REF ?? "main"
 const source = local[name]
   ? await Bun.file(local[name]).text()
-  : Bun.spawnSync(["git", "show", `main:packages/core/test/fixture/${name}.ts`])
+  : Bun.spawnSync(["git", "show", `${sourceRef}:packages/core/test/fixture/${name}.ts`])
 if (typeof source !== "string" && source.exitCode !== 0) throw new Error("Could not read committed MCP fixture")
 const output = path.join(directory, `${name}.ts`)
 await Bun.write(

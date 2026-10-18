@@ -159,10 +159,6 @@ enum PublicEvent_shell_created_type {
   PUBLICEVENT_SHELL_CREATED_TYPE_SHELL_CREATED = 1;
 }
 
-enum PublicEvent_shell_updated_type {
-  PUBLICEVENT_SHELL_UPDATED_TYPE_SHELL_UPDATED = 1;
-}
-
 enum PublicEvent_shell_exited_type {
   PUBLICEVENT_SHELL_EXITED_TYPE_SHELL_EXITED = 1;
 }
@@ -173,7 +169,8 @@ enum PublicEvent_shell_exited_data_status {
   PUBLICEVENT_SHELL_EXITED_DATA_STATUS_TIMEOUT = 3;
   PUBLICEVENT_SHELL_EXITED_DATA_STATUS_MEMORY_LIMIT = 4;
   PUBLICEVENT_SHELL_EXITED_DATA_STATUS_KILLED = 5;
-  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_QUEUED = 6;
+  reserved 6;
+  reserved "PUBLICEVENT_SHELL_EXITED_DATA_STATUS_QUEUED";
 }
 
 enum PublicEvent_shell_deleted_type {
@@ -1178,29 +1175,6 @@ message PublicEvent_shell_created_data {
   required Shell_Info info = 1;
 }
 
-message PublicEvent_shell_updated {
-  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
-  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
-  optional PublicEvent_shell_updated_metadata metadata = 3;
-  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
-  required PublicEvent_shell_updated_type type = 5;
-  optional Location_Ref location = 6;
-  required PublicEvent_shell_updated_data data = 7;
-}
-
-message PublicEvent_shell_updated_metadata {
-  repeated PublicEvent_shell_updated_metadataEntry entries = 1;
-}
-
-message PublicEvent_shell_updated_metadataEntry {
-  required LosslessString key = 1;
-  required Value value = 2;
-}
-
-message PublicEvent_shell_updated_data {
-  required Shell_Info info = 1;
-}
-
 message PublicEvent_shell_exited {
   required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
   required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
@@ -1920,7 +1894,6 @@ message PublicEvent {
     PublicEvent_pty_exited pty_exited = 79 [(ycoding.v5.public_event) = { diagnostic_name: "pty.exited" durable: false }];
     PublicEvent_pty_deleted pty_deleted = 80 [(ycoding.v5.public_event) = { diagnostic_name: "pty.deleted" durable: false }];
     PublicEvent_shell_created shell_created = 81 [(ycoding.v5.public_event) = { diagnostic_name: "shell.created" durable: false }];
-    PublicEvent_shell_updated shell_updated = 116 [(ycoding.v5.public_event) = { diagnostic_name: "shell.updated" durable: false }];
     PublicEvent_shell_exited shell_exited = 82 [(ycoding.v5.public_event) = { diagnostic_name: "shell.exited" durable: false }];
     PublicEvent_shell_deleted shell_deleted = 83 [(ycoding.v5.public_event) = { diagnostic_name: "shell.deleted" durable: false }];
     PublicEvent_question_asked question_asked = 84 [(ycoding.v5.public_event) = { diagnostic_name: "question.asked" durable: false }];
@@ -1946,4 +1919,6 @@ message PublicEvent {
     PublicEvent_mcp_status_changed mcp_status_changed = 100 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.status.changed" durable: false }];
     PublicEvent_mcp_resources_changed mcp_resources_changed = 101 [(ycoding.v5.public_event) = { diagnostic_name: "mcp.resources.changed" durable: false }];
   }
+  reserved 116;
+  reserved "shell_updated";
 }

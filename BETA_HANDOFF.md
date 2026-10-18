@@ -2,7 +2,216 @@
 
 Recorded: 2026-10-17. Target version: `0.11.0-beta.1`.
 
-## Checkout and delivery state
+## Main behavior reconciled into native beta (2026-10-17)
+
+This section supersedes the historical main-integration and publication-scope
+statements below. The durable prior handoff was restored with exact tree
+`6653a2bbfc2d457e8bb2c53e9156e8cdfeef2979`, then main was audited through
+`1783930b81144a13e5259c50a9b722c9979a8ee9` (v0.10.14). All 43 first-parent
+commits and four merged child commits were classified against the native beta.
+The user authorized reconciling main and publishing to remote `beta` or opening
+a PR. That authorization does not include merging main, tagging, releasing,
+deploying, remote migrations, secret changes, or live-beta acceptance.
+
+The native Rust/Store/revision-5 runtime remains authoritative. Reconciled
+behavior includes dedicated Usage presentation, transcript cost-section removal,
+machine-wide shell queue retirement, native shared-context snapshots and family
+cache partitioning, effort-only prompt-cache continuity, question timeout and
+automatic-answer provenance, built-in guidance, and Meeting lifecycle/evidence
+updates. Retired wire fields, enum values, and events are reserved, not reused.
+The canceled Task MCP endpoint/setup/OAuth/tunnel work remains excluded (main
+commits `6720fa01` and `53f98d5e`); existing native MCP client behavior is preserved.
+
+Fresh verification and remaining gates are recorded in the accompanying portable
+verification report. The historical 475/479 native target count below predates
+this reconciliation and is not acceptance for the new changes. Fresh focused
+native suites include 210 workspace library tests, 234 orchestration/audit tests,
+and 351 shell/usage/guardrail cases; these groups include documented overlap.
+All-target Clippy passes with warnings denied. Real native/client fixtures pass.
+Optimized CLI and TUI production graphs pass, followed by both real packaged
+TUI/runtime smokes. The owning CLI suite passes 323 cases with 8 guarded skips;
+skipped platform/packaged gates do not count as acceptance.
+The isolated packaged-browser harness now uses revision-5 client contracts;
+21 focused lifecycle/environment cases pass, with real Chrome acceptance pending.
+Whole-workspace and whole-package integration checks must be interpreted from
+their latest reported command results, never from an earlier handoff count.
+
+Fresh capability-gated reruns compiled all four targets: 15 cases passed and
+8 failed because this cloud sandbox rejects Unix sockets or workerd network
+interface enumeration. These failures remain acceptance gaps, not ignored tests.
+
+Remaining external gates include cloud-blocked Unix-socket/browser tests,
+macOS Chrome/extension and Safari rendering, native Windows stale-PID execution,
+macOS ARM64 three-release updater behavior, and separately authorized live-beta
+acceptance. Session-family price discovery also retains an O(retained family
+request history) prepass; global dated discovery uses the existing time index.
+The local continuation prompt identifies the exact commands and boundaries.
+
+The original interrupted operation remains human-only. Neither these changes nor
+fresh isolated tests authorize replay. Inspect the original action and actual
+human decision using the preserved task/recovery/question identifiers below.
+
+## Historical pre-reconciliation Linux continuation (2026-10-17)
+
+This continuation started from a separate clone of `stage-3d14` at
+`bf3358ec98096d936a86361637741588574fea4b`. That commit already contains the
+migration described as uncommitted in the original handoff below. The original
+checkout and recovery item have not been resumed or changed. The user authorized
+continuation, pinned tool installation, and the existing JPEG decoder's
+platform-independent feature; publication and deployment remain separate.
+
+Confirmed corrections include the web type errors, explicit operation identities
+and role allocations, the missing incident fixture table, predecessor backup
+inspection without mutating its evidence, Meeting's mutating Bun partial matcher,
+and asynchronous cancellation receipt settlement. Linux-specific fixture repairs
+preserve exact guardrail, ownership, and persistence assertions. Native JPEG
+normalization now matches the unchanged npm/WASM byte oracle. Unix PTY writes
+return `BrokenPipe` on sticky write-closed readiness instead of starving runtime
+expiry and shutdown.
+Usage reports keep their five-second deadline with an explicit cross join that
+correctly associates correlated enrichment with request rows. The SQLite parity
+harness explicitly enables immutable URI reads on Linux while preserving
+read-only access, lossless integers, source hashes, and WAL/SHM bytes.
+Cursor's native HTTP/2 transport enables low-latency TCP writes; oversized-image
+fixtures recognize exact heartbeat frames without relaxing refusal assertions.
+
+Current verification is not a final release pass:
+
+- All 18 workspace typecheck tasks passed, including web.
+- The rebuilt native runtime passed real TypeScript client interoperability.
+  Cloudflare generated types and all 51 Worker typecheck files passed. Type-aware
+  lint completed with 0 errors and 3,480 warnings; effect-pattern and lint-rule
+  checks passed. Client unit tests: 216 passed; Protocol: 413; Schema: 156;
+  Chrome extension: 46; Meeting: 41; goal/autonomy: 86. Web source: 1,089 passed.
+  Web build and both stable/beta Worker dry-run builds passed; neither deploys.
+- Focused protocol targets passed; all 52 launcher tests and the original runtime
+  handoff failure targets passed. Runtime library rerun: 103 passed; configuration
+  operations: 2 passed. MCP/extension repair targets: 65 passed. Core policy,
+  precision, image, and discovery repair targets: 66 passed. PTY platform: 4 passed.
+- All six workspace libraries passed (204 tests). Usage read/dimension suites:
+  46 passed. Shell lifetime: 15 passed. TypeScript baseline/immutable-read checks:
+  12 passed with 947 assertions; durable Store: 29 passed, two subprocess-only
+  helpers ignored. Native report stack/depth checks: two passed, including
+  deadline-free completion at the selected depth. Formatting and all-target
+  Clippy with warnings denied passed. The Linux/Darwin `openpty` declaration
+  difference uses an explicit raw mutable pointer accepted by both signatures.
+- Dependency direction and complete license closure passed after the decoder
+  feature change; no package versions or checksums changed.
+- A single workspace test invocation exhausted this executor's 32 GiB disk while
+  linking test executables. Reproducible integration executables were reclaimed,
+  preserving source, dependency caches, runtime, and verification logs. The same
+  target inventory was tested serially with executable reclamation after
+  each target, a 6 GiB process-tree cap, and a 900-second per-target watchdog.
+- A fresh current-tree sweep completed after all native/schema repairs:
+  475 of 479 target records pass across 451 successful grouped commands.
+  The three Cursor repair targets retain their original deadlines and byte
+  limits. Existing ignored native/browser and subprocess-helper tests remain
+  ignored and are not acceptance evidence. Four targets require executor
+  capabilities unavailable in the normal sandbox: runtime `connector_relay`
+  (local Worker network-interface enumeration), and Core `computer_client`,
+  `computer_service`, and `extension_activation` (local Unix-domain sockets).
+  These are not passing tests. No assertion or product behavior was relaxed to
+  work around the restrictions. The normal supported escalation also failed
+  before launching the tests because the executor could not create its session
+  path on a read-only filesystem. Their unchanged capability failures were
+  carried explicitly as blocked in the final sweep, not rerun or counted passing.
+- Fresh Linux x86_64 optimized release build passed (60m47s, 5,761 MiB peak).
+  Packaged TUI and runtime smokes passed, as did both packaged launcher tests
+  (27 assertions), including crash persistence and shutdown interruption.
+  Shipped TUI, CLI, and web graph checks passed. Uncompressed release runtime:
+  187,426,296 bytes; packaged TUI: 689,412,064 bytes; CLI: 690,968,544 bytes.
+  The runtime is embedded in each package, so these sizes are not additive.
+  The native runtime is optimized and unstripped, not a debug-size estimate.
+  The workflow-equivalent Linux tar.gz is 237,454,475 bytes (226.5 MiB), with
+  exact executable/extension entries verified; source executables were unchanged.
+  Post-contract workspace/Worker types, lint (0 errors, 3,480 warnings), and
+  all 216 Client tests passed. Full CLI: 303 passed, eight platform skips.
+  Final full TUI: 2,023 passed, both snapshots, 67,238 assertions. Its earlier
+  GC-sensitive signal test was replaced by deterministic all-100 abort and fresh
+  episode admission checks; missing-abort/deletion mutations both fail. No
+  notification production source changed. Native Windows, macOS browser, Safari,
+  and the macOS-only three-release updater acceptance remain required.
+- Final remote/Worker/web integration runs found incomplete wire parity for the
+  `Status.lost` 500-item cap, `session.status` loss classification, team-shell
+  queue positions, and named Incident payload exports. These now pass with their
+  owning schemas/generators and native producers: Protocol 413, Remote 196,
+  Worker 207; native wire 15, connector status 5, remote-derived 16, and Session
+  list 11. Repeated generation is stable; operation/event identities and roles
+  are unchanged, and all 95 golden vectors differ only by the new contract digest
+  in eight handshake rows. An inactive lost root with a real pending Form stays
+  actionable until that Form settles. Final isolated web integration passed all
+  516 tests and 2,231 assertions across 31 files. Subscription-refusal fixtures
+  use the native operation's declared rejection; notice tests wait for observed
+  status delivery without changing opt-in or ownership assertions.
+
+The original human-only recovery boundary below remains unresolved. Fresh static
+source repairs and isolated tests do not settle that interrupted operation.
+
+### Final local verification and remaining acceptance
+
+After the final test-only correction, all-target Clippy (`-D warnings`), formatting,
+TUI typecheck, real TypeScript/Rust socket interoperability, workspace boundaries,
+and Rust license closure passed. Installer/release/build-assets/CI/browser-host
+contract tests passed 135 tests with ten platform skips and 717 assertions.
+Final type-aware lint passed with zero errors and 3,480 warnings. The complete
+tracked and untracked change set was reviewed; generated build/cache artifacts
+and raw verification logs are excluded from the source change.
+
+The Linux implementation and runnable checks are complete. This is not release or
+merge approval. Remaining gates/decisions are:
+
+1. Run the four named blocked native targets in an executor supporting local Unix
+   sockets and Worker network-interface enumeration. Do not waive assertions.
+2. Run the approved native Windows stale-PID acceptance and macOS Chrome 152+
+   source/packaged browser and extension checks. The composed remote flow also
+   launches headed macOS Chrome for push acceptance; Linux fixture tests are not
+   a substitute.
+3. Complete Safari rendered acceptance and the macOS-arm64 three-release updater
+   acceptance under their documented platform constraints.
+4. Resolve the original human-only recovery item using its original record. Its
+   task/review/question identifiers are preserved below; the interrupted action
+   itself is not available in this clone and must not be guessed or replayed.
+5. Reconcile current-main changes, especially shell-queue UI removal, before
+   integration. Obtain approval before publishing, merging, tagging, deploying,
+   remote migrations, secret changes, or live beta resource acceptance.
+
+The local Linux archive uses the existing release packaging format and contains
+only `ycoding` and `ycoding-chrome-extension`. Its SHA-256 is
+`d234719de725e65d282e0a1c4b6f1672289738d0a9a8f3923a5e097faf6048eb`.
+It remains a local verification artifact; no release, upload, or deployment was
+performed. Existing source history, Git identity, and hooks are preserved.
+
+### Upstream integration decision
+
+The user separately removed the shell-queue UI on current `main` for `0.10.14`.
+This older handoff branch retains its existing queue-position contract; migration
+parity repairs here do not authorize restoring the removed UI when integrating
+with `main`. Reconcile that divergence explicitly before merge. This continuation
+has not merged `main` or expanded the queue removal into the Rust branch.
+
+### Portable fixture prerequisites
+
+Use the direct installed Cargo toolchain, the pinned `PROTOC`, one build job, and
+this clone's own target directory. MCP tests support `YCODING_MCP_SERVER_ROOT`
+pointing at the installed locked server package and `YCODING_MCP_FIXTURE_REF`
+pointing at a verified committed fixture source (this continuation verified
+`bf3358ec98096d936a86361637741588574fea4b`). The real repository-policy test accepts
+`YCODING_TEST_POLICY_ROOT` when Cargo's target directory is inside a globally
+exempt temporary root; the test verifies the selected root through the actual
+classifier. Do not remove ambient ancestor repositories or configuration folders
+to make fixture assertions pass.
+
+The sections below preserve the original handoff evidence and remaining external
+requirements; their historical checkout/tool paths are not this clone's state.
+
+## Original handoff record
+
+The following sections preserve the original handoff for traceability. Current
+Linux results above supersede its stale error/verification status. The human-only
+recovery boundary and external/native-platform acceptance requirements remain
+active; fresh isolated tests do not resolve them.
+
+### Checkout and delivery state
 
 - Continue in `.worktrees/stage-3d14` from the outer repository root. All paths below are relative to that worktree unless stated otherwise.
 - Working branch: `stage-3d14`; committed HEAD: `00de646aaeefdb6b47c2cc76d1dd4cf06fb4f525`.
@@ -125,7 +334,7 @@ The `mise` Cargo shim failed when tests isolated XDG paths because its configura
 
 ```sh
 export PATH="$HOME/.cargo/bin:$PATH"
-export PROTOC=/opt/homebrew/bin/protoc
+export PROTOC="${PROTOC:-$(command -v protoc)}"
 export CARGO_BUILD_JOBS=1
 export CARGO_TARGET_DIR="$PWD/rust/target"
 export CARGO_PROFILE_DEV_DEBUG=0

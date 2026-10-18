@@ -25,7 +25,6 @@ enum Shape {
     Fallbacks,
     Color,
     MemoryLimit,
-    Load,
     Advisory,
     McpServer,
     McpTimeout,
@@ -271,16 +270,6 @@ const ROOT: Shape = Shape::Object(&[
         Shape::Enum(&["disabled", "optional", "required"]),
     ),
     optional("shell_memory_limit_mb", Shape::MemoryLimit),
-    optional(
-        "shell_queue",
-        Shape::Object(&[
-            optional("max_running", Shape::Int(1.0, 64.0)),
-            optional("max_running_per_session", Shape::Int(1.0, 64.0)),
-            optional("max_queued_per_session", Shape::Int(1.0, 1_000.0)),
-            optional("memory_reserve_mb", Shape::MemoryLimit),
-            optional("max_load", Shape::Load),
-        ]),
-    ),
     optional("model", Shape::Selection),
     optional("default_agent", Shape::String),
     optional("model_fallbacks", Shape::Fallbacks),
@@ -398,6 +387,7 @@ const ROOT: Shape = Shape::Object(&[
         ]),
     ),
     optional("guardrails", GUARDRAILS),
+    optional("question_timeout_seconds", Shape::Int(0.0, 86_400.0)),
     optional("skills", STRINGS),
     optional("commands", Shape::Record(&COMMAND)),
     optional("instructions", STRINGS),
@@ -443,6 +433,10 @@ const ROOT: Shape = Shape::Object(&[
                         Shape::Enum(&["auto", "implicit", "explicit"]),
                     ),
                     optional("openai_extended_retention", Shape::Bool),
+                    optional(
+                        "family_scope",
+                        Shape::Enum(&["session", "family-experiment"]),
+                    ),
                 ]),
             ),
             optional(
@@ -706,10 +700,6 @@ fn inspect(value: &JsonValue, shape: Shape, path: &JsonPath) -> Result<JsonValue
                 Shape::Enum(allowed) => domain::literal_enum(value, allowed, path).is_ok(),
                 Shape::Color => agent::Color::decode(value).is_ok(),
                 Shape::MemoryLimit => shell::MemoryLimitMb::decode(value).is_ok(),
-                Shape::Load => {
-                    schema::Finite::decode(value).is_ok()
-                        && matches!(value, JsonValue::Number(number) if *number > 0.0 && *number <= 64.0)
-                }
                 _ => unreachable!(),
             };
             if valid {

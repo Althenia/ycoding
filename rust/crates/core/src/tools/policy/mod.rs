@@ -4,6 +4,7 @@ pub mod helper;
 pub mod permissions;
 pub mod questions;
 pub(crate) mod state;
+pub mod timeout;
 pub use state::{Authority, Error, Event, Publisher, SessionAuthority, Wait};
 
 use ycoding_schema::{LosslessString, permission};
@@ -22,16 +23,28 @@ pub(crate) async fn answer_options(
     if questions.len() > 32 {
         return Err(Reason::Error);
     }
+    let redacted_questions = questions
+        .iter()
+        .map(crate::process::guardrails::redact_value)
+        .collect::<Vec<_>>();
+    let request = ObjectEncoder::new()
+        .field(
+            "state",
+            &crate::process::guardrails::redact_value(&evidence),
+        )
+        .field("questions", &JsonValue::Array(redacted_questions.clone()))
+        .finish();
+    // Validation rejects distinct original options that collapse to one redacted value.
+    crate::resources::decision::judgment::Request::decode(&request).map_err(|_| Reason::Error)?;
     let input = ObjectEncoder::new()
         .field("provider", "agent")
-        .field(
-            "request",
-            &ObjectEncoder::new()
-                .field("state", &evidence)
-                .field("questions", &JsonValue::Array(questions.clone()))
-                .finish(),
-        )
+        .field("request", &request)
         .finish();
+    if ycoding_schema::stringify_json(&input).len()
+        > crate::resources::decision::judgment::BYTE_LIMIT
+    {
+        return Err(Reason::Error);
+    }
     let response = tokio::select! {
         biased;
         _ = cancellation.cancelled() => return Err(Reason::Error),
@@ -55,18 +68,24 @@ pub(crate) async fn answer_options(
         return Err(Reason::Error);
     }
     let mut result = JsonObject::new();
-    for question in questions {
-        let JsonValue::Object(question) = question else {
+    for (question, redacted_question) in questions.into_iter().zip(redacted_questions) {
+        let (JsonValue::Object(question), JsonValue::Object(redacted_question)) =
+            (question, redacted_question)
+        else {
             return Err(Reason::Error);
         };
         let Some(JsonValue::String(name)) = question.get(&"name".into()) else {
+            return Err(Reason::Error);
+        };
+        let Some(JsonValue::String(redacted_name)) = redacted_question.get(&"name".into()) else {
             return Err(Reason::Error);
         };
         let matching = answers
             .iter()
             .filter_map(|answer| match answer {
                 JsonValue::Object(answer)
-                    if answer.get(&"name".into()) == Some(&JsonValue::String(name.clone())) =>
+                    if answer.get(&"name".into())
+                        == Some(&JsonValue::String(redacted_name.clone())) =>
                 {
                     Some(answer)
                 }
@@ -87,12 +106,23 @@ pub(crate) async fn answer_options(
         let Some(choice) = answer.get(&"choice".into()) else {
             return Err(Reason::Error);
         };
-        if answer.get(&"type".into()) != Some(&JsonValue::String("choice".into()))
-            || !matches!(question.get(&"choices".into()), Some(JsonValue::Array(choices)) if choices.iter().any(|entry| matches!(entry, JsonValue::Object(entry) if entry.get(&"value".into()) == Some(choice))))
-        {
+        if answer.get(&"type".into()) != Some(&JsonValue::String("choice".into())) {
             return Err(Reason::Error);
         }
-        result.insert(name.clone(), choice.clone());
+        let (Some(JsonValue::Array(choices)), Some(JsonValue::Array(redacted_choices))) = (
+            question.get(&"choices".into()),
+            redacted_question.get(&"choices".into()),
+        ) else {
+            return Err(Reason::Error);
+        };
+        let Some(index) = redacted_choices.iter().position(|entry| matches!(entry, JsonValue::Object(entry) if entry.get(&"value".into()) == Some(choice))) else { return Err(Reason::Error) };
+        let Some(JsonValue::Object(original)) = choices.get(index) else {
+            return Err(Reason::Error);
+        };
+        result.insert(
+            name.clone(),
+            original.get(&"value".into()).ok_or(Reason::Error)?.clone(),
+        );
     }
     Ok(result)
 }

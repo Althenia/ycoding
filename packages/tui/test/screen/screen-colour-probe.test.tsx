@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { renderScreen } from "./harness"
+import type { useData } from "../../src/context/data"
 
 const viewports = [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE] as const
 const chrome = [15, 17, 21, 255] satisfies [number, number, number, number]
@@ -30,7 +31,19 @@ function landingRoute(url: URL) {
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main" } })
   if (url.pathname === "/api/agent")
-    return json({ location, data: [{ id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }] })
+    return json({
+      location,
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+          request: { headers: {}, body: {} },
+        },
+      ],
+    })
   if (url.pathname === "/api/model/default") return json({ location, data: { selection: session.model } })
   if (url.pathname === "/api/model")
     return json({
@@ -52,7 +65,8 @@ function landingRoute(url: URL) {
       ],
     })
   if (url.pathname === "/api/provider") return json({ location, data: [] })
-  if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname)) return json({ location, data: [] })
+  if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
+    return json({ location, data: [] })
   return undefined
 }
 
@@ -77,7 +91,17 @@ function sessionRoute(url: URL) {
     return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
-    return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
+    return json({
+      data: {
+        rootSessionID: sessionID,
+        profile: "standard",
+        customRules: 0,
+        approvals: 0,
+        blocked: 0,
+        counters: [],
+        invalidFiles: [],
+      },
+    })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`)
     return json({
       data: {
@@ -85,15 +109,43 @@ function sessionRoute(url: URL) {
         context: { total: 0, percent: 0 },
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
         cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
-        requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+        requests: {
+          logical: 0,
+          physical: 0,
+          helpers: 0,
+          continued: 0,
+          fallback: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
       },
     })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
   if (url.pathname === "/api/model") return landingRoute(url)
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "anthropic", name: "Claude" }] })
   if (url.pathname === "/api/agent")
-    return json({ location, data: [{ id: "build", name: "Build", mode: "primary", hidden: false, permissions: [], request: { headers: {}, body: {} } }] })
-  if (["/api/integration", "/api/command", "/api/skill", "/api/reference", "/api/permission/request", "/api/form/request"].includes(url.pathname))
+    return json({
+      location,
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+          request: { headers: {}, body: {} },
+        },
+      ],
+    })
+  if (
+    [
+      "/api/integration",
+      "/api/command",
+      "/api/skill",
+      "/api/reference",
+      "/api/permission/request",
+      "/api/form/request",
+    ].includes(url.pathname)
+  )
     return json({ location, data: [] })
   return undefined
 }
@@ -104,7 +156,11 @@ describe("screen chrome colour probes", () => {
       const viewport = { width, height: 40 }
       const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Message YCoding…" })
       try {
-        const footer = screen.lines().slice(viewport.height - 3, viewport.height).find((line) => line.includes("⌃p commands")) ?? ""
+        const footer =
+          screen
+            .lines()
+            .slice(viewport.height - 3, viewport.height)
+            .find((line) => line.includes("⌃p commands")) ?? ""
         expect(footer).toContain("usage")
         expect(footer.indexOf("usage")).toBeLessThan(footer.indexOf("commands"))
       } finally {
@@ -133,7 +189,7 @@ describe("screen chrome colour probes", () => {
       await screen.input.typeText("Connect Chrome")
       await waitFor(screen, "Connect Chrome")
       screen.input.pressEnter()
-      await waitFor(screen, "Chrome connection")
+      await waitFor(screen, "Chrome connection", () => requests.includes("status"))
       expect(requests).toEqual(["create", "status"])
     } finally {
       await screen.dispose()
@@ -142,6 +198,7 @@ describe("screen chrome colour probes", () => {
 
   test("landing Chrome pairing reuses a Session in the current Location", async () => {
     const requests: string[] = []
+    let data: ReturnType<typeof useData> | undefined
     const route: FetchHandler = (url, request) => {
       if (url.pathname === "/api/session" && request.method === "GET") return json({ data: [session], cursor: {} })
       if (url.pathname === "/api/session" && request.method === "POST") requests.push("create")
@@ -151,13 +208,30 @@ describe("screen chrome colour probes", () => {
       }
       return landingRoute(url)
     }
-    const screen = await renderScreen({ width: 100, height: 40, route, settle: "Message YCoding…" })
+    const screen = await renderScreen({
+      width: 100,
+      height: 40,
+      route,
+      settle: "Message YCoding…",
+      data: (value) => {
+        data = value
+      },
+    })
     try {
+      await waitFor(screen, "Message YCoding…", () => {
+        const current = data
+        return (
+          current?.location.info()?.directory === directory &&
+          current.session
+            .list()
+            .some((item) => item.id === sessionID && item.location.directory === current.location.default().directory)
+        )
+      })
       screen.input.pressKey("p", { ctrl: true })
       await waitFor(screen, "Commands")
       await screen.input.typeText("Connect Chrome")
       screen.input.pressEnter()
-      await waitFor(screen, "Chrome connection")
+      await waitFor(screen, "Chrome connection", () => requests.includes("status"))
       expect(requests).toEqual(["status"])
     } finally {
       await screen.dispose()
@@ -168,7 +242,17 @@ describe("screen chrome colour probes", () => {
     const requests: string[] = []
     const route: FetchHandler = (url, request) => {
       if (url.pathname === "/api/session" && request.method === "POST") requests.push("create")
-      if (url.pathname === "/api/usage") return json({ data: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } })
+      if (url.pathname === "/api/usage")
+        return json({
+          data: {
+            logical: 0,
+            physical: 0,
+            helpers: 0,
+            continued: 0,
+            fallback: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        })
       if (url.pathname === "/api/provider/usage") return json({ data: [] })
       return landingRoute(url)
     }
@@ -230,9 +314,7 @@ describe("screen chrome colour probes", () => {
 
         // The rail footer that printed the build and connection state was removed by design; the
         // rail's own left rule is now what separates it from the transcript.
-        const ruleSpan = screen
-          .spans()
-          .lines[4]?.spans.find((span) => span.text.includes("\u2502"))
+        const ruleSpan = screen.spans().lines[4]?.spans.find((span) => span.text.includes("\u2502"))
         if (!ruleSpan) throw new Error("Rail left rule did not render")
         expect(ruleSpan.fg.toInts()).toEqual(border)
         expect(screen.frame()).not.toContain("YCoding v")
@@ -250,15 +332,21 @@ describe("screen chrome colour probes", () => {
   }, 60_000)
 })
 
-async function waitFor(screen: Awaited<ReturnType<typeof renderScreen>>, text: string) {
+async function waitFor(
+  screen: Awaited<ReturnType<typeof renderScreen>>,
+  text: string,
+  ready: () => boolean = () => true,
+) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (screen.frame().includes(text)) return
+    if (screen.frame().includes(text) && ready()) return
     await Bun.sleep(20)
   }
   throw new Error(`Screen did not render ${text}`)
 }
 
 function railSpans<T extends { width: number }>(spans: ReadonlyArray<T>, width: number) {
-  const start = spans.findIndex((_, index) => spans.slice(0, index + 1).reduce((total, span) => total + span.width, 0) > width - 50)
+  const start = spans.findIndex(
+    (_, index) => spans.slice(0, index + 1).reduce((total, span) => total + span.width, 0) > width - 50,
+  )
   return start < 0 ? [] : spans.slice(start)
 }

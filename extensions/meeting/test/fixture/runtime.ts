@@ -14,13 +14,23 @@ export async function startBackend(channel = "beta", knowledge = false, analysis
   const project = path.join(root, "project")
   const data = path.join(root, "data")
   await Promise.all([mkdir(project), mkdir(path.join(root, "home"))])
-  const flags = { answerFailing: true }
+  const flags = { answerFailing: true, holdFinalAnalysis: false, holdFinalAudio: false }
   const requests: Record<string, unknown>[] = []
   const releaseAnswer = Promise.withResolvers<void>()
+  const releaseFinalAnalysis = Promise.withResolvers<void>()
+  const finalAudioStarted = Promise.withResolvers<void>()
+  const releaseFinalAudio = Promise.withResolvers<void>()
   const provider = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
+      if (new URL(request.url).pathname === "/fixture/audio-barrier") {
+        if (flags.holdFinalAudio) {
+          finalAudioStarted.resolve()
+          await releaseFinalAudio.promise
+        }
+        return new Response("")
+      }
       const body: unknown = await request.json()
       if (!body || typeof body !== "object" || !("messages" in body) || !Array.isArray(body.messages))
         throw new Error("Expected model messages")
@@ -36,6 +46,7 @@ export async function startBackend(channel = "beta", knowledge = false, analysis
       if (prompt.includes('"question":"fail"') && flags.answerFailing)
         return Response.json({ error: { message: "Fixture provider unavailable" } }, { status: 400 })
       if (prompt.includes('"question":"hold"')) await releaseAnswer.promise
+      if (!prompt.includes('"question":') && flags.holdFinalAnalysis) await releaseFinalAnalysis.promise
       const evidence =
         knowledge && !prompt.includes('"question":')
           ? (JSON.parse(prompt.slice(prompt.indexOf("\n") + 1)) as {
@@ -74,12 +85,13 @@ export async function startBackend(channel = "beta", knowledge = false, analysis
     worker,
     `#!/usr/bin/env node
 const fs = require("node:fs")
-require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+require("node:readline").createInterface({ input: process.stdin }).on("line", async (line) => {
   const request = JSON.parse(line)
   const response = { id: request.id, ok: true }
   if (request.op === "initialize") response.metrics = { device: "test-device" }
   if (request.op === "health") response.healthy = true
   if (request.op === "transcribe") {
+    await fetch("http://127.0.0.1:${provider.port}/fixture/audio-barrier")
     if (fs.existsSync(${JSON.stringify(failure)})) { response.ok = false; response.error = "inference_failed" }
     else response.results = [{ startMs: request.chunk.startMs, endMs: request.chunk.startMs + 900, text: "เราจะทดสอบ canary rollout และ transcription latency" }]
   }
@@ -193,6 +205,22 @@ require("node:readline").createInterface({input:process.stdin}).on("line",line=>
           .query("INSERT INTO segments (id,meeting_id,sequence,state,original_text,data) VALUES (?,?,?,?,?,?)")
           .run(segment.id, segment.meetingID, segment.sequence, segment.state, segment.rawText, JSON.stringify(segment))
       }
+      for (const finding of [
+        { id: "review-action", kind: "action", summary: "Verify rollout", sourceSegmentIds: ["reading-12"] },
+        { id: "review-question", kind: "question", summary: "Who owns rollout?", sourceSegmentIds: ["reading-12"] },
+        { id: "outside-window", kind: "action", summary: "Earlier evidence", sourceSegmentIds: ["outside-window-segment"] },
+      ])
+        fixture.query("INSERT INTO findings (id,meeting_id,data) VALUES (?,?,?)").run(
+          finding.id,
+          "imported",
+          JSON.stringify({
+            ...finding,
+            meetingID: "imported",
+            confidence: 0.8,
+            status: "unconfirmed",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        )
     } finally {
       fixture.close()
     }
@@ -261,12 +289,17 @@ require("node:readline").createInterface({input:process.stdin}).on("line",line=>
     },
     flags,
     releaseAnswer,
+    releaseFinalAnalysis,
+    finalAudioStarted,
+    releaseFinalAudio,
     async failAudio(value: boolean) {
       if (value) await writeFile(failure, "fail")
       if (!value) await rm(failure, { force: true })
     },
     async stop() {
       releaseAnswer.resolve()
+      releaseFinalAnalysis.resolve()
+      releaseFinalAudio.resolve()
       await launch.stop()
       await provider.stop(true)
       await rm(root, { recursive: true, force: true })

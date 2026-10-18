@@ -223,6 +223,14 @@ impl Client {
                     )
                 })?)
             };
+            // Small HTTP/2 control frames must not wait for delayed TCP acknowledgements.
+            socket.get_ref().set_nodelay(true).map_err(|_| {
+                failure(
+                    "Cursor TCP_NODELAY configuration failed",
+                    "CURSOR_CONNECT_FAILED",
+                    true,
+                )
+            })?;
             if endpoint.0.scheme() == "http" {
                 return establish(socket).await;
             }

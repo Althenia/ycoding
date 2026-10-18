@@ -266,8 +266,31 @@ pub fn volatile_digest(messages: &[ycoding_ai::llm::Message]) -> String {
 }
 
 pub fn options_digest(request: &ycoding_ai::llm::Request) -> String {
-    let semantic = request
-        .provider_options
+    use crate::resources::catalog::merge_json;
+    let options = [
+        request.model.route.defaults.provider_options.as_ref(),
+        request.model.defaults.provider_options.as_ref(),
+        request.provider_options.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .reduce(|base, next| merge_json(&base, &next));
+    let generation = request
+        .model
+        .route
+        .defaults
+        .generation
+        .overlay(&request.model.defaults.generation)
+        .overlay(&request.generation);
+    let http = request
+        .model
+        .route
+        .defaults
+        .http
+        .overlay(&request.model.defaults.http)
+        .overlay(&request.http);
+    let semantic = options
         .as_ref()
         .and_then(|options| match options {
             JsonValue::Object(fields) => fields.get(&"openai".into()),
@@ -288,18 +311,52 @@ pub fn options_digest(request: &ycoding_ai::llm::Request) -> String {
             }
             other => other.clone(),
         });
+    let mut query = ycoding_schema::JsonObject::new();
+    for (name, value) in &http.query {
+        query.insert(
+            name.as_str().into(),
+            JsonValue::String(value.as_str().into()),
+        );
+    }
+    let query = JsonValue::Object(query);
     sha256(&canonical_json(
         &ObjectEncoder::new()
-            .optional("maxTokens", &request.generation.max_tokens)
+            .field(
+                "generation",
+                &ObjectEncoder::new()
+                    .optional("maxTokens", &generation.max_tokens)
+                    .optional("temperature", &generation.temperature)
+                    .optional("topP", &generation.top_p)
+                    .optional("topK", &generation.top_k)
+                    .optional("frequencyPenalty", &generation.frequency_penalty)
+                    .optional("presencePenalty", &generation.presence_penalty)
+                    .optional("seed", &generation.seed)
+                    .optional("stop", &generation.stop)
+                    .finish(),
+            )
             .optional("openai", &semantic)
             .optional(
                 "toolChoice",
                 &request
                     .tool_choice
                     .as_ref()
-                    .map(|choice| LosslessString::from(format!("{choice:?}").as_str())),
+                    .map(|choice| LosslessString::from(format!("{choice:?}"))),
+            )
+            .optional(
+                "responseFormat",
+                &request
+                    .response_format
+                    .as_ref()
+                    .map(|format| LosslessString::from(format!("{format:?}"))),
             )
             .field("cache", format!("{:?}", request.cache).as_str())
+            .field(
+                "http",
+                &ObjectEncoder::new()
+                    .optional("body", &http.body)
+                    .field("query", &query)
+                    .finish(),
+            )
             .finish(),
     ))
 }

@@ -35,7 +35,8 @@ pub async fn spawn(command: Command, cols: u16, rows: u16) -> io::Result<Native>
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut size,
+            // Darwin requires a mutable pointer; Linux accepts a const pointer.
+            &raw mut size,
         )
     } != 0
     {
@@ -103,6 +104,13 @@ impl Terminal {
     pub async fn write(&self, mut bytes: &[u8]) -> io::Result<()> {
         while !bytes.is_empty() {
             let mut ready = self.0.writable().await?;
+            // Closed readiness is sticky; retrying a backpressured PTY would spin forever.
+            if ready.ready().is_write_closed() {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "PTY input is closed",
+                ));
+            }
             match ready.try_io(|file| {
                 let mut file = file.get_ref();
                 file.write(bytes)

@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -65,11 +65,11 @@ describe("QuestionTool", () => {
   const terminalStates: ReadonlyArray<{ state: Form.TerminalState; message: string }> = [
     {
       state: { status: "timed_out", seconds: 60 },
-      message: "Question timed out after 60 seconds; no answer was received.",
+      message: "No answer arrived within 60 seconds, so the questions were closed without a user answer. Proceed using your own best judgment.",
     },
     {
       state: { status: "deferred", itemID: SessionReviewID.make("rvw_question_deferred") },
-      message: "Question deferred to the review box; no answer was received.",
+      message: "The user is asleep. These questions were added to the user's review box as item rvw_question_deferred; the answer will arrive later as a user message. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.",
     },
   ]
   for (const terminal of terminalStates) {
@@ -85,8 +85,8 @@ describe("QuestionTool", () => {
         ...toolIdentity,
         call: { type: "tool-call", id: `call-${terminal.state.status}`, name: "question", input: questionInput },
       })).toEqual({
-        result: { type: "error", value: terminal.message },
-        error: { type: "tool.execution", message: terminal.message },
+        result: { type: "text", value: terminal.message },
+        output: { structured: { answers: [[]], ...(terminal.state.status === "timed_out" ? { timedOutAfterSeconds: terminal.state.seconds } : terminal.state.status === "deferred" ? { deferredItemID: terminal.state.itemID } : {}) }, content: [{ type: "text", text: terminal.message }] },
       })
     }))
   }
@@ -205,10 +205,20 @@ describe("QuestionTool", () => {
     yield* autonomy.set({ sessionID, autoAnswer: true })
     for (const yolo of [0, 2] as const) {
       yield* autonomy.setYolo({ sessionID, yolo })
-      expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: `yolo-${yolo}`, name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]] })
+      expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: `yolo-${yolo}`, name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]], automatic: true })
     }
     yield* autonomy.setYolo({ sessionID, yolo: 0 })
     yield* autonomy.setGoal({ sessionID, text: "Choose safely" })
-    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]] })
+    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]], automatic: true })
   }))
+})
+
+
+test("question return schema and prose keep non-human outcomes explicit", () => {
+  expect(Schema.is(QuestionTool.Output)({ answers: [], timedOutAfterSeconds: 0 })).toBe(false)
+  expect(Schema.is(QuestionTool.Output)({ answers: [], timedOutAfterSeconds: 1.5 })).toBe(false)
+  expect(Schema.is(QuestionTool.Output)({ answers: [], reviewFull: true })).toBe(true)
+  expect(QuestionTool.toModelOutput([plan], [["Fast"]], undefined, undefined, undefined, true)).toContain("not provided or approved by the user")
+  expect(QuestionTool.toModelOutput([plan], [[]], undefined, undefined, true)).toContain("not recorded")
+  expect(QuestionTool.toModelOutput([plan], [[]], undefined, undefined, true)).toContain("Do not guess an answer")
 })

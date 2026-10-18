@@ -259,7 +259,6 @@ async fn a_matching_human_grant_bypasses_helpers_once_without_replaying_the_acti
         metadata: None,
         skip_review: false,
         holder: None,
-        defer_shell: false,
         source: Some(guardrail::Source {
             message_id: session_message::Id::new("msg_source").unwrap(),
             call_id: "call_source".into(),

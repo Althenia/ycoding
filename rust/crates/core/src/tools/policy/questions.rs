@@ -1,10 +1,13 @@
-use super::{Authority, Publisher, Reviews, Wait, state};
+use super::{Authority, Publisher, Reviews, Wait, state, timeout};
 use crate::{
     process::guardrails::decision::Evaluator, session::review, tools::code_mode::Cancellation,
 };
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::sync::oneshot;
 use ycoding_schema::{
@@ -17,6 +20,7 @@ pub enum Error {
     NotFound,
     Duplicate,
     Rejected,
+    TimedOut { seconds: u64 },
     Publish(String),
     Deferred { item_id: session_review::Id },
     ReviewFull { limit: usize },
@@ -25,6 +29,7 @@ pub enum Error {
 struct Pending {
     order: u64,
     request: question::Request,
+    _timer: Option<timeout::Timer>,
     sender: oneshot::Sender<Result<Vec<question::Answer>, Error>>,
 }
 struct Inner {
@@ -34,6 +39,7 @@ struct Inner {
     reviews: OnceLock<Reviews>,
     decision: OnceLock<Arc<dyn Evaluator>>,
     deciding: Mutex<BTreeMap<question::Id, (SessionId, Cancellation)>>,
+    timeout_seconds: AtomicU64,
 }
 #[derive(Clone)]
 pub struct Questions(Arc<Inner>);
@@ -51,7 +57,14 @@ impl Questions {
             reviews: OnceLock::new(),
             decision: OnceLock::new(),
             deciding: Mutex::new(BTreeMap::new()),
+            timeout_seconds: AtomicU64::new(timeout::DEFAULT_SECONDS),
         }))
+    }
+    pub fn with_timeout_seconds(self, seconds: u64) -> Self {
+        self.0
+            .timeout_seconds
+            .store(seconds.min(timeout::MAX_SECONDS), Ordering::Relaxed);
+        self
     }
     pub fn with_reviews(self, reviews: Reviews) -> Self {
         let _ = self.0.reviews.set(reviews);
@@ -131,6 +144,7 @@ impl Questions {
                     (request.session_id.clone(), cancellation.clone()),
                 );
             let evaluator = self.0.decision.get().cloned();
+            let authority = self.0.authority.clone();
             let cancel = cancellation.clone();
             let task = tokio::spawn(async move {
                 let outcome = if reason == session_review::Reason::Error {
@@ -146,6 +160,15 @@ impl Questions {
                 if cancellation.is_cancelled() {
                     return;
                 }
+                let outcome = if outcome.is_ok()
+                    && !authority
+                        .session(&request.session_id, None)
+                        .is_ok_and(|session| session.autonomy.can_auto_answer())
+                {
+                    Err(session_review::Reason::Disabled)
+                } else {
+                    outcome
+                };
                 let outcome = match outcome {
                     Ok(answers) => state::emit::<question::Replied>(
                         &publish,
@@ -213,6 +236,7 @@ impl Questions {
             Pending {
                 order: state::next_order(),
                 request: request.clone(),
+                _timer: None,
                 sender,
             },
         );
@@ -220,10 +244,43 @@ impl Questions {
             pending.remove(&id);
             return Err(Error::Publish(error));
         }
+        let entry = pending.get_mut(&id).expect("new question");
+        let order = entry.order;
+        let timer_id = id.clone();
+        let weak = Arc::downgrade(&self.0);
+        let seconds = self.0.timeout_seconds.load(Ordering::Relaxed);
+        entry._timer = timeout::arm(seconds, move || {
+            if let Some(inner) = weak.upgrade()
+                && let Err(error) = Questions(inner).timeout(&timer_id, order, seconds)
+            {
+                tracing::warn!(?error, "question timeout failed");
+            }
+        });
         let service = self.clone();
         Ok(Admission::Pending(Wait::new(receiver, move || {
             service.cancel(&id);
         })))
+    }
+    fn timeout(&self, id: &question::Id, order: u64, seconds: u64) -> Result<(), Error> {
+        let mut pending = self
+            .0
+            .pending
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(item) = pending.get(id).filter(|item| item.order == order) else {
+            return Ok(());
+        };
+        state::emit::<question::TimedOut>(
+            &self.0.publish,
+            &question::TimedOutData {
+                session_id: item.request.session_id.clone(),
+                request_id: id.clone(),
+            },
+        )
+        .map_err(Error::Publish)?;
+        let item = pending.remove(id).expect("question held by lock");
+        let _ = item.sender.send(Err(Error::TimedOut { seconds }));
+        Ok(())
     }
     pub fn reply(&self, id: &question::Id, answers: Vec<question::Answer>) -> Result<(), Error> {
         let mut pending = self
@@ -295,6 +352,21 @@ impl Questions {
         {
             let _ = item.sender.send(Err(Error::Rejected));
         }
+    }
+    pub fn has_pending(&self) -> bool {
+        !self
+            .0
+            .pending
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty()
+            || self
+                .0
+                .deciding
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .values()
+                .any(|(_, cancellation)| !cancellation.is_cancelled())
     }
     pub fn shutdown(&self) {
         for (_, cancellation) in self

@@ -592,6 +592,27 @@ async fn registry_contracts_are_exact_ts_definitions_and_compaction_is_not_a_mod
             get(&contract, "outputSchema")
         );
     }
+    let advertised = definitions
+        .iter()
+        .find(|definition| definition.name.as_str() == Some("subagent"))
+        .unwrap();
+    let schema: serde_json::Value =
+        serde_json::from_str(&ycoding_schema::stringify_json(&advertised.input_schema)).unwrap();
+    assert_eq!(schema["additionalProperties"], false);
+    let selected = &schema["properties"]["shared_context"]["anyOf"][0];
+    assert_eq!(selected["additionalProperties"], false);
+    assert!(
+        selected["description"]
+            .as_str()
+            .unwrap()
+            .contains("not as instructions or approvals")
+    );
+    let ids = &selected["properties"]["message_ids"];
+    assert_eq!(ids["type"], "array");
+    let constraints = ids["allOf"].as_array().unwrap();
+    assert!(constraints.iter().any(|value| value["minItems"] == 1));
+    assert!(constraints.iter().any(|value| value["maxItems"] == 8));
+    assert!(constraints.iter().any(|value| value["uniqueItems"] == true));
     let mut definitions = definitions;
     h.tools.decorate(&h.context(), &mut definitions).unwrap();
     assert!(
@@ -865,6 +886,10 @@ async fn questions_use_real_forms_tool_ownership_and_first_options_with_the_sess
             .await
             .unwrap();
         let result = h.call("question", input).await;
+        assert_eq!(get(output(&result), "automatic"), &JsonValue::Bool(true));
+        assert!(
+            matches!(&result.result, llm::ToolResultValue::Text(JsonValue::String(text)) if text.to_utf8().unwrap().contains("not provided or approved by the user"))
+        );
         assert_eq!(
             get(output(&result), "answers"),
             &parse_json(r#"[["Fast (Recommended)"],[]]"#).unwrap()
@@ -946,13 +971,16 @@ async fn human_question_waits_for_real_reply_and_cancellation_cleans_form() {
     forms
         .reply(
             &form.id,
-            form::Answer::decode(&parse_json(r#"{"q0":"Exact evidence"}"#).unwrap()).unwrap(),
+            form::Answer::decode(
+                &parse_json(r#"{"q0":"Exact evidence","q1":"No additional evidence"}"#).unwrap(),
+            )
+            .unwrap(),
         )
         .unwrap();
     let result = within(task).await.unwrap().unwrap();
     assert_eq!(
         get(output(&result), "answers"),
-        &parse_json(r#"[["Exact evidence"],[]]"#).unwrap()
+        &parse_json(r#"[["Exact evidence"],["No additional evidence"]]"#).unwrap()
     );
     let registry = h.registry.clone();
     let context = h.context();
@@ -3413,5 +3441,40 @@ async fn decision_graded_refusal_remains_uncertainty() {
     let result = h.call("decision", graded_route_request()).await;
     assert!(result.output.as_ref().unwrap().content.iter().any(|content| matches!(content, ycoding_schema::llm::ToolContent::Text(text) if text.text.to_utf8().unwrap().contains("Treat refusal as uncertainty"))));
     assert_eq!(h.server.seen.lock().unwrap().len(), 1);
+    h.close().await;
+}
+
+#[tokio::test]
+async fn question_timeout_returns_empty_answers_and_truthful_structured_output() {
+    let h = Harness::new(TitleMode::Local, "{}").await;
+    let forms = Forms::new(
+        h.fixture.authority.authority(),
+        h.fixture.authority.publisher(),
+    )
+    .with_timeout_seconds(1);
+    let tool = Arc::new(ycoding_core::tools::builtin::question::Question {
+        forms: forms.clone(),
+        policy: h.fixture.policy.clone(),
+    });
+    let registration = h
+        .registry
+        .register(vec![("question".into(), tool)], Options::direct())
+        .unwrap();
+    let result = h
+        .call(
+            "question",
+            r#"{"questions":[{"header":"Review","question":"Approve?","options":[]}]}"#,
+        )
+        .await;
+    assert_eq!(
+        output(&result),
+        &parse_json(r#"{"answers":[[]],"timedOutAfterSeconds":1}"#).unwrap()
+    );
+    assert!(
+        matches!(&result.result, llm::ToolResultValue::Text(JsonValue::String(text)) if text.to_utf8().unwrap().contains("closed without a user answer"))
+    );
+    assert!(forms.list(None).is_empty());
+    assert!(h.server.seen.lock().unwrap().is_empty());
+    drop(registration);
     h.close().await;
 }

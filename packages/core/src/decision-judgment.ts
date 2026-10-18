@@ -16,6 +16,7 @@ export const Request = Schema.Struct({
         type: Schema.Literal("choice"),
         name: Name,
         instructions: Text,
+        grade: Schema.Boolean.pipe(Schema.optional),
         choices: Schema.Array(Schema.Struct({ value: ChoiceValue, description: Schema.optional(Text) })).check(
           Schema.isMinLength(1),
           Schema.isMaxLength(255),
@@ -53,6 +54,11 @@ export const Document = Schema.Struct({
           Schema.makeFilter(Number.isFinite),
           Schema.isBetween({ minimum: 0, maximum: 1 }),
         ),
+        grades: Schema.Array(Schema.Struct({
+          choice: ChoiceValue,
+          confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+          evidence: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)),
+        })).check(Schema.isMinLength(1), Schema.isMaxLength(255)).pipe(Schema.optional),
       }),
     ).check(Schema.isMinLength(1), Schema.isMaxLength(32)),
   }),
@@ -101,6 +107,7 @@ export function encode(document: typeof Document.Type): string {
           choice: answer.choice,
           score: answer.score,
           confidence: answer.confidence,
+          ...(answer.grades === undefined ? {} : { grades: answer.grades }),
         })),
       },
     }),
@@ -129,8 +136,14 @@ function matchesQuestion(
 ) {
   if (!answer) return false
   if (answer.type === "refusal")
-    return answer.answer === null && answer.choice === null && answer.score === null && answer.confidence === 0
+    return answer.answer === null && answer.choice === null && answer.score === null && answer.confidence === 0 && answer.grades === undefined
   if (answer.type !== question.type) return false
+  if (question.type === "choice" && question.grade === true)
+    return answer.answer === null && answer.choice === null && answer.score === null && answer.confidence === 0 &&
+      answer.grades !== undefined && answer.grades.length === question.choices.length &&
+      new Set(answer.grades.map((grade) => grade.choice)).size === question.choices.length &&
+      answer.grades.every((grade) => question.choices.some((choice) => choice.value === grade.choice))
+  if (answer.grades !== undefined) return false
   if (question.type === "predicate") return answer.answer !== null && answer.choice === null && answer.score === null
   if (question.type === "choice")
     return (

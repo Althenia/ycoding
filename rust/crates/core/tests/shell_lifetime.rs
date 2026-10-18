@@ -143,8 +143,16 @@ async fn timeout_memory_and_optional_required_sandbox_modes() {
         Status::Timeout
     );
     let mut prepared = shell
-        .prepare(input("exec tail -f /dev/null", 5000, Some(1)), &config)
+        .prepare(
+            input(
+                "exec perl -e '$x = \"a\" x 50_000_000; sleep 60'",
+                5000,
+                Some(1),
+            ),
+            &config,
+        )
         .unwrap();
+    assert_eq!(prepared.memory_limit_mb, Some(1));
     prepared.memory_limit_mb = None;
     let created = shell.create(&mut prepared).await.unwrap();
     assert_eq!(
@@ -802,4 +810,42 @@ async fn failed_ledger_record_joins_the_process_and_removes_its_capture() {
         assert!(!ycoding_core::platform::process::is_alive(pid.parse().unwrap()).unwrap());
     }
     shell.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn independent_commands_start_immediately_and_shutdown_reaps_both() {
+    let fixture = Fixture::new();
+    let roots = Roots::development(&fixture.0).unwrap();
+    let config = fixture.configuration("{\"shell\":\"/bin/sh\"}");
+    let shell = Shell::new(&roots, fixture.0.clone(), "project", fixture.1.client())
+        .await
+        .unwrap();
+    let mut first = shell
+        .prepare(
+            input("printf first; exec tail -f /dev/null", 0, None),
+            &config,
+        )
+        .unwrap();
+    let first = shell.create(&mut first).await.unwrap();
+    let mut second = shell
+        .prepare(
+            input("printf second; exec tail -f /dev/null", 0, None),
+            &config,
+        )
+        .unwrap();
+    let second = shell.create(&mut second).await.unwrap();
+    assert_eq!(shell.list().len(), 2);
+    for (info, output) in [(&first, "first"), (&second, "second")] {
+        assert_eq!(info.status, Status::Running);
+        assert!(info.pid.is_some());
+        ready(&shell, &info.id, output).await;
+    }
+    assert!(!roots.state.join("shell-queue").exists());
+    shell.shutdown().await.unwrap();
+    assert!(shell.list().is_empty());
+    for info in [first, second] {
+        assert!(
+            !ycoding_core::platform::process::is_alive(info.pid.unwrap().get() as u32).unwrap()
+        );
+    }
 }

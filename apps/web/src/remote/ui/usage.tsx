@@ -6,9 +6,11 @@ import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
 import { UsageFilterControls, UsageGroupControl } from "./usage-filters"
 import { usageGroups, type UsageFiltersPresentation } from "./usage-filter-model"
-import { QuotaForecastBlock, UsageStatisticsDetails } from "./usage-cost"
-import { ModelIncidents } from "./model-incidents"
 import type { UsageForecastView } from "../wire-views"
+import { ModelIncidents } from "./model-incidents"
+import { ProviderLogo } from "./provider-logo"
+import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
+import { consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
 import {
   compactUsageTotal,
   dailyBars,
@@ -328,7 +330,10 @@ export function UsagePage() {
     <div class="usage-page">
       <header class="usage-head">
         <div class="usage-head__title">
-          <h1>Usage</h1>
+          <h1>
+            <Icon name="usage" />
+            Usage
+          </h1>
           <p>Quotas and spend from {machine() ?? "your machine"}</p>
         </div>
         <div class="usage-head__actions">
@@ -364,10 +369,46 @@ export function UsagePage() {
         </div>
       </header>
 
-      <section class="usage-quotas" aria-labelledby="usage-allowances">
-        <h2 class="visually-hidden" id="usage-allowances">
-          Provider quotas
+      <section class="usage-spend" aria-labelledby="usage-spend-title">
+        <h2 class="visually-hidden" id="usage-spend-title">
+          Estimated spend overview
         </h2>
+        <Show when={dailyData()}>
+          <div class="usage-tiles">
+            <For each={tileIDs}>
+              {(id) => (
+                <article class="usage-tile">
+                  <h3>{tileLabels[id]}</h3>
+                  <strong>{spendCostText(tileValue(id))}</strong>
+                  <p class="usage-tile__meta">
+                    <span>{count(tileValue(id).requests)} requests</span>
+                    <span>{count(tileValue(id).tokens)} tokens</span>
+                  </p>
+                  <Show when={id === "last30"}>
+                    <svg
+                      viewBox="0 0 100 32"
+                      aria-label="Spend trend over the last 30 days"
+                      role="img"
+                      preserveAspectRatio="none"
+                    >
+                      <polyline points={sparkline()} />
+                    </svg>
+                  </Show>
+                </article>
+              )}
+            </For>
+          </div>
+        </Show>
+      </section>
+
+      <section class="usage-quotas" aria-labelledby="usage-allowances">
+        <div class="usage-section-head">
+          <h2 id="usage-allowances">
+            <Icon name="usage" />
+            Provider quotas
+          </h2>
+          <p>Account-reported limits · separate from this backend's consumption</p>
+        </div>
         <Show when={!providerData() && providerRead().status === "unsupported"}>
           <p class="usage-message" role="status">
             Update YCoding on this machine to see usage.
@@ -412,283 +453,237 @@ export function UsagePage() {
         </div>
       </section>
 
-      <Show when={forecastData()}>
-        <section class="usage-breakdown-section" aria-label="Recorded token consumption">
-          <h2>Recorded consumption · Backend</h2>
-          <For each={forecastData()?.localRates}>
-            {(rate) => (
-              <p class="usage-message">
-                {rate.providerID}
-                {rate.profile ? ` · profile ${rate.profile}` : " · provider default at request time"}
-                {rate.modelID ? ` · ${rate.modelID}` : ""}: {count(rate.tokensPerMinute)} tokens/min · 5m{" "}
-                {rate.tokensPerMinute5 === undefined ? "unreported" : count(rate.tokensPerMinute5)} · 60m{" "}
-                {rate.tokensPerMinute60 === undefined ? "unreported" : count(rate.tokensPerMinute60)}
-                <Show when={rate.estimatedUSDPerHour !== undefined}> · {money(rate.estimatedUSDPerHour!)} estimated/hour</Show>
-                {" "}· {rate.coverage.pricedRequests} priced / {rate.coverage.unpricedRequests} unpriced · observed{" "}
-                {new Date(rate.observedFrom).toISOString()} – {new Date(rate.observedTo).toISOString()}
-              </p>
-            )}
-          </For>
-          <Show when={forecastData()?.localRates === undefined}>
-            <p class="usage-message">Recorded consumption unreported · lookup unavailable.</p>
-          </Show>
-          <Show when={forecastData()?.localRates?.length === 0}>
-            <p class="usage-message">No recorded consumption in the observation window.</p>
-          </Show>
-        </section>
-      </Show>
-
-      <section class="usage-spend" aria-labelledby="usage-spend-title">
-        <h2 class="visually-hidden" id="usage-spend-title">
-          Spend overview
-        </h2>
-        <Show when={dailyData()}>
-          <div class="usage-tiles">
-            <For each={tileIDs}>
-              {(id) => (
-                <article class="usage-tile">
-                  <h3>{tileLabels[id]}</h3>
-                  <strong>{spendCostText(tileValue(id))}</strong>
-                  <p class="usage-tile__meta">
-                    <span>{count(tileValue(id).requests)} requests</span>
-                    <span>{count(tileValue(id).tokens)} tokens</span>
-                  </p>
-                  <Show when={id === "last30"}>
-                    <svg
-                      viewBox="0 0 100 32"
-                      aria-label="Spend trend over the last 30 days"
-                      role="img"
-                      preserveAspectRatio="none"
-                    >
-                      <polyline points={sparkline()} />
-                    </svg>
-                  </Show>
-                </article>
-              )}
-            </For>
-          </div>
-        </Show>
-        <div class="usage-visuals">
-          <div class="usage-chart" ref={dayCard}>
-            <div class="usage-chart__head">
-              <div>
-                <h3>Daily spend (last 30 {zoneLabel()} days)</h3>
-                <p>{zoneLabel()} day boundary · Today highlighted</p>
-              </div>
-              <button
-                type="button"
-                aria-expanded={tableOpen()}
-                aria-controls="usage-daily-table"
-                onClick={() => setTableOpen(!tableOpen())}
-              >
-                {tableOpen() ? "Hide table" : "View table"}
-              </button>
+      <section class="usage-visuals" aria-label="Usage charts">
+        <div class="usage-chart" ref={dayCard}>
+          <div class="usage-chart__head">
+            <div>
+              <h3>
+                <Icon name="usage" />
+                Daily spend (last 30 {zoneLabel()} days)
+              </h3>
+              <p>{zoneLabel()} day boundary · Today highlighted</p>
             </div>
-            <Show when={dailyData() && daily()?.status === "error"}>
-              <p class="usage-message" role="alert">
-                {daily()?.message ?? "Daily usage could not be loaded."}{" "}
-                <button type="button" onClick={() => retryReport(dailyInput())}>
-                  Retry
-                </button>
-              </p>
-            </Show>
-            <Show
-              when={dailyData()}
-              fallback={
-                <Show
-                  when={daily()?.status === "unsupported" || daily()?.status === "error"}
-                  fallback={
-                    <Show when={connected()}>
-                      <LoadingPlaceholder kind="chart" label="Loading daily spend…" />
-                    </Show>
-                  }
-                >
-                  <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>
-                    {daily()?.status === "unsupported"
-                      ? zoneMode() === "local"
-                        ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue."
-                        : "Update YCoding on this machine to see usage."
-                      : daily()?.message}
-                    <Show when={daily()?.status === "error"}>
-                      {" "}
-                      <button type="button" onClick={() => retryReport(dailyInput())}>
-                        Retry
-                      </button>
-                    </Show>
-                  </p>
-                </Show>
-              }
+            <button
+              type="button"
+              aria-expanded={tableOpen()}
+              aria-controls="usage-daily-table"
+              onClick={() => setTableOpen(!tableOpen())}
             >
-              <p class="usage-chart__today">
-                Today: {spendCostText(tileValue("today"))} · {count(days().at(-1)?.requests ?? 0)} requests
-              </p>
-              <svg
-                viewBox="0 0 900 180"
-                role="img"
-                aria-label="Daily cost over the last 30 days, with exact values in the table"
-                preserveAspectRatio="none"
-              >
-                <line x1="0" y1={bars().axis} x2="900" y2={bars().axis} class="usage-chart__axis" />
-                <For each={dayKeys()}>
-                  {(key, index) => {
-                    const entry = () => days().find((item) => item.key === key)!
-                    return (
-                      <rect
-                        x={index() * 30 + 7}
-                        y={bars().bars[index()]!.y}
-                        width="16"
-                        height={bars().bars[index()]!.height}
-                        rx="2"
-                        class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
-                        tabindex="0"
-                        role="img"
-                        data-cursor="action"
-                        aria-label={`${key}: estimated cost ${spendCostText(entry())}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
-                        onPointerEnter={(event) => {
-                          if (event.pointerType !== "touch") {
-                            setActiveDay(entry())
-                            queueMicrotask(() => placeDay(event.clientX, event.clientY))
-                          }
-                        }}
-                        onPointerMove={(event) => {
-                          if (event.pointerType !== "touch") placeDay(event.clientX, event.clientY)
-                        }}
-                        onPointerLeave={(event) => {
-                          if (event.pointerType !== "touch") setActiveDay(undefined)
-                        }}
-                        onFocus={(event) => {
-                          const rect = event.currentTarget.getBoundingClientRect()
-                          setActiveDay(entry())
-                          queueMicrotask(() => placeDay(rect.left + rect.width / 2, rect.top + rect.height / 2))
-                        }}
-                        onBlur={() => setActiveDay(undefined)}
-                        onClick={(event) => {
-                          const rect = event.currentTarget.getBoundingClientRect()
-                          setActiveDay(entry())
-                          queueMicrotask(() =>
-                            placeDay(
-                              event.clientX || rect.left + rect.width / 2,
-                              event.clientY || rect.top + rect.height / 2,
-                            ),
-                          )
-                        }}
-                      />
-                    )
-                  }}
-                </For>
-              </svg>
-              <Show when={activeDay()}>
-                {(entry) => (
-                  <div
-                    class="usage-chart__tooltip"
-                    ref={dayTooltip}
-                    style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }}
-                    role="status"
-                  >
-                    <strong>{entry().key}</strong>
-                    <span>Estimated cost {spendCostText(entry())}</span>
-                    <span>
-                      {count(entry().requests)} requests · {count(entry().tokens)} tokens
-                    </span>
-                  </div>
-                )}
-              </Show>
-              <div class="usage-chart__labels">
-                <span>{days()[0]?.label}</span>
-                <span>{days()[14]?.label}</span>
-                <span>Today</span>
-              </div>
-              <Show when={tableOpen()}>
-                <div id="usage-daily-table" class="usage-table-wrap">
-                  <table>
-                    <caption>Daily usage, last 30 {zoneLabel()} days</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">Day</th>
-                        <th scope="col">Cost</th>
-                        <th scope="col">Tokens</th>
-                        <th scope="col">Requests</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <For each={[...days()].reverse()}>
-                        {(entry) => (
-                          <tr>
-                            <th scope="row">{entry.key}</th>
-                            <td>{spendCostText(entry)}</td>
-                            <td>{count(entry.tokens)}</td>
-                            <td>{count(entry.requests)}</td>
-                          </tr>
-                        )}
-                      </For>
-                    </tbody>
-                  </table>
-                </div>
-              </Show>
-            </Show>
+              <Icon name="sessions" />
+              {tableOpen() ? "Hide table" : "View table"}
+            </button>
           </div>
-          <div class="usage-distribution" ref={providerCard} aria-labelledby="usage-distribution-title">
-            <Show when={monthlyData()}>
-              {(value) => <p class="usage-message">Pricing: {reportCostText(value().total)}</p>}
-            </Show>
-            <div class="usage-distribution__head">
-              <div>
-                <h3 id="usage-distribution-title">Provider distribution (current {zoneLabel()} month)</h3>
-                <p>Current {zoneLabel()} month</p>
-              </div>
-              <div class="usage-distribution__controls">
+          <Show when={dailyData() && daily()?.status === "error"}>
+            <p class="usage-message" role="alert">
+              {daily()?.message ?? "Daily usage could not be loaded."}{" "}
+              <button type="button" onClick={() => retryReport(dailyInput())}>
+                Retry
+              </button>
+            </p>
+          </Show>
+          <Show
+            when={dailyData()}
+            fallback={
+              <Show
+                when={daily()?.status === "unsupported" || daily()?.status === "error"}
+                fallback={
+                  <Show when={connected()}>
+                    <LoadingPlaceholder kind="chart" label="Loading daily spend…" />
+                  </Show>
+                }
+              >
+                <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>
+                  {daily()?.status === "unsupported"
+                    ? zoneMode() === "local"
+                      ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue."
+                      : "Update YCoding on this machine to see usage."
+                    : daily()?.message}
+                  <Show when={daily()?.status === "error"}>
+                    {" "}
+                    <button type="button" onClick={() => retryReport(dailyInput())}>
+                      Retry
+                    </button>
+                  </Show>
+                </p>
+              </Show>
+            }
+          >
+            <p class="usage-chart__today">
+              Today: {spendCostText(tileValue("today"))} · {count(days().at(-1)?.requests ?? 0)} requests
+            </p>
+            <svg
+              viewBox="0 0 900 180"
+              role="img"
+              aria-label="Daily cost over the last 30 days, with exact values in the table"
+              preserveAspectRatio="none"
+            >
+              <line x1="0" y1={bars().axis} x2="900" y2={bars().axis} class="usage-chart__axis" />
+              <For each={dayKeys()}>
+                {(key, index) => {
+                  const entry = () => days().find((item) => item.key === key)!
+                  return (
+                    <rect
+                      x={index() * 30 + 7}
+                      y={bars().bars[index()]!.y}
+                      width="16"
+                      height={bars().bars[index()]!.height}
+                      rx="2"
+                      class={index() === 29 ? "usage-chart__bar usage-chart__bar--today" : "usage-chart__bar"}
+                      tabindex="0"
+                      role="img"
+                      data-cursor="action"
+                      aria-label={`${key}: estimated cost ${spendCostText(entry())}, ${count(entry().requests)} requests, ${count(entry().tokens)} tokens`}
+                      onPointerEnter={(event) => {
+                        if (event.pointerType !== "touch") {
+                          setActiveDay(entry())
+                          queueMicrotask(() => placeDay(event.clientX, event.clientY))
+                        }
+                      }}
+                      onPointerMove={(event) => {
+                        if (event.pointerType !== "touch") placeDay(event.clientX, event.clientY)
+                      }}
+                      onPointerLeave={(event) => {
+                        if (event.pointerType !== "touch") setActiveDay(undefined)
+                      }}
+                      onFocus={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect()
+                        setActiveDay(entry())
+                        queueMicrotask(() => placeDay(rect.left + rect.width / 2, rect.top + rect.height / 2))
+                      }}
+                      onBlur={() => setActiveDay(undefined)}
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect()
+                        setActiveDay(entry())
+                        queueMicrotask(() =>
+                          placeDay(
+                            event.clientX || rect.left + rect.width / 2,
+                            event.clientY || rect.top + rect.height / 2,
+                          ),
+                        )
+                      }}
+                    />
+                  )
+                }}
+              </For>
+            </svg>
+            <Show when={activeDay()}>
+              {(entry) => (
                 <div
-                  class={`usage-toggle${distributionMetric() === "tokens" ? " usage-toggle--tokens" : ""}`}
-                  role="group"
-                  aria-label="Distribution metric"
+                  class="usage-chart__tooltip"
+                  ref={dayTooltip}
+                  style={{ left: `${dayPosition().left}px`, top: `${dayPosition().top}px` }}
+                  role="status"
                 >
-                  <button
-                    type="button"
-                    aria-pressed={distributionMetric() === "spend"}
-                    onClick={() => setDistributionMetric("spend")}
-                  >
-                    Spend
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={distributionMetric() === "tokens"}
-                    onClick={() => setDistributionMetric("tokens")}
-                  >
-                    Tokens
-                  </button>
+                  <strong>{entry().key}</strong>
+                  <span>Estimated cost {spendCostText(entry())}</span>
+                  <span>
+                    {count(entry().requests)} requests · {count(entry().tokens)} tokens
+                  </span>
                 </div>
+              )}
+            </Show>
+            <div class="usage-chart__labels">
+              <span>{days()[0]?.label}</span>
+              <span>{days()[14]?.label}</span>
+              <span>Today</span>
+            </div>
+            <Show when={tableOpen()}>
+              <div id="usage-daily-table" class="usage-table-wrap">
+                <table>
+                  <caption>Daily usage, last 30 {zoneLabel()} days</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Day</th>
+                      <th scope="col">Cost</th>
+                      <th scope="col">Tokens</th>
+                      <th scope="col">Requests</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <For each={[...days()].reverse()}>
+                      {(entry) => (
+                        <tr>
+                          <th scope="row">{entry.key}</th>
+                          <td>{spendCostText(entry)}</td>
+                          <td>{count(entry.tokens)}</td>
+                          <td>{count(entry.requests)}</td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+              </div>
+            </Show>
+          </Show>
+        </div>
+        <div class="usage-distribution" ref={providerCard} aria-labelledby="usage-distribution-title">
+          <div class="usage-distribution__head">
+            <div>
+              <h3 id="usage-distribution-title">
+                <Icon name="package" />
+                Provider distribution (current {zoneLabel()} month)
+              </h3>
+              <p>Current {zoneLabel()} month</p>
+            </div>
+            <div class="usage-distribution__controls">
+              <div
+                class={`usage-toggle${distributionMetric() === "tokens" ? " usage-toggle--tokens" : ""}`}
+                role="group"
+                aria-label="Distribution metric"
+              >
+                <button
+                  type="button"
+                  aria-pressed={distributionMetric() === "spend"}
+                  onClick={() => setDistributionMetric("spend")}
+                >
+                  <Icon name="usage" />
+                  Spend
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={distributionMetric() === "tokens"}
+                  onClick={() => setDistributionMetric("tokens")}
+                >
+                  <Icon name="hash" />
+                  Tokens
+                </button>
               </div>
             </div>
-            <Show when={monthlyData() && monthly()?.status === "error"}>
-              <p class="usage-message" role="alert">
-                {monthly()?.message ?? "Monthly usage could not be loaded."}{" "}
-                <button type="button" onClick={() => retryReport(monthlyInput())}>
-                  Retry
-                </button>
-              </p>
-            </Show>
-            <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}>
-              <LoadingPlaceholder kind="chart" label="Loading monthly usage…" />
-            </Show>
-            <Show when={!monthlyData() && monthly()?.status === "unsupported"}>
-              <p class="usage-distribution__empty">
-                {zoneMode() === "local"
-                  ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue."
-                  : "Update YCoding on this machine to see monthly usage."}
-              </p>
-            </Show>
-            <Show when={!monthlyData() && monthly()?.status === "error"}>
-              <p class="usage-distribution__empty" role="alert">
-                {monthly()?.message}{" "}
-                <button type="button" onClick={() => retryReport(monthlyInput())}>
-                  Retry
-                </button>
-              </p>
-            </Show>
-            <Show when={monthlyData()}>
-              <Show
-                when={
-                  distribution().total > 0 && !(distributionMetric() === "spend" && spendSharesUnavailable(monthlyData()))
+          </div>
+          <Show when={monthlyData()}>
+            {(value) => <p class="usage-distribution__pricing">Pricing: {reportCostText(value().total)}</p>}
+          </Show>
+          <Show when={monthlyData() && monthly()?.status === "error"}>
+            <p class="usage-message" role="alert">
+              {monthly()?.message ?? "Monthly usage could not be loaded."}{" "}
+              <button type="button" onClick={() => retryReport(monthlyInput())}>
+                Retry
+              </button>
+            </p>
+          </Show>
+          <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}>
+            <LoadingPlaceholder kind="chart" label="Loading monthly usage…" />
+          </Show>
+          <Show when={!monthlyData() && monthly()?.status === "unsupported"}>
+            <p class="usage-distribution__empty">
+              {zoneMode() === "local"
+                ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue."
+                : "Update YCoding on this machine to see monthly usage."}
+            </p>
+          </Show>
+          <Show when={!monthlyData() && monthly()?.status === "error"}>
+            <p class="usage-distribution__empty" role="alert">
+              {monthly()?.message}{" "}
+              <button type="button" onClick={() => retryReport(monthlyInput())}>
+                Retry
+              </button>
+            </p>
+          </Show>
+          <Show when={monthlyData()}>
+            <Show
+              when={
+                  distribution().total > 0 &&
+                  !(distributionMetric() === "spend" && spendSharesUnavailable(monthlyData()))
                 }
                 fallback={
                   distributionMetric() === "spend" && spendSharesUnavailable(monthlyData()) ? (
@@ -706,147 +701,188 @@ export function UsagePage() {
                 }
               >
                 <div class="usage-distribution__body">
-                  <div class="usage-distribution__chart" ref={distributionChart}>
-                    <svg
-                      class="usage-donut"
-                      viewBox="0 0 200 200"
-                      role="img"
-                      aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the legend`}
-                    >
-                      <circle class="usage-donut__track" cx="100" cy="100" r="72" fill="none" stroke-width="26" />
-                      <For each={segmentIDs()}>
-                        {(id, index) => {
-                          const initial = arcs().find((segment) => segment.providerID === id)!
-                          const segment = () => arcs().find((item) => item.providerID === id) ?? initial
-                          return (
-                            <circle
-                              class="usage-donut__arc"
-                              cx="100"
-                              cy="100"
-                              r="72"
-                              fill="none"
-                              stroke-width="26"
-                              style={{
-                                stroke: distributionColors[index() % distributionColors.length],
-                                "--usage-dash": `${segment().length} ${segment().circumference - segment().length}`,
-                                "--usage-circumference": segment().circumference,
-                                "stroke-dashoffset": segment().offset,
-                              }}
-                              tabindex="0"
-                              role="img"
-                              data-cursor="action"
-                              aria-label={`${segment().label}: cost ${segment().costLabel ?? "unreported"}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
-                              onPointerEnter={(event) => {
-                                if (event.pointerType !== "touch") {
-                                  setActiveProvider(id)
-                                  queueMicrotask(() => placeProvider(event.clientX, event.clientY))
-                                }
-                              }}
-                              onPointerMove={(event) => {
-                                if (event.pointerType !== "touch") placeProvider(event.clientX, event.clientY)
-                              }}
-                              onPointerLeave={(event) => {
-                                if (event.pointerType !== "touch") setActiveProvider(undefined)
-                              }}
-                              onFocus={(event) => {
-                                const rect = event.currentTarget.getBoundingClientRect()
-                                setActiveProvider(id)
-                                queueMicrotask(() =>
-                                  placeProvider(rect.left + rect.width / 2, rect.top + rect.height / 2),
-                                )
-                              }}
-                              onBlur={() => setActiveProvider(undefined)}
-                              onClick={(event) => {
-                                const rect = event.currentTarget.getBoundingClientRect()
-                                setActiveProvider(id)
-                                queueMicrotask(() =>
-                                  placeProvider(
-                                    event.clientX || rect.left + rect.width / 2,
-                                    event.clientY || rect.top + rect.height / 2,
-                                  ),
-                                )
-                              }}
-                            />
-                          )
-                        }}
-                      </For>
-                    </svg>
-                    <div class="usage-donut__center">
-                      <strong
-                        class="usage-donut__total"
-                        role="img"
-                        tabindex="0"
-                        aria-label={totalLabel()}
-                        title={totalLabel()}
-                      >
-                        {shownTotal()}
-                      </strong>
-                      <span class="usage-donut__caption" ref={distributionCaption}>
-                        {distributionMetric() === "spend" ? "known USD" : "tokens"}
-                      </span>
-                      <span class="usage-donut__probe" ref={distributionProbe} aria-hidden="true">
-                        {distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}
-                      </span>
-                    </div>
-                  </div>
-                  <Show when={activeSegment()}>
-                    {(segment) => (
-                      <div
-                        class="usage-distribution__tooltip"
-                        ref={providerTooltip}
-                        style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }}
-                        role="status"
-                      >
-                        <strong>{segment().label}</strong>
-                        <span>
-                          Cost {segment().costLabel ?? "unreported"} ·{" "}
-                          {Math.round(segment().share * 100)}% share
-                        </span>
-                        <Show when={distributionMetric() === "tokens"}>
-                          <span>{count(segment().value)} tokens</span>
-                        </Show>
-                      </div>
-                    )}
-                  </Show>
-                  <ul
-                    class="usage-distribution__legend"
-                    aria-label={
-                      distributionMetric() === "spend" ? "Providers by estimated spend in USD" : "Providers by tokens"
-                    }
+                <div class="usage-distribution__chart" ref={distributionChart}>
+                  <svg
+                    class="usage-donut"
+                    viewBox="0 0 200 200"
+                    role="img"
+                    aria-label={`${distributionMetric() === "spend" ? "Estimated spend" : "Tokens"} by provider this ${zoneLabel()} month; exact values are available in the legend`}
                   >
+                    <circle class="usage-donut__track" cx="100" cy="100" r="72" fill="none" stroke-width="26" />
                     <For each={segmentIDs()}>
                       {(id, index) => {
-                        const initial = distribution().segments.find((segment) => segment.providerID === id)!
-                        const segment = () => distribution().segments.find((item) => item.providerID === id) ?? initial
+                        const initial = arcs().find((segment) => segment.providerID === id)!
+                        const segment = () => arcs().find((item) => item.providerID === id) ?? initial
                         return (
-                          <li>
-                            <span
-                              class="usage-distribution__swatch"
-                              style={{ background: distributionColors[index() % distributionColors.length] }}
-                              aria-hidden="true"
-                            />
-                            <span class="usage-distribution__name">{segment().label}</span>
-                            <span>{Math.round(segment().share * 100)}%</span>
-                            <strong>
-                              {distributionMetric() === "spend"
-                                ? (segment().costLabel ?? "unreported")
-                                : count(segment().value)}
-                            </strong>
-                          </li>
+                          <circle
+                            class="usage-donut__arc"
+                            cx="100"
+                            cy="100"
+                            r="72"
+                            fill="none"
+                            stroke-width="26"
+                            style={{
+                              stroke: distributionColors[index() % distributionColors.length],
+                              "--usage-dash": `${segment().length} ${segment().circumference - segment().length}`,
+                              "--usage-circumference": segment().circumference,
+                              "stroke-dashoffset": segment().offset,
+                            }}
+                            tabindex="0"
+                            role="img"
+                            data-cursor="action"
+                            aria-label={`${segment().label}: cost ${segment().costLabel ?? "unreported"}, ${Math.round(segment().share * 100)}% share${distributionMetric() === "tokens" ? `, ${count(segment().value)} tokens` : ""}`}
+                            onPointerEnter={(event) => {
+                              if (event.pointerType !== "touch") {
+                                setActiveProvider(id)
+                                queueMicrotask(() => placeProvider(event.clientX, event.clientY))
+                              }
+                            }}
+                            onPointerMove={(event) => {
+                              if (event.pointerType !== "touch") placeProvider(event.clientX, event.clientY)
+                            }}
+                            onPointerLeave={(event) => {
+                              if (event.pointerType !== "touch") setActiveProvider(undefined)
+                            }}
+                            onFocus={(event) => {
+                              const rect = event.currentTarget.getBoundingClientRect()
+                              setActiveProvider(id)
+                              queueMicrotask(() =>
+                                placeProvider(rect.left + rect.width / 2, rect.top + rect.height / 2),
+                              )
+                            }}
+                            onBlur={() => setActiveProvider(undefined)}
+                            onClick={(event) => {
+                              const rect = event.currentTarget.getBoundingClientRect()
+                              setActiveProvider(id)
+                              queueMicrotask(() =>
+                                placeProvider(
+                                  event.clientX || rect.left + rect.width / 2,
+                                  event.clientY || rect.top + rect.height / 2,
+                                ),
+                              )
+                            }}
+                          />
                         )
                       }}
                     </For>
-                  </ul>
+                  </svg>
+                  <div class="usage-donut__center">
+                    <strong
+                      class="usage-donut__total"
+                      role="img"
+                      tabindex="0"
+                      aria-label={totalLabel()}
+                      title={totalLabel()}
+                    >
+                      {shownTotal()}
+                    </strong>
+                    <span class="usage-donut__caption" ref={distributionCaption}>
+                      {distributionMetric() === "spend" ? "known USD" : "tokens"}
+                    </span>
+                  </div>
+                  <span class="usage-donut__probe" ref={distributionProbe} aria-hidden="true">
+                    {distributionMetric() === "spend" ? money(distribution().total) : count(distribution().total)}
+                  </span>
                 </div>
-              </Show>
+                <Show when={activeSegment()}>
+                  {(segment) => (
+                    <div
+                      class="usage-distribution__tooltip"
+                      ref={providerTooltip}
+                      style={{ left: `${providerPosition().left}px`, top: `${providerPosition().top}px` }}
+                      role="status"
+                    >
+                      <strong>{segment().label}</strong>
+                      <span>
+                        Cost {segment().costLabel ?? "unreported"} · {Math.round(segment().share * 100)}% share
+                      </span>
+                      <Show when={distributionMetric() === "tokens"}>
+                        <span>{count(segment().value)} tokens</span>
+                      </Show>
+                    </div>
+                  )}
+                </Show>
+                <ul
+                  class="usage-distribution__legend"
+                  aria-label={
+                    distributionMetric() === "spend" ? "Providers by estimated spend in USD" : "Providers by tokens"
+                  }
+                >
+                  <For each={segmentIDs()}>
+                    {(id, index) => {
+                      const initial = distribution().segments.find((segment) => segment.providerID === id)!
+                      const segment = () => distribution().segments.find((item) => item.providerID === id) ?? initial
+                      return (
+                        <li>
+                          <span
+                            class="usage-distribution__swatch"
+                            style={{ background: distributionColors[index() % distributionColors.length] }}
+                            aria-hidden="true"
+                          />
+                          <span class="usage-distribution__name">
+                            <ProviderLogo providerID={segment().providerID} />
+                            {segment().label}
+                          </span>
+                          <span>{Math.round(segment().share * 100)}%</span>
+                          <strong>
+                            {distributionMetric() === "spend"
+                              ? (segment().costLabel ?? "unreported")
+                              : count(segment().value)}
+                          </strong>
+                        </li>
+                      )
+                    }}
+                  </For>
+                </ul>
+              </div>
             </Show>
-          </div>
+          </Show>
         </div>
       </section>
 
+      <Show when={forecastData()}>
+        <section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption">
+          <div class="usage-section-head">
+            <h2>
+              <Icon name="zap" />
+              Recorded consumption · Backend
+            </h2>
+          </div>
+          <Show when={forecastData()?.localRates?.length}>
+            <ul class="usage-consumption__list">
+              <For each={forecastData()?.localRates}>
+                {(rate) => {
+                  const row = consumptionRow(rate)
+                  return (
+                    <li class="usage-consumption__row">
+                      <span class="usage-consumption__identity">
+                        <ProviderLogo providerID={rate.providerID} />
+                        <span>{row.identity}</span>
+                      </span>
+                      <span class="usage-consumption__tokens">{row.tokens}</span>
+                      <span class="usage-consumption__cost">{row.cost}</span>
+                      <UsageDetails label={row.identity} groups={[{ lines: row.details }]} />
+                    </li>
+                  )
+                }}
+              </For>
+            </ul>
+          </Show>
+          <Show when={forecastData()?.localRates === undefined}>
+            <p class="usage-message">Recorded consumption unreported · lookup unavailable.</p>
+          </Show>
+          <Show when={forecastData()?.localRates?.length === 0}>
+            <p class="usage-message">No recorded consumption in the observation window.</p>
+          </Show>
+        </section>
+      </Show>
+
       <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
         <div class="usage-breakdown__head">
-          <h2 id="usage-breakdown-title">Breakdown</h2>
+          <h2 id="usage-breakdown-title">
+            <Icon name="sessions" />
+            Breakdown
+          </h2>
           <Show when={displayed()?.rows.length}>
             <span class="usage-breakdown__summary">
               Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–
@@ -949,6 +985,7 @@ export function UsagePage() {
                 aria-controls="usage-breakdown-table"
                 onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}
               >
+                <Icon name="sessions" />
                 {breakdownTableOpen() ? "Hide table" : "View table"}
               </button>
               <div
@@ -1047,6 +1084,7 @@ export function UsagePage() {
                     disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0}
                     onClick={previousPage}
                   >
+                    <Icon name="arrow-left" />
                     Previous
                   </button>
                   <button
@@ -1055,10 +1093,11 @@ export function UsagePage() {
                     onClick={nextPage}
                   >
                     Next
+                    <Icon name="arrow-right" />
                   </button>
                 </div>
               </div>
-              <p class="usage-message">
+              <p class="usage-scope-total">
                 Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}
               </p>
             </Show>
@@ -1084,20 +1123,29 @@ function ProviderCard(props: {
 }) {
   const label = (value: string) => value.replaceAll("_", " ")
   const heading = () => providerHeading(props.provider())
-  const updated = () =>
-    new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(props.provider().updatedAt)
-  const provenance = () =>
-    `Updated ${updated()} — source: ${label(props.provider().source).replace("api", "API")}, stability: ${label(props.provider().stability)}`
+  const forecastFor = (window: UsageWindow) => matchingQuotaForecast(props.provider(), window, props.forecasts)
+  const detailGroups = () => [
+    { lines: providerProvenanceLines(props.provider()) },
+    ...props.provider().windows.flatMap((window) => {
+      const forecast = forecastFor(window)
+      return forecast === undefined
+        ? []
+        : [{ title: window.label, lines: forecastDetails(forecast, props.now, props.forecastAsOf) }]
+    }),
+  ]
   return (
-    <article class="usage-provider">
+    <article class="usage-provider" data-provider-id={props.provider().providerID}>
       <header class="usage-provider__head">
         <div class="usage-provider__identity">
+          <h3>
+            <ProviderLogo providerID={props.provider().providerID} />
+            {heading().name}
+          </h3>
           <span
             class={`usage-status usage-status--${props.provider().status}`}
             title={label(props.provider().status)}
             aria-label={`${label(props.provider().status)} quota status`}
           />
-          <h3>{heading().name}</h3>
           <Show when={heading().plan}>
             <span class="usage-provider__plan">{heading().plan}</span>
           </Show>
@@ -1107,11 +1155,7 @@ function ProviderCard(props: {
         </div>
         <span class="usage-provider__freshness">
           {props.provider().status === "error" ? "Checked" : "Synced"}{" "}
-          <time
-            datetime={new Date(props.provider().updatedAt).toISOString()}
-            title={provenance()}
-            aria-label={provenance()}
-          >
+          <time datetime={new Date(props.provider().updatedAt).toISOString()}>
             {relativeFreshness(props.provider().updatedAt, props.now)}
           </time>
         </span>
@@ -1128,15 +1172,12 @@ function ProviderCard(props: {
           <For each={props.provider().windows.map((window) => window.id)}>
             {(id) => {
               const initial = props.provider().windows.find((window) => window.id === id)!
+              const window = () => props.provider().windows.find((item) => item.id === id) ?? initial
               return (
                 <QuotaRow
-                  window={() => props.provider().windows.find((window) => window.id === id) ?? initial}
+                  window={window}
                   now={props.now}
-                  forecast={matchingQuotaForecast(
-                    props.provider(),
-                    props.provider().windows.find((window) => window.id === id) ?? initial,
-                    props.forecasts,
-                  )}
+                  forecast={forecastFor(window())}
                   forecastAsOf={props.forecastAsOf}
                   forecastState={props.forecastState}
                 />
@@ -1145,6 +1186,7 @@ function ProviderCard(props: {
           </For>
         </div>
       </Show>
+      <UsageDetails label={heading().name} groups={detailGroups()} />
     </article>
   )
 }
@@ -1157,8 +1199,9 @@ function QuotaRow(props: {
   readonly forecastState: string
 }) {
   const quota = () => quotaWindow(props.window(), props.now)
+  const exhausted = () => quota().exhausted || props.forecast?.state === "exhausted"
   return (
-    <div class="usage-window">
+    <div class="usage-window" classList={{ "usage-window--exhausted": exhausted() }}>
       <div class="usage-window__top">
         <span>
           <strong>{props.window().label}</strong>
@@ -1172,12 +1215,19 @@ function QuotaRow(props: {
             <b>{quota().remaining} remaining</b>
           </Show>
         </span>
-        <Show when={quota().pace}>
-          <span
-            class={`usage-pace usage-pace--${quota().pace === "Ahead of pace" ? "ahead" : quota().pace === "Below pace" ? "below" : "on"}`}
-          >
-            {quota().pace?.toLowerCase()}
-          </span>
+        <Show
+          when={exhausted()}
+          fallback={
+            <Show when={quota().pace}>
+              <span
+                class={`usage-pace usage-pace--${quota().pace === "Ahead of pace" ? "ahead" : quota().pace === "Below pace" ? "below" : "on"}`}
+              >
+                {quota().pace?.toLowerCase()}
+              </span>
+            </Show>
+          }
+        >
+          <span class="usage-pace usage-pace--exhausted">exhausted</span>
         </Show>
       </div>
       <Show when={quota().fill !== undefined}>
@@ -1218,7 +1268,7 @@ function QuotaRow(props: {
           </p>
         }
       >
-        {(value) => <QuotaForecastBlock forecast={value()} now={props.now} asOf={props.forecastAsOf} />}
+        {(value) => <QuotaForecastStatus forecast={value()} asOf={props.forecastAsOf ?? props.now} />}
       </Show>
     </div>
   )

@@ -46,6 +46,7 @@ async function sessionFixture() {
     height: 36,
     kittyKeyboard: true,
     args: { sessionID },
+    sessionReady: true,
     settle: "Message YCoding…",
     config: { animations: false, session: { sidebar: "hide" } },
     route: async (url, request) => {

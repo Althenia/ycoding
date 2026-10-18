@@ -228,7 +228,6 @@ pub(super) fn shell(json: J) -> R<v5::ShellInfo> {
                 ("timeout", 3),
                 ("memory-limit", 4),
                 ("killed", 5),
-                ("queued", 6),
             ],
         )?,
         command: text(json, "command")?,
@@ -238,7 +237,6 @@ pub(super) fn shell(json: J) -> R<v5::ShellInfo> {
         pid: opt_count(json, "pid")?,
         exit: opt_number(json, "exit")?,
         tool_call_id: opt_text(json, "toolCallID")?,
-        queue_position: opt_count(json, "queuePosition")?,
         metadata: v5::ShellInfoMetadata {
             entries: message::object_entries(json.field("metadata")?, |key, value| {
                 v5::ShellInfoMetadataEntry { key, value }
@@ -247,7 +245,6 @@ pub(super) fn shell(json: J) -> R<v5::ShellInfo> {
         time: v5::ShellInfoTime {
             started: number(time, "started")?,
             completed: opt_number(time, "completed")?,
-            queued: opt_number(time, "queued")?,
         },
     })
 }

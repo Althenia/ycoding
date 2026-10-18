@@ -55,7 +55,6 @@ fn input(session: &SessionId, command: &str) -> Input {
         metadata: None,
         skip_review: false,
         holder: None,
-        defer_shell: false,
         source: Some(guardrail::Source {
             message_id: ycoding_schema::session_message::Id::new("msg_synthetic_source").unwrap(),
             call_id: "call_synthetic_source".into(),

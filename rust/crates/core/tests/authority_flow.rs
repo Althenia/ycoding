@@ -730,7 +730,6 @@ fn guardrail_input(session_id: &session::Id, resource: String) -> GuardrailInput
         metadata: None,
         skip_review: false,
         holder: None,
-        defer_shell: false,
         source: None,
     }
 }
@@ -758,8 +757,9 @@ async fn test019_root_child_family_and_location_review_reply_matrix_gates_shell_
     .enumerate()
     {
         let marker = fixture.temp.outside.join(format!("ownership-{index}"));
+        // The no-op names a non-temporary review target; the only write stays in our fixture.
         let input = parse_json(
-            &serde_json::json!({"command":format!("printf 'effect\\n' >> '{}'", marker.display())})
+            &serde_json::json!({"command":format!(": '/authority-fixture/outside/file'; printf 'effect\\n' >> '{}'", marker.display())})
                 .to_string(),
         )
         .unwrap();
@@ -770,6 +770,12 @@ async fn test019_root_child_family_and_location_review_reply_matrix_gates_shell_
             request = until(|| guardrails.for_session(requestor).unwrap().into_iter().next()) => request,
             result = &mut task => panic!("shell settled before review: {result:?}"),
         };
+        assert!(request.standard);
+        assert_eq!(request.hard_review, None);
+        assert_eq!(
+            request.rule_ids,
+            vec!["standard.review.outside-repo".into()]
+        );
         for non_owner in [&other, &foreign] {
             let before = fixture.events.lock().unwrap().clone();
             assert!(
@@ -877,9 +883,9 @@ async fn test020_yolo_goal_matrix_settles_every_authority_kind() {
                     );
                 }
 
-                // Ordinary guardrail review (outside-repository write).
+                // Classify an outside write without executing it in a temporary exemption.
                 let guardrails = fixture.guardrails("prj_a", &repo, Arc::new(Vec::new), true);
-                let outside = format!("touch '{}/file'", fixture.temp.outside.display());
+                let outside = "touch /authority-fixture/outside/file".to_owned();
                 let admission = guardrails.assert(guardrail_input(&root, outside)).unwrap();
                 if auto_guardrail {
                     assert_eq!(admission.effect, Effect::Allow, "guardrail {label}");
@@ -887,7 +893,12 @@ async fn test020_yolo_goal_matrix_settles_every_authority_kind() {
                 } else {
                     assert_eq!(admission.effect, Effect::Ask, "guardrail {label}");
                     let request = admission.request.clone().unwrap();
+                    assert!(request.standard);
                     assert_eq!(request.hard_review, None, "guardrail {label}");
+                    assert_eq!(
+                        request.rule_ids,
+                        vec!["standard.review.outside-repo".into()]
+                    );
                     assert_eq!(
                         guardrails.for_session(&root).unwrap(),
                         vec![request.clone()]
@@ -1070,9 +1081,16 @@ async fn test020_file_backed_restart_preserves_numeric_level_and_durable_child_w
         let permission_wait = admission.wait.unwrap();
 
         let guardrails = fixture.guardrails("prj_a", &repo, Arc::new(Vec::new), true);
-        let outside = format!("touch '{}/file'", fixture.temp.outside.display());
+        let outside = "touch /authority-fixture/outside/file".to_owned();
         let admission = guardrails.assert(guardrail_input(&root, outside)).unwrap();
         assert_eq!(admission.effect, Effect::Ask);
+        let request = admission.request.as_ref().unwrap();
+        assert!(request.standard);
+        assert_eq!(request.hard_review, None);
+        assert_eq!(
+            request.rule_ids,
+            vec!["standard.review.outside-repo".into()]
+        );
         let guardrail_wait = admission.wait.unwrap();
 
         let forms = Forms::new(fixture.authority(), fixture.publisher());
@@ -1184,6 +1202,18 @@ fn custom_allow_layer() -> Vec<CustomLayer> {
     }]
 }
 
+fn hard_review_paths(project: &str) -> ycoding_core::process::guardrails::Paths {
+    // Destructive inputs are classified only; safe_effect writes the real temporary marker.
+    let directory = format!("/authority-fixture/{project}");
+    ycoding_core::process::guardrails::Paths {
+        workdir: directory.as_str().into(),
+        project: directory.into(),
+        home: "/home/operator".into(),
+        tmpdir: None,
+        trusted_paths: vec![],
+    }
+}
+
 #[tokio::test]
 async fn test021_hard_reviews_require_fresh_human_once_or_reject_for_every_class() {
     let classes: [(&str, &str); 6] = [
@@ -1244,7 +1274,12 @@ async fn test021_hard_reviews_require_fresh_human_once_or_reject_for_every_class
             } else {
                 Arc::new(Vec::new)
             };
-            let guardrails = fixture.guardrails("prj_a", &repo, custom_layers, enabled);
+            let guardrails = fixture.guardrails_with_paths(
+                "prj_a",
+                hard_review_paths("prj_a"),
+                custom_layers,
+                enabled,
+            );
             let admission = guardrails
                 .assert(guardrail_input(&root, command.into()))
                 .unwrap();
@@ -1254,19 +1289,13 @@ async fn test021_hard_reviews_require_fresh_human_once_or_reject_for_every_class
                 "{command} yolo={level} goal={goal} custom={custom} exempt={exempt} enabled={enabled}"
             );
             let request = admission.request.clone().unwrap();
+            assert!(request.standard);
             assert_eq!(
                 request.hard_review,
                 Some(true),
                 "{command} must stay a hard review"
             );
-            assert!(
-                request
-                    .rule_ids
-                    .iter()
-                    .any(|id| id.as_str() == Some(rule_id)),
-                "{command} must classify as {rule_id}: {:?}",
-                request.rule_ids
-            );
+            assert_eq!(request.rule_ids, vec![rule_id.into()], "{command}");
             let before = effects;
             guardrails
                 .reply(&root, &request.id, guardrail::Reply::Always)
@@ -1316,7 +1345,12 @@ async fn test021_hard_reviews_require_fresh_human_once_or_reject_for_every_class
         // Reject: zero effect. Once: exactly one gated effect, then it asks again.
         autonomy.set_yolo(&root, YoloLevel::OFF).await.unwrap();
         let _ = autonomy.stop(&root).await;
-        let guardrails = fixture.guardrails("prj_a", &repo, Arc::new(Vec::new), true);
+        let guardrails = fixture.guardrails_with_paths(
+            "prj_a",
+            hard_review_paths("prj_a"),
+            Arc::new(Vec::new),
+            true,
+        );
         for reply in [guardrail::Reply::Reject, guardrail::Reply::Once] {
             let admission = guardrails
                 .assert(guardrail_input(&root, command.into()))
@@ -1370,9 +1404,9 @@ async fn test021_hard_reviews_require_fresh_human_once_or_reject_for_every_class
             .unwrap();
         assert!(foreign.wait.unwrap().await.unwrap().is_err());
 
-        let guardrails_b = fixture.guardrails(
+        let guardrails_b = fixture.guardrails_with_paths(
             "prj_b",
-            &fixture.temp.repo_b.clone(),
+            hard_review_paths("prj_b"),
             Arc::new(Vec::new),
             true,
         );
@@ -1414,12 +1448,17 @@ async fn test021_ordinary_always_is_scoped_to_the_root_family_and_location() {
         None,
     );
     let guardrails = fixture.guardrails("prj_a", &repo, Arc::new(Vec::new), true);
-    let outside = format!("touch '{}/file'", fixture.temp.outside.display());
+    let outside = "touch /authority-fixture/outside/file".to_owned();
     let admission = guardrails
         .assert(guardrail_input(&root, outside.clone()))
         .unwrap();
     let request = admission.request.clone().unwrap();
+    assert!(request.standard);
     assert_eq!(request.hard_review, None);
+    assert_eq!(
+        request.rule_ids,
+        vec!["standard.review.outside-repo".into()]
+    );
     assert!(
         guardrails
             .reply(&other, &request.id, guardrail::Reply::Always)
@@ -1558,7 +1597,6 @@ impl ComputerPolicy for NativePolicy {
                 ),
                 skip_review: false,
                 holder: None,
-                defer_shell: false,
                 source: None,
             };
             let evaluated = self.leaf.guardrails.evaluate(&input).unwrap();

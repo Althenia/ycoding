@@ -1162,6 +1162,66 @@ fn a_report_excludes_writes_during_pricing_and_the_next_read_includes_them() {
 }
 
 #[test]
+fn backend_report_predicates_and_pricing_share_the_captured_snapshot() {
+    let (store, service) = setup();
+    insert(
+        &store,
+        (0..10)
+            .map(|index| {
+                let mut spec = Spec::new("ses_one", &format!("prq_predicate_{index}"), index + 1);
+                spec.time = 100;
+                spec.cost = None;
+                spec.profile = Some("work");
+                spec.variant = Some("high");
+                match index {
+                    1 => spec.time = 101,
+                    2 => spec.time = 99,
+                    3 => spec.time = 102,
+                    4 => spec.provider = "other",
+                    5 => spec.model = "other",
+                    6 => spec.profile = Some("other"),
+                    7 => spec.variant = Some("other"),
+                    8 => spec.profile = None,
+                    9 => spec.variant = None,
+                    _ => {}
+                }
+                spec
+            })
+            .collect(),
+    );
+    let calls = Cell::new(0);
+    let pricer = |reference: &PricingRef| {
+        calls.set(calls.get() + 1);
+        assert_eq!(reference.provider.as_str(), Some("openai"));
+        assert_eq!(reference.model.as_str(), Some("gpt"));
+        assert_eq!(reference.profile.as_ref().unwrap().as_str(), Some("work"));
+        let mut late = Spec::new("ses_one", "prq_predicate_late", 11);
+        late.time = 100;
+        late.cost = None;
+        late.profile = Some("work");
+        late.variant = Some("high");
+        insert(&store, vec![late]);
+        Some(catalog(2.0))
+    };
+    let input = report_input(
+        r#"{"group":"model","from":100,"to":102,"providerID":"openai","modelID":"gpt","profile":"work","selectedEffort":"high"}"#,
+    );
+    let result = service.usage_report_all(&input, Some(&pricer)).unwrap();
+    assert_eq!(calls.get(), 1);
+    assert_eq!(result.total.logical.get(), 2);
+    assert_eq!(result.row_count.get(), 1);
+    assert!((result.total.cost.unwrap().get() - 0.00004).abs() < 1e-12);
+    assert_eq!(
+        string(&result.encode(), "total.costProvenance"),
+        "current_catalog"
+    );
+    let next = service.usage_report_all(&input, None).unwrap();
+    assert_eq!(next.total.logical.get(), 3);
+    assert_eq!(next.row_count.get(), 1);
+    assert_eq!(next.total.cost, None);
+}
+
+#[test]
 fn sparse_report_filters_and_unpriced_references_cross_source_pages() {
     let (store, service) = setup();
     insert(
@@ -1207,6 +1267,26 @@ fn sparse_report_filters_and_unpriced_references_cross_source_pages() {
     let summary = service.usage_all(Some(&pricer)).unwrap();
     assert_eq!(summary.logical.get(), 10_017);
     assert_eq!(summary.models.unwrap().len(), 2);
+    let input = report_input(r#"{"group":"model","limit":1}"#);
+    for scoped in [false, true] {
+        let report = if scoped {
+            service.usage_report(&id("ses_one"), &input, Some(&pricer))
+        } else {
+            service.usage_report_all(&input, Some(&pricer))
+        }
+        .unwrap();
+        assert_eq!(report.total.logical.get(), 10_017);
+        assert_eq!(report.row_count.get(), 2);
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.next_offset.unwrap().get(), 1);
+        assert_eq!(report.rows[0].metrics.cost, None);
+        assert_eq!(report.rows[0].metrics.cost_provenance, None);
+        assert!((report.total.cost.unwrap().get() - 0.20032).abs() < 1e-12);
+        assert_eq!(
+            string(&report.encode(), "total.costProvenance"),
+            "current_catalog"
+        );
+    }
 }
 
 #[test]

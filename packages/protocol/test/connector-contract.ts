@@ -1,8 +1,10 @@
+import { messageTags, reservedLine } from "./wire-allocation.js"
 import path from "node:path"
 import { readFileSync } from "node:fs"
 import { Schema, SchemaAST } from "effect"
 import { HttpApiEndpoint } from "effect/unstable/httpapi"
 import { Session } from "@ycoding-ai/schema/session"
+import { Shell } from "@ycoding-ai/schema/shell"
 import { Model } from "@ycoding-ai/schema/model"
 import { wireContract } from "./wire-contract.js"
 import { resourceFieldConstraints } from "./resources-contract.js"
@@ -257,6 +259,7 @@ const schemas = {
       attention: Schema.Array(text()),
       outstanding: optional(Schema.Array(text())),
       failed: optional(Schema.Array(text())),
+      lost: optional(Schema.Array(text())),
     }),
   ],
   "session.catalog": [empty, catalog],
@@ -393,7 +396,7 @@ export function connectorProto() {
         .filter(([name]) => !existing.has(name))
         .map(
           ([name, message]) =>
-            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${index + 1}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}}`,
+            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields)[index]}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name)}}`,
         ),
     )
   return `syntax = "proto2";\npackage ycoding.v5;\n\n${["foundation", "operations", "shared", "session"].map((file) => `import "ycoding/v5/${file}.proto";`).join("\n")}\n\noption (ycoding.v5.operation_range) = { first: 5000 last: 5099 };\n\n${declarations.join("\n\n")}\n\n${connectorServices(contract)}\n`

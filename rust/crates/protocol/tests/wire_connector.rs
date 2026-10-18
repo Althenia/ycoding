@@ -196,8 +196,8 @@ fn generated_role_allowlists_are_closed_and_match_descriptors() {
                 .collect::<Vec<_>>()
         );
         match v5::PeerRole::try_from(*role).unwrap() {
-            v5::PeerRole::RemoteClient => assert_eq!(ids.len(), 76),
-            v5::PeerRole::Relay => assert_eq!(ids.len(), 72),
+            v5::PeerRole::RemoteClient => assert_eq!(ids.len(), 79),
+            v5::PeerRole::Relay => assert_eq!(ids.len(), 75),
             v5::PeerRole::Agent | v5::PeerRole::Server => assert!(ids.is_empty()),
             v5::PeerRole::LocalClient => assert!(!ids.is_empty()),
         }

@@ -45,7 +45,9 @@ candidates AS MATERIALIZED (
     FROM report_session_provider_request r JOIN report_session s ON s.id = r.session_id
     LEFT JOIN report_project p ON p.id = s.project_id
     LEFT JOIN family f ON f.id = s.id
-    LEFT JOIN hints h ON h.hint_lookup = r.input_key AND r.anchor_session_id IS NULL, args a
+    LEFT JOIN hints h ON h.hint_lookup = r.input_key AND r.anchor_session_id IS NULL
+    -- Keep the request on the left side of both correlated enrichment joins.
+    CROSS JOIN args a
     LEFT JOIN LATERAL (SELECT seconds, label FROM offsets WHERE start <= r.time_created ORDER BY start DESC LIMIT 1) o ON true
     LEFT JOIN LATERAL (
         SELECT (r.input * input_price + (r.output + r.reasoning) * output_price + r.cache_read * read_price + r.cache_write * write_price) / 1000000 AS amount

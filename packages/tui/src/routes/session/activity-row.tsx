@@ -18,7 +18,6 @@ export type ToolLifecycleInput = {
   error?: { type?: string; message?: string }
   failed?: boolean
   cancelled?: boolean
-  queued?: boolean
   summary?: string
   now?: number
 }
@@ -54,7 +53,9 @@ export function toolLifecyclePresentation(input: ToolLifecycleInput): ToolLifecy
           : label === "failed"
             ? "error"
             : "success"
-  const start = validTimestamp(input.status === "streaming" ? input.time.created : (input.time.ran ?? input.time.created))
+  const start = validTimestamp(
+    input.status === "streaming" ? input.time.created : (input.time.ran ?? input.time.created),
+  )
   const terminal = input.status === "completed" || input.status === "error"
   const end = validTimestamp(terminal ? input.time.completed : (input.now ?? Date.now()))
   const duration = start !== undefined && end !== undefined && end >= start ? Locale.duration(end - start) : undefined
@@ -93,10 +94,13 @@ export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {
   const color = createMemo(() => {
     if (presentation().variant === "error") return theme.text.feedback.error.default
     if (presentation().variant === "warning") return theme.text.feedback.warning.default
-    if (props.lifecycle.queued) return theme.text.feedback.info.default
     return theme.text.subdued
   })
-  return <text flexShrink={0} fg={color()}>{presentation().status}</text>
+  return (
+    <text flexShrink={0} fg={color()}>
+      {presentation().status}
+    </text>
+  )
 }
 
 export function SessionActivityRow(props: {
@@ -211,8 +215,7 @@ export function SessionActivityRow(props: {
     if (r.type === "subagent") return `subagent ${(r as Extract<SessionRow, { type: "subagent" }>).agent}`
     return (r as Extract<SessionRow, { type: "task" }>).content
   }
-  const labelWidth = () =>
-    Math.max(1, (props.width ?? dimensions().width) - 1 - 2 - 5 - 1 - stringWidth(status()))
+  const labelWidth = () => Math.max(1, (props.width ?? dimensions().width) - 1 - 2 - 5 - 1 - stringWidth(status()))
 
   return (
     <box
@@ -237,27 +240,20 @@ export function SessionActivityRow(props: {
                 ? "ok"
                 : ".."}
         </text>
-        <Show
-          when={expandable()}
-          fallback={<SessionActivitySpacer running={running()} color={markerColor()} />}
-        >
+        <Show when={expandable()} fallback={<SessionActivitySpacer running={running()} color={markerColor()} />}>
           <box width={5} flexShrink={0} flexDirection="row">
             <text width={2} flexShrink={0} fg={theme.text.subdued}>
               {expanded() ? "-" : "+"}
             </text>
           </box>
         </Show>
-        <text
-          width={labelWidth()}
-          flexShrink={1}
-          wrapMode="none"
-          truncate={true}
-          fg={theme.text.default}
-        >
+        <text width={labelWidth()} flexShrink={1} wrapMode="none" truncate={true} fg={theme.text.default}>
           {label()}
         </text>
         <box flexGrow={1} />
-        <text flexShrink={0} fg={statusColor()}>{status()}</text>
+        <text flexShrink={0} fg={statusColor()}>
+          {status()}
+        </text>
       </box>
       <Show when={expanded() && props.row.type === "guardrail" ? props.row.detail : undefined}>
         {(detail) => (
@@ -304,7 +300,9 @@ export function SessionToolActivityRow(props: {
     props.lifecycle ? toolLifecyclePresentation({ ...props.lifecycle, now: now() }) : undefined,
   )
   const variant = createMemo(() =>
-    props.variant === "subagent" && lifecycle()?.label === "done" ? "subagent" : (lifecycle()?.variant ?? props.variant),
+    props.variant === "subagent" && lifecycle()?.label === "done"
+      ? "subagent"
+      : (lifecycle()?.variant ?? props.variant),
   )
   const active = createMemo(() => variant() === "running" || variant() === "pending")
   const expandable = createMemo(() => Boolean(props.details?.request.length || props.details?.response.length))
@@ -355,7 +353,9 @@ export function SessionToolActivityRow(props: {
       onKeyDown={onKeyDown}
     >
       <box width="100%" border={[`top`]} borderColor={theme.border.default} flexDirection="row">
-        <text width={2} flexShrink={0} fg={color()}>{marker()}</text>
+        <text width={2} flexShrink={0} fg={color()}>
+          {marker()}
+        </text>
         <SessionActivitySpacer running={active()} color={color()} />
         <text
           width={labelWidth()}
@@ -368,14 +368,7 @@ export function SessionToolActivityRow(props: {
           {label()}
         </text>
         <box flexGrow={1} />
-        <text
-          flexShrink={0}
-          fg={variant() === "error" || variant() === "warning"
-            ? color()
-            : props.lifecycle?.queued
-              ? theme.text.feedback.info.default
-              : theme.text.subdued}
-        >
+        <text flexShrink={0} fg={variant() === "error" || variant() === "warning" ? color() : theme.text.subdued}>
           {status()}
         </text>
       </box>
@@ -390,11 +383,25 @@ export function SessionToolActivityRow(props: {
           >
             <Show when={details().request.length > 0}>
               <text fg={theme.text.label}>− Request</text>
-              <For each={details().request}>{(line) => <text fg={theme.text.subdued} wrapMode="word">  {line}</text>}</For>
+              <For each={details().request}>
+                {(line) => (
+                  <text fg={theme.text.subdued} wrapMode="word">
+                    {" "}
+                    {line}
+                  </text>
+                )}
+              </For>
             </Show>
             <Show when={details().response.length > 0}>
               <text fg={theme.text.label}>− Response</text>
-              <For each={details().response}>{(line) => <text fg={theme.text.subdued} wrapMode="word">  {line}</text>}</For>
+              <For each={details().response}>
+                {(line) => (
+                  <text fg={theme.text.subdued} wrapMode="word">
+                    {" "}
+                    {line}
+                  </text>
+                )}
+              </For>
             </Show>
           </scrollbox>
         )}

@@ -10,7 +10,7 @@
   </head>
   <body>
     <a class="skip" href="#transcript">Skip to transcript</a>
-    <div class="passage" id="passage" data-phase="start">
+    <div class="passage" id="passage" data-phase="setup">
       <header class="header">
         <div class="brand">
           <img src="/view/mark.svg" width="32" height="32" alt="YCoding" data-audit-ignore />
@@ -21,20 +21,26 @@
           </div>
         </div>
         <ol class="stages" aria-label="Meeting stages">
-          <li id="stage-start" aria-current="step">01 Start</li>
+          <li id="stage-setup" aria-current="step">01 Setup</li>
           <li id="stage-live">02 Live</li>
-          <li id="stage-review">03 Review</li>
+          <li id="stage-finalizing">03 Finalizing</li>
+          <li id="stage-review">04 Review</li>
         </ol>
       </header>
       <div id="connection" class="connection" role="status" aria-live="polite">Connecting to the local runtime…</div>
       <section id="ownership" class="ownership" hidden aria-label="Recording lifetime">
-        <strong>REC · Keep this tab open</strong>
-        <p>Closing or reloading this page stops recording. Leave it open beside Meet.</p>
-        <button id="leave-preview" type="button">Leave-page warning preview</button>
+        <div>
+          <strong>REC · Keep this tab open</strong>
+          <p class="hint">Closing or reloading stops recording.</p>
+        </div>
+        <div class="recording-actions">
+          <button id="leave-preview" type="button">Leave-page warning preview</button>
+          <button id="stop" type="button" hidden disabled aria-describedby="connection">Stop and finalize</button>
+        </div>
       </section>
       <main id="workspace" class="workspace">
         <section id="capture-panel" class="capture-runtime" aria-label="Capture and runtime">
-          <div class="capture-gate">
+          <div id="capture-gate" class="capture-gate">
             <p class="eyebrow">Capture setup</p>
             <h2 id="capture-title">Choose what to capture</h2>
             <p id="capture-description">
@@ -63,24 +69,24 @@
               </button>
             </form>
             <div class="actions">
-              <button id="stop" type="button" hidden disabled aria-describedby="connection">Stop and finalize</button
-              ><button id="tab-only" type="button" hidden>Use tab audio only · fresh Start</button
+              <button id="tab-only" type="button" hidden>Use tab audio only · fresh Start</button
               ><button id="settings-help" type="button">Microphone site settings help</button>
-            </div>
-            <div class="feedback" role="status" aria-live="polite">
-              <p id="capture-feedback">Nothing is recording.</p>
-              <p id="control-feedback"></p>
             </div>
           </div>
           <section class="runtime" aria-label="Runtime reports">
             <div class="section-head">
-              <h3>Runtime</h3>
+              <h3 id="runtime-title">Readiness</h3>
               <span id="health-status" class="status">Unreported</span>
             </div>
+            <ul id="readiness" class="readiness">
+              <li><span>Local runtime</span><strong id="runtime-readiness">Connecting</strong></li>
+              <li><span>Chrome tab capture</span><strong id="capture-readiness">Unreported</strong></li>
+              <li><span>Microphone</span><strong>Optional</strong></li>
+            </ul>
             <p id="source-status" class="hint">Sources unreported</p>
             <dl class="metrics">
               <div>
-                <dt>Buffered audio</dt>
+                <dt>Buffered</dt>
                 <dd id="buffered">Unreported</dd>
               </div>
               <div>
@@ -88,13 +94,16 @@
                 <dd id="backlog">Unreported</dd>
               </div>
               <div>
-                <dt>Processed audio</dt>
+                <dt>Processed</dt>
                 <dd id="processed">Unreported</dd>
               </div>
+              <div>
+                <dt>Transcription lag</dt>
+                <dd id="lag">Unreported</dd>
+              </div>
             </dl>
-            <p class="hint">Transcription lag · <span id="lag">Unreported</span></p>
             <details id="runtime-details">
-              <summary>Model details</summary>
+              <summary>Diagnostics</summary>
               <div class="details-body">
                 <p id="model" class="mono">Model unreported</p>
                 <p id="device" class="hint">Device unreported</p>
@@ -102,12 +111,30 @@
               </div>
             </details>
           </section>
+          <div class="capture-feedback" role="status" aria-live="polite">
+            <p id="capture-feedback" class="hint">Nothing is recording.</p>
+            <p id="control-feedback" class="hint"></p>
+          </div>
+        </section>
+        <section id="finalization" class="notice" hidden aria-labelledby="finalization-title">
+          <p class="eyebrow">Finalizing · transcript retained</p>
+          <h2 id="finalization-title">Finalizing audio</h2>
+          <p id="finalization-description">Processing remaining audio before final analysis.</p>
+          <ol class="finalization-stages">
+            <li id="finalization-audio">Audio · processing</li>
+            <li id="finalization-analysis">Analysis · waiting</li>
+          </ol>
         </section>
         <section id="recovery" class="notice" hidden aria-labelledby="recovery-title">
           <h2 id="recovery-title">Runtime needs attention</h2>
           <p id="recovery-text"></p>
           <p id="error-detail" class="hint"></p>
           <button id="retry-audio" type="button" hidden>Retry failed audio</button>
+          <button id="review-retained" type="button" hidden>Review retained transcript</button>
+          <p id="recovery-limit" class="hint" hidden>
+            Failed audio ranges are not reported. Reviewing does not discard or retry audio; the summary may be
+            incomplete.
+          </p>
         </section>
         <section id="transcript" class="transcript" aria-labelledby="transcript-title" tabindex="-1">
           <div class="section-head">
@@ -121,6 +148,7 @@
             </div>
           </div>
           <p class="hint">Source is an audio channel, not speaker identification. Temporary text can change.</p>
+          <p id="evidence-feedback" class="hint" role="status" aria-live="polite"></p>
           <p id="transcript-empty" class="empty hint">
             Audio is not being captured. Give fresh consent and Start on this page; processed evidence will appear here.
           </p>
@@ -132,13 +160,23 @@
         <section id="insights" class="insights" aria-label="Advisory notebook">
           <section class="analysis" aria-labelledby="summary-title">
             <p class="eyebrow">Advisory · transcript so far</p>
-            <h2 id="summary-title">Working summary</h2>
+            <h2 id="summary-title" tabindex="-1">Working summary</h2>
             <p id="summary-status" class="hint">Analysis unreported</p>
             <p id="summary-text" class="prose">No summary yet.</p>
             <details id="findings">
               <summary id="findings-title">Findings · unreported</summary>
               <div id="finding-list" class="details-body"></div>
             </details>
+          </section>
+          <section id="questions-panel" class="review-outcomes" hidden aria-labelledby="questions-title">
+            <p class="eyebrow">Needs a human answer</p>
+            <h2 id="questions-title">Open questions</h2>
+            <div id="questions-list"></div>
+          </section>
+          <section id="actions-panel" class="review-outcomes" hidden aria-labelledby="actions-title">
+            <p class="eyebrow">Advisory · status from YCoding</p>
+            <h2 id="actions-title">Proposed actions</h2>
+            <div id="actions-list"></div>
           </section>
           <section id="chat-panel" class="ask-panel" aria-labelledby="chat-title">
             <h2 id="chat-title">Ask AI</h2>
@@ -162,58 +200,84 @@
               </p>
             </form>
           </section>
+          <section id="handoff" class="handoff" hidden aria-labelledby="handoff-title">
+            <p class="eyebrow">Continue in YCoding</p>
+            <h2 id="handoff-title">Review and next steps</h2>
+            <p>
+              Confirm or reject findings and review knowledge proposals in the terminal. This page cannot approve
+              changes.
+            </p>
+            <details>
+              <summary>Terminal handoff</summary>
+              <div class="details-body">
+                <p>
+                  Use <code>/meeting transcript</code> for the full retained transcript,
+                  <code>/meeting summary</code> for analysis, and <code>/meeting knowledge-review</code> for proposals.
+                </p>
+                <p>
+                  To record again, arm a new meeting with <code>/meeting start</code>, open its link, and give fresh
+                  consent. Capture cannot resume this meeting.
+                </p>
+              </div>
+            </details>
+          </section>
         </section>
         <section id="owner-panel" class="owner-panel" hidden aria-labelledby="owner-title">
-          <p class="eyebrow">Owner link · this device</p>
-          <h2 id="owner-title">Owner settings</h2>
-          <p class="hint">
-            Shown only on the owner link issued by YCoding. The owner credential stays in this page's memory and is
-            never stored; after a reload, reopen the owner link. Knowledge writes still require approval in YCoding.
-          </p>
-          <p id="owner-feedback" class="feedback" role="status" aria-live="polite">
-            Owner settings have not loaded yet.
-          </p>
-          <button id="owner-retry" type="button" hidden>Retry loading owner settings</button>
-          <form id="owner-form" hidden>
-            <fieldset id="owner-model-fieldset">
-              <legend>Ask AI model</legend>
+          <details id="owner-details">
+            <summary id="owner-title">Owner settings · owner link only</summary>
+            <div class="details-body">
+              <p class="eyebrow">Owner link · this device</p>
               <p class="hint">
-                Applies to future Ask AI questions only. Meeting analysis keeps the model of its existing session.
+                Shown only on the owner link issued by YCoding. The owner credential stays in this page's memory and is
+                never stored; after a reload, reopen the owner link. Knowledge writes still require approval in YCoding.
               </p>
-              <label class="field" for="owner-model">Model</label>
-              <span class="select-wrap"><select id="owner-model"></select></span>
-              <label class="field" for="owner-variant">Variant</label>
-              <span class="select-wrap"><select id="owner-variant"></select></span>
-              <p id="owner-model-status" class="hint">Model availability unreported</p>
-              <p id="owner-profile" class="hint" hidden></p>
-            </fieldset>
-            <fieldset id="owner-knowledge-fieldset">
-              <legend>Knowledge connectors</legend>
-              <label class="check"
-                ><input id="owner-mcp" type="checkbox" /><span
-                  >Use knowledge connectors <small>Retrieval is read-only here · writes require approval</small></span
-                ></label
-              >
-              <div id="owner-bindings"></div>
-              <p id="owner-bindings-status" class="hint">No connector bindings loaded yet.</p>
-              <div class="owner-add">
-                <label class="field" for="owner-add-server">Server</label>
-                <span class="select-wrap"><select id="owner-add-server"></select></span>
-                <label class="field" for="owner-add-search">Search tool</label>
-                <span class="select-wrap"><select id="owner-add-search"></select></span>
-                <label class="field" for="owner-add-read">Read tool</label>
-                <span class="select-wrap"><select id="owner-add-read"></select></span>
-                <label class="field" for="owner-add-write">Write tool</label>
-                <span class="select-wrap"><select id="owner-add-write"></select></span>
-                <button id="owner-add" type="button">Add connector binding</button>
-              </div>
-            </fieldset>
-            <div class="actions">
-              <button id="owner-save" type="submit" class="primary" aria-describedby="owner-feedback">
-                Save owner settings
-              </button>
+              <p id="owner-feedback" class="feedback" role="status" aria-live="polite">
+                Owner settings have not loaded yet.
+              </p>
+              <button id="owner-retry" type="button" hidden>Retry loading owner settings</button>
+              <form id="owner-form" hidden>
+                <fieldset id="owner-model-fieldset">
+                  <legend>Ask AI model</legend>
+                  <p class="hint">
+                    Applies to future Ask AI questions only. Meeting analysis keeps the model of its existing session.
+                  </p>
+                  <label class="field" for="owner-model">Model</label>
+                  <span class="select-wrap"><select id="owner-model"></select></span>
+                  <label class="field" for="owner-variant">Variant</label>
+                  <span class="select-wrap"><select id="owner-variant"></select></span>
+                  <p id="owner-model-status" class="hint">Model availability unreported</p>
+                  <p id="owner-profile" class="hint" hidden></p>
+                </fieldset>
+                <fieldset id="owner-knowledge-fieldset">
+                  <legend>Knowledge connectors</legend>
+                  <label class="check"
+                    ><input id="owner-mcp" type="checkbox" /><span
+                      >Use knowledge connectors
+                      <small>Retrieval is read-only here · writes require approval</small></span
+                    ></label
+                  >
+                  <div id="owner-bindings"></div>
+                  <p id="owner-bindings-status" class="hint">No connector bindings loaded yet.</p>
+                  <div class="owner-add">
+                    <label class="field" for="owner-add-server">Server</label>
+                    <span class="select-wrap"><select id="owner-add-server"></select></span>
+                    <label class="field" for="owner-add-search">Search tool</label>
+                    <span class="select-wrap"><select id="owner-add-search"></select></span>
+                    <label class="field" for="owner-add-read">Read tool</label>
+                    <span class="select-wrap"><select id="owner-add-read"></select></span>
+                    <label class="field" for="owner-add-write">Write tool</label>
+                    <span class="select-wrap"><select id="owner-add-write"></select></span>
+                    <button id="owner-add" type="button">Add connector binding</button>
+                  </div>
+                </fieldset>
+                <div class="actions">
+                  <button id="owner-save" type="submit" class="primary" aria-describedby="owner-feedback">
+                    Save owner settings
+                  </button>
+                </div>
+              </form>
             </div>
-          </form>
+          </details>
         </section>
       </main>
       <footer class="footer">

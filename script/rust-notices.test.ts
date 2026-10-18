@@ -673,7 +673,7 @@ describe("repository NOTICE", () => {
   test("keeps the upstream and non-Rust notices before the generated section", async () => {
     const prefix = prefixOf(await readFile(path.join(root, "NOTICE"), "utf8"))
     for (const required of [
-      "Copyright (c) 2025 opencode",
+      "Copyright (c) 2025 opencode", // YCODING_UPSTREAM: required NOTICE attribution
       "Copyright (c) 2026 Oleksiy Akimov",
       "The Geist Project Authors",
       "Copyright 2021-2026 Stichting DuckDB Foundation",

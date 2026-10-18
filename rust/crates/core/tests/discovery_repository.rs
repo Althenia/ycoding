@@ -115,6 +115,9 @@ fn repository_root_detection_includes_worktree_gitfiles_and_mercurial_without_vc
         repository::root(&root.join("mercurial")).unwrap().unwrap(),
         root.join("mercurial")
     );
-    assert!(repository::root(&root).unwrap().is_none());
+    assert_eq!(
+        repository::root(&root).unwrap(),
+        repository::root(root.parent().unwrap()).unwrap()
+    );
     fs::remove_dir_all(root).unwrap();
 }

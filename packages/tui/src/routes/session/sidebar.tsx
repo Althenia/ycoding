@@ -69,11 +69,11 @@ export function Sidebar(props: { sessionID: string; autonomy?: SessionAutonomyVi
                   <SessionRailIdentity title={session().title} />
                 </pluginRuntime.Slot>
               </SessionRailContent>
-              <AutonomyRailContent autonomy={props.autonomy} reviewCount={data.session.review.list(props.sessionID).length} />
-              <PluginSlot
-                name="sidebar.content"
-                input={{ sessionID: props.sessionID }}
+              <AutonomyRailContent
+                autonomy={props.autonomy}
+                reviewCount={data.session.review.list(props.sessionID).length}
               />
+              <PluginSlot name="sidebar.content" input={{ sessionID: props.sessionID }} />
               <Show when={pluginRuntime.status().length > 0}>
                 <RailSection
                   section="plugins"
@@ -85,9 +85,7 @@ export function Sidebar(props: { sessionID: string; autonomy?: SessionAutonomyVi
                       <RailRow
                         label={plugin.id}
                         value={plugin.active ? "active" : "inactive"}
-                        valueColor={
-                          plugin.active ? theme.text.feedback.success.default : theme.text.subdued
-                        }
+                        valueColor={plugin.active ? theme.text.feedback.success.default : theme.text.subdued}
                       />
                     )}
                   </For>
@@ -106,10 +104,7 @@ export function SessionRailContent(props: { sessionID: string; title: string; ch
 
   return (
     <RailSection section="session" title="SESSION">
-      <box
-        gap={railMetrics(dimensions().width).sessionGap}
-        paddingRight={1}
-      >
+      <box gap={railMetrics(dimensions().width).sessionGap} paddingRight={1}>
         <Show when={props.children} fallback={<SessionRailIdentity title={props.title} />}>
           {props.children}
         </Show>
@@ -141,11 +136,7 @@ export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; rev
           <RailSection section="goal" title="GOAL" summary={goal().status}>
             <text fg={theme.text.default}>{goal().text}</text>
             <box height={1} flexShrink={0} />
-            <RailRow
-              label="Status"
-              value={goal().status}
-              valueColor={theme.text.feedback.success.default}
-            />
+            <RailRow label="Status" value={goal().status} valueColor={theme.text.feedback.success.default} />
           </RailSection>
         )}
       </Show>
@@ -155,15 +146,21 @@ export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; rev
           title="AUTONOMY"
           summary={autonomyModeLabel(props.autonomy)}
           attention={
-            (level() ?? 0) > 0 || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true || autoAnswerOn(props.autonomy)
+            (level() ?? 0) > 0 ||
+            props.autonomy?.goal?.status === "active" ||
+            props.autonomy?.effective?.asleep === true ||
+            autoAnswerOn(props.autonomy)
           }
         >
-          <For each={[
-            ["Permissions", "permissions"],
-            ["Guardrails", "guardrails"],
-            ["Questions", "questions"],
-            ["Auto-answer", "auto-answer"],
-          ] as const}>
+          <For
+            each={
+              [
+                ["Permissions", "permissions"],
+                ["Guardrails", "guardrails"],
+                ["Questions", "questions"],
+              ] as const
+            }
+          >
             {([label, action]) => {
               const decision = () => autonomyDecisionKind(props.autonomy, action)
               return (
@@ -183,11 +180,7 @@ export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; rev
           </For>
           <Show when={props.reviewCount}>
             {(count) => (
-              <RailRow
-                label="Review"
-                value={`${count()} waiting`}
-                valueColor={theme.text.feedback.warning.default}
-              />
+              <RailRow label="Review" value={`${count()} waiting`} valueColor={theme.text.feedback.warning.default} />
             )}
           </Show>
         </RailSection>

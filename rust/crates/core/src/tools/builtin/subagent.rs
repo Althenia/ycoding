@@ -133,7 +133,15 @@ impl Tool for Subagent {
             if raw.iter().any(|(key, _)| {
                 !matches!(
                     key.as_str(),
-                    Some("agent" | "description" | "prompt" | "background" | "model" | "timeout")
+                    Some(
+                        "agent"
+                            | "description"
+                            | "prompt"
+                            | "background"
+                            | "model"
+                            | "timeout"
+                            | "shared_context"
+                    )
                 )
             }) {
                 return Err(Failure::message("Invalid subagent launch input"));
@@ -144,6 +152,11 @@ impl Tool for Subagent {
             let prompt: LosslessString = fields.field("prompt").map_err(invalid)?;
             let _: Option<bool> = fields.optional("background").map_err(invalid)?;
             let selected: Option<model::Ref> = fields.optional("model").map_err(invalid)?;
+            let shared_context = raw
+                .get(&"shared_context".into())
+                .map(crate::session::shared_context::Selection::decode)
+                .transpose()
+                .map_err(Failure::message)?;
             if let Some(JsonValue::Object(model)) = raw.get(&"model".into())
                 && model.iter().any(|(key, _)| {
                     !matches!(
@@ -218,7 +231,7 @@ impl Tool for Subagent {
             }
             let child = self
                 .orchestration
-                .launch_attributed(
+                .launch_attributed_with_context(
                     orchestration::LaunchInput {
                         parent_id: context.session_id.clone(),
                         parent_assistant_message_id: context.message_id.clone(),
@@ -231,6 +244,7 @@ impl Tool for Subagent {
                     },
                     &context.cancellation,
                     &context.attribution,
+                    shared_context.as_ref(),
                 )
                 .await
                 .map_err(failure)?;

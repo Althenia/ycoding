@@ -26,28 +26,12 @@ fn recover(input: &str, expected: &str, paths: &[&str]) {
 }
 
 #[test]
-fn shell_queue_limits_preserve_valid_boundaries_and_reject_invalid_leaves() {
-    for input in [
-        r#"{"shell_queue":{"max_running":1,"max_running_per_session":1,"max_queued_per_session":1,"memory_reserve_mb":0,"max_load":0.01}}"#,
-        r#"{"shell_queue":{"max_running":64,"max_running_per_session":64,"max_queued_per_session":1000,"memory_reserve_mb":1048576,"max_load":64}}"#,
-    ] {
-        recover(input, input, &[]);
-    }
-    for (key, values) in [
-        ("max_running", vec!["0", "65", "1.5"]),
-        ("max_running_per_session", vec!["0", "65", "1.5"]),
-        ("max_queued_per_session", vec!["0", "1001", "1.5"]),
-        ("memory_reserve_mb", vec!["-1", "1048577", "1.5"]),
-        ("max_load", vec!["0", "-1", "64.01"]),
-    ] {
-        for value in values {
-            recover(
-                &format!(r#"{{"shell":"kept","shell_queue":{{"{key}":{value}}}}}"#),
-                r#"{"shell":"kept","shell_queue":{}}"#,
-                &[&format!("$.shell_queue.{key}")],
-            );
-        }
-    }
+fn shell_queue_is_an_unknown_key_without_discarding_other_valid_configuration() {
+    recover(
+        r#"{"shell":"/bin/sh","shell_memory_limit_mb":64,"shell_queue":{"max_running":1}}"#,
+        r#"{"shell":"/bin/sh","shell_memory_limit_mb":64}"#,
+        &["$.shell_queue"],
+    );
 }
 
 #[test]
@@ -788,5 +772,32 @@ fn malformed_review_switches_fail_closed_without_enabling_model_reviews() {
             Some("$.guardrails")
         );
         assert_eq!(decoded.diagnostics[0].fail_closed, Some(true));
+    }
+}
+
+#[test]
+fn question_timeouts_and_family_cache_scope_have_bounded_explicit_configuration() {
+    for seconds in [0, 1, 300, 86_400] {
+        let input = format!(
+            r#"{{"question_timeout_seconds":{seconds},"efficiency":{{"prompt_cache":{{"family_scope":"family-experiment"}}}}}}"#
+        );
+        recover(&input, &input, &[]);
+    }
+    recover(
+        r#"{"efficiency":{"prompt_cache":{"family_scope":"session"}}}"#,
+        r#"{"efficiency":{"prompt_cache":{"family_scope":"session"}}}"#,
+        &[],
+    );
+    recover(
+        r#"{"efficiency":{"prompt_cache":{"family_scope":true}}}"#,
+        r#"{"efficiency":{"prompt_cache":{}}}"#,
+        &["$.efficiency.prompt_cache.family_scope"],
+    );
+    for seconds in ["-1", "0.5", "86401", "true", "\"300\""] {
+        recover(
+            &format!(r#"{{"question_timeout_seconds":{seconds},"shell":"kept"}}"#),
+            r#"{"shell":"kept"}"#,
+            &["$.question_timeout_seconds"],
+        );
     }
 }

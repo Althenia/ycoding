@@ -207,10 +207,32 @@ async fn settled_without_a_human_reply(
 #[tokio::test]
 async fn skip_review_admits_ordinary_and_hard_shell_reviews_but_a_deny_still_blocks() {
     let ordinary = "touch /elsewhere/file";
-    let hard = "rm -rf ~/notes";
+    let hard = "git reset --hard";
     let denied = ["rm", "-rf", "/"].join(" ");
     for (command, admitted) in [(ordinary, true), (hard, true), (denied.as_str(), false)] {
         let fixture = ToolFixture::new();
+        if command == hard {
+            let evaluation = fixture
+                .policy
+                .guardrails
+                .evaluate(&ycoding_core::process::guardrails::Input {
+                    session_id: fixture.context().session_id,
+                    action: "shell".into(),
+                    resources: vec![command.into()],
+                    metadata: None,
+                    skip_review: false,
+                    holder: None,
+                    source: None,
+                })
+                .unwrap();
+            assert_eq!(evaluation.effect, ycoding_core::tools::policy::Effect::Ask);
+            assert!(evaluation.standard);
+            assert!(evaluation.hard_review);
+            assert_eq!(
+                evaluation.rule_ids,
+                vec!["standard.review.git-destructive".into()]
+            );
+        }
         let calls = Arc::new(Mutex::new(Vec::new()));
         let (registry, _registration) = register(&fixture, &calls);
         invoke(

@@ -82,6 +82,7 @@ describe("Form", () => {
       yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
       expect(yield* service.ask({ ...settings, id: Form.ID.create(`frm_toggle_${yolo}`) })).toEqual({
         status: "answered",
+        automatic: true,
         answer: { confirm: true },
       })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
@@ -121,6 +122,7 @@ describe("Form", () => {
 
       expect(result).toEqual({
         status: "answered",
+        automatic: true,
         answer: { branch: "main", attempts: 1, confirm: true, features: ["tests"], setup: true },
       })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
@@ -162,7 +164,7 @@ describe("Form", () => {
           title: "Required input",
           fields: [{ key: "name", type: "string", required: true }],
         }),
-      ).toEqual({ status: "answered", answer: { name: "Continue" } })
+      ).toEqual({ status: "answered", answer: { name: "Continue" }, automatic: true })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
     }),
   )

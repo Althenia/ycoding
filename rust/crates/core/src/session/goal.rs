@@ -107,10 +107,14 @@ impl Service {
             },
         };
         let latest = latest.map(|text| tail(&trim(&text), 2_000));
+        let automatic = autonomy::Service::new(self.store.client.clone())
+            .can_auto_answer(&session.id)
+            .unwrap_or(false);
         self.generate(session, format!(
-            "User-proxy steer request:\nActive goal: {}\nPhase: {phase}\nCurrent iteration: {}\nLatest assistant response: {}\nPreserve the active goal and produce only the next concise user-proxy steer.",
+            "User-proxy steer request:\nActive goal: {}\nPhase: {phase}\nCurrent iteration: {}\nAutomatic answering: {}\nLatest assistant response: {}\nPreserve the active goal and produce only the next concise user-proxy steer.",
             request.goal.text.to_utf8().map_err(|_| Error::CalculationFailed)?,
             request.goal.iteration,
+            if automatic { "enabled" } else { "disabled" },
             latest.as_deref().filter(|text| !text.is_empty()).unwrap_or("(none)"),
         ), cancellation).await
     }
@@ -213,24 +217,94 @@ fn context_message(message: session_message::Info) -> Result<Option<String>, Fro
             assistant
                 .content
                 .into_iter()
-                .filter_map(|part| match part {
-                    session_message::AssistantContent::Text(text) => Some(text.text),
-                    session_message::AssistantContent::Reasoning(reasoning) => Some(reasoning.text),
-                    _ => None,
+                .map(|part| match part {
+                    session_message::AssistantContent::Text(text) => text.text.to_utf8().map(Some),
+                    session_message::AssistantContent::Reasoning(reasoning) =>
+                        reasoning.text.to_utf8().map(Some),
+                    session_message::AssistantContent::Tool(tool)
+                        if tool.name.as_str() == Some("question") =>
+                    {
+                        let session_message::ToolState::Completed(state) = tool.state else {
+                            return Ok(None);
+                        };
+                        let origin = if state.structured.get(&"automatic".into())
+                            == Some(&ycoding_schema::JsonValue::Bool(true))
+                        {
+                            "automatic"
+                        } else {
+                            "source unreported"
+                        };
+                        let questions = ycoding_schema::ObjectEncoder::new()
+                            .optional("questions", &state.input.get(&"questions".into()).cloned())
+                            .finish();
+                        let answers = ycoding_schema::ObjectEncoder::new()
+                            .optional("answers", &state.structured.get(&"answers".into()).cloned())
+                            .finish();
+                        Ok(Some(format!(
+                            "Question details (bounded): {}\nQuestion tool result ({origin}): {}",
+                            bounded_json(&questions),
+                            bounded_json(&answers)
+                        )))
+                    }
+                    _ => Ok(None),
                 })
-                .map(|text| text.to_utf8())
                 .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
                 .join("\n")
         )),
         session_message::Info::System(message) => {
             Some(format!("Context: {}", message.text.to_utf8()?))
         }
-        session_message::Info::Synthetic(message) => {
-            Some(format!("Context: {}", message.text.to_utf8()?))
-        }
+        session_message::Info::Synthetic(message) => Some(format!(
+            "Synthetic observation (not a human reply): {}",
+            message.text.to_utf8()?
+        )),
         session_message::Info::Skill(message) => {
             Some(format!("Context: {}", message.text.to_utf8()?))
         }
         _ => None,
     })
+}
+
+fn bounded_json(value: &ycoding_schema::JsonValue) -> String {
+    let text = ycoding_schema::stringify_json(value);
+    String::from_utf16_lossy(&text.encode_utf16().take(1_000).collect::<Vec<_>>())
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn completed_question_context_is_bounded_and_never_labels_automatic_choices_human() {
+        let tool = |name: &str, automatic: bool| {
+            serde_json::json!({
+                "type":"tool", "id":format!("call_{name}"), "name":name,
+                "time":{"created":1,"completed":2},
+                "state":{"status":"completed","input":{"questions":[{"question":"Bounded choice","details":"x".repeat(2000)}]},"structured":{"answers":[["Continue independently"]],"automatic":automatic,"secret":"UNRELATED_STRUCTURED_PAYLOAD"},"content":[]}
+            })
+        };
+        for automatic in [false, true] {
+            let value = serde_json::json!({"type":"assistant","id":"msg_question","agent":"build","model":{"providerID":"openai","id":"test"},"time":{"created":1,"completed":2},"content":[tool("question",automatic),tool("shell",true)]});
+            let message =
+                session_message::Info::decode(&parse_json(&value.to_string()).unwrap()).unwrap();
+            let context = context_message(message).unwrap().unwrap();
+            assert!(context.contains(if automatic {
+                "Question tool result (automatic)"
+            } else {
+                "Question tool result (source unreported)"
+            }));
+            assert!(context.contains("Continue independently"));
+            assert!(!context.contains("UNRELATED_STRUCTURED_PAYLOAD"));
+            assert!(!context.contains("User has answered"));
+            assert!(context.encode_utf16().count() < 1200);
+        }
+        let synthetic = session_message::Info::decode(&parse_json(r#"{"type":"synthetic","id":"msg_synthetic","text":"An automatic selection","time":{"created":1}}"#).unwrap()).unwrap();
+        assert_eq!(
+            context_message(synthetic).unwrap().unwrap(),
+            "Synthetic observation (not a human reply): An automatic selection"
+        );
+    }
 }

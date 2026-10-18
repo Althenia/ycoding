@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     platform::shell::ledger,
-    process::guardrails::{Guardrails, Reservation},
+    process::guardrails::{Guardrails, Reservation, decision::Evaluator},
     session::{
         autonomy, key, pending,
         projector::{self, random_event_id},
@@ -13,21 +13,23 @@ use crate::{
         review::{ChildAnswer, Claim, DeliveryError},
         review_fold::{self, WithdrawReason, Withdrawals},
         run_coordinator::{self, RunFuture},
-        store,
+        shared_context, store,
         usage_attribution::{self, Attribution},
     },
+    tools::code_mode::Cancellation,
 };
 use std::{
     collections::BTreeMap,
     ops::Bound,
     sync::{Arc, Mutex, OnceLock, Weak},
+    time::Duration,
 };
 use ycoding_schema::{
-    DomainDecode, JsonValue, LosslessString, ObjectEncoder, agent, domain, model, permission,
-    session, session_message,
+    DomainDecode, JsonValue, LosslessString, ObjectEncoder, agent, domain, guardrail, model,
+    permission, session, session_message,
     session_orchestration::{Answer, Change, Question, QuestionId, Task},
     session_pending,
-    session_review::{Kind, Origin},
+    session_review::{Kind, Origin, Reason},
     stringify_json, usage_anchor,
 };
 use ycoding_store::{
@@ -41,6 +43,39 @@ const EXCERPT_BYTES: usize = 16 * 1024;
 const ATTEMPTS: usize = 16;
 const RESTART_LOST: &str =
     "The service restarted while the child task was active. Provider execution was not resumed.";
+
+type QuestionConfig = Arc<dyn Fn(&session::Id) -> Option<JsonValue> + Send + Sync>;
+type QuestionEvaluator = Arc<dyn Fn(&session::Id) -> Option<Arc<dyn Evaluator>> + Send + Sync>;
+type QuestionTimers = BTreeMap<LosslessString, (QuestionId, Cancellation)>;
+
+struct QuestionTimerLifetime(Arc<Mutex<QuestionTimers>>);
+impl Drop for QuestionTimerLifetime {
+    fn drop(&mut self) {
+        let mut timers = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        for (_, cancellation) in std::mem::take(&mut *timers).into_values() {
+            cancellation.cancel();
+        }
+    }
+}
+
+enum SleepAnswer {
+    Answer(LosslessString),
+    Deferred {
+        reason: Reason,
+        choice: Option<LosslessString>,
+        confidence: Option<guardrail::Confidence>,
+    },
+}
+
+impl SleepAnswer {
+    fn deferred(reason: Reason) -> Self {
+        Self::Deferred {
+            reason,
+            choice: None,
+            confidence: None,
+        }
+    }
+}
 
 type ReconciliationStates = BTreeMap<usize, Weak<tokio::sync::Mutex<bool>>>;
 
@@ -172,12 +207,34 @@ pub struct Service {
     held: Arc<Mutex<BTreeMap<LosslessString, Reservation>>>,
     reconciled: Arc<tokio::sync::Mutex<bool>>,
     reviews: Option<crate::tools::policy::Reviews>,
+    question_config: QuestionConfig,
+    question_evaluator: QuestionEvaluator,
+    question_timers: Arc<Mutex<QuestionTimers>>,
+    question_timer_lifetime: Option<Arc<QuestionTimerLifetime>>,
 }
 
 impl Service {
     pub fn new(sessions: store::Service, execution: Arc<dyn Execution>) -> Self {
         ledger::current_owner();
         let reconciled = reconciliation_state(&sessions.client);
+        let question_timers = Arc::new(Mutex::new(QuestionTimers::new()));
+        let timers = Arc::downgrade(&question_timers);
+        sessions.client.observe_events(move |events| {
+            let Some(timers) = timers.upgrade() else { return false };
+            for event in events {
+                let JsonValue::Object(data) = &event.data else { continue };
+                let deferred = event.type_.as_str() == Some("session.review.deferred.1")
+                    && data.get(&"kind".into()) == Some(&JsonValue::String("subagent_question".into()));
+                let closed = event.type_.as_str() == Some("session.task.updated.1")
+                    && matches!(data.get(&"change".into()), Some(JsonValue::Object(change)) if matches!(change.get(&"type".into()), Some(JsonValue::String(kind)) if matches!(kind.as_str(), Some("question_answered" | "question_timed_out" | "cancel_requested" | "cancelled" | "completed" | "failed" | "lost"))));
+                if (deferred || closed)
+                    && let Some((_, cancellation)) = timers.lock().unwrap_or_else(|error| error.into_inner()).remove(&event.aggregate_id)
+                {
+                    cancellation.cancel();
+                }
+            }
+            true
+        });
         Self {
             autonomy: autonomy::Service::new(sessions.client.clone()),
             sessions,
@@ -186,7 +243,21 @@ impl Service {
             held: Arc::default(),
             reconciled,
             reviews: None,
+            question_config: Arc::new(|_| None),
+            question_evaluator: Arc::new(|_| None),
+            question_timer_lifetime: Some(Arc::new(QuestionTimerLifetime(question_timers.clone()))),
+            question_timers,
         }
+    }
+
+    pub fn with_question_policy(
+        mut self,
+        config: QuestionConfig,
+        evaluator: QuestionEvaluator,
+    ) -> Self {
+        self.question_config = config;
+        self.question_evaluator = evaluator;
+        self
     }
 
     pub fn with_reviews(mut self, reviews: crate::tools::policy::Reviews) -> Self {
@@ -278,6 +349,17 @@ impl Service {
         cancellation: &crate::tools::code_mode::Cancellation,
         attribution: &Attribution,
     ) -> Result<Task, Error> {
+        self.launch_attributed_with_context(input, cancellation, attribution, None)
+            .await
+    }
+
+    pub async fn launch_attributed_with_context(
+        &self,
+        input: LaunchInput,
+        cancellation: &crate::tools::code_mode::Cancellation,
+        attribution: &Attribution,
+        selected: Option<&shared_context::Selection>,
+    ) -> Result<Task, Error> {
         let ids = Launch::new(
             &input.parent_id,
             &input.parent_assistant_message_id,
@@ -298,7 +380,18 @@ impl Service {
         let anchor = self
             .dispatch_anchor(input.parent_id.as_lossless(), attribution)
             .await?;
-        let prompt_digest = sha256(&input.prompt);
+        let prompt_digest = selected.map_or_else(
+            || sha256(&input.prompt),
+            |selected| {
+                sha256(&crate::session::prompt_cache::canonical_json(
+                    &ObjectEncoder::new()
+                        .field("version", &1.0)
+                        .field("prompt", input.prompt.as_str())
+                        .field("messageIDs", &selected.message_ids)
+                        .finish(),
+                ))
+            },
+        );
         if let Some(existing) = self.task(&ids.child_id)? {
             let model = existing.model.domain()?;
             let same = existing.parent_id == *input.parent_id.as_lossless()
@@ -314,17 +407,19 @@ impl Service {
                 )));
             }
             if existing.state.as_str() == Some("starting") {
+                let prompt = self.launch_prompt(&ids, &input, selected)?;
                 let reservation = self.reserve(&input, cancellation).await?;
                 let stored = existing
                     .usage_anchor
                     .as_ref()
                     .and_then(|anchor| anchor.domain().ok());
-                let task = self.start(&ids, &input.prompt, stored).await?;
+                let task = self.start(&ids, prompt, stored).await?;
                 self.hold(&ids, reservation);
                 return Ok(task);
             }
             return Ok(task_from_row(&existing)?);
         }
+        let prompt = self.launch_prompt(&ids, &input, selected)?;
         let reservation = self.reserve(&input, cancellation).await?;
         let now = now();
         let ceiling = ceiling::inherit(
@@ -388,7 +483,7 @@ impl Service {
             Some(ids.launch_event_id.as_lossless().clone()),
         )
         .await?;
-        let task = self.start(&ids, &input.prompt, anchor).await?;
+        let task = self.start(&ids, prompt, anchor).await?;
         self.hold(&ids, reservation);
         Ok(task)
     }
@@ -807,8 +902,63 @@ impl Service {
                 autonomy::Error::NotFound(_) => Error::TaskNotFound(child_id.clone()),
                 autonomy::Error::Store(error) => Error::Store(error),
             })?;
-        let automatic = effective.can_auto_answer() && !effective.asleep;
-        if !automatic {
+        let sleep_answer = if effective.asleep {
+            let outcome = if effective.can_auto_answer() {
+                self.sleep_answer(child_id, &question, attribution).await
+            } else {
+                SleepAnswer::deferred(Reason::Disabled)
+            };
+            Some(
+                if matches!(outcome, SleepAnswer::Answer(_))
+                    && !self
+                        .autonomy
+                        .effective(child_id)
+                        .map_err(autonomy_error)?
+                        .can_auto_answer()
+                {
+                    SleepAnswer::deferred(Reason::Disabled)
+                } else {
+                    outcome
+                },
+            )
+        } else {
+            None
+        };
+        if let Some(SleepAnswer::Deferred {
+            reason,
+            choice,
+            confidence,
+        }) = sleep_answer
+        {
+            let reviews = self
+                .reviews
+                .as_ref()
+                .ok_or_else(|| Error::Conflict("The user's review box is unavailable".into()))?;
+            reviews
+                .service
+                .open(crate::session::review::OpenInput {
+                    session_id: child_id.clone(),
+                    kind: Kind::SubagentQuestion,
+                    reason,
+                    choice,
+                    confidence,
+                    grades: None,
+                    origin: Origin::Question {
+                        question_id: question.id.clone(),
+                    },
+                    payload: ycoding_schema::session_review::Payload::SubagentQuestion(
+                        ycoding_schema::session_review::SubagentQuestionPayload {
+                            text: question.text.clone(),
+                            data: question.data.clone(),
+                        },
+                    ),
+                    limit: reviews.limit,
+                    conversion: false,
+                    created: now(),
+                })
+                .await
+                .map_err(|error| Error::Conflict(error.to_string()))?;
+            question.deferred = Some(true);
             self.publish(
                 child_id,
                 Change::QuestionAsked {
@@ -817,48 +967,34 @@ impl Service {
                 None,
             )
             .await?;
-            if effective.asleep
-                && let Some(reviews) = &self.reviews
-            {
-                reviews
-                    .service
-                    .open(crate::session::review::OpenInput {
-                        session_id: child_id.clone(),
-                        kind: Kind::SubagentQuestion,
-                        reason: if effective.can_auto_answer() {
-                            ycoding_schema::session_review::Reason::FreeText
-                        } else {
-                            ycoding_schema::session_review::Reason::Disabled
-                        },
-                        choice: None,
-                        confidence: None,
-                        grades: None,
-                        origin: Origin::Question {
-                            question_id: question.id.clone(),
-                        },
-                        payload: ycoding_schema::session_review::Payload::SubagentQuestion(
-                            ycoding_schema::session_review::SubagentQuestionPayload {
-                                text: question.text.clone(),
-                                data: question.data.clone(),
-                            },
-                        ),
-                        limit: reviews.limit,
-                        conversion: false,
-                        created: now(),
-                    })
-                    .await
-                    .map_err(|error| Error::Conflict(error.to_string()))?;
-                question.deferred = Some(true);
-            }
             return Ok(Asked {
                 question,
                 auto_answered: false,
             });
         }
+        if !effective.can_auto_answer() {
+            self.publish(
+                child_id,
+                Change::QuestionAsked {
+                    question: question.clone(),
+                },
+                None,
+            )
+            .await?;
+            self.arm_question_timer(child_id, &question.id, 0)?;
+            return Ok(Asked {
+                question,
+                auto_answered: false,
+            });
+        }
+        let answer_text = match sleep_answer {
+            Some(SleepAnswer::Answer(text)) => text,
+            _ => autonomy::AUTOMATIC_ANSWER.into(),
+        };
         let ids = launch_ids(&row)?;
         let body = ObjectEncoder::new()
             .field("questionID", &question.id.0)
-            .field("text", autonomy::AUTOMATIC_ANSWER)
+            .field("text", &answer_text)
             .finish();
         let caused_by = self
             .dispatch_anchor(child_id.as_lossless(), attribution)
@@ -890,6 +1026,302 @@ impl Service {
             question,
             auto_answered: true,
         })
+    }
+
+    fn disarm_question_timer(&self, child_id: &session::Id, question_id: &QuestionId) {
+        let mut timers = self
+            .question_timers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if timers
+            .get(child_id.as_lossless())
+            .is_some_and(|(id, _)| id == question_id)
+            && let Some((_, cancellation)) = timers.remove(child_id.as_lossless())
+        {
+            cancellation.cancel();
+        }
+    }
+
+    fn arm_question_timer(
+        &self,
+        child_id: &session::Id,
+        question_id: &QuestionId,
+        elapsed_ms: u64,
+    ) -> Result<bool, Error> {
+        self.disarm_question_timer(child_id, question_id);
+        if self
+            .sessions
+            .get(child_id)?
+            .is_none_or(|session| session.time.archived.is_some())
+        {
+            return Ok(false);
+        }
+        let seconds =
+            crate::tools::policy::timeout::seconds((self.question_config)(child_id).as_ref());
+        if seconds == 0 {
+            return Ok(false);
+        }
+        let cancellation = Cancellation::default();
+        if let Some((_, previous)) = self
+            .question_timers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                child_id.as_lossless().clone(),
+                (question_id.clone(), cancellation.clone()),
+            )
+        {
+            previous.cancel();
+        }
+        let mut service = self.clone();
+        // Timers must not keep their owning Service alive after its final caller is dropped.
+        service.question_timer_lifetime = None;
+        let child_id = child_id.clone();
+        let question_id = question_id.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_millis(seconds.saturating_mul(1000).saturating_sub(elapsed_ms))) => {},
+            }
+            if let Err(error) = service
+                .expire_question(&child_id, &question_id, seconds)
+                .await
+            {
+                tracing::warn!(%error, "subagent question timeout failed");
+            }
+        });
+        Ok(true)
+    }
+
+    /// Closes an unanswered question and admits fresh guidance; never replays a provider attempt.
+    pub async fn expire_question(
+        &self,
+        child_id: &session::Id,
+        question_id: &QuestionId,
+        seconds: u64,
+    ) -> Result<bool, Error> {
+        let _guard = self.lock(child_id.as_lossless()).await;
+        self.disarm_question_timer(child_id, question_id);
+        for _ in 0..ATTEMPTS {
+            let (row, fence) = {
+                let snapshot = self.sessions.client.snapshot()?;
+                let Some(row) = snapshot.get::<TaskTable>(&key(child_id.as_lossless()))? else {
+                    return Ok(false);
+                };
+                if row.state.as_str() != Some("waiting")
+                    || row.question_id.as_ref() != Some(&question_id.0)
+                    || review_fold::owns_question(&snapshot, child_id, question_id)?
+                {
+                    return Ok(false);
+                }
+                (
+                    row,
+                    review_fold::latest_at(&snapshot, child_id.as_lossless())?,
+                )
+            };
+            let created = now();
+            let input = synthetic(
+                format!(
+                    "No parent answer arrived within {seconds} seconds for question {}. The question is closed and can no longer be answered. Proceed using your own best judgment.",
+                    text_of(&question_id.0)
+                ),
+                "Parent answer timed out",
+                ObjectEncoder::new()
+                    .field("source", "subagent_parent")
+                    .field("parentID", &row.parent_id)
+                    .field("childID", child_id)
+                    .field("kind", "timeout")
+                    .field("questionID", &question_id.0)
+                    .finish(),
+                "steer",
+            )?;
+            let request = pending::Request {
+                id: launch_ids(&row)?.answer(text_of(&question_id.0)),
+                session_id: child_id.clone(),
+                input,
+                event_id: random_event_id()?,
+                created,
+            };
+            let event = NewEvent {
+                id: random_event_id()?.as_lossless().clone(),
+                aggregate_id: child_id.as_lossless().clone(),
+                created,
+                type_: "session.task.updated.1".into(),
+                data: ObjectEncoder::new()
+                    .field("sessionID", child_id)
+                    .field(
+                        "change",
+                        &Change::QuestionTimedOut {
+                            question_id: question_id.clone(),
+                        },
+                    )
+                    .finish(),
+            };
+            let question = question_id.0.clone();
+            let committed = self
+                .sessions
+                .client
+                .submit(move |tx| {
+                    if review_fold::latest_in(tx, &row.session_id)? != fence {
+                        return Err(review_fold::changed(tx));
+                    }
+                    let Some(session) = tx.get::<SessionTable>(&key(&row.session_id))? else {
+                        return Ok(None);
+                    };
+                    if session.time_archived.is_some()
+                        || !tx
+                            .get::<TaskTable>(&key(&row.session_id))?
+                            .is_some_and(|task| {
+                                task.state.as_str() == Some("waiting")
+                                    && task.question_id.as_ref() == Some(&question)
+                            })
+                    {
+                        return Ok(None);
+                    }
+                    pending::admit_in(tx, &request, &None)?;
+                    projector::append(tx, &event)?;
+                    Ok(Some(session.revert.is_none()))
+                })?
+                .await;
+            match committed {
+                Err(error) if review_fold::is_changed(&error) => continue,
+                Err(error) => return Err(error.into()),
+                Ok(None) => return Ok(false),
+                Ok(Some(wake)) => {
+                    if wake {
+                        self.execution.wake(child_id)?;
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+        Err(Error::Conflict(
+            "Question changed during timeout delivery".into(),
+        ))
+    }
+
+    pub async fn rearm_waiting_questions(&self) -> Result<usize, Error> {
+        self.rearm_waiting_questions_with_processes(ledger::processes)
+            .await
+    }
+
+    pub async fn rearm_waiting_questions_with_processes<P, F>(
+        &self,
+        processes: P,
+    ) -> Result<usize, Error>
+    where
+        P: FnOnce() -> F,
+        F: std::future::Future<Output = std::io::Result<Vec<ledger::Process>>>,
+    {
+        let processes = match processes().await {
+            Ok(processes) => processes,
+            Err(error) => {
+                tracing::warn!(%error, "could not list processes; subagent question timers were not re-armed");
+                return Ok(0);
+            }
+        };
+        self.rearm_waiting_questions_in(&processes).await
+    }
+
+    pub(super) async fn rearm_waiting_questions_in(
+        &self,
+        processes: &[ledger::Process],
+    ) -> Result<usize, Error> {
+        let mut rows = self.sessions.client.snapshot()?.scan::<TaskTable>(
+            Bound::Unbounded,
+            Bound::Unbounded,
+            usize::MAX,
+        )?;
+        rows.sort_by(|left, right| {
+            (left.time_created, &left.session_id).cmp(&(right.time_created, &right.session_id))
+        });
+        let mut armed = 0;
+        for row in rows
+            .into_iter()
+            .filter(|row| row.state.as_str() == Some("waiting"))
+        {
+            let _guard = self.lock(&row.session_id).await;
+            let child_id = session_id(&row.session_id)?;
+            let snapshot = self.sessions.client.snapshot()?;
+            let Some(latest) = snapshot.get::<TaskTable>(&key(&row.session_id))? else {
+                continue;
+            };
+            let Some(question_id) = latest.question_id.clone().map(QuestionId) else {
+                continue;
+            };
+            if latest.state.as_str() != Some("waiting")
+                || review_fold::owns_question(&snapshot, &child_id, &question_id)?
+                || (latest.owner_pid != Some(i64::from(std::process::id()))
+                    && ledger::alive(processes, latest.owner_pid, latest.owner_started.as_ref()))
+            {
+                continue;
+            }
+            let elapsed = now()
+                .saturating_sub(latest.question_time.unwrap_or_else(now))
+                .max(0) as u64;
+            if self.arm_question_timer(&child_id, &question_id, elapsed)? {
+                armed += 1;
+            }
+        }
+        Ok(armed)
+    }
+
+    async fn sleep_answer(
+        &self,
+        child_id: &session::Id,
+        question: &Question,
+        attribution: &Attribution,
+    ) -> SleepAnswer {
+        let options = question_options(question.data.as_ref());
+        if options.is_empty() {
+            return SleepAnswer::deferred(Reason::FreeText);
+        }
+        let Some(evaluator) = (self.question_evaluator)(child_id) else {
+            return SleepAnswer::deferred(Reason::Error);
+        };
+        let redacted = options
+            .iter()
+            .map(|value| {
+                crate::process::guardrails::redact_value(&JsonValue::String(value.clone()))
+            })
+            .collect::<Vec<_>>();
+        // Redaction can collapse distinct options; an ambiguous result must stay with the user.
+        if options.len() > 255
+            || redacted
+                .iter()
+                .enumerate()
+                .any(|(index, value)| redacted[..index].contains(value))
+        {
+            return SleepAnswer::deferred(Reason::Error);
+        }
+        let request = ObjectEncoder::new().field("provider", "agent").field("request", &ObjectEncoder::new()
+            .field("state", &crate::process::guardrails::redact_value(&ObjectEncoder::new().field("question", &question.text).field("options", &options).finish()))
+            .field("questions", &vec![crate::tools::policy::option_question("subagent_question", "The user is asleep and cannot answer this subagent's question. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal defers the question to the user's review box.", redacted.iter().map(|value| ObjectEncoder::new().field("value", value).finish()).collect())]).finish()).finish();
+        if stringify_json(&request).len() > crate::resources::decision::judgment::BYTE_LIMIT {
+            return SleepAnswer::deferred(Reason::Error);
+        }
+        let cancellation = Cancellation::default();
+        let response = tokio::time::timeout(
+            Duration::from_secs(60),
+            evaluator.evaluate(
+                request,
+                crate::resources::decision::Invocation {
+                    session_id: child_id,
+                    input_id: None,
+                    cancellation: &cancellation,
+                    attribution: attribution.clone(),
+                },
+            ),
+        )
+        .await;
+        cancellation.cancel();
+        let response = match response {
+            Err(_) => return SleepAnswer::deferred(Reason::Timeout),
+            Ok(Err(_)) => return SleepAnswer::deferred(Reason::Error),
+            Ok(Ok(response)) => response,
+        };
+        sleep_choice(&response, &options, &redacted)
     }
 
     pub async fn settle(
@@ -965,7 +1397,12 @@ impl Service {
         };
         let mut lost = 0;
         for row in &rows {
-            if ledger::alive(&snapshot, row.owner_pid, row.owner_started.as_ref()) {
+            if (row.state.as_str() == Some("waiting")
+                && row.question_id.is_some()
+                && row.question.is_some()
+                && row.question_time.is_some())
+                || ledger::alive(&snapshot, row.owner_pid, row.owner_started.as_ref())
+            {
                 continue;
             }
             let child_id = session_id(&row.session_id)?;
@@ -980,6 +1417,7 @@ impl Service {
             .await?;
             lost += 1;
         }
+        self.rearm_waiting_questions_in(&snapshot).await?;
         *reconciled = true;
         Ok(lost)
     }
@@ -1168,16 +1606,108 @@ impl Service {
             .or_insert(reservation);
     }
 
+    fn launch_prompt(
+        &self,
+        ids: &Launch,
+        input: &LaunchInput,
+        selected: Option<&shared_context::Selection>,
+    ) -> Result<session_pending::UserData, Error> {
+        if let Some(pending) = self.sessions.pending(&ids.input_id)? {
+            if pending.session_id != *ids.child_id.as_lossless()
+                || pending.type_.as_str() != Some("user")
+            {
+                return Err(Error::Conflict("Conflicting initial child input".into()));
+            }
+            return session_pending::UserData::decode(&pending.data)
+                .map_err(|error| Error::InvalidRequest(error.to_string()));
+        }
+        if let Some((owner, message)) = self.sessions.message(&ids.input_id)? {
+            if owner != ids.child_id {
+                return Err(Error::Conflict("Conflicting initial child input".into()));
+            }
+            let session_message::Info::User(user) = message else {
+                return Err(Error::Conflict("Conflicting initial child input".into()));
+            };
+            return Ok(session_pending::UserData {
+                text: user.text,
+                files: user.files,
+                agents: user.agents,
+                metadata: user.metadata,
+            });
+        }
+        // An admitted snapshot remains authoritative even after its projected message is pruned.
+        let snapshot = self.sessions.client.snapshot()?;
+        let prefix = ycoding_store::tuple_key(&[
+            ycoding_store::KeyPart::String(ids.child_id.as_lossless()),
+            ycoding_store::KeyPart::String(&"session.input.admitted.1".into()),
+        ]);
+        let mut after = None;
+        loop {
+            let events = snapshot.index_range::<ycoding_store::session::EventTable>(
+                "event_aggregate_type_seq_idx",
+                IndexQuery {
+                    lower: Bound::Unbounded,
+                    upper: Bound::Unbounded,
+                    prefix: Some(&prefix),
+                    order: IndexOrder::Ascending,
+                    after: after.as_ref(),
+                    limit: 128,
+                },
+            )?;
+            for event in &events {
+                let JsonValue::Object(data) = &event.record.data else {
+                    continue;
+                };
+                if data.get(&"inputID".into())
+                    != Some(&JsonValue::String(ids.input_id.as_lossless().clone()))
+                {
+                    continue;
+                }
+                let message = data
+                    .get(&"input".into())
+                    .ok_or_else(|| Error::Conflict("Invalid initial child input".into()))?;
+                let session_pending::Message::User(user) =
+                    session_pending::Message::decode(message)
+                        .map_err(|error| Error::InvalidRequest(error.to_string()))?
+                else {
+                    return Err(Error::Conflict("Conflicting initial child input".into()));
+                };
+                return Ok(user.data);
+            }
+            let Some(last) = events.last() else { break };
+            after = Some(last.cursor.clone());
+        }
+        let Some(selected) = selected else {
+            return Ok(session_pending::UserData {
+                text: input.prompt.as_str().into(),
+                files: None,
+                agents: None,
+                metadata: None,
+            });
+        };
+        let context = shared_context::resolve(&input.parent_id, selected, |message_id| {
+            self.sessions
+                .message(message_id)
+                .map(|message| {
+                    message
+                        .and_then(|(owner, message)| (owner == input.parent_id).then_some(message))
+                })
+                .map_err(|error| error.to_string())
+        })
+        .map_err(Error::InvalidRequest)?;
+        shared_context::compose(&input.prompt, &context).map_err(Error::InvalidRequest)
+    }
+
     async fn start(
         &self,
         ids: &Launch,
-        prompt: &str,
+        prompt: session_pending::UserData,
         caused_by: Option<usage_anchor::Ref>,
     ) -> Result<Task, Error> {
         let input = session_pending::Message::decode(
             &ObjectEncoder::new()
                 .field("type", "user")
-                .field("data", &ObjectEncoder::new().field("text", prompt).finish())
+                .field("data", &prompt)
                 .field("delivery", "steer")
                 .finish(),
         )
@@ -1365,5 +1895,84 @@ fn delivery_error(error: Error) -> DeliveryError {
     match error {
         Error::Store(error) => DeliveryError::Store(error),
         error => DeliveryError::Conflict(error.to_string()),
+    }
+}
+
+fn autonomy_error(error: autonomy::Error) -> Error {
+    match error {
+        autonomy::Error::NotFound(id) => Error::TaskNotFound(id),
+        autonomy::Error::Store(error) => Error::Store(error),
+    }
+}
+
+fn question_options(data: Option<&domain::Json>) -> Vec<LosslessString> {
+    let Some(JsonValue::Object(data)) = data.map(domain::Json::as_value) else {
+        return vec![];
+    };
+    let Some(JsonValue::Array(options)) = data.get(&"options".into()) else {
+        return vec![];
+    };
+    options
+        .iter()
+        .filter_map(|option| match option {
+            JsonValue::String(value) => Some(value.clone()),
+            JsonValue::Object(option) => match option.get(&"label".into()) {
+                Some(JsonValue::String(label)) => Some(label.clone()),
+                _ => match option.get(&"value".into()) {
+                    Some(JsonValue::String(value)) => Some(value.clone()),
+                    _ => None,
+                },
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+fn sleep_choice(
+    response: &JsonValue,
+    options: &[LosslessString],
+    redacted: &[JsonValue],
+) -> SleepAnswer {
+    let JsonValue::Object(response) = response else {
+        return SleepAnswer::deferred(Reason::Error);
+    };
+    let Some(JsonValue::Object(response)) = response.get(&"response".into()) else {
+        return SleepAnswer::deferred(Reason::Error);
+    };
+    let Some(JsonValue::Array(answers)) = response.get(&"answers".into()) else {
+        return SleepAnswer::deferred(Reason::Error);
+    };
+    let [JsonValue::Object(answer)] = answers.as_slice() else {
+        return SleepAnswer::deferred(Reason::Error);
+    };
+    if answer.get(&"name".into()) != Some(&JsonValue::String("subagent_question".into())) {
+        return SleepAnswer::deferred(Reason::Error);
+    }
+    if answer.get(&"type".into()) == Some(&JsonValue::String("refusal".into())) {
+        return SleepAnswer::deferred(Reason::Refused);
+    }
+    if answer.get(&"type".into()) != Some(&JsonValue::String("choice".into())) {
+        return SleepAnswer::deferred(Reason::Error);
+    }
+    let Some(index) = answer
+        .get(&"choice".into())
+        .and_then(|choice| redacted.iter().position(|value| value == choice))
+    else {
+        return SleepAnswer::deferred(Reason::Error);
+    };
+    let confidence = answer
+        .get(&"confidence".into())
+        .and_then(|value| guardrail::Confidence::decode(value).ok());
+    match confidence {
+        Some(confidence) if confidence.get() >= 0.8 => SleepAnswer::Answer(options[index].clone()),
+        confidence => SleepAnswer::Deferred {
+            reason: if confidence.is_some() {
+                Reason::LowConfidence
+            } else {
+                Reason::Error
+            },
+            choice: Some(options[index].clone()),
+            confidence,
+        },
     }
 }

@@ -32,8 +32,6 @@ import { DotTrail } from "./dot-trail"
 import { FileChangeCard } from "./file-change-card"
 import { ImagePreview, UserImage } from "./image"
 import { LoadingPlaceholder } from "./loading"
-import { PromptCostBlock } from "./usage-cost"
-import { accountingPresentation, promptCostLine } from "./usage-accounting"
 import "./transcript.css"
 
 type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
@@ -151,7 +149,7 @@ function ShellOutputSection(props: {
   const remote = useRemote()
   createEffect(() => {
     const state = props.output?.status ?? props.status
-    const live = state === "running" || state === "queued"
+    const live = state === "running"
     const more = props.output !== undefined && props.output.cursor < props.output.size
     if ((!live && !more) || props.fetch?.state === "loading" || props.fetch?.state === "error") return
     if (props.output === undefined) void remote.store.loadShellOutputPage(props.shellID)
@@ -529,13 +527,6 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
   const kind = () => props.message().kind
   const remote = useRemote()
   const selectedView = () => remote.state().view
-  const cost = () =>
-    selectedView()?.id === remote.state().activeSessionID
-      ? selectedView()?.promptCosts?.find(
-          (unit) => unit.anchor.sessionID === selectedView()?.id && unit.anchor.inputID === props.message().id,
-        )
-      : undefined
-  const costLine = () => promptCostLine(userState(props.message()), cost() !== undefined, selectedView()?.promptCostState)
   const fileChanges = () =>
     selectedView()?.capturedChanges?.filter((group) => group.placementMessageID === props.message().id) ?? []
   const showFileChanges = () =>
@@ -636,18 +627,6 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
                   Retry send
                 </button>
               </div>
-            )}
-          </Show>
-          <Show when={costLine()}>
-            {(line) => (
-              <Show
-                when={line().kind === "unit" ? cost() : undefined}
-                fallback={<p class="usage-unit-cost">Prompt cost {line().kind}</p>}
-              >
-                {(unit) => (
-                  <PromptCostBlock unit={accountingPresentation(unit(), selectedView()?.promptCostState === "unavailable")} />
-                )}
-              </Show>
             )}
           </Show>
         </Show>

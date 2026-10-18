@@ -2,6 +2,104 @@ use ycoding_core::session::prompt_cache::{self, Namespace};
 use ycoding_schema::{DomainDecode, JsonValue, parse_json};
 
 #[test]
+fn selected_context_markers_only_use_public_supported_responses_routes() {
+    use prompt_cache::{OpenAIMode, shared_context_marker_support};
+    assert!(shared_context_marker_support(
+        &"openai".into(),
+        "openai-responses",
+        "gpt-6-sol",
+        OpenAIMode::Auto,
+        "https://api.openai.com/v1"
+    ));
+    for (provider, route, model, mode, endpoint) in [
+        (
+            "openai",
+            "openai-responses",
+            "gpt-5.5",
+            OpenAIMode::Auto,
+            "https://api.openai.com/v1",
+        ),
+        (
+            "openai",
+            "openai-responses-websocket",
+            "gpt-6-sol",
+            OpenAIMode::Auto,
+            "https://api.openai.com/v1",
+        ),
+        (
+            "openai",
+            "openai-responses",
+            "gpt-6-sol",
+            OpenAIMode::Implicit,
+            "https://api.openai.com/v1",
+        ),
+        (
+            "openai",
+            "openai-responses",
+            "gpt-6-sol",
+            OpenAIMode::Auto,
+            "https://proxy.example/v1",
+        ),
+        (
+            "openai",
+            "openai-responses",
+            "gpt-6-sol",
+            OpenAIMode::Auto,
+            "https://api.openai.com/v1?extra=1",
+        ),
+        (
+            "openai",
+            "openai-responses",
+            "gpt-6-sol",
+            OpenAIMode::Auto,
+            "https://user@api.openai.com/v1",
+        ),
+        (
+            "subscription",
+            "openai-responses",
+            "gpt-6-sol",
+            OpenAIMode::Auto,
+            "https://api.openai.com/v1",
+        ),
+    ] {
+        assert!(!shared_context_marker_support(
+            &provider.into(),
+            route,
+            model,
+            mode,
+            endpoint
+        ));
+    }
+    assert!(!prompt_cache::Settings::default().family_experiment);
+}
+
+#[test]
+fn family_cache_keys_require_complete_identity_and_partition_semantic_authority() {
+    let root = "ses_root".into();
+    let account = "a".repeat(64);
+    let connection = "b".repeat(64);
+    let semantic = "c".repeat(64);
+    let snapshot = "d".repeat(64);
+    let mut input = prompt_cache::FamilyExperiment {
+        root_session_id: &root,
+        baseline_key: "baseline",
+        account_identity_digest: &account,
+        api_model_id: "gpt-6-sol",
+        variant: None,
+        route_id: "openai-responses",
+        connection_identity_digest: &connection,
+        semantic_options_digest: &semantic,
+        snapshot_digest: &snapshot,
+    };
+    let key = prompt_cache::family_experiment_key(&input).unwrap();
+    input.snapshot_digest = &semantic;
+    assert_ne!(prompt_cache::family_experiment_key(&input).unwrap(), key);
+    input.snapshot_digest = &snapshot;
+    input.connection_identity_digest = "unknown";
+    assert!(prompt_cache::family_experiment_key(&input).is_none());
+}
+
+#[test]
 fn kept_cache_policies_and_usage_reporting_follow_route_and_model_contracts() {
     let settings = prompt_cache::Settings::default();
     for (route, provider, model, ttl) in [
@@ -175,6 +273,13 @@ fn namespace_matches_typescript_goldens_and_isolates_all_sharing_dimensions() {
         tools: &tools,
     };
     let baseline = prompt_cache::namespace(&input);
+    input.variant = Some("high".into());
+    assert_eq!(
+        prompt_cache::namespace(&input),
+        baseline,
+        "effort does not rotate the namespace"
+    );
+    input.variant = None;
     assert_eq!(
         baseline,
         "87f7196969720e74e3d2ad02a0926e06bff1037aeb1d47dc516638a7fed3a6e0"
@@ -193,7 +298,6 @@ fn namespace_matches_typescript_goldens_and_isolates_all_sharing_dimensions() {
         "workspace",
         "provider",
         "model",
-        "variant",
         "account",
         "permissions",
         "system",
@@ -218,7 +322,6 @@ fn namespace_matches_typescript_goldens_and_isolates_all_sharing_dimensions() {
             "workspace" => alternative.workspace_id = None,
             "provider" => alternative.provider_id = "other".into(),
             "model" => alternative.model_id = "other".into(),
-            "variant" => alternative.variant = Some("default".into()),
             "account" => alternative.account_identity_digest = Some("other"),
             "permissions" => alternative.permissions = &[],
             "system" => alternative.system = &alternative_system,
@@ -238,4 +341,59 @@ fn namespace_matches_typescript_goldens_and_isolates_all_sharing_dimensions() {
         ])),
         r#"[null,"tail"]"#
     );
+}
+
+#[test]
+fn family_semantic_digest_uses_effective_defaults_and_wire_options() {
+    use ycoding_ai::llm;
+    use ycoding_core::session::continuation::options_digest;
+    let model = ycoding_ai::route::Route::openai_responses().model("gpt-6-sol");
+    let base = llm::Request::new(model);
+    let baseline = options_digest(&base);
+    let mut temperature = base.clone();
+    temperature.model.defaults.generation.temperature = Some(0.25);
+    assert_ne!(options_digest(&temperature), baseline);
+    let mut defaults = base.clone();
+    defaults.model.defaults.provider_options =
+        Some(parse_json(r#"{"openai":{"reasoningEffort":"high"}}"#).unwrap());
+    assert_ne!(options_digest(&defaults), baseline);
+    let mut explicit = base.clone();
+    explicit.provider_options = defaults.model.defaults.provider_options.clone();
+    assert_eq!(options_digest(&explicit), options_digest(&defaults));
+    for change in ["body", "query", "format", "choice"] {
+        let mut modified = base.clone();
+        match change {
+            "body" => {
+                modified.model.defaults.http.body =
+                    Some(parse_json(r#"{"reasoning":{"mode":"extended"}}"#).unwrap())
+            }
+            "query" => {
+                modified
+                    .http
+                    .query
+                    .insert("api-version".into(), "next".into());
+            }
+            "format" => {
+                modified.response_format = Some(llm::ResponseFormat::Json(
+                    parse_json(r#"{"type":"object"}"#).unwrap(),
+                ))
+            }
+            "choice" => modified.tool_choice = Some(llm::ToolChoice::None),
+            _ => unreachable!(),
+        }
+        assert_ne!(options_digest(&modified), baseline, "{change}");
+    }
+    explicit.provider_options = Some(parse_json(r#"{"openai":{"reasoningEffort":"high","previousResponseId":"response","continuationInputStart":3,"promptCacheKey":"other"}}"#).unwrap());
+    assert_eq!(
+        options_digest(&explicit),
+        options_digest(&defaults),
+        "session-local continuation identities are not semantic options"
+    );
+    assert!(!prompt_cache::shared_context_marker_support(
+        &"openai".into(),
+        "openai-responses",
+        "gpt-6-sol",
+        prompt_cache::OpenAIMode::Auto,
+        "https://api.openai.com/v1//"
+    ));
 }

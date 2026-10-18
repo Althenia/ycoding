@@ -25,6 +25,8 @@ fn request(session: &ycoding_schema::session_id::SessionId, id: &str) -> permiss
 async fn resolved_external_targets_require_policy_approval_before_write_and_remove() {
     let inside = Fixture::new();
     let outside = Fixture::new();
+    // Anchor saved directory approvals here, independently of a repository above the temp root.
+    outside.repository();
     let location = Location::new(&inside.0).unwrap();
     let policy = policy_fixture::Fixture::default();
     let session = policy.session("ses_mutation", None, 0, false, None);

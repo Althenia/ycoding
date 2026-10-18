@@ -167,7 +167,20 @@ operation_id: 3000 diagnostic_name: "test.read" roles: LOCAL_CLIENT roles: LOCAL
 fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
     use std::collections::BTreeMap;
     let operations = &*ycoding_protocol::OPERATIONS;
-    assert_eq!(operations.len(), 227);
+    assert_eq!(operations.len(), 231);
+    for (name, id, roles) in [
+        ("incident.report", 2064, &[1, 2, 3][..]),
+        ("incident.recent", 2065, &[1, 2, 3][..]),
+        ("incident.guidance.get", 2066, &[1, 2, 3][..]),
+        ("incident.guidance.clear", 2067, &[1][..]),
+    ] {
+        let operation = operations
+            .iter()
+            .find(|operation| operation.diagnostic_name == name)
+            .unwrap();
+        assert_eq!(operation.operation_id, id, "{name}");
+        assert_eq!(operation.roles, roles, "{name}");
+    }
     let mut ids = HashSet::new();
     let mut names = HashSet::new();
     let mut patterns: BTreeMap<Vec<i32>, usize> = BTreeMap::new();
@@ -225,8 +238,8 @@ fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
     assert_eq!(
         patterns,
         BTreeMap::from([
-            (vec![1], 151),
-            (vec![1, 2, 3], 58),
+            (vec![1], 152),
+            (vec![1, 2, 3], 61),
             (vec![2, 3], 14),
             (vec![2], 4),
         ]),

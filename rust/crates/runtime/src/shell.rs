@@ -21,7 +21,6 @@ pub(crate) fn info(info: &shell::Info) -> Result<v5::ShellInfo, Failure> {
         shell: convert::wire(&info.shell),
         file: convert::wire(&info.file),
         status: match info.status {
-            shell::Status::Queued => v5::ShellInfoStatus::Queued,
             shell::Status::Running => v5::ShellInfoStatus::Running,
             shell::Status::Exited => v5::ShellInfoStatus::Exited,
             shell::Status::Timeout => v5::ShellInfoStatus::Timeout,
@@ -41,10 +40,8 @@ pub(crate) fn info(info: &shell::Info) -> Result<v5::ShellInfo, Failure> {
                 .collect(),
         },
         tool_call_id: info.tool_call_id.as_ref().map(convert::wire),
-        queue_position: info.queue_position.map(|value| value.get() as u64),
         time: v5::ShellInfoTime {
             started: info.time.started.get(),
-            queued: info.time.queued.map(|value| value.get()),
             completed: info.time.completed.map(|value| value.get()),
         },
     })

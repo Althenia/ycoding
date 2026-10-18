@@ -14892,6 +14892,12 @@
     "negativeZeros": []
   },
   {
+    "name": "Shell.Status",
+    "input": "\"queued\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "Shell.MemoryLimitMb",
     "input": "1048576",
     "output": "1048576",
@@ -14925,6 +14931,12 @@
     "name": "Shell.Time",
     "input": "{\"started\":\"1\"}",
     "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "Shell.Time",
+    "input": "{\"started\":0,\"queued\":10}",
+    "output": "{\"started\":0}",
     "negativeZeros": []
   },
   {
@@ -15014,18 +15026,6 @@
   {
     "name": "Shell.Event.Created",
     "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.created\",\"data\":{}}",
-    "output": null,
-    "negativeZeros": []
-  },
-  {
-    "name": "Shell.Event.Updated",
-    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.updated\",\"data\":{\"info\":{\"id\":\"sh_x\",\"status\":\"queued\",\"command\":\"c\",\"cwd\":\"\",\"shell\":\"sh\",\"file\":\"f\",\"metadata\":{},\"queuePosition\":1,\"time\":{\"started\":0,\"queued\":1}}}}",
-    "output": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.updated\",\"data\":{\"info\":{\"id\":\"sh_x\",\"status\":\"queued\",\"command\":\"c\",\"cwd\":\"\",\"shell\":\"sh\",\"file\":\"f\",\"metadata\":{},\"time\":{\"started\":0,\"queued\":1},\"queuePosition\":1}}}",
-    "negativeZeros": []
-  },
-  {
-    "name": "Shell.Event.Updated",
-    "input": "{\"id\":\"evt_\",\"created\":0,\"type\":\"shell.updated\",\"data\":{}}",
     "output": null,
     "negativeZeros": []
   },

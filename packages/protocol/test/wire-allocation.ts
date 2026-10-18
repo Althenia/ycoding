@@ -1,4 +1,4 @@
-export type Reserved = { readonly reserved: string }
+export type Reserved = { readonly reserved: string; readonly wireName?: string }
 type Literal = string | number | boolean
 
 export type WireAllocation = {
@@ -8,6 +8,30 @@ export type WireAllocation = {
 
 export const wireAllocation: WireAllocation = {
   messages: {
+    Shell_Info: [
+      "id",
+      "status",
+      "command",
+      "cwd",
+      "shell",
+      "file",
+      "pid",
+      "exit",
+      "metadata",
+      "toolCallID",
+      "time",
+      { reserved: "queuePosition", wireName: "queuePosition" },
+    ],
+    Shell_Info_time: ["started", "completed", { reserved: "queued", wireName: "queued" }],
+    session_team_shell_list_Result_dataItem: [
+      "id",
+      "ownerID",
+      "command",
+      "status",
+      "startedAt",
+      "completedAt",
+      { reserved: "queuePosition", wireName: "queuePosition" },
+    ],
     SessionAutonomyYolo: ["0", "1", "2", { reserved: "3" }],
     SessionAutonomyState: ["mode", "yolo", "goal", "sleep", "autoAnswer"],
     SessionAutonomyView: ["mode", "yolo", "goal", "sleep", "autoAnswer", "effective"],
@@ -274,7 +298,7 @@ export const wireAllocation: WireAllocation = {
       "guardrail_deferred",
       "question_deferred",
       "form_deferred",
-      "shell_updated",
+      { reserved: "shell_updated", wireName: "shell_updated" },
     ],
     SessionLogItemValue24_data_change: [
       "launched",
@@ -321,6 +345,30 @@ export const wireAllocation: WireAllocation = {
     ],
   },
   enums: {
+    Shell_Info_status: [
+      "running",
+      "exited",
+      "timeout",
+      "memory-limit",
+      "killed",
+      { reserved: "queued", wireName: "SHELL_INFO_STATUS_QUEUED" },
+    ],
+    Session_Message_Shell_status: [
+      "running",
+      "exited",
+      "timeout",
+      "memory-limit",
+      "killed",
+      { reserved: "queued", wireName: "SESSION_MESSAGE_SHELL_STATUS_QUEUED" },
+    ],
+    PublicEvent_shell_exited_data_status: [
+      "running",
+      "exited",
+      "timeout",
+      "memory-limit",
+      "killed",
+      { reserved: "queued", wireName: "PUBLICEVENT_SHELL_EXITED_DATA_STATUS_QUEUED" },
+    ],
     Telemetry_RequestSample_operation: [
       "provider.auth.list",
       "provider.auth.key",
@@ -435,7 +483,13 @@ export function reservedLine(kind: "message" | "enum", name: string, allocation:
   const numbers = (entryOf(kind === "message" ? allocation.messages : allocation.enums, name) ?? []).flatMap(
     (item, index) => (isReserved(item) ? [index + 1] : []),
   )
-  return numbers.length ? `  reserved ${numbers.join(", ")};\n` : ""
+  const names = (entryOf(kind === "message" ? allocation.messages : allocation.enums, name) ?? []).flatMap((item) =>
+    isReserved(item) && item.wireName ? [JSON.stringify(item.wireName)] : [],
+  )
+  return (
+    (numbers.length ? `  reserved ${numbers.join(", ")};\n` : "") +
+    (names.length ? `  reserved ${names.join(", ")};\n` : "")
+  )
 }
 
 function slots<T extends Literal>(

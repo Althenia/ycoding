@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import {
   create,
   decodeStrict,
+  encodeStrict,
   encodeLossless,
   encodeRemoteRequest,
   remotePayloadCodecs,
@@ -12,6 +13,7 @@ import {
   PublicEventSchema,
 } from "@ycoding-ai/remote"
 import { readWireMessage, writeWireMessage, prepareRemoteRequest } from "./wire"
+import { readAutonomy } from "./projection"
 
 test("canonical request preparation places Session IDs, queries and workspace scopes in their declared fields", () => {
   const request = prepareRemoteRequest("session.list", {
@@ -126,7 +128,18 @@ test("autonomy state crosses the wire flattened with its effective values, and a
     params: { sessionID: "ses_browser" },
     payload: { autoAnswer: false },
   })
-  expect(() => writeWireMessage(codec, { data: { ...state, yolo: 3 } })).toThrow()
+  // YOLO bounds belong to the domain reader; the wire branches carry doubles.
+  for (const invalid of [
+    { ...state, yolo: 3 },
+    { ...state, effective: { ...effective, yolo: 3 } },
+  ]) {
+    const decoded = readWireMessage(
+      codec,
+      decodeStrict(codec, encodeStrict(codec, writeWireMessage(codec, { data: invalid }))),
+    )
+    expect(decoded).toEqual({ data: invalid })
+    expect(readAutonomy(decoded)).toBeUndefined()
+  }
   expect(() =>
     prepareRemoteRequest("session.autonomy.set", { sessionID: "ses_browser", input: { autoAnswer: true, yolo: 1 } }),
   ).toThrow()

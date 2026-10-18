@@ -11,7 +11,7 @@ test("REQ-WIRE-001/005 public EventBatch membership equals ServerDefinitions, no
   expect(publicEvents.map((event) => [event.name, event.durable]).sort()).toEqual(
     EventManifest.ServerDefinitions.map((event) => [event.type, event.durability === "durable"]).sort(),
   )
-  expect(publicEvents).toHaveLength(116)
+  expect(publicEvents).toHaveLength(115)
   expect(publicEvents.filter((event) => event.durable)).toHaveLength(58)
   for (const name of [
     "server.connected",

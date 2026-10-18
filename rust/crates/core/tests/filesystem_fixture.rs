@@ -17,7 +17,12 @@ impl Default for Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
+        Self::under(&std::env::temp_dir())
+    }
+
+    pub fn under(parent: &Path) -> Self {
+        fs::create_dir_all(parent).unwrap();
+        let root = parent.join(format!(
             "ycoding-filesystem-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)

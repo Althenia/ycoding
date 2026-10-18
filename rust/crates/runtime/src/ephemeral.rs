@@ -375,13 +375,6 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                 info: shell::info(&data.info)?
             }
         ),
-        Data::ShellUpdated(data) => envelope!(
-            ShellUpdated,
-            PublicEventShellUpdated,
-            v5::PublicEventShellUpdatedData {
-                info: shell::info(&data.info)?
-            }
-        ),
         Data::ShellExited(data) => envelope!(
             ShellExited,
             PublicEventShellExited,

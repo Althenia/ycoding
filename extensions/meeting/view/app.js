@@ -31,7 +31,8 @@ let retryQuestion,
   activeRead,
   closed = false
 let original = false,
-  follow = true
+  follow = true,
+  reviewRetained = false
 let ownerData,
   ownerDraft = [],
   ownerLoadedAskValue,
@@ -56,7 +57,7 @@ const capture = createCapture({
       .catch(() => "prompt"),
   onState: (value) => {
     Object.assign(captureState, value)
-    renderCapture()
+    preserveReader(renderCapture)
     updateControls()
     if (value.phase === "stopped" || value.phase === "error") void refresh()
   },
@@ -97,6 +98,7 @@ async function request(path, body) {
 function updateControls() {
   const view = current ? describeView(current) : undefined
   const available = connected && !denied
+  text("runtime-readiness", available ? "Connected" : denied ? "Invalid view key" : "Unavailable")
   node("start").disabled =
     !available ||
     controlPending ||
@@ -140,28 +142,57 @@ function updateControls() {
 }
 
 function renderCapture() {
+  const view = describeView(current ?? {})
   const recording =
     ["capturing", "reconnecting"].includes(captureState.phase) ||
     (current?.meeting?.status === "recording" && !["stopping", "stopped", "error"].includes(captureState.phase))
-  const phase = recording ? "live" : current?.meeting && current.meeting.status !== "ready" ? "review" : "start"
+  const phase = recording
+    ? "live"
+    : view.phase === "recovery" && reviewRetained
+      ? "review"
+      : view.phase === "recovery"
+        ? "recovery"
+        : stopPending || captureState.phase === "stopping" || view.phase === "live"
+          ? "finalizing"
+          : view.phase
   if (node("passage").dataset.phase !== phase) {
-    const anchor = [...segments.values()].find(
-      (row) => row.getBoundingClientRect().top >= 0 && row.getBoundingClientRect().bottom <= innerHeight,
-    )
-    const before = anchor?.getBoundingClientRect().top
     node("passage").dataset.phase = phase
     if (phase === "review") node("workspace").insertBefore(node("insights"), node("transcript"))
-    if (phase !== "review") node("workspace").append(node("insights"))
-    if (!follow && anchor?.isConnected) window.scrollBy(0, anchor.getBoundingClientRect().top - before)
+    if (phase !== "review") node("workspace").insertBefore(node("insights"), node("owner-panel"))
   }
-  for (const stage of ["start", "live", "review"]) {
-    if (stage === phase) node(`stage-${stage}`).setAttribute("aria-current", "step")
-    if (stage !== phase) node(`stage-${stage}`).removeAttribute("aria-current")
+  for (const stage of ["setup", "live", "finalizing", "review"]) {
+    if (stage === phase || (phase === "recovery" && stage === "finalizing"))
+      node(`stage-${stage}`).setAttribute("aria-current", "step")
+    if (stage !== phase && !(phase === "recovery" && stage === "finalizing"))
+      node(`stage-${stage}`).removeAttribute("aria-current")
   }
+  text("stage-finalizing", phase === "recovery" ? "03 Needs attention" : "03 Finalizing")
   node("ownership").hidden = !recording
+  node("capture-gate").hidden = phase !== "setup"
+  node("readiness").hidden = phase !== "setup"
+  text("runtime-title", phase === "setup" ? "Readiness" : "Runtime")
+  text("capture-readiness", typeof navigator.mediaDevices?.getDisplayMedia === "function" ? "Available" : "Unavailable")
   node("settings-help").hidden = recording
   node("capture-form").hidden = recording
   node("stop").hidden = !recording
+  node("finalization").hidden = phase !== "finalizing"
+  const analyzing = current?.meeting?.status === "stopped" && current?.analysis?.status === "analyzing"
+  text("meeting-status", phase === "finalizing" && !analyzing ? "Finalizing audio" : view.status)
+  text("finalization-title", analyzing ? "Finalizing analysis" : "Finalizing audio")
+  text(
+    "finalization-description",
+    analyzing
+      ? "Audio capture has ended. YCoding is analyzing the retained transcript."
+      : "Capture is stopping and remaining audio is being processed. The transcript stays readable.",
+  )
+  text("finalization-audio", analyzing ? "Audio · capture ended" : "Audio · finalizing")
+  text("finalization-analysis", analyzing ? "Analysis · analyzing" : "Analysis · waiting")
+  node("review-retained").hidden = view.phase !== "recovery" || phase === "review"
+  node("recovery-limit").hidden = !current?.audio?.error
+  node("questions-panel").hidden = phase !== "review"
+  node("actions-panel").hidden = phase !== "review"
+  node("handoff").hidden = !["review", "recovery"].includes(phase)
+  text("summary-title", phase === "review" ? "Summary" : "Working summary")
   const failures = {
     no_tab_audio:
       "Tab audio was not shared. Nothing is recording. Re-share the Meet tab and tick Share tab audio, with fresh consent.",
@@ -174,8 +205,9 @@ function renderCapture() {
       "Microphone is blocked for this origin. Nothing is recording. Change Chrome site settings, or use tab audio only with a fresh Start.",
     inference_failed:
       "Speech recognition failed and recording stopped. The transcript so far is saved. Retry failed audio below; it never restarts recording.",
-    track_ended: "Chrome Stop sharing ended capture. The transcript so far is saved; remaining audio is finalizing.",
-    user: "Capture stopped. Remaining audio is finalizing in YCoding.",
+    track_ended:
+      "Chrome Stop sharing ended capture. The transcript so far is saved; processing state is reported above.",
+    user: "Capture stopped. The retained transcript remains available; processing state is reported above.",
     backend_stopped: "The runtime stopped recording. Inspect its state before starting again.",
     unauthorized: "This view key is invalid. Reopen the meeting from YCoding.",
   }
@@ -209,7 +241,9 @@ function renderCapture() {
       progress[captureState.phase] ||
       (captureState.phase === "error"
         ? "Capture failed or delivery is unconfirmed. Sources were released. Inspect runtime state before a fresh Start; capture never auto-resumes."
-        : "Nothing is recording."),
+        : current?.meeting?.status === "ready" || !current?.meeting
+          ? "Nothing is recording."
+          : "Capture has ended. The retained transcript remains available."),
   )
   node("tab-only").hidden = !["microphone_denied", "microphone_blocked"].includes(captureState.reason)
   text(
@@ -218,6 +252,18 @@ function renderCapture() {
       ? "Arm a ready meeting in YCoding before a fresh Start. Audio retry does not arm or restart capture."
       : "Acknowledge both checks for every Start. This tab must stay open while recording.",
   )
+}
+
+function preserveReader(render) {
+  const top = node("ownership").hidden ? 0 : node("ownership").getBoundingClientRect().bottom
+  const anchor = follow
+    ? undefined
+    : [...segments.values()].find(
+        (row) => row.getBoundingClientRect().bottom > top && row.getBoundingClientRect().top < innerHeight,
+      )
+  const before = anchor?.getBoundingClientRect().top
+  render()
+  if (anchor?.isConnected) window.scrollBy(0, anchor.getBoundingClientRect().top - before)
 }
 
 function timestamp(value) {
@@ -229,10 +275,6 @@ function timestamp(value) {
 function renderSegments() {
   const list = records(current?.segments)
   const reported = new Set(list.map((segment) => segment.id))
-  const anchor = [...segments.values()].find(
-    (row) => row.getBoundingClientRect().top >= 0 && row.getBoundingClientRect().bottom <= innerHeight,
-  )
-  const before = anchor?.getBoundingClientRect().top
   let changed = false
   for (const segment of list) {
     const id = typeof segment.id === "string" ? segment.id : ""
@@ -268,8 +310,6 @@ function renderSegments() {
   }
   node("transcript-empty").hidden = list.length > 0
   node("transcript-window").hidden = !(list[0]?.sequence > 1)
-  if (!follow && anchor?.isConnected && typeof before === "number")
-    window.scrollBy(0, anchor.getBoundingClientRect().top - before)
   if (follow && changed && !node("chat-panel").contains(document.activeElement) && !node("stop-dialog").open)
     node("segments").lastElementChild?.scrollIntoView({ block: "end" })
 }
@@ -279,49 +319,87 @@ function renderFindings() {
     text("findings-title", "Findings · unreported")
     node("finding-list").replaceChildren()
     node("finding-list").dataset.version = "unreported"
+    for (const id of ["actions-list", "questions-list"]) text(id, "Findings unreported.")
     return
   }
   const list = records(current?.findings)
-  const version = JSON.stringify(list)
+  const review = node("passage").dataset.phase === "review"
+  const version = JSON.stringify([review, list])
   if (node("finding-list").dataset.version === version) return
   node("finding-list").dataset.version = version
-  text("findings-title", `${list.length} findings · statuses from YCoding`)
-  node("finding-list").replaceChildren(
-    ...list.map((finding) => {
-      const entry = document.createElement("article")
-      entry.className = "finding"
-      const label = document.createElement("h3")
-      label.textContent = `${finding.kind || "Kind unreported"} · ${finding.status || "Status unreported"}`
-      const content = document.createElement("p")
-      content.textContent = finding.summary ?? "Summary unreported"
-      const evidence = document.createElement("div")
-      evidence.className = "evidence-links"
-      const refs = Array.isArray(finding.sourceSegmentIds) ? finding.sourceSegmentIds : []
-      for (const id of refs) {
-        const button = document.createElement("button")
-        button.type = "button"
-        button.textContent = `Evidence · ${id}`
-        button.addEventListener("click", () => {
-          const row = segments.get(id)
-          if (!row) {
-            text(
-              "control-feedback",
-              "This evidence segment is outside the current transcript window. Read the full transcript in YCoding.",
-            )
-            return
-          }
-          follow = false
-          updateFollow()
-          for (const other of segments.values()) other.classList.remove("evidence")
-          row.classList.add("evidence")
-          row.scrollIntoView({ block: "center" })
-          row.focus({ preventScroll: true })
-        })
-        evidence.append(button)
-      }
-      entry.append(label, content, evidence)
-      return entry
-    }),
+  const remaining = review ? list.filter((finding) => !["action", "question"].includes(finding.kind)) : list
+  text("findings-title", `${remaining.length} ${review ? "other findings" : "findings"} · statuses from YCoding`)
+  const renderList = (id, findings, empty) => {
+    node(id).replaceChildren(
+      ...findings.map((finding) => {
+        const entry = document.createElement("article")
+        entry.className = "finding"
+        const label = document.createElement("h3")
+        label.textContent = `${finding.kind || "Kind unreported"} · ${finding.status || "Status unreported"}`
+        const content = document.createElement("p")
+        content.textContent = finding.summary ?? "Summary unreported"
+        entry.append(label, content)
+        if (finding.owner || finding.deadline) {
+          const assignment = document.createElement("p")
+          assignment.className = "hint"
+          assignment.textContent = [
+            finding.owner && `Owner · ${finding.owner}`,
+            finding.deadline && `Due · ${finding.deadline}`,
+          ]
+            .filter(Boolean)
+            .join(" / ")
+          entry.append(assignment)
+        }
+        const evidence = document.createElement("div")
+        evidence.className = "evidence-links"
+        const refs = Array.isArray(finding.sourceSegmentIds) ? finding.sourceSegmentIds : []
+        for (const id of refs.filter((id) => typeof id === "string")) {
+          const button = document.createElement("button")
+          button.type = "button"
+          button.dataset.evidenceId = id
+          button.textContent = `Evidence · ${id}`
+          button.addEventListener("click", () => {
+            follow = false
+            updateFollow()
+            const row = segments.get(id)
+            if (!row) {
+              text(
+                "evidence-feedback",
+                "This evidence segment is outside the current transcript window. Read the full transcript in YCoding.",
+              )
+              node("evidence-feedback").scrollIntoView({ block: "center" })
+              node("transcript").focus({ preventScroll: true })
+              return
+            }
+            text("evidence-feedback", `Evidence · ${id}`)
+            for (const other of segments.values()) other.classList.remove("evidence")
+            row.classList.add("evidence")
+            row.scrollIntoView({ block: "center" })
+            row.focus({ preventScroll: true })
+          })
+          evidence.append(button)
+        }
+        entry.append(evidence)
+        return entry
+      }),
+    )
+    if (!findings.length) {
+      const message = document.createElement("p")
+      message.className = "hint"
+      message.textContent = empty
+      node(id).append(message)
+    }
+  }
+  renderList("finding-list", remaining, "No other findings reported.")
+  renderList(
+    "actions-list",
+    list.filter((finding) => finding.kind === "action"),
+    "No proposed actions reported.",
+  )
+  renderList(
+    "questions-list",
+    list.filter((finding) => finding.kind === "question"),
+    "No open questions reported.",
   )
 }
 
@@ -371,42 +449,45 @@ function render(value) {
     node("chat-history").replaceChildren()
     retryQuestion = undefined
     node("retry-question").hidden = true
+    reviewRetained = false
   }
   current = value
   connected = true
   if (["capturing", "reconnecting"].includes(captureState.phase) && current.meeting?.status !== "recording")
     void capture.heartbeat()
-  const view = describeView(current)
-  text("meeting-title", current.meeting?.title || "YCoding Meeting")
-  text("meeting-status", view.status)
-  node("meeting-status").dataset.tone = view.tone
-  text("health-status", view.health)
-  node("health-status").dataset.tone = view.tone
-  text("source-status", `Remote · ${view.remote} / You · ${view.microphone}`)
-  text("connection", "Connected to local runtime · page-owned capture")
-  node("connection").dataset.tone = "ready"
-  text("model", current.health?.model || "Model unreported")
-  text(
-    "device",
-    `Device · ${current.health?.device || "Unreported"} / Provider · ${current.health?.provider || "Unreported"}`,
-  )
-  text("bridge", `Bridge · ${location.origin}`)
-  for (const id of ["buffered", "processed", "backlog", "lag"]) text(id, view[id])
-  node("recovery").hidden = !view.notice
-  text("recovery-text", view.notice)
-  text("error-detail", current.audio?.error || current.analysis?.error || current.health?.error || "")
-  node("retry-audio").hidden = !view.canRetry
-  text("summary-text", current.summary?.summary || "No summary yet.")
-  text(
-    "summary-status",
-    current.summary?.final
-      ? "Final summary · advisory"
-      : `Analysis · ${current.analysis?.status || "Unreported"}${current.summary ? ` · through sequence ${current.summary.throughSequence ?? "Unreported"}` : ""}`,
-  )
-  renderCapture()
-  renderSegments()
-  renderFindings()
-  renderChat()
+  preserveReader(() => {
+    const view = describeView(current)
+    text("meeting-title", current.meeting?.title || "YCoding Meeting")
+    text("meeting-status", view.status)
+    node("meeting-status").dataset.tone = view.tone
+    text("health-status", view.health)
+    node("health-status").dataset.tone = view.tone
+    text("source-status", `Remote · ${view.remote} / You · ${view.microphone}`)
+    text("connection", "Connected to local runtime · page-owned capture")
+    node("connection").dataset.tone = "ready"
+    text("model", current.health?.model || "Model unreported")
+    text(
+      "device",
+      `Device · ${current.health?.device || "Unreported"} / Provider · ${current.health?.provider || "Unreported"}`,
+    )
+    text("bridge", `Bridge · ${location.origin}`)
+    for (const id of ["buffered", "processed", "backlog", "lag"]) text(id, view[id])
+    node("recovery").hidden = !view.notice
+    text("recovery-text", view.notice)
+    text("error-detail", current.audio?.error || current.analysis?.error || current.health?.error || "")
+    node("retry-audio").hidden = !view.canRetry
+    text("summary-text", current.summary?.summary || "No summary yet.")
+    text(
+      "summary-status",
+      current.summary?.final
+        ? "Final summary · advisory"
+        : `Analysis · ${current.analysis?.status || "Unreported"}${current.summary ? ` · through sequence ${current.summary.throughSequence ?? "Unreported"}` : ""}`,
+    )
+    renderCapture()
+    renderSegments()
+    renderFindings()
+    renderChat()
+  })
   updateControls()
 }
 
@@ -455,11 +536,15 @@ async function control(action) {
     const value = await request("/view/control", { action })
     if (closed) return
     if (value?.error) throw new Error("operation_failed")
+    if (action === "retry" && captureState.reason === "inference_failed") {
+      captureState.phase = "stopped"
+      captureState.reason = undefined
+    }
     text(
       "control-feedback",
       action === "retry"
         ? "Failed audio retry completed. Capture has not restarted; arm a ready meeting in YCoding and give fresh consent here."
-        : "Capture stopped. Remaining analysis continues in YCoding.",
+        : "Capture stopped. Review the reported processing state above.",
     )
   } catch {
     if (!closed && !denied)
@@ -649,7 +734,10 @@ function renderOwnerAdd() {
     ["owner-add-search", "Choose the search tool"],
     ["owner-add-read", "Choose the read tool"],
   ])
-    node(id).replaceChildren(ownerOption("", tools.length ? empty : "No tools reported"), ...tools.map((name) => ownerOption(name, name)))
+    node(id).replaceChildren(
+      ownerOption("", tools.length ? empty : "No tools reported"),
+      ...tools.map((name) => ownerOption(name, name)),
+    )
   node("owner-add-write").replaceChildren(
     ownerOption("", "No write tool"),
     ...tools.map((name) => ownerOption(name, name)),
@@ -720,7 +808,10 @@ async function loadOwner() {
     text("owner-feedback", "Owner settings loaded. Nothing is saved until you choose Save owner settings.")
   } catch {
     if (!closed && !ownerDenied) {
-      text("owner-feedback", "Owner settings could not load. The meeting view is unaffected; retry when the runtime is ready.")
+      text(
+        "owner-feedback",
+        "Owner settings could not load. The meeting view is unaffected; retry when the runtime is ready.",
+      )
       node("owner-retry").hidden = false
     }
   } finally {
@@ -802,7 +893,7 @@ node("original").addEventListener("click", () => {
   original = !original
   node("original").setAttribute("aria-pressed", String(original))
   text("original", original ? "Show corrected" : "Show original")
-  renderSegments()
+  preserveReader(renderSegments)
 })
 window.addEventListener(
   "wheel",
@@ -814,6 +905,15 @@ window.addEventListener(
   { passive: true },
 )
 node("retry-audio").addEventListener("click", () => control("retry"))
+node("review-retained").addEventListener("click", () => {
+  reviewRetained = true
+  preserveReader(() => {
+    renderCapture()
+    renderFindings()
+  })
+  node("summary-title").scrollIntoView({ block: "start" })
+  node("summary-title").focus({ preventScroll: true })
+})
 node("capture-form").addEventListener("change", updateControls)
 node("capture-form").addEventListener("submit", (event) => {
   event.preventDefault()

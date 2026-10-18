@@ -38,6 +38,7 @@ async fn global_forms_need_no_session_and_remain_location_owned() {
     assert_eq!(service.state(&input.id).unwrap(), form::State::Pending);
     service.reply(&input.id, answer.clone()).unwrap();
     assert_eq!(wait.await.unwrap(), form::State::Answered(answer.clone()));
+    assert!(!service.answered_automatically(&input.id).unwrap());
     assert_eq!(
         service.state(&input.id).unwrap(),
         form::State::Answered(answer)
@@ -195,7 +196,8 @@ async fn autonomous_forms_use_valid_defaults_and_leave_impossible_fields_pending
         root.as_lossless().as_str().unwrap(),
         r#"[{"key":"ack","type":"external","url":"https://example.com"},{"key":"flag","type":"boolean"},{"key":"count","type":"integer","minimum":2.3},{"key":"items","type":"multiselect","required":true,"options":[{"value":"first","label":"First"}]},{"key":"name","type":"string","required":true,"minLength":10}]"#,
     );
-    let result = service.ask(input).unwrap().await.unwrap();
+    let result = service.ask(input.clone()).unwrap().await.unwrap();
+    assert!(service.answered_automatically(&input.id).unwrap());
     let form::State::Answered(answer) = result else {
         panic!("expected automatic answer");
     };
@@ -313,4 +315,97 @@ async fn enclosing_timeouts_cancel_forms_and_remove_questions() {
             .is_err()
     );
     assert!(questions.list().is_empty());
+}
+
+#[tokio::test]
+async fn unanswered_forms_and_questions_timeout_without_fabricating_an_answer() {
+    let fixture = Fixture::default();
+    let session = fixture.session("ses_timeout", None, 0, false, None);
+    let forms = Forms::new(fixture.authority(), fixture.publisher()).with_timeout_seconds(1);
+    let input = form(
+        "frm_timeout",
+        "ses_timeout",
+        r#"[{"key":"name","type":"string","required":true}]"#,
+    );
+    let wait = forms.ask(input.clone()).unwrap();
+    let questions =
+        questions::Questions::new(fixture.authority(), fixture.publisher()).with_timeout_seconds(1);
+    let request = question::Request::decode(&parse_json(r#"{"id":"que_timeout","sessionID":"ses_timeout","questions":[{"question":"Choose","header":"Choice","options":[{"label":"A","description":"A"}]}]}"#).unwrap()).unwrap();
+    let question_wait = match questions.ask(request.clone()).unwrap() {
+        questions::Admission::Pending(wait) => wait,
+        _ => panic!("manual question must wait"),
+    };
+    let (form_result, question_result) = tokio::join!(wait, question_wait);
+    assert_eq!(
+        form_result.unwrap(),
+        form::State::TimedOut {
+            seconds: ycoding_schema::schema::PositiveInt::new(1).unwrap()
+        }
+    );
+    assert!(matches!(
+        question_result.unwrap(),
+        Err(questions::Error::TimedOut { seconds: 1 })
+    ));
+    assert!(!forms.answered_automatically(&input.id).unwrap());
+    assert_eq!(
+        forms.reply(
+            &input.id,
+            form::Answer::decode(&parse_json(r#"{"name":"late"}"#).unwrap()).unwrap()
+        ),
+        Err(Error::AlreadySettled)
+    );
+    assert!(matches!(
+        questions.reply(&request.id, vec![vec!["A".into()]]),
+        Err(questions::Error::NotFound)
+    ));
+    assert!(forms.list(Some(session.as_lossless())).is_empty());
+    let events = fixture.events.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.type_ == "form.timed_out")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.type_ == "question.timed_out")
+            .count(),
+        1
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.type_ == "form.replied" || e.type_ == "question.replied")
+    );
+}
+
+#[tokio::test]
+async fn disabled_form_timeout_and_a_human_reply_win_without_late_events() {
+    let fixture = Fixture::default();
+    let forms = Forms::new(fixture.authority(), fixture.publisher()).with_timeout_seconds(0);
+    let input = form(
+        "frm_no_timeout",
+        "global",
+        r#"[{"key":"name","type":"string"}]"#,
+    );
+    let mut wait = Box::pin(forms.ask(input.clone()).unwrap());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut wait)
+            .await
+            .is_err()
+    );
+    let answer = form::Answer::decode(&parse_json(r#"{"name":"human"}"#).unwrap()).unwrap();
+    forms.reply(&input.id, answer.clone()).unwrap();
+    assert_eq!(wait.await.unwrap(), form::State::Answered(answer));
+    assert!(!forms.answered_automatically(&input.id).unwrap());
+    assert!(
+        !fixture
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.type_ == "form.timed_out")
+    );
 }

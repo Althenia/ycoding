@@ -9,7 +9,7 @@ use ycoding_schema::{
     session, session_id::SessionId, session_message_id, token_usage, usage_anchor,
 };
 use ycoding_store::{
-    Error, IndexOrder, KeyPart, Snapshot, TableSpec,
+    Error, IndexOrder, IndexQuery, KeyPart, Snapshot, TableSpec,
     analytics::{Query, Value, reports},
     resources::{Request, UsageAnalyticsRequest, UsageAnalyticsRequestTable, requests},
     session::{Document, Session, SessionTable},
@@ -168,7 +168,12 @@ fn analytics_report(
     };
     match &sessions {
         Some(sessions) => scan(&snapshot, sessions, &mut observe)?,
-        None => scan_facts(&snapshot, &mut observe)?,
+        None => scan_facts(
+            &snapshot,
+            input.from.map(|value| value.get()),
+            input.to.map(|value| value.get()),
+            &mut observe,
+        )?,
     }
     let mut resolved_hints = Vec::new();
     for (lookup, (session, input)) in hints {
@@ -786,21 +791,31 @@ fn scan(
 
 fn scan_facts(
     snapshot: &Snapshot,
+    from: Option<i64>,
+    to: Option<i64>,
     visit: &mut dyn FnMut(Family, Row) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    let mut after: Option<Vec<u8>> = None;
+    let lower = from.map(|time| tuple_key(&[KeyPart::I64(time)]));
+    let upper = to.map(|time| tuple_key(&[KeyPart::I64(time)]));
+    let mut after = None;
     loop {
-        let page = snapshot.scan::<UsageAnalyticsRequestTable>(
-            after.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
-            Bound::Unbounded,
-            PAGE,
+        let page = snapshot.index_range::<UsageAnalyticsRequestTable>(
+            "usage_analytics_request_time_created_id_idx",
+            IndexQuery {
+                lower: lower.as_deref().map_or(Bound::Unbounded, Bound::Included),
+                upper: upper.as_deref().map_or(Bound::Unbounded, Bound::Excluded),
+                prefix: None,
+                order: IndexOrder::Ascending,
+                after: after.as_ref(),
+                limit: PAGE,
+            },
         )?;
         let Some(last) = page.last() else {
             break;
         };
-        after = Some(UsageAnalyticsRequestTable::primary_key(last));
-        for fact in page {
-            let (family, row) = Row::fact(fact);
+        after = Some(last.cursor.clone());
+        for entry in page {
+            let (family, row) = Row::fact(entry.record);
             visit(family, row)?;
         }
         std::thread::yield_now();
@@ -940,7 +955,7 @@ fn read_summary(
     };
     match id {
         Some(id) => scan(snapshot, &family(snapshot, id)?, &mut observe)?,
-        None => scan_facts(snapshot, &mut observe)?,
+        None => scan_facts(snapshot, None, None, &mut observe)?,
     }
     let mut models = groups.into_values().collect::<Vec<_>>();
     models.sort_by(|(left_model, left), (right_model, right)| {
@@ -1080,4 +1095,87 @@ fn hex(value: &str) -> String {
 
 fn text(value: &LosslessString) -> String {
     value.to_utf8().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fact_discovery_visits_only_half_open_time_bounds_across_equal_timestamp_pages() {
+        let store = ycoding_store::Store::disposable(
+            ycoding_store::Options::core(),
+            ycoding_store::import::catalog(ycoding_store::import::DatabaseKind::Core),
+            ycoding_store::Metadata::new([79; 16], 1),
+        )
+        .unwrap();
+        store
+            .submit(|tx| {
+                for index in 0..405 {
+                    UsageAnalyticsRequestTable::insert(
+                        tx,
+                        &UsageAnalyticsRequest {
+                            id: format!("prq_{:04}", 404 - index).into(),
+                            session_id: "ses_report".into(),
+                            project_id: "prj_report".into(),
+                            directory: "/project".into(),
+                            workspace_id: None,
+                            session_updated: 1,
+                            agent: "build".into(),
+                            source: "step".into(),
+                            model: Document::new(ycoding_schema::parse_json(
+                                r#"{"providerID":"openai","id":"model"}"#,
+                            ).unwrap())?,
+                            usage_anchor: None,
+                            task_path: Document::new(JsonValue::Array(vec![]))?,
+                            request: index,
+                            attempts: 1,
+                            continuation: "full".into(),
+                            invalidation: "none".into(),
+                            prompt_cache_key: "cache".into(),
+                            cache_read_reported: None,
+                            tokens: Document::new(ycoding_schema::parse_json(
+                                r#"{"input":1,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}"#,
+                            ).unwrap())?,
+                            cost: Some(0.0),
+                            timing: None,
+                            time_created: match index {
+                                0 => 99,
+                                404 => 101,
+                                _ => 100,
+                            },
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        let snapshot = store.client().snapshot().unwrap();
+        for (from, to, expected) in [
+            (Some(100), Some(101), 403),
+            (Some(101), None, 1),
+            (None, Some(100), 1),
+            (None, None, 405),
+            (Some(101), Some(100), 0),
+        ] {
+            let mut visited = Vec::new();
+            scan_facts(&snapshot, from, to, &mut |_, row| {
+                assert!(from.is_none_or(|lower| row.time_created >= lower));
+                assert!(to.is_none_or(|upper| row.time_created < upper));
+                visited.push(row.request);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(visited.len(), expected);
+            visited.sort();
+            visited.dedup();
+            assert_eq!(
+                visited.len(),
+                expected,
+                "page cursors must not revisit a request"
+            );
+        }
+    }
 }

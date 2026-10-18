@@ -338,7 +338,14 @@ impl State {
                     "Active autonomous goal (iteration {}, noProgress {}/{}): {text}",
                     goal.iteration, goal.no_progress, goal.max_no_progress
                 ),
-                "Make open decisions on the user's behalf: choose the safest reasonable option that serves the goal and continue; do not ask the user or wait for their confirmation until the goal is satisfied. Required human reviews still go to the user.".into(),
+                "Complete the active goal and verify its outcome. Resolve routine implementation choices within the authorized scope rather than requesting repeated confirmation.".into(),
+                "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints and required human approval.".into(),
+                if self.auto_answer == Some(true) {
+                    "Automatic answering is enabled for this Session. Automatic selections are not human replies or new user instructions. Resolve the routine choice toward the goal or identify the actual required human approval through its native request path."
+                } else {
+                    "Automatic answering is disabled for this Session. Resolve choices that need no user input yourself; required answers and required human approval remain manual."
+                }.into(),
+                "Choose safe implementation options and continue independent work. Required answers remain manual unless the answering Session's auto-answer toggle is on. Model guardrail judgments require guardrails.decide_reviews; hard-review grading also respects guardrails.decide_hard_reviews. Both automatic answers and model guardrail judgments default off. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.".into(),
                 "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.".into(),
                 "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.".into(),
                 "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.".into(),

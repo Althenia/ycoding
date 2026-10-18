@@ -32,6 +32,7 @@
   --dialog-width: 480px;
   --quick: 140ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  --recording-layer: 2;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -462,6 +463,7 @@ dd {
   list-style: none;
   font: 12px/1.65 var(--font-mono);
   color: var(--muted);
+  flex-wrap: wrap;
 }
 .stages [aria-current] {
   color: var(--success);
@@ -469,12 +471,102 @@ dd {
   border-bottom: 2px solid currentColor;
 }
 .ownership {
+  position: sticky;
+  top: 0;
+  z-index: var(--recording-layer);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   padding: var(--padding) var(--section);
 }
-.ownership button {
-  margin-top: var(--gap);
+.recording-actions {
+  display: flex;
+  gap: var(--gap);
+  align-items: center;
+}
+#stop {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.capture-feedback {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+[data-phase="live"] #capture-feedback {
+  display: none;
+}
+[data-phase]:not([data-phase="setup"]) .capture-runtime {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap);
+}
+[data-phase]:not([data-phase="setup"]) .runtime {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap) var(--section);
+}
+[data-phase]:not([data-phase="setup"]) .runtime > * {
+  margin: 0;
+}
+[data-phase]:not([data-phase="setup"]) .runtime .section-head h3 {
+  display: none;
+}
+[data-phase]:not([data-phase="setup"]) .metrics {
+  flex: 1 1 auto;
+  gap: var(--padding);
+}
+[data-phase]:not([data-phase="setup"]) #runtime-details[open] {
+  flex-basis: 100%;
+}
+[data-phase="review"] #actions-panel {
+  grid-column: 1 / -1;
+}
+.review-outcomes,
+.handoff {
+  min-width: 0;
+}
+.handoff > * + * {
+  margin-top: var(--padding);
+}
+.handoff p,
+.finalization-stages {
+  overflow-wrap: anywhere;
+}
+code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  color: var(--text);
+  background: var(--surface);
+}
+.finalization-stages {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  padding: 0;
+  gap: var(--section);
+  font: 12px/1.65 var(--font-mono);
+  color: var(--muted);
+}
+.finalization-stages li {
+  padding-top: var(--gap);
+}
+.readiness {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 13px;
+}
+.readiness li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: var(--gap) 0;
+  border-bottom: 1px solid var(--border);
 }
 .footer {
   padding: var(--section);
@@ -582,6 +674,9 @@ dialog .actions {
 .owner-panel > * + * {
   margin-top: var(--padding);
 }
+.owner-panel .details-body > * + * {
+  margin-top: var(--padding);
+}
 .owner-panel p {
   max-inline-size: var(--measure);
 }
@@ -680,15 +775,34 @@ dialog .actions {
     width: 100%;
   }
   .actions > button,
-  .capture-gate form > button,
-  .ownership button {
+  .capture-gate form > button {
     width: 100%;
   }
   .stages {
     width: 100%;
   }
   .ownership {
-    padding: var(--padding);
+    padding: var(--gap) var(--padding);
+    align-items: flex-start;
+  }
+  .ownership .hint {
+    display: none;
+  }
+  .recording-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    max-width: 55%;
+  }
+  .recording-actions button {
+    padding: var(--gap);
+    white-space: normal;
+  }
+  .ownership > div:first-child {
+    min-width: 0;
+    font-size: 13px;
+  }
+  [data-phase="review"] #actions-panel {
+    grid-column: auto;
   }
   .metrics {
     gap: var(--gap);

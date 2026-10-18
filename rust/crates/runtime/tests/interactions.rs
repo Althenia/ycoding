@@ -558,7 +558,6 @@ fn review(session: &str, command: &str) -> Input {
         metadata: None,
         skip_review: false,
         holder: None,
-        defer_shell: false,
         source: None,
     }
 }

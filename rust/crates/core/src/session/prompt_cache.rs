@@ -102,7 +102,6 @@ pub fn namespace(input: &Namespace) -> String {
             .optional("workspaceID", &input.workspace_id)
             .field("providerID", &input.provider_id)
             .field("modelID", &input.model_id)
-            .optional("variant", &input.variant)
             .optional(
                 "accountIdentityDigest",
                 &input.account_identity_digest.map(LosslessString::from),
@@ -204,6 +203,7 @@ pub struct Settings {
     pub openai_mode: OpenAIMode,
     pub anthropic_ttl: AnthropicTtl,
     pub openai_extended_retention: bool,
+    pub family_experiment: bool,
 }
 
 impl Default for Settings {
@@ -214,6 +214,7 @@ impl Default for Settings {
             openai_mode: OpenAIMode::Auto,
             anthropic_ttl: AnthropicTtl::Adaptive,
             openai_extended_retention: false,
+            family_experiment: false,
         }
     }
 }
@@ -253,11 +254,86 @@ impl Settings {
             },
             openai_extended_retention: option("openai_extended_retention")
                 == Some(&JsonValue::Bool(true)),
+            family_experiment: option("family_scope")
+                == Some(&JsonValue::String("family-experiment".into())),
         }
     }
 }
 
 const PROMPT_CACHE_READ_CANDIDATE_LIMIT: usize = 50;
+
+pub fn shared_context_marker_support(
+    provider: &LosslessString,
+    route: &str,
+    model: &str,
+    mode: OpenAIMode,
+    endpoint: &str,
+) -> bool {
+    if provider.as_str() != Some("openai")
+        || route != "openai-responses"
+        || mode == OpenAIMode::Implicit
+        || !ycoding_ai::cache::supports_prompt_cache_breakpoints(route, model)
+    {
+        return false;
+    }
+    let Ok(url) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str() == Some("api.openai.com")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path().strip_suffix('/').unwrap_or(url.path()) == "/v1"
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+pub struct FamilyExperiment<'a> {
+    pub root_session_id: &'a LosslessString,
+    pub baseline_key: &'a str,
+    pub account_identity_digest: &'a str,
+    pub api_model_id: &'a str,
+    pub variant: Option<&'a LosslessString>,
+    pub route_id: &'a str,
+    pub connection_identity_digest: &'a str,
+    pub semantic_options_digest: &'a str,
+    pub snapshot_digest: &'a str,
+}
+
+pub fn family_experiment_key(input: &FamilyExperiment<'_>) -> Option<String> {
+    if input.root_session_id.is_empty()
+        || [
+            input.account_identity_digest,
+            input.connection_identity_digest,
+            input.semantic_options_digest,
+            input.snapshot_digest,
+        ]
+        .iter()
+        .any(|digest| {
+            digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    {
+        return None;
+    }
+    Some(sha256(&canonical_json(
+        &ObjectEncoder::new()
+            .field("namespace", "session-prompt-cache-family-experiment/v1")
+            .field("rootSessionID", input.root_session_id)
+            .field("baselineKey", input.baseline_key)
+            .field("accountIdentityDigest", input.account_identity_digest)
+            .field("apiModelID", input.api_model_id)
+            .optional("variant", &input.variant.cloned())
+            .field("routeID", input.route_id)
+            .field("connectionIdentityDigest", input.connection_identity_digest)
+            .field("semanticOptionsDigest", input.semantic_options_digest)
+            .field("snapshotDigest", input.snapshot_digest)
+            .finish(),
+    )))
+}
 
 pub fn provider_options(input: &OptionsInput) -> Options {
     let route = input.route_id;

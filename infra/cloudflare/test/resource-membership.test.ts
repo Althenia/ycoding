@@ -195,44 +195,81 @@ const budgetCoverage = {
 }
 
 const storeCoverage = {
-  TRANSACTION_WORK: boundary(
+  "rust/crates/store/src/engine.rs::TRANSACTION_WORK": boundary(
     store + "tests/durable_store.rs",
     "transaction_work_limit_is_atomic_for_point_and_range_operations",
   ),
-  CLEANUP_BATCH: boundary(
+  "rust/crates/store/src/session/cleanup.rs::CLEANUP_BATCH": boundary(
     store + "tests/session_tables.rs",
     "cleanup_keyset_is_bounded_and_uses_sqlite_binary_tiebreaks",
   ),
-  BYTE_BUDGET: boundary(store + "src/backup.rs", "byte_budget_admits_a_row_that_reaches_exactly_the_limit"),
-  CLEANUP_ROWS: boundary(
+  "rust/crates/store/src/backup.rs::BYTE_BUDGET": boundary(
+    store + "src/backup.rs",
+    "byte_budget_admits_a_row_that_reaches_exactly_the_limit",
+  ),
+  "rust/crates/store/src/session/cleanup.rs::CLEANUP_ROWS": boundary(
     store + "tests/session_tables.rs",
     "cleanup_rolls_back_and_resumes_from_committed_pages_without_touching_history",
   ),
-  HEADROOM_BYTES: boundary(
+  "rust/crates/store/src/model_incident/mod.rs::CLEANUP_ROWS": boundary(
+    store + "tests/model_incident_tables.rs",
+    "expiry_deletes_bounded_batches_strictly_before_the_cutoff_with_their_index_entries",
+  ),
+  "rust/crates/store/src/upgrade.rs::BATCH": boundary(
+    store + "tests/core_upgrade.rs",
+    "the_head_predecessor_rewrites_four_layouts_and_preserves_every_other_row",
+  ),
+  "rust/crates/store/src/backup.rs::HEADROOM_BYTES": boundary(
     store + "tests/history_backup.rs",
     "space_gate_exact_threshold_retry_marker_restore_and_reopen",
   ),
-  INTENT_LIMIT: boundary(
+  "rust/crates/store/src/analytics/mod.rs::INTENT_LIMIT": boundary(
     store + "tests/analytics.rs",
     "outage_does_not_block_canonical_and_overflow_recovers_retained_state",
   ),
-  INTENT_BYTES: boundary(
+  "rust/crates/store/src/analytics/mod.rs::INTENT_BYTES": boundary(
     store + "tests/analytics.rs",
     "encoded_intent_budget_accepts_exact_bytes_and_invalidates_one_byte_past",
   ),
-  BATCH_SIZE: boundary(store + "tests/analytics.rs", "watermarked_rebuild_catches_up_delete_and_new_changes"),
-  REPORT_DEADLINE: boundary(
+  "rust/crates/store/src/analytics/mod.rs::BATCH_SIZE": boundary(
+    store + "tests/analytics.rs",
+    "watermarked_rebuild_catches_up_delete_and_new_changes",
+  ),
+  "rust/crates/store/src/analytics/mod.rs::REPORT_DEADLINE": boundary(
     store + "tests/analytics.rs",
     "report_deadline_is_explicit_and_native_work_releases_its_connection",
   ),
-  REPORT_STACK_BYTES: boundary(
+  "rust/crates/store/src/analytics/mod.rs::REPORT_STACK_BYTES": boundary(
     store + "tests/report_stack.rs",
     "engine_returns_typed_outcomes_at_the_selected_expression_depth",
   ),
-  ROW_BYTES: report,
-  REPORT_ROWS: report,
-  REPORT_BYTES: report,
+  "rust/crates/store/src/analytics/mod.rs::ROW_BYTES": report,
+  "rust/crates/store/src/analytics/mod.rs::REPORT_ROWS": report,
+  "rust/crates/store/src/analytics/mod.rs::REPORT_BYTES": report,
 }
+
+test("predecessor upgrade bounds both rewrite and backfill before retaining rows", async () => {
+  const source = await Bun.file(path.join(root, store + "src/upgrade.rs")).text()
+  expect(source).toMatch(/^const\s+BATCH:\s*usize\s*=\s*256\s*;/m)
+  // The Rust upgrade suite verifies migration and backup preservation across pages;
+  // this source boundary also rejects removing the cap without changing results.
+  for (const [name, table] of [
+    ["rewrite", "table"],
+    ["backfill", "requests"],
+  ]) {
+    const body = source.match(new RegExp(`^fn ${name}\\([\\s\\S]*?^\\}`, "m"))?.[0]
+    expect(body, name).toBeDefined()
+    const batch = body?.match(/let\s+batch\s*=\s*([\s\S]*?)\.collect::<Result<Vec<_>,\s*Error>>\(\)\?;/)?.[1]
+    expect(batch, `${name}: retained batch`).toBeDefined()
+    expect(
+      batch?.replace(/\s+/g, "").startsWith(
+        `${table}.range::<&[u8]>((after.as_deref().map_or(Bound::Unbounded,Bound::Excluded),Bound::Unbounded,))?` +
+          ".take(BATCH).map(|entry|{",
+      ),
+      `${name}: bound the keyset iterator before copying rows`,
+    ).toBe(true)
+  }
+})
 
 test("TEST-055 every declared resource limit has a reviewed enforcement boundary", async () => {
   const read = (file: string) => Bun.file(path.join(root, file)).text()
@@ -273,6 +310,7 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
               STATUS_OUTSTANDING_MAX_COUNT: collection,
               STATUS_FAILED_MAX_COUNT: collection,
               STATUS_DETAILS_MAX_COUNT: collection,
+              STATUS_LOST_MAX_COUNT: collection,
               COMPLETIONS_ITEMS_MAX_COUNT: collection,
               SUBSCRIPTION_SNAPSHOT_SESSION_IDS_MAX_COUNT: collection,
               NOTICES_ADDED_NOTICES_MAX_COUNT: collection,
@@ -330,7 +368,7 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
     const source = await read(file)
     for (const item of source.matchAll(/\bconst ([A-Z][A-Z_0-9]*): (?:usize|u64|u32|Duration) = [^;]+;/g)) {
       if (["RECORD_CODEC_VERSION", "KEY_CODEC_VERSION"].includes(item[1]!)) continue
-      declared.push(item[1]!)
+      declared.push(`${file}::${item[1]}`)
     }
   }
   await check("Store constants", declared, storeCoverage)
@@ -492,7 +530,9 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
         "analytics_queue_deadline_and_cancellation_bounds_leave_canonical_work_available",
       ),
     },
-    "rust/crates/store/src/analytics/worker.rs": { "1": storeCoverage.REPORT_DEADLINE },
+    "rust/crates/store/src/analytics/worker.rs": {
+      "1": storeCoverage["rust/crates/store/src/analytics/mod.rs::REPORT_DEADLINE"],
+    },
   }
   for (const [file, channels] of Object.entries(channelOwners)) {
     await check(
@@ -554,7 +594,7 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
       "65,536-byte": wireBytes,
     },
     "specs/wire-platform.md": { "64 KiB": http },
-    "specs/wire-session.md": { "64 KiB": http },
+    "specs/wire-session.md": { "64 KiB": http, "500 entries": collection },
   }
   for (const [file, members] of Object.entries(specCoverage)) {
     const quantities = [

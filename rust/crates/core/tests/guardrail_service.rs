@@ -42,7 +42,6 @@ fn input(session: &ycoding_schema::session_id::SessionId, command: &str) -> Inpu
         metadata: None,
         skip_review: false,
         holder: None,
-        defer_shell: false,
         source: None,
     }
 }
@@ -893,10 +892,40 @@ fn an_immediate_subagent_limit_names_the_limit_and_its_setting() {
 #[test]
 fn real_repository_checkouts_are_inside_through_canonical_paths_and_fresh_git_lists() {
     use ycoding_core::platform::{git, worktree};
-    let main = filesystem_fixture::Fixture::new();
+    // Cargo's target may itself be under an exempt temporary root.
+    let directory = std::env::var_os("YCODING_TEST_POLICY_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| env!("CARGO_TARGET_TMPDIR").into());
+    let main = filesystem_fixture::Fixture::under(&directory);
+    let preflight = ycoding_core::process::guardrails::classify(
+        "file_mutation",
+        &[main.0.to_str().unwrap().into()],
+        &Paths {
+            workdir: "/ycoding-policy-preflight/unrelated".into(),
+            project: "/ycoding-policy-preflight/unrelated".into(),
+            ..settings().paths
+        },
+        &[],
+    );
+    assert_eq!(
+        (
+            preflight.effect,
+            preflight.standard,
+            preflight.hard_review,
+            preflight.rule_ids
+        ),
+        (
+            Effect::Ask,
+            true,
+            false,
+            vec!["standard.review.outside-repo".into()]
+        ),
+        "Checkout-policy fixture root {} is exempt; set YCODING_TEST_POLICY_ROOT to an explicit writable directory outside temporary-policy roots",
+        main.0.display()
+    );
     main.repository();
-    let base = filesystem_fixture::Fixture::new();
-    let other = filesystem_fixture::Fixture::new();
+    let base = filesystem_fixture::Fixture::under(&directory);
+    let other = filesystem_fixture::Fixture::under(&directory);
     other.repository();
     let git = git::Service::new(16 * 1024 * 1024);
     let repository = git.discover(&main.0).unwrap().unwrap();
@@ -978,6 +1007,9 @@ fn real_repository_checkouts_are_inside_through_canonical_paths_and_fresh_git_li
         file(&root, &format!("{}/new.ts", sibling.worktree.display())),
     );
     base.write("sibling/.git", git_file);
+    // Keep the plain Location from inheriting the repository containing Cargo's target directory.
+    base.write(".git", "gitdir: missing-repository\n");
+    assert!(git.discover(&base.0).unwrap().is_none());
     let plain = Guardrails::new(
         fixture.authority(),
         fixture.permissions(),

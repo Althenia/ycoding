@@ -14,8 +14,7 @@ export type TeamShell = {
   readonly ownerAgent?: string
   readonly ownerTitle?: string
   readonly command: string
-  readonly status: "queued" | "running" | "exited" | "timeout" | "memory-limit" | "killed"
-  readonly queuePosition?: number
+  readonly status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
   readonly startedAt: number
   readonly completedAt?: number
 }
@@ -148,11 +147,6 @@ export function siblingTargets(tasks: readonly TeamSubagent[], currentID: string
   const rows = taskRows(tasks).filter((id) => !id.startsWith("section:"))
   const index = rows.indexOf(currentID)
   return { previous: index > 0 ? rows[index - 1] : undefined, next: index >= 0 ? rows[index + 1] : undefined }
-}
-
-export function shellStatusLabel(shell: Pick<TeamShell, "status" | "queuePosition">): string {
-  if (shell.status !== "queued") return shell.status
-  return shell.queuePosition === undefined ? "queued" : `queued #${shell.queuePosition}`
 }
 
 export function shellRows(shells: readonly TeamShell[]): readonly string[] {

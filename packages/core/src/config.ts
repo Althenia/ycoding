@@ -19,6 +19,7 @@ import { Policy } from "./policy"
 import { AbsolutePath, PositiveInt } from "./schema"
 import { ConfigAgent } from "./config/agent"
 import { ConfigAttachments } from "./config/attachments"
+import { ConfigQuestionTimeout } from "./config/question-timeout"
 import { ConfigCompaction } from "./config/compaction"
 import { ConfigCommand } from "./config/command"
 import { ConfigEfficiency } from "./config/efficiency"
@@ -106,6 +107,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   mcp: ConfigMCP.Info.pipe(Schema.optional).annotate({
     description: "MCP server configuration",
+  }),
+  question_timeout_seconds: ConfigQuestionTimeout.Seconds.pipe(Schema.optional).annotate({
+    description:
+      "Seconds an unanswered question, form, or subagent question stays open before it times out (default: 300, 0 disables, max: 86400)",
   }),
   compaction: ConfigCompaction.Info.pipe(Schema.optional).annotate({
     description: "Conversation compaction behavior",
@@ -530,8 +535,19 @@ const decodeGuardrails = Schema.decodeUnknownResult(ConfigGuardrail.Info, recove
 function recoverInfo(input: unknown, target: string) {
   const diagnostics: Diagnostic[] = []
   const record = configRecord(input) ? input : {}
-  const report = (keys: readonly PropertyKey[], reason: Diagnostic["reason"], message: string, failClosed?: boolean) => {
-    diagnostics.push({ path: target, jsonPath: configJsonPath(keys), reason, message, ...(failClosed ? { failClosed } : {}) })
+  const report = (
+    keys: readonly PropertyKey[],
+    reason: Diagnostic["reason"],
+    message: string,
+    failClosed?: boolean,
+  ) => {
+    diagnostics.push({
+      path: target,
+      jsonPath: configJsonPath(keys),
+      reason,
+      message,
+      ...(failClosed ? { failClosed } : {}),
+    })
   }
   if (!configRecord(input)) report([], "invalid-values", "Expected a configuration object")
 
@@ -547,7 +563,12 @@ function recoverInfo(input: unknown, target: string) {
     const rules = scope.value.permissions
     if (!Array.isArray(rules)) {
       scope.value.permissions = [{ action: "*", resource: "*", effect: "deny" }]
-      report(keys, "invalid-values", "Invalid permission ruleset; fails closed by denying every action on every resource", true)
+      report(
+        keys,
+        "invalid-values",
+        "Invalid permission ruleset; fails closed by denying every action on every resource",
+        true,
+      )
       continue
     }
     const denied: Permission.Rule[] = []
@@ -560,7 +581,9 @@ function recoverInfo(input: unknown, target: string) {
         denied.push({ action: readable ? action : "*", resource: "*", effect: "deny" })
         report(
           [...keys, index],
-          configIssues(decoded.failure.issue).some((issue) => issue.tag === "UnexpectedKey") ? "removed-keys" : "invalid-values",
+          configIssues(decoded.failure.issue).some((issue) => issue.tag === "UnexpectedKey")
+            ? "removed-keys"
+            : "invalid-values",
           readable
             ? "Invalid permission rule; fails closed by denying its action on every resource"
             : "Invalid permission rule; fails closed by denying every action on every resource",
@@ -577,7 +600,9 @@ function recoverInfo(input: unknown, target: string) {
       record.guardrails = { enabled: true }
       report(
         ["guardrails"],
-        configIssues(decoded.failure.issue).some((issue) => issue.tag === "UnexpectedKey") ? "removed-keys" : "invalid-values",
+        configIssues(decoded.failure.issue).some((issue) => issue.tag === "UnexpectedKey")
+          ? "removed-keys"
+          : "invalid-values",
         "Invalid guardrails value; fails closed with guardrails enabled and default limits",
         true,
       )
@@ -589,26 +614,42 @@ function recoverInfo(input: unknown, target: string) {
     if (Result.isSuccess(decoded)) return { info: decoded.success, diagnostics }
     const issues = configIssues(decoded.failure.issue).map((issue) => {
       const keys = issue.tag === "MissingKey" ? issue.keys.slice(0, -1) : issue.keys
-      const named = keys[0] === "mcp" && keys[1] === "servers" && keys.length > 2
-        ? 3
-        : ["providers", "commands", "references"].includes(String(keys[0])) && keys.length > 1 ? 2 : keys.length
+      const named =
+        keys[0] === "mcp" && keys[1] === "servers" && keys.length > 2
+          ? 3
+          : ["providers", "commands", "references"].includes(String(keys[0])) && keys.length > 1
+            ? 2
+            : keys.length
       return { ...issue, keys: issue.tag === "UnexpectedKey" ? keys : keys.slice(0, named) }
     })
-    const units = issues.filter((issue, index) => !issues.some((other, otherIndex) =>
-      (other.keys.length < issue.keys.length || (other.keys.length === issue.keys.length && otherIndex < index)) &&
-      other.keys.every((key, offset) => key === issue.keys[offset]),
-    ))
+    const units = issues.filter(
+      (issue, index) =>
+        !issues.some(
+          (other, otherIndex) =>
+            (other.keys.length < issue.keys.length ||
+              (other.keys.length === issue.keys.length && otherIndex < index)) &&
+            other.keys.every((key, offset) => key === issue.keys[offset]),
+        ),
+    )
     for (const unit of units) {
       report(
         unit.keys,
         unit.tag === "UnexpectedKey" ? "removed-keys" : "invalid-values",
-        unit.tag === "UnexpectedKey" ? "Removed or unknown configuration key" : "Value does not match the configuration schema",
+        unit.tag === "UnexpectedKey"
+          ? "Removed or unknown configuration key"
+          : "Value does not match the configuration schema",
       )
     }
     for (const unit of units.toReversed()) {
-      const parent = unit.keys.slice(0, -1).reduce<unknown>((value, key) =>
-        value !== null && typeof value === "object" && Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined,
-      record)
+      const parent = unit.keys
+        .slice(0, -1)
+        .reduce<unknown>(
+          (value, key) =>
+            value !== null && typeof value === "object" && Object.hasOwn(value, key)
+              ? Reflect.get(value, key)
+              : undefined,
+          record,
+        )
       const key = unit.keys.at(-1)
       if (Array.isArray(parent) && typeof key === "number") {
         parent.splice(key, 1)
@@ -624,23 +665,42 @@ function configRecord(input: unknown): input is Record<string, unknown> {
 }
 
 function configJsonPath(keys: readonly PropertyKey[]) {
-  return "$" + keys.map((key) => typeof key === "number"
-    ? `[${key}]`
-    : /^[a-zA-Z_$][\w$]*$/.test(String(key)) ? `.${String(key)}` : `[${JSON.stringify(String(key))}]`,
-  ).join("")
+  return (
+    "$" +
+    keys
+      .map((key) =>
+        typeof key === "number"
+          ? `[${key}]`
+          : /^[a-zA-Z_$][\w$]*$/.test(String(key))
+            ? `.${String(key)}`
+            : `[${JSON.stringify(String(key))}]`,
+      )
+      .join("")
+  )
 }
 
-function configIssues(issue: SchemaIssue.Issue, keys: readonly PropertyKey[] = []): { keys: readonly PropertyKey[]; tag: SchemaIssue.Issue["_tag"] }[] {
+function configIssues(
+  issue: SchemaIssue.Issue,
+  keys: readonly PropertyKey[] = [],
+): { keys: readonly PropertyKey[]; tag: SchemaIssue.Issue["_tag"] }[] {
   switch (issue._tag) {
-    case "Pointer": return configIssues(issue.issue, [...keys, ...issue.path])
-    case "Encoding": return configIssues(issue.issue, keys)
-    case "Composite": return issue.issues.flatMap((child) => configIssues(child, keys))
+    case "Pointer":
+      return configIssues(issue.issue, [...keys, ...issue.path])
+    case "Encoding":
+      return configIssues(issue.issue, keys)
+    case "Composite":
+      return issue.issues.flatMap((child) => configIssues(child, keys))
     case "AnyOf": {
       if (issue.issues.length === 1) return configIssues(issue.issues[0], keys)
-      return issue.issues.map((child) => configIssues(child, keys))
-        .find((alternative) => alternative.length > 0 && alternative.every((child) => child.tag === "UnexpectedKey"))
-        ?? [{ keys, tag: issue._tag }]
+      return (
+        issue.issues
+          .map((child) => configIssues(child, keys))
+          .find(
+            (alternative) => alternative.length > 0 && alternative.every((child) => child.tag === "UnexpectedKey"),
+          ) ?? [{ keys, tag: issue._tag }]
+      )
     }
-    default: return [{ keys, tag: issue._tag }]
+    default:
+      return [{ keys, tag: issue._tag }]
   }
 }

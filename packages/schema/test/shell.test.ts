@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Shell } from "@ycoding-ai/schema/shell"
-import { Schema, Struct } from "effect"
+import { Schema } from "effect"
 
 describe("Shell", () => {
   test("decodes optional process-tree memory limits", () => {
@@ -18,25 +18,39 @@ describe("Shell", () => {
   test("exposes memory-limit as a terminal status", () => {
     expect(Schema.decodeUnknownSync(Shell.Status)("memory-limit")).toBe("memory-limit")
   })
+})
 
-  test("preserves queued shell positions and admission timestamps", () => {
-    const info = {
-      id: Shell.ID.make("sh_queued"),
-      status: "queued" as const,
-      command: "printf ready",
-      cwd: "/workspace",
-      shell: "/bin/sh",
-      file: "/workspace/output",
-      metadata: {},
-      queuePosition: 1,
-      time: { started: 0, queued: 20 },
+describe("shell lifecycle contract", () => {
+  test("accepts only running and terminal process statuses", () => {
+    const decode = Schema.decodeUnknownSync(Shell.Status)
+    for (const status of ["running", "exited", "timeout", "memory-limit", "killed"] as const) {
+      expect(decode(status)).toBe(status)
     }
-    const decode = Schema.decodeUnknownSync(Shell.Info)
-    expect(decode(info)).toEqual(info)
-    for (const queuePosition of [0, -1, 1.5]) expect(() => decode({ ...info, queuePosition })).toThrow()
-    expect(
-      decode({ ...Struct.omit(info, ["queuePosition"]), status: "running", time: { started: 30, queued: 20 } }).time,
-    ).toEqual({ started: 30, queued: 20 })
-    expect(Shell.Event.Definitions.map((event) => event.type)).toContain("shell.updated")
+    expect(() => decode("queued")).toThrow()
+  })
+
+  test("exposes process timing and metadata without scheduler fields", () => {
+    expect(Object.keys(Shell.Time.fields).sort()).toEqual(["completed", "started"])
+    expect(Object.keys(Shell.Info.fields).sort()).toEqual([
+      "command",
+      "cwd",
+      "exit",
+      "file",
+      "id",
+      "metadata",
+      "pid",
+      "shell",
+      "status",
+      "time",
+      "toolCallID",
+    ])
+  })
+
+  test("publishes only process creation, exit, and deletion events", () => {
+    expect(Shell.Event.Definitions.map((event) => event.type).sort()).toEqual([
+      "shell.created",
+      "shell.deleted",
+      "shell.exited",
+    ])
   })
 })

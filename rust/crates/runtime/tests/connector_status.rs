@@ -130,7 +130,7 @@ async fn authoritative_family_requests_failures_and_reconnect_publish_status() {
         assert_eq!(replayed.details.unwrap().items[0].need, Some(v5::AttentionNeed::Permission as i32));
         location.permissions.reply(&permission.id, permission::Reply("once".into()), None).unwrap();
         permission_wait.wait.unwrap().await.unwrap().unwrap();
-        let review = location.guardrails.assert(ycoding_core::process::guardrails::Input { session_id: child.clone(), action: "shell".into(), resources: vec!["rm -rf /project".into()], metadata: None, skip_review: false, holder: None, defer_shell: false, source: None }).unwrap();
+        let review = location.guardrails.assert(ycoding_core::process::guardrails::Input { session_id: child.clone(), action: "shell".into(), resources: vec!["rm -rf /project".into()], metadata: None, skip_review: false, holder: None, source: None }).unwrap();
         location.questions.reject(&question.id).unwrap();
         drop(question_wait);
         let reviewed = status(&mut relay, second.generation, &["ses_get"]).await;

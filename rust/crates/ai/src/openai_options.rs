@@ -236,6 +236,9 @@ pub fn lower(request: &Request, responses: bool) -> JsonValue {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| {
+                if crate::effort::mechanism(request) == Some(crate::effort::Provider::OpenAI) {
+                    return vec![];
+                }
                 vec![json::object([
                     ("type", s("compaction")),
                     ("compact_threshold", JsonValue::Number(200_000.0)),

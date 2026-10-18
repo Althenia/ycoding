@@ -66,6 +66,7 @@ const CATALOG: Catalog = Catalog::new(
         TableDeclaration::of::<tables::ManifestTable>(),
         TableDeclaration::of::<tables::JobTable>(),
         TableDeclaration::of::<tables::ExclusionTable>(),
+        TableDeclaration::of::<ycoding_store::model_incident::IncidentTable>(),
         TableDeclaration::of::<analytics::DeliveryTable>(),
         TableDeclaration::of::<analytics::IntentTable>(),
     ],

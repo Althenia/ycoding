@@ -243,6 +243,110 @@ async fn launch_creates_a_background_child_session_with_durable_task_and_pending
 }
 
 #[tokio::test]
+async fn selected_context_is_admitted_once_and_launch_retries_do_not_reread_parent_messages() {
+    let harness = harness();
+    let selected_id = message("msg_selected");
+    harness.sessions.admit(ycoding_core::session::pending::Request {
+        id: selected_id.clone(), session_id: id("ses_one"),
+        event_id: ycoding_schema::event::Id::new("evt_selected").unwrap(), created: 10,
+        input: ycoding_schema::session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"Verified fact 😀 @skill:historical"},"delivery":"steer"}"#).unwrap()).unwrap(),
+    }).await.unwrap();
+    harness
+        .sessions
+        .promote_input(&id("ses_one"), selected_id.as_lossless(), 11)
+        .await
+        .unwrap();
+    let selected = ycoding_core::session::shared_context::Selection::decode(
+        &parse_json(r#"{"message_ids":["msg_selected"]}"#).unwrap(),
+    )
+    .unwrap();
+    let task = harness
+        .service
+        .launch_attributed_with_context(
+            input(&harness, "ses_one", "context", "Inspect the code", 1, "[]"),
+            &ycoding_core::tools::code_mode::Cancellation::default(),
+            &Attribution::Unset,
+            Some(&selected),
+        )
+        .await
+        .unwrap();
+    let pending = harness.sessions.pending_list(&task.session_id).unwrap();
+    let original = pending[0].data.clone();
+    let data = ycoding_schema::session_pending::UserData::decode(&original).unwrap();
+    let split =
+        ycoding_core::session::shared_context::split(&data.text, data.metadata.as_ref()).unwrap();
+    assert!(split.prefix.contains("Verified fact 😀 @skill:historical"));
+    assert_eq!(split.task, "Inspect the code");
+    assert!(data.metadata.unwrap().get(&"skills".into()).is_none());
+    harness
+        .store
+        .submit(move |tx| {
+            tx.delete::<ycoding_store::session::MessageTable>(&tuple_key(&[KeyPart::String(
+                selected_id.as_lossless(),
+            )]))?;
+            Ok(())
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    let retry = harness
+        .service
+        .launch_attributed_with_context(
+            input(&harness, "ses_one", "context", "Inspect the code", 1, "[]"),
+            &ycoding_core::tools::code_mode::Cancellation::default(),
+            &Attribution::Unset,
+            Some(&selected),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.session_id, task.session_id);
+    assert_eq!(
+        harness.sessions.pending_list(&task.session_id).unwrap()[0].data,
+        original
+    );
+    assert!(matches!(
+        harness
+            .service
+            .launch_attributed_with_context(
+                input(&harness, "ses_one", "context", "Changed task", 1, "[]"),
+                &ycoding_core::tools::code_mode::Cancellation::default(),
+                &Attribution::Unset,
+                Some(&selected),
+            )
+            .await,
+        Err(Error::Conflict(_))
+    ));
+}
+
+#[tokio::test]
+async fn an_unavailable_selected_message_fails_before_child_creation() {
+    let harness = harness();
+    let selected = ycoding_core::session::shared_context::Selection::decode(
+        &parse_json(r#"{"message_ids":["msg_missing"]}"#).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        harness
+            .service
+            .launch_attributed_with_context(
+                input(&harness, "ses_one", "missing-context", "Inspect", 1, "[]"),
+                &ycoding_core::tools::code_mode::Cancellation::default(),
+                &Attribution::Unset,
+                Some(&selected),
+            )
+            .await,
+        Err(Error::InvalidRequest(_))
+    ));
+    assert!(
+        harness
+            .sessions
+            .get(&child_of("ses_one", "missing-context"))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn identical_launch_retries_return_the_task_and_conflicting_retries_are_rejected() {
     let harness = harness();
     let first = harness
@@ -2206,4 +2310,165 @@ async fn a_failed_child_wake_releases_the_launch_reservation() {
             .is_err()
     );
     assert_eq!(subagents(&guardrails), 0);
+}
+
+#[path = "session_orchestration/questions.rs"]
+mod question_policy_tests;
+
+#[tokio::test]
+async fn starting_shared_context_retry_reuses_pruned_durable_input_and_rejects_foreign_projection()
+{
+    use ycoding_store::session::{ContextStateTable, MessageTable};
+    let harness = harness();
+    let selected_id = message("msg_starting_selected");
+    harness.sessions.admit(ycoding_core::session::pending::Request {
+        id: selected_id.clone(), session_id: id("ses_one"),
+        event_id: ycoding_schema::event::Id::new("evt_starting_selected").unwrap(), created: 10,
+        input: ycoding_schema::session_pending::Message::decode(&parse_json(r#"{"type":"user","data":{"text":"Captured historical fact 😀"},"delivery":"steer"}"#).unwrap()).unwrap(),
+    }).await.unwrap();
+    harness
+        .sessions
+        .promote_input(&id("ses_one"), selected_id.as_lossless(), 11)
+        .await
+        .unwrap();
+    let selected = ycoding_core::session::shared_context::Selection::decode(
+        &parse_json(r#"{"message_ids":["msg_starting_selected"]}"#).unwrap(),
+    )
+    .unwrap();
+    let launch = || {
+        input(
+            &harness,
+            "ses_one",
+            "starting-context",
+            "Inspect once",
+            1,
+            "[]",
+        )
+    };
+    let task = harness
+        .service
+        .launch_attributed_with_context(
+            launch(),
+            &ycoding_core::tools::code_mode::Cancellation::default(),
+            &Attribution::Unset,
+            Some(&selected),
+        )
+        .await
+        .unwrap();
+    let ids = Launch::new(&id("ses_one"), &message("msg_parent"), "starting-context");
+    let original = harness
+        .sessions
+        .pending(&ids.input_id)
+        .unwrap()
+        .unwrap()
+        .data;
+    harness
+        .sessions
+        .promote_input(&task.session_id, ids.input_id.as_lossless(), 12)
+        .await
+        .unwrap();
+    let mut row = task_row(&harness.store, &task.session_id);
+    row.state = "starting".into();
+    row.revision = 0;
+    let input_id = ids.input_id.clone();
+    let started_event_id = ids.started_event_id.clone();
+    harness
+        .store
+        .submit(move |tx| {
+            TaskTable::put(tx, &row)?;
+            // Simulate the crash window after initial input admission but before Started commits.
+            tx.delete::<EventTable>(&tuple_key(&[KeyPart::String(
+                started_event_id.as_lossless(),
+            )]))?;
+            tx.delete::<MessageTable>(&tuple_key(&[KeyPart::String(selected_id.as_lossless())]))?;
+            let mut projected = tx
+                .get::<MessageTable>(&tuple_key(&[KeyPart::String(input_id.as_lossless())]))?
+                .unwrap();
+            projected.session_id = "ses_two".into();
+            MessageTable::put(tx, &projected)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    assert!(matches!(
+        harness
+            .service
+            .launch_attributed_with_context(
+                launch(),
+                &ycoding_core::tools::code_mode::Cancellation::default(),
+                &Attribution::Unset,
+                Some(&selected)
+            )
+            .await,
+        Err(Error::Conflict(_))
+    ));
+    let child = task.session_id.clone();
+    let input_id = ids.input_id.clone();
+    harness
+        .store
+        .submit(move |tx| {
+            let input_key = tuple_key(&[KeyPart::String(input_id.as_lossless())]);
+            let projected = tx.get::<MessageTable>(&input_key)?.unwrap();
+            tx.delete::<MessageTable>(&input_key)?;
+            let key = tuple_key(&[KeyPart::String(child.as_lossless())]);
+            let mut context = tx.get::<ContextStateTable>(&key)?.unwrap();
+            context.covered_through_message_id = Some(input_id.as_lossless().clone());
+            context.covered_through_seq = Some(projected.seq);
+            ContextStateTable::put(tx, &context)
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    assert!(harness.sessions.pending(&ids.input_id).unwrap().is_none());
+    assert!(harness.sessions.message(&ids.input_id).unwrap().is_none());
+    let retry = harness
+        .service
+        .launch_attributed_with_context(
+            launch(),
+            &ycoding_core::tools::code_mode::Cancellation::default(),
+            &Attribution::Unset,
+            Some(&selected),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.state, State::Running);
+    assert_eq!(retry.session_id, task.session_id);
+    assert!(
+        harness
+            .sessions
+            .pending_list(&task.session_id)
+            .unwrap()
+            .is_empty(),
+        "an already promoted initial input must not be replayed"
+    );
+    let admitted = harness
+        .store
+        .snapshot()
+        .unwrap()
+        .scan::<EventTable>(Bound::Unbounded, Bound::Unbounded, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event.aggregate_id == *task.session_id.as_lossless()
+                && event.type_.as_str() == Some("session.input.admitted.1")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(admitted.len(), 1);
+    let JsonValue::Object(data) = &admitted[0].data else {
+        panic!()
+    };
+    let message =
+        ycoding_schema::session_pending::Message::decode(data.get(&"input".into()).unwrap())
+            .unwrap();
+    let ycoding_schema::session_pending::Message::User(user) = message else {
+        panic!()
+    };
+    assert_eq!(user.data.encode(), original);
+    assert!(
+        user.data
+            .text
+            .to_utf8()
+            .unwrap()
+            .contains("Captured historical fact 😀")
+    );
 }

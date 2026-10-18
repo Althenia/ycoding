@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { accountedTask } from "../../../test/usage-fixture"
-import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, isDeferredQuestion, taskStateLabel, teamShellCommand, shellOwnerLabel, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, shellStatusLabel, siblingTargets, taskRows, usageSlots, TEAM_SHELL_OUTPUT_TAIL_LIMIT, type TeamSubagent } from "./team-model"
+import { appendTeamShellOutput, canAnswerSubagent, canCancelSubagent, canContinueRecovery, isDeferredQuestion, taskStateLabel, teamShellCommand, shellOwnerLabel, teamActiveCount, teamActivityLabel, formatCacheHit, formatElapsed, isManagedSubagent, pinAction, shellRows, siblingTargets, taskRows, usageSlots, TEAM_SHELL_OUTPUT_TAIL_LIMIT, type TeamSubagent } from "./team-model"
 
 const task = (id: string, state: TeamSubagent["state"], updatedAt: number): TeamSubagent => ({
   sessionID: id, parentID: "ses_root", agent: "omoikane", description: `Review ${id}`, state, revision: 1,
@@ -148,13 +148,6 @@ test("a shell keeps its list preview while the opened view uses the complete com
   expect(teamShellCommand(shell, { command: "" })).toBe("")
   expect(shell.command).toHaveLength(256)
   expect(shell.command.endsWith("…")).toBe(true)
-})
-
-test("queued shells show their queue position and other statuses show their own word", () => {
-  expect(shellStatusLabel({ status: "queued", queuePosition: 2 })).toBe("queued #2")
-  expect(shellStatusLabel({ status: "queued" })).toBe("queued")
-  expect(shellStatusLabel({ status: "running" })).toBe("running")
-  expect(shellStatusLabel({ status: "killed", queuePosition: 2 })).toBe("killed")
 })
 
 test("a stopped recovery reads as stopped and can be continued by a human, while a deferred question waits in Review instead of the Team form", () => {

@@ -38,7 +38,7 @@ async function setup(options: {
   let activeSubagents = 0
   const autonomy = new Map<string, AutonomyState>()
   const waits = new Map<string, PromiseWithResolvers<void>>()
-  const terminalSignals: WeakRef<AbortSignal>[] = []
+  const terminalWaits: { sessionID: string; released: Promise<void> }[] = []
   let notificationAttempts = 0
   const session = (id: string, title: string, parentID?: string): Session => ({
     id,
@@ -124,7 +124,11 @@ async function setup(options: {
           },
           get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID],
           wait: async ({ sessionID }: { sessionID: string }, options?: { signal?: AbortSignal }) => {
-            if (options?.signal) terminalSignals.push(new WeakRef(options.signal))
+            if (options?.signal) {
+              const released = Promise.withResolvers<void>()
+              options.signal.addEventListener("abort", () => released.resolve(), { once: true })
+              terminalWaits.push({ sessionID, released: released.promise })
+            }
             return waits.get(sessionID)?.promise
           },
           autonomy: {
@@ -167,7 +171,7 @@ async function setup(options: {
     },
     autonomy,
     waits,
-    terminalSignals,
+    terminalWaits,
     addSession(id: string) {
       sessions[id] = session(id, `Session ${id}`)
     },
@@ -789,15 +793,21 @@ describe("internal notifications TUI plugin", () => {
 
   test("releases settled terminal episodes for many successful normal Sessions", async () => {
     const harness = await setup()
-    await runSuccessfulSessions(harness, 100)
-    Bun.gc(true)
-    await settle()
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    Bun.gc(true)
+    const sessions = Array.from({ length: 100 }, (_, index) => `normal-${index}`)
+    try {
+      await runSuccessfulSessions(harness, 100)
+      expect(harness.terminalWaits.map((wait) => wait.sessionID)).toEqual(sessions)
+      await Promise.all(harness.terminalWaits.map((wait) => wait.released))
 
-    expect(harness.terminalSignals).toHaveLength(100)
-    expect(harness.terminalSignals.flatMap((signal, index) => signal.deref() ? [index] : [])).toEqual([])
-    await harness.cleanup()
+      // A retained terminal episode rejects another success. Without a new start
+      // to replace it, each Session must create a fresh wait after its release.
+      sessions.forEach((sessionID, index) => harness.emit(executionSucceeded(`settled-${index}`, sessionID)))
+      expect(harness.terminalWaits.map((wait) => wait.sessionID)).toEqual([...sessions, ...sessions])
+      await Promise.all(harness.terminalWaits.map((wait) => wait.released))
+      expect(harness.notifications).toEqual([])
+    } finally {
+      await harness.cleanup()
+    }
   })
 
   test("does not treat an unfinished or another Session's completion call as root completion", async () => {

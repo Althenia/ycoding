@@ -514,7 +514,9 @@ impl Local {
             let data = session_pending::UserData::decode(&input.data)
                 .map_err(|_| error("skill.unavailable", "Pending skill metadata is invalid"))?;
             requested.extend(skill::selected(data.metadata.as_ref()));
-            has_mentions |= data.text.code_units().any(|unit| unit == u16::from(b'$'));
+            has_mentions |= super::shared_context::task_text(&data.text, data.metadata.as_ref())
+                .code_units()
+                .any(|unit| unit == u16::from(b'$'));
         }
         let Some(resolver) = &services.skill_resolver else {
             if requested.is_empty() {
@@ -543,7 +545,10 @@ impl Local {
             let data = session_pending::UserData::decode(&input.data)
                 .map_err(|_| error("skill.unavailable", "Pending skill metadata is invalid"))?;
             requested.extend(skill::selected(data.metadata.as_ref()));
-            requested.extend(skill::mentions(&data.text, &available));
+            requested.extend(skill::mentions(
+                &super::shared_context::task_text(&data.text, data.metadata.as_ref()),
+                &available,
+            ));
         }
         let mut ids = Vec::new();
         for id in requested {
@@ -1114,6 +1119,13 @@ impl Local {
                 metadata_key: metadata_key.clone(),
                 accounts,
                 states,
+                cache_shared_context: prompt_cache::shared_context_marker_support(
+                    &prepared.model.provider.0,
+                    &prepared.model.route.id,
+                    prepared.model.id.as_str().unwrap_or_default(),
+                    efficiency.openai_mode,
+                    &prepared.model.route.endpoint.base_url,
+                ),
             };
             let descriptions =
                 if super::image_analyzer::is_multimodal(Some(&resolved.info.capabilities)) {
@@ -1331,7 +1343,7 @@ impl Local {
             let project_id = text(&session.project_id);
             let provider_id = text(&selection.provider_id);
             let session_text = session.id.as_lossless().clone();
-            let cache = prompt_cache::provider_options(&prompt_cache::OptionsInput {
+            let mut cache = prompt_cache::provider_options(&prompt_cache::OptionsInput {
                 route_id: &prepared.model.route.id,
                 api_model_id: prepared.model.id.as_str().unwrap_or_default(),
                 session_id: &session_text,
@@ -1356,6 +1368,26 @@ impl Local {
             } else {
                 (0, 0)
             };
+            let effort_updates = super::effort::prepare(
+                &services.store.client.snapshot()?,
+                &session.id,
+                &selection,
+                account_identity.as_deref(),
+                &begin.prompt_cache_key,
+                &mut prepared,
+                |historical| {
+                    let resolved = model::resolve_catalog(
+                        &services.models.catalog(),
+                        historical,
+                        &saved,
+                        connection.as_ref(),
+                    )
+                    .ok()?;
+                    model::from_catalog_model(&resolved.info, None).ok()
+                },
+            )?;
+            // Keep the reconstructed effort baseline when family keys or continuation options are added.
+            cache.provider_options = prepared.provider_options.clone().unwrap_or(JsonValue::Null);
             let fingerprint = continuation::Fingerprint {
                 session: session_text.clone(),
                 context_revision: authority.1,
@@ -1390,6 +1422,44 @@ impl Local {
                 options_digest: continuation::options_digest(&prepared),
                 volatile_context_digest: continuation::volatile_digest(&[]),
             };
+            if efficiency.family_experiment
+                && replay.cache_shared_context
+                && let Some(shared) = loaded
+                    .iter()
+                    .find_map(|message| match message {
+                        session_message::Info::User(user) => Some(super::shared_context::split(
+                            &user.text,
+                            user.metadata.as_ref(),
+                        )),
+                        _ => None,
+                    })
+                    .flatten()
+                && let Some(account) = account_identity.as_deref()
+                && let Some(root) = super::family::root(
+                    &mut super::family::Reader::Snapshot(&services.store.client.snapshot()?),
+                    session.id.as_lossless(),
+                )?
+                && let Some(key) =
+                    prompt_cache::family_experiment_key(&prompt_cache::FamilyExperiment {
+                        root_session_id: &root,
+                        baseline_key: &begin.prompt_cache_key,
+                        account_identity_digest: account,
+                        api_model_id: prepared.model.id.as_str().unwrap_or_default(),
+                        variant: selection.variant.as_ref().map(text).as_ref(),
+                        route_id: &prepared.model.route.id,
+                        connection_identity_digest: &fingerprint.connection_identity_digest,
+                        semantic_options_digest: &fingerprint.options_digest,
+                        snapshot_digest: &shared.digest,
+                    })
+            {
+                cache.wire_key = key.clone();
+                cache.provider_options = with_openai(
+                    cache.provider_options,
+                    &[("promptCacheKey", JsonValue::String(key.into()))],
+                );
+                prepared.provider_options =
+                    Some(with_openai(cache.provider_options.clone(), &openai_options));
+            }
             let eligible = direct_responses
                 && route.current.is_none()
                 && account_identity.is_some()
@@ -1420,7 +1490,10 @@ impl Local {
                     "previousResponseId",
                     JsonValue::String(state.response_id.clone()),
                 ));
-                openai_options.push(("continuationInputStart", JsonValue::Number(start as f64)));
+                openai_options.push((
+                    "continuationInputStart",
+                    JsonValue::Number(effort_updates.input_start(start) as f64),
+                ));
                 prepared.provider_options =
                     Some(with_openai(cache.provider_options, &openai_options));
             }
@@ -2695,7 +2768,10 @@ impl execution::Runner for Local {
                 .iter()
                 .map(|skill| skill.id.clone())
                 .collect::<Vec<_>>();
-            let mentioned = skill::mentions(&user.data.text, &available);
+            let mentioned = skill::mentions(
+                &super::shared_context::task_text(&user.data.text, user.data.metadata.as_ref()),
+                &available,
+            );
             if mentioned.is_empty() {
                 return Ok(session_pending::Message::User(user));
             }

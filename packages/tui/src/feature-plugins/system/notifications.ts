@@ -150,7 +150,9 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         )
         if (disposed || requests.get(episode.key) !== episode) return
         episode.soundDelivered ||= result?.sound === true
-        episode.state = (notification.notification === false ? result?.ok : result?.notification) ? "notified" : "failed"
+        episode.state = (notification.notification === false ? result?.ok : result?.notification)
+          ? "notified"
+          : "failed"
         if (episode.state === "failed" && availableAt !== availabilityRevision) scheduleRequest(episode)
       }
 
@@ -161,7 +163,9 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
 
       function recoverRequests() {
         availabilityRevision += 1
-        Array.from(requests.values()).filter((episode) => episode.state === "failed").forEach(scheduleRequest)
+        Array.from(requests.values())
+          .filter((episode) => episode.state === "failed")
+          .forEach(scheduleRequest)
       }
 
       function addRequest(input: Omit<RequestEpisode, "key" | "state">) {
@@ -254,7 +258,9 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
           episode.state = "terminal"
           if (!work || work[0].summary.active > 0) return
-          if (work[1].data.some((shell) => (shell.status === "running" || shell.status === "queued") && shell.metadata.sessionID === episode.sessionID))
+          if (
+            work[1].data.some((shell) => shell.status === "running" && shell.metadata.sessionID === episode.sessionID)
+          )
             return
           const output =
             initial.goal?.status === "active"

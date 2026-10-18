@@ -1,9 +1,8 @@
-import { Database } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
 import { generateManifest, reconcileMembers } from "./manifest"
 import { coverageReport, type Tables } from "./coverage"
+import { immutableQuery, openImmutableDatabase } from "./immutable"
 
 export const normalization = {
   version: 1,
@@ -30,22 +29,17 @@ export function canonical(value: unknown): unknown {
 }
 
 export function exportDatabase(file: string): Tables {
-  const db = new Database(`${pathToFileURL(file).href}?immutable=1`, {
-    readonly: true,
-    strict: true,
-    safeIntegers: true,
-  })
+  const db = openImmutableDatabase(file)
   try {
-    const names = db
-      .query<{ name: string }, []>(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-      )
+    const names = immutableQuery<{ name: string }>(
+      db,
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )
       .all()
       .map((row) => row.name)
     return Object.fromEntries(
       names.map((name) => {
-        const rows = db
-          .query<Record<string, unknown>, []>(`SELECT * FROM "${name.replaceAll('"', '""')}"`)
+        const rows = immutableQuery<Record<string, unknown>>(db, `SELECT * FROM "${name.replaceAll('"', '""')}"`)
           .all()
           .map(canonical)
         return [

@@ -47,8 +47,14 @@ test("canonical control collection metadata enforces each current RemoteLimits N
     ]
     for (const value of cases) {
       const bytes = toBinary(StatusSchema, value)
-      if (count === 500) expect(() => decodeStrict(StatusSchema, bytes)).not.toThrow()
-      if (count === 501) expect(() => decodeStrict(StatusSchema, bytes)).toThrow("collection limit")
+      if (count === 500) {
+        expect(() => decodeStrict(StatusSchema, bytes)).not.toThrow()
+        expect(() => encodeStrict(StatusSchema, value)).not.toThrow()
+      }
+      if (count === 501) {
+        expect(() => decodeStrict(StatusSchema, bytes)).toThrow("collection limit")
+        expect(() => encodeStrict(StatusSchema, value)).toThrow("collection limit")
+      }
     }
   }
   for (const count of [200, 201]) {
@@ -375,9 +381,19 @@ test("handshake, tiny control, event bytes, bulk announcement/end and all frame 
 })
 
 test("TEST-027 descriptor membership is exhaustive for operations, fields, oneofs and events", () => {
-  expect(operations).toHaveLength(227)
-  expect(new Set(operations.map((operation) => operation.operationId)).size).toBe(227)
-  expect(new Set(operations.map((operation) => operation.diagnosticName)).size).toBe(227)
+  expect(operations).toHaveLength(231)
+  expect(new Set(operations.map((operation) => operation.operationId)).size).toBe(231)
+  expect(new Set(operations.map((operation) => operation.diagnosticName)).size).toBe(231)
+  expect(
+    operations
+      .filter((operation) => operation.diagnosticName.startsWith("incident."))
+      .map((operation) => [operation.operationId, operation.diagnosticName, operation.roles]),
+  ).toEqual([
+    [2064, "incident.report", [PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY]],
+    [2065, "incident.recent", [PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY]],
+    [2066, "incident.guidance.get", [PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY]],
+    [2067, "incident.guidance.clear", [PeerRole.LOCAL_CLIENT]],
+  ])
   const typeNames = new Set(schemas.map((schema) => schema.typeName))
   expect(typeNames.size).toBe(schemas.length)
   for (const operation of operations) {
@@ -385,14 +401,14 @@ test("TEST-027 descriptor membership is exhaustive for operations, fields, oneof
       expect(typeNames.has(type), `${operation.diagnosticName} references missing schema ${type}`).toBe(true)
     expect(operation.roles.length).toBeGreaterThan(0)
   }
-  expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(209)
+  expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(213)
   for (const name of ["session.capturedChanges.list", "session.team.economics", "session.family.activity"]) {
     const operation = operations.find((operation) => operation.diagnosticName === name)
     expect(operation?.roles).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
     expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toContain(operation!.operationId)
   }
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(76)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(72)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
   expect(operations.filter((operation) => operation.diagnosticName.startsWith("notice."))).toHaveLength(4)
   for (const schema of schemas) {
     const numbers = schema.fields.map((field) => field.number)

@@ -75,7 +75,7 @@ describe("remote team facts", () => {
     const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} } }), undefined, (request) => {
       if (request.operation === "session.team.shell.list") return { ok: true, value: { data: live ? [
         { id: "sh_external_running", ownerID: "ses_a", command: "bun test", status: "running", startedAt: 1 },
-        { id: "sh_external_queued", ownerID: "ses_a", command: "bun check", status: "queued", queuePosition: 2, startedAt: 2 },
+        { id: "sh_external_check", ownerID: "ses_a", command: "bun check", status: "running", startedAt: 2 },
       ] : [], truncated: false } }
       return "default"
     })
@@ -114,7 +114,7 @@ describe("remote team facts", () => {
       (request) => {
         if (request.operation !== "session.review.decide") return "default"
         return gate.promise.then((outcome) => {
-          if (outcome !== "default" && outcome !== "silent" && outcome !== "close" && outcome.ok) stopped = false
+          if (typeof outcome === "object" && "ok" in outcome && outcome.ok) stopped = false
           return outcome
         })
       },
@@ -201,17 +201,22 @@ describe("remote team facts", () => {
     const command = "bun test --watch"
     const h = await setup(() => ({ ok: true, value: { data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} } }), undefined, (request) => {
       if (request.operation === "session.team.shell.list") return { ok: true, value: { data: live ? [{ id: "sh_final", ownerID: "ses_a", command, status: "running", startedAt: 1 }] : [], truncated: false } }
-      if (request.operation === "shell.output") return { ok: true, value: { command, status: live ? "running" : "exited", data: { output: live ? "first" : "final", cursor: live ? 5 : 10, size: live ? 5 : 10, truncated: false } } }
+      if (request.operation === "shell.output") return { ok: true, value: { data: { output: live ? "first" : "final", cursor: live ? 5 : 10, size: live ? 5 : 10, truncated: false } } }
       return "default"
     })
     try {
       h.store.watchTeam(true); await h.store.selectSession("ses_a")
       await waitFor(() => h.store.state().team?.shellStatus === "ready")
+      expect(h.store.state().team?.shells).toEqual([{ id: "sh_final", ownerID: "ses_a", command, status: "running", startedAt: 1 }])
       expect(await h.store.teamShellOutput("ses_a", "sh_final")).toMatchObject({ text: "first" })
       live = false
       h.relay.pushEvent("ses_a", { type: "session.execution.succeeded", created: 10, data: {} })
       await waitFor(() => h.store.state().team?.shells.length === 0)
-      expect(await h.store.teamShellOutput("ses_a", "sh_final", 5)).toMatchObject({ command, status: "exited", text: "final", cursor: 10 })
+      expect(await h.store.teamShellOutput("ses_a", "sh_final", 5)).toEqual({ text: "final", cursor: 10, size: 10, truncated: false })
+      expect(h.relay.requests.filter((request) => request.operation === "shell.output").at(-1)).toMatchObject({
+        sessionID: "ses_a",
+        input: { id: "sh_final", cursor: 5, limit: 65_536 },
+      })
       const reads = h.relay.requests.filter((request) => request.operation === "shell.output").length
       await expect(h.store.teamShellOutput("ses_foreign", "sh_final")).rejects.toThrow("not in this family")
       expect(h.relay.requests.filter((request) => request.operation === "shell.output")).toHaveLength(reads)
@@ -301,11 +306,10 @@ describe("remote team facts", () => {
               data: [
                 { id: "sh_child", ownerID: "ses_child", command: "bun test", status: "running", startedAt: 1 },
                 {
-                  id: "sh_queued",
+                  id: "sh_check",
                   ownerID: "ses_child",
                   command: "bun typecheck",
-                  status: "queued",
-                  queuePosition: 2,
+                  status: "running",
                   startedAt: 2,
                 },
               ],
@@ -353,7 +357,7 @@ describe("remote team facts", () => {
         sideChatStatus: "ready",
         shells: [
           { id: "sh_child", ownerID: "ses_child" },
-          { id: "sh_queued", status: "queued", queuePosition: 2 },
+          { id: "sh_check", status: "running" },
         ],
         sideChats: [{ id: "ses_btw" }],
       })
@@ -362,14 +366,14 @@ describe("remote team facts", () => {
       expect(await test.store.cancelSubagent("ses_child")).toMatchObject({ status: "ok" })
       expect(test.store.state().team?.tasks[0]?.state).toBe("cancelling")
       expect(await test.store.killTeamShell("sh_child")).toMatchObject({ status: "ok" })
-      expect(test.store.state().team?.shells.map((shell) => shell.id)).toEqual(["sh_queued"])
-      expect(await test.store.killTeamShell("sh_queued")).toMatchObject({ status: "ok" })
+      expect(test.store.state().team?.shells.map((shell) => shell.id)).toEqual(["sh_check"])
+      expect(await test.store.killTeamShell("sh_check")).toMatchObject({ status: "ok" })
       expect(test.store.state().team?.shells).toEqual([])
       expect(
         test.relay.requests
           .filter((request) => request.operation === "session.team.shell.kill")
           .map((request) => request.input),
-      ).toEqual([{ shellID: "sh_child" }, { shellID: "sh_queued" }])
+      ).toEqual([{ shellID: "sh_child" }, { shellID: "sh_check" }])
       expect(await test.store.createSideChat()).toMatchObject({ status: "ok" })
       expect(test.relay.requests.filter((request) => request.operation === "session.side-chat.create")).toHaveLength(1)
       expect(test.relay.requests.filter((request) => request.operation === "session.family.activity")).toEqual([])
@@ -481,10 +485,13 @@ describe("remote team facts", () => {
     try {
       test.store.watchTeam(true)
       await test.store.selectSession("ses_a")
-      await waitFor(() => test.store.state().team?.status === "ready")
+      // Roster readiness starts a separate accounting read; wait for it to settle
+      // before observing the diagnostics request controlled by this test.
+      await waitFor(() => test.store.state().team?.status === "ready" && test.store.state().team?.economicsLoading === false)
+      expect(economics).toBe(0)
       expect(test.store.state().team?.economicsLoading).toBeFalsy()
       const controls = test.store.loadTeamControls()
-      await waitFor(() => test.store.state().team?.economicsLoading === true)
+      await waitFor(() => economics === 1 && test.store.state().team?.economicsLoading === true)
       held.resolve({ ok: false, code: "internal_error", message: "economics unavailable" })
       await controls
       expect(test.store.state().team?.economicsLoading).toBe(false)

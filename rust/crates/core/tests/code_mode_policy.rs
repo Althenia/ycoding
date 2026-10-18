@@ -91,7 +91,6 @@ impl ToolHost for Host {
                         metadata: None,
                         skip_review: false,
                         holder: None,
-                        defer_shell: false,
                         source: None,
                     })
                     .map_err(|_| ToolFailure::Safe("Guardrail denied".into()))?;

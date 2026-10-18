@@ -64,6 +64,26 @@ impl Fixture {
             env: BTreeMap::new(),
         }
     }
+
+    fn is_fixture_directory(&self, path: &Path) -> bool {
+        if path.starts_with(&self.0) {
+            return true;
+        }
+        // Runtime discovery also visits directories above the isolated fixture.
+        assert!(
+            path.file_name().is_some_and(|name| {
+                name == ".ycoding" || name == ".claude" || name == ".agents"
+            }) && path.parent().is_some_and(|parent| {
+                self.0
+                    .ancestors()
+                    .skip(1)
+                    .any(|ancestor| ancestor == parent)
+            }),
+            "unexpected non-ancestor discovery: {}",
+            path.display()
+        );
+        false
+    }
 }
 
 impl Drop for Fixture {
@@ -192,7 +212,7 @@ fn ordered_discovery_crosses_repository_boundary_and_keeps_ecosystem_sources() {
         .entries
         .iter()
         .filter_map(|entry| match entry {
-            Entry::Directory(path) => Some(path.clone()),
+            Entry::Directory(path) if fixture.is_fixture_directory(path) => Some(path.clone()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -208,7 +228,9 @@ fn ordered_discovery_crosses_repository_boundary_and_keeps_ecosystem_sources() {
         .entries
         .iter()
         .filter_map(|entry| match entry {
-            Entry::ClaudeDirectory(path) => Some(path.clone()),
+            Entry::ClaudeDirectory(path) if fixture.is_fixture_directory(path) => {
+                Some(path.clone())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -224,7 +246,9 @@ fn ordered_discovery_crosses_repository_boundary_and_keeps_ecosystem_sources() {
         .entries
         .iter()
         .filter_map(|entry| match entry {
-            Entry::AgentsDirectory(path) => Some(path.clone()),
+            Entry::AgentsDirectory(path) if fixture.is_fixture_directory(path) => {
+                Some(path.clone())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -291,7 +315,11 @@ fn home_roots_false_excludes_exact_home_roots_even_from_ancestors() {
             .entries
             .iter()
             .filter_map(|entry| match entry {
-                Entry::AgentsDirectory(path) | Entry::ClaudeDirectory(path) => Some(path.clone()),
+                Entry::AgentsDirectory(path) | Entry::ClaudeDirectory(path)
+                    if fixture.is_fixture_directory(path) =>
+                {
+                    Some(path.clone())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()

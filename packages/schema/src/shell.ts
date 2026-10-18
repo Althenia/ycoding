@@ -4,7 +4,7 @@ import { Schema } from "effect"
 import { optional } from "./schema.js"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
-import { NonNegativeInt, PositiveInt, statics } from "./schema.js"
+import { NonNegativeInt, statics } from "./schema.js"
 
 const IDSchema = Schema.String.check(Schema.isStartsWith("sh_")).pipe(Schema.brand("Shell.ID"))
 
@@ -19,7 +19,7 @@ export const ID = IDSchema.pipe(
 )
 export type ID = typeof ID.Type
 
-export const Status = Schema.Literals(["running", "exited", "timeout", "memory-limit", "killed", "queued"])
+export const Status = Schema.Literals(["running", "exited", "timeout", "memory-limit", "killed"])
 export type Status = typeof Status.Type
 
 export const MAX_MEMORY_LIMIT_MB = 1_048_576
@@ -28,7 +28,6 @@ export const MemoryLimitMb = NonNegativeInt.check(Schema.isLessThanOrEqualTo(MAX
 export const Time = Schema.Struct({
   started: Schema.Finite,
   completed: optional(Schema.Finite),
-  queued: optional(Schema.Finite),
 })
 export interface Time extends Schema.Schema.Type<typeof Time> {}
 
@@ -52,15 +51,13 @@ export const Info = Schema.Struct({
   // Present for shells created by a Session tool invocation.
   toolCallID: optional(Schema.String.check(Schema.isNonEmpty())),
   time: Time,
-  queuePosition: optional(PositiveInt),
 }).annotate({ identifier: "Shell.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 
 const Created = ephemeral({ type: "shell.created", schema: { info: Info } })
-const Updated = ephemeral({ type: "shell.updated", schema: { info: Info } })
 const Exited = ephemeral({ type: "shell.exited", schema: { id: ID, exit: optional(Schema.Finite), status: Status } })
 const Deleted = ephemeral({ type: "shell.deleted", schema: { id: ID } })
-export const Event = { Created, Updated, Exited, Deleted, Definitions: inventory(Created, Updated, Exited, Deleted) }
+export const Event = { Created, Exited, Deleted, Definitions: inventory(Created, Exited, Deleted) }
 
 export const CreateInput = Schema.Struct({
   command: Schema.String,

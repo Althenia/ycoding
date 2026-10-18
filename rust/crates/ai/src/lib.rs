@@ -3,6 +3,7 @@ pub mod auth;
 pub mod cache;
 pub mod claude_code;
 pub mod cursor;
+pub mod effort;
 pub mod framing;
 pub mod image;
 pub mod image_providers;

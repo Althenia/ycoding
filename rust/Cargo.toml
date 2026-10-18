@@ -41,6 +41,8 @@ oxc_ast = { version = "0.153", default-features = false }
 oxc_parser = { version = "0.153", default-features = false }
 oxc_semantic = { version = "0.153", default-features = false }
 photon-rs = { version = "=0.3.3", default-features = false }
+# Match Photon's scalar WASM JPEG pixels; native SIMD decoding rounds differently.
+jpeg-decoder = { version = "=0.3.2", default-features = false, features = ["platform_independent"] }
 oxc_span = { version = "0.153", default-features = false }
 prost = { version = "0.14", default-features = false, features = ["derive", "no-recursion-limit"] }
 prost-build = { version = "0.14", default-features = false }

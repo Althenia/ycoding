@@ -6,17 +6,18 @@ import { ConfigModel } from "./model"
 export class PromptCache extends Schema.Class<PromptCache>("ConfigEfficiency.PromptCache")({
   anthropic_ttl: Schema.Literals(["adaptive", "5m", "1h"]).pipe(Schema.optional),
   openai_mode: Schema.Literals(["auto", "implicit", "explicit"]).pipe(Schema.optional),
+  family_scope: Schema.Literals(["session", "family-experiment"]).pipe(Schema.optional),
   openai_extended_retention: Schema.Boolean.pipe(Schema.optional),
 }) {}
 
 export const HelperModel = Schema.Union([Schema.Literal("session"), ConfigModel.Selection])
 
-export class CompactionHelperModels extends Schema.Class<CompactionHelperModels>("ConfigEfficiency.HelperModels.Compaction")(
-  {
-    main: HelperModel.pipe(Schema.optional),
-    subagent: HelperModel.pipe(Schema.optional),
-  },
-) {}
+export class CompactionHelperModels extends Schema.Class<CompactionHelperModels>(
+  "ConfigEfficiency.HelperModels.Compaction",
+)({
+  main: HelperModel.pipe(Schema.optional),
+  subagent: HelperModel.pipe(Schema.optional),
+}) {}
 
 export class HelperModels extends Schema.Class<HelperModels>("ConfigEfficiency.HelperModels")({
   title: HelperModel.pipe(Schema.optional),

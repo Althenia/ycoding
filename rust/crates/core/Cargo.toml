@@ -30,6 +30,7 @@ oxc_ast.workspace = true
 oxc_parser.workspace = true
 oxc_semantic.workspace = true
 photon-rs.workspace = true
+jpeg-decoder.workspace = true
 oxc_span.workspace = true
 reqwest.workspace = true
 rmcp.workspace = true

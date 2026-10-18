@@ -4254,3 +4254,79 @@ async fn a_completed_real_prompt_settles_its_cost_status_while_the_runner_and_se
     );
     coordinator.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn shared_historical_skill_mentions_never_activate_but_task_mentions_do() {
+    use ycoding_core::session::shared_context;
+    use ycoding_schema::ObjectEncoder;
+    let (endpoint, mut requests, server) = server(vec![TEXT, TEXT, TEXT, TEXT]).await;
+    for prepare in [false, true] {
+        for explicit in [false, true] {
+            let store = support::store();
+            let service = Service::new(store.client());
+            let local = skill_local(
+                &store,
+                &endpoint,
+                vec![fixture_skill("audit", "Audit", "AUDIT_SKILL_INSTRUCTIONS")],
+            );
+            let snapshot = shared_context::resolve(&session::Id::new("ses_parent").unwrap(), &shared_context::Selection { message_ids: vec![session_message::Id::new("msg_history").unwrap()] }, |_| {
+                Ok(Some(session_message::Info::decode(&parse_json(r#"{"type":"user","id":"msg_history","text":"Previously someone mentioned $audit","time":{"created":1}}"#).unwrap()).unwrap()))
+            }).unwrap();
+            let data = shared_context::compose(
+                if explicit {
+                    "Now use $audit for this task"
+                } else {
+                    "Now report the evidence"
+                },
+                &snapshot,
+            )
+            .unwrap();
+            let mut input = session_pending::Message::decode(
+                &ObjectEncoder::new()
+                    .field("type", "user")
+                    .field("data", &data)
+                    .field("delivery", "steer")
+                    .finish(),
+            )
+            .unwrap();
+            if prepare {
+                input = Runner::prepare_input(&local, input).await.unwrap();
+                let selected =
+                    ycoding_schema::stringify_json(&input.encode()).contains(r#""skills":["#);
+                assert_eq!(
+                    selected, explicit,
+                    "admission preparation must ignore historical mentions"
+                );
+            }
+            service
+                .admit(ycoding_core::session::pending::Request {
+                    id: session_message::Id::new("msg_shared").unwrap(),
+                    session_id: session::Id::new("ses_one").unwrap(),
+                    input,
+                    event_id: ycoding_schema::event::Id::new("evt_shared").unwrap(),
+                    created: 10,
+                })
+                .await
+                .unwrap();
+            Coordinator::new(Arc::new(local))
+                .run(&session::Id::new("ses_one").unwrap())
+                .await
+                .unwrap();
+            let sent = ycoding_schema::stringify_json(&requests.recv().await.unwrap());
+            assert!(sent.contains("Previously someone mentioned $audit"));
+            assert_eq!(
+                sent.contains("AUDIT_SKILL_INSTRUCTIONS"),
+                explicit,
+                "runner promotion must use only current task mentions"
+            );
+            assert_eq!(
+                event_types(&store)
+                    .iter()
+                    .filter(|event| event.as_str() == "session.skill.activated.1")
+                    .count(),
+                usize::from(explicit)
+            );
+        }
+    }
+    server.await.unwrap();
+}

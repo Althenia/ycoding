@@ -1,5 +1,11 @@
 import ts from "typescript"
 
+const args = Bun.argv.slice(2)
+if (args.length > 1 || (args[0] !== undefined && !args[0].startsWith("--source-ref=")))
+  throw new Error("Usage: generate-code-mode-assertions.ts [--source-ref=<committed-ref>]")
+const sourceRef = args[0]?.slice("--source-ref=".length) ?? "main"
+if (sourceRef.length === 0) throw new Error("A committed source ref is required")
+
 const suites = ["callbacks", "parity", "stdlib", "regexp-math-test262", "promise", "lexical-test262"]
 const matcherKind: Record<string, string> = {
   toEqual: "toEqual",
@@ -20,6 +26,44 @@ const literalPattern = (node: ts.Expression | undefined) => {
 }
 const errorHelpers = new Set(["error", "toolError"])
 
+// ECMA-262 permits implementation-approximated results for these calls. Keep
+// this policy on the single host-Math vector, not on arbitrary numeric results.
+const approximatedMath = [
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cos",
+  "cosh",
+  "sin",
+  "sinh",
+  "tan",
+  "tanh",
+  "log1p",
+  "expm1",
+]
+const mathComparison = (suite: string, test: string, expected: ts.Expression | undefined) => {
+  if (suite !== "stdlib" || test !== "deterministic Math methods match the host runtime") return undefined
+  if (expected === undefined || !ts.isArrayLiteralExpression(expected)) throw new Error("Expected the host-Math vector")
+  const methods = expected.elements.map((element) => {
+    if (!ts.isCallExpression(element) || !ts.isPropertyAccessExpression(element.expression)) return undefined
+    const receiver = element.expression.expression
+    return ts.isIdentifier(receiver) && receiver.text === "Math" ? element.expression.name.text : undefined
+  })
+  if (JSON.stringify(methods) !== JSON.stringify([...approximatedMath, "f16round", "fround", "clz32", "imul"]))
+    throw new Error("The host-Math vector changed; review its precision policy")
+  return {
+    kind: "math-ulp",
+    maxUlps: 1,
+    indices: methods.flatMap((method, index) =>
+      method !== undefined && approximatedMath.includes(method) ? [index] : [],
+    ),
+  }
+}
+
 type Observation = { observe: string; code: ts.Expression | string }
 type Manual = { suite: string; test: string; file: string; rust: string }
 
@@ -32,13 +76,14 @@ const cases: Array<{
   code: string
   observe: string
   assertion: string
+  comparison?: ReturnType<typeof mathComparison>
   expected: unknown
 }> = []
 const excluded: Array<{ suite: string; line: number; at: number; test: string; reason: string }> = []
 const covered = new Map<string, number>()
 
 for (const suite of suites) {
-  const original = Bun.spawnSync(["git", "show", `main:packages/codemode/test/${suite}.test.ts`])
+  const original = Bun.spawnSync(["git", "show", `${sourceRef}:packages/codemode/test/${suite}.test.ts`])
   if (original.exitCode !== 0) throw new Error(`Cannot read committed suite ${suite}`)
   const text = original.stdout.toString()
   const source = ts.createSourceFile(suite, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
@@ -211,6 +256,12 @@ for (const suite of suites) {
         exclude(child, "expected value requires specification setup")
         return
       }
+      const comparison = mathComparison(suite, label.text, resolvedExpected)
+      if (
+        comparison !== undefined &&
+        (negated || assertion !== "toEqual" || planned.some((plan) => plan.observe !== "value"))
+      )
+        throw new Error("The host-Math assertion changed; review its precision policy")
       const emitted: typeof cases = []
       const loop = bindings(child)
       for (const plan of planned) {
@@ -244,6 +295,7 @@ for (const suite of suites) {
               code: program.code,
               observe: plan.observe,
               assertion: negated ? `not.${assertion}` : matcherKind[assertion]!,
+              ...(comparison === undefined ? {} : { comparison }),
               expected: value,
             })
           } catch {

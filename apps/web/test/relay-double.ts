@@ -748,7 +748,12 @@ export function fixtureResult(operation: string, value: unknown, sessionID?: str
     }
   if (operation === "session.list")
     return {
-      data: { data: Array.isArray(record?.data) ? record.data.map(info) : record?.data, cursor: record?.cursor ?? {} },
+      data: {
+        data: Array.isArray(record?.data) ? record.data.map(info) : record?.data,
+        cursor: record?.cursor ?? {},
+        ...(record?.status === undefined ? {} : { status: record.status }),
+        ...(record?.stale === undefined ? {} : { stale: record.stale }),
+      },
     }
   if (operation === "session.get" || operation === "session.create" || operation === "session.side-chat.create")
     return { data: info(record?.data) }

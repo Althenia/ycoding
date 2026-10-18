@@ -1,11 +1,14 @@
 mod validation;
-use super::{Authority, Publisher, Reviews, Wait, state};
+use super::{Authority, Publisher, Reviews, Wait, state, timeout};
 use crate::{
     process::guardrails::decision::Evaluator, session::review, tools::code_mode::Cancellation,
 };
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Instant,
 };
 use tokio::sync::oneshot;
@@ -30,6 +33,10 @@ struct Entry {
     order: u64,
     form: form::Info,
     state: form::State,
+    automatic: bool,
+    visible: bool,
+    failure: Option<Error>,
+    timer: Option<timeout::Timer>,
     settled_at: Option<u64>,
     sender: Option<oneshot::Sender<form::State>>,
 }
@@ -41,6 +48,7 @@ struct Inner {
     reviews: OnceLock<Reviews>,
     decision: OnceLock<Arc<dyn Evaluator>>,
     deciding: Mutex<BTreeMap<form::Id, Cancellation>>,
+    timeout_seconds: AtomicU64,
 }
 #[derive(Clone)]
 pub struct Forms(Arc<Inner>);
@@ -67,7 +75,14 @@ impl Forms {
             reviews: OnceLock::new(),
             decision: OnceLock::new(),
             deciding: Mutex::new(BTreeMap::new()),
+            timeout_seconds: AtomicU64::new(timeout::DEFAULT_SECONDS),
         }))
+    }
+    pub fn with_timeout_seconds(self, seconds: u64) -> Self {
+        self.0
+            .timeout_seconds
+            .store(seconds.min(timeout::MAX_SECONDS), Ordering::Relaxed);
+        self
     }
     pub fn with_reviews(self, reviews: Reviews) -> Self {
         let _ = self.0.reviews.set(reviews);
@@ -92,6 +107,7 @@ impl Forms {
                 .values()
                 .filter(|entry| {
                     entry.sender.is_some()
+                        && entry.visible
                         && entry.state == form::State::Pending
                         && &entry.form.session_id == session.as_lossless()
                 })
@@ -123,6 +139,7 @@ impl Forms {
             .map_err(Error::Publish)?;
             entry.state = form::State::Deferred { item_id };
             entry.settled_at = Some((self.0.clock)());
+            entry.timer.take();
             if let Some(sender) = entry.sender.take() {
                 let _ = sender.send(entry.state.clone());
             }
@@ -178,6 +195,14 @@ impl Forms {
         });
     }
     pub fn create(&self, form: form::Info) -> Result<form::Info, Error> {
+        self.create_pending(form, true, true)
+    }
+    fn create_pending(
+        &self,
+        form: form::Info,
+        visible: bool,
+        timed: bool,
+    ) -> Result<form::Info, Error> {
         let mut forms = self
             .0
             .forms
@@ -194,17 +219,71 @@ impl Forms {
                 order: state::next_order(),
                 form: form.clone(),
                 state: form::State::Pending,
+                automatic: false,
+                visible,
+                failure: None,
+                timer: None,
                 settled_at: None,
                 sender: None,
             },
         );
-        if let Err(error) =
-            state::emit::<form::Created>(&self.0.publish, &form::CreatedData { form: form.clone() })
+        if visible
+            && let Err(error) = state::emit::<form::Created>(
+                &self.0.publish,
+                &form::CreatedData { form: form.clone() },
+            )
         {
             forms.remove(&form.id);
             return Err(Error::Publish(error));
         }
+        let entry = forms.get_mut(&form.id).expect("new Form");
+        let order = entry.order;
+        let id = form.id.clone();
+        let weak = Arc::downgrade(&self.0);
+        let seconds = if timed {
+            self.0.timeout_seconds.load(Ordering::Relaxed)
+        } else {
+            0
+        };
+        entry.timer = timeout::arm(seconds, move || {
+            if let Some(inner) = weak.upgrade()
+                && let Err(error) = Forms(inner).timeout(&id, order, seconds)
+            {
+                tracing::warn!(?error, "Form timeout failed");
+            }
+        });
         Ok(form)
+    }
+    fn timeout(&self, id: &form::Id, order: u64, seconds: u64) -> Result<(), Error> {
+        let mut forms = self
+            .0
+            .forms
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(entry) = forms
+            .get_mut(id)
+            .filter(|entry| entry.order == order && entry.state == form::State::Pending)
+        else {
+            return Ok(());
+        };
+        state::emit::<form::TimedOut>(
+            &self.0.publish,
+            &form::TimedOutData {
+                id: id.clone(),
+                session_id: entry.form.session_id.clone(),
+            },
+        )
+        .map_err(Error::Publish)?;
+        entry.state = form::State::TimedOut {
+            seconds: ycoding_schema::schema::PositiveInt::new(seconds as i64)
+                .expect("nonzero bounded timeout"),
+        };
+        entry.settled_at = Some((self.0.clock)());
+        entry.timer.take();
+        if let Some(sender) = entry.sender.take() {
+            let _ = sender.send(entry.state.clone());
+        }
+        Ok(())
     }
     pub fn ask(&self, form: form::Info) -> Result<Wait<form::State>, Error> {
         if let Some(deferred) = self.defer_asleep(&form)? {
@@ -212,7 +291,23 @@ impl Forms {
             let _ = sender.send(deferred);
             return Ok(Wait::new(receiver, || {}));
         }
-        let form = self.create(form)?;
+        let autonomy = SessionId::decode(&JsonValue::String(form.session_id.clone()))
+            .ok()
+            .and_then(|session| self.0.authority.session(&session, None).ok())
+            .map(|session| session.autonomy);
+        let asleep_automatic = autonomy
+            .is_some_and(|state| state.asleep && state.can_auto_answer())
+            && self.0.decision.get().is_some()
+            && self.0.reviews.get().is_some();
+        let immediate_answer = autonomy
+            .is_some_and(|state| !state.asleep && state.can_auto_answer())
+            .then(|| automatic_answer(&form))
+            .flatten();
+        let form = self.create_pending(
+            form,
+            !asleep_automatic,
+            !asleep_automatic && immediate_answer.is_none(),
+        )?;
         let (sender, receiver) = oneshot::channel();
         {
             let mut forms = self
@@ -227,11 +322,6 @@ impl Forms {
                 entry.sender = Some(sender);
             }
         }
-        let autonomy =
-            SessionId::decode(&ycoding_schema::JsonValue::String(form.session_id.clone()))
-                .ok()
-                .and_then(|session| self.0.authority.session(&session, None).ok())
-                .map(|session| session.autonomy);
         if autonomy.is_some_and(|autonomy| autonomy.can_auto_answer() && autonomy.asleep)
             && let (Some(evaluator), Some(reviews)) = (
                 self.0.decision.get().cloned(),
@@ -248,13 +338,21 @@ impl Forms {
             let cancel = cancellation.clone();
             let id = form.id.clone();
             let task = tokio::spawn(async move {
-                let result = automatic(evaluator.as_ref(), &form, &cancellation).await;
+                let mut result = automatic(evaluator.as_ref(), &form, &cancellation).await;
+                if result.is_ok()
+                    && !SessionId::new(form.session_id.clone())
+                        .ok()
+                        .and_then(|session| service.0.authority.session(&session, None).ok())
+                        .is_some_and(|session| session.autonomy.can_auto_answer())
+                {
+                    result = Err(session_review::Reason::Disabled);
+                }
                 if cancellation.is_cancelled() {
                     return;
                 }
                 if let Err(error) = service.settle_automatic(&form, &reviews, result) {
                     tracing::warn!(?error, "automatic Form settlement failed");
-                    let _ = service.cancel(&form.id);
+                    let _ = service.cancel_with_failure(&form.id, Some(error));
                 }
             });
             let service = self.clone();
@@ -270,10 +368,11 @@ impl Forms {
             });
             return Ok(Wait::new(receiver, move || drop(task)));
         }
-        let autonomous =
-            autonomy.is_some_and(|autonomy| autonomy.can_auto_answer() && !autonomy.asleep);
-        if autonomous && let Some(answer) = automatic_answer(&form) {
-            self.reply(&form.id, answer)?;
+        if let Some(answer) = immediate_answer {
+            match self.reply_with_origin(&form.id, answer, true) {
+                Ok(()) | Err(Error::AlreadySettled) => {}
+                Err(error) => return Err(error),
+            }
         }
         let service = self.clone();
         let id = form.id;
@@ -315,7 +414,8 @@ impl Forms {
         let mut pending = forms
             .values()
             .filter(|entry| {
-                entry.state == form::State::Pending
+                entry.visible
+                    && entry.state == form::State::Pending
                     && session.is_none_or(|session| &entry.form.session_id == session)
             })
             .map(|entry| (entry.order, entry.form.clone()))
@@ -324,6 +424,23 @@ impl Forms {
         pending.into_iter().map(|(_, form)| form).collect()
     }
     pub fn reply(&self, id: &form::Id, answer: form::Answer) -> Result<(), Error> {
+        self.reply_with_origin(id, answer, false)
+    }
+    pub fn answered_automatically(&self, id: &form::Id) -> Result<bool, Error> {
+        self.0
+            .forms
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(id)
+            .map(|entry| entry.automatic)
+            .ok_or(Error::NotFound)
+    }
+    fn reply_with_origin(
+        &self,
+        id: &form::Id,
+        answer: form::Answer,
+        automatic: bool,
+    ) -> Result<(), Error> {
         let mut forms = self
             .0
             .forms
@@ -333,6 +450,9 @@ impl Forms {
         let entry = forms.get_mut(id).ok_or(Error::NotFound)?;
         if entry.state != form::State::Pending {
             return Err(Error::AlreadySettled);
+        }
+        if !entry.visible {
+            return Err(Error::NotFound);
         }
         validate_answer(&entry.form, &answer).map_err(Error::InvalidAnswer)?;
         state::emit::<form::Replied>(
@@ -345,13 +465,26 @@ impl Forms {
         )
         .map_err(Error::Publish)?;
         entry.state = form::State::Answered(answer);
+        entry.automatic = automatic;
         entry.settled_at = Some((self.0.clock)());
+        entry.timer.take();
         if let Some(sender) = entry.sender.take() {
             let _ = sender.send(entry.state.clone());
         }
         Ok(())
     }
+    pub fn failure(&self, id: &form::Id) -> Option<Error> {
+        self.0
+            .forms
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(id)
+            .and_then(|entry| entry.failure.clone())
+    }
     pub fn cancel(&self, id: &form::Id) -> Result<(), Error> {
+        self.cancel_with_failure(id, None)
+    }
+    fn cancel_with_failure(&self, id: &form::Id, failure: Option<Error>) -> Result<(), Error> {
         if let Some(cancellation) = self
             .0
             .deciding
@@ -371,25 +504,66 @@ impl Forms {
         if entry.state != form::State::Pending {
             return Err(Error::AlreadySettled);
         }
-        state::emit::<form::Cancelled>(
-            &self.0.publish,
-            &form::CancelledData {
-                id: id.clone(),
-                session_id: entry.form.session_id.clone(),
-            },
-        )
-        .map_err(Error::Publish)?;
+        if entry.visible {
+            state::emit::<form::Cancelled>(
+                &self.0.publish,
+                &form::CancelledData {
+                    id: id.clone(),
+                    session_id: entry.form.session_id.clone(),
+                },
+            )
+            .map_err(Error::Publish)?;
+        }
         entry.state = form::State::Cancelled;
+        entry.failure = failure;
         entry.settled_at = Some((self.0.clock)());
+        entry.timer.take();
         if let Some(sender) = entry.sender.take() {
             let _ = sender.send(entry.state.clone());
         }
         Ok(())
     }
+    pub fn has_pending(&self) -> bool {
+        self.0
+            .forms
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .any(|entry| entry.state == form::State::Pending)
+    }
+    pub fn cancel_session(&self, session: &SessionId) -> Vec<Error> {
+        let ids = self
+            .0
+            .forms
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .filter(|(_, entry)| {
+                entry.state == form::State::Pending
+                    && &entry.form.session_id == session.as_lossless()
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        ids.into_iter()
+            .filter_map(|id| match self.cancel(&id) {
+                Ok(()) | Err(Error::AlreadySettled) => None,
+                Err(error) => Some(error),
+            })
+            .collect()
+    }
     pub fn shutdown(&self) -> Vec<Error> {
-        self.list(None)
+        let pending = self
+            .0
+            .forms
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .filter(|(_, entry)| entry.state == form::State::Pending)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        pending
             .into_iter()
-            .filter_map(|form| self.cancel(&form.id).err())
+            .filter_map(|id| self.cancel(&id).err())
             .collect()
     }
 
@@ -400,7 +574,29 @@ impl Forms {
         result: Result<form::Answer, session_review::Reason>,
     ) -> Result<(), Error> {
         if let Ok(answer) = &result {
-            return self.reply(&form.id, answer.clone());
+            {
+                let mut forms = self
+                    .0
+                    .forms
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                let entry = forms.get_mut(&form.id).ok_or(Error::NotFound)?;
+                if entry.state != form::State::Pending {
+                    return Ok(());
+                }
+                if !entry.visible {
+                    state::emit::<form::Created>(
+                        &self.0.publish,
+                        &form::CreatedData { form: form.clone() },
+                    )
+                    .map_err(Error::Publish)?;
+                    entry.visible = true;
+                }
+            }
+            return match self.reply_with_origin(&form.id, answer.clone(), true) {
+                Ok(()) | Err(Error::AlreadySettled) => Ok(()),
+                Err(error) => Err(error),
+            };
         }
         let mut forms = self
             .0
@@ -432,6 +628,7 @@ impl Forms {
         .map_err(Error::Publish)?;
         entry.state = form::State::Deferred { item_id };
         entry.settled_at = Some((self.0.clock)());
+        entry.timer.take();
         if let Some(sender) = entry.sender.take() {
             let _ = sender.send(entry.state.clone());
         }

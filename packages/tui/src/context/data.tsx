@@ -1335,7 +1335,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         ),
         ...Object.values(store.location).flatMap((location) =>
           Object.values(location.shell ?? {}).flatMap((shell) =>
-            (shell.status === "running" || shell.status === "queued") && shell.metadata.sessionID ? [shell.metadata.sessionID] : [],
+            shell.status === "running" && shell.metadata.sessionID ? [shell.metadata.sessionID] : [],
           ),
         ),
         ...submissions
@@ -1419,6 +1419,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     function handleEvent(event: YCodingEvent) {
+      if (event.type === "shell.exited" || event.type === "shell.deleted") {
+        const keys = event.location ? [locationKey(event.location)] : Object.keys(store.location)
+        keys.forEach((key) => sync.invalidate(`location.shell:${key}`))
+      }
       switch (event.type) {
         case "session.created": {
           // The event already carries the creation-time record, including the
@@ -1455,7 +1459,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           removeSession(event.data.sessionID)
           break
         case "session.task.updated": {
-          refreshAccounting(event.data.sessionID, event.data.change.type === "launched" ? event.data.change.parentID : undefined)
+          refreshAccounting(
+            event.data.sessionID,
+            event.data.change.type === "launched" ? event.data.change.parentID : undefined,
+          )
           const parentID =
             event.data.change.type === "launched"
               ? event.data.change.parentID
@@ -1702,7 +1709,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.guardrail.escalated":
           message.update(event.data.sessionID, (draft, index) => {
-            message.append(draft, index, { id: messageIDFromEvent(event.id), type: "system", text: GuardrailEscalation.text(event.data), time: { created: event.created } })
+            message.append(draft, index, {
+              id: messageIDFromEvent(event.id),
+              type: "system",
+              text: GuardrailEscalation.text(event.data),
+              time: { created: event.created },
+            })
           })
           break
         case "session.synthetic":
@@ -2116,12 +2128,29 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           const dismissed = store.session.guardrailDismissed[event.data.sessionID] ?? []
           const source = event.data.source
           const existing = dismissed.find((item) => item.eventID === event.id)
-          if (!existing) setStore("session", "guardrailDismissed", event.data.sessionID,
-            [...dismissed, { sessionID: event.data.reviewSessionID, created: event.created, eventID: event.id, ruleID: event.data.ruleID, confidence: event.data.confidence, ...(source ? { source } : {}) }].slice(-100),
-          )
+          if (!existing)
+            setStore(
+              "session",
+              "guardrailDismissed",
+              event.data.sessionID,
+              [
+                ...dismissed,
+                {
+                  sessionID: event.data.reviewSessionID,
+                  created: event.created,
+                  eventID: event.id,
+                  ruleID: event.data.ruleID,
+                  confidence: event.data.confidence,
+                  ...(source ? { source } : {}),
+                },
+              ].slice(-100),
+            )
           else if (source && !existing.source)
-            setStore("session", "guardrailDismissed", event.data.sessionID,
-              dismissed.map((item) => item.eventID === event.id ? { ...item, source } : item),
+            setStore(
+              "session",
+              "guardrailDismissed",
+              event.data.sessionID,
+              dismissed.map((item) => (item.eventID === event.id ? { ...item, source } : item)),
             )
           break
         }
@@ -2136,7 +2165,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.guardrail.decided": {
           const decisions = store.session.guardrailDecided[event.data.sessionID] ?? []
           const existing = decisions.find((item) => item.requestID === event.data.requestID)
-          const request = store.session.guardrail[event.data.sessionID]?.find((item) => item.id === event.data.requestID)
+          const request = store.session.guardrail[event.data.sessionID]?.find(
+            (item) => item.id === event.data.requestID,
+          )
           const decision: GuardrailDecisionMade = {
             ...(existing ?? {}),
             requestID: event.data.requestID,
@@ -2265,17 +2296,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           )
           break
         case "shell.created":
-        case "shell.updated":
           setStore("location", locationKey(event.location ?? defaultLocation()), (data) => ({
             ...data,
             shell: { ...data?.shell, [event.data.info.id]: event.data.info },
           }))
-          if (typeof event.data.info.metadata.sessionID === "string" && !store.session.info[event.data.info.metadata.sessionID])
+          if (
+            typeof event.data.info.metadata.sessionID === "string" &&
+            !store.session.info[event.data.info.metadata.sessionID]
+          )
             void syncShellOwners([event.data.info])
           break
         case "shell.exited":
-          // Keep the settled shell resident so its tab row and output view survive the
-          // exit; the next shell list sync replaces the record with live shells only.
           setStore(
             "location",
             produce((draft) => {
@@ -2504,29 +2535,47 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
         },
         taskCosts: {
-          get(sessionID: string, childID: string) { return store.session.taskCosts[sessionID]?.find((task) => task.sessionID === childID) },
-          state(sessionID: string) { return store.session.taskCostState[sessionID] },
-          invalidate(sessionID: string) { sync.invalidate(`session.taskCosts:${sessionID}`) },
+          get(sessionID: string, childID: string) {
+            return store.session.taskCosts[sessionID]?.find((task) => task.sessionID === childID)
+          },
+          state(sessionID: string) {
+            return store.session.taskCostState[sessionID]
+          },
+          invalidate(sessionID: string) {
+            sync.invalidate(`session.taskCosts:${sessionID}`)
+          },
           sync(sessionID: string, sessionIDs: readonly string[], refresh = false) {
             const ids = [...new Set(sessionIDs)].sort()
             const signature = JSON.stringify(ids)
-            if (JSON.stringify(taskCostInputs.get(sessionID)) !== signature) { taskCostInputs.set(sessionID, ids); sync.invalidate(`session.taskCosts:${sessionID}`) }
-            return sync.run(`session.taskCosts:${sessionID}`, async (current) => {
-              setStore("session", "taskCostState", sessionID, "loading")
-              const tasks: SessionTaskCostsOutput["tasks"][number][] = []
-              for (let offset = 0; offset < ids.length; offset += 100) {
-                const first = ids[offset]
-                if (first === undefined || !current()) return
-                const pageIDs: [string, ...string[]] = [first, ...ids.slice(offset + 1, offset + 100)]
-                const page = await client.api.session.taskCosts({ sessionID, sessionIDs: pageIDs }).catch((error: unknown) => {
-                  if (current()) setStore("session", "taskCostState", sessionID, "unavailable")
-                  throw error
-                })
-                if (!current()) return
-                tasks.push(...page.tasks.filter((task) => pageIDs.includes(task.sessionID)))
-              }
-              if (current()) { setStore("session", "taskCosts", sessionID, tasks); setStore("session", "taskCostState", sessionID, "ready") }
-            }, refresh)
+            if (JSON.stringify(taskCostInputs.get(sessionID)) !== signature) {
+              taskCostInputs.set(sessionID, ids)
+              sync.invalidate(`session.taskCosts:${sessionID}`)
+            }
+            return sync.run(
+              `session.taskCosts:${sessionID}`,
+              async (current) => {
+                setStore("session", "taskCostState", sessionID, "loading")
+                const tasks: SessionTaskCostsOutput["tasks"][number][] = []
+                for (let offset = 0; offset < ids.length; offset += 100) {
+                  const first = ids[offset]
+                  if (first === undefined || !current()) return
+                  const pageIDs: [string, ...string[]] = [first, ...ids.slice(offset + 1, offset + 100)]
+                  const page = await client.api.session
+                    .taskCosts({ sessionID, sessionIDs: pageIDs })
+                    .catch((error: unknown) => {
+                      if (current()) setStore("session", "taskCostState", sessionID, "unavailable")
+                      throw error
+                    })
+                  if (!current()) return
+                  tasks.push(...page.tasks.filter((task) => pageIDs.includes(task.sessionID)))
+                }
+                if (current()) {
+                  setStore("session", "taskCosts", sessionID, tasks)
+                  setStore("session", "taskCostState", sessionID, "ready")
+                }
+              },
+              refresh,
+            )
           },
         },
         usage: {
@@ -2687,24 +2736,44 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           sync(sessionID: string) {
             return sync.run(`session.guardrail:${sessionID}`, async (current) => {
               const beforeDecisions = untrack(
-                () => new Map((store.session.guardrailDecided[resolveRoot(sessionID)] ?? []).map((item) => [item.requestID, JSON.stringify(item)])),
+                () =>
+                  new Map(
+                    (store.session.guardrailDecided[resolveRoot(sessionID)] ?? []).map((item) => [
+                      item.requestID,
+                      JSON.stringify(item),
+                    ]),
+                  ),
               )
-              const beforeDismissals = untrack(() => new Set((store.session.guardrailDismissed[resolveRoot(sessionID)] ?? []).map((item) => item.eventID)))
+              const beforeDismissals = untrack(
+                () =>
+                  new Set((store.session.guardrailDismissed[resolveRoot(sessionID)] ?? []).map((item) => item.eventID)),
+              )
               const [requests, status] = await Promise.all([
                 client.api.guardrail.request.list({ sessionID }),
                 client.api.guardrail.status({ sessionID }),
               ])
               if (!current()) return
               const rootID = status.rootSessionID
-              const liveDismissals = (store.session.guardrailDismissed[rootID] ?? []).filter((item) => !beforeDismissals.has(item.eventID))
-              setStore("session", "guardrailDismissed", rootID, [
-                ...(status.dismissals ?? []).filter((item) => !liveDismissals.some((current) => current.eventID === item.eventID)),
-                ...liveDismissals,
-              ].slice(-100))
+              const liveDismissals = (store.session.guardrailDismissed[rootID] ?? []).filter(
+                (item) => !beforeDismissals.has(item.eventID),
+              )
+              setStore(
+                "session",
+                "guardrailDismissed",
+                rootID,
+                [
+                  ...(status.dismissals ?? []).filter(
+                    (item) => !liveDismissals.some((current) => current.eventID === item.eventID),
+                  ),
+                  ...liveDismissals,
+                ].slice(-100),
+              )
               setStore("session", "guardrail", rootID, reconcile(requests))
               const decisions = store.session.guardrailDecided[rootID] ?? []
               const statusDecisions = status.decisions ?? []
-              const liveDecisions = decisions.filter((item) => beforeDecisions.get(item.requestID) !== JSON.stringify(item))
+              const liveDecisions = decisions.filter(
+                (item) => beforeDecisions.get(item.requestID) !== JSON.stringify(item),
+              )
               setStore(
                 "session",
                 "guardrailDecided",
@@ -2716,7 +2785,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                     const cached = decisions.find((decision) => decision.requestID === item.requestID)
                     return cached?.action === undefined ? item : { ...item, action: cached.action }
                   }),
-                  ...liveDecisions.filter((item) => !statusDecisions.some((statusItem) => statusItem.requestID === item.requestID)),
+                  ...liveDecisions.filter(
+                    (item) => !statusDecisions.some((statusItem) => statusItem.requestID === item.requestID),
+                  ),
                 ].slice(-100),
               )
             })
@@ -2826,7 +2897,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             let cursor: string | undefined
             do {
               if (!current()) return undefined
-              const page = await client.api.session.list({ parentID: parent.id, limit: 200, ...(cursor === undefined ? {} : { cursor }) })
+              const page = await client.api.session.list({
+                parentID: parent.id,
+                limit: 200,
+                ...(cursor === undefined ? {} : { cursor }),
+              })
               if (!current()) return undefined
               for (const child of page.data) {
                 if (child.parentID !== parent.id || seen.has(child.id)) continue
@@ -2838,15 +2913,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               cursor = page.cursor.next ?? undefined
             } while (cursor !== undefined)
           }
-          const locations = [...new Map(members.map((member) => [locationKey(member.location), member.location])).values()]
+          const locations = [
+            ...new Map(members.map((member) => [locationKey(member.location), member.location])).values(),
+          ]
           let next = 0
-          await Promise.all(locations.slice(0, 4).map(async () => {
-            while (current()) {
-              const ref = locations[next++]
-              if (!ref) return
-              await result.shell.sync(ref, current)
-            }
-          }))
+          await Promise.all(
+            locations.slice(0, 4).map(async () => {
+              while (current()) {
+                const ref = locations[next++]
+                if (!ref) return
+                await result.shell.sync(ref, current)
+              }
+            }),
+          )
           return current() ? members : undefined
         },
         list(location?: LocationRef) {
@@ -2868,7 +2947,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             const key = locationKey(response.location)
             setStore("location", key, {
               ...store.location[key],
-              shell: Object.fromEntries(response.data.map((info) => [info.id, info])),
+              shell: Object.fromEntries([
+                ...response.data.map((info) => [info.id, info]),
+                ...Object.entries(store.location[key]?.shell ?? {}).filter(([, info]) => info.status !== "running"),
+              ]),
             })
             await syncShellOwners(response.data, isCurrent)
           })

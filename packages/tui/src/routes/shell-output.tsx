@@ -1,11 +1,4 @@
-import {
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  untrack,
-} from "solid-js"
+import { Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js"
 import { useRoute, useRouteData } from "../context/route"
 import { useData } from "../context/data"
 import { useClient } from "../context/client"
@@ -37,10 +30,14 @@ export function ShellOutput() {
     const fromStore = data.shell.get(route.shellID) ?? data.shell.list().find((s) => s.id === route.shellID)
     const candidate = fromStore ?? shellFetch()
     if (!candidate || candidate.id !== route.shellID) return undefined
-    return groupSessionShells([candidate], data.session.list(), route.sessionID, { includeSettled: true }).length ? candidate : undefined
+    return groupSessionShells([candidate], data.session.list(), route.sessionID, { includeSettled: true }).length
+      ? candidate
+      : undefined
   })
   const sessions = createMemo(() => data.session.list())
-  const groups = createMemo(() => groupSessionShells(shell() ? [shell()!] : [], sessions(), route.sessionID, { includeSettled: true }))
+  const groups = createMemo(() =>
+    groupSessionShells(shell() ? [shell()!] : [], sessions(), route.sessionID, { includeSettled: true }),
+  )
   const owner = createMemo(() => {
     const s = shell()
     if (!s) return ""
@@ -60,20 +57,24 @@ export function ShellOutput() {
   let outputLoading: number | undefined
   let settlementPending = false
   let wasLive = false
-  onCleanup(() => { readGeneration++ })
-  onCleanup(data.on("shell.deleted", (event) => {
-    if (event.data.id !== route.shellID) return
+  onCleanup(() => {
     readGeneration++
-    settlementPending = false
-    wasLive = false
-    outputLoading = undefined
-    setLookup("error")
-    setShellFetch(undefined)
-    setOutputText("")
-    setCursor(0)
-    setLoading(false)
-    setOutputError(undefined)
-  }))
+  })
+  onCleanup(
+    data.on("shell.deleted", (event) => {
+      if (event.data.id !== route.shellID) return
+      readGeneration++
+      settlementPending = false
+      wasLive = false
+      outputLoading = undefined
+      setLookup("error")
+      setShellFetch(undefined)
+      setOutputText("")
+      setCursor(0)
+      setLoading(false)
+      setOutputError(undefined)
+    }),
+  )
 
   createEffect(() => {
     const sessionID = route.sessionID
@@ -93,16 +94,22 @@ export function ShellOutput() {
   async function findShell(sessionID: string, shellID: string, generation: number) {
     const members = await data.shell.syncFamily(sessionID, () => generation === readGeneration).catch(() => undefined)
     if (generation !== readGeneration) return
-    if (!members) { setLookup("error"); return }
+    if (!members) {
+      setLookup("error")
+      return
+    }
     const locations = new Map(members.map((member) => [JSON.stringify(member.location), member.location]))
     for (const ref of locations.values()) {
       if (generation !== readGeneration) return
-      const response = await client.api.shell.get({ id: shellID, location: { directory: ref.directory, workspace: ref.workspaceID } }).catch(() => undefined)
+      const response = await client.api.shell
+        .get({ id: shellID, location: { directory: ref.directory, workspace: ref.workspaceID } })
+        .catch(() => undefined)
       if (generation !== readGeneration) return
       if (!response || response.data.id !== shellID) continue
       const owner = await data.shell.owner(response.data, sessionID).catch(() => undefined)
       if (generation !== readGeneration) return
-      if (!owner || owner.location.directory !== ref.directory || owner.location.workspaceID !== ref.workspaceID) continue
+      if (!owner || owner.location.directory !== ref.directory || owner.location.workspaceID !== ref.workspaceID)
+        continue
       setShellFetch(response.data)
       setLookup("ready")
       return
@@ -112,7 +119,7 @@ export function ShellOutput() {
 
   createEffect(() => {
     const s = shell()
-    if (!s || (s.status !== "running" && s.status !== "queued")) return
+    if (!s || s.status !== "running") return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -132,7 +139,10 @@ export function ShellOutput() {
     while (generation === readGeneration) {
       const owner = await data.shell.owner(s, route.sessionID).catch(() => undefined)
       if (generation !== readGeneration) return
-      if (!owner || untrack(shell)?.metadata.sessionID !== s.metadata.sessionID) { setLookup("error"); break }
+      if (!owner || untrack(shell)?.metadata.sessionID !== s.metadata.sessionID) {
+        setLookup("error")
+        break
+      }
       const from = untrack(cursor)
       const response = await client.api.shell
         .output({
@@ -143,13 +153,22 @@ export function ShellOutput() {
         })
         .catch(() => undefined)
       if (generation !== readGeneration) return
-      if (!response) { setOutputError("Captured output could not be read."); break }
-      if (untrack(shell)?.id !== s.id || untrack(shell)?.metadata.sessionID !== s.metadata.sessionID) { setLookup("error"); break }
+      if (!response) {
+        setOutputError("Captured output could not be read.")
+        break
+      }
+      if (untrack(shell)?.id !== s.id || untrack(shell)?.metadata.sessionID !== s.metadata.sessionID) {
+        setLookup("error")
+        break
+      }
       const page = response.data
       if (page.output) setOutputText((current) => appendShellOutputTail(current, stripAnsi(page.output)))
       setCursor(page.cursor)
       if (page.cursor <= from || page.cursor >= page.size) {
-        if (settlementPending) { settlementPending = false; continue }
+        if (settlementPending) {
+          settlementPending = false
+          continue
+        }
         break
       }
     }
@@ -162,7 +181,7 @@ export function ShellOutput() {
   createEffect(() => {
     const s = shell()
     if (!s) return
-    const live = s.status === "running" || s.status === "queued"
+    const live = s.status === "running"
     const settled = wasLive && !live
     wasLive = live
     void loadOutput(settled)
@@ -170,7 +189,7 @@ export function ShellOutput() {
 
   createEffect(() => {
     const s = shell()
-    if (!s || outputError() || s.status !== "running" && s.status !== "queued") return
+    if (!s || outputError() || s.status !== "running") return
     const interval = setInterval(() => void loadOutput(), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -182,18 +201,28 @@ export function ShellOutput() {
   async function kill() {
     const generation = readGeneration
     const s = shell()
-    if (!s || s.status !== "running" && s.status !== "queued") return
+    if (!s || s.status !== "running") return
     const owner = await data.shell.owner(s, route.sessionID).catch(() => undefined)
     if (generation !== readGeneration) return
-    if (!owner || shell()?.metadata.sessionID !== s.metadata.sessionID) { setLookup("error"); return }
-    await client.api.shell.remove({
-      id: s.id,
-      location: { directory: owner.location.directory, workspace: owner.location.workspaceID },
-    }).catch(() => { if (generation === readGeneration) setOutputError("Shell could not be stopped.") })
+    if (!owner || shell()?.metadata.sessionID !== s.metadata.sessionID) {
+      setLookup("error")
+      return
+    }
+    await client.api.shell
+      .remove({
+        id: s.id,
+        location: { directory: owner.location.directory, workspace: owner.location.workspaceID },
+      })
+      .catch(() => {
+        if (generation === readGeneration) setOutputError("Shell could not be stopped.")
+      })
   }
 
   function retry() {
-    if (shell()) { void loadOutput(); return }
+    if (shell()) {
+      void loadOutput()
+      return
+    }
     setLookup("loading")
     void findShell(route.sessionID, route.shellID, ++readGeneration)
   }
@@ -230,14 +259,19 @@ export function ShellOutput() {
       flexDirection="column"
       backgroundColor={theme.background.default}
     >
-      <Show when={shell()} fallback={
-        <box flexGrow={1} alignItems="center" justifyContent="center">
-          <Show when={lookup() !== "loading"} fallback={<text fg={theme.text.subdued}>Loading shell data...</text>}>
-            <text fg={theme.text.feedback.error.default}>Shell is not available in this family.</text>
-            <text fg={theme.text.feedback.info.default} onMouseUp={retry}>Retry shell lookup · r</text>
-          </Show>
-        </box>
-      }>
+      <Show
+        when={shell()}
+        fallback={
+          <box flexGrow={1} alignItems="center" justifyContent="center">
+            <Show when={lookup() !== "loading"} fallback={<text fg={theme.text.subdued}>Loading shell data...</text>}>
+              <text fg={theme.text.feedback.error.default}>Shell is not available in this family.</text>
+              <text fg={theme.text.feedback.info.default} onMouseUp={retry}>
+                Retry shell lookup · r
+              </text>
+            </Show>
+          </box>
+        }
+      >
         {(s) => (
           <>
             <ShellOutputHeader shell={s()} owner={owner()} now={now()} />

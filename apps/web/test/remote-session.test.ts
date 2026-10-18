@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { remotePayloadCodecs } from "@ycoding-ai/remote"
 import { validLatencySample, type NoticeFrame } from "../src/remote/wire-views"
+import { writeWireMessage } from "../src/remote/wire"
 import {
   canReplyToRequest,
   hasCompactionCheckpoint,
@@ -3277,7 +3279,16 @@ describe("remote store integration", () => {
           ? {
               ok: true,
               value: {
-                data: { decisions: [decision, { ...decision, sessionID: "ses_child", requestID: "grq_child" }] },
+                data: {
+                  rootSessionID: "ses_a",
+                  profile: "standard",
+                  customRules: 0,
+                  approvals: 0,
+                  blocked: 0,
+                  counters: [],
+                  invalidFiles: [],
+                  decisions: [decision, { ...decision, sessionID: "ses_child", requestID: "grq_child" }],
+                },
               },
             }
           : ("default" as const),
@@ -3456,13 +3467,13 @@ describe("remote store integration", () => {
         id: "evt_step",
         type: "session.step.ended",
         created: 40,
-        data: { sessionID: "ses_a" },
+        data: { sessionID: "ses_a", assistantMessageID: "msg_step" },
       })
       test.relay.pushEvent("ses_a", {
         id: "evt_task",
         type: "session.task.updated",
         created: 41,
-        data: { sessionID: "ses_a" },
+        data: { sessionID: "ses_a", change: { type: "started" } },
       })
       test.relay.pushEvent("ses_a", {
         id: "evt_deferred",
@@ -4168,10 +4179,18 @@ describe("remote store integration", () => {
   })
 
   test("an autonomy answer without the required effective values stays unreported", async () => {
+    // Wire-valid mode=normal, yolo=2, autoAnswer=true, with only effective omitted.
+    // The ordinary fixture encoder must continue rejecting this invalid domain object.
+    const missingEffective = Uint8Array.of(10, 15, 8, 1, 18, 9, 25, 0, 0, 0, 0, 0, 0, 0, 64, 40, 1)
+    const codec = remotePayloadCodecs.get("session.autonomy.get")!.result
+    expect(() => writeWireMessage(codec.schema, { data: { mode: "normal", yolo: 2, autoAnswer: true } })).toThrow(
+      "SessionAutonomyView.effective",
+    )
+    expect(() => codec.decode(missingEffective)).toThrow("required presence")
     const test = await harness({
       handler: (request) =>
         request.operation === "session.autonomy.get"
-          ? { ok: true, value: { data: { mode: "normal", yolo: 2, autoAnswer: true } } }
+          ? { wire: (peer, dispatch) => peer.malformedResult(dispatch, missingEffective) }
           : ("default" as const),
     })
     try {
@@ -4250,7 +4269,7 @@ describe("remote store integration", () => {
           ok: true,
           value: {
             data: autonomyData({
-              mode: "goal",
+              mode: "normal",
               yolo: 0,
               goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
             }),

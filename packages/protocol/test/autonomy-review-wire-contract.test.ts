@@ -14,7 +14,7 @@ import {
   Streaming,
 } from "../src/v5/index.js"
 
-type Field = { tag: number; name: string; target?: string }
+type Field = { tag: number; name: string; target?: string; maxCount?: number }
 const declared = messages as Record<string, { fields: readonly Field[] }>
 const message = (name: string) => {
   const found = declared[`ycoding.v5.${name}`]
@@ -67,6 +67,14 @@ describe("Session approval settings", () => {
   test("lost background results retain a separate status identity", () => {
     expect(tags("Status")).toEqual({ running: 1, attention: 2, outstanding: 3, failed: 4, details: 5, lost: 6 })
     expect(target("Status", "lost")).toBe("IdentifierList")
+    expect(Object.fromEntries(message("Status").fields.map((field) => [field.name, field.maxCount]))).toEqual({
+      running: 500,
+      attention: 500,
+      outstanding: 500,
+      failed: 500,
+      details: 500,
+      lost: 500,
+    })
   })
 })
 
@@ -164,11 +172,11 @@ describe("review operations", () => {
 describe("public events", () => {
   const entry = (name: string) => publicEvents.find((event) => event.name === name)
 
-  test("the inventory is 116 branches, 58 durable, with the old numbering intact", () => {
-    expect(publicEvents).toHaveLength(116)
+  test("the inventory is 115 branches (shell update tag 116 retired), 58 durable, with the old numbering intact", () => {
+    expect(publicEvents).toHaveLength(115)
     expect(publicEvents.filter((event) => event.durable)).toHaveLength(58)
-    expect(new Set(publicEvents.map((event) => event.tag)).size).toBe(116)
-    expect(Math.max(...publicEvents.map((event) => event.tag))).toBe(116)
+    expect(new Set(publicEvents.map((event) => event.tag)).size).toBe(115)
+    expect(Math.max(...publicEvents.map((event) => event.tag))).toBe(115)
     expect(entry("session.tool.progress")).toMatchObject({ tag: 51, durable: false })
   })
 

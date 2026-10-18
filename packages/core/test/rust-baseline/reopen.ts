@@ -1,7 +1,7 @@
 import { lstat, readdir, realpath } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
+import { immutableQuery, openImmutableDatabase } from "../../../../script/rust-parity/immutable"
 
 const root = process.argv[2]
 if (
@@ -30,11 +30,7 @@ await Effect.runPromise(
   ),
 )
 {
-  const { Database } = await import("bun:sqlite")
-  const meeting = new Database(`${pathToFileURL(path.join(root, "meetings.sqlite")).href}?immutable=1`, {
-    readonly: true,
-    strict: true,
-  })
+  const meeting = openImmutableDatabase(path.join(root, "meetings.sqlite"))
   try {
     for (const table of [
       "meetings",
@@ -47,11 +43,12 @@ await Effect.runPromise(
       "jobs",
       "knowledge_references",
     ])
-      if (meeting.query(`SELECT data FROM ${table}`).all().length !== 1)
+      if (immutableQuery(meeting, `SELECT data FROM ${table}`).all().length !== 1)
         throw new Error(`Incomplete Meeting baseline: ${table}`)
-    if (meeting.query<{ integrity_check: string }, []>("PRAGMA integrity_check").get()?.integrity_check !== "ok")
+    if (immutableQuery<{ integrity_check: string }>(meeting, "PRAGMA integrity_check").get()?.integrity_check !== "ok")
       throw new Error("Corrupt Meeting baseline")
-    if (meeting.query("PRAGMA foreign_key_check").all().length) throw new Error("Invalid Meeting baseline references")
+    if (immutableQuery(meeting, "PRAGMA foreign_key_check").all().length)
+      throw new Error("Invalid Meeting baseline references")
   } finally {
     meeting.close()
   }

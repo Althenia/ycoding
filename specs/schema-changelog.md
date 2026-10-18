@@ -2,6 +2,17 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+
+## 2026-10-17: Remove queued shell commands
+
+- Remove `queued` from `Shell.Status`, `Shell.Info.queuePosition`, `Shell.Time.queued`, and the queue-only ephemeral `shell.updated` event.
+- Remove `shell_queue` configuration and the shell tool's `channel` input. Shell commands start after permission and family-cap checks; foreground and background execution retain timeout and memory-limit behavior.
+- `shell.list` lists running shells. Terminal shell metadata and captured output remain accessible by ID until removal.
+
+Compatibility:
+
+- Shell queue state is ephemeral and has no durable Session migration. Clients must use the current shell status contract and omit the removed configuration and tool input. Regenerate Promise and Effect clients from Protocol and Schema.
+
 ## 2026-10-11: Add Session Compaction History Read
 
 - Add `SessionCompaction.HistoryJob` (`jobID`, `trigger`, `status`, `created`, optional `metrics` on completed jobs, optional `code` on failed jobs) and `SessionCompaction.History` (`data`, `truncated`, `completedBefore`, `completedCount`, `totalSavedTokens`).

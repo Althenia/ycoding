@@ -561,8 +561,10 @@ needs `python3` only. The SDK subprocess checks require Bun and cached
 installation when the standard Bun cache is unavailable. `extract-fixture.mjs`
 reads upstream fixture sources through `git show main` and the Rust-owned HTTP
 fixture from `tests/mcp_protocol_http.ts`, rewrites server package import
-locations, and installs nothing. HTTP tests use real isolated loopback servers
-for JSON and SSE responses.
+locations, and installs nothing. Set `YCODING_MCP_FIXTURE_REF` to a committed ref
+when `main` is unavailable; verify the selected source files match the intended
+parity baseline. HTTP tests use real isolated loopback servers for JSON and SSE
+responses.
 
 ### MCP OAuth
 
@@ -1738,6 +1740,14 @@ DuckDB engine. A root includes its descendant family once; a child reads only it
 These blocking report calls run outside executor threads. Composition owns the Engine
 lifetime through `ycoding_store::analytics::reports::start`; an unavailable engine
 fails explicitly and never changes operational Session diagnostics.
+Global report pricing discovery pages the retained-fact time index within the
+requested half-open `[from, to)` range. Session-family pricing and prompt-attribution
+discovery pages its operational ledger in batches of 128; its total work remains
+linear in that family's retained request history because that ledger has no time
+index. Facts and operational history retain independent lifetimes, so a retained
+fact index cannot replace session-ledger reads. Both paths use the same captured
+snapshot for pricing and the final analytics query.
+
 `usage_report` supports the `model`, `hour`, `day`, `month`, `session`,
 `project`, and `agent` groups, the half-open `from`/`to` range, sorting with
 ascending key tiebreak, `offset`/`limit` paging (default limit 100), and per-row
@@ -1748,8 +1758,9 @@ not from the `decision` source are priced through the optional `pricer`, which
 maps a `PricingRef` (Location directory, workspace, provider, model, profile) to
 provider and OpenRouter cost tables; the estimate is added with
 `current_catalog` provenance. Without a `pricer` they carry no cost. Pricing refs
-and timezone offsets are prepared in 200-row keyset windows; a concurrent source
-change during preparation fails explicitly. Reports never retain all requests or
+and timezone offsets are prepared in 128-row keyset windows from the captured
+source snapshot; concurrent writes are visible on the next report. Reports never
+retain all requests or
 percentile vectors in Core. Native totals/grouping still process the complete
 filtered population; pagination bounds decoded results, not all native query work.
 
@@ -2613,6 +2624,15 @@ characters without a provider call.
 
 Run authority checks from `rust` with
 `cargo test --locked -p ycoding-core --test 'policy_*' --test 'guardrail_*' --test 'form_*'`.
+The real-checkout policy test in `guardrail_service` needs a writable fixture root
+outside the standard temporary-directory exemptions. It defaults to Cargo's
+`CARGO_TARGET_TMPDIR`; if the build directory is under an exempt root (such as
+`/tmp` or macOS `/var/folders`), set `YCODING_TEST_POLICY_ROOT` to an explicit
+non-exempt directory. The test creates and removes its own unique subdirectories
+there and checks the canonical root with the real classifier before creating Git
+repositories. It fails with setup guidance instead of skipping policy assertions
+or choosing another filesystem location automatically.
+
 The tests use real store-backed authority and synthetic Sessions. Event
 publication, agent resource discovery, custom Markdown source discovery/reload,
 managed-worktree discovery, actual leaf effects, and runtime wiring are caller
@@ -3488,7 +3508,15 @@ API does not supply JavaScript event-loop `ref`/`unref` liveness controls.
 ### Configuration and paging
 
 Shell preparation reads `shell`, `shell_memory_limit_mb` and `shell_sandbox` from
-the existing configuration service. An explicit memory limit of zero disables a
+the existing configuration service. Commands start directly after permission and
+Session-family guardrail admission. The family shell cap waits up to
+`guardrails.shell_wait_seconds`; cancellation abandons a waiting admission.
+An admitted command owns its family slot until confirmed process settlement or
+successful removal. Cleanup errors keep the live command, process identity, and
+slot available for an explicit cleanup retry, even if a tool waiter has failed.
+Shell status is `running`, `exited`, `timeout`, `memory-limit`, or `killed`;
+`time.started` records process start, and lifecycle events are `shell.created`,
+`shell.exited`, and `shell.deleted`. An explicit memory limit of zero disables a
 configured limit. Finite limits set Go/Node memory hints and sample aggregate
 process-group RSS every 250 milliseconds, with process identity checks. Windows
 rejects memory-limited preparation. A zero timeout clears the deadline.
@@ -3789,6 +3817,12 @@ translated by hand into the Rust tests named in `tests/code-mode-manual.json`
 (`tests/code_mode_promise_trace.rs`); the generator emits them as `manual` entries
 and `code_mode_assertions` verifies that each named test exists. A manual entry
 that matches no excluded assertion fails generation.
+The host-Math vector declares its implementation-approximated indices through
+generator-owned comparison metadata. Those finite, same-sign transcendental
+results permit one ULP of platform variation; its binary16/binary32 rounding and
+integer results remain exact. Other corpus assertions retain exact equality.
+Direct interpreter checks preserve specified NaN, infinity and signed-zero cases
+before JSON result normalization.
 `tests/generate-openapi-corpus.ts` runs the committed TypeScript OpenAPI assertions
 with their supplied HTTP fixtures and records literal generation/signature data.
 Its diamond-graph case does not render a catalog signature; that original test
@@ -3798,6 +3832,8 @@ flows run against loopback servers in `tests/code_mode_openapi_integration.rs`.
 The generators read parity sources with
 `git show main:<path>` and use installed oracle dependencies without modifying
 another checkout.
+The assertion generator accepts `--source-ref=<committed-ref>` when `main` is
+unavailable; verify the selected source files match the intended parity baseline.
 
 Run `bun rust/crates/core/tests/generate-string-core.ts` from the repository root
 to regenerate `tests/string-core-corpus.json` from the original String Core
@@ -3872,7 +3908,8 @@ the registry installs no default Session, control, MCP, or resource handlers.
 schemas; register it with `Options::direct()`). Its fields are the Location `Shell`,
 the loaded `Configuration`, `Paths`, the shared `LeafPolicy`, a `Jobs`
 implementation, and the foreground auto-background duration (`AUTO_BACKGROUND`,
-five minutes). One call resolves `workdir` through `Paths::resolve`, prepares the
+five minutes). Input fields are `command`, `workdir`, `timeout`, `memory_limit_mb`,
+and `background`. One call resolves `workdir` through `Paths::resolve`, prepares the
 process (a required sandbox fails closed with no permission request or spawn), asks
 `external_directory` for an external workdir, records advisory warnings for absolute
 command-argument paths outside the workdir, asks the `shell` permission with the

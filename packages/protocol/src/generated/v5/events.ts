@@ -546,12 +546,6 @@ export const publicEvents = [
     type: "ycoding.v5.PublicEvent_shell_created",
   },
   {
-    name: "shell.updated",
-    durable: false,
-    tag: 116,
-    type: "ycoding.v5.PublicEvent_shell_updated",
-  },
-  {
     name: "shell.exited",
     durable: false,
     tag: 82,

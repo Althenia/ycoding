@@ -70,6 +70,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           encode(input),
           "Output exactly one TOON document with the following shape. The template shows a refusal only to demonstrate the fields; answer the questions when the supplied evidence supports a judgment.",
           DecisionJudgment.template(input),
+          "For a choice with grade: true, return type choice with answer, choice, and score null and confidence 0; add grades containing exactly one { choice, confidence, evidence } for every listed option. Preserve each choice's type and value, use finite confidence from 0 to 1 and non-whitespace evidence of at most 500 characters. Grade every option independently; do not select a winner. Refusal uses the demonstrated shape without grades. For all other questions omit grades.",
           "Before answering each question, weigh the plausible alternatives. Set confidence to how likely the answer is to be correct given only the supplied evidence, from 0 for no support to 1 for certainty; lower it when evidence conflicts or alternatives are close. Confidence remains your uncalibrated self-estimate. Abstain for insufficient evidence on any predicate, choice, or score: use type refusal, answer/choice/score null, and confidence 0. Never force an option or encode insufficient evidence as a low-confidence pick. Use null for irrelevant fields.",
         ].join("\n\n"),
         tools: [],

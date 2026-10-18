@@ -12,7 +12,6 @@ import {
   validBase64,
   type CapturedChangesView,
   type CompactionHistoryView,
-  type UsagePromptCostView,
 } from "./wire-views"
 import { parseUnifiedPatch } from "./file-change-diff"
 import {
@@ -526,8 +525,6 @@ export type SessionView = {
   readonly compactionHistory?: CompactionHistoryView
   readonly requests: readonly PendingRequestView[]
   readonly capturedChanges?: CapturedChangesView["data"]
-  readonly promptCosts?: readonly UsagePromptCostView[]
-  readonly promptCostState?: "loading" | "ready" | "unavailable"
   readonly review?: { readonly status: "ready" | "unsupported" | "error"; readonly items: readonly ReviewItemView[] }
   readonly guardrailDecisions?: readonly GuardrailDecisionView[]
   readonly unhandledEvents: number

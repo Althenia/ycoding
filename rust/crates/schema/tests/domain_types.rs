@@ -1008,7 +1008,6 @@ fn effect_domain_goldens() {
             "Shell.Metadata" => round_trip::<shell::Metadata>(&input),
             "Shell.Info" => round_trip::<shell::Info>(&input),
             "Shell.Event.Created" => round_trip::<event::EphemeralPayload<shell::Created>>(&input),
-            "Shell.Event.Updated" => round_trip::<event::EphemeralPayload<shell::Updated>>(&input),
             "Shell.Event.Exited" => round_trip::<event::EphemeralPayload<shell::Exited>>(&input),
             "Shell.Event.Deleted" => round_trip::<event::EphemeralPayload<shell::Deleted>>(&input),
             "Shell.CreateInput" => round_trip::<shell::CreateInput>(&input),

@@ -7,6 +7,7 @@ pub struct Replay {
     pub metadata_key: String,
     pub accounts: std::collections::BTreeSet<LosslessString>,
     pub states: std::collections::BTreeMap<String, JsonValue>,
+    pub cache_shared_context: bool,
 }
 
 pub fn convert(
@@ -20,7 +21,11 @@ pub fn convert(
         let id = match encoded.get(&"id".into()) { Some(JsonValue::String(id)) => Some(id.clone()), _ => None };
         match message {
             session_message::Info::User(user) => {
-                let mut content = if user.text.is_empty() { Vec::new() } else { vec![llm::Part::Text(user.text.clone().into())] };
+                let mut content = if let Some(split) = crate::session::shared_context::split(&user.text, user.metadata.as_ref()) {
+                    let mut prefix = llm::TextPart::from(LosslessString::from(split.prefix));
+                    prefix.cache = replay.cache_shared_context.then(|| ycoding_ai::cache::Hint::ephemeral(None));
+                    vec![llm::Part::Text(prefix), llm::Part::Text(LosslessString::from(split.task).into())]
+                } else if user.text.is_empty() { Vec::new() } else { vec![llm::Part::Text(user.text.clone().into())] };
                 for file in user.files.as_deref().unwrap_or_default() {
                     let name = file.name.as_ref().unwrap_or(&file.content.digest.0);
                     match attachments.read(&file.content) {

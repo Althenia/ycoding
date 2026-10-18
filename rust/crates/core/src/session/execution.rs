@@ -197,6 +197,21 @@ impl Execution {
         let prior = self.store.pending(&request.id)?.is_some()
             || self.store.message(&request.id)?.is_some();
         if !prior
+            && let session_pending::Message::User(user) = &mut request.input
+            && let Some(metadata) = &mut user.data.metadata
+        {
+            // Only orchestration's internal snapshot composer can establish this
+            // provenance. Strip caller claims before skill preparation; admission
+            // reconciliation still returns the original durable record on retries.
+            let mut admitted = ycoding_schema::JsonObject::new();
+            for (key, value) in metadata.iter() {
+                if key.as_str() != Some("sharedContext") {
+                    admitted.insert(key.clone(), value.clone());
+                }
+            }
+            *metadata = admitted;
+        }
+        if !prior
             && matches!(
                 &request.input,
                 session_pending::Message::User(user)

@@ -21,8 +21,9 @@ import {
 import { useTheme } from "../../context/theme"
 import { BrandMark } from "../../component/logo"
 import { Locale } from "../../util/locale"
-import { QuotaForecastBlock } from "./usage-cost"
-import { matchingQuotaForecast, usd } from "../../util/usage-accounting"
+import { stringWidth } from "../../util/string-width"
+import { QuotaForecastBlock, QuotaForecastSummary } from "./usage-cost"
+import { matchingQuotaForecast, recordedRateLines, recordedRateRow, usd } from "../../util/usage-accounting"
 import { ModelIncidents, type ModelIncidentLoaders } from "./model-incidents"
 import {
   PROVIDER_USAGE_VIEWS,
@@ -36,17 +37,23 @@ export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 const NAV_CELL_WIDTH = 12
 
 export function visibleProviderSnapshots(snapshots: readonly ProviderUsageSnapshot[]) {
-  return [...snapshots.filter((snapshot) => snapshot.status !== "unsupported").reduce((result, snapshot) => {
-    const key = JSON.stringify([snapshot.providerID, snapshot.profile])
-    const current = result.get(key)
-    if (!current || snapshot.updatedAt >= current.updatedAt) result.set(key, snapshot)
-    return result
-  }, new Map<string, ProviderUsageSnapshot>()).values()]
-    .toSorted((left, right) =>
+  return [
+    ...snapshots
+      .filter((snapshot) => snapshot.status !== "unsupported")
+      .reduce((result, snapshot) => {
+        const key = JSON.stringify([snapshot.providerID, snapshot.profile])
+        const current = result.get(key)
+        if (!current || snapshot.updatedAt >= current.updatedAt) result.set(key, snapshot)
+        return result
+      }, new Map<string, ProviderUsageSnapshot>())
+      .values(),
+  ].toSorted(
+    (left, right) =>
       Number(left.source === "local_session") - Number(right.source === "local_session") ||
       left.label.localeCompare(right.label) ||
       left.providerID.localeCompare(right.providerID) ||
-      (left.profile ?? "").localeCompare(right.profile ?? ""))
+      (left.profile ?? "").localeCompare(right.profile ?? ""),
+  )
 }
 
 export function createProviderUsageGenerationGuard() {
@@ -110,9 +117,14 @@ export function ProviderUsageScreen() {
         if (guard.current(token)) {
           setRefreshing(false)
           setForecastFailed(false)
-          void client.api.providerUsage.forecast({ localScope: "backend" }).then((result) => {
-            if (guard.current(token)) setForecast(result.data)
-          }, () => { if (guard.current(token)) setForecastFailed(true) })
+          void client.api.providerUsage.forecast({ localScope: "backend" }).then(
+            (result) => {
+              if (guard.current(token)) setForecast(result.data)
+            },
+            () => {
+              if (guard.current(token)) setForecastFailed(true)
+            },
+          )
         }
       })
   }
@@ -122,7 +134,8 @@ export function ProviderUsageScreen() {
     backendUsageGuard.invalidate()
   })
 
-  const back = () => router.navigate(route.sessionID ? { type: "session", sessionID: route.sessionID } : { type: "home" })
+  const back = () =>
+    router.navigate(route.sessionID ? { type: "session", sessionID: route.sessionID } : { type: "home" })
   return (
     <ProviderUsageScreenContent
       snapshots={snapshots}
@@ -131,7 +144,7 @@ export function ProviderUsageScreen() {
       backendUsageFailed={backendUsageFailed}
       refreshing={refreshing}
       failed={failed}
-      forecast={() => forecastFailed() ? undefined : forecast()}
+      forecast={() => (forecastFailed() ? undefined : forecast())}
       forecastFailed={forecastFailed}
       onBack={back}
       onRefresh={refresh}
@@ -172,9 +185,17 @@ export function ProviderUsageScreenContent(props: {
     return [summaryPresentation(summary), ...(summary.models ?? []).map(spendPresentation)]
   })
   const [view, setView] = createSignal<ProviderUsageView>(props.initialTab ?? "overview")
-  const [overviewSorting, setOverviewSorting] = createSignal<{ sort: OverviewSort; order: "asc" | "desc" }>({ sort: "cost", order: "desc" })
+  const [overviewSorting, setOverviewSorting] = createSignal<{ sort: OverviewSort; order: "asc" | "desc" }>({
+    sort: "cost",
+    order: "desc",
+  })
   const changeOverviewSort = (sort: OverviewSort) =>
-    setOverviewSorting((current) => ({ sort, order: current.sort === sort ? (current.order === "asc" ? "desc" : "asc") : sort === "key" ? "asc" : "desc" }))
+    setOverviewSorting((current) => ({
+      sort,
+      order: current.sort === sort ? (current.order === "asc" ? "desc" : "asc") : sort === "key" ? "asc" : "desc",
+    }))
+  const [detailsOpen, setDetailsOpen] = createSignal(false)
+  const scrollColumnWidth = () => Math.max(1, dimensions().width - 7)
   const [reportRefresh, setReportRefresh] = createSignal(0)
   const reportView = createMemo(() => {
     const current = view()
@@ -214,32 +235,190 @@ export function ProviderUsageScreenContent(props: {
     mode: "base",
     commands: [
       { id: "provider-usage.back", title: "Back", group: "Provider usage", bind: "escape", run: back },
-      { id: "provider-usage.refresh", title: "Refresh provider usage", group: "Provider usage", bind: "r", run: refresh },
-      { id: "provider-usage.view.previous", title: "Previous usage view", group: "Provider usage", bind: "left", run: () => moveView(-1) },
-      { id: "provider-usage.view.next", title: "Next usage view", group: "Provider usage", bind: "right", run: () => moveView(1) },
-      { id: "provider-usage.view.previous-tab", title: "Previous usage view", group: "Provider usage", bind: "shift+tab", run: () => moveView(-1) },
-      { id: "provider-usage.view.next-tab", title: "Next usage view", group: "Provider usage", bind: "tab", run: () => moveView(1) },
-      { id: "provider-usage.scroll.previous", title: "Scroll usage up", group: "Provider usage", bind: reportView() ? false : "up", run: () => scrollSimple("up") },
-      { id: "provider-usage.scroll.next", title: "Scroll usage down", group: "Provider usage", bind: reportView() ? false : "down", run: () => scrollSimple("down") },
-      { id: "provider-usage.scroll.home", title: "First usage item", group: "Provider usage", bind: reportView() ? false : "home", run: () => scrollSimple("home") },
-      { id: "provider-usage.scroll.end", title: "Last usage item", group: "Provider usage", bind: reportView() ? false : "end", run: () => scrollSimple("end") },
-      { id: "provider-usage.scroll.page-up", title: "Scroll usage one page up", group: "Provider usage", bind: reportView() ? false : "pageup", run: () => scrollSimple("pageup") },
-      { id: "provider-usage.scroll.page-down", title: "Scroll usage one page down", group: "Provider usage", bind: reportView() ? false : "pagedown", run: () => scrollSimple("pagedown") },
-      { id: "provider-usage.overview.sort.key", title: "Sort overview models by name", group: "Usage", bind: view() === "overview" ? "d" : false, run: () => { changeOverviewSort("key") } },
-      { id: "provider-usage.overview.sort.steps", title: "Sort overview models by steps", group: "Usage", bind: view() === "overview" ? "s" : false, run: () => { changeOverviewSort("steps") } },
-      { id: "provider-usage.overview.sort.input", title: "Sort overview models by input tokens", group: "Usage", bind: view() === "overview" ? "i" : false, run: () => { changeOverviewSort("input") } },
-      { id: "provider-usage.overview.sort.output", title: "Sort overview models by output tokens", group: "Usage", bind: view() === "overview" ? "o" : false, run: () => { changeOverviewSort("output") } },
-      { id: "provider-usage.overview.sort.reasoning", title: "Sort overview models by reasoning tokens", group: "Usage", bind: view() === "overview" ? "g" : false, run: () => { changeOverviewSort("reasoning") } },
-      { id: "provider-usage.overview.sort.cache-read", title: "Sort overview models by cache-read tokens", group: "Usage", bind: view() === "overview" ? "a" : false, run: () => { changeOverviewSort("cacheRead") } },
-      { id: "provider-usage.overview.sort.cache-write", title: "Sort overview models by cache-write tokens", group: "Usage", bind: view() === "overview" ? "w" : false, run: () => { changeOverviewSort("cacheWrite") } },
-      { id: "provider-usage.overview.sort.tokens", title: "Sort overview models by total tokens", group: "Usage", bind: view() === "overview" ? "t" : false, run: () => { changeOverviewSort("tokens") } },
-      { id: "provider-usage.overview.sort.cost", title: "Sort overview models by cost", group: "Usage", bind: view() === "overview" ? "c" : false, run: () => { changeOverviewSort("cost") } },
+      {
+        id: "provider-usage.refresh",
+        title: "Refresh provider usage",
+        group: "Provider usage",
+        bind: "r",
+        run: refresh,
+      },
+      {
+        id: "provider-usage.view.previous",
+        title: "Previous usage view",
+        group: "Provider usage",
+        bind: "left",
+        run: () => moveView(-1),
+      },
+      {
+        id: "provider-usage.view.next",
+        title: "Next usage view",
+        group: "Provider usage",
+        bind: "right",
+        run: () => moveView(1),
+      },
+      {
+        id: "provider-usage.view.previous-tab",
+        title: "Previous usage view",
+        group: "Provider usage",
+        bind: "shift+tab",
+        run: () => moveView(-1),
+      },
+      {
+        id: "provider-usage.view.next-tab",
+        title: "Next usage view",
+        group: "Provider usage",
+        bind: "tab",
+        run: () => moveView(1),
+      },
+      {
+        id: "provider-usage.scroll.previous",
+        title: "Scroll usage up",
+        group: "Provider usage",
+        bind: reportView() ? false : "up",
+        run: () => scrollSimple("up"),
+      },
+      {
+        id: "provider-usage.scroll.next",
+        title: "Scroll usage down",
+        group: "Provider usage",
+        bind: reportView() ? false : "down",
+        run: () => scrollSimple("down"),
+      },
+      {
+        id: "provider-usage.scroll.home",
+        title: "First usage item",
+        group: "Provider usage",
+        bind: reportView() ? false : "home",
+        run: () => scrollSimple("home"),
+      },
+      {
+        id: "provider-usage.scroll.end",
+        title: "Last usage item",
+        group: "Provider usage",
+        bind: reportView() ? false : "end",
+        run: () => scrollSimple("end"),
+      },
+      {
+        id: "provider-usage.scroll.page-up",
+        title: "Scroll usage one page up",
+        group: "Provider usage",
+        bind: reportView() ? false : "pageup",
+        run: () => scrollSimple("pageup"),
+      },
+      {
+        id: "provider-usage.scroll.page-down",
+        title: "Scroll usage one page down",
+        group: "Provider usage",
+        bind: reportView() ? false : "pagedown",
+        run: () => scrollSimple("pagedown"),
+      },
+      {
+        id: "provider-usage.details",
+        title: "Toggle usage details",
+        group: "Provider usage",
+        bind: view() === "usage" ? "d" : false,
+        run: () => setDetailsOpen((open) => !open),
+      },
+      {
+        id: "provider-usage.overview.sort.key",
+        title: "Sort overview models by name",
+        group: "Usage",
+        bind: view() === "overview" ? "d" : false,
+        run: () => {
+          changeOverviewSort("key")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.steps",
+        title: "Sort overview models by steps",
+        group: "Usage",
+        bind: view() === "overview" ? "s" : false,
+        run: () => {
+          changeOverviewSort("steps")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.input",
+        title: "Sort overview models by input tokens",
+        group: "Usage",
+        bind: view() === "overview" ? "i" : false,
+        run: () => {
+          changeOverviewSort("input")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.output",
+        title: "Sort overview models by output tokens",
+        group: "Usage",
+        bind: view() === "overview" ? "o" : false,
+        run: () => {
+          changeOverviewSort("output")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.reasoning",
+        title: "Sort overview models by reasoning tokens",
+        group: "Usage",
+        bind: view() === "overview" ? "g" : false,
+        run: () => {
+          changeOverviewSort("reasoning")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.cache-read",
+        title: "Sort overview models by cache-read tokens",
+        group: "Usage",
+        bind: view() === "overview" ? "a" : false,
+        run: () => {
+          changeOverviewSort("cacheRead")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.cache-write",
+        title: "Sort overview models by cache-write tokens",
+        group: "Usage",
+        bind: view() === "overview" ? "w" : false,
+        run: () => {
+          changeOverviewSort("cacheWrite")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.tokens",
+        title: "Sort overview models by total tokens",
+        group: "Usage",
+        bind: view() === "overview" ? "t" : false,
+        run: () => {
+          changeOverviewSort("tokens")
+        },
+      },
+      {
+        id: "provider-usage.overview.sort.cost",
+        title: "Sort overview models by cost",
+        group: "Usage",
+        bind: view() === "overview" ? "c" : false,
+        run: () => {
+          changeOverviewSort("cost")
+        },
+      },
     ],
     bindings: ["provider-usage.back", "provider-usage.refresh"],
   }))
   return (
-    <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={theme.background.default}>
-      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
+    <box
+      width={dimensions().width}
+      height={dimensions().height}
+      flexDirection="column"
+      backgroundColor={theme.background.default}
+    >
+      <box
+        height={3}
+        flexShrink={0}
+        alignItems="center"
+        flexDirection="row"
+        paddingLeft={3}
+        paddingRight={3}
+        backgroundColor={theme.background.chrome}
+      >
         <BrandMark width={2} height={1} />
         <text> Usage</text>
         <box flexGrow={1} />
@@ -253,84 +432,152 @@ export function ProviderUsageScreenContent(props: {
         </box>
       </box>
       <box flexGrow={1} minHeight={0} flexDirection="column" paddingLeft={3} paddingRight={3}>
-      <box flexShrink={0} height={3} flexDirection="row" alignItems="center">
-        <For each={visibleViews()}>{(item, index) => (
-          <>
-            <Show when={index() > 0}><text flexShrink={0} fg={theme.border.default}>│</text></Show>
-            <box width={NAV_CELL_WIDTH} height={1} flexShrink={0} alignItems="center" onMouseUp={() => selectView(item)}>
-              <text
-                fg={view() === item ? theme.text.feedback.info.default : theme.text.subdued}
-                attributes={view() === item ? TextAttributes.BOLD : undefined}
-              >
-                {providerUsageViewLabel(item)}
+        <box flexShrink={0} height={3} flexDirection="row" alignItems="center">
+          <For each={visibleViews()}>
+            {(item, index) => (
+              <>
+                <Show when={index() > 0}>
+                  <text flexShrink={0} fg={theme.border.default}>
+                    │
+                  </text>
+                </Show>
+                <box
+                  width={NAV_CELL_WIDTH}
+                  height={1}
+                  flexShrink={0}
+                  alignItems="center"
+                  onMouseUp={() => selectView(item)}
+                >
+                  <text
+                    fg={view() === item ? theme.text.feedback.info.default : theme.text.subdued}
+                    attributes={view() === item ? TextAttributes.BOLD : undefined}
+                  >
+                    {providerUsageViewLabel(item)}
+                  </text>
+                </box>
+              </>
+            )}
+          </For>
+        </box>
+        <Show when={!reportView()}>
+          <scrollbox
+            ref={(value: ScrollBoxRenderable) => {
+              simpleScroll = value
+            }}
+            flexGrow={1}
+            minHeight={0}
+            horizontalScrollbarOptions={{ visible: false }}
+            verticalScrollbarOptions={{
+              trackOptions: {
+                backgroundColor: theme.background.default,
+                foregroundColor: theme.scrollbar.default,
+              },
+            }}
+            paddingBottom={1}
+          >
+            <Show when={view() === "overview" && props.backendUsageRefreshing?.() && props.backendUsage?.()}>
+              <text fg={theme.text.feedback.warning.default}>
+                Refreshing YCoding backend usage · showing previous data
               </text>
-            </box>
-          </>
-        )}</For>
+            </Show>
+            <Show when={view() === "overview" && props.backendUsageFailed?.() && props.backendUsage?.()}>
+              <text fg={theme.text.feedback.error.default}>
+                YCoding backend usage refresh failed · showing stale data
+              </text>
+            </Show>
+            <Show when={view() === "usage" && props.failed?.()}>
+              <text fg={theme.text.feedback.warning.default}>Some provider usage could not be refreshed.</text>
+            </Show>
+            <Show when={view() === "overview" && aggregateUsage()}>
+              {(items) => (
+                <OverviewTable
+                  items={items()}
+                  width={dimensions().width}
+                  sorting={overviewSorting}
+                  onSort={changeOverviewSort}
+                />
+              )}
+            </Show>
+            <Show when={view() === "usage"}>
+              <box flexDirection="column" flexShrink={0} width={scrollColumnWidth()}>
+                <text fg={theme.text.feedback.info.default} onMouseUp={() => setDetailsOpen((open) => !open)}>
+                  {detailsOpen() ? "Hide details" : "Details"} · d
+                </text>
+                <Show when={props.forecast?.()?.quotas === undefined}>
+                  <text fg={theme.text.subdued}>Quota forecasts unavailable</text>
+                </Show>
+                <For each={visibleProviderSnapshots(props.snapshots())}>
+                  {(snapshot) => (
+                    <QuotaSection
+                      snapshot={snapshot}
+                      now={props.now?.() ?? Date.now()}
+                      asOf={props.forecast?.()?.asOf}
+                      forecasts={props.forecastFailed?.() ? undefined : props.forecast?.()?.quotas}
+                      forecastFailed={props.forecastFailed?.()}
+                      details={detailsOpen()}
+                    />
+                  )}
+                </For>
+                <RecordedConsumption
+                  rates={props.forecast?.()?.localRates}
+                  width={scrollColumnWidth()}
+                  details={detailsOpen()}
+                />
+                <Show when={visibleProviderSnapshots(props.snapshots()).length === 0}>
+                  <text fg={theme.text.subdued}>
+                    {props.refreshing?.()
+                      ? "Loading provider quotas..."
+                      : props.failed?.()
+                        ? "Provider quotas could not be loaded."
+                        : "No provider quotas are reported."}
+                  </text>
+                </Show>
+              </box>
+            </Show>
+            <Show when={view() === "overview" && !aggregateUsage()}>
+              <text fg={theme.text.subdued}>
+                {props.backendUsageFailed?.()
+                  ? "YCoding backend usage could not be loaded."
+                  : props.backendUsageRefreshing?.()
+                    ? "Loading YCoding backend usage..."
+                    : "No retained usage is reported across the YCoding backend."}
+              </text>
+            </Show>
+          </scrollbox>
+        </Show>
+        <Show when={tableView()}>
+          {(current) => (
+            <ProviderUsageReports view={current()} refresh={reportRefresh()} now={props.now} load={props.loadReport} />
+          )}
+        </Show>
+        <Show when={view() === "incidents"}>
+          <ModelIncidents refresh={reportRefresh()} now={props.now} load={props.incidents} />
+        </Show>
       </box>
-      <Show when={!reportView()}>
-      <scrollbox
-        ref={(value: ScrollBoxRenderable) => { simpleScroll = value }}
-        flexGrow={1}
-        minHeight={0}
-        horizontalScrollbarOptions={{ visible: false }}
-        verticalScrollbarOptions={{
-          trackOptions: {
-            backgroundColor: theme.background.default,
-            foregroundColor: theme.scrollbar.default,
-          },
-        }}
-        paddingBottom={1}
+      <box
+        minHeight={3}
+        flexShrink={0}
+        alignItems="center"
+        flexDirection="row"
+        paddingLeft={3}
+        paddingRight={3}
+        backgroundColor={theme.background.chrome}
       >
-        <Show when={view() === "overview" && props.backendUsageRefreshing?.() && props.backendUsage?.()}>
-          <text fg={theme.text.feedback.warning.default}>Refreshing YCoding backend usage · showing previous data</text>
-        </Show>
-        <Show when={view() === "overview" && props.backendUsageFailed?.() && props.backendUsage?.()}>
-          <text fg={theme.text.feedback.error.default}>YCoding backend usage refresh failed · showing stale data</text>
-        </Show>
-        <Show when={view() === "usage" && props.failed?.()}>
-          <text fg={theme.text.feedback.warning.default}>Some provider usage could not be refreshed.</text>
-        </Show>
-        <Show when={view() === "overview" && aggregateUsage()}>
-          {(items) => <OverviewTable items={items()} width={dimensions().width} sorting={overviewSorting} onSort={changeOverviewSort} />}
-        </Show>
-        <Show when={view() === "usage"}><Show when={props.forecast?.()?.quotas === undefined}><text fg={theme.text.subdued}>Quota forecasts unavailable</text></Show><For each={visibleProviderSnapshots(props.snapshots())}>
-          {(snapshot) => <QuotaSection snapshot={snapshot} now={props.now?.() ?? Date.now()} asOf={props.forecast?.()?.asOf} forecasts={props.forecastFailed?.() ? undefined : props.forecast?.()?.quotas} forecastFailed={props.forecastFailed?.()} />}
-        </For><box flexDirection="column"><text fg={theme.text.feedback.info.default}>Recorded consumption · Backend</text><Show when={props.forecast?.()?.localRates} fallback={<text fg={theme.text.subdued}>Recorded consumption unavailable</text>}>{(rates) => <For each={rates()} fallback={<text fg={theme.text.subdued}>No recorded consumption</text>}>{(rate) => <text fg={theme.text.subdued} wrapMode="word">{rate.providerID}{rate.profile ? ` · profile ${rate.profile}` : " · provider default at request time"}{rate.modelID ? ` · ${rate.modelID}` : ""}: {rate.tokensPerMinute.toFixed(1)} tokens/min · 5m {rate.tokensPerMinute5?.toFixed(1) ?? "unreported"} · 60m {rate.tokensPerMinute60?.toFixed(1) ?? "unreported"}{rate.estimatedUSDPerHour === undefined ? "" : ` · $${rate.estimatedUSDPerHour.toFixed(2)} estimated/hour`} · {rate.coverage.pricedRequests} priced / {rate.coverage.unpricedRequests} unpriced · observed {new Date(rate.observedFrom).toISOString()} – {new Date(rate.observedTo).toISOString()}</text>}</For>}</Show></box></Show>
-        <Show when={view() === "usage" && visibleProviderSnapshots(props.snapshots()).length === 0}>
-          <text fg={theme.text.subdued}>{props.refreshing?.() ? "Loading provider quotas..." : props.failed?.() ? "Provider quotas could not be loaded." : "No provider quotas are reported."}</text>
-        </Show>
-        <Show
-          when={view() === "overview" && !aggregateUsage()}
-        >
-          <text fg={theme.text.subdued}>
-            {props.backendUsageFailed?.()
-              ? "YCoding backend usage could not be loaded."
-              : props.backendUsageRefreshing?.()
-                ? "Loading YCoding backend usage..."
-                : "No retained usage is reported across the YCoding backend."}
-          </text>
-        </Show>
-      </scrollbox>
-      </Show>
-      <Show when={tableView()}>{(current) => (
-        <ProviderUsageReports
-          view={current()}
-          refresh={reportRefresh()}
-          now={props.now}
-          load={props.loadReport}
-        />
-      )}</Show>
-      <Show when={view() === "incidents"}>
-        <ModelIncidents refresh={reportRefresh()} now={props.now} load={props.incidents} />
-      </Show>
-      </box>
-      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={theme.background.chrome}>
         <text fg={theme.text.subdued}>
-          {view() === "incidents" ? "Retained model incidents · backend-wide" : reportView() ? "Retained analytics · not a bill" : view() === "overview" ? "Backend analytics · retained request history" : "Provider-reported quota windows"}
+          {view() === "incidents"
+            ? "Retained model incidents · backend-wide"
+            : reportView()
+              ? "Retained analytics · not a bill"
+              : view() === "overview"
+                ? "Backend analytics · retained request history"
+                : "Provider-reported quota windows"}
         </text>
         <box flexGrow={1} />
-        <text fg={theme.text.subdued}>←→/Tab views · ↑↓ {reportView() ? "select" : "scroll"} · {refreshShortcut() ? `${refreshShortcut()} refresh` : "refresh"} · {backShortcut() ? `${backShortcut()} back` : "back"}</text>
+        <text fg={theme.text.subdued}>
+          ←→/Tab views · ↑↓ {reportView() ? "select" : "scroll"} ·{" "}
+          {refreshShortcut() ? `${refreshShortcut()} refresh` : "refresh"} ·{" "}
+          {backShortcut() ? `${backShortcut()} back` : "back"}
+        </text>
       </box>
     </box>
   )
@@ -354,24 +601,44 @@ function OverviewTable(props: {
   const narrow = () => !geometry().fits
   const orderedItems = createMemo(() => {
     const current = props.sorting()
-    const metric = (item: OverviewItem) => current.sort === "key" ? item.model : item.values[current.sort]
-    return [props.items[0], ...props.items.slice(1).toSorted((left, right) => {
-      const a = metric(left)
-      const b = metric(right)
-      const comparison = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b))
-      return (current.order === "asc" ? comparison : -comparison) || left.model.localeCompare(right.model)
-    })].filter((item): item is OverviewItem => item !== undefined)
+    const metric = (item: OverviewItem) => (current.sort === "key" ? item.model : item.values[current.sort])
+    return [
+      props.items[0],
+      ...props.items.slice(1).toSorted((left, right) => {
+        const a = metric(left)
+        const b = metric(right)
+        const comparison = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b))
+        return (current.order === "asc" ? comparison : -comparison) || left.model.localeCompare(right.model)
+      }),
+    ].filter((item): item is OverviewItem => item !== undefined)
   })
-  return <box flexDirection="column" paddingTop={1}>
-    <text fg={theme.text.subdued}>RETAINED MODEL BREAKDOWN · YCODING BACKEND</text>
-    <text fg={theme.border.default}>{"─".repeat(Math.max(1, Math.min(props.width - 6, 96)))}</text>
-    <Show when={!narrow()}><OverviewHeader geometry={geometry()} sorting={props.sorting} onSort={props.onSort} /></Show>
-    <For each={orderedItems()}>{(item, index) => {
-      const identity = index() === 0 ? "Total" : item.model
-      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? theme.text.feedback.info.default : theme.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={theme.text.subdued}>  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
-      return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
-    }}</For>
-  </box>
+  return (
+    <box flexDirection="column" paddingTop={1}>
+      <text fg={theme.text.subdued}>RETAINED MODEL BREAKDOWN · YCODING BACKEND</text>
+      <text fg={theme.border.default}>{"─".repeat(Math.max(1, Math.min(props.width - 6, 96)))}</text>
+      <Show when={!narrow()}>
+        <OverviewHeader geometry={geometry()} sorting={props.sorting} onSort={props.onSort} />
+      </Show>
+      <For each={orderedItems()}>
+        {(item, index) => {
+          const identity = index() === 0 ? "Total" : item.model
+          if (narrow())
+            return (
+              <box flexDirection="column" paddingTop={1}>
+                <text fg={index() === 0 ? theme.text.feedback.info.default : theme.text.default}>
+                  {identity} · {item.input} in · {item.output} out · {item.spent}
+                </text>
+                <text fg={theme.text.subdued}>
+                  {" "}
+                  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}
+                </text>
+              </box>
+            )
+          return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
+        }}
+      </For>
+    </box>
+  )
 }
 
 type OverviewSort = "key" | "steps" | "input" | "output" | "reasoning" | "cacheRead" | "cacheWrite" | "tokens" | "cost"
@@ -391,17 +658,33 @@ function OverviewHeader(props: {
     { key: "cost" as const, label: "COST", width: props.geometry.cost },
   ]
   const { theme } = useTheme()
-  return <box flexDirection="row">
-    <For each={columns}>{(column, index) => {
-      const selected = createMemo(() => props.sorting().sort === column.key)
-      const label = column.key === "key" ? column.label.padEnd(column.width - 1) : column.label.padStart(column.width - 1)
-      return <text width={column.width + (index() > 0 ? 1 : 0)} fg={theme.text.subdued} onMouseUp={() => props.onSort(column.key)}>
-        {index() > 0 ? "\u00a0" : ""}{label}
-        <Show when={selected()}><span>{props.sorting().order === "asc" ? "▲" : "▼"}</span></Show>
-        <Show when={!selected()}><span>{"\u00a0"}</span></Show>
-      </text>
-    }}</For>
-  </box>
+  return (
+    <box flexDirection="row">
+      <For each={columns}>
+        {(column, index) => {
+          const selected = createMemo(() => props.sorting().sort === column.key)
+          const label =
+            column.key === "key" ? column.label.padEnd(column.width - 1) : column.label.padStart(column.width - 1)
+          return (
+            <text
+              width={column.width + (index() > 0 ? 1 : 0)}
+              fg={theme.text.subdued}
+              onMouseUp={() => props.onSort(column.key)}
+            >
+              {index() > 0 ? "\u00a0" : ""}
+              {label}
+              <Show when={selected()}>
+                <span>{props.sorting().order === "asc" ? "▲" : "▼"}</span>
+              </Show>
+              <Show when={!selected()}>
+                <span>{"\u00a0"}</span>
+              </Show>
+            </text>
+          )
+        }}
+      </For>
+    </box>
+  )
 }
 
 type OverviewGeometry = ReturnType<typeof overviewGeometry>
@@ -415,42 +698,151 @@ function overviewGeometry(width: number) {
   const cache = 17
   const cost = 16
   const reserved = steps + input + output + reasoning + cache + cost + 6
-  return { name: Math.max(20, available - reserved), steps, input, output, reasoning, cache, cost, fits: available >= 20 + reserved }
+  return {
+    name: Math.max(20, available - reserved),
+    steps,
+    input,
+    output,
+    reasoning,
+    cache,
+    cost,
+    fits: available >= 20 + reserved,
+  }
 }
 
-function OverviewRow(props: {
-  item: OverviewItem
-  identity: string
-  geometry: OverviewGeometry
-  total: boolean
-}) {
+function OverviewRow(props: { item: OverviewItem; identity: string; geometry: OverviewGeometry; total: boolean }) {
   const { theme } = useTheme()
   return (
     <box width="100%" flexShrink={0}>
       <text>
-        <span style={{ fg: props.total ? theme.text.feedback.info.default : theme.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
+        <span style={{ fg: props.total ? theme.text.feedback.info.default : theme.text.default }}>
+          {Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}
+        </span>{" "}
         <span>{props.item.steps.padStart(props.geometry.steps)}</span>{" "}
-        <span style={{ fg: theme.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
-        <span style={{ fg: theme.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
+        <span style={{ fg: theme.text.feedback.success.default }}>
+          {props.item.input.padStart(props.geometry.input)}
+        </span>{" "}
+        <span style={{ fg: theme.text.feedback.warning.subdued }}>
+          {props.item.output.padStart(props.geometry.output)}
+        </span>{" "}
         <span style={{ fg: theme.text.label }}>{props.item.reasoning.padStart(props.geometry.reasoning)}</span>{" "}
-        <span style={{ fg: theme.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
-        <span style={{ fg: theme.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
+        <span style={{ fg: theme.text.feedback.info.default }}>
+          {`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}
+        </span>{" "}
+        <span style={{ fg: theme.text.feedback.success.subdued }}>
+          {props.item.spent.padStart(props.geometry.cost)}
+        </span>
       </text>
     </box>
   )
 }
 
-function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number; asOf?: number; forecasts?: ProviderUsageForecastOutput["data"]["quotas"]; forecastFailed?: boolean }) {
+function RecordedConsumption(props: {
+  rates?: ProviderUsageForecastOutput["data"]["localRates"]
+  width: number
+  details: boolean
+}) {
+  const { theme } = useTheme()
+  const rows = createMemo(() => (props.rates ?? []).map(recordedRateRow))
+  const tokensWidth = () => Math.max(0, ...rows().map((row) => stringWidth(row.tokens)))
+  const costWidth = () =>
+    Math.max(0, ...rows().map((row) => stringWidth(row.cost) + (row.partial ? PARTIAL.length : 0)))
+  const identityWidth = () => props.width - tokensWidth() - costWidth() - 4
+  const stacked = () => rows().some((row) => stringWidth(row.identity) > identityWidth())
+  return (
+    <box flexDirection="column">
+      <text fg={theme.text.feedback.info.default}>Recorded consumption · Backend</text>
+      <Show when={props.rates} fallback={<text fg={theme.text.subdued}>Recorded consumption unavailable</text>}>
+        {(rates) => (
+          <For each={rates()} fallback={<text fg={theme.text.subdued}>No recorded consumption</text>}>
+            {(rate) => {
+              const row = recordedRateRow(rate)
+              const measures = `  ${padCells(row.tokens, tokensWidth(), "start")}  ${row.cost}`
+              return (
+                <box flexDirection="column">
+                  <Show
+                    when={stacked()}
+                    fallback={
+                      <text fg={theme.text.subdued} wrapMode="word">
+                        {padCells(row.identity, identityWidth(), "end")}
+                        {measures}
+                        <Show when={row.partial}>
+                          <span style={{ fg: theme.text.feedback.warning.default }}>{PARTIAL}</span>
+                        </Show>
+                      </text>
+                    }
+                  >
+                    <text fg={theme.text.subdued} wrapMode="word">
+                      {row.identity}
+                    </text>
+                    <text fg={theme.text.subdued} wrapMode="word">
+                      {measures}
+                      <Show when={row.partial}>
+                        <span style={{ fg: theme.text.feedback.warning.default }}>{PARTIAL}</span>
+                      </Show>
+                    </text>
+                  </Show>
+                  <Show when={props.details}>
+                    <box flexDirection="column" paddingLeft={2}>
+                      <For each={recordedRateLines(rate)}>
+                        {(line) => (
+                          <text fg={theme.text.subdued} wrapMode="word">
+                            {line}
+                          </text>
+                        )}
+                      </For>
+                    </box>
+                  </Show>
+                </box>
+              )
+            }}
+          </For>
+        )}
+      </Show>
+      <Show when={props.details}>
+        <text fg={theme.text.subdued} wrapMode="word">
+          Local recorded consumption · not provider quota
+        </text>
+      </Show>
+    </box>
+  )
+}
+
+const PARTIAL = " partial"
+
+function padCells(text: string, width: number, side: "start" | "end") {
+  const padding = " ".repeat(Math.max(0, width - stringWidth(text)))
+  return side === "start" ? padding + text : text + padding
+}
+
+function humanize(value: string) {
+  return value.replace(/_/g, " ").replace(/\bapi\b/g, "API")
+}
+
+function QuotaSection(props: {
+  snapshot: ProviderUsageSnapshot
+  now: number
+  asOf?: number
+  forecasts?: ProviderUsageForecastOutput["data"]["quotas"]
+  forecastFailed?: boolean
+  details: boolean
+}) {
   const { theme } = useTheme()
   return (
     <box flexDirection="column" paddingBottom={1}>
       <text fg={theme.text.feedback.info.default}>
-        {props.snapshot.label}{props.snapshot.profile ? ` · ${props.snapshot.profile}` : ""} ·{" "}
+        {props.snapshot.label}
+        {props.snapshot.profile ? ` · ${props.snapshot.profile}` : ""} ·{" "}
         {props.snapshot.status === "available" || props.snapshot.status === "stale"
           ? freshnessLabel(props.snapshot, props.now)
-          : props.snapshot.status}{" "}
-        · {props.snapshot.source} · {props.snapshot.stability}
+          : props.snapshot.status}
       </text>
+      <Show when={props.details}>
+        <text fg={theme.text.subdued}>
+          {" "}
+          Source {humanize(props.snapshot.source)} · Stability {humanize(props.snapshot.stability)}
+        </text>
+      </Show>
       <For each={props.snapshot.windows}>
         {(window) => {
           const ratio = quotaRatio(window)
@@ -472,14 +864,33 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number; asO
                 {formatWindowValue(window)}
                 {deadline ? ` · ${deadline}` : ""}
               </text>
-              <Show when={matchingQuotaForecast(props.snapshot, window, props.forecasts)} fallback={<text fg={theme.text.subdued}>Forecast unavailable · {props.forecastFailed ? "lookup failed" : props.forecasts === undefined ? "Not loaded" : "No matching quota observation"}</text>}>{(quota) => <QuotaForecastBlock forecast={quota()} now={props.now} asOf={props.asOf} />}</Show>
+              <Show
+                when={matchingQuotaForecast(props.snapshot, window, props.forecasts)}
+                fallback={
+                  <text fg={theme.text.subdued} wrapMode="word">
+                    Forecast unavailable ·{" "}
+                    {props.forecastFailed
+                      ? "lookup failed"
+                      : props.forecasts === undefined
+                        ? "Not loaded"
+                        : "No matching quota observation"}
+                  </text>
+                }
+              >
+                {(quota) => (
+                  <Show
+                    when={props.details}
+                    fallback={<QuotaForecastSummary forecast={quota()} now={props.now} asOf={props.asOf} />}
+                  >
+                    <QuotaForecastBlock forecast={quota()} now={props.now} asOf={props.asOf} />
+                  </Show>
+                )}
+              </Show>
             </box>
           )
         }}
       </For>
-      <Show when={props.snapshot.message}>
-        {(message) => <text fg={theme.text.subdued}> {message()}</text>}
-      </Show>
+      <Show when={props.snapshot.message}>{(message) => <text fg={theme.text.subdued}> {message()}</text>}</Show>
       <Show when={!props.snapshot.message && props.snapshot.windows.length === 0}>
         <text fg={theme.text.subdued}> Quota information is not reported.</text>
       </Show>
@@ -503,7 +914,16 @@ type OverviewItem = {
   cacheRead: string
   cacheWrite: string
   spent: string
-  values: { steps: number; input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; tokens: number; cost: number }
+  values: {
+    steps: number
+    input: number
+    output: number
+    reasoning: number
+    cacheRead: number
+    cacheWrite: number
+    tokens: number
+    cost: number
+  }
 }
 
 function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
@@ -516,7 +936,21 @@ function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
     cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "Unknown",
     cacheWrite: summary.tokens.cache.write.toLocaleString("en-US"),
     spent: money(summary.cost),
-    values: { steps: summary.logical, input: summary.tokens.input, output: summary.tokens.output, reasoning: summary.tokens.reasoning, cacheRead: summary.tokens.cache.read, cacheWrite: summary.tokens.cache.write, tokens: summary.tokens.input + summary.tokens.output + summary.tokens.reasoning + summary.tokens.cache.read + summary.tokens.cache.write, cost: summary.cost ?? 0 },
+    values: {
+      steps: summary.logical,
+      input: summary.tokens.input,
+      output: summary.tokens.output,
+      reasoning: summary.tokens.reasoning,
+      cacheRead: summary.tokens.cache.read,
+      cacheWrite: summary.tokens.cache.write,
+      tokens:
+        summary.tokens.input +
+        summary.tokens.output +
+        summary.tokens.reasoning +
+        summary.tokens.cache.read +
+        summary.tokens.cache.write,
+      cost: summary.cost ?? 0,
+    },
   }
 }
 
@@ -524,9 +958,7 @@ function money(value: number | undefined) {
   return value === undefined ? "unreported" : `Known ${usd(value, false)}`
 }
 
-function spendPresentation(
-  spend: NonNullable<ProviderRequestSummary["models"]>[number],
-): OverviewItem {
+function spendPresentation(spend: NonNullable<ProviderRequestSummary["models"]>[number]): OverviewItem {
   return {
     model: `${spend.model.providerID}/${spend.model.id}${spend.model.variant ? ` · selected effort ${spend.model.variant}` : ""}${spend.model.profile === undefined ? "" : ` · profile ${spend.model.profile}`}`,
     steps: spend.requests.toLocaleString("en-US"),
@@ -536,6 +968,20 @@ function spendPresentation(
     cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "Unknown",
     cacheWrite: spend.tokens.cache.write.toLocaleString("en-US"),
     spent: money(spend.cost),
-    values: { steps: spend.requests, input: spend.tokens.input, output: spend.tokens.output, reasoning: spend.tokens.reasoning, cacheRead: spend.tokens.cache.read, cacheWrite: spend.tokens.cache.write, tokens: spend.tokens.input + spend.tokens.output + spend.tokens.reasoning + spend.tokens.cache.read + spend.tokens.cache.write, cost: spend.cost ?? 0 },
+    values: {
+      steps: spend.requests,
+      input: spend.tokens.input,
+      output: spend.tokens.output,
+      reasoning: spend.tokens.reasoning,
+      cacheRead: spend.tokens.cache.read,
+      cacheWrite: spend.tokens.cache.write,
+      tokens:
+        spend.tokens.input +
+        spend.tokens.output +
+        spend.tokens.reasoning +
+        spend.tokens.cache.read +
+        spend.tokens.cache.write,
+      cost: spend.cost ?? 0,
+    },
   }
 }

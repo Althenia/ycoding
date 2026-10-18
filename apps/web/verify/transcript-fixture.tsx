@@ -4,7 +4,6 @@ import { create, encodeStrict, ConnectorNoticePageSchema, ResultSchema, TypedPay
 import { render } from "solid-js/web"
 import { TranscriptNavigation } from "../src/remote/ui/transcript-nav"
 import { TodoPanel } from "../src/remote/ui/todo-panel"
-import { accountedTask } from "../test/usage-fixture"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore } from "../src/remote/store"
 import { createRemoteHttp } from "../src/remote/http"

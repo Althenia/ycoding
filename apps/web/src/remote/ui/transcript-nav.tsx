@@ -102,7 +102,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     const bottom = bounds.top + controls.offsetTop + controls.offsetHeight + clearance()
     const left = bounds.left + controls.offsetLeft
     const gap = Number.parseFloat(getComputedStyle(controls).bottom)
-    setClearance([...scrollRoot.querySelectorAll<HTMLElement>(".request__actions")].map((row) => row.getBoundingClientRect()).sort((a, b) => b.top - a.top).reduce((offset, row) =>
+    setClearance([...scrollRoot.querySelectorAll<HTMLElement>(".request__actions")].map((row) => row.getBoundingClientRect()).sort((a, b) => b.top - a.top).reduce<number>((offset, row) =>
       row.left < left + controls.offsetWidth && row.right > left && row.top < bottom - offset && row.bottom > bottom - offset - controls.offsetHeight
         ? bottom - row.top + gap : offset, 0))
   }

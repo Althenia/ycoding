@@ -16,8 +16,14 @@ use support::{machine, operation, session_scope, text, units};
 use ycoding_core::{
     remote::Device,
     resources::auth::integration,
-    ycoding_schema::{DomainEncode, JsonValue, ObjectEncoder, parse_json, session},
-    ycoding_store::session as tables,
+    ycoding_schema::{
+        DomainDecode, DomainEncode, JsonValue, ObjectEncoder, form, parse_json, session, shell,
+    },
+    ycoding_store::{
+        KeyPart,
+        resources::{Shell, ShellTable},
+        session as tables, tuple_key,
+    },
 };
 use ycoding_protocol::{connection::Budgets, decode_strict, v5};
 use ycoding_runtime::{
@@ -1240,6 +1246,82 @@ async fn family_shells_use_recorded_locations_filter_foreign_owners_and_fail_clo
     fixture.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn family_shell_list_preserves_parallel_owners_and_omits_completed_commands() {
+    let fixture = Fixture::new().await;
+    let mut harness = Harness::new(fixture.environment(true)).await;
+    let running =
+        remote_derived_support::owned_shell(&fixture.platform, Some(&fixture.root), "sleep 60")
+            .await;
+    let first = remote_derived_support::owned_shell(
+        &fixture.platform,
+        Some(&fixture.root),
+        "while [ ! -f release-shell ]; do sleep 0.05; done; printf first",
+    )
+    .await;
+    let second = remote_derived_support::owned_shell(
+        &fixture.child_platform,
+        Some(&fixture.child),
+        "while [ ! -f release-shell ]; do sleep 0.05; done; printf second",
+    )
+    .await;
+    let list: v5::SessionTeamShellListResult = harness
+        .ask(
+            NAMES[14],
+            session_scope(&fixture.root),
+            v5::SessionTeamShellListRequest {},
+        )
+        .await;
+    assert!(!list.truncated);
+    assert_eq!(list.data.items.len(), 3);
+    for (shell, owner) in [
+        (&running, &fixture.root),
+        (&first, &fixture.root),
+        (&second, &fixture.child),
+    ] {
+        assert_eq!(shell.status, shell::Status::Running);
+        let JsonValue::String(id) = shell.id.encode() else {
+            unreachable!()
+        };
+        let item = list
+            .data
+            .items
+            .iter()
+            .find(|item| units(&item.id) == id.as_str().unwrap())
+            .unwrap();
+        assert_eq!(units(&item.owner_id), *owner);
+        assert_eq!(units(&item.status), "running");
+    }
+    fixture.platform.shell.remove(&running.id).await.unwrap();
+    std::fs::write(fixture.path.join("release-shell"), "").unwrap();
+    std::fs::write(fixture.path.join("child/release-shell"), "").unwrap();
+    for (platform, shell) in [
+        (&fixture.platform, &first),
+        (&fixture.child_platform, &second),
+    ] {
+        let completed =
+            tokio::time::timeout(connector_support::WAIT, platform.shell.wait(&shell.id))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(completed.status, shell::Status::Exited);
+        assert_eq!(completed.exit.unwrap().get(), 0.0);
+        assert!(completed.time.completed.is_some());
+        assert_eq!(platform.shell.get(&shell.id).await.unwrap(), completed);
+    }
+    let completed: v5::SessionTeamShellListResult = harness
+        .ask(
+            NAMES[14],
+            session_scope(&fixture.root),
+            v5::SessionTeamShellListRequest {},
+        )
+        .await;
+    assert!(!completed.truncated);
+    assert!(completed.data.items.is_empty());
+    harness.close().await;
+    fixture.close().await;
+}
+
 fn assistant(content: JsonValue, completed: bool) -> String {
     ycoding_core::ycoding_schema::stringify_json(
         &ObjectEncoder::new()
@@ -2285,6 +2367,109 @@ async fn status_separates_pending_attention_and_failed_roots() {
     );
     permissions.cancel(&id);
     stop(&fixture.child).await;
+    harness.close().await;
+    fixture.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn status_reports_loss_only_roots_and_preserves_inactive_pending_attention() {
+    let fixture = Fixture::new().await;
+    let failed = format!("{}_lost_failed", fixture.root);
+    create(&failed, &fixture.project, &fixture.directory, None, "build").await;
+    world()
+        .core
+        .sessions
+        .publish(tables::NewEvent {
+            id: format!("evt_failure_{failed}").into(),
+            aggregate_id: failed.as_str().into(),
+            created: remote_derived_support::now(),
+            type_: "session.execution.failed.1".into(),
+            data: parse_json(&format!(
+                r#"{{"sessionID":"{failed}","error":{{"type":"unknown","message":"Synthetic failure"}}}}"#
+            ))
+            .unwrap(),
+        })
+        .await
+        .unwrap();
+    for owner in [&fixture.child, &fixture.other, &failed] {
+        let row = Shell {
+            id: format!("shl_derived_{owner}").into(),
+            session_id: Some(owner.as_str().into()),
+            pid: 1,
+            process_started: None,
+            owner_pid: 1,
+            owner_started: "Mon Jan  1 00:00:00 2024".into(),
+            notice_pending: 1,
+            time_created: 1,
+            time_lost: Some(2),
+            start_seq: -1,
+        };
+        world()
+            .store
+            .submit(move |tx| ShellTable::insert(tx, &row))
+            .unwrap()
+            .await
+            .unwrap();
+    }
+    let location = world()
+        .core
+        .locations
+        .session(&session::Id::new(fixture.other.as_str()).unwrap())
+        .unwrap()
+        .1;
+    let request = form::Info::decode(
+        &parse_json(&format!(
+            r#"{{"id":"frm_{}","sessionID":"{}","title":"Lost with request","fields":[{{"key":"approve","type":"boolean"}}]}}"#,
+            fixture.other, fixture.other
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    location.forms.create(request.clone()).unwrap();
+    let mut harness = Harness::new(fixture.environment(true)).await;
+    let status: v5::SessionStatusResult = harness
+        .ask(NAMES[8], machine(), v5::SessionStatusRequest {})
+        .await;
+    for id in [&fixture.root, &fixture.other, &failed] {
+        assert!(status.attention.items.iter().any(|item| units(item) == *id));
+        assert!(!status.running.items.iter().any(|item| units(item) == *id));
+        assert!(status.outstanding.as_ref().is_none_or(|outstanding| {
+            !outstanding.items.iter().any(|item| units(item) == *id)
+        }));
+        assert!(
+            status
+                .failed
+                .as_ref()
+                .is_none_or(|failed| !failed.items.iter().any(|item| units(item) == *id))
+        );
+    }
+    let lost = &status.lost.as_ref().unwrap().items;
+    assert!(lost.iter().any(|item| units(item) == fixture.root));
+    assert!(lost.iter().any(|item| units(item) == failed));
+    assert!(!lost.iter().any(|item| units(item) == fixture.child));
+    assert!(!lost.iter().any(|item| units(item) == fixture.other));
+    location.forms.cancel(&request.id).unwrap();
+    let cleared: v5::SessionStatusResult = harness
+        .ask(NAMES[8], machine(), v5::SessionStatusRequest {})
+        .await;
+    assert!(
+        cleared
+            .lost
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .any(|item| units(item) == fixture.other)
+    );
+    for owner in [&fixture.child, &fixture.other, &failed] {
+        let key = tuple_key(&[KeyPart::String(&format!("shl_derived_{owner}").into())]);
+        world()
+            .store
+            .submit(move |tx| tx.delete::<ShellTable>(&key))
+            .unwrap()
+            .await
+            .unwrap();
+    }
     harness.close().await;
     fixture.close().await;
 }

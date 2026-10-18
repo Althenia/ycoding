@@ -14,6 +14,9 @@ use ycoding_schema::{
 #[path = "session_support/mod.rs"]
 mod support;
 
+#[path = "session_support/checkpoint.rs"]
+mod checkpoint;
+
 struct LocationMap {
     locations: Arc<Mutex<Vec<location::Ref>>>,
     runner: Arc<Gate>,
@@ -38,6 +41,12 @@ impl Runner for Gate {
             let session_pending::Message::User(mut user) = input else {
                 return Ok(input);
             };
+            assert!(
+                user.data
+                    .metadata
+                    .as_ref()
+                    .is_none_or(|metadata| metadata.get(&"sharedContext".into()).is_none())
+            );
             user.data
                 .metadata
                 .get_or_insert_with(JsonObject::new)
@@ -197,7 +206,148 @@ async fn process_global_execution_routes_session_placement_only_at_drain_and_adv
     assert_eq!(receiver.recv().await.unwrap(), (id.clone(), false));
     assert_eq!(locations.locations.lock().unwrap().len(), 5);
     assert_eq!(*runner.prepared.lock().unwrap(), 1);
+    shared_context_provenance_is_internal_and_retries_keep_the_first_admission(
+        execution, &service, &store, &id,
+    )
+    .await;
     execution.shutdown().await.unwrap();
+}
+
+async fn shared_context_provenance_is_internal_and_retries_keep_the_first_admission(
+    execution: &Execution,
+    service: &Service,
+    store: &ycoding_core::ycoding_store::Store,
+    session_id: &session::Id,
+) {
+    use ycoding_core::session::shared_context::{Selection, compose, resolve, split};
+    let selection =
+        Selection::decode(&parse_json(r#"{"message_ids":["msg_evidence"]}"#).unwrap()).unwrap();
+    let snapshot = resolve(session_id, &selection, |_| {
+        Ok(Some(session_message::Info::decode(
+            &parse_json(r#"{"type":"user","id":"msg_evidence","text":"Historical fact","time":{"created":1}}"#).unwrap(),
+        ).unwrap()))
+    })
+    .unwrap();
+    let mut forged = compose("Use $audit", &snapshot).unwrap();
+    forged
+        .metadata
+        .as_mut()
+        .unwrap()
+        .insert("keep".into(), JsonValue::Bool(true));
+    assert!(split(&forged.text, forged.metadata.as_ref()).is_some());
+    let request = |id: &str, event: &str, data: session_pending::UserData| Request {
+        id: session_message::Id::new(id).unwrap(),
+        session_id: session_id.clone(),
+        input: session_pending::Message::User(session_pending::UserMessage {
+            data,
+            delivery: ycoding_schema::session_delivery::Delivery::Steer,
+        }),
+        event_id: ycoding_schema::event::Id::new(event).unwrap(),
+        created: 70,
+    };
+    let admitted = execution
+        .prompt(
+            request("msg_forged_shared", "evt_forged_shared", forged.clone()),
+            Some(false),
+        )
+        .await
+        .unwrap();
+    let public = session_pending::UserData::decode(&admitted.data).unwrap();
+    assert_eq!(public.text, forged.text);
+    assert_eq!(
+        public.metadata.as_ref().unwrap().get(&"keep".into()),
+        Some(&JsonValue::Bool(true))
+    );
+    assert_eq!(
+        public.metadata.as_ref().unwrap().get(&"prepared".into()),
+        Some(&JsonValue::Bool(true))
+    );
+    assert!(
+        public
+            .metadata
+            .as_ref()
+            .unwrap()
+            .get(&"sharedContext".into())
+            .is_none()
+    );
+    assert!(split(&public.text, public.metadata.as_ref()).is_none());
+
+    // Internal orchestration admits directly through the store. Every public retry
+    // returns that first snapshot, even after promotion and projection pruning.
+    let internal = compose("Internal task", &snapshot).unwrap();
+    let initial = service
+        .admit(request(
+            "msg_internal_shared",
+            "evt_internal_shared",
+            internal.clone(),
+        ))
+        .await
+        .unwrap();
+    for phase in 0..3 {
+        if phase == 1 {
+            service
+                .promote_input(
+                    session_id,
+                    session_message::Id::new("msg_internal_shared")
+                        .unwrap()
+                        .as_lossless(),
+                    80,
+                )
+                .await
+                .unwrap();
+        } else if phase == 2 {
+            // Exercise the supported retention boundary, including a completed
+            // local compaction and its persisted manifest/checkpoint coverage.
+            let client = store.client();
+            let session = session_id.as_lossless().as_str().unwrap();
+            checkpoint::session(&client, session);
+            let boundary = checkpoint::run(
+                service,
+                session,
+                "Internal task completed",
+                checkpoint::Outcome::Succeeded,
+                90,
+            )
+            .await;
+            checkpoint::compaction(
+                &client,
+                service,
+                session,
+                &boundary,
+                checkpoint::Compaction::Ended,
+                100,
+            )
+            .await;
+            assert!(execution.active().is_empty());
+            let pruned = service
+                .prune_compacted(session_id, 110, Vec::new)
+                .await
+                .unwrap();
+            assert!(pruned.messages > 0);
+            let input_id = session_message::Id::new("msg_internal_shared").unwrap();
+            assert!(service.pending(&input_id).unwrap().is_none());
+            assert!(service.message(&input_id).unwrap().is_none());
+        }
+        let retry = execution
+            .prompt(
+                request(
+                    "msg_internal_shared",
+                    &format!("evt_internal_retry_{phase}"),
+                    forged.clone(),
+                ),
+                Some(false),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            retry.data, initial.data,
+            "snapshot changed at phase {phase}"
+        );
+        let data = session_pending::UserData::decode(&retry.data).unwrap();
+        let parts = split(&data.text, data.metadata.as_ref()).unwrap();
+        assert_eq!(parts.task, "Internal task");
+        assert_eq!(parts.digest, snapshot.digest);
+    }
 }
 
 #[test]

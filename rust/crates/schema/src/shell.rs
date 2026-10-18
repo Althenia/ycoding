@@ -15,7 +15,7 @@ impl DomainEncode for Id {
         self.0.encode()
     }
 }
-crate::schema::literal_enum_type!(Status,{Queued=>"queued",Running=>"running",Exited=>"exited",Timeout=>"timeout",MemoryLimit=>"memory-limit",Killed=>"killed"});
+crate::schema::literal_enum_type!(Status,{Running=>"running",Exited=>"exited",Timeout=>"timeout",MemoryLimit=>"memory-limit",Killed=>"killed"});
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MemoryLimitMb(crate::schema::NonNegativeInt);
 impl DomainDecode for MemoryLimitMb {
@@ -39,7 +39,6 @@ impl DomainEncode for MemoryLimitMb {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Time {
     pub started: crate::schema::Finite,
-    pub queued: Option<crate::schema::Finite>,
     pub completed: Option<crate::schema::Finite>,
 }
 impl DomainDecode for Time {
@@ -47,7 +46,6 @@ impl DomainDecode for Time {
         let o = ObjectDecoder::new(v, p)?;
         Ok(Self {
             started: o.field("started")?,
-            queued: o.optional("queued")?,
             completed: o.optional("completed")?,
         })
     }
@@ -57,7 +55,6 @@ impl DomainEncode for Time {
         ObjectEncoder::new()
             .field("started", &self.started)
             .optional("completed", &self.completed)
-            .optional("queued", &self.queued)
             .finish()
     }
 }
@@ -74,7 +71,6 @@ pub struct Info {
     pub exit: Option<crate::schema::Finite>,
     pub metadata: Metadata,
     pub tool_call_id: Option<LosslessString>,
-    pub queue_position: Option<crate::schema::PositiveInt>,
     pub time: Time,
 }
 impl DomainDecode for Info {
@@ -98,7 +94,6 @@ impl DomainDecode for Info {
             exit: o.optional("exit")?,
             metadata: o.field("metadata")?,
             tool_call_id,
-            queue_position: o.optional("queuePosition")?,
             time: o.field("time")?,
         })
     }
@@ -117,7 +112,6 @@ impl DomainEncode for Info {
             .field("metadata", &self.metadata)
             .optional("toolCallID", &self.tool_call_id)
             .field("time", &self.time)
-            .optional("queuePosition", &self.queue_position)
             .finish()
     }
 }
@@ -141,27 +135,6 @@ pub struct Created;
 impl crate::event::EventType for Created {
     const TYPE: &'static str = "shell.created";
     type Data = CreatedData;
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct UpdatedData {
-    pub info: Info,
-}
-impl DomainDecode for UpdatedData {
-    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
-        Ok(Self {
-            info: ObjectDecoder::new(v, p)?.field("info")?,
-        })
-    }
-}
-impl DomainEncode for UpdatedData {
-    fn encode(&self) -> JsonValue {
-        ObjectEncoder::new().field("info", &self.info).finish()
-    }
-}
-pub struct Updated;
-impl crate::event::EventType for Updated {
-    const TYPE: &'static str = "shell.updated";
-    type Data = UpdatedData;
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExitedData {

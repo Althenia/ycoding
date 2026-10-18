@@ -168,7 +168,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "3": "timeout",
     "4": "memory-limit",
     "5": "killed",
-    "6": "queued",
   },
   "ycoding.v5.Session_Message_Assistant_type": {
     "1": "assistant",
@@ -868,7 +867,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "3": "timeout",
     "4": "memory-limit",
     "5": "killed",
-    "6": "queued",
   },
   "ycoding.v5.Reference_LocalSource_type": {
     "1": "local",
@@ -1732,9 +1730,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
   "ycoding.v5.PublicEvent_shell_created_type": {
     "1": "shell.created",
   },
-  "ycoding.v5.PublicEvent_shell_updated_type": {
-    "1": "shell.updated",
-  },
   "ycoding.v5.PublicEvent_shell_exited_type": {
     "1": "shell.exited",
   },
@@ -1744,7 +1739,6 @@ export const enumLabels: Readonly<Record<string, Readonly<Record<number, string>
     "3": "timeout",
     "4": "memory-limit",
     "5": "killed",
-    "6": "queued",
   },
   "ycoding.v5.PublicEvent_shell_deleted_type": {
     "1": "shell.deleted",

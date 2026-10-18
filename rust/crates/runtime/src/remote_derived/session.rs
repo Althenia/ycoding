@@ -70,7 +70,7 @@ pub async fn status(
     let failed = roots(&work.failed);
     let lost = roots(&work.lost);
     let mut requests = BTreeSet::new();
-    let mut locations = Vec::new();
+    let mut locations = BTreeMap::new();
     for id in &work.running {
         let Some(info) = session::Id::new(id.clone())
             .ok()
@@ -78,14 +78,48 @@ pub async fn status(
         else {
             continue;
         };
-        if locations.contains(&info.location) {
+        let key = (
+            info.location.directory.as_lossless().clone(),
+            info.location
+                .workspace_id
+                .as_ref()
+                .map(|id| id.as_lossless().clone()),
+        );
+        if locations.contains_key(&key) {
             continue;
         }
-        locations.push(info.location.clone());
-        let services = target::verify(core, &info.id)?.1;
+        locations.insert(key, target::verify(core, &info.id)?.1);
+    }
+    for root in &running {
+        let owner = target::verify(core, root)?.1;
+        locations.insert(
+            (
+                owner.info.directory.as_lossless().clone(),
+                owner
+                    .info
+                    .workspace_id
+                    .as_ref()
+                    .map(|id| id.as_lossless().clone()),
+            ),
+            owner,
+        );
+    }
+    for (directory, workspace) in core.locations.cached() {
+        let services = core
+            .locations
+            .location(&directory, workspace.as_ref())
+            .map_err(|_| target::error(10, "Session Location is unavailable"))?;
+        locations.entry((directory, workspace)).or_insert(services);
+    }
+    for services in locations.values() {
         for services in core.locations.policy_sets(&services.info) {
             for permission in services.permissions.list() {
                 if let Some(owner) = root(&permission.session_id) {
+                    requests.insert(owner);
+                }
+            }
+            for question in services.questions.list() {
+                if let Some(owner) = root(&question.session_id) {
                     requests.insert(owner);
                 }
             }
@@ -97,19 +131,34 @@ pub async fn status(
                     requests.insert(owner);
                 }
             }
+            let mut reviewed = BTreeSet::new();
+            for info in inventory.values().filter(|info| {
+                info.location.directory == services.info.directory
+                    && info.location.workspace_id == services.info.workspace_id
+            }) {
+                let Some(owner) = root(&info.id).filter(|id| reviewed.insert(id.clone())) else {
+                    continue;
+                };
+                for request in services
+                    .guardrails
+                    .for_session(&owner)
+                    .map_err(|_| target::error(10, "Guardrail requests unavailable"))?
+                {
+                    if let Some(owner) = root(&request.session_id) {
+                        requests.insert(owner);
+                    }
+                }
+            }
         }
     }
-    for root in &running {
-        let owner = target::verify(core, root)?.1;
-        for services in core.locations.policy_sets(&owner.info) {
-            if !services
-                .guardrails
-                .for_session(root)
-                .map_err(|_| target::error(10, "Guardrail requests unavailable"))?
-                .is_empty()
-            {
-                requests.insert(root.clone());
-            }
+    for info in inventory.values().filter(|info| info.parent_id.is_none()) {
+        if !core
+            .reviews
+            .list(&info.id)
+            .map_err(|_| target::error(10, "Session reviews unavailable"))?
+            .is_empty()
+        {
+            requests.insert(info.id.clone());
         }
     }
     let attention = requests
@@ -123,11 +172,13 @@ pub async fn status(
         .filter(|id| !lost.contains(*id))
         .cloned()
         .collect::<BTreeSet<_>>();
+    let lost = lost.difference(&requests).cloned().collect::<BTreeSet<_>>();
     if [
         running.len(),
         attention.len(),
         outstanding.len(),
         failed.len(),
+        lost.len(),
     ]
     .iter()
     .any(|count| *count > 500)
@@ -151,6 +202,9 @@ pub async fn status(
         }),
         failed: (!failed.is_empty()).then(|| v5::SessionStatusResultFailed {
             items: items(&failed),
+        }),
+        lost: (!lost.is_empty()).then(|| v5::SessionStatusResultLost {
+            items: items(&lost),
         }),
     })
 }

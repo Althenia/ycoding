@@ -91,12 +91,19 @@ test("opening reads overlap subscription admission without applying unadmitted s
 test("refused subscription discards every parallel Session result", async () => {
   const fixture = await harness((request) =>
     request.operation === "event.subscribe"
-      ? { ok: false, code: "session_not_allowed", message: "refused" }
+      ? {
+          wire: (peer, dispatch) => peer.error(dispatch, "ycoding.v5.InvalidRequestError", {
+            _tag: "InvalidRequestError",
+            message: "Session not found",
+            kind: "not_found",
+          }),
+        }
       : "default",
   )
   try {
     await fixture.store.selectSession("ses_a")
     expect(fixture.store.state().notice).toContain("not available")
+    expect(fixture.store.state().connection.kind).toBe("connected")
     expect(fixture.store.state().history).toBeUndefined()
     expect(fixture.store.state().todos).toBeUndefined()
     expect(fixture.store.state().view?.autonomy).toBeUndefined()

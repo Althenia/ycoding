@@ -130,6 +130,7 @@ test("release verification runs the Rust gates in a 20-minute Ubuntu leg", () =>
   expect(check).toContain("        if: matrix.suite == 'rust'\n")
   const commands = [
     "python3 script/rust-workspace-check.py",
+    "bun test --cwd packages/core ./test/rust-baseline/immutable.test.ts",
     "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
     "cargo clippy --locked --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings",
     "cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast",
@@ -145,6 +146,23 @@ test("release verification runs the Rust gates in a 20-minute Ubuntu leg", () =>
   expect(verify.indexOf("- name: Verify Rust workspace")).toBeLessThan(
     verify.indexOf("- name: Verify Rust runtime client interoperability"),
   )
+})
+
+test("release Rust MCP fixtures use installed dependencies and the fetched main oracle", async () => {
+  const verify = section(release, "\n  verify-source:", "\n  build:")
+  expect(step(verify, "Checkout release source")).toContain("          fetch-depth: 0\n")
+  expect(step(verify, "Setup Bun")).toContain("          install-flags: --frozen-lockfile\n")
+  expect(verify.indexOf("- name: Setup Bun")).toBeLessThan(verify.indexOf("- name: Verify Rust workspace"))
+  expect(step(verify, "Verify Rust workspace")).toContain(
+    [
+      "        env:",
+      "          YCODING_MCP_SERVER_ROOT: ${{ github.workspace }}/packages/core/node_modules/@modelcontextprotocol/server",
+      "          YCODING_MCP_FIXTURE_REF: refs/remotes/origin/main",
+    ].join("\n"),
+  )
+  const extractor = await read("rust/crates/core/src/resources/mcp/extract-fixture.mjs")
+  expect(extractor).toContain('process.env.YCODING_MCP_FIXTURE_REF ?? "main"')
+  expect(extractor).toContain('manifest.version !== "2.3.1"')
 })
 
 test("legs that execute the native runtime install Rust and build the debug runtime before their suites", () => {

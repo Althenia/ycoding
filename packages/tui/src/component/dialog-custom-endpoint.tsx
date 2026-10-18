@@ -77,7 +77,9 @@ export function DialogCustomEndpoint(props: {
   }[] = []
   let focusIndex = 0
   let settled = false
+  let focusTimer: ReturnType<typeof setTimeout> | undefined
   onCleanup(() => {
+    clearTimeout(focusTimer)
     if (settled) return
     props.onCancel?.()
   })
@@ -154,12 +156,20 @@ export function DialogCustomEndpoint(props: {
     inputs[focusIndex]?.focus()
   }
 
+  function deferFocus(input: () => InputRenderable | undefined) {
+    clearTimeout(focusTimer)
+    focusTimer = setTimeout(() => {
+      const target = input()
+      if (target && !target.isDestroyed) target.focus()
+    }, 1)
+  }
+
   function addModel() {
     const index = models().length
     modelInputs[index] = {}
     setModels((current) => [...current, { id: "", name: "", family: "", api: "" }])
     focusIndex = index * 4 + 1
-    setTimeout(() => modelInputs[index]?.id?.focus(), 1)
+    deferFocus(() => modelInputs[index]?.id)
   }
 
   function handleInputKeyDown(event: { name: string; ctrl: boolean; preventDefault(): void }, modelIndex?: number) {
@@ -257,7 +267,7 @@ export function DialogCustomEndpoint(props: {
 
   onMount(() => {
     dialog.setSize("medium")
-    setTimeout(() => baseURLInput?.focus(), 1)
+    deferFocus(() => baseURLInput)
   })
 
   return (

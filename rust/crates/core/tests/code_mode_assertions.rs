@@ -11,7 +11,7 @@ use ycoding_core::tools::code_mode::{
     Cancellation, ExecutionLimits, ExecutionResult, Runtime, ToolDescription, ToolFailure,
     ToolFuture, ToolHost,
 };
-use ycoding_schema::{JsonValue, LosslessString, parse_json};
+use ycoding_schema::{JsonObject, JsonValue, LosslessString, parse_json};
 
 #[derive(Default)]
 struct Gate {
@@ -192,6 +192,73 @@ fn observation(result: &ExecutionResult, observe: &str) -> Result<JsonValue, Str
     })
 }
 
+fn assertion_matches(case: &JsonObject, actual: &JsonValue) -> bool {
+    let expected = case.get(&"expected".into()).unwrap();
+    if let Some(comparison) = case.get(&"comparison".into()) {
+        let (JsonValue::Object(comparison), JsonValue::Array(actual), JsonValue::Array(expected)) =
+            (comparison, actual, expected)
+        else {
+            return false;
+        };
+        if comparison.get(&"kind".into()) != Some(&JsonValue::String("math-ulp".into()))
+            || comparison.get(&"maxUlps".into()) != Some(&JsonValue::Number(1.0))
+            || case.get(&"assertion".into()) != Some(&JsonValue::String("toEqual".into()))
+            || case.get(&"observe".into()) != Some(&JsonValue::String("value".into()))
+            || actual.len() != expected.len()
+        {
+            return false;
+        }
+        let Some(JsonValue::Array(indices)) = comparison.get(&"indices".into()) else {
+            return false;
+        };
+        if !indices.iter().enumerate().all(|(position, index)| {
+            let JsonValue::Number(index) = index else {
+                return false;
+            };
+            index.is_finite()
+                && *index >= 0.0
+                && index.fract() == 0.0
+                && *index < expected.len() as f64
+                && (position == 0
+                    || matches!(indices[position - 1], JsonValue::Number(previous) if previous < *index))
+        }) {
+            return false;
+        }
+        return actual
+            .iter()
+            .zip(expected)
+            .enumerate()
+            .all(|(index, (actual, expected))| {
+                let (JsonValue::Number(actual), JsonValue::Number(expected)) = (actual, expected)
+                else {
+                    return false;
+                };
+                // Corpus Math values are finite. Never let proximity hide NaN,
+                // overflow, a changed sign, or the distinction between signed zeros.
+                if !actual.is_finite() || !expected.is_finite() {
+                    return false;
+                }
+                if indices.contains(&JsonValue::Number(index as f64))
+                    && *actual != 0.0
+                    && *expected != 0.0
+                    && actual.is_sign_negative() == expected.is_sign_negative()
+                {
+                    return actual.to_bits().abs_diff(expected.to_bits()) <= 1;
+                }
+                actual.to_bits() == expected.to_bits()
+            });
+    }
+    match text(case.get(&"assertion".into()).unwrap()).as_str() {
+        "toContain" => {
+            matches!(actual, JsonValue::String(_)) && text(actual).contains(&text(expected))
+        }
+        "not.toContain" => {
+            matches!(actual, JsonValue::String(_)) && !text(actual).contains(&text(expected))
+        }
+        _ => actual == expected,
+    }
+}
+
 #[tokio::test]
 async fn committed_typescript_literal_assertions() {
     let fixture = corpus();
@@ -238,16 +305,7 @@ async fn committed_typescript_literal_assertions() {
                 continue;
             }
         };
-        let matched = match text(case.get(&"assertion".into()).unwrap()).as_str() {
-            "toContain" => {
-                matches!(&actual, JsonValue::String(_)) && text(&actual).contains(&text(expected))
-            }
-            "not.toContain" => {
-                matches!(&actual, JsonValue::String(_)) && !text(&actual).contains(&text(expected))
-            }
-            _ => &actual == expected,
-        };
-        if !matched {
+        if !assertion_matches(case, &actual) {
             failures.push(format!("{label}: expected {expected:?}, got {actual:?}"));
         }
     }
@@ -256,6 +314,156 @@ async fn committed_typescript_literal_assertions() {
         "{} failures:\n{}",
         failures.len(),
         failures.join("\n")
+    );
+}
+
+fn math_case() -> JsonObject {
+    let fixture = corpus();
+    let Some(JsonValue::Array(cases)) = fixture.get(&"cases".into()) else {
+        panic!("An assertion corpus must declare cases")
+    };
+    let cases = cases
+        .iter()
+        .filter_map(|case| match case {
+            JsonValue::Object(case) if case.get(&"comparison".into()).is_some() => Some(case),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cases.len(),
+        1,
+        "only the host-Math vector permits approximation"
+    );
+    cases[0].clone()
+}
+
+#[test]
+fn math_comparison_metadata_preserves_exact_non_transcendental_entries() {
+    let case = math_case();
+    assert_eq!(text(case.get(&"suite".into()).unwrap()), "stdlib");
+    assert_eq!(
+        text(case.get(&"test".into()).unwrap()),
+        "deterministic Math methods match the host runtime"
+    );
+    assert_eq!(
+        case.get(&"comparison".into()),
+        Some(
+            &parse_json(
+                r#"{"kind":"math-ulp","maxUlps":1,"indices":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14]}"#
+            )
+            .unwrap()
+        )
+    );
+    let JsonValue::Array(expected) = case.get(&"expected".into()).unwrap() else {
+        panic!("The host-Math result must be an array")
+    };
+    assert_eq!(expected.len(), 19);
+    assert!(assertion_matches(
+        &case,
+        &JsonValue::Array(expected.clone())
+    ));
+    for (index, value) in expected.iter().enumerate() {
+        let JsonValue::Number(value) = value else {
+            panic!("The host-Math result must contain numbers")
+        };
+        for ulps in [-2, -1, 1, 2] {
+            let mut actual = expected.clone();
+            actual[index] = JsonValue::Number(f64::from_bits(
+                value.to_bits().checked_add_signed(ulps).unwrap(),
+            ));
+            assert_eq!(
+                assertion_matches(&case, &JsonValue::Array(actual)),
+                index < 15 && ulps.abs() == 1,
+                "index {index}, distance {ulps} ULP"
+            );
+        }
+    }
+    let mut exact = JsonObject::new();
+    exact.insert("assertion".into(), JsonValue::String("toEqual".into()));
+    exact.insert("expected".into(), JsonValue::Array(expected.clone()));
+    let mut actual = expected.clone();
+    let JsonValue::Number(first) = actual[0] else {
+        unreachable!()
+    };
+    actual[0] = JsonValue::Number(f64::from_bits(first.to_bits() + 1));
+    assert!(!assertion_matches(&exact, &JsonValue::Array(actual)));
+    assert!(assertion_matches(
+        &exact,
+        &JsonValue::Array(expected.clone())
+    ));
+    assert!(!assertion_matches(
+        &case,
+        &JsonValue::Array(expected[1..].to_vec())
+    ));
+    let mut actual = expected.clone();
+    actual[0] = JsonValue::Null;
+    assert!(!assertion_matches(&case, &JsonValue::Array(actual)));
+}
+
+#[test]
+fn math_comparison_rejects_nonfinite_values_wrong_signs_and_signed_zero_changes() {
+    let mut case = math_case();
+    let JsonValue::Array(expected) = case.get(&"expected".into()).unwrap() else {
+        unreachable!()
+    };
+    let expected = expected.clone();
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 0.0, -0.0] {
+        let mut actual = expected.clone();
+        actual[0] = JsonValue::Number(value);
+        assert!(
+            !assertion_matches(&case, &JsonValue::Array(actual)),
+            "{value:?}"
+        );
+    }
+    for (wanted, actual, matches) in [
+        (0.0, 0.0, true),
+        (-0.0, -0.0, true),
+        (0.0, -0.0, false),
+        (-0.0, 0.0, false),
+        (0.0, f64::from_bits(1), false),
+        (-0.0, -f64::from_bits(1), false),
+        (-1.0, f64::from_bits((-1.0_f64).to_bits() + 1), true),
+        (-1.0, 1.0, false),
+        (f64::NAN, f64::NAN, false),
+        (f64::INFINITY, f64::INFINITY, false),
+    ] {
+        let mut values = expected.clone();
+        values[0] = JsonValue::Number(wanted);
+        case.insert("expected".into(), JsonValue::Array(values.clone()));
+        values[0] = JsonValue::Number(actual);
+        assert_eq!(
+            assertion_matches(&case, &JsonValue::Array(values)),
+            matches,
+            "{wanted:?}, {actual:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn transcendental_math_preserves_specified_special_values() {
+    let runtime = Runtime::new(
+        Arc::new(Host::default()),
+        ExecutionLimits::default(),
+        Arc::new(ycoding_core::tools::code_mode::regexp::NativeRegExpEngine),
+        code_mode_regexp_fixture::collation(),
+    )
+    .unwrap();
+    // Observe special values before the JSON result boundary normalizes them.
+    let result = runtime.execute(
+        "return [
+            Number.isNaN(Math.acos(NaN)), Number.isNaN(Math.acos(2)), Number.isNaN(Math.acos(-2)),
+            Number.isNaN(Math.asin(NaN)), Number.isNaN(Math.asin(2)), Number.isNaN(Math.asin(-2)),
+            Number.isNaN(Math.atanh(NaN)), Number.isNaN(Math.atanh(2)), Number.isNaN(Math.atanh(-2)),
+            Object.is(Math.acos(1), 0),
+            Object.is(Math.asin(0), 0), Object.is(Math.asin(-0), -0),
+            Object.is(Math.atanh(0), 0), Object.is(Math.atanh(-0), -0),
+            Math.atanh(1) === Infinity, Math.atanh(-1) === -Infinity
+        ]",
+        Cancellation::default(),
+    ).await;
+    assert_eq!(
+        result.value.unwrap(),
+        JsonValue::Array(vec![JsonValue::Bool(true); 16])
     );
 }
 

@@ -252,6 +252,7 @@ async fn cursor_oversized_binary_write_gets_a_typed_refusal_and_the_run_continue
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
+            socket.set_nodelay(true).unwrap();
             let mut connection = h2::server::handshake(socket).await.unwrap();
             let (request, mut response) = connection.accept().await.unwrap().unwrap();
             let mut body = request.into_body();
@@ -280,7 +281,7 @@ async fn cursor_oversized_binary_write_gets_a_typed_refusal_and_the_run_continue
                 while observed.len() < 2 {
                     let chunk = body.data().await.unwrap().unwrap();
                     body.flow_control().release_capacity(chunk.len()).unwrap();
-                    observed.extend(decoder.push(&chunk));
+                    observed.extend(decoder.push(&chunk).into_iter().filter(|frame| frame.flags != 0 || frame.payload != [0x3a, 0]));
                 }
                 let reply = protobuf::fields(&observed[0].payload).unwrap();
                 let exec = protobuf::fields(reply[0].bytes().unwrap()).unwrap();
