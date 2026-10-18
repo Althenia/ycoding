@@ -37,6 +37,7 @@ export type InstallReleaseInput = {
   readonly platform: string
   readonly arch: string
   readonly fetch?: Fetch
+  readonly currentUser?: () => number | undefined
   readonly filesystem?: {
     readonly rename: Rename
     readonly verifyApplication?: (application: string) => Promise<void>
@@ -77,7 +78,8 @@ export async function latestRelease(fetcher: Fetch = fetch) {
 export async function installRelease(input: InstallReleaseInput) {
   if (!validVersion(input.version)) throw new Error(`Invalid YCoding version: ${input.version}`)
   const existing = await lstat(input.executable)
-  if (!existing.isFile() || existing.isSymbolicLink() || existing.uid !== process.getuid?.())
+  const uid = input.currentUser ? input.currentUser() : process.getuid?.()
+  if (!existing.isFile() || existing.isSymbolicLink() || existing.uid !== uid)
     throw new Error("Installed ycoding executable must be an owned regular file")
   const target = releaseTarget(input.platform, input.arch)
   const asset = `ycoding-${input.version}-${target}.tar.gz`
@@ -150,7 +152,7 @@ export async function installRelease(input: InstallReleaseInput) {
     const installDirectory = path.dirname(input.executable)
     const helper = bareHelper ? path.join(installDirectory, legacyComputerHelper) : undefined
     const installedHelper = helper ? await statIfExists(helper) : undefined
-    if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.())) {
+    if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== uid)) {
       throw new Error("Installed computer helper must be a regular file owned by the current user")
     }
     const bundles: ReadonlyArray<Bundle> = await Promise.all(
@@ -160,13 +162,13 @@ export async function installRelease(input: InstallReleaseInput) {
       ].map(async (bundle) => {
         const target = path.join(installDirectory, bundle.name)
         const installed = await statIfExists(target)
-        if (installed && (!installed.isDirectory() || installed.isSymbolicLink() || installed.uid !== process.getuid?.())) {
+        if (installed && (!installed.isDirectory() || installed.isSymbolicLink() || installed.uid !== uid)) {
           throw new Error(`Installed ${bundle.label} must be an owned directory`)
         }
         return { label: bundle.label, target, candidate: path.join(temporary, bundle.name), exists: installed !== undefined }
       }),
     )
-    const superseded = currentLayout && input.platform === "darwin" ? await installedSuperseded(installDirectory) : []
+    const superseded = currentLayout && input.platform === "darwin" ? await installedSuperseded(installDirectory, uid) : []
     rollback = await mkdtemp(path.join(installDirectory, ".ycoding-update-backup-"))
     const transaction: InstallTransaction = {
       executableBackedUp: false,
@@ -306,13 +308,13 @@ async function restoreRelease(input: {
   return recovery
 }
 
-async function installedSuperseded(directory: string) {
+async function installedSuperseded(directory: string, uid: number | undefined) {
   const helper = path.join(directory, legacyComputerHelper)
   const app = path.join(directory, legacyComputerApp)
   const [installedHelper, installedApp] = await Promise.all([statIfExists(helper), statIfExists(app)])
-  if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.()))
+  if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== uid))
     throw new Error("Installed computer helper must be a regular file owned by the current user")
-  if (installedApp && (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== process.getuid?.()))
+  if (installedApp && (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== uid))
     throw new Error("Installed computer helper app must be an owned directory")
   return [...(installedHelper ? [helper] : []), ...(installedApp ? [app] : [])]
 }

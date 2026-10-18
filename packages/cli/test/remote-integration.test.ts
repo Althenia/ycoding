@@ -343,7 +343,14 @@ function pseudoRandomBytes(length: number) {
 /** Writes fixture bytes into the Location directory and returns the command reading them. */
 async function captureCommand(directory: string, name: string, bytes: Buffer) {
   await writeFile(join(directory, name), bytes)
-  return `cat ${name}`
+  return captureScript(directory, name, `process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(name)}))`)
+}
+
+// Byte-capture fixtures use an explicit POSIX shell and a binary writer, not host text aliases.
+async function captureScript(directory: string, name: string, source: string) {
+  await writeFile(join(directory, `${name}.cjs`), source)
+  const executable = process.execPath.replaceAll("\\", "/").replaceAll("'", "'\\''")
+  return `'${executable}' '${name}.cjs'`
 }
 
 const goalRequest = "keep the remote bridge honest"
@@ -952,7 +959,7 @@ Require a fresh human decision in this isolated test.
 
 test("pages real shell output over the relay for the owning Session only", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-shell-"))
-  const server = await startServer(directory)
+  const server = await startServer(directory, { config: { shell: process.platform === "win32" ? "bash" : "/bin/sh" } })
   const ownerSessionID = "ses_remote_shell_owner"
   const otherSessionID = "ses_remote_shell_other"
   const hiddenSessionID = "ses_remote_shell_hidden"
@@ -975,7 +982,7 @@ test("pages real shell output over the relay for the owning Session only", async
     const stored = "a\n".repeat(650_000)
     expect(stored.length).toBe(1_300_000)
     const shell = await createShell(server, directory, {
-      command: "yes a | head -c 1300000",
+      command: await captureCommand(directory, "owned.bin", Buffer.from(stored)),
       metadata: { sessionID: ownerSessionID },
     })
     expect(shell.metadata.sessionID).toBe(ownerSessionID)
@@ -1055,7 +1062,7 @@ test("pages real shell output over the relay for the owning Session only", async
 
 test("joins real captured pages to the bytes the shell wrote at every budget", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-shell-paging-"))
-  const server = await startServer(directory)
+  const server = await startServer(directory, { config: { shell: process.platform === "win32" ? "bash" : "/bin/sh" } })
   try {
     const small = boundaryBytes()
     const smallShell = await createShell(server, directory, {
@@ -1112,14 +1119,18 @@ test("joins real captured pages to the bytes the shell wrote at every budget", a
 
 test("holds a live incomplete shell output character until the appended bytes arrive", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-shell-paging-live-"))
-  const server = await startServer(directory)
+  const server = await startServer(directory, { config: { shell: process.platform === "win32" ? "bash" : "/bin/sh" } })
   try {
     const first = Buffer.concat([Buffer.from("live-"), Buffer.from([0xc3])])
     const second = Buffer.concat([Buffer.from([0xa9]), Buffer.from("-done\n")])
     await writeFile(join(directory, "live-first.bin"), first)
     await writeFile(join(directory, "live-second.bin"), second)
     const shell = await createShell(server, directory, {
-      command: "cat live-first.bin; sleep 2; cat live-second.bin",
+      command: await captureScript(directory, "live", `
+        const fs = require("node:fs")
+        process.stdout.write(fs.readFileSync("live-first.bin"))
+        setTimeout(() => process.stdout.write(fs.readFileSync("live-second.bin")), 2000)
+      `),
       metadata: {},
     })
 
@@ -1158,7 +1169,7 @@ test("holds a live incomplete shell output character until the appended bytes ar
 
 test("settles incomplete trailing shell output bytes, clamps cursors, and reads nothing for a zero limit", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-shell-paging-settled-"))
-  const server = await startServer(directory)
+  const server = await startServer(directory, { config: { shell: process.platform === "win32" ? "bash" : "/bin/sh" } })
   try {
     const tails = [
       Buffer.concat([Buffer.from("ok\n"), Buffer.from([0xc3])]),
@@ -1221,7 +1232,7 @@ test("settles incomplete trailing shell output bytes, clamps cursors, and reads 
 
 test("pages real Unicode shell output over the relay without corrupting split characters", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-shell-unicode-"))
-  const server = await startServer(directory)
+  const server = await startServer(directory, { config: { shell: process.platform === "win32" ? "bash" : "/bin/sh" } })
   const sessionID = "ses_remote_shell_unicode"
   const relay = createRelay()
   const bridge = new RemoteAgent({

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
-import { TextareaRenderable, type Renderable } from "@opentui/core"
+import { InputRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
 import { DOT_TRAIL_FRAMES, SPINNER_FRAMES } from "../../src/component/spinner"
 import { mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
@@ -253,6 +253,14 @@ async function waitFor(predicate: () => boolean, label: string) {
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
   throw new Error(`timed out waiting for ${label}; prompts=${JSON.stringify(promptRequests)}`)
+}
+
+async function searchPalette(screen: Awaited<ReturnType<typeof renderScreen>>, query: string) {
+  await waitFor(() => screen.renderer.currentFocusedEditor instanceof InputRenderable, "focused palette filter")
+  const filter = screen.renderer.currentFocusedEditor
+  if (!(filter instanceof InputRenderable)) throw new Error("Palette filter is not focused")
+  await screen.input.typeText(query)
+  expect(filter.value).toBe(query)
 }
 
 async function focusComposer(screen: Awaited<ReturnType<typeof renderScreen>>) {
@@ -729,7 +737,7 @@ test("discarding failed shell recovery does not replay the command or erase its 
   try {
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "pristine recovery palette")
-    await screen.input.typeText("previous submission")
+    await searchPalette(screen, "previous submission")
     await waitFor(() => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"), "pristine recovery search")
     expect(screen.frame()).not.toContain("Retry previous submission")
     expect(screen.frame()).not.toContain("Discard previous submission recovery")
@@ -743,7 +751,7 @@ test("discarding failed shell recovery does not replay the command or erase its 
     await waitFor(() => screen.frame().includes("Shell submission failed"), "shell rejection")
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "recovery palette")
-    await screen.input.typeText("Discard previous submission recovery")
+    await searchPalette(screen, "Discard previous submission recovery")
     await waitFor(() => screen.frame().includes("Discard previous submission recovery"), "discard command")
     screen.input.pressEnter()
     await waitFor(() => screen.frame().includes("Previous submission recovery discarded"), "local discard")
@@ -751,7 +759,7 @@ test("discarding failed shell recovery does not replay the command or erase its 
     expect(composer(screen.renderer.root)?.plainText).toBe("echo discard")
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "discarded recovery palette")
-    await screen.input.typeText("previous submission")
+    await searchPalette(screen, "previous submission")
     await waitFor(() => screen.frame().includes("No results") || screen.frame().includes("Retry previous submission"), "discarded recovery search")
     expect(screen.frame()).not.toContain("Retry previous submission")
     expect(screen.frame()).not.toContain("Discard previous submission recovery")

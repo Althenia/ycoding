@@ -18,7 +18,9 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
+import { Git } from "@ycoding-ai/core/git"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationMutationPath } from "@ycoding-ai/core/location-mutation-path"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Provider } from "@ycoding-ai/core/provider"
@@ -50,7 +52,8 @@ import { toolIdentity, executeTool, settleTool, toolDefinitions, waitForTool } f
 
 const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("test"), providerID: Provider.ID.make("test") })
-const testShell = process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh"
+// The Windows commands below use PowerShell syntax.
+const testShell = process.platform === "win32" ? "powershell.exe" : "/bin/sh"
 const configDocument = (shellSandbox?: "disabled" | "optional" | "required", shellMemoryLimitMb?: number) =>
   new Config.Document({
     type: "document",
@@ -372,6 +375,8 @@ const executionNode = makeGlobalNode({
 
 const layer = AppNodeBuilder.build(
   LayerNode.group([
+    Git.node,
+    LocationMutationPath.node,
     Database.node,
     EventRuntime.node,
     Job.node,
@@ -440,6 +445,41 @@ const mixedOutputCommand = isWindows
   ? "[Console]::Out.Write('stdout'); Start-Sleep -Milliseconds 50; [Console]::Error.Write('stderr'); Start-Sleep -Milliseconds 100"
   : "printf stdout; sleep 0.05; printf stderr >&2"
 const idleCommand = isWindows ? "Start-Sleep -Seconds 60" : "sleep 60"
+const counterCommand = (counter: string, nativePowerShell = isWindows) =>
+  nativePowerShell
+    ? `[System.IO.File]::AppendAllText('${counter.replaceAll("'", "''")}', 'x', [System.Text.UTF8Encoding]::new($false)); [Console]::Out.Write('done')`
+    : `printf x >> '${counter.replaceAll("'", "'\\''")}'; printf done`
+
+test("background child counter command preserves literal paths and BOM-free append semantics", () => {
+  expect(counterCommand("C:\\owner's folder\\[counter] $value", true)).toBe(
+    "[System.IO.File]::AppendAllText('C:\\owner''s folder\\[counter] $value', 'x', [System.Text.UTF8Encoding]::new($false)); [Console]::Out.Write('done')",
+  )
+  expect(counterCommand("/owner's folder/[counter] $value", false)).toBe(
+    "printf x >> '/owner'\\''s folder/[counter] $value'; printf done",
+  )
+})
+
+test("background child counter command appends one raw byte per execution", async () => {
+  await using tmp = await tmpdir()
+  const counter = path.join(tmp.path, "owner's counter [literal] $value")
+  for (const expected of [[120], [120, 120]]) {
+    const child = Bun.spawn([
+      testShell,
+      ...(isWindows ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] : ["-c"]),
+      counterCommand(counter),
+    ], { stdout: "pipe", stderr: "pipe" })
+    const [exit, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    expect(exit).toBe(0)
+    expect(stderr).toBe("")
+    expect(stdout).toBe("done")
+    expect(Array.from(await fs.readFile(counter))).toEqual(expected)
+  }
+})
+
 const memoryHogCommand = [
   `"${process.execPath}" -e 'const retained = [Buffer.alloc(80 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
   `"${process.execPath}" -e 'const retained = [Buffer.alloc(80 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
@@ -819,7 +859,7 @@ describe("ShellTool", () => {
     ),
   )
 
-  it.live("applies the configured memory default and accepts an unlimited override", () =>
+  it.live("enforces platform memory-limit support and accepts an unlimited override", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
@@ -828,10 +868,20 @@ describe("ShellTool", () => {
         return withSession(tmp.path, () =>
           Effect.gen(function* () {
             const shell = yield* Shell.Service
-            expect((yield* shell.prepare({ command: helloCommand, timeout: 0 })).memoryLimitMb).toBe(512)
             expect(
               (yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 0 })).memoryLimitMb,
             ).toBeUndefined()
+            if (isWindows) {
+              for (const input of [
+                { command: helloCommand, timeout: 0 },
+                { command: helloCommand, timeout: 0, memoryLimitMb: 256 },
+              ]) expect(yield* shell.prepare(input).pipe(Effect.flip)).toMatchObject({
+                _tag: "Shell.MemoryLimitUnavailable",
+                message: "Shell process-tree memory limits are unavailable on Windows",
+              })
+              return
+            }
+            expect((yield* shell.prepare({ command: helloCommand, timeout: 0 })).memoryLimitMb).toBe(512)
             expect(
               (yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 256 })).memoryLimitMb,
             ).toBe(256)
@@ -1023,10 +1073,11 @@ describe("ShellTool", () => {
       ([active, outside]) => {
         reset()
         return withSession(active.path, (registry) =>
-          executeTool(registry, call({ command: cwdCommand, workdir: outside.path })),
+          settleTool(registry, call({ command: "pwd", workdir: outside.path })),
         ).pipe(
-          Effect.andThen(
+          Effect.andThen((settled) =>
             Effect.sync(() => {
+              expect(settled.output?.structured).toMatchObject({ exit: 0 })
               expect(assertions.map((item) => item.action)).toEqual(["external_directory", "shell"])
               expect(assertions[0]).toMatchObject({
                 resources: [path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")],
@@ -1063,7 +1114,30 @@ describe("ShellTool", () => {
         }).pipe(
           Effect.andThen(
             withSession(tmp.path, (registry) =>
-              executeTool(registry, call({ command: cwdCommand, workdir: worktree })),
+              Effect.gen(function* () {
+                const git = yield* Git.Service
+                const canonical = yield* LocationMutationPath.Service
+                const location = yield* Location.Service
+                const repository = yield* git.repo.discover(location.directory)
+                expect(repository, "active Location repository discovery").toBeDefined()
+                if (!repository) throw new Error("Active Location repository was not discovered")
+                const canonicalWorktree = yield* canonical.realPath(worktree)
+                const entries = yield* git.worktree.list(repository)
+                const checkouts = yield* Effect.forEach(entries, (entry) => canonical.realPath(entry.directory))
+                expect(checkouts, "linked checkout is listed by the active repository").toContain(canonicalWorktree)
+                expect(
+                  checkouts.some((checkout) => FSUtil.contains(checkout, canonicalWorktree)),
+                  "listed checkout contains the canonical workdir",
+                ).toBe(true)
+                const linked = yield* git.repo.discover(AbsolutePath.make(canonicalWorktree))
+                expect(linked, "linked checkout repository discovery").toBeDefined()
+                if (!linked) throw new Error("Linked checkout repository was not discovered")
+                expect(
+                  yield* canonical.realPath(linked.commonDirectory),
+                  "linked and active repositories share their canonical Git common directory",
+                ).toBe(yield* canonical.realPath(repository.commonDirectory))
+                return yield* executeTool(registry, call({ command: cwdCommand, workdir: worktree }))
+              }),
             ),
           ),
           Effect.andThen(Effect.sync(() => expect(assertions.map((input) => input.action)).toEqual(["shell"]))),
@@ -1287,7 +1361,7 @@ describe("ShellTool", () => {
             )
             const settled = yield* settleTool(
               registry,
-              call({ command: `printf x >> ${counter}; printf done`, background: true }, "call-child-shell"),
+              call({ command: counterCommand(counter), background: true }, "call-child-shell"),
             )
             const shellID = requiredShellID(settled)
             yield* Deferred.await(woken)

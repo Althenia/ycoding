@@ -743,6 +743,9 @@ from recorded Session Locations in the connector's inventory when their
 directories exist. Both reads exclude the global project and directories inside
 system temporary locations after realpath resolution: `os.tmpdir()`, `/tmp`,
 `/private/tmp`, `/var/tmp`, and the per-user `var/folders/.../T` directories.
+Directory containment rejects absolute relative-path results: paths on different
+Windows drives or UNC shares are not descendants. The same boundary applies to
+Session file and attachment containment.
 Every item has the project name when reported or the directory basename.
 A Session group is not permission to create a Session in an unavailable directory.
 `id` is a deterministic, domain-separated SHA-256 identifier over the exact

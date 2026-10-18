@@ -29,6 +29,7 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`memory.md`](./memory.md)                                               | On-demand workspace knowledge, Markdown concepts, permissions, conflict-safe updates, and offline graph export.                              |
 | [`meeting-intelligence.md`](./meeting-intelligence.md)                   | Opt-in local speech capture, model management, bounded meeting analysis, and approval-gated MCP reconciliation. |
 | [`tui-redesign-backlog.md`](./tui-redesign-backlog.md)                   | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog.                            |
+| [`windows-runtime-backlog.md`](./windows-runtime-backlog.md) | Deferred Windows process ownership, private storage, and guardrail contracts with Rust-first reuse. |
 | [`provider-efficiency.md`](./provider-efficiency.md)                     | Provider request amplification, prompt-cache capability matrix, OpenAI continuation, diagnostics, privacy, and reproducible benchmarks.      |
 | [`configuration.md`](./configuration.md)                                 | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.                                               |
 | [`remote-deployment.md`](./remote-deployment.md)                         | Operator deployment inputs, logging surfaces and privacy limits, and D1 backup, migration, and recovery for the remote relay.                |

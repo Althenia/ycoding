@@ -33,8 +33,8 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Pro
 type Row = {
   project_id: Project.ID
   project_name: string | null
-  project_worktree: AbsolutePath
-  directory: AbsolutePath
+  project_worktree: string
+  directory: string
   strategy: string | null
   sessions: number
   time_active: number
@@ -70,7 +70,14 @@ const layer = Layer.effect(
           order by ${ProjectTable.worktree}, candidates.project_id, candidates.directory
           limit ${input.limit + 1}`,
         )
-        .pipe(Effect.orDie)
+        .pipe(
+          Effect.map((rows) => rows.map((row) => ({
+            ...row,
+            project_worktree: ProjectTable.worktree.mapFromDriverValue(row.project_worktree),
+            directory: AbsolutePath.make(SessionTable.directory.mapFromDriverValue(row.directory)),
+          }))),
+          Effect.orDie,
+        )
       const page = rows.slice(0, input.limit)
       const data = yield* Effect.forEach(
         page,
@@ -130,13 +137,14 @@ function where(input: ListInput) {
 function searchFilter(search: string | undefined) {
   const value = search?.trim().toLowerCase()
   if (!value) return undefined
-  const pattern = `%${value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`
-  return sql`(lower(candidates.directory) like ${pattern} escape '\\' or lower(coalesce(${ProjectTable.name}, '')) like ${pattern} escape '\\')`
+  const directory = process.platform === "win32" ? value.replaceAll("\\", "/") : value
+  const pattern = (input: string) => `%${input.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`
+  return sql`(lower(candidates.directory) like ${pattern(directory)} escape '\\' or lower(coalesce(${ProjectTable.name}, '')) like ${pattern(value)} escape '\\')`
 }
 
 function anchorFilter(anchor: Anchor | undefined) {
   if (!anchor) return undefined
-  return sql`(${ProjectTable.worktree}, candidates.project_id, candidates.directory) > (${anchor.projectWorktree}, ${anchor.projectID}, ${anchor.directory})`
+  return sql`(${ProjectTable.worktree}, candidates.project_id, candidates.directory) > (${sql.param(anchor.projectWorktree, ProjectTable.worktree)}, ${anchor.projectID}, ${sql.param(anchor.directory, SessionTable.directory)})`
 }
 
 export const node = makeGlobalNode({

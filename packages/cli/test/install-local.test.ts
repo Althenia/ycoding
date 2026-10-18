@@ -37,11 +37,39 @@ test("installs the executable and Chrome extension together and replaces a previ
 
     expect((await readdir(destination)).sort()).toEqual(["ycoding", BrowserExtension.directory].sort())
     expect(await readFile(path.join(destination, "ycoding"), "utf8")).toBe("binary-second")
-    expect((await stat(path.join(destination, "ycoding"))).mode & 0o111).not.toBe(0)
+    // A simulated Linux build still uses the host filesystem; Windows has no POSIX executable bits.
+    if (process.platform !== "win32") expect((await stat(path.join(destination, "ycoding"))).mode & 0o111).not.toBe(0)
     expect((await stat(path.join(destination, "ycoding"))).ino).not.toBe(running.ino)
     expect(await readdir(path.join(destination, BrowserExtension.directory))).toEqual(["manifest.json"])
     expect(await readFile(path.join(destination, BrowserExtension.directory, "manifest.json"), "utf8")).toBe(
       "manifest-second",
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("rejects Windows installation without changing existing files", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-install-local-"))
+  try {
+    const destination = path.join(root, "bin")
+    await installLocalBuild({ source: await build(root, "first", "linux"), destination, platform: "linux" })
+    const executable = path.join(destination, "ycoding")
+    const before = await stat(executable)
+    const source = await build(root, "second", "linux")
+
+    const result = await installLocalBuild({ source, destination, platform: "win32" }).then(
+      () => undefined,
+      (error: unknown) => error instanceof Error ? error.message : undefined,
+    )
+    expect(result).toBe("install:local supports macOS and Linux")
+
+    expect((await readdir(destination)).sort()).toEqual(["ycoding", BrowserExtension.directory].sort())
+    expect(await readFile(executable, "utf8")).toBe("binary-first")
+    expect((await stat(executable)).ino).toBe(before.ino)
+    expect(await readdir(path.join(destination, BrowserExtension.directory))).toEqual(["manifest.json"])
+    expect(await readFile(path.join(destination, BrowserExtension.directory, "manifest.json"), "utf8")).toBe(
+      "manifest-first",
     )
   } finally {
     await rm(root, { recursive: true, force: true })

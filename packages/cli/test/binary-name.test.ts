@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
 import { BUN_BINARY, NODE_BINARY, platformBinary } from "../src/binary"
 
 test("published binaries use the ycoding command name", async () => {
@@ -10,6 +11,6 @@ test("published binaries use the ycoding command name", async () => {
 
   const pkg = await Bun.file(new URL("../package.json", import.meta.url)).json()
   expect(pkg.bin).toEqual({ ycoding: "./bin/ycoding.cjs" })
-  const wrappers = [...new Bun.Glob("*.cjs").scanSync(new URL("../bin/", import.meta.url).pathname)]
+  const wrappers = [...new Bun.Glob("*.cjs").scanSync(fileURLToPath(new URL("../bin/", import.meta.url)))]
   expect(wrappers).toEqual(["ycoding.cjs"])
 })

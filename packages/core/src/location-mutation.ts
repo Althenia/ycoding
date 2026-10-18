@@ -6,6 +6,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { FSUtil } from "./fs-util"
 import { Git } from "./git"
 import { Location } from "./location"
+import { LocationMutationPath } from "./location-mutation-path"
 import { Project } from "./project"
 import { AbsolutePath } from "./schema"
 
@@ -86,29 +87,33 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const git = yield* Git.Service
+    const trustPath = yield* LocationMutationPath.Service
 
     const repositoryWorktree = Effect.fnUntraced(function* (target: string) {
       const resolved = yield* resolvePath(path.resolve(target)).pipe(
         Effect.catchTag("LocationMutation.PathError", () => Effect.succeed(undefined)),
       )
       if (!resolved) return false
-      return yield* repositoryCheckout(resolved.canonical)
+      return yield* repositoryCheckout(resolved)
     })
 
-    const repositoryCheckout = Effect.fnUntraced(function* (canonical: string) {
+    const repositoryCheckout = Effect.fnUntraced(function* (resolved: ResolvedPath) {
       const repository = yield* git.repo.discover(location.directory)
       if (!repository) return false
-      const commonDirectory = yield* fs.realPath(repository.commonDirectory)
+      // Resolve the existing anchor strictly; prospective descendants need not exist yet.
+      const anchor = yield* trustPath.realPath(resolved.directory)
+      const canonical = path.resolve(anchor, path.relative(resolved.directory, resolved.canonical))
+      const commonDirectory = yield* trustPath.realPath(repository.commonDirectory)
       const entries = yield* git.worktree
         .list(repository)
         .pipe(Effect.catchTag("Git.WorktreeError", () => Effect.succeed([])))
       const trusted = yield* Effect.forEach(entries, (entry) =>
         Effect.gen(function* () {
-          const checkout = yield* fs.realPath(entry.directory).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          const checkout = yield* trustPath.realPath(entry.directory).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (!checkout || !FSUtil.contains(checkout, canonical)) return false
           const found = yield* git.repo.discover(AbsolutePath.make(checkout))
           if (!found) return false
-          return (yield* fs.realPath(found.commonDirectory)) === commonDirectory
+          return (yield* trustPath.realPath(found.commonDirectory)) === commonDirectory
         }),
       )
       return trusted.some(Boolean)
@@ -159,7 +164,7 @@ const layer = Layer.effect(
       }
 
       const external = !lexicallyInternal
-      const trustedCheckout = external && (yield* repositoryCheckout(resolved.canonical))
+      const trustedCheckout = external && (yield* repositoryCheckout(resolved))
       const resource = external
         ? slash(resolved.canonical)
         : slash(path.relative(locationRoot, resolved.canonical) || ".")
@@ -190,5 +195,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer: layer.pipe(Layer.orDie),
-  deps: [FSUtil.node, Location.node, Git.node],
+  deps: [FSUtil.node, Location.node, Git.node, LocationMutationPath.node],
 })

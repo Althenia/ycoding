@@ -100,6 +100,11 @@ const toPlatformError = (
 }
 
 type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
+
+// Windows close includes inherited pipe closure; root exit alone is not enough.
+export const recheckWindowsClose = <E>(kill: Effect.Effect<void, E>, closed: ExitSignal) =>
+  kill.pipe(Effect.catch((error) => Deferred.isDoneUnsafe(closed) ? Effect.void : Effect.fail(error)))
+
 type Capture = {
   stdout?: PassThrough
   stderr?: PassThrough
@@ -372,7 +377,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
       opts?: ChildProcess.KillOptions,
     ) {
       if (process.platform === "win32") {
-        if (!(yield* Deferred.isDone(signal))) yield* killGroup(command, proc, "SIGKILL")
+        if (!(yield* Deferred.isDone(signal))) yield* recheckWindowsClose(killGroup(command, proc, "SIGKILL"), signal)
         yield* Deferred.await(signal)
         return
       }
