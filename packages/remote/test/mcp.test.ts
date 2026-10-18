@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { parseClientMessage, parseRelayToClientMessage, RemoteLimits } from "../src/index"
+import { parseClientMessage, parseRelayToClientMessage, remoteOperationAccess, RemoteLimits } from "../src/index"
 import { parseMcpRequest, parseMcpState, parseMcpStateAck, mcpResource } from "../src/mcp"
 
 const request = {
@@ -11,6 +11,13 @@ const request = {
     epoch: "epoch_test",
   },
 } as const
+
+test.each(["artifact.demo.preview", "artifact.demo.export"] as const)("fixed demo operation %s is closed, global and read-only", (operation) => {
+  expect(remoteOperationAccess[operation]).toBe("read")
+  expect(parseClientMessage(JSON.stringify({ type: "request", id: "demo", operation })).ok).toBe(true)
+  for (const fields of [{ sessionID: "ses_foreign" }, { input: { path: "/etc/passwd" } }, { input: { uri: "file:///etc/passwd" } }])
+    expect(parseClientMessage(JSON.stringify({ type: "request", id: "demo", operation, ...fields })).ok).toBe(false)
+})
 
 test("MCP forwarding accepts only its fixed target and trusted envelope", () => {
   expect(parseMcpRequest(JSON.stringify(request))).toEqual(request)

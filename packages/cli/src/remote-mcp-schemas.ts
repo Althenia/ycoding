@@ -402,6 +402,8 @@ const specs = {
     description: "Turn the machine keep-awake hold on or off.",
     input: object({ enabled: boolean }, ["enabled"]),
   },
+  "artifact.demo.preview": { description: "Render the fixed two-variant MCP Apps capability demo. No Session or workspace content is read. Actual host support requires verification." },
+  "artifact.demo.export": { description: "Export only the fixed expiring PNG demo with original-byte integrity metadata. Native attachment creation belongs to the host." },
   "session.createInDirectory": {
     description:
       "Create a root Session in an existing directory strictly below the machine owner's home directory, given as an absolute path. The client must supply input.id; retry an uncertain create with the same id and directory. Missing paths, the home directory itself, and paths outside home (including via symlinks) are refused; no directory is created.",

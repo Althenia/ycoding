@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { RemoteLimits, remoteOperations } from "@ycoding-ai/remote"
 import { LocalFailure, type LocalServer } from "../src/remote-local"
@@ -27,7 +28,7 @@ const expectedTools = [
   "session_goal_stop", "session_create", "session_status", "session_catalog", "session_file_find", "session_switch_model",
   "session_switch_agent", "session_command", "session_skill", "usage_providers", "usage_summary", "usage_report", "session_usage_report",
   "session_prompt_costs", "session_task_costs", "usage_forecast", "incident_report", "incident_recent", "incident_guidance",
-  "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "session_create_in_directory",
+  "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "artifact_demo_preview", "artifact_demo_export", "session_create_in_directory",
 ]
 const excludedOperations = [
   "session.subscribe", "session.unsubscribe", "session.message.stream", "session.attachment.upload",
@@ -65,8 +66,8 @@ async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}
   const registry = createSessionRegistry({ local })
   await registry.refresh()
   calls.length = 0
-  const state = { allowed: true }
-  const mcp = createRemoteMcp({ local, sessions: registry, subscriptions: createSubscriptions(), resource, allowed: (epoch) => state.allowed && epoch === context.epoch })
+  const state = { allowed: true, now: 1000 }
+  const mcp = createRemoteMcp({ local, sessions: registry, subscriptions: createSubscriptions(), resource, allowed: (epoch) => state.allowed && epoch === context.epoch, now: () => state.now })
   closers.push(() => mcp.close())
   const request = (method: string, params: Record<string, unknown>, init: { name?: string; signal?: AbortSignal; body?: BodyInit; url?: string; verb?: string } = {}) =>
     mcp.fetch(
@@ -108,7 +109,7 @@ describe("inventory and discovery", () => {
     const operations = RemoteMcpSchemas.tools.map((tool) => tool.operation).filter((operation) => operation !== "session.createInDirectory")
     expect(operations.map(String).toSorted()).toEqual(remoteOperations.filter((operation) => !excludedOperations.includes(operation)).map(String).toSorted())
     expect(RemoteMcpSchemas.tools.at(-1)?.operation).toBe("session.createInDirectory")
-    expect(new Set(expectedTools).size).toBe(73)
+    expect(new Set(expectedTools).size).toBe(75)
   })
 
   test("session-scoped tools require sessionID and parameterless ones publish no input", async () => {
@@ -126,6 +127,83 @@ describe("inventory and discovery", () => {
     expect(schemas.get("incident_guidance")?.properties?.sessionID).toBeDefined()
     expect(schemas.get("workspace_list")?.required).toBeUndefined()
     expect(schemas.get("usage_forecast")?.allOf).toHaveLength(1)
+  })
+})
+
+describe("fixed artifact demo over authorized Relay MCP", () => {
+  test("discovers only fixed resources and exports original PNG bytes without accessing a Session", async () => {
+    const { request, run, calls } = await fixture()
+    const catalog = await (await request("tools/list", {})).json() as { result: { tools: { name: string; _meta?: unknown; outputSchema?: unknown }[] } }
+    expect(catalog.result.tools.find((tool) => tool.name === "artifact_demo_preview")).toMatchObject({ _meta: { ui: { resourceUri: "ui://ycoding/artifact-demo/v1.html" } } })
+    expect(catalog.result.tools.find((tool) => tool.name === "artifact_demo_export")?._meta).toBeUndefined()
+    expect(catalog.result.tools.filter((tool) => tool.name.startsWith("artifact_demo_")).every((tool) => tool.outputSchema !== undefined)).toBe(true)
+    expect((await run("artifact_demo_preview")).structuredContent).toMatchObject({ variants: ["list", "cards"], hostVerification: "required" })
+    const exported = await run("artifact_demo_export")
+    expect(exported.structuredContent).toMatchObject({ filename: "ycoding-demo.png", mime: "image/png", size: 79, sha256: "d3a97d031a3094c93d334c8e01e97c5a235ae1f44d5aab476d51311f16f0bce5", expiresAt: 901000 })
+    const link = exported.content[0] as unknown as { type: string; uri: string }
+    expect(link.type).toBe("resource_link")
+    const read = async (uri: string) => (await (await request("resources/read", { uri }, { name: uri })).json()) as { result: { contents: { uri: string; mimeType: string; blob?: string; text?: string; _meta?: unknown }[] } }
+    const png = (await read(link.uri)).result.contents[0]
+    const bytes = Buffer.from(png.blob ?? "", "base64")
+    expect(bytes.length).toBe(79)
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("d3a97d031a3094c93d334c8e01e97c5a235ae1f44d5aab476d51311f16f0bce5")
+    expect(JSON.stringify(exported)).not.toContain(png.blob!)
+    expect((await read(link.uri)).result.contents[0]).toEqual(png)
+    const html = (await read("ui://ycoding/artifact-demo/v1.html")).result.contents[0]
+    expect(html).toMatchObject({ mimeType: "text/html;profile=mcp-app", _meta: { ui: { csp: { connectDomains: [], resourceDomains: [], frameDomains: [] } } } })
+    expect(html.text).toContain("ui/initialize")
+    const listed = await (await request("resources/list", {})).json() as { result: { resources: { uri: string }[] } }
+    expect(listed.result.resources.map((item) => item.uri)).toEqual([html.uri, png.uri])
+    expect(await (await request("resources/templates/list", {})).json()).toMatchObject({ result: { resourceTemplates: [] } })
+    expect(calls).toEqual([])
+  })
+
+  test("rejects paths, caller-selected Sessions and unknown resources; expiry never renews on retry", async () => {
+    const { run, request, state, calls } = await fixture()
+    for (const name of ["artifact_demo_preview", "artifact_demo_export"]) for (const args of [{ path: "/etc/passwd" }, { sessionID: "ses_1" }, { input: { uri: "file:///etc/passwd" } }])
+      expect((await run(name, args)).isError).toBe(true)
+    for (const uri of ["file:///etc/passwd", "ui://ycoding/artifact-demo/../../secret", "artifact://ycoding-demo/unknown"])
+      expect(await (await request("resources/read", { uri }, { name: uri })).json()).toMatchObject({ error: { code: -32602, data: { uri } } })
+    const exported = await run("artifact_demo_export")
+    const uri = (exported.content[0] as unknown as { uri: string }).uri
+    state.now = 901000
+    expect((await run("artifact_demo_export")).isError).toBe(true)
+    expect(await (await request("resources/read", { uri }, { name: uri })).json()).toMatchObject({ error: { code: -32602, data: { uri } } })
+    expect(await (await request("resources/list", {})).json()).toMatchObject({ result: { resources: [{ uri: "ui://ycoding/artifact-demo/v1.html" }] } })
+    expect(calls).toEqual([])
+  })
+
+  test.each(["tools/list", "resources/list", "resources/templates/list", "resources/read", "tools/call"])("rechecks authority after asynchronous admission for %s", async (method) => {
+    const { request, state, calls } = await fixture()
+    const started = Promise.withResolvers<void>()
+    const body = Promise.withResolvers<void>()
+    const params = method === "resources/read" ? { uri: "ui://ycoding/artifact-demo/v1.html" } : method === "tools/call" ? { name: "artifact_demo_export", arguments: {} } : {}
+    const target = "uri" in params ? params.uri : "name" in params ? params.name : undefined
+    const pending = request(method, params, { ...(target === undefined ? {} : { name: target }), body: new ReadableStream({ async start(controller) {
+      started.resolve()
+      await body.promise
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params, _meta: meta } })))
+      controller.close()
+    } }) })
+    await started.promise
+    state.allowed = false
+    body.resolve()
+    expect((await pending).status).toBe(503)
+    expect(calls).toEqual([])
+  })
+
+  test("cancelled and closed resource reads disclose no bytes, and a safe read retry retains identity", async () => {
+    const { request, run, mcp } = await fixture()
+    const exported = await run("artifact_demo_export")
+    const uri = (exported.content[0] as unknown as { uri: string }).uri
+    const controller = new AbortController()
+    controller.abort()
+    expect((await request("resources/read", { uri }, { name: uri, signal: controller.signal })).status).toBe(503)
+    const retry = await request("resources/read", { uri }, { name: uri })
+    expect(retry.status).toBe(200)
+    expect(await retry.json()).toMatchObject({ result: { contents: [{ uri, mimeType: "image/png" }] } })
+    await mcp.close()
+    expect((await request("resources/read", { uri }, { name: uri })).status).toBe(503)
   })
 })
 

@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Artifact preview feasibility fixture</title>
+    <style id="shared">
+      :root {
+        color-scheme: light dark;
+        --yc-green-strong: #0a7b47;
+        --yc-primary-bg: #0b8550;
+        --yc-primary-fg: #ffffff;
+        --yc-danger: #c53a3a;
+        --yc-focus: #0b8b50;
+        --yc-bg: #ffffff;
+        --yc-surface: #f7f9f8;
+        --yc-surface-sunken: #eff3f1;
+        --yc-surface-raised: #ffffff;
+        --yc-text: #0b0f14;
+        --yc-text-muted: #5c6672;
+        --yc-text-subtle: #646d78;
+        --yc-border: #e4e8e6;
+        --yc-border-strong: #78847e;
+        --yc-font-sans: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+        --yc-font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+        --yc-size-xs: 13px;
+        --yc-leading-xs: 20px;
+        --yc-size-sm: 14px;
+        --yc-leading-sm: 22px;
+        --yc-size-md: 16px;
+        --yc-leading-md: 26px;
+        --yc-size-lg: 18px;
+        --yc-leading-lg: 28px;
+        --yc-size-2xl: 24px;
+        --yc-leading-2xl: 32px;
+        --yc-weight-regular: 400;
+        --yc-weight-medium: 500;
+        --yc-weight-semibold: 600;
+        --yc-space-1: 4px;
+        --yc-space-2: 8px;
+        --yc-space-3: 12px;
+        --yc-space-4: 16px;
+        --yc-space-6: 24px;
+        --yc-radius-sm: 6px;
+        --yc-radius-md: 10px;
+        --yc-radius-lg: 14px;
+        --yc-control-h: 44px;
+        --yc-control-pad-x: 16px;
+        --yc-border-width: 1px;
+        --yc-measure: 68ch;
+        --yc-gutter: 16px;
+        --yc-focus-ring: 0 0 0 2px var(--yc-bg), 0 0 0 4px var(--yc-focus);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --yc-green-strong: #4ee29b;
+          --yc-primary-bg: #4ee29b;
+          --yc-primary-fg: #04150c;
+          --yc-danger: #ef6f6f;
+          --yc-focus: #4ee29b;
+          --yc-bg: #0b1115;
+          --yc-surface: #11181d;
+          --yc-surface-sunken: #0e151a;
+          --yc-surface-raised: #151e24;
+          --yc-text: #f4f7f6;
+          --yc-text-muted: #99a2ad;
+          --yc-text-subtle: #7d8792;
+          --yc-border: #263039;
+          --yc-border-strong: #718278;
+        }
+      }
+
+      @media (min-width: 640px) {
+        :root {
+          --yc-gutter: 24px;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--yc-bg);
+        color: var(--yc-text);
+        font-family: var(--yc-font-sans);
+        font-size: var(--yc-size-md);
+        font-weight: var(--yc-weight-regular);
+        line-height: var(--yc-leading-md);
+      }
+
+      h1,
+      h2,
+      h3,
+      p,
+      ul,
+      ol {
+        margin: 0;
+        padding: 0;
+      }
+
+      h1,
+      h2,
+      h3 {
+        font-weight: var(--yc-weight-semibold);
+      }
+
+      .switch {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--yc-space-2);
+      }
+
+      .switch button,
+      .action {
+        min-width: var(--yc-control-h);
+        min-height: var(--yc-control-h);
+        padding: 0 var(--yc-control-pad-x);
+        border: var(--yc-border-width) solid var(--yc-border-strong);
+        border-radius: var(--yc-radius-md);
+        background: var(--yc-surface-raised);
+        color: var(--yc-text);
+        font: inherit;
+        font-size: var(--yc-size-sm);
+        font-weight: var(--yc-weight-medium);
+        line-height: var(--yc-leading-sm);
+        cursor: pointer;
+      }
+
+      .switch button:hover,
+      .action:hover {
+        background: var(--yc-surface-sunken);
+      }
+
+      .switch button[aria-pressed="true"] {
+        border-color: var(--yc-primary-bg);
+        background: var(--yc-primary-bg);
+        color: var(--yc-primary-fg);
+        font-weight: var(--yc-weight-semibold);
+      }
+
+      .switch button[aria-pressed="true"]::before {
+        content: "\2713\00a0";
+      }
+
+      .action[aria-disabled="true"] {
+        border-style: dashed;
+        background: var(--yc-surface);
+        color: var(--yc-text-subtle);
+        cursor: not-allowed;
+      }
+
+      .switch button:focus-visible,
+      .action:focus-visible {
+        outline: 2px solid transparent;
+        outline-offset: 2px;
+        box-shadow: var(--yc-focus-ring);
+      }
+    </style>
+    <style id="page">
+      main {
+        display: grid;
+        gap: var(--yc-space-6);
+        max-width: var(--yc-measure);
+        margin: 0 auto;
+        padding: var(--yc-space-6) var(--yc-gutter);
+      }
+
+      h1 {
+        font-size: var(--yc-size-2xl);
+        line-height: var(--yc-leading-2xl);
+      }
+
+      h2 {
+        font-size: var(--yc-size-lg);
+        line-height: var(--yc-leading-lg);
+      }
+
+      h3 {
+        font-size: var(--yc-size-md);
+        line-height: var(--yc-leading-md);
+      }
+
+      section {
+        display: grid;
+        gap: var(--yc-space-3);
+      }
+
+      .note {
+        color: var(--yc-text-muted);
+        font-size: var(--yc-size-sm);
+        line-height: var(--yc-leading-sm);
+      }
+
+      .status {
+        padding: var(--yc-space-2) var(--yc-space-3);
+        border: var(--yc-border-width) solid var(--yc-border);
+        border-left: 4px solid var(--yc-border-strong);
+        border-radius: var(--yc-radius-sm);
+        background: var(--yc-surface);
+        font-size: var(--yc-size-sm);
+        line-height: var(--yc-leading-sm);
+        overflow-wrap: anywhere;
+      }
+
+      .status[data-state="initialized"],
+      .status[data-state="confirmed"] {
+        border-left-color: var(--yc-green-strong);
+      }
+
+      .status[data-state="failed"],
+      .status[data-state="unavailable"] {
+        border-left-color: var(--yc-danger);
+      }
+
+      #variant-heading:focus-visible {
+        outline: 2px solid transparent;
+        box-shadow: var(--yc-focus-ring);
+      }
+
+      .rows {
+        list-style: none;
+        border: var(--yc-border-width) solid var(--yc-border);
+        border-radius: var(--yc-radius-md);
+        background: var(--yc-surface-raised);
+      }
+
+      .rows li {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: var(--yc-space-1) var(--yc-space-3);
+        padding: var(--yc-space-3) var(--yc-space-4);
+      }
+
+      .rows li + li {
+        border-top: var(--yc-border-width) solid var(--yc-border);
+      }
+
+      .row-title {
+        font-weight: var(--yc-weight-semibold);
+      }
+
+      .row-state {
+        color: var(--yc-text-muted);
+        font-family: var(--yc-font-mono);
+        font-size: var(--yc-size-xs);
+        line-height: var(--yc-leading-sm);
+      }
+
+      .row-detail {
+        grid-column: 1 / -1;
+        color: var(--yc-text-muted);
+        font-size: var(--yc-size-sm);
+        line-height: var(--yc-leading-sm);
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+        gap: var(--yc-space-3);
+        list-style: none;
+      }
+
+      .cards article {
+        display: grid;
+        gap: var(--yc-space-2);
+        height: 100%;
+        padding: var(--yc-space-4);
+        border: var(--yc-border-width) solid var(--yc-border-strong);
+        border-radius: var(--yc-radius-lg);
+        background: var(--yc-surface-raised);
+      }
+
+      .cards p {
+        color: var(--yc-text-muted);
+        font-size: var(--yc-size-sm);
+        line-height: var(--yc-leading-sm);
+      }
+
+      .cards .chip {
+        justify-self: start;
+        padding: 0 var(--yc-space-2);
+        border: var(--yc-border-width) solid var(--yc-border-strong);
+        border-radius: var(--yc-radius-sm);
+        font-family: var(--yc-font-mono);
+        font-size: var(--yc-size-xs);
+        line-height: var(--yc-leading-xs);
+      }
+
+      #probe-frame {
+        display: block;
+        width: 100%;
+        height: 240px;
+        border: var(--yc-border-width) solid var(--yc-border-strong);
+        border-radius: var(--yc-radius-md);
+        background: var(--yc-bg);
+      }
+    </style>
+    <style id="child">
+      body {
+        padding: var(--yc-space-3);
+      }
+
+      main {
+        display: grid;
+        gap: var(--yc-space-3);
+      }
+
+      h2 {
+        font-size: var(--yc-size-md);
+        line-height: var(--yc-leading-md);
+      }
+
+      #child-items {
+        display: grid;
+        gap: var(--yc-space-2);
+        list-style: none;
+      }
+
+      #child-items li {
+        padding: var(--yc-space-2) var(--yc-space-3);
+        border: var(--yc-border-width) solid var(--yc-border);
+        background: var(--yc-surface-raised);
+        font-size: var(--yc-size-sm);
+        line-height: var(--yc-leading-sm);
+      }
+
+      #child-items.list li {
+        border-width: 0 0 var(--yc-border-width);
+        border-radius: 0;
+      }
+
+      #child-items.cards {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+      }
+
+      #child-items.cards li {
+        border-color: var(--yc-border-strong);
+        border-radius: var(--yc-radius-md);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Artifact preview feasibility fixture</h1>
+        <p class="note">Feasibility probe only. It checks what one host allows and is not the production preview.</p>
+      </header>
+
+      <section aria-labelledby="host-heading">
+        <h2 id="host-heading">Host handshake</h2>
+        <p id="host-status" class="status" role="status" data-state="pending">Pending: starting.</p>
+      </section>
+
+      <section aria-labelledby="variants-heading">
+        <h2 id="variants-heading">Variants</h2>
+        <div class="switch" role="group" aria-labelledby="variants-heading">
+          <button type="button" id="variant-list" data-variant="list" aria-pressed="true">List</button>
+          <button type="button" id="variant-cards" data-variant="cards" aria-pressed="false">Cards</button>
+        </div>
+        <h3 id="variant-heading" tabindex="-1">List variant</h3>
+        <div id="variant-view"></div>
+        <noscript><p class="status" data-state="failed">Failed: variants need JavaScript.</p></noscript>
+      </section>
+
+      <section aria-labelledby="probe-heading">
+        <h2 id="probe-heading">Nested frame probe</h2>
+        <p class="note">Creates a sandboxed frame with scripts only and no same-origin access. Hosts may block it.</p>
+        <button type="button" id="probe-button" class="action" aria-describedby="probe-status">
+          Run nested frame probe
+        </button>
+        <p id="probe-status" class="status" role="status" data-state="idle">Not confirmed: probe has not run.</p>
+        <div id="probe-host"></div>
+      </section>
+    </main>
+
+    <script>
+      const protocolVersion = "2026-01-26"
+      const hostTimeoutMs = 3000
+      const probeTimeoutMs = 2000
+      const probeReadyType = "yc-fixture-probe-ready"
+      const childCsp =
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src data:; form-action 'none'; base-uri 'none'"
+      const items = [
+        ["Summary", "Short recap of the Session so far.", "ready"],
+        ["Proposed actions", "Three follow-ups awaiting a decision.", "review"],
+        ["Open questions", "One question is still unanswered.", "open"],
+      ]
+      const titles = { list: "List variant", cards: "Cards variant" }
+
+      const byId = (id) => document.getElementById(id)
+      const make = (tag, className, text) => {
+        const node = document.createElement(tag)
+        if (className) node.className = className
+        if (text !== undefined) node.textContent = text
+        return node
+      }
+      const shown = (value) => (typeof value === "string" && value ? value.slice(0, 64) : "unreported")
+
+      const view = byId("variant-view")
+      const heading = byId("variant-heading")
+      const switchButtons = document.querySelectorAll("button[data-variant]")
+
+      function render(variant) {
+        heading.textContent = titles[variant]
+        switchButtons.forEach((button) =>
+          button.setAttribute("aria-pressed", String(button.dataset.variant === variant)),
+        )
+        view.replaceChildren(variant === "cards" ? cardList() : rowList())
+      }
+
+      function rowList() {
+        const list = make("ol", "rows")
+        items.forEach(([title, detail, state]) => {
+          const row = make("li")
+          row.append(
+            make("span", "row-title", title),
+            make("span", "row-state", state),
+            make("span", "row-detail", detail),
+          )
+          list.append(row)
+        })
+        return list
+      }
+
+      function cardList() {
+        const list = make("ul", "cards")
+        items.forEach(([title, detail, state]) => {
+          const card = make("article")
+          card.append(make("h3", "", title), make("p", "", detail), make("p", "chip", state))
+          const entry = make("li")
+          entry.append(card)
+          list.append(entry)
+        })
+        return list
+      }
+
+      const fromHash = () => (location.hash === "#variant=cards" ? "cards" : "list")
+
+      switchButtons.forEach((button) =>
+        button.addEventListener("click", () => {
+          const hash = "#variant=" + button.dataset.variant
+          if (location.hash !== hash) location.hash = hash
+          render(button.dataset.variant)
+        }),
+      )
+      window.addEventListener("hashchange", () => render(fromHash()))
+      render(fromHash())
+
+      const hostStatus = byId("host-status")
+      const embedded = window.parent !== window
+
+      function setHost(state, text) {
+        hostStatus.dataset.state = state
+        hostStatus.textContent = text
+      }
+
+      function onHostMessage(data) {
+        if (hostStatus.dataset.state === "initialized") return
+        if (!data || data.jsonrpc !== "2.0" || data.id !== 1) return
+        if (data.error) {
+          setHost("failed", "Failed: host rejected ui/initialize (" + shown(data.error.message) + ").")
+          return
+        }
+        const result = data.result
+        if (!result || typeof result !== "object") {
+          setHost("failed", "Failed: host answered ui/initialize without a result.")
+          return
+        }
+        if (result.protocolVersion !== protocolVersion) {
+          setHost(
+            "failed",
+            "Failed: host selected protocol " + shown(result.protocolVersion) + ", not " + protocolVersion + ".",
+          )
+          return
+        }
+        const info = result.hostInfo && typeof result.hostInfo === "object" ? result.hostInfo : {}
+        setHost(
+          "initialized",
+          "Initialized: host " +
+            shown(info.name) +
+            " " +
+            shown(info.version) +
+            " accepted protocol " +
+            protocolVersion +
+            ".",
+        )
+        window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized" }, "*")
+      }
+
+      if (!embedded) setHost("failed", "Failed: no host window. This document is not embedded.")
+      else {
+        setHost("pending", "Pending: waiting for the host to answer ui/initialize.")
+        window.parent.postMessage(
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "ui/initialize",
+            params: {
+              protocolVersion,
+              appInfo: { name: "artifact-preview-fixture", version: "0.0.0" },
+              appCapabilities: {},
+            },
+          },
+          "*",
+        )
+        setTimeout(() => {
+          if (hostStatus.dataset.state === "pending")
+            setHost("failed", "Failed: no answer to ui/initialize within " + hostTimeoutMs / 1000 + " s.")
+        }, hostTimeoutMs)
+      }
+
+      const probeButton = byId("probe-button")
+      const probeStatus = byId("probe-status")
+      const probeHost = byId("probe-host")
+      let frame
+      let probeTimer
+
+      function setProbe(state, text) {
+        probeStatus.dataset.state = state
+        probeStatus.textContent = text
+      }
+
+      function childMain() {
+        const list = document.getElementById("child-items")
+        const title = document.getElementById("child-heading")
+        const buttons = document.querySelectorAll("button[data-variant]")
+        function show(variant) {
+          list.className = variant
+          title.textContent = variant === "cards" ? "Nested cards variant" : "Nested list variant"
+          buttons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.variant === variant)))
+        }
+        buttons.forEach((button) => button.addEventListener("click", () => show(button.dataset.variant)))
+        show("list")
+        parent.postMessage({ type: "yc-fixture-probe-ready" }, "*")
+      }
+
+      function childDocument() {
+        return (
+          '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+          '<meta http-equiv="Content-Security-Policy" content="' +
+          childCsp +
+          '">' +
+          '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+          "<style>" +
+          byId("shared").textContent +
+          byId("child").textContent +
+          "</style></head><body><main>" +
+          '<h2 id="child-heading" tabindex="-1"></h2>' +
+          '<div class="switch" role="group" aria-label="Nested variant">' +
+          '<button type="button" id="child-variant-list" data-variant="list" aria-pressed="true">List</button>' +
+          '<button type="button" id="child-variant-cards" data-variant="cards" aria-pressed="false">Cards</button></div>' +
+          '<ul id="child-items" class="list"><li>Alpha</li><li>Beta</li><li>Gamma</li></ul></main>' +
+          "<script>(" +
+          childMain.toString() +
+          ")()<\/script></body></html>"
+        )
+      }
+
+      function runProbe() {
+        if (probeButton.getAttribute("aria-disabled") === "true") return
+        clearTimeout(probeTimer)
+        if (frame) frame.remove()
+        frame = document.createElement("iframe")
+        frame.id = "probe-frame"
+        frame.title = "Isolated nested frame probe"
+        frame.setAttribute("sandbox", "allow-scripts")
+        frame.srcdoc = childDocument()
+        probeButton.setAttribute("aria-disabled", "true")
+        setProbe("pending", "Not confirmed: waiting for the nested frame to report ready.")
+        probeHost.append(frame)
+        probeTimer = setTimeout(() => {
+          probeButton.removeAttribute("aria-disabled")
+          if (probeStatus.dataset.state !== "pending") return
+          setProbe(
+            "unavailable",
+            "Unavailable: no readiness message within " +
+              probeTimeoutMs / 1000 +
+              " s. The host may block nested frames; support is not established.",
+          )
+        }, probeTimeoutMs)
+      }
+
+      function onProbeMessage(event) {
+        const data = event.data
+        const ready =
+          event.origin === "null" &&
+          data &&
+          typeof data === "object" &&
+          Object.keys(data).length === 1 &&
+          data.type === probeReadyType
+        if (!ready) return
+        clearTimeout(probeTimer)
+        probeButton.removeAttribute("aria-disabled")
+        setProbe(
+          "confirmed",
+          "Confirmed: the nested frame ran its script and sent its readiness message. This is one host observation only.",
+        )
+      }
+
+      probeButton.addEventListener("click", runProbe)
+      window.addEventListener("message", (event) => {
+        if (event.source && frame && event.source === frame.contentWindow) return onProbeMessage(event)
+        if (embedded && event.source === window.parent) onHostMessage(event.data)
+      })
+    </script>
+  </body>
+</html>

@@ -1,5 +1,7 @@
 export * as RemoteOperations from "./remote-operations"
 
+import { RemoteMcpDemo } from "./remote-mcp-demo"
+
 import { createHash } from "node:crypto"
 import { realpath, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -754,6 +756,7 @@ export type OperationInput = {
   readonly subscriptions: SubscriptionRegistry
   readonly local: LocalServer
   readonly cache?: OperationCache
+  readonly demo?: ReturnType<typeof RemoteMcpDemo.create>
 }
 
 export async function executeRemoteOperation(input: OperationInput): Promise<readonly RemoteResponse[]> {
@@ -826,6 +829,15 @@ async function run(input: OperationInput) {
   // Validation is complete before any local call, so a malformed request never
   // causes local side effects.
   const validated = validate(request)
+  if (validated.kind === "artifact.demo.preview" || validated.kind === "artifact.demo.export") {
+    if (!input.demo) return unknownOperation()
+    try {
+      return input.demo.data(validated.kind)
+    } catch (error) {
+      if (error instanceof RemoteMcpDemo.ExpiredError) throw new OperationError("invalid_message", "Demo resource expired")
+      throw error
+    }
+  }
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
     : await workspaceList(input) }
@@ -1154,6 +1166,7 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
+  | { readonly kind: "artifact.demo.preview" | "artifact.demo.export" }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
@@ -1248,6 +1261,10 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
+  if (request.operation === "artifact.demo.preview" || request.operation === "artifact.demo.export") {
+    if (request.sessionID !== undefined || request.input !== undefined) throw new OperationError("invalid_message", "Fixed demo does not accept a Session or input")
+    return { kind: request.operation }
+  }
   if (request.operation === "machine.latency.append" || request.operation === "machine.latency.list") {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine latency does not accept a Session")
     if (request.operation === "machine.latency.append") {

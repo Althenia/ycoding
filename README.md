@@ -90,7 +90,7 @@ ycoding remote mcp off
 > [!WARNING]
 > An approved client acts on every existing and future Session on the machine with the same abilities as the web workspace, including persistent Always approvals where YCoding offers them and YOLO changes, and it can start a Session in any existing folder below your home directory. Each client needs a fresh Google sign-in by an allowlisted owner and an explicit approval. `ycoding remote mcp off` or disconnecting revokes every client.
 
-It exposes 73 tools on MCP revision 2026-07-28. Operators provision it with one D1 migration and one additional Google redirect URI; see [Remote relay deployment](docs/remote-deployment.md#relay-mcp). This is separate from the localhost task interface below.
+It exposes 75 tools on MCP revision 2026-07-28, including a fixed two-variant UI and PNG export feasibility demo with Relay transport groundwork. This is not a general artifact pipeline: arbitrary Session-scoped artifacts, PDFs and complete skill/proposal bundles are not implemented by the demo. Actual-chat UI rendering and native-file delivery remain unverified. Operators provision Relay MCP with one D1 migration and one additional Google redirect URI; see [Remote relay deployment](docs/remote-deployment.md#relay-mcp). This is separate from the localhost task interface below.
 
 ## Guardrails
 
