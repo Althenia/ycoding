@@ -441,6 +441,41 @@ const mixedOutputCommand = isWindows
   ? "[Console]::Out.Write('stdout'); Start-Sleep -Milliseconds 50; [Console]::Error.Write('stderr'); Start-Sleep -Milliseconds 100"
   : "printf stdout; sleep 0.05; printf stderr >&2"
 const idleCommand = isWindows ? "Start-Sleep -Seconds 60" : "sleep 60"
+const counterCommand = (counter: string, nativePowerShell = isWindows) =>
+  nativePowerShell
+    ? `[System.IO.File]::AppendAllText('${counter.replaceAll("'", "''")}', 'x', [System.Text.UTF8Encoding]::new($false)); [Console]::Out.Write('done')`
+    : `printf x >> '${counter.replaceAll("'", "'\\''")}'; printf done`
+
+test("background child counter command preserves literal paths and BOM-free append semantics", () => {
+  expect(counterCommand("C:\\owner's folder\\[counter] $value", true)).toBe(
+    "[System.IO.File]::AppendAllText('C:\\owner''s folder\\[counter] $value', 'x', [System.Text.UTF8Encoding]::new($false)); [Console]::Out.Write('done')",
+  )
+  expect(counterCommand("/owner's folder/[counter] $value", false)).toBe(
+    "printf x >> '/owner'\\''s folder/[counter] $value'; printf done",
+  )
+})
+
+test("background child counter command appends one raw byte per execution", async () => {
+  await using tmp = await tmpdir()
+  const counter = path.join(tmp.path, "owner's counter [literal] $value")
+  for (const expected of [[120], [120, 120]]) {
+    const child = Bun.spawn([
+      testShell,
+      ...(isWindows ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] : ["-c"]),
+      counterCommand(counter),
+    ], { stdout: "pipe", stderr: "pipe" })
+    const [exit, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    expect(exit).toBe(0)
+    expect(stderr).toBe("")
+    expect(stdout).toBe("done")
+    expect(Array.from(await fs.readFile(counter))).toEqual(expected)
+  }
+})
+
 const memoryHogCommand = [
   `"${process.execPath}" -e 'const retained = [Buffer.alloc(80 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
   `"${process.execPath}" -e 'const retained = [Buffer.alloc(80 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
@@ -1288,7 +1323,7 @@ describe("ShellTool", () => {
             )
             const settled = yield* settleTool(
               registry,
-              call({ command: `printf x >> ${counter}; printf done`, background: true }, "call-child-shell"),
+              call({ command: counterCommand(counter), background: true }, "call-child-shell"),
             )
             const shellID = requiredShellID(settled)
             yield* Deferred.await(woken)
