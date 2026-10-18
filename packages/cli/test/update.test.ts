@@ -746,12 +746,13 @@ async function setup(
   const asset = `ycoding-${version}-${target}.tar.gz`
   const archiveFile = path.join(root, asset)
   const tar = Bun.spawnSync(
-    ["tar", "-C", source, "-czf", archiveFile, ...(options.entries ?? ["ycoding", ...(options.renamed ? [] : [helperName]), ...(options.app ? [appName] : []), ...(options.extension ?? options.renamed ? ["ycoding-chrome-extension"] : [])])],
+    ["tar", "-C", "source", "-czf", asset, ...(options.entries ?? ["ycoding", ...(options.renamed ? [] : [helperName]), ...(options.app ? [appName] : []), ...(options.extension ?? options.renamed ? ["ycoding-chrome-extension"] : [])])],
     {
+      cwd: root,
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     },
   )
-  expect(tar.exitCode).toBe(0)
+  expect(tar.exitCode, tar.stderr.toString()).toBe(0)
   const archive = new Uint8Array(await Bun.file(archiveFile).arrayBuffer())
   const digest = new Bun.CryptoHasher("sha256").update(archive).digest("hex")
   const executable = path.join(root, "ycoding")

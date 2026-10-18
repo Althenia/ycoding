@@ -90,7 +90,7 @@ function harness(input?: {
     readonly release: PromiseWithResolvers<void>
   }
 }) {
-  const documents = new Map(input?.documents)
+  const documents = new Map(Array.from(input?.documents ?? [], ([file, content]) => [path.normalize(file), content]))
   const scans: Array<{ readonly pattern: string; readonly cwd: string | undefined }> = []
   const choices: Decision.Input[] = []
   const verifications: Decision.Input[] = []
@@ -111,9 +111,10 @@ function harness(input?: {
         scan: (pattern, options) =>
           Effect.sync(() => {
             scans.push({ pattern, cwd: options?.cwd })
-            return Array.from(documents.keys()).filter((file) => path.dirname(file) === options?.cwd)
+            return Array.from(documents.keys()).filter((file) =>
+              options?.cwd !== undefined && path.dirname(file) === path.normalize(options.cwd))
           }),
-        readFileStringSafe: (file) => Effect.succeed(documents.get(file)),
+        readFileStringSafe: (file) => Effect.succeed(documents.get(path.normalize(file))),
       })
     }),
   ).pipe(Layer.provide(FSUtil.layer), Layer.provide(NodeFileSystem.layer))
@@ -1233,7 +1234,7 @@ hardenedRule.it.effect("does not reuse a prior Always after the same rule become
     yield* reservation.release
 
     hardenedRule.documents.set(
-      "/global/guardrails/review.md",
+      path.normalize("/global/guardrails/review.md"),
       markdown({ id: "stable-rule", decision: "hard_review", resource: "deploy exact" }),
     )
     const hard = yield* waitForRequest(service, input)
@@ -1313,9 +1314,9 @@ discovery.it.effect("discovers nearest repository layers before broader and glob
       yield* service.evaluate({ sessionID: parentID, action: "shell", resources: ["npm publish exact"] }),
     ).toMatchObject({ decision: "allow", ruleIDs: ["nearest-allow-publish"] })
     expect(discovery.scans.slice(0, 3)).toEqual([
-      { pattern: "*.md", cwd: "/repo/work/.ycoding/guardrails" },
-      { pattern: "*.md", cwd: "/repo/.ycoding/guardrails" },
-      { pattern: "*.md", cwd: "/global/guardrails" },
+      { pattern: "*.md", cwd: path.normalize("/repo/work/.ycoding/guardrails") },
+      { pattern: "*.md", cwd: path.normalize("/repo/.ycoding/guardrails") },
+      { pattern: "*.md", cwd: path.normalize("/global/guardrails") },
     ])
 
     expect(

@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
+import { InputRenderable } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { createEffect, createMemo, onMount, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, onMount, Show, type JSX } from "solid-js"
 import { DialogAgent } from "../../src/component/dialog-agent"
 import { DialogConfig } from "../../src/component/dialog-config"
 import { DialogCustomEndpoint } from "../../src/component/dialog-custom-endpoint"
@@ -461,6 +462,44 @@ const directories = [
   { directory: "/tmp/ycoding/home/Workspace/Personal/Weeeee", strategy: "copy" as const },
   { directory: "/tmp/ycoding/home/Workspace/work/bkof", strategy: "copy" as const },
 ]
+
+test("a mounted rename dialog focuses its current title", async () => {
+  const app = await testRender(
+    () => <DialogProviders><DialogSessionRename sessionID={sessionID} currentTitle="Rename this session" /></DialogProviders>,
+    { width: 100, height: 30 },
+  )
+  app.renderer.start()
+  try {
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+    const input = app.renderer.currentFocusedEditor
+    expect(input instanceof InputRenderable ? input.value : undefined).toBe("Rename this session")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("closing rename before deferred focus does not touch its destroyed input", async () => {
+  let closed = false
+  function Fixture() {
+    const [visible, setVisible] = createSignal(true)
+    onMount(() => queueMicrotask(() => {
+      setVisible(false)
+      closed = true
+    }))
+    return <Show when={visible()}><DialogSessionRename sessionID={sessionID} currentTitle="Close immediately" /></Show>
+  }
+  const app = await testRender(() => <DialogProviders><Fixture /></DialogProviders>, { width: 100, height: 30 })
+  app.renderer.start()
+  try {
+    await app.waitFor(() => closed)
+    // Cross the timer turn after synchronous disposal; deferred focus must have been cancelled.
+    await new Promise<void>((resolve) => setTimeout(resolve, 1))
+    await app.renderOnce()
+    expect(app.captureCharFrame()).not.toContain("Close immediately")
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("captures concrete remaining dialog fixtures at canonical terminal dimensions", async () => {
   await mkdir(state, { recursive: true })

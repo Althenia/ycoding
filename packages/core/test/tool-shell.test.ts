@@ -50,7 +50,8 @@ import { toolIdentity, executeTool, settleTool, toolDefinitions, waitForTool } f
 
 const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("test"), providerID: Provider.ID.make("test") })
-const testShell = process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh"
+// The Windows commands below use PowerShell syntax.
+const testShell = process.platform === "win32" ? "powershell.exe" : "/bin/sh"
 const configDocument = (shellSandbox?: "disabled" | "optional" | "required", shellMemoryLimitMb?: number) =>
   new Config.Document({
     type: "document",

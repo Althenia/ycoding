@@ -3,6 +3,7 @@ import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 import { cp, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { chromeExtensionSource, copyChromeExtension } from "../script/chrome-extension"
 import { releasedExtensionFiles, releasedUpdaterAcceptsLinuxArchive } from "./fixtures/v0.7.15-updater"
 
@@ -19,7 +20,8 @@ async function packaged<T>(use: (bin: string, extension: string) => Promise<T>) 
 async function archive(bin: string, extra: string[] = []) {
   await writeFile(path.join(bin, "ycoding"), "executable\n")
   for (const file of extra) await writeFile(path.join(bin, "ycoding-chrome-extension", file), `${file}\n`)
-  const tar = Bun.spawnSync(["tar", "-C", bin, "-czf", path.join(bin, "release.tar.gz"), "ycoding", "ycoding-chrome-extension"], {
+  const tar = Bun.spawnSync(["tar", "-czf", "release.tar.gz", "ycoding", "ycoding-chrome-extension"], {
+    cwd: bin,
     env: { ...process.env, COPYFILE_DISABLE: "1" },
   })
   expect(tar.exitCode, tar.stderr.toString()).toBe(0)
@@ -28,7 +30,7 @@ async function archive(bin: string, extra: string[] = []) {
 
 test("copies the Chrome extension runtime files beside a built executable", async () => {
   await packaged(async (_, extension) => {
-    const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: extension }))).sort()
+    const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: extension }))).map((file) => file.split(path.sep).join("/")).sort()
     expect(files).toEqual([...BrowserExtension.files])
     expect(files).toEqual(releasedExtensionFiles)
     expect(await readFile(path.join(extension, "manifest.json"), "utf8")).toBe(
@@ -77,8 +79,8 @@ test("bundles the Geist Sans data into service-worker.js once, without shipping 
     expect(css).toContain(sans)
     expect(css).toContain(mono)
     const license = (await readFile(path.join(chromeExtensionSource, "../../assets/brand/fonts/OFL.txt"), "utf8")).trim()
-    expect(worker).toContain(license)
-    expect(css).toContain(license)
+    expect(worker.replaceAll("\r\n", "\n")).toContain(license.replaceAll("\r\n", "\n"))
+    expect(css.replaceAll("\r\n", "\n")).toContain(license.replaceAll("\r\n", "\n"))
     await releasedUpdaterAcceptsLinuxArchive(await archive(bin))
   })
 })
@@ -89,7 +91,7 @@ test("the packaged service worker passes the extension lifecycle and marker suit
     await cp(extension, mirror, { recursive: true })
     await writeFile(
       path.join(mirror, "indicator.js"),
-      `export { timing } from ${JSON.stringify(path.join(chromeExtensionSource, "indicator.js"))}\n`,
+      `export { timing } from ${JSON.stringify(pathToFileURL(path.join(chromeExtensionSource, "indicator.js")).href)}\n`,
     )
     await mkdir(path.join(mirror, "test/fixtures"), { recursive: true })
     for (const file of ["service-worker.case.js", "fake-page.js"])

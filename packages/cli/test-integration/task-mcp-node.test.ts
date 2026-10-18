@@ -73,10 +73,11 @@ test("Node MCP listener reads POST bodies and bounds chunked SDK requests", () =
       `
     import assert from "node:assert/strict"
     import { createRequire } from "node:module"
+    import { pathToFileURL } from "node:url"
     import { Effect } from "effect"
     import { serveTaskMcp } from "./src/task-mcp-http.ts"
     const require = createRequire(new URL("../core/package.json", import.meta.url))
-    const { createMcpHandler, Server } = await import(require.resolve("@modelcontextprotocol/server"))
+    const { createMcpHandler, Server } = await import(pathToFileURL(require.resolve("@modelcontextprotocol/server")).href)
     const sdk = createMcpHandler(() => new Server({ name: "test", version: "1" }), { maxRequestBodySize: 128 * 1024 })
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const address = yield* serveTaskMcp(0, async (request) => {

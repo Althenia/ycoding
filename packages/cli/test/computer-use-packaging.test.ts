@@ -100,12 +100,12 @@ describe("macOS computer helper packaging", () => {
     expect(arm64).toEqual({
       source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
       bridgingHeader: path.resolve(import.meta.dir, "../../core/computer-use/CGVirtualDisplay.h"),
-      application: "/tmp/bin/YCoding Computer Use.app",
+      application: path.join("/tmp/bin", "YCoding Computer Use.app"),
       target: "arm64-apple-macosx13.0",
     })
     expect(arm64?.application).toBe(MacOSComputer.applicationPath("/tmp/bin/ycoding"))
     expect(computerHelperBuild({ platform: "darwin", arch: "x64" }, "/tmp/bin")).toMatchObject({
-      application: "/tmp/bin/YCoding Computer Use.app",
+      application: path.join("/tmp/bin", "YCoding Computer Use.app"),
       target: "x86_64-apple-macosx13.0",
     })
   })

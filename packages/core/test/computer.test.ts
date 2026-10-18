@@ -799,7 +799,7 @@ describe("native computer target ownership", () => {
         action: request.action,
         revision: request.action === "iterm.send_text" ? "rev-2" : "rev-1",
       })
-    })
+    }, "darwin")
 
     expect(
       await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "call-inspect", target })),
@@ -853,6 +853,7 @@ describe("native computer target ownership", () => {
               outcome: "unknown",
             }),
           ),
+      "darwin",
     )
 
     await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "call-inspect", target }))
@@ -879,6 +880,33 @@ describe("native computer target ownership", () => {
     )
     expect(Exit.isFailure(replay)).toBe(true)
     if (Exit.isFailure(replay)) expect(replay.cause.toString()).toContain("must be inspected")
+  })
+
+  test("defaults the layered platform to the host and rejects Linux before native launch", async () => {
+    expect(Effect.runSync(Computer.Platform)).toBe(process.platform)
+    const launches: ReadonlyArray<string>[] = []
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const supported = yield* makeLocationComputers(
+        (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev" }),
+      )
+      expect(yield* supported.first.status).toMatchObject({ platform: "macos", state: "supported" })
+      yield* supported.close
+      expect(yield* Computer.Platform).toBe(process.platform)
+      const locations = yield* makeLocationComputers(
+        (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev" }),
+        Stream.never,
+        (args) => { launches.push(args) },
+        undefined,
+        false,
+        "linux",
+      )
+      expect(yield* locations.first.status).toEqual({ platform: "linux", state: "unsupported", capabilities: [] })
+      const result = yield* locations.first.inspect({ sessionID: owner, callID: "linux-inspect", target }).pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ code: "unsupported_platform", outcome: "not_started" })
+      expect(launches).toEqual([])
+      yield* locations.close
+    })))
   })
 
   test("filters capabilities and fails safely before native invocation on unsupported platforms", async () => {
@@ -955,6 +983,7 @@ describe("native computer target ownership", () => {
               }),
           })
         : Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-1" }),
+      "darwin",
     )
 
     const fiber = Effect.runFork(computer.inspect({ sessionID: owner, callID: "call-active", target }))
@@ -1152,6 +1181,7 @@ function makeLocationComputers(
     readonly outcome: "unknown" | "not_started"
   },
   respondAfterOpen = false,
+  platform: NodeJS.Platform = "darwin",
 ) {
   const processLayer = Layer.mock(AppProcess.Service, {
     run: (command, options) => Effect.promise(async () => {
@@ -1193,7 +1223,7 @@ function makeLocationComputers(
       acquire,
       close: Scope.close(first.scope, Exit.void).pipe(Effect.andThen(Scope.close(second.scope, Exit.void))),
     }
-  })
+  }).pipe(Effect.provideService(Computer.Platform, platform))
 }
 
 function fixtureRunResult() {
