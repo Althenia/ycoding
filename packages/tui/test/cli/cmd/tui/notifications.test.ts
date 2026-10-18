@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, onTestFinished, test } from "bun:test"
 import { createCliRenderer } from "@opentui/core"
 import { Readable, Writable } from "node:stream"
 import { createTuiAttention } from "../../../../src/attention"
@@ -40,6 +40,8 @@ async function setup(options: {
   const autonomy = new Map<string, AutonomyState>()
   const waits = new Map<string, PromiseWithResolvers<void>>()
   const terminalSignals: WeakRef<AbortSignal>[] = []
+  const terminalSettled: Promise<void>[] = []
+  const autonomySnapshots: WeakRef<object>[] = []
   let notificationAttempts = 0
   const session = (id: string, title: string, parentID?: string): Session => ({
     id,
@@ -125,12 +127,18 @@ async function setup(options: {
           },
           get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID],
           wait: async ({ sessionID }: { sessionID: string }, options?: { signal?: AbortSignal }) => {
-            if (options?.signal) terminalSignals.push(new WeakRef(options.signal))
+            if (options?.signal) {
+              terminalSignals.push(new WeakRef(options.signal))
+              terminalSettled.push(whenAborted(options.signal))
+            }
             return waits.get(sessionID)?.promise
           },
           autonomy: {
-            get: async ({ sessionID }: { sessionID: string }) =>
-              localAutonomyView(autonomy.get(sessionID) ?? { mode: "normal", yolo: false }),
+            get: async ({ sessionID }: { sessionID: string }) => {
+              const snapshot = localAutonomyView(autonomy.get(sessionID) ?? { mode: "normal", yolo: false })
+              autonomySnapshots.push(new WeakRef(snapshot))
+              return snapshot
+            },
           },
         },
       } as unknown as Context["client"],
@@ -176,6 +184,8 @@ async function setup(options: {
     autonomy,
     waits,
     terminalSignals,
+    terminalSettled,
+    autonomySnapshots,
     addSession(id: string) {
       sessions[id] = session(id, `Session ${id}`)
     },
@@ -377,18 +387,24 @@ function executionInterrupted(
   }
 }
 
+function whenAborted(signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) resolve()
+    else signal.addEventListener("abort", () => resolve(), { once: true })
+  })
+}
+
 async function settle() {
   for (const _ of Array.from({ length: 12 })) await Promise.resolve()
 }
 
-async function runSuccessfulSessions(harness: Awaited<ReturnType<typeof setup>>, count: number) {
+function runSuccessfulSessions(harness: Awaited<ReturnType<typeof setup>>, count: number) {
   for (let index = 0; index < count; index += 1) {
     const sessionID = `normal-${index}`
     harness.addSession(sessionID)
     harness.emit(executionStarted(`started-${index}`, sessionID))
     harness.emit(executionSucceeded(`succeeded-${index}`, sessionID))
   }
-  await settle()
 }
 
 const questionNotification: TuiAttentionNotifyInput = {
@@ -806,15 +822,32 @@ describe("internal notifications TUI plugin", () => {
 
   test("releases settled terminal episodes for many successful normal Sessions", async () => {
     const harness = await setup()
-    await runSuccessfulSessions(harness, 100)
-    Bun.gc(true)
-    await settle()
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    Bun.gc(true)
+    let finished = false
+    onTestFinished(async () => {
+      finished = true
+      await harness.cleanup()
+    })
+    runSuccessfulSessions(harness, 100)
+    expect(harness.terminalSettled).toHaveLength(100)
+    await Promise.all(harness.terminalSettled)
+    // Await actual collection, not a fixed number of GC passes. Dereferencing keeps
+    // a target alive for this job, so every collection runs in a fresh event-loop job.
+    while (true) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      if (finished) return // Bun has already failed a timed-out test.
+      Bun.gc(true)
+      if (
+        harness.terminalSignals.every((signal) => !signal.deref()) &&
+        harness.autonomySnapshots.every((snapshot) => !snapshot.deref())
+      ) break
+    }
 
     expect(harness.terminalSignals).toHaveLength(100)
     expect(harness.terminalSignals.flatMap((signal, index) => signal.deref() ? [index] : [])).toEqual([])
-    await harness.cleanup()
+    // An episode retains its initial autonomy promise even after its controller is cleared.
+    // These WeakRefs therefore catch leaked map entries that signal-only coverage misses.
+    expect(harness.autonomySnapshots).toHaveLength(200)
+    expect(harness.autonomySnapshots.flatMap((snapshot, index) => snapshot.deref() ? [index] : [])).toEqual([])
   })
 
   test("does not treat an unfinished or another Session's completion call as root completion", async () => {

@@ -855,7 +855,7 @@ describe("ShellTool", () => {
     ),
   )
 
-  it.live("applies the configured memory default and accepts an unlimited override", () =>
+  it.live("enforces platform memory-limit support and accepts an unlimited override", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
@@ -864,10 +864,20 @@ describe("ShellTool", () => {
         return withSession(tmp.path, () =>
           Effect.gen(function* () {
             const shell = yield* Shell.Service
-            expect((yield* shell.prepare({ command: helloCommand, timeout: 0 })).memoryLimitMb).toBe(512)
             expect(
               (yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 0 })).memoryLimitMb,
             ).toBeUndefined()
+            if (isWindows) {
+              for (const input of [
+                { command: helloCommand, timeout: 0 },
+                { command: helloCommand, timeout: 0, memoryLimitMb: 256 },
+              ]) expect(yield* shell.prepare(input).pipe(Effect.flip)).toMatchObject({
+                _tag: "Shell.MemoryLimitUnavailable",
+                message: "Shell process-tree memory limits are unavailable on Windows",
+              })
+              return
+            }
+            expect((yield* shell.prepare({ command: helloCommand, timeout: 0 })).memoryLimitMb).toBe(512)
             expect(
               (yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 256 })).memoryLimitMb,
             ).toBe(256)
