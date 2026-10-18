@@ -13,6 +13,7 @@ export interface GetInput {
 
 export interface Interface {
   readonly get: (input: GetInput) => Effect.Effect<ProviderUsage.Snapshot, Error>
+  readonly peek: (input: { readonly key: string; readonly generation?: number }) => Effect.Effect<ProviderUsage.Snapshot | undefined>
   readonly put: (key: string, value: ProviderUsage.Snapshot, ttlMs: number) => Effect.Effect<void>
   readonly clear: (key?: string) => Effect.Effect<void>
 }
@@ -89,6 +90,11 @@ export function make(input: { readonly now?: () => number } = {}): Interface {
           return pending
         },
         catch: (cause) => (cause instanceof Error ? cause : new Error("Provider usage refresh failed")),
+      }),
+    peek: (request) =>
+      Effect.sync(() => {
+        const current = entries.get(request.key)
+        return current && current.generation >= (request.generation ?? 0) ? current.value : undefined
       }),
     put: (key, value, ttlMs) =>
       Effect.sync(() => {

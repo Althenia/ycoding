@@ -68,6 +68,8 @@ const currentMigrations = [
   { id: "20261015122915_usage-analytics" },
   { id: "20261016080907_model-incident" },
   { id: "20261017090000_session-yolo-level" },
+  { id: "20261017230123_usage-analytics-unpriced-index" },
+  { id: "20261017232507_usage-analytics-metrics-index" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

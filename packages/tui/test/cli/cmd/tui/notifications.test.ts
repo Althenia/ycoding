@@ -19,6 +19,7 @@ async function setup(options: {
   attention?: ReturnType<typeof createTuiAttention>
 } = {}) {
   const notifications: TuiAttentionNotifyInput[] = []
+  const slots = new Set<string>()
   const handlers = new Map<YCodingEvent["type"], ((event: YCodingEvent) => void)[]>()
   const scheduled: Array<{ cancelled: boolean; delay: number; run: () => Promise<void> }> = []
   const forms = new Map<string, ReturnType<typeof form>>()
@@ -155,12 +156,19 @@ async function setup(options: {
           get: (sessionID: string) => sessions[sessionID],
         },
       },
+      ui: {
+        slot: (name: string) => {
+          slots.add(name)
+          return () => slots.delete(name)
+        },
+      },
     }),
     attention,
   })
 
   return {
     notifications,
+    slots,
     shells,
     setActiveSubagents(value: number) {
       activeSubagents = value
@@ -205,6 +213,15 @@ async function setup(options: {
       if (event.type === "guardrail.replied") guardrails.delete(event.data.requestID)
       for (const handler of handlers.get(event.type) ?? []) handler(event)
     },
+  }
+}
+
+function quotaPace(id: string): Extract<YCodingEvent, { type: "provider.quota.pace" }> {
+  return {
+    id,
+    created: 0,
+    type: "provider.quota.pace",
+    data: { providerID: "anthropic", windowID: "seven-day", milestone: "will-run-out", resetAt: 1_000, title: "Anthropic 7 day", body: "Projected to run out before reset" },
   }
 }
 
@@ -1013,6 +1030,48 @@ describe("internal notifications TUI plugin", () => {
         sound: { name: "error", when: "always" },
       },
     ])
+  })
+
+  test("quota pace alerts send a terminal notification without Session or provider reads", async () => {
+    const harness = await setup()
+    harness.emit(quotaPace("quota-1"))
+    await harness.flush()
+
+    expect(harness.notifications).toEqual([{ title: "Anthropic 7 day", message: "Projected to run out before reset", notification: { when: "blurred" } }])
+    expect(harness.scheduled).toEqual([])
+  })
+
+  test("a duplicate quota pace event does not repeat while a distinct recovery event stays deliverable", async () => {
+    const harness = await setup()
+    harness.emit(quotaPace("quota-1"))
+    harness.emit(quotaPace("quota-1"))
+    await harness.flush()
+    expect(harness.notifications).toHaveLength(1)
+
+    harness.emit(quotaPace("quota-2"))
+    await harness.flush()
+    expect(harness.notifications).toHaveLength(2)
+  })
+
+  test("a quota pace notification that failed is retried when attention becomes available", async () => {
+    const harness = await setup({ rejectFirstNotification: true })
+    harness.emit(quotaPace("quota-1"))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(harness.notifications).toHaveLength(1)
+
+    harness.emit(quotaPace("quota-1"))
+    await harness.flush()
+    expect(harness.notifications).toHaveLength(2)
+  })
+
+  test("cleanup removes the quota pace listener and app slot", async () => {
+    const harness = await setup()
+    expect(harness.slots).toEqual(new Set(["app"]))
+    await harness.cleanup()
+    expect(harness.slots.size).toBe(0)
+    harness.emit(quotaPace("quota-1"))
+    await harness.flush()
+    expect(harness.notifications).toEqual([])
   })
 
   test("cancels pending attention work and listeners on cleanup", async () => {

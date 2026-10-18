@@ -6,9 +6,12 @@ import {
   RemoteCloseCode,
   RemoteLimits,
   parseRelayToAgentMessage,
+  parseAgentMessage,
+  quotaKey,
   alertTitle,
   type RemoteAttentionNeed,
   type RemoteRequest,
+  type RemoteQuota,
   serializeResponse,
   serializeSessions,
   serializeStatus,
@@ -38,6 +41,7 @@ import type { LocalEventStream, LocalServer } from "./remote-local"
 import { RemoteScheduler } from "./remote-scheduler"
 import { CloudflareRemoteTransport } from "./remote-transport"
 import { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
+import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { Schema } from "effect"
 
 // The local relay agent. It dials out to the relay over WSS and never listens,
@@ -104,6 +108,7 @@ export type BridgeState = "idle" | "live" | "terminal" | "closed"
 
 const terminalCloseCodes: readonly number[] = [RemoteCloseCode.unauthorized, RemoteCloseCode.forbidden]
 const maxPendingEvents = 4_096
+const maxPendingQuotas = 256
 const slowRequestMs = 1_000
 const agentFrameIntervalMs = 25
 const interactiveCoalesceMs = 40
@@ -156,6 +161,8 @@ export class RemoteAgent {
   private eventStarting = false
   private eventStreamGeneration = 0
   private readonly inFlight = new Map<string, AbortController>()
+  private readonly quotas = new Map<string, { readonly quota: RemoteQuota; sent?: object; attempt?: object }>()
+  private readonly settledQuotas = new Map<string, number>()
   private eventRetryAttempt = 0
   private eventStreamFailed = false
   private terminalReason?: string
@@ -231,6 +238,8 @@ export class RemoteAgent {
     this.scheduler.reset()
     this.abortRequests()
     this.uploads.clear()
+    this.quotas.clear()
+    this.settledQuotas.clear()
     const connection = this.connection
     this.connection = undefined
     try {
@@ -245,6 +254,7 @@ export class RemoteAgent {
   async republish(): Promise<void> {
     if (this.state !== "live") return
     await this.registry.refresh()
+    await this.sendQuotas(true)
   }
 
   private async openConnection() {
@@ -282,6 +292,7 @@ export class RemoteAgent {
         this.completionDirty = false
         void this.sendStatus()
         void this.sendCompletions()
+        void this.sendQuotas()
         this.syncEventStream()
       },
       onClose: (code, reason) => { if (this.connection === connection) this.onConnectionClosed(code, reason) },
@@ -342,6 +353,18 @@ export class RemoteAgent {
       return
     }
     if (parsed.value.type === "cancel") { this.inFlight.get(parsed.value.id)?.abort(); return }
+    if (parsed.value.type === "quota.result") {
+      const key = quotaKey(parsed.value)
+      const pending = this.quotas.get(key)
+      if (!pending) return
+      pending.sent = undefined
+      if (parsed.value.status === "settled") {
+        this.quotas.delete(key)
+        this.settledQuotas.set(key, pending.quota.resetAt + 60_000)
+        while (this.settledQuotas.size > maxPendingQuotas) this.settledQuotas.delete(this.settledQuotas.keys().next().value!)
+      }
+      return
+    }
     if (parsed.value.type !== "request") return
     const controller = new AbortController()
     this.inFlight.set(parsed.value.id, controller)
@@ -755,6 +778,20 @@ export class RemoteAgent {
     if (connection === undefined || this.state !== "live") return
     if (typeof event === "object" && event !== null) {
       const type = Reflect.get(event, "type")
+      if (type === "provider.quota.pace") {
+        if (this.eventStreamGeneration !== streamGeneration) return
+        const alert = Schema.decodeUnknownOption(ProviderUsage.QuotaPaceAlert)(Reflect.get(event, "data"))
+        if (alert._tag === "None" || alert.value.resetAt <= this.now()) return
+        const frame = parseAgentMessage(JSON.stringify({ type: "quota", providerID: alert.value.providerID,
+          windowID: alert.value.windowID, milestone: alert.value.milestone, resetAt: alert.value.resetAt }))
+        if (!frame.ok || frame.value.type !== "quota") return
+        const key = quotaKey(frame.value)
+        if (this.quotas.has(key) || (this.settledQuotas.get(key) ?? 0) > this.now()) return
+        if (this.quotas.size >= maxPendingQuotas) return
+        this.quotas.set(key, { quota: frame.value })
+        void this.sendQuotas()
+        return
+      }
       if (typeof type === "string" && type.startsWith("session.review.")) this.advertise()
       if (type === "shell.deleted") {
         if (this.eventStreamGeneration === streamGeneration) {
@@ -796,6 +833,27 @@ export class RemoteAgent {
     }
     if (isSessionInventoryEvent(event)) this.refreshInventory(event)
     this.enqueueEvent(event, connection, streamGeneration)
+  }
+
+  private async sendQuotas(retry = false) {
+    const connection = this.connection
+    const owner = this.statusOwner
+    if (connection === undefined || owner === undefined || this.state !== "live") return
+    for (const [key, expiresAt] of this.settledQuotas) if (expiresAt <= this.now()) this.settledQuotas.delete(key)
+    for (const [key, pending] of this.quotas) {
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
+      if (pending.quota.resetAt <= this.now()) {
+        this.quotas.delete(key)
+        continue
+      }
+      if (pending.attempt === owner || !retry && pending.sent === owner) continue
+      pending.attempt = owner
+      pending.sent = owner
+      const sent = await this.send(JSON.stringify({ type: "quota", providerID: pending.quota.providerID,
+        windowID: pending.quota.windowID, milestone: pending.quota.milestone, resetAt: pending.quota.resetAt }), connection)
+      if (pending.attempt === owner) pending.attempt = undefined
+      if (!sent && pending.sent === owner) pending.sent = undefined
+    }
   }
 
   /** Runs for every local event, connected or not, so a later cached read never trusts a Session that changed while the relay was away. */

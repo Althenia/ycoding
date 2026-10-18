@@ -2,7 +2,7 @@ import { createSignal, For, Show } from "solid-js"
 import { Portal } from "solid-js/web"
 import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
-import { costCoverage, forecastStatus, measuredSpeedLines, unitCostLines, type CostPresentation, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "./usage-accounting"
+import { costCoverage, forecastStatus, measuredSpeedLines, paceStatus, unitCostLines, type CostPresentation, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "./usage-accounting"
 import "./usage-cost.css"
 
 export function UsageStatisticsDetails(props: {
@@ -28,7 +28,7 @@ export function TaskCostDetails(props: { readonly unit: Omit<UnitCostPresentatio
 }
 
 export function QuotaForecastStatus(props: { readonly forecast: ForecastPresentation; readonly asOf: number }) {
-  return <p class="usage-quota-forecast">{forecastStatus(props.forecast, props.asOf)}</p>
+  return <p class="usage-quota-forecast">{forecastStatus(props.forecast, props.asOf)}<Show when={props.forecast.pace}>{(pace) => <> · <span class="usage-quota-pace" data-verdict={pace().verdict}>Pace: {paceStatus(pace(), props.asOf)}</span></>}</Show></p>
 }
 
 export function UsageDetails(props: { readonly label: string; readonly groups: readonly { readonly title?: string; readonly lines: readonly string[] }[] }) {

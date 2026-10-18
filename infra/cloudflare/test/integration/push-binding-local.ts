@@ -66,7 +66,7 @@ try {
 
   const register = async (cookie: string, body: unknown) =>
     (await fetch(`${origin}/api/push/subscriptions`, { method: "POST", headers: { cookie: `yc_session=${cookie}`, origin, "content-type": "application/json" }, body: JSON.stringify(body) })).status
-  const categories = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+  const categories = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
   expect(await register(browsers.laptop, { endpoint: endpoint("laptop"), keys, categories }) === 200, "The laptop subscription was not registered")
   expect(await register(browsers.phone, { endpoint: endpoint("phone"), keys, categories }) === 200, "The phone subscription was not registered")
 

@@ -21,7 +21,7 @@ afterAll(() => {
   else Reflect.set(crypto.subtle, "timingSafeEqual", previousTimingSafeEqual)
 })
 
-const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
 
 async function setup(enabled: boolean, publicKeyOverride?: string) {
   const sqlite = await migratedDatabase()
@@ -103,9 +103,14 @@ test("a device's System choices are stored with its subscription and a renewal k
   const test = await setup(true)
   const keys = await receiverKeys()
   const iphone = "https://web.push.apple.com/iphone"
-  const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false }
+  const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true }
   expect((await test.call("POST", "/api/push/subscriptions", test.owner.token, { endpoint: iphone, keys, categories: quiet }, { origin })).status).toBe(200)
   expect((await test.rows()).get(iphone)?.categories).toEqual(quiet)
+  expect((await test.call("POST", "/api/push/subscriptions", test.owner.token, { endpoint: iphone, keys, categories: { ...quiet, "quota-pace": false } }, { origin })).status).toBe(200)
+  expect((await test.rows()).get(iphone)?.categories).toEqual({ ...quiet, "quota-pace": false })
+  const { "quota-pace": _omitted, ...withoutQuota } = quiet
+  expect((await test.call("POST", "/api/push/subscriptions", test.owner.token, { endpoint: iphone, keys, categories: withoutQuota }, { origin })).status).toBe(400)
+  expect((await test.call("POST", "/api/push/subscriptions", test.owner.token, { endpoint: iphone, keys, categories: quiet }, { origin })).status).toBe(200)
   expect((await test.call("POST", "/api/push/subscriptions", test.owner.token, { endpoint: iphone, keys }, { origin })).status).toBe(400)
   const renewed = "https://web.push.apple.com/iphone-renewed"
   expect((await test.call("POST", "/api/push/subscriptions", test.other.token, { endpoint: renewed, keys, replaces: iphone }, { origin })).status).toBe(404)
@@ -171,7 +176,7 @@ for (const operation of ["registration", "renewal"] as const) {
       const fixture = await setup(true)
       const keys = await receiverKeys()
       const endpoint = "https://fcm.googleapis.com/send/current"
-      const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false }
+      const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true }
       expect((await fixture.call("POST", "/api/push/subscriptions", fixture.owner.token, { endpoint, keys, categories: quiet }, { origin })).status).toBe(200)
       const entered = Promise.withResolvers<void>()
       const release = Promise.withResolvers<void>()

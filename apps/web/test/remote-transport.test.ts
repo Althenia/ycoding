@@ -55,6 +55,22 @@ describe("remote transport integration", () => {
     }
   })
 
+  test("delivers a quota notice frame to the notice handler instead of settling a request", async () => {
+    const quota = { type: "notice.quota", providerID: "prov_a", windowID: "weekly", milestone: "almost-out", resetAt: 1_790_000_000_000, at: 5_000 }
+    const server = Bun.serve({ port: 0, fetch: (request, bound) => bound.upgrade(request) ? undefined : new Response("upgrade required", { status: 426 }),
+      websocket: { open: (socket) => { socket.send(JSON.stringify(quota)) }, message: () => {} } })
+    const frames: unknown[] = []
+    const transport = createRemoteTransport({ url: `ws://127.0.0.1:${server.port}`, handlers: { onNotices: (frame) => frames.push(frame) }, resetDelayMs: 10 })
+    try {
+      transport.connect()
+      await waitFor(() => frames.length === 1)
+      expect(frames).toEqual([quota])
+    } finally {
+      transport.close()
+      await server.stop(true)
+    }
+  })
+
   test("delivers relay notice frames to the handler and settles a notice request", async () => {
     const notice = { id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 5 } as const
     const relay = await startRelayDouble({ noticePage: { notices: [notice], total: 1, unavailable: false } })

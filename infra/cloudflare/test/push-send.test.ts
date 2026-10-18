@@ -8,7 +8,7 @@ import { createRelay } from "../src/relay/core"
 import { createNoticeStore } from "../src/relay/notice-store"
 import { createNoticeStorage } from "./notice-storage"
 
-const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
 
 async function receiverFor(endpoint: string, categories = allOn, browserSessionID = `bs_${endpoint.split("/").at(-1)}`) {
   const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
@@ -70,7 +70,7 @@ test("Web Push sends a decryptable minimal payload with VAPID and bounded header
 
 test("each subscription receives only the categories its device turned on as System alerts", async () => {
   const windows = await receiverFor("https://fcm.googleapis.com/fcm/send/windows", { ...allOn, "machine-offline": false })
-  const iphone = await receiverFor("https://web.push.apple.com/iphone", { "agent-completed": false, "approval-requested": true, "machine-offline": true })
+  const iphone = await receiverFor("https://web.push.apple.com/iphone", { "agent-completed": false, "approval-requested": true, "machine-offline": true, "quota-pace": true })
   const requests: Request[] = []
   const deliver = (event: Parameters<typeof sendPushToOwner>[0]["event"]) => sendPushToOwner({
     store: memoryStore([windows.subscription, iphone.subscription]), accountID: "usr_1", event, ...keys,

@@ -305,7 +305,13 @@ export function UsagePage() {
         </div>
     </section>
 
-    <Show when={forecastData()}><section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption"><div class="usage-section-head"><h2><Icon name="zap" />Recorded consumption · Backend</h2></div>
+    <section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption"><div class="usage-section-head"><h2><Icon name="zap" />Recorded consumption · Backend</h2></div>
+      <Show when={forecastData()} fallback={<>
+        <Show when={forecast().status === "loading" || forecast().status === "idle" && connected()}><LoadingPlaceholder kind="usage" label="Loading recorded consumption…" /></Show>
+        <Show when={forecast().status === "idle" && !connected()}><p class="usage-message" role="status">Connect to a machine to see recorded consumption.</p></Show>
+        <Show when={forecast().status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see recorded consumption.</p></Show>
+        <Show when={forecast().status === "error"}><p class="usage-message" role="alert">{forecast().message ?? "Recorded consumption could not be loaded."} Refresh quotas to retry.</p></Show>
+      </>}>
       <Show when={forecastData()?.localRates?.length}><ul class="usage-consumption__list"><For each={forecastData()?.localRates}>{(rate) => {
         const row = consumptionRow(rate)
         return <li class="usage-consumption__row"><span class="usage-consumption__identity"><ProviderLogo providerID={rate.providerID} /><span>{row.identity}</span></span><span class="usage-consumption__tokens">{row.tokens}</span><span class="usage-consumption__cost">{row.cost}</span>
@@ -313,7 +319,8 @@ export function UsagePage() {
       }}</For></ul></Show>
       <Show when={forecastData()?.localRates === undefined}><p class="usage-message">Recorded consumption unreported · lookup unavailable.</p></Show>
       <Show when={forecastData()?.localRates?.length === 0}><p class="usage-message">No recorded consumption in the observation window.</p></Show>
-    </section></Show>
+      </Show>
+    </section>
 
     <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
       <div class="usage-breakdown__head"><h2 id="usage-breakdown-title"><Icon name="sessions" />Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s</span></Show>

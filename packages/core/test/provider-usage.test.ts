@@ -133,6 +133,38 @@ describe("ProviderUsageCache", () => {
     expect(value).toMatchObject({ status: "stale", updatedAt: 1_000, windows: [{ used: 25 }] })
   })
 
+  test("peek serves the last value without loading, across expiry and a pending refresh, never from an older credential generation", async () => {
+    let now = 1_000
+    const cache = ProviderUsageCache.make({ now: () => now })
+    expect(await Effect.runPromise(cache.peek({ key: "provider:credential" }))).toBeUndefined()
+    await Effect.runPromise(
+      cache.get({ key: "provider:credential", generation: 1, ttlMs: 10, load: Effect.succeed(snapshot(25, 1_000)) }),
+    )
+    now = 100_000
+    expect(await Effect.runPromise(cache.peek({ key: "provider:credential", generation: 1 }))).toMatchObject({
+      windows: [{ used: 25 }],
+    })
+    expect(await Effect.runPromise(cache.peek({ key: "provider:credential", generation: 2 }))).toBeUndefined()
+    const release = Deferred.makeUnsafe<void>()
+    const refresh = Effect.runFork(
+      cache.get({
+        key: "provider:credential",
+        generation: 1,
+        ttlMs: 10,
+        refresh: true,
+        load: Deferred.await(release).pipe(Effect.as(snapshot(40, now))),
+      }),
+    )
+    expect(await Effect.runPromise(cache.peek({ key: "provider:credential", generation: 1 }))).toMatchObject({
+      windows: [{ used: 25 }],
+    })
+    await Effect.runPromise(Deferred.succeed(release, undefined))
+    await Effect.runPromise(Fiber.join(refresh))
+    expect(await Effect.runPromise(cache.peek({ key: "provider:credential", generation: 1 }))).toMatchObject({
+      windows: [{ used: 40 }],
+    })
+  })
+
   test("bounds credential entries while rotations preserve other accounts' cached data", async () => {
     const cache = ProviderUsageCache.make({ now: () => 1_000 })
     for (let index = 0; index < 256; index++)

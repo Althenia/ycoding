@@ -347,7 +347,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       handlers.onEvents?.(frame.sessionID, frame.events)
       return
     }
-    if (frame.type === "notice.added" || frame.type === "notice.removed" || frame.type === "notice.cleared" || frame.type === "notice.unavailable" || frame.type === "notice.offline" || frame.type === "notice.present") {
+    if (frame.type === "notice.added" || frame.type === "notice.removed" || frame.type === "notice.cleared" || frame.type === "notice.unavailable" || frame.type === "notice.offline" || frame.type === "notice.present" || frame.type === "notice.quota") {
       handlers.onNotices?.(frame)
       return
     }

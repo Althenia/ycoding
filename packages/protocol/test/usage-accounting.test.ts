@@ -25,6 +25,14 @@ test("forecast is a read-only provider-usage endpoint with explicit local token 
   expect(operation?.parameters?.map((parameter) => "$ref" in parameter ? parameter.$ref : parameter.name))
     .toEqual(["location", "localScope"])
   expect(operation?.responses?.[503]).toBeDefined()
+  expect(document.components?.schemas?.["UsageForecast.Pace"]).toMatchObject({
+    type: "object",
+    properties: { verdict: { enum: ["ahead", "cutting-it-close", "will-run-out"] }, projectedUsedAtReset: { type: "number" } },
+    required: ["verdict", "projectedUsedAtReset"],
+  })
+  expect(document.components?.schemas?.["UsageForecast.Quota"]).toMatchObject({
+    properties: { pace: { $ref: "#/components/schemas/UsageForecast.Pace" } },
+  })
 })
 
 test("report query preserves selected effort and provider-qualified profile filters", () => {

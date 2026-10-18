@@ -153,28 +153,27 @@ const route: FetchHandler = async (url, request) => {
     return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
-  if (url.pathname === "/api/model")
-    return json({
-      location,
-      data: [
-        { ...baseSession.model, name: "GPT 5.6 Terra", daybreak: advertised, profiles },
-        ...unsupportedModels,
-      ].map((model) => ({
-        id: model.id,
-        modelID: model.id,
-        providerID: model.providerID,
-        name: model.name,
-        capabilities: { tools: true, input: ["text"], output: ["text"] },
-        variants: [{ id: baseSession.model.variant }, { id: "low" }],
-        time: { released: 0 },
-        cost: [],
-        status: "active",
-        enabled: true,
-        ...("daybreak" in model && model.daybreak.length > 0 ? { daybreak: model.daybreak } : {}),
-        ...("profiles" in model ? { profiles: model.profiles } : {}),
-        limit: { context: 200_000, output: 32_000 },
-      })),
-    })
+  if (url.pathname === "/api/model" || url.pathname === "/api/model/default") {
+    const models = [
+      { ...baseSession.model, name: "GPT 5.6 Terra", daybreak: advertised, profiles },
+      ...unsupportedModels,
+    ].map((model) => ({
+      id: model.id,
+      modelID: model.id,
+      providerID: model.providerID,
+      name: model.name,
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      variants: [{ id: baseSession.model.variant }, { id: "low" }],
+      time: { released: 0 },
+      cost: [],
+      status: "active",
+      enabled: true,
+      ...("daybreak" in model && model.daybreak.length > 0 ? { daybreak: model.daybreak } : {}),
+      ...("profiles" in model ? { profiles: model.profiles } : {}),
+      limit: { context: 200_000, output: 32_000 },
+    }))
+    return json({ location, data: url.pathname === "/api/model" ? models : { ...models[0], selection: sessionModel } })
+  }
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
   if (url.pathname === "/api/agent")

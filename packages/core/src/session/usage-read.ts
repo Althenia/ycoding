@@ -17,8 +17,6 @@ export type Aggregate = {
   sessionID: string
   title: string
   projectID: string
-  directory: string
-  workspaceID: string | null
   model: string
   agent: string
   time: number
@@ -52,8 +50,9 @@ export const pricingRefs = Effect.fnUntraced(function* (
   where: SQL,
   after?: string,
   sessionID?: SessionSchema.ID,
+  range?: Range,
 ) {
-  const page = yield* pricingBoundary(db, after, sliceRows, sessionID)
+  const page = yield* pricingBoundary(db, after, sliceRows, sessionID, range)
   const selected = source(sessionID !== undefined)
   const key = sql`json_array(${selected.directory}, ${selected.workspaceID}, json_extract(r.model, '$.providerID'), json_extract(r.model, '$.id'), json_extract(r.model, '$.profile'))`
   const refs = yield* db
@@ -62,7 +61,7 @@ export const pricingRefs = Effect.fnUntraced(function* (
     SELECT DISTINCT ${key} AS key, ${selected.directory} AS directory, ${selected.workspaceID} AS workspaceID,
       json_extract(r.model, '$.providerID') AS provider, json_extract(r.model, '$.id') AS model,
       json_extract(r.model, '$.profile') AS profile
-    FROM ${selected.name} AS r INDEXED BY ${selected.index} ${selected.join}
+    FROM ${selected.name} AS r INDEXED BY ${selected.unpricedIndex} ${selected.join}
     WHERE ${where} AND r.cost IS NULL AND r.source <> 'decision'
       ${sliceWhere(page.slice)}
   `,
@@ -356,6 +355,14 @@ const source = (sessionScoped: boolean) => ({
   index: sql.raw(
     sessionScoped ? "session_provider_request_session_request_idx" : "usage_analytics_request_time_created_id_idx",
   ),
+  scanIndex: sql.raw(
+    sessionScoped ? "session_provider_request_session_request_idx" : "usage_analytics_request_metrics_idx",
+  ),
+  unpricedIndex: sql.raw(
+    sessionScoped
+      ? "session_provider_request_session_request_idx"
+      : "usage_analytics_request_unpriced_time_created_id_idx",
+  ),
   join: sessionScoped ? sql`JOIN session AS s ON s.id = r.session_id` : sql``,
   sessionID: sql<SessionSchema.ID>`r.session_id`,
   title: sessionScoped ? sql<string>`s.title` : sql<string>`r.session_id`,
@@ -372,26 +379,41 @@ const source = (sessionScoped: boolean) => ({
   ) SELECT json_group_array(task_id) FROM path WHERE task_id IS NOT NULL)`
     : sql<string>`r.task_path`,
 })
+type Range = { readonly from?: number | undefined; readonly to?: number | undefined }
 type Slice =
-  | { readonly sessionID?: undefined; readonly after?: Cursor; readonly before?: Cursor }
+  | ({ readonly sessionID?: undefined; readonly after?: Cursor; readonly before?: Cursor } & Range)
   | { readonly sessionID: SessionSchema.ID; readonly after?: number; readonly before?: number }
 
 const sliceRows = 10_000
 
-const sampleRows = 10_000
+const metricRows = 500
 
 const sliceWhere = (slice: Slice) => {
   if (slice.sessionID !== undefined)
     return sql`AND r.session_id = ${slice.sessionID}
     ${slice.after === undefined ? sql`` : sql`AND r.request > ${slice.after}`}
     ${slice.before === undefined ? sql`` : sql`AND r.request <= ${slice.before}`}`
-  return sql`${slice.after === undefined ? sql`` : sql`AND (r.time_created, r.id) > (${slice.after.time}, ${slice.after.id})`}
-    ${slice.before === undefined ? sql`` : sql`AND (r.time_created, r.id) <= (${slice.before.time}, ${slice.before.id})`}`
+  return sql`${
+    slice.after !== undefined
+      ? sql`AND (r.time_created, r.id) > (${slice.after.time}, ${slice.after.id})`
+      : slice.from === undefined
+        ? sql``
+        : sql`AND (r.time_created, r.id) >= (${slice.from}, '')`
+  }
+    ${
+      slice.before !== undefined
+        ? sql`AND (r.time_created, r.id) <= (${slice.before.time}, ${slice.before.id})`
+        : slice.to === undefined
+          ? sql``
+          : sql`AND (r.time_created, r.id) < (${slice.to}, '')`
+    }`
 }
 
 const sliceIndex = (slice: Slice) => source(slice.sessionID !== undefined).index
 
-const slices = Effect.fnUntraced(function* (db: Db, sessions?: ReadonlyArray<SessionSchema.ID>) {
+const sliceScanIndex = (slice: Slice) => source(slice.sessionID !== undefined).scanIndex
+
+const slices = Effect.fnUntraced(function* (db: Db, sessions?: ReadonlyArray<SessionSchema.ID>, range: Range = {}) {
   if (sessions !== undefined) {
     const ranges: Slice[] = []
     for (const sessionID of sessions) {
@@ -420,7 +442,7 @@ const slices = Effect.fnUntraced(function* (db: Db, sessions?: ReadonlyArray<Ses
       .get<Cursor>(
         sql`
       SELECT r.time_created AS time, r.id FROM ${source(false).name} AS r INDEXED BY ${source(false).index}
-      WHERE 1 ${sliceWhere({ after: bounds.at(-1) })}
+      WHERE 1 ${sliceWhere({ after: bounds.at(-1), ...range })}
       ORDER BY r.time_created, r.id LIMIT 1 OFFSET ${sliceRows - 1}
     `,
       )
@@ -429,7 +451,7 @@ const slices = Effect.fnUntraced(function* (db: Db, sessions?: ReadonlyArray<Ses
     bounds.push(next)
     yield* Effect.yieldNow
   }
-  return [undefined, ...bounds].map((after, index): Slice => ({ after, before: bounds[index] }))
+  return [undefined, ...bounds].map((after, index): Slice => ({ after, before: bounds[index], ...range }))
 })
 
 const stage = Effect.fnUntraced(function* (
@@ -437,18 +459,20 @@ const stage = Effect.fnUntraced(function* (
   where: SQL,
   raw: SQL,
   sessions?: ReadonlyArray<SessionSchema.ID>,
-  attribution = false,
+  group: ReportGroup = "model",
+  range?: Range,
 ) {
+  const attribution = group === "prompt"
   yield* db.run(sql`DROP TABLE IF EXISTS temp.usage_partial`).pipe(Effect.orDie)
   yield* db
     .run(
-      sql`CREATE TEMP TABLE usage_partial (raw TEXT, sessionID TEXT, title TEXT, projectID TEXT, directory TEXT, workspaceID TEXT,
+      sql`CREATE TEMP TABLE usage_partial (raw TEXT, sessionID TEXT, title TEXT, projectID TEXT,
         model TEXT, agent TEXT, time INTEGER, logical INTEGER, physical INTEGER, helpers INTEGER, continued INTEGER,
         fallback INTEGER, input INTEGER, output INTEGER, reasoning INTEGER, cacheRead INTEGER, cacheWrite INTEGER,
         cacheReadReported INTEGER, cost REAL, priced INTEGER)`,
     )
     .pipe(Effect.orDie)
-  const ranges = yield* slices(db, sessions)
+  const ranges = yield* slices(db, sessions, range)
   if (attribution && sessions) {
     yield* db.run(sql`CREATE TEMP TABLE usage_anchor_hint (id TEXT PRIMARY KEY, anchor TEXT)`).pipe(Effect.orDie)
     yield* each(db, sessions, (row) =>
@@ -471,9 +495,9 @@ const stage = Effect.fnUntraced(function* (
       .run(
         sql`
       INSERT INTO temp.usage_partial
-      SELECT ${raw}, ${selected.sessionID}, ${selected.title}, ${selected.projectID}, ${selected.directory}, ${selected.workspaceID}, r.model, r.agent, r.time_created,
+      SELECT ${raw}, ${selected.sessionID}, ${selected.title}, ${selected.projectID}, ${group === "model" ? sql`NULL` : sql`r.model`}, r.agent, r.time_created,
         ${aggregate}, coalesce(sum(r.cost), 0), count(r.cost)
-      FROM ${selected.name} AS r INDEXED BY ${sliceIndex(slice)} ${selected.join}
+      FROM ${selected.name} AS r INDEXED BY ${sliceScanIndex(slice)} ${selected.join}
       ${attribution && sessions ? sql`LEFT JOIN temp.usage_anchor_hint AS h ON h.id = r.id` : sql``}
       WHERE ${where} ${sliceWhere(slice)} GROUP BY 1
     `,
@@ -497,7 +521,7 @@ export const models = Effect.fn("SessionUsageRead.models")(
     WITH keyed AS MATERIALIZED (
       SELECT CAST(json_array(json_extract(raw, '$.providerID'), json_extract(raw, '$.id'), json_extract(raw, '$.variant'),
           json_extract(raw, '$.profile')) AS TEXT) AS key,
-        sessionID, title, projectID, directory, workspaceID, model, agent, time, ${rollup}
+        sessionID, title, projectID, raw AS model, agent, time, ${rollup}
       FROM temp.usage_partial GROUP BY key
     )
     SELECT * FROM keyed ${result.length === 0 ? sql`` : sql`WHERE key > ${result.at(-1)!.key}`} ORDER BY key ASC LIMIT 200
@@ -657,17 +681,20 @@ type ReportSqlRow = Aggregate & { kind: number; raws: string | null; rowCount: n
 export const report = Effect.fn("SessionUsageRead.report")(
   function* (db: Db, input: ReportInput) {
     const key = yield* groupKey(db, input.group, input, input.timeZone, input.sessions)
-    const ranges = yield* stage(db, input.where, key.raw, input.sessions, input.group === "prompt")
+    const ranges = yield* stage(db, input.where, key.raw, input.sessions, input.group, {
+      from: input.from,
+      to: input.to,
+    })
     const result = yield* db
       .all<ReportSqlRow>(
         sql`
   WITH keyed AS MATERIALIZED (
-    SELECT CAST(${key.key} AS TEXT) AS key, sessionID, title, projectID, directory, workspaceID, model, agent, time,
+    SELECT CAST(${key.key} AS TEXT) AS key, sessionID, title, projectID, ${input.group === "model" ? sql`raw` : sql`model`} AS model, agent, time,
       ${rollup}, json_group_array(DISTINCT raw) AS raws
     FROM temp.usage_partial ${input.group === "task" ? sql`LEFT JOIN json_each(raw) AS task` : sql``} GROUP BY 1
   )
   SELECT 0 AS kind, page.* FROM (
-    SELECT k.key, k.sessionID, k.title, k.projectID, k.directory, k.workspaceID, k.model, k.agent, k.time,
+    SELECT k.key, k.sessionID, k.title, k.projectID, k.model, k.agent, k.time,
       k.logical, k.physical, k.helpers, k.continued, k.fallback, k.input, k.output, k.reasoning, k.cacheRead, k.cacheWrite,
       k.cost + coalesce(json_extract(c.correction, '$.cost'), 0) AS cost, k.priced + coalesce(json_extract(c.correction, '$.requests'), 0) AS priced, k.cacheReadReported,
       (c.correction IS NOT NULL) AS currentCatalog, k.raws, NULL AS rowCount
@@ -677,7 +704,7 @@ export const report = Effect.fn("SessionUsageRead.report")(
     ORDER BY ${input.order} LIMIT ${input.limit} OFFSET ${input.offset}
   ) AS page
   UNION ALL
-  SELECT 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  SELECT 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     coalesce(sum(logical), 0), coalesce(sum(physical), 0), coalesce(sum(helpers), 0), coalesce(sum(continued), 0),
     coalesce(sum(fallback), 0), coalesce(sum(input), 0), coalesce(sum(output), 0), coalesce(sum(reasoning), 0),
     coalesce(sum(cacheRead), 0), coalesce(sum(cacheWrite), 0), coalesce(sum(cost), 0), coalesce(sum(priced), 0),
@@ -690,8 +717,16 @@ export const report = Effect.fn("SessionUsageRead.report")(
     const total = result.find((row) => row.kind === 1)!
     const page = result.filter((row) => row.kind === 0)
     const observations = yield* speed(db, input.where, input.group, key, page, ranges, input.sessions)
+    const models =
+      input.group === "model"
+        ? yield* ambiguousModels(db, input.where, page, ranges, input.sessions)
+        : new Map<string, string>()
     return {
-      rows: page.map((row): ReportRow => ({ ...row, ...observations.get(row.key) })),
+      rows: page.map((row): ReportRow => ({
+        ...row,
+        ...(models.has(row.key) ? { model: models.get(row.key)! } : {}),
+        ...observations.get(row.key),
+      })),
       total,
       rowCount: total.rowCount!,
     }
@@ -703,6 +738,7 @@ export const report = Effect.fn("SessionUsageRead.report")(
         release(db, "usage_partial"),
         release(db, "usage_slot"),
         release(db, "usage_sample"),
+        release(db, "usage_metric"),
         release(db, "usage_anchor_hint"),
       ]),
     ),
@@ -719,7 +755,7 @@ const speed = Effect.fnUntraced(function* (
   ranges: ReadonlyArray<Slice>,
   sessions?: ReadonlyArray<SessionSchema.ID>,
 ) {
-  const observations = new Map<string, { model: string; speed?: ProviderRequest.Speed }>()
+  const observations = new Map<string, { speed: ProviderRequest.Speed }>()
   if (page.length === 0) return observations
   const pairs = JSON.stringify(
     page.flatMap((item, slot) =>
@@ -735,27 +771,17 @@ const speed = Effect.fnUntraced(function* (
     )
     .pipe(Effect.orDie)
   yield* db
+    .run(sql`CREATE TEMP TABLE usage_sample (slot INTEGER, first, total, tokens, duration, providerTimed INTEGER,
+      valid INTEGER GENERATED ALWAYS AS (duration > 0 AND duration <= 9007199254740991 AND CAST(duration AS INTEGER) = duration
+        AND tokens > 0 AND tokens <= 9007199254740991 AND CAST(tokens AS INTEGER) = tokens) STORED)`)
+    .pipe(Effect.orDie)
+  yield* db
     .run(
-      sql`CREATE TEMP TABLE usage_sample (id INTEGER PRIMARY KEY, requestID TEXT NOT NULL, slot INTEGER, model TEXT,
-      updated INTEGER, sessionID TEXT, request INTEGER, family INTEGER, first, total, tokens, duration, providerTimed INTEGER, generation REAL)`,
+      sql`CREATE TEMP TABLE usage_metric (slot INTEGER, metric INTEGER, value, count INTEGER NOT NULL, PRIMARY KEY(slot, metric, value)) WITHOUT ROWID`,
     )
     .pipe(Effect.orDie)
-  for (const metric of ["first", "total", "generation"])
-    yield* db
-      .run(
-        sql.raw(
-          `CREATE INDEX usage_sample_${metric} ON usage_sample (slot, ${metric}, requestID) WHERE ${metric} IS NOT NULL`,
-        ),
-      )
-      .pipe(Effect.orDie)
   type Stats = {
     slot: number
-    id: number
-    model: string
-    updated: number
-    sessionID: string
-    request: number
-    family: number
     first: number
     total: number
     tokens: number
@@ -765,21 +791,19 @@ const speed = Effect.fnUntraced(function* (
     observedSamples: number
   }
   const sampled = new Map<number, Stats>()
-  let after = 0
   for (const slice of ranges) {
     const selected = source(slice.sessionID !== undefined)
+    yield* db.run(sql`DELETE FROM temp.usage_sample`).pipe(Effect.orDie)
     yield* db
       .run(
         sql`
-      INSERT INTO temp.usage_sample (requestID, slot, model, updated, sessionID, request, family, first, total, tokens, duration, providerTimed)
-      SELECT r.id, usage_slot.slot, r.model, ${selected.updated}, ${selected.sessionID}, r.request,
-        ${sessions ? sql`CAST(family.key AS INTEGER)` : sql`0`},
+      INSERT INTO temp.usage_sample (slot, first, total, tokens, duration, providerTimed)
+      SELECT usage_slot.slot,
         json_extract(r.timing, '$.firstOutputMs'), json_extract(r.timing, '$.totalMs'), json_extract(r.timing, '$.generatedTokens'),
         CASE WHEN json_type(r.timing, '$.generationDurationNs') IS NOT NULL THEN json_extract(r.timing, '$.generationDurationNs')
           WHEN json_extract(r.timing, '$.observedGenerationDurationNs') >= 1000000000 THEN json_extract(r.timing, '$.observedGenerationDurationNs') END,
         json_type(r.timing, '$.generationDurationNs') IS NOT NULL
-      FROM ${selected.name} AS r INDEXED BY ${sliceIndex(slice)} ${selected.join}
-      ${sessions ? sql`JOIN json_each(${JSON.stringify(sessions)}) AS family ON family.value = s.id` : sql``}
+      FROM ${selected.name} AS r INDEXED BY ${sliceScanIndex(slice)} ${selected.join}
       ${group === "prompt" && sessions ? sql`LEFT JOIN temp.usage_anchor_hint AS h ON h.id = r.id` : sql``}
       JOIN temp.usage_slot ON usage_slot.raw = ${group === "model" ? sql`r.model` : key.raw}
       WHERE ${where} ${sliceWhere(slice)}
@@ -787,123 +811,134 @@ const speed = Effect.fnUntraced(function* (
       )
       .pipe(Effect.orDie)
     yield* Effect.yieldNow
-    const last = yield* db
-      .get<{ id: number }>(sql`SELECT id FROM temp.usage_sample ORDER BY id DESC LIMIT 1`)
+    const rows = yield* db
+      .all<Stats>(
+        sql`
+      SELECT slot, count(first) AS first, count(total) AS total, count(CASE WHEN valid THEN 1 END) AS generationSamples,
+        count(CASE WHEN valid AND providerTimed THEN 1 END) AS providerTimedSamples,
+        count(CASE WHEN valid AND NOT providerTimed THEN 1 END) AS observedSamples,
+        total(CASE WHEN valid THEN tokens END) AS tokens,
+        total(CASE WHEN valid THEN duration END) AS duration
+      FROM temp.usage_sample GROUP BY slot
+    `,
+      )
       .pipe(Effect.orDie)
     yield* Effect.yieldNow
-    while (last && after < last.id) {
-      const upper = Math.min(after + sampleRows, last.id)
+    for (const [metric, value, present] of [
+      [0, sql`first`, sql`first IS NOT NULL`],
+      [1, sql`total`, sql`total IS NOT NULL`],
+      [2, sql`tokens * 1000000000.0 / duration`, sql`valid`],
+    ] as const) {
       yield* db
         .run(
-          sql`UPDATE temp.usage_sample SET generation = tokens * 1000000000.0 / duration
-      WHERE id > ${after} AND id <= ${upper} AND duration > 0 AND duration <= 9007199254740991 AND CAST(duration AS INTEGER) = duration
-        AND tokens > 0 AND tokens <= 9007199254740991 AND CAST(tokens AS INTEGER) = tokens`,
-        )
-        .pipe(Effect.orDie)
-      yield* Effect.yieldNow
-      const generation = yield* db
-        .all<Stats>(
           sql`
-      WITH chunk AS MATERIALIZED (
-        SELECT *, row_number() OVER (PARTITION BY slot ORDER BY ${sessions ? sql`family, request` : sql`updated, sessionID, request`}) AS rank
-        FROM temp.usage_sample WHERE id > ${after} AND id <= ${upper}
-      )
-      SELECT slot, max(id) AS id, max(CASE WHEN rank = 1 THEN model END) AS model,
-        max(CASE WHEN rank = 1 THEN updated END) AS updated, max(CASE WHEN rank = 1 THEN sessionID END) AS sessionID,
-        max(CASE WHEN rank = 1 THEN request END) AS request, max(CASE WHEN rank = 1 THEN family END) AS family,
-        count(first) AS first, count(total) AS total,
-        count(CASE WHEN duration > 0 AND duration <= 9007199254740991 AND CAST(duration AS INTEGER) = duration
-          AND tokens > 0 AND tokens <= 9007199254740991 AND CAST(tokens AS INTEGER) = tokens THEN 1 END) AS generationSamples,
-        count(CASE WHEN duration > 0 AND duration <= 9007199254740991 AND CAST(duration AS INTEGER) = duration
-          AND tokens > 0 AND tokens <= 9007199254740991 AND CAST(tokens AS INTEGER) = tokens AND providerTimed THEN 1 END) AS providerTimedSamples,
-        count(CASE WHEN duration > 0 AND duration <= 9007199254740991 AND CAST(duration AS INTEGER) = duration
-          AND tokens > 0 AND tokens <= 9007199254740991 AND CAST(tokens AS INTEGER) = tokens AND NOT providerTimed THEN 1 END) AS observedSamples,
-        total(CASE WHEN duration > 0 AND duration <= 9007199254740991 AND CAST(duration AS INTEGER) = duration
-          AND tokens > 0 AND tokens <= 9007199254740991 AND CAST(tokens AS INTEGER) = tokens THEN tokens END) AS tokens,
-        total(CASE WHEN duration > 0 AND duration <= 9007199254740991 AND CAST(duration AS INTEGER) = duration
-          AND tokens > 0 AND tokens <= 9007199254740991 AND CAST(tokens AS INTEGER) = tokens THEN duration END) AS duration
-      FROM chunk GROUP BY slot
+      INSERT INTO temp.usage_metric SELECT slot, ${metric}, ${value}, 1 FROM temp.usage_sample WHERE ${present}
+      ON CONFLICT (slot, metric, value) DO UPDATE SET count = count + 1
     `,
         )
         .pipe(Effect.orDie)
-      for (const row of generation) {
-        after = Math.max(after, row.id)
-        const current = sampled.get(row.slot)
-        const order = !current
-          ? -1
-          : sessions
-            ? row.family - current.family || row.request - current.request
-            : row.updated - current.updated ||
-              (row.sessionID < current.sessionID ? -1 : row.sessionID > current.sessionID ? 1 : 0) ||
-              row.request - current.request
-        sampled.set(row.slot, {
-          ...(order < 0 ? row : current!),
-          first: (current?.first ?? 0) + row.first,
-          total: (current?.total ?? 0) + row.total,
-          tokens: (current?.tokens ?? 0) + row.tokens,
-          duration: (current?.duration ?? 0) + row.duration,
-          generationSamples: (current?.generationSamples ?? 0) + row.generationSamples,
-          providerTimedSamples: (current?.providerTimedSamples ?? 0) + row.providerTimedSamples,
-          observedSamples: (current?.observedSamples ?? 0) + row.observedSamples,
-        })
-      }
       yield* Effect.yieldNow
+    }
+    for (const row of rows) {
+      const current = sampled.get(row.slot)
+      sampled.set(row.slot, {
+        slot: row.slot,
+        first: (current?.first ?? 0) + row.first,
+        total: (current?.total ?? 0) + row.total,
+        tokens: (current?.tokens ?? 0) + row.tokens,
+        duration: (current?.duration ?? 0) + row.duration,
+        generationSamples: (current?.generationSamples ?? 0) + row.generationSamples,
+        providerTimedSamples: (current?.providerTimedSamples ?? 0) + row.providerTimedSamples,
+        observedSamples: (current?.observedSamples ?? 0) + row.observedSamples,
+      })
     }
   }
   for (const row of sampled.values()) {
-    const first = yield* percentiles(db, row.slot, "first", row.first)
-    const total = yield* percentiles(db, row.slot, "total", row.total)
-    const generation = yield* percentiles(db, row.slot, "generation", row.generationSamples)
+    if (row.first === 0 && row.total === 0 && row.duration === 0) continue
+    const first = yield* percentiles(db, row.slot, 0, row.first)
+    const total = yield* percentiles(db, row.slot, 1, row.total)
+    const generation = yield* percentiles(db, row.slot, 2, row.generationSamples)
     observations.set(page[row.slot].key, {
-      model: row.model,
-      ...(row.first === 0 && row.total === 0 && row.duration === 0
-        ? {}
-        : {
-            speed: {
-              samples: row.first,
-              generationSamples: row.generationSamples,
-              providerTimedSamples: row.providerTimedSamples,
-              observedSamples: row.observedSamples,
-              ...(generation
-                ? { generationP50TokensPerSecond: generation[0], generationP90TokensPerSecond: generation[1] }
-                : {}),
-              ...(first ? { firstOutputP50Ms: first[0], firstOutputP95Ms: first[1] } : {}),
-              ...(total ? { totalP50Ms: total[0], totalP95Ms: total[1] } : {}),
-              ...(row.duration === 0 ? {} : { outputTokensPerSecond: row.tokens / (row.duration / 1_000_000_000) }),
-            },
-          }),
+      speed: {
+        samples: row.first,
+        generationSamples: row.generationSamples,
+        providerTimedSamples: row.providerTimedSamples,
+        observedSamples: row.observedSamples,
+        ...(generation ? { generationP50TokensPerSecond: generation[0], generationP90TokensPerSecond: generation[1] } : {}),
+        ...(first ? { firstOutputP50Ms: first[0], firstOutputP95Ms: first[1] } : {}),
+        ...(total ? { totalP50Ms: total[0], totalP95Ms: total[1] } : {}),
+        ...(row.duration === 0 ? {} : { outputTokensPerSecond: row.tokens / (row.duration / 1_000_000_000) }),
+      },
     })
   }
   return observations
 })
 
-const percentiles = Effect.fnUntraced(function* (
+const ambiguousModels = Effect.fnUntraced(function* (
   db: Db,
-  slot: number,
-  metric: "first" | "total" | "generation",
-  size: number,
+  where: SQL,
+  page: ReadonlyArray<ReportSqlRow>,
+  ranges: ReadonlyArray<Slice>,
+  sessions?: ReadonlyArray<SessionSchema.ID>,
 ) {
-  if (size === 0) return undefined
-  const values: number[] = []
-  let cursor: { id: string; value: number } | undefined
-  let rank = 0
-  for (const target of [Math.ceil(size / 2), Math.ceil((size * (metric === "generation" ? 90 : 95)) / 100)]) {
-    while (rank < target) {
-      const step = Math.min(sampleRows, target - rank)
-      cursor = yield* db
-        .get<{ id: string; value: number }>(
+  type Candidate = { model: string; updated: number; sessionID: string; request: number; family: number }
+  const models = new Map<string, string>()
+  for (const item of page) {
+    if (decodeRaws(item.raws!).length < 2) continue
+    let earliest: Candidate | undefined
+    for (const slice of ranges) {
+      const selected = source(slice.sessionID !== undefined)
+      const candidate = yield* db
+        .get<Candidate>(
           sql`
-        SELECT requestID AS id, ${sql.raw(metric)} AS value FROM temp.usage_sample INDEXED BY ${sql.raw(`usage_sample_${metric}`)}
-        WHERE slot = ${slot} AND ${sql.raw(metric)} IS NOT NULL
-          ${cursor ? sql`AND (${sql.raw(metric)}, requestID) > (${cursor.value}, ${cursor.id})` : sql``}
-        ORDER BY ${sql.raw(metric)}, requestID LIMIT 1 OFFSET ${step - 1}
+        SELECT r.model AS model, ${selected.updated} AS updated, ${selected.sessionID} AS sessionID, r.request AS request,
+          ${sessions ? sql`CAST(family.key AS INTEGER)` : sql`0`} AS family
+        FROM ${selected.name} AS r INDEXED BY ${sliceScanIndex(slice)} ${selected.join}
+        ${sessions ? sql`JOIN json_each(${JSON.stringify(sessions)}) AS family ON family.value = s.id` : sql``}
+        WHERE ${where} ${sliceWhere(slice)} AND r.model IN (SELECT value FROM json_each(${item.raws}))
+        ORDER BY ${sessions ? sql`family, r.request` : sql`${selected.updated}, ${selected.sessionID}, r.request`} LIMIT 1
       `,
         )
         .pipe(Effect.orDie)
-      rank += step
       yield* Effect.yieldNow
+      if (!candidate) continue
+      const order = !earliest
+        ? -1
+        : sessions
+          ? candidate.family - earliest.family || candidate.request - earliest.request
+          : candidate.updated - earliest.updated ||
+            (candidate.sessionID < earliest.sessionID ? -1 : candidate.sessionID > earliest.sessionID ? 1 : 0) ||
+            candidate.request - earliest.request
+      if (order < 0) earliest = candidate
     }
-    values.push(cursor!.value)
+    if (earliest) models.set(item.key, earliest.model)
+  }
+  return models
+})
+
+const percentiles = Effect.fnUntraced(function* (db: Db, slot: number, metric: 0 | 1 | 2, size: number) {
+  if (size === 0) return undefined
+  const targets = [Math.ceil(size / 2), Math.ceil((size * (metric === 2 ? 90 : 95)) / 100)]
+  const values: number[] = []
+  let cursor: number | undefined
+  let seen = 0
+  while (values.length < targets.length) {
+    const rows = yield* db
+      .all<{ value: number; count: number }>(
+        sql`
+      SELECT value, count FROM temp.usage_metric WHERE slot = ${slot} AND metric = ${metric}
+        ${cursor === undefined ? sql`` : sql`AND value > ${cursor}`}
+      ORDER BY value LIMIT ${metricRows}
+    `,
+      )
+      .pipe(Effect.orDie)
+    for (const row of rows) {
+      seen += row.count
+      cursor = row.value
+      while (values.length < targets.length && seen >= targets[values.length]) values.push(row.value)
+    }
+    yield* Effect.yieldNow
+    if (rows.length < metricRows) break
   }
   return values
 })
@@ -913,6 +948,7 @@ const pricingBoundary = Effect.fnUntraced(function* (
   after: string | undefined,
   rows: number,
   sessionID?: SessionSchema.ID,
+  range: Range = {},
 ) {
   if (sessionID !== undefined) {
     const cursor = after === undefined ? undefined : Number(after)
@@ -935,23 +971,29 @@ const pricingBoundary = Effect.fnUntraced(function* (
   const next = yield* db
     .get<Cursor>(
       sql`
-    SELECT r.time_created AS time, r.id FROM ${source(false).name} AS r INDEXED BY ${source(false).index}
-    WHERE 1 ${cursor === undefined ? sql`` : sql`AND (r.time_created, r.id) > (${cursor.time}, ${cursor.id})`}
+    SELECT r.time_created AS time, r.id FROM ${source(false).name} AS r INDEXED BY ${source(false).unpricedIndex}
+    WHERE r.cost IS NULL AND r.source <> 'decision' ${sliceWhere({ after: cursor, ...range })}
     ORDER BY r.time_created, r.id LIMIT 1 OFFSET ${rows - 1}
   `,
     )
     .pipe(Effect.orDie)
   yield* Effect.yieldNow
-  return { slice: { after: cursor, before: next } as Slice, after: next ? JSON.stringify(next) : undefined }
+  return { slice: { after: cursor, before: next, ...range } as Slice, after: next ? JSON.stringify(next) : undefined }
 })
 
-export const unpriced = Effect.fnUntraced(function* (db: Db, where: SQL, after?: string, sessionID?: SessionSchema.ID) {
+export const unpriced = Effect.fnUntraced(function* (
+  db: Db,
+  where: SQL,
+  after?: string,
+  sessionID?: SessionSchema.ID,
+  range?: Range,
+) {
   const selected = source(sessionID !== undefined)
-  const page = yield* pricingBoundary(db, after, 200, sessionID)
+  const page = yield* pricingBoundary(db, after, 200, sessionID, range)
   const ids = yield* db
     .all<{ id: ProviderRequest.ID }>(
       sql`
-    SELECT r.id FROM ${selected.name} AS r INDEXED BY ${selected.index} ${selected.join}
+    SELECT r.id FROM ${selected.name} AS r INDEXED BY ${selected.unpricedIndex} ${selected.join}
     WHERE ${where} AND r.cost IS NULL AND r.source <> 'decision'
       ${sliceWhere(page.slice)}
   `,

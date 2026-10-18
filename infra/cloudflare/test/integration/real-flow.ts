@@ -32,7 +32,8 @@ import { crc32 } from "node:zlib"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
 import { createLocalServer } from "../../../../packages/cli/src/remote-local"
 import { RemoteAgent } from "../../../../packages/cli/src/remote-bridge"
-import { RemoteLimits, RemoteWebSocketPath, parsePushTestResponse } from "../../../../packages/remote/src/index"
+import { CloudflareRemoteTransport } from "../../../../packages/cli/src/remote-transport"
+import { RemoteLimits, RemoteWebSocketPath, parsePushTestResponse, parseRelayToAgentMessage, quotaKey } from "../../../../packages/remote/src/index"
 import {
   enroll,
   generateDeviceKey,
@@ -51,6 +52,8 @@ import { createRemoteTransport, type RemoteTransportStatus } from "../../../../a
 import { base64UrlEncode } from "../../src/auth/crypto"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../../../packages/ai/test/lib/openai-chunks"
 import { Global } from "../../../../packages/core/src/global"
+import { Provider } from "../../../../packages/schema/src/provider"
+import { ProviderUsage } from "../../../../packages/schema/src/provider-usage"
 
 const repositoryRoot = new URL("../../../../", import.meta.url).pathname
 const wranglerBin = `${repositoryRoot}node_modules/.bin/wrangler`
@@ -280,7 +283,7 @@ try {
   const servedPublicKeyHash = await sha256Hex(vapid.VAPID_PUBLIC_KEY)
   let chromeEndpointHash: string | undefined
   const pushDiagnostics: PushDiagnostic[] = []
-  const pushRequests: { method: string; ttl: string | null; body: Uint8Array }[] = []
+  const pushRequests: { method: string; path: string; ttl: string | null; body: Uint8Array }[] = []
   const pushStub = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
     if (new URL(request.url).pathname === "/push-diagnostic") {
       const evidence = parsePushDiagnostic(await request.json().catch(() => undefined))
@@ -290,7 +293,7 @@ try {
         endpointMatchesChrome: chromeEndpointHash === undefined ? "unreported" : evidence.endpointHash === chromeEndpointHash }))
       return new Response(null, { status: 201 })
     }
-    pushRequests.push({ method: request.method, ttl: request.headers.get("ttl"), body: new Uint8Array(await request.arrayBuffer()) })
+    pushRequests.push({ method: request.method, path: new URL(request.url).pathname, ttl: request.headers.get("ttl"), body: new Uint8Array(await request.arrayBuffer()) })
     return new Response(null, { status: 201 })
   } })
   disposals.push(async () => pushStub.stop(true))
@@ -368,7 +371,7 @@ try {
   const endpoint = "https://fcm.googleapis.com/fcm/send/flow-local-only"
   const pushKeys = { p256dh: base64UrlEncode(pushReceiver), auth: base64UrlEncode(pushAuth) }
   const registeredPush = await pushHttp.subscribe({ endpoint, keys: pushKeys,
-    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true } })
+    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true } })
   const decryptPush = async (request: { readonly body: Uint8Array }): Promise<Record<string, unknown>> => {
     const sender = request.body.slice(21, 86)
     const publicSender = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
@@ -1491,8 +1494,128 @@ try {
 
   const absentMessage = await browserFetch(`${workerOrigin}/api/remote/devices/${enrolled.deviceID}/sessions/${sessionID}/messages/msg_not_found`)
   expect(absentMessage.status === 404, `an unknown indexed message returned ${absentMessage.status}`)
+  const quotaStreams = new Set<Parameters<typeof local.events>[0]>()
+  const quotaLocal: typeof local = { ...local, events: async (stream) => {
+    quotaStreams.add(stream)
+    const stop = await local.events(stream)
+    return async () => {
+      quotaStreams.delete(stream)
+      await stop()
+    }
+  } }
+  const quotaDevices: string[] = []
+  const quotaResults: { readonly index: number; readonly key: string }[] = []
+  for (const [index, name] of ["Quota Flow Device A", "Quota Flow Device B"].entries()) {
+    const quotaEnrollment = await http.createEnrollment()
+    expect(quotaEnrollment.ok, "the relay could not create a quota device enrollment")
+    if (!quotaEnrollment.ok) throw new Error(quotaEnrollment.message)
+    const quotaDeviceKey = await generateDeviceKey()
+    const quotaEnrolled = await enroll({ relayURL: workerOrigin, enrollmentID: quotaEnrollment.value.enrollmentID,
+      code: quotaEnrollment.value.code, name, privateKey: quotaDeviceKey.privateKey, publicKey: quotaDeviceKey.publicKey })
+    const quotaState = `${cliState}-quota-${index}`
+    await run("mkdir", ["-p", quotaState])
+    const quotaLayer = effectModule.Layer.mergeAll(Global.layerWith({ state: quotaState, config: serverConfig, home }), platformModule.NodeFileSystem.layer)
+    const runQuotaEffect = (effect: unknown): Promise<unknown> => effectModule.Effect.runPromise(effectModule.Effect.provide(quotaLayer)(effect))
+    await runQuotaEffect(RemoteCredentials.create(Identity.make({ deviceID: quotaEnrolled.deviceID, name, relayURL: workerOrigin,
+      publicKey: quotaDeviceKey.publicKey, privateKey: quotaDeviceKey.privateKey, enrolledAt: Date.now() })))
+    const quotaAgent = new RemoteAgent({ relayURL: workerOrigin, local: quotaLocal, refreshIntervalMs: 3_600_000,
+      credentials: async () => {
+        const stored = (await runQuotaEffect(RemoteCredentials.read())) as { readonly deviceID: string } | undefined
+        if (stored === undefined) throw new Error("the stored quota device identity disappeared")
+        return (await runQuotaEffect(RemoteCredentials.credentials(stored))) as { readonly accessToken: string; readonly accessExpiresAt: number }
+      },
+      createConnection: (input) => {
+        const transport = new CloudflareRemoteTransport({ url: input.url,
+          headers: { authorization: `Bearer ${input.accessToken}` }, onOpen: input.onOpen,
+          onClose: ({ code, reason }) => input.onClose(code, reason) })
+        transport.onMessage((frame) => {
+          const parsed = parseRelayToAgentMessage(typeof frame === "string" ? frame : JSON.stringify(frame))
+          if (parsed.ok && parsed.value.type === "quota.result" && parsed.value.status === "settled")
+            quotaResults.push({ index, key: quotaKey(parsed.value) })
+        })
+        return transport
+      },
+      onDiagnostic: (message) => diagnostics.push(message), onTerminal: (message) => diagnostics.push(`terminal: ${message}`) })
+    disposals.push(async () => quotaAgent.close())
+    await quotaAgent.connect()
+    await waitFor(() => (quotaAgent.currentState === "live" ? true : undefined), 20_000, `${name} never went live`)
+    quotaDevices.push(quotaEnrolled.deviceID)
+  }
+  await waitFor(() => (quotaStreams.size === 2 ? true : undefined), 20_000, "the quota device agents never opened their local event streams")
+
+  const quietBrowser = await signInBrowser(signInInput)
+  expect(quietBrowser.userID === receiverIdentity.userID, "the second browser did not sign in to the same account")
+  const quietFetch: typeof fetch = (input, init) => {
+    const headers = new Headers(init?.headers)
+    headers.set("cookie", quietBrowser.cookie)
+    headers.set("origin", workerOrigin)
+    headers.set("sec-fetch-site", "same-origin")
+    return fetch(input, { ...init, headers })
+  }
+  const quietReceiver = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
+  if (!(quietReceiver instanceof Object) || !("publicKey" in quietReceiver)) throw new Error("ECDH pair unavailable")
+  const quietPushHttp = createPushHttp({ baseURL: workerOrigin, fetch: quietFetch })
+  const quietEndpoint = "https://fcm.googleapis.com/fcm/send/admin-local-quota-off"
+  const quietSubscribed = await quietPushHttp.subscribe({
+    endpoint: quietEndpoint,
+    keys: { p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", quietReceiver.publicKey))),
+      auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))) },
+    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": false } })
+  expect(quietSubscribed.ok, `the quota-off browser subscription was not stored: ${JSON.stringify(quietSubscribed)}`)
+
+  const quietFrames: Record<string, unknown>[] = []
+  const quietSocket = new WebSocket(`${socketOrigin}${RemoteWebSocketPath.client}?device=${quotaDevices[1]}`, { headers: { cookie: quietBrowser.cookie, origin: workerOrigin } })
+  disposals.push(async () => quietSocket.close())
+  quietSocket.addEventListener("message", (event) => {
+    const frame: unknown = JSON.parse(String(event.data))
+    if (isRecord(frame)) quietFrames.push(frame)
+  })
+  await new Promise<void>((resolve, reject) => {
+    quietSocket.addEventListener("open", () => resolve(), { once: true })
+    quietSocket.addEventListener("error", () => reject(new Error("the quota-off browser socket did not open")), { once: true })
+  })
+  const quietNoticePage = async (id: string) => {
+    quietSocket.send(JSON.stringify({ type: "request", id, operation: "notice.subscribe" }))
+    const answer = await waitFor(() => quietFrames.find((frame) => frame.type === "response" && frame.id === id), 10_000, "the quota-off browser got no notice page")
+    return isRecord(answer.value) ? answer.value.total : undefined
+  }
+  expect(await quietNoticePage("quota_notice_before") === 0, "the quota-off browser started with stored notices")
+
+  expect((await pushHttp.subscribe({ endpoint, keys: pushKeys,
+    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true } })).ok,
+    "the subscribed browser could not register its quota System alert")
+  const pushesBeforeQuota = pushRequests.length
+  const quotaAlert = new ProviderUsage.QuotaPaceAlert({ providerID: Provider.ID.make("flow-quota"), windowID: "five-hour", milestone: "will-run-out",
+    resetAt: Date.now() + 2 * 60 * 60_000, title: "Quota will run out", body: "At the current pace this quota runs out before it resets." })
+  const quotaFields = { providerID: quotaAlert.providerID, windowID: quotaAlert.windowID, milestone: quotaAlert.milestone, resetAt: quotaAlert.resetAt }
+  for (const [index, stream] of Array.from(quotaStreams).entries())
+    for (const copy of [1, 2])
+      stream.onEvent({ id: `evt_quota_flow_${index}_${copy}`, type: "provider.quota.pace", data: { ...quotaFields, title: quotaAlert.title, body: quotaAlert.body } })
+  const quotaPushes = async () => (await Promise.all(pushRequests.slice(pushesBeforeQuota).filter((request) => request.path === "/push")
+    .map(async (request) => ({ ttl: request.ttl, payload: await decryptPush(request) })))).filter((entry) => entry.payload.category === "quota-pace")
+  const settledKey = quotaKey(quotaFields)
+  await waitFor(() => quotaDevices.every((_deviceID, index) => quotaResults.some((result) => result.index === index && result.key === settledKey)) ? true : undefined, 20_000,
+    "both quota connectors did not receive a settled quota result from the relay")
+  await waitFor(() => quietFrames.some((frame) => frame.type === "notice.quota") ? true : undefined, 10_000, "the quota-off browser got no live quota notice")
+  const deliveredQuota = await quotaPushes()
+  expect(deliveredQuota.length === 1 && deliveredQuota[0]?.ttl === "3600" &&
+    quotaDevices.includes(String(deliveredQuota[0]?.payload.deviceID)) &&
+    JSON.stringify(deliveredQuota[0]?.payload) === JSON.stringify({ category: "quota-pace", deviceID: deliveredQuota[0]?.payload.deviceID, ...quotaFields }),
+    `two machines and duplicate events did not yield one safe encrypted quota push: ${JSON.stringify(deliveredQuota)}`)
+  expect(pushRequests.slice(pushesBeforeQuota).every((request) => request.path !== "/push/quota-off"),
+    "the browser with the quota System alert off received an encrypted quota push")
+  const quietQuota = quietFrames.filter((frame) => frame.type === "notice.quota")
+  expect(quietQuota.length === 1 && JSON.stringify(quietQuota[0]) === JSON.stringify({ type: "notice.quota", ...quotaFields, at: quietQuota[0]?.at }) &&
+    typeof quietQuota[0]?.at === "number", `the quota-off browser did not get exactly one live quota notice: ${JSON.stringify(quietQuota)}`)
+  expect(!quietFrames.some((frame) => frame.type === "notice.present" || frame.type === "notice.added"),
+    "the quota-off browser received a page alert or a stored notice for the quota alert")
+  expect(await quietNoticePage("quota_notice_after") === 0, "the quota alert was stored as a Session notice")
+  checks.push("two enrolled CLI connectors on one account forwarded duplicate quota events through the real Worker coordinator to one encrypted push per subscribed browser, none to a quota-off browser, and one unstored live notice")
+  expect((await quietPushHttp.remove(quietEndpoint)).ok, "the quota-off browser subscription was not removed")
+  quietSocket.close()
+
   if (!agent) throw new Error("the local connector was not running")
-  const offlineOnly = { "agent-completed": false, "approval-requested": false, "machine-offline": true }
+  const offlineOnly = { "agent-completed": false, "approval-requested": false, "machine-offline": true, "quota-pace": false }
   expect((await pushHttp.subscribe({ endpoint, keys: pushKeys, categories: offlineOnly })).ok, "the push subscription could not store this device's System choices")
   const pushesBeforeTest = pushRequests.length
   const testPush = () => fetch(`${workerOrigin}/api/admin/push/test`, { method: "POST", signal: AbortSignal.timeout(10_000),

@@ -344,19 +344,12 @@ for (const fixture of [
                     )
                     populations.push(Number(count[0]!.population))
                   }
-                  if (query.includes("WITH chunk AS MATERIALIZED")) {
-                    const count = yield* read(
-                      "SELECT count(*) AS population FROM temp.usage_sample WHERE id > ? AND id <= ?",
-                      params,
-                    )
+                  if (/INSERT INTO temp\.usage_metric\b|FROM temp\.usage_sample GROUP BY slot/.test(query)) {
+                    const count = yield* read("SELECT count(*) AS population FROM temp.usage_sample")
                     populations.push(Number(count[0]!.population))
                   }
-                  const metric = /SELECT requestID AS id, (first|total|generation) AS value/.test(query)
-                    ? query.includes("first AS value")
-                      ? "first"
-                      : query.includes("total AS value")
-                        ? "total"
-                        : "generation"
+                  const metric = /FROM temp\.usage_metric WHERE slot = \? AND metric = \?/.test(query)
+                    ? (["first", "total", "generation"] as const)[Number(params[1])]
                     : /SELECT DISTINCT.*AS key/s.test(query) && query.includes("r.cost IS NULL")
                       ? "pricing"
                       : undefined
@@ -373,22 +366,10 @@ for (const fixture of [
                     return
                   }
                   const plan = yield* read(`EXPLAIN QUERY PLAN ${query}`, params)
-                  expect(plan.some((row) => String(row.detail).includes(`usage_sample_${metric}`))).toBe(true)
+                  expect(plan.some((row) => /SEARCH temp\.usage_metric USING PRIMARY KEY \(slot=\? AND metric=\?/.test(String(row.detail)))).toBe(true)
                   expect(plan.some((row) => String(row.detail).includes("TEMP B-TREE"))).toBe(false)
-                  if (params.length === 4) {
-                    const instructions = yield* read(`EXPLAIN ${query}`, params)
-                    expect(
-                      instructions.some((row) => String(row.opcode).startsWith("Seek") && Number(row.p4) === 3),
-                    ).toBe(true)
-                  }
-                  const scanned = query
-                    .replace(/SELECT requestID AS id, (first|total|generation) AS value/, "SELECT requestID")
-                    .replace(/LIMIT 1 OFFSET \?/, "LIMIT ?")
-                  const count = yield* read(`SELECT count(*) AS population FROM (${scanned})`, [
-                    ...params.slice(0, -1),
-                    Number(params.at(-1)) + 1,
-                  ])
-                  populations.push(Number(count[0]!.population))
+                  const page = yield* read(query, params)
+                  populations.push(page.length)
                 }),
             }),
             Effect.provide(EffectDrizzleSqlite.DefaultServices),

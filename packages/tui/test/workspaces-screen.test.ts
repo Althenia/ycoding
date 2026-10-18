@@ -189,6 +189,7 @@ test("narrow terminals hide the details pane", async () => {
   const app = await launch({ width: 100 })
   try {
     await app.open()
+    await app.waitFor(() => app.frame().includes("/tmp/wt/ycoding-feature"))
     expect(app.line("/tmp/wt/ycoding-feature")).toContain("copy")
     expect(app.frame()).not.toContain("Recent sessions")
     expect(app.frame()).not.toContain("┃")

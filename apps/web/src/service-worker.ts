@@ -1,6 +1,6 @@
-import { isAlertTitle } from "@ycoding-ai/remote"
+import { isAlertTitle, quotaKey } from "@ycoding-ai/remote"
 import { CACHE_NAME, CACHE_PREFIX, OFFLINE_FALLBACK_URL, PRECACHE_URLS, shouldCacheStaticAsset, shouldHandleNavigation } from "./pwa/offline"
-import { alertCopy, isAlertDeviceID, overflowCopy, sessionURL } from "./remote/alert"
+import { alertCopy, isAlertDeviceID, overflowCopy, quotaCopy, readQuota, sessionURL, usageURL } from "./remote/alert"
 
 /**
  * Static shell service worker.
@@ -73,6 +73,14 @@ scope.addEventListener("notificationclick", (event: { notification: { data?: unk
       const url = new URL(client.url)
       return url.origin === scope.location.origin && (url.pathname === "/remote" || url.pathname.startsWith("/remote/"))
     })
+    if (isRecord(data) && data.quota === true && isAlertDeviceID(data.deviceID) && Object.keys(data).length === 2) {
+      const delivered = current !== undefined && await current.focus().then(() => {
+        current.postMessage({ type: "ycoding:open-usage", deviceID: data.deviceID })
+        return true
+      }).catch(() => false)
+      if (!delivered) await scope.clients.openWindow(usageURL(data.deviceID))
+      return
+    }
     if (!isRecord(data) || !isSessionID(data.sessionID)) {
       if (current && await current.focus().then(() => true, () => false)) return
       await scope.clients.openWindow("/remote")
@@ -131,6 +139,11 @@ function pushAlert(value: unknown): { readonly title: string; readonly options: 
   if (isRecord(value) && value.category === "machine-offline" && isAlertDeviceID(value.deviceID) &&
     typeof value.offlineAt === "number" && Number.isSafeInteger(value.offlineAt) && value.offlineAt > 0)
     return { title: "YCoding — machine offline", options: { body: "The connected machine stopped reporting.", tag: `ycoding-${value.deviceID}-offline-${value.offlineAt}` } }
+  if (isRecord(value) && value.category === "quota-pace" && isAlertDeviceID(value.deviceID)) {
+    const quota = readQuota(value, ["category", "deviceID"])
+    if (quota !== undefined) return { title: quotaCopy(quota.milestone).title, options: { body: quotaCopy(quota.milestone).body,
+      tag: `ycoding-${value.deviceID}-quota-${quotaKey(quota)}`, data: { quota: true, deviceID: value.deviceID } } }
+  }
   if (isRecord(value) && (value.category === "approval-requested" || value.category === "agent-completed") && isAlertDeviceID(value.deviceID) &&
     typeof value.overflow === "number" && Number.isSafeInteger(value.overflow) && value.overflow > 0 && Object.keys(value).length === 3)
     return { title: overflowCopy(value.category, value.overflow).title, options: { body: overflowCopy(value.category, value.overflow).body,

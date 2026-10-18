@@ -4,6 +4,8 @@ import { Effect } from "effect"
 import { sql } from "drizzle-orm"
 import { DatabaseMigration } from "../src/database/migration"
 import migration from "../src/database/migration/20261015122915_usage-analytics"
+import unpricedIndex from "../src/database/migration/20261017230123_usage-analytics-unpriced-index"
+import metricsIndex from "../src/database/migration/20261017232507_usage-analytics-metrics-index"
 import { sqliteLayer } from "../src/database/sqlite.bun"
 import { Sqlite } from "../src/database/sqlite"
 import { SessionUsageRead } from "../src/session/usage-read"
@@ -79,6 +81,8 @@ test(
         }
         expect(population.length).toBeGreaterThan(2)
         expect(Math.max(...population)).toBe(10_000)
+        yield* db.transaction(unpricedIndex.up)
+        yield* db.transaction(metricsIndex.up)
         queries.length = 0
         const report = yield* SessionUsageRead.report(db, {
           where: sql`1`,

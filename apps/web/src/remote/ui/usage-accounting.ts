@@ -52,6 +52,13 @@ export type ForecastPresentation = {
   readonly ratePerHour?: number
   readonly exhaustionAt?: number
   readonly projectedUsedAtReset?: number
+  readonly pace?: { readonly verdict: "ahead" | "cutting-it-close" | "will-run-out"; readonly projectedUsedAtReset: number; readonly exhaustionAt?: number }
+}
+
+export function paceStatus(pace: NonNullable<ForecastPresentation["pace"]>, asOf: number) {
+  if (pace.verdict === "ahead") return "Ahead"
+  if (pace.verdict === "cutting-it-close") return "Cutting it close"
+  return `Will run out${pace.exhaustionAt === undefined ? "" : ` ${pace.exhaustionAt <= asOf ? "now" : `${new Date(pace.exhaustionAt).toISOString().slice(0, 16).replace("T", " ")} UTC`}`}`
 }
 
 const currency = (value: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2 }).format(value)

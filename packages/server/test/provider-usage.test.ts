@@ -52,13 +52,17 @@ test("provider usage handlers forward refresh and return normalized snapshots", 
 
 test("provider usage HTTP routes decode refresh and encode normalized quota with server Location", async () => {
   const calls: unknown[] = []
+  const quota = { providerID: openai, windowID: "codex-primary", unit: "percent", source: "provider_internal_api", stability: "best_effort", updatedAt: 100,
+    state: "estimated", evidence: "medium", ratePerHour: 12, projectedUsedAtReset: 300,
+    pace: { verdict: "ahead", projectedUsedAtReset: 90 } } as const
+  const quotas: (typeof quota)[] = []
   const context = Context.make(Location.Service, new Location.Info({
     directory: AbsolutePath.make("/fixture"),
     project: { id: Project.ID.make("prj_usage"), directory: AbsolutePath.make("/fixture") },
   })).pipe(Context.add(ProviderUsageRuntime.Service, ProviderUsageRuntime.Service.of({
     forecast: (input) => Effect.sync(() => {
       calls.push(["forecast", input])
-      return { asOf: 100, localScope: input.localScope, localRates: [], quotas: [] }
+      return { asOf: 100, localScope: input.localScope, localRates: [], quotas }
     }),
     list: (input) => Effect.sync(() => { calls.push(input); return [snapshot] }),
     get: (input) => Effect.sync(() => { calls.push(input); return snapshot }),
@@ -91,4 +95,9 @@ test("provider usage HTTP routes decode refresh and encode normalized quota with
     expect(await forecast.json()).toMatchObject({ location: { directory: "/fixture" }, data: { asOf: 100, localScope, localRates: [], quotas: [] } })
   }
   expect(calls).toEqual([{ refresh: true }, { providerID: openai, refresh: false }, ["forecast", { localScope: "backend" }], ["forecast", { localScope: "location" }]])
+  quotas.push(quota)
+  const forecast = await http.request("/api/provider/usage/forecast?localScope=backend")
+  expect(forecast.status).toBe(200)
+  expect(await forecast.json()).toMatchObject({ data: { quotas: [{ ratePerHour: 12, projectedUsedAtReset: 300,
+    pace: { verdict: "ahead", projectedUsedAtReset: 90 } }] } })
 })

@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import { InputRenderable } from "@opentui/core"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -186,25 +187,22 @@ const route: FetchHandler = async (url, request) => {
     return json({ location, data: [] })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
-  if (url.pathname === "/api/model")
-    return json({
-      location,
-      data: [
-        {
-          id: session.model.id,
-          modelID: session.model.id,
-          providerID: session.model.providerID,
-          name: "GPT 5.6 Terra",
-          capabilities: { tools: true, input: ["text"], output: ["text"] },
-          variants: [{ id: session.model.variant }, { id: "low" }],
-          time: { released: 0 },
-          cost: [],
-          status: "active",
-          enabled: true,
-          limit: { context: 200_000, output: 32_000 },
-        },
-      ],
-    })
+  if (url.pathname === "/api/model" || url.pathname === "/api/model/default") {
+    const model = {
+      id: session.model.id,
+      modelID: session.model.id,
+      providerID: session.model.providerID,
+      name: "GPT 5.6 Terra",
+      capabilities: { tools: true, input: ["text"], output: ["text"] },
+      variants: [{ id: session.model.variant }, { id: "low" }],
+      time: { released: 0 },
+      cost: [],
+      status: "active",
+      enabled: true,
+      limit: { context: 200_000, output: 32_000 },
+    }
+    return json({ location, data: url.pathname === "/api/model" ? [model] : { ...model, selection: session.model } })
+  }
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
   if (url.pathname === "/api/agent")
@@ -569,6 +567,7 @@ test("the command palette exposes the goal action and applies it to the active S
   try {
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "command palette")
+    await waitFor(() => screen.renderer.currentFocusedRenderable instanceof InputRenderable, "palette input")
     await screen.input.typeText("autonomous goal")
     await waitFor(() => screen.frame().includes("Set autonomous goal") || screen.frame().includes("No results"), "goal palette search")
     expect(screen.lines().filter((line) => line.includes("Set autonomous goal"))).toHaveLength(1)

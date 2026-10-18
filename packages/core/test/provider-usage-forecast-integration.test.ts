@@ -44,7 +44,7 @@ const create = (credentials: Credential.Interface, label: string) =>
     value: { type: "key", key: `fixture-${label}` },
   })
 
-it.effect("warms a real quota cache once per observation and isolates profiles without exposing account identity", () =>
+it.effect("a prior list warms the quota cache once per observation, forecasts never refresh, and profiles stay isolated without exposing account identity", () =>
   Effect.gen(function* () {
     const credentials = yield* Credential.Service
     const work = yield* create(credentials, "Work")
@@ -64,6 +64,10 @@ it.effect("warms a real quota cache once per observation and isolates profiles w
           }),
       },
     })
+    expect((yield* service.forecast({ localScope: "backend" })).quotas).toEqual([])
+    expect(loads).toBe(0)
+    yield* service.list()
+    expect(loads).toBe(2)
     expect(
       (yield* service.forecast({ localScope: "backend" })).quotas!.every((value) => value.state === "insufficient"),
     ).toBe(true)
@@ -101,6 +105,8 @@ it.effect("warms a real quota cache once per observation and isolates profiles w
       now: () => now,
       adapters: { [providerID]: (input) => Effect.succeed(quota(used, input.updatedAt)) },
     })
+    expect((yield* restarted.forecast({ localScope: "backend" })).quotas).toEqual([])
+    yield* restarted.list()
     expect(
       (yield* restarted.forecast({ localScope: "backend" })).quotas!.every((value) => value.state === "insufficient"),
     ).toBe(true)
@@ -349,6 +355,7 @@ it.effect(
             ]
           }),
       })
+      yield* service.list()
       const result = yield* service.forecast({ localScope: "location" })
       expect(scopes).toEqual(["location"])
       expect(result.localRates![0]).toMatchObject({
@@ -540,6 +547,7 @@ it.effect("uses low evidence for supported billing-cycle means and suppresses in
           ),
       },
     })
+    yield* service.list()
     const result = yield* service.forecast({ localScope: "backend" })
     expect(result.quotas!.find((value) => value.providerID === "cursor")).toMatchObject({
       state: "estimated",

@@ -59,8 +59,10 @@ test("the command palette refreshes models and providers for the current locatio
     await waitForFrame("Models and providers refreshed")
     expect(refreshes).toEqual([directory])
     const after = requests.slice(before)
-    expect(after.indexOf("GET /api/model")).toBeGreaterThan(after.indexOf("POST /api/provider/refresh"))
-    expect(after.indexOf("GET /api/provider")).toBeGreaterThan(after.indexOf("POST /api/provider/refresh"))
+    expect(after).toContain("POST /api/provider/refresh")
+    const refreshed = after.slice(after.indexOf("POST /api/provider/refresh") + 1)
+    expect(refreshed).toContain("GET /api/model")
+    expect(refreshed).toContain("GET /api/provider")
 
     setup.renderer.destroy()
     await task

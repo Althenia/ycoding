@@ -22,6 +22,7 @@ import {
   noticeSequence,
   parseAgentMessage,
   parseClientMessage,
+  quotaKey,
   serializeError,
   serializeNoticeFrame,
   serializeRequest,
@@ -38,11 +39,14 @@ import {
   type RemoteNoticeRequest,
   type RemotePriorityMode,
   type RemoteOperation,
+  type RemoteQuota,
   type RemoteResponse,
   type RemoteStatus,
 } from "../../../../packages/remote/src/index"
 import type { NoticeEvent, NoticeStore } from "./notice-store"
-import type { PushEvent, PushOutcome } from "../push/send"
+import type { PushEvent, PushOutcome, QuotaPushEvent } from "../push/send"
+import type { PushSubscription } from "../push/store"
+import type { QuotaReservation } from "./quota-claims"
 export type RelayConnection = {
   readonly connectionID: string
   readonly role: "agent" | "client"
@@ -59,6 +63,13 @@ export type RelayConnection = {
 export type OfflineCheck = { readonly ownerID: string; readonly deviceID: string; readonly closedAt: number }
 
 export type RelayAuthority = { readonly ok: true } | { readonly ok: false; readonly reason: string }
+
+export type QuotaDelivery = {
+  readonly subscriptions: (ownerID: string) => Promise<readonly PushSubscription[]>
+  readonly reserve: (ownerID: string, key: string, until: number, members: readonly string[]) => Promise<QuotaReservation>
+  readonly release: (ownerID: string, key: string, members: readonly string[]) => Promise<void>
+  readonly push: (ownerID: string, event: QuotaPushEvent, subscriptions: readonly PushSubscription[]) => Promise<readonly PushOutcome[]>
+}
 
 export type RelayDeps = {
   readonly now: () => number
@@ -84,6 +95,7 @@ export type RelayDeps = {
   readonly authorityTtlMs: number
   readonly notifyPush?: (accountID: string, event: PushEvent) => Promise<readonly PushOutcome[]>
   readonly agentHeartbeatAt?: (connectionID: string) => number | undefined
+  readonly quota?: QuotaDelivery
 }
 
 type ClientState = {
@@ -121,6 +133,14 @@ type PendingRequest = {
 const outcomeUnknownMessage = "Agent disconnected before settling this request"
 const forbiddenClientMessage = "Connection is not permitted"
 
+function browserMember(browserSessionID: string) {
+  return `browser:${browserSessionID}`
+}
+
+function noticeMember(browserSessionID: string) {
+  return `notice:${browserSessionID}`
+}
+
 function closeCodeFor(reason: string): number {
   if (reason === "revoked_session" || reason === "expired_session") return RemoteCloseCode.unauthorized
   return RemoteCloseCode.forbidden
@@ -139,6 +159,8 @@ const noticeStorageMessage = "Notification storage is unavailable"
 const invalidFrameMessage = "Frame is not valid for this connection"
 const sizeMessage = "Frame exceeds the size bound"
 const policyMessage = "Agent violated the relay policy"
+const pushBudgetPerMinute = 20
+const quotaClaimGraceMs = 120_000
 
 export function createRelay(deps: RelayDeps) {
   const clients = new Map<string, ClientState>()
@@ -185,8 +207,9 @@ export function createRelay(deps: RelayDeps) {
   const mutationLane = (connectionID: string, message: { readonly sessionID?: string }) =>
     message.sessionID === undefined ? `${connectionID}\0mutation` : `${connectionID}\0session\0${message.sessionID}`
 
-  const sendToClients = async (frame: string, noticesOnly = false) => {
-    await Promise.all(Array.from(clients.values()).filter((client) => !noticesOnly || client.noticesSubscribed).map(async (client) => {
+  const sendToClients = async (frame: string, noticesOnly = false, browsers?: ReadonlySet<string>) => {
+    await Promise.all(Array.from(clients.values()).filter((client) => (!noticesOnly || client.noticesSubscribed) &&
+      (browsers === undefined || browsers.has(client.browserSessionID))).map(async (client) => {
       if (await authorizeRecipient(client)) deps.send(client.connectionID, frame)
     }))
   }
@@ -235,9 +258,13 @@ export function createRelay(deps: RelayDeps) {
 
   const deliveries = new Set<Promise<void>>()
 
-  const deliverAlerts = async (ownerID: string, alerts: readonly { readonly event: PushEvent; readonly item?: RemoteNoticePresentation }[]) => {
+  const rollPushWindow = () => {
     if (deps.now() - pushWindowStart >= 60_000) { pushWindowStart = deps.now(); pushWindowCount = 0; summarized.clear() }
-    const admitted = Math.max(0, 20 - pushWindowCount)
+  }
+
+  const deliverAlerts = async (ownerID: string, alerts: readonly { readonly event: Exclude<PushEvent, QuotaPushEvent>; readonly item?: RemoteNoticePresentation }[]) => {
+    rollPushWindow()
+    const admitted = Math.max(0, pushBudgetPerMinute - pushWindowCount)
     const notify = deps.notifyPush
     const immediate = new Map<string, RemoteNoticePresentation[]>()
     const overflow = new Map<RemoteNoticeCategory, { readonly deviceID: string; readonly items: readonly RemoteNoticePresentation[] }>()
@@ -271,6 +298,54 @@ export function createRelay(deps: RelayDeps) {
       if (notify !== undefined) dispatch(notify, { category, deviceID: entry.deviceID, overflow: entry.items.length }, entry.items)
     }
     await Promise.all(Array.from(immediate, ([browserSessionID, items]) => present(browserSessionID, items)))
+  }
+
+  const answerQuota = async (current: AgentState, quota: RemoteQuota) => {
+    const status = await deliverQuota(current, quota)
+    if (agent?.connectionID !== current.connectionID) return
+    deps.send(current.connectionID, JSON.stringify({ type: "quota.result", providerID: quota.providerID, windowID: quota.windowID,
+      milestone: quota.milestone, resetAt: quota.resetAt, status }))
+  }
+
+  const deliverQuota = async (current: AgentState, quota: RemoteQuota): Promise<"settled" | "pending"> => {
+    if (quota.resetAt <= deps.now()) return "settled"
+    const delivery = deps.quota
+    if (delivery === undefined) return "pending"
+    rollPushWindow()
+    if (pushWindowCount >= pushBudgetPerMinute) return "pending"
+    pushWindowCount += 1
+    const windowStart = pushWindowStart
+    const refund = () => { if (pushWindowStart === windowStart && pushWindowCount > 0) pushWindowCount -= 1 }
+    const subscriptions = await delivery.subscriptions(current.ownerID).catch(() => undefined)
+    if (subscriptions === undefined) {
+      refund()
+      return "pending"
+    }
+    const owned = new Set(subscriptions.map((subscription) => subscription.browserSessionID))
+    const targets = subscriptions.filter((subscription) => subscription.categories["quota-pace"])
+    const subscribed = Array.from(presenters().keys())
+    const viewers = subscribed.filter((browserSessionID) => !owned.has(browserSessionID))
+    const key = quotaKey(quota)
+    const reservation = await delivery.reserve(current.ownerID, key, quota.resetAt + quotaClaimGraceMs, [...subscribed.map(noticeMember),
+      ...targets.map((subscription) => browserMember(subscription.browserSessionID)), ...viewers.map(browserMember)]).catch(() => undefined)
+    if (reservation?.status !== "reserved") {
+      refund()
+      return "pending"
+    }
+    const granted = new Set(reservation.granted)
+    const pushed = targets.filter((subscription) => granted.has(browserMember(subscription.browserSessionID)))
+    if (pushed.length === 0) refund()
+    const fields = { providerID: quota.providerID, windowID: quota.windowID, milestone: quota.milestone, resetAt: quota.resetAt }
+    const noticed = new Set(subscribed.filter((browserSessionID) => granted.has(noticeMember(browserSessionID))))
+    if (noticed.size > 0) await sendToClients(serializeNoticeFrame({ type: "notice.quota", ...fields, at: deps.now() }), true, noticed)
+    await Promise.all(viewers.filter((browserSessionID) => granted.has(browserMember(browserSessionID)))
+      .map((browserSessionID) => present(browserSessionID, [{ kind: "quota", ...fields }])))
+    if (pushed.length === 0) return "settled"
+    if (await delivery.push(current.ownerID, { category: "quota-pace", deviceID: current.deviceID, ...fields }, pushed).then(() => true, () => false))
+      return "settled"
+    refund()
+    await delivery.release(current.ownerID, key, pushed.map((subscription) => browserMember(subscription.browserSessionID))).catch(() => undefined)
+    return "pending"
   }
 
   const readOfflineCheck = async () => {
@@ -649,6 +724,7 @@ export function createRelay(deps: RelayDeps) {
         deliverResponse(current.connectionID, message)
         return
       }
+      if (message.type === "quota") return inArrivalOrder(`${connectionID}\0quota`, () => answerQuota(current, message))
       return inArrivalOrder(connectionID, async () => {
         if (message.type === "completions") {
           const recorded = await recordNotices(() => deps.notices.complete(message.data, message.more))

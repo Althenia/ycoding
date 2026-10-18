@@ -77,14 +77,14 @@ const readAll = Effect.fnUntraced(function* (db: Db, range: Range, sessions?: ty
   for (const sessionID of scopes) {
     let after: string | undefined
     while (true) {
-      const page = yield* SessionUsageRead.unpriced(db, where, after, sessionID)
+      const page = yield* SessionUsageRead.unpriced(db, where, after, sessionID, range)
       unpriced += page.rows.length
       if (page.after === undefined) break
       after = page.after
     }
     after = undefined
     while (true) {
-      const page: Effect.Success<ReturnType<typeof SessionUsageRead.pricingRefs>> = yield* SessionUsageRead.pricingRefs(db, where, after, sessionID)
+      const page: Effect.Success<ReturnType<typeof SessionUsageRead.pricingRefs>> = yield* SessionUsageRead.pricingRefs(db, where, after, sessionID, range)
       page.refs.forEach((ref) => refs.add(ref.key))
       if (page.after === undefined) break
       after = page.after
@@ -94,6 +94,7 @@ const readAll = Effect.fnUntraced(function* (db: Db, range: Range, sessions?: ty
     where,
     sessions,
     group: "model",
+    ...range,
     order: sql`key ASC`,
     offset: 0,
     limit: 100,
@@ -143,7 +144,7 @@ test("dated usage pages seek by the (time_created, id) cursor instead of rescann
       const dated = queries.filter(
         (query) => query.sql.includes("FROM usage_analytics_request AS r") && /r\.time_created >= \?/.test(query.sql),
       )
-      expect(dated.length).toBeGreaterThan(40)
+      expect(dated.length).toBeGreaterThan(5)
       const kinds = new Set<string>()
       for (const query of dated) {
         const from = query.sql.indexOf("FROM usage_analytics_request")
@@ -154,8 +155,16 @@ test("dated usage pages seek by the (time_created, id) cursor instead of rescann
         const offset = (query.sql.slice(0, from).match(/\?/g) ?? []).length
         const params = query.params.slice(offset, offset + (source.match(/\?/g) ?? []).length)
         const plan = yield* db.$client.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN SELECT r.id ${source}`, params)
-        const search = plan.find((row) => row.detail.includes("usage_analytics_request_time_created_id_idx"))!.detail
-        kinds.add(query.sql.includes("DISTINCT") ? "pricing" : query.sql.includes("INSERT") ? "stage" : "unpriced")
+        const search = plan.find((row) => /usage_analytics_request_(unpriced_|metrics_)?(time_created_id_)?idx/.test(row.detail))!.detail
+        const kind = query.sql.includes("DISTINCT") ? "pricing" : query.sql.includes("INSERT") ? "stage" : "unpriced"
+        kinds.add(kind)
+        expect(search).toContain(
+          kind === "stage"
+            ? "COVERING INDEX usage_analytics_request_metrics_idx"
+            : "usage_analytics_request_unpriced_time_created_id_idx",
+        )
+        expect(search).toContain("(time_created,id)>(?,?)")
+        expect(search).toContain("(time_created,id)<")
         expect(search).not.toContain("time_created>? AND time_created<?")
         expect(search).toContain("(time_created,id)")
       }

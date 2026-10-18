@@ -1,6 +1,7 @@
 export * as ProviderUsageForecast from "./forecast"
 
 import type { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
+import type { UsageForecast } from "@ycoding-ai/schema/usage-forecast"
 
 const minute = 60_000
 const hour = 60 * minute
@@ -123,7 +124,7 @@ export function make(input: { readonly maxSeries?: number; readonly maxObservati
       }
     },
 
-    quota(request: QuotaInput): Estimate & Pick<ProviderUsage.Snapshot, "source" | "stability" | "updatedAt"> {
+    quota(request: QuotaInput): Estimate & Pick<ProviderUsage.Snapshot, "source" | "stability" | "updatedAt"> & { readonly pace?: UsageForecast.Pace } {
       const current =
         request.account === undefined
           ? undefined
@@ -151,13 +152,37 @@ export function make(input: { readonly maxSeries?: number; readonly maxObservati
           ),
         }))
         .find((candidate) => candidate.result.state !== "insufficient")
+      const pacing = request.snapshot.status === "available" && request.now - request.snapshot.updatedAt <= freshness && request.snapshot.updatedAt <= request.now
+        ? pace(request)
+        : undefined
       return {
         ...(selected?.result ?? result),
         source: selected?.series.snapshot.source ?? request.snapshot.source,
         stability: selected?.series.snapshot.stability ?? request.snapshot.stability,
         updatedAt: selected?.series.snapshot.updatedAt ?? request.snapshot.updatedAt,
+        ...(pacing === undefined ? {} : { pace: pacing }),
       }
     },
+  }
+}
+
+export function pace(request: Pick<QuotaInput, "window" | "now" | "semantics">): UsageForecast.Pace | undefined {
+  const window = request.window
+  const limit = window.limit ?? (window.unit === "percent" ? 100 : undefined)
+  const duration = window.periodSeconds === undefined ? undefined : window.periodSeconds * 1000
+  if (request.semantics !== "fixed-reset" || window.unlimited || window.used === undefined || window.used <= 0 ||
+    limit === undefined || limit <= 0 || duration === undefined || duration <= 0 || window.resetAt === undefined ||
+    ![window.used, limit, duration, window.resetAt, request.now].every(Number.isFinite) || request.now >= window.resetAt) return undefined
+  const elapsed = request.now - (window.resetAt - duration)
+  if (elapsed < Math.max(minute, duration * 0.01)) return undefined
+  const projectedUsedAtReset = window.used * (duration / elapsed)
+  if (!Number.isFinite(projectedUsedAtReset)) return undefined
+  const verdict = window.used >= limit || projectedUsedAtReset > limit
+    ? "will-run-out"
+    : projectedUsedAtReset > limit * 0.9 ? "cutting-it-close" : "ahead"
+  const exhaustionAt = Math.trunc(request.now + (limit - window.used) / (window.used / elapsed))
+  return { verdict, projectedUsedAtReset,
+    ...(verdict === "will-run-out" && exhaustionAt > request.now && exhaustionAt < window.resetAt ? { exhaustionAt } : {}),
   }
 }
 

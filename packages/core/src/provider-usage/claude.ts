@@ -96,6 +96,7 @@ export function normalizeOAuth(input: NormalizeOAuthInput) {
         label: bucketLabel(key),
         unit: "percent",
         used,
+        periodSeconds: key === "five_hour" ? 18_000 : 604_800,
         ...(resetAt === undefined ? {} : { resetAt }),
       }),
     ]
@@ -131,6 +132,7 @@ function scopedWindows(value: unknown) {
         label: `${model.trim()} weekly`,
         unit: "percent",
         used,
+        periodSeconds: 604_800,
         ...(resetAt === undefined ? {} : { resetAt }),
       }),
     ]
@@ -169,6 +171,7 @@ function headerWindow(
       label,
       unit: "percent",
       used,
+      ...(id === "five-hour" ? { periodSeconds: 18_000 } : id === "seven-day" ? { periodSeconds: 604_800 } : {}),
       ...(resetAt === undefined ? {} : { resetAt }),
     }),
   ]

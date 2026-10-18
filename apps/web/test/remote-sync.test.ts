@@ -663,8 +663,8 @@ describe("snapshot synchronization", () => {
         durable: { aggregateID: "ses_a", seq: 11, version: 1 },
         sourceEpoch: "epoch_2",
       })
-      await test.flush()
-      expect(textOf(test.store.state().view)).toContain("NEXT-EPOCH")
+      await test.runUntil(() => textOf(test.store.state().view).includes("NEXT-EPOCH"))
+      expect(textOf(test.store.state().view)).toEqual(["BASE", "NEXT-EPOCH"])
       expect(test.store.state().view?.watermark).toBe(11)
 
       // A gap means a durable event was missed, so the canonical snapshot is re-read.

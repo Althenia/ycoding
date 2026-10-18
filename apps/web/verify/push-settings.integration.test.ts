@@ -102,16 +102,32 @@ describe("Settings push to this device", () => {
       await page.evaluate(toggle("Machine offline"))
       await page.evaluate(`window.__push.gates.key()`)
       await until(page, `window.__push.posts.length === 1`)
-      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false })
+      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
       await page.evaluate(toggle("Needs your attention"))
       await Bun.sleep(100)
       expect(await page.evaluate<number>(`window.__push.posts.length`)).toBe(1)
       await page.evaluate(`window.__push.gates.post1()`)
       await until(page, `window.__push.posts.length === 2`)
-      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": false, "machine-offline": false })
+      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": false, "machine-offline": false, "quota-pace": true })
       await page.evaluate(`window.__push.gates.post2()`)
       await until(page, `${pushButton}.textContent === 'Turn off'`)
       expect(await page.evaluate<string>(status)).toBe("Push is registered on this device for the System alerts chosen above.")
+    } finally { await page.close() }
+  })
+
+  test("the Quota pace In app and System switches are independent and only System reaches the registered categories", async () => {
+    const page = await open({ permission: "granted", subscribed: true })
+    try {
+      await until(page, `${pushButton}.textContent === 'Turn off'`)
+      expect(await page.evaluate<unknown>(`['In app', 'System'].map(channel => document.querySelector('[aria-label="Quota pace via ' + channel + '"]').checked)`)).toEqual([true, true])
+      await page.evaluate(`document.querySelector('[aria-label="Quota pace via In app"]').click()`)
+      await Bun.sleep(100)
+      expect(await page.evaluate<number>(`window.__push.posts.length`)).toBe(1)
+      expect(await page.evaluate<unknown>(`['In app', 'System'].map(channel => document.querySelector('[aria-label="Quota pace via ' + channel + '"]').checked)`)).toEqual([false, true])
+      await page.evaluate(toggle("Quota pace"))
+      await until(page, `window.__push.posts.length === 2`)
+      expect(await page.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": false })
+      expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.notifications'))['quota-pace']`)).toEqual({ "in-app": false, desktop: false })
     } finally { await page.close() }
   })
 
@@ -124,7 +140,7 @@ describe("Settings push to this device", () => {
       await until(second, `!document.querySelector('[aria-label="Work finished via System"]').checked`)
       await second.evaluate(toggle("Machine offline"))
       await until(second, `window.__push.posts.length === 2`)
-      expect(await second.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false })
+      expect(await second.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
       expect(await first.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.notifications'))`)).toMatchObject({
         "agent-completed": { desktop: false }, "machine-offline": { desktop: false } })
     } finally { await first.close(); await second.close() }
@@ -143,7 +159,7 @@ describe("Settings push to this device", () => {
       expect(await second.evaluate<boolean>(`document.querySelector('[aria-label="Work finished via System"]').checked`)).toBe(true)
       await second.evaluate(toggle("Machine offline"))
       await until(second, `window.__push.posts.length === 2`)
-      expect(await second.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false })
+      expect(await second.evaluate<unknown>(lastCategories)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true })
       expect(await second.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.notifications'))`)).toMatchObject({
         "agent-completed": { desktop: false }, "machine-offline": { desktop: false } })
       await second.evaluate(`window.__push.holdStorage = false; window.__push.heldStorage.splice(0).forEach(deliver => deliver())`)

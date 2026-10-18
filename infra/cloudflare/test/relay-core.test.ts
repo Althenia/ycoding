@@ -2025,7 +2025,7 @@ describe("relay core: one System alert owner per browser", () => {
       const auth = createD1AuthStore(sqliteD1(database))
       const push = createD1PushStore(sqliteD1(database))
       await push.upsert("usr_1", "browser-1", { endpoint: "https://fcm.googleapis.com/send/synthetic", keys: { p256dh: "synthetic", auth: "synthetic" },
-        categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true } }, 1)
+        categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true } }, 1)
       const h = harness({ database, authorityTtlMs: 5_000, pushOutcomes: async () => (await push.list("usr_1")).map((row) => ({ owner: row.browserSessionID, outcome: "accepted" })) })
       const service = createAuthService(auth, { now: h.at })
       h.setClientAuthorityRead(() => service.authorizeClientCommand("browser-1", "dev_1"))

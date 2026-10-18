@@ -3,6 +3,7 @@ import type { Context } from "@ycoding-ai/plugin/tui/context"
 type Options = {
   readonly attention?: Partial<Context["attention"]>
   readonly client?: Partial<Context["client"]>
+  readonly ui?: Partial<Context["ui"]>
   readonly data?: {
     readonly on?: Context["data"]["on"]
     readonly session?: Partial<Context["data"]["session"]>
@@ -36,6 +37,14 @@ export function createTuiPluginContext(options: Options = {}) {
       },
     },
     keymap: {},
-    ui: {},
+    ui: {
+      router: {
+        register: () => { throw new Error("Unexpected route registration") },
+        navigate: () => { throw new Error("Unexpected route navigation") },
+        current: () => ({ type: "home" }),
+      },
+      slot: () => () => {},
+      ...options.ui,
+    },
   } as unknown as Context
 }

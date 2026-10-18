@@ -482,6 +482,16 @@ export type RemoteSubscriptions = {
 export type RemoteHeartbeat = { readonly type: "ping" } | { readonly type: "pong" }
 export type RemoteCancel = { readonly type: "cancel"; readonly id: string }
 
+export type RemoteQuota = { readonly providerID: string; readonly windowID: string;
+  readonly milestone: "almost-out" | "cutting-it-close" | "will-run-out"; readonly resetAt: number }
+export type RemoteQuotaFrame = RemoteQuota & { readonly type: "quota" }
+export type RemoteQuotaResult = RemoteQuota & { readonly type: "quota.result"; readonly status: "settled" | "pending" }
+export type RemoteQuotaNotice = RemoteQuota & { readonly type: "notice.quota"; readonly at: number }
+
+export function quotaKey(quota: RemoteQuota): string {
+  return JSON.stringify([quota.providerID, quota.windowID, quota.milestone, Math.round(quota.resetAt / 60_000)])
+}
+
 export const remoteNoticeOperations = ["notice.subscribe", "notice.list", "notice.read", "notice.readAll"] as const
 export type RemoteNoticeOperation = (typeof remoteNoticeOperations)[number]
 export type RemoteNoticeCategory = "approval-requested" | "agent-completed"
@@ -504,6 +514,7 @@ export type RemoteNoticePage = {
   readonly unavailable: boolean
 }
 export type RemoteNoticeFrame =
+  | RemoteQuotaNotice
   | { readonly type: "notice.added"; readonly notices: readonly RemoteNotice[]; readonly total: number }
   | { readonly type: "notice.removed"; readonly ids: readonly string[]; readonly total: number }
   | { readonly type: "notice.cleared" }
@@ -511,16 +522,16 @@ export type RemoteNoticeFrame =
   | { readonly type: "notice.offline"; readonly at: number }
   | { readonly type: "notice.present"; readonly items: readonly RemoteNoticePresentation[] }
 
-export type RemoteNoticePresentation = { readonly kind: "notice"; readonly notice: RemoteNotice; readonly detail?: RemoteAlertDetail } | { readonly kind: "offline"; readonly at: number }
+export type RemoteNoticePresentation = { readonly kind: "notice"; readonly notice: RemoteNotice; readonly detail?: RemoteAlertDetail } | { readonly kind: "offline"; readonly at: number } | (RemoteQuota & { readonly kind: "quota" })
 
 /** Frames accepted from a browser connection. */
 export type RemoteClientMessage = RemoteRequest | RemoteNoticeRequest | RemoteHeartbeat | RemoteCancel | RemotePriorityHint
 /** Frames accepted from a local agent connection. */
-export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteCompletions | RemoteBlocked | RemoteHeartbeat
+export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteCompletions | RemoteBlocked | RemoteHeartbeat | RemoteQuotaFrame
 /** Frames the relay sends to a browser connection. */
 export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteEventBatch | RemoteSessions | RemoteStatus | RemoteHeartbeat | RemoteNoticeFrame
 /** Frames the relay sends to a local agent connection. */
-export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat | RemoteCancel | RemotePriority
+export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat | RemoteCancel | RemotePriority | RemoteQuotaResult
 
 export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -590,14 +601,19 @@ export function serializeSubscriptions(subscriptions: RemoteSubscriptions): stri
 }
 
 export function serializeNoticeFrame(frame: RemoteNoticeFrame): string {
+  if (frame.type === "notice.quota") return JSON.stringify({ type: frame.type, ...quotaWire(frame), at: frame.at })
   if (frame.type === "notice.removed") return JSON.stringify({ type: frame.type, ids: [...frame.ids], total: frame.total })
   if (frame.type === "notice.added") return JSON.stringify({ type: frame.type, notices: frame.notices.map(noticeWire), total: frame.total })
   if (frame.type === "notice.offline") return JSON.stringify({ type: frame.type, at: frame.at })
   if (frame.type === "notice.present")
     return JSON.stringify({ type: frame.type, items: frame.items.map((item) => item.kind === "notice"
       ? { kind: item.kind, notice: noticeWire(item.notice), ...(item.detail === undefined ? {} : { detail: alertDetailWire(item.detail) }) }
-      : { kind: item.kind, at: item.at }) })
+      : item.kind === "quota" ? { kind: item.kind, ...quotaWire(item) } : { kind: item.kind, at: item.at }) })
   return JSON.stringify({ type: frame.type })
+}
+
+function quotaWire(quota: RemoteQuota) {
+  return { providerID: quota.providerID, windowID: quota.windowID, milestone: quota.milestone, resetAt: quota.resetAt }
 }
 
 export function noticePageValue(page: RemoteNoticePage) {
@@ -645,7 +661,7 @@ export function parseRelayToClientMessage(raw: string): ParseResult<RemoteRelayT
   if (isRecord(frame.value) && typeof frame.value.type === "string" && frame.value.type.startsWith("notice.")) return parseNoticeFrame(frame.value)
   const parsed = parseAgentFrame(frame.value)
   if (!parsed.ok) return parsed
-  if (parsed.value.type === "completions" || parsed.value.type === "blocked") return invalid()
+  if (parsed.value.type === "completions" || parsed.value.type === "blocked" || parsed.value.type === "quota") return invalid()
   return { ok: true, value: parsed.value }
 }
 
@@ -670,6 +686,13 @@ export function parseRelayToAgentMessage(raw: string): ParseResult<RemoteRelayTo
     return id.ok ? { ok: true, value: { type: "cancel", id: id.value } } : id
   }
   if (frame.value.type === "subscriptions") return parseSubscriptions(frame.value)
+  if (frame.value.type === "quota.result") {
+    const keys = withOnlyKeys(frame.value, ["type", ...quotaFields, "status"], frame.value)
+    const quota = parseQuota(frame.value)
+    return keys.ok && quota && (frame.value.status === "settled" || frame.value.status === "pending")
+      ? { ok: true, value: { type: "quota.result", ...quota, status: frame.value.status } }
+      : invalid()
+  }
   if (frame.value.type === "priority") {
     const keys = withOnlyKeys(frame.value, ["type", "clientID", "mode"], frame.value)
     if (!keys.ok) return keys
@@ -700,6 +723,11 @@ function parseClientFrame(frame: unknown): ParseResult<RemoteClientMessage> {
 
 function parseAgentFrame(frame: unknown): ParseResult<RemoteAgentMessage> {
   if (!isRecord(frame)) return invalid()
+  if (frame.type === "quota") {
+    const keys = withOnlyKeys(frame, ["type", ...quotaFields], frame)
+    const quota = parseQuota(frame)
+    return keys.ok && quota ? { ok: true, value: { type: "quota", ...quota } } : invalid()
+  }
   if (frame.type === "ping" || frame.type === "pong") return withOnlyKeys(frame, ["type"], { type: frame.type })
   if (frame.type === "response") return parseResponse(frame)
   if (frame.type === "event") return parseEvent(frame)
@@ -1098,6 +1126,16 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 }
 
+const quotaFields = ["providerID", "windowID", "milestone", "resetAt"] as const
+
+function parseQuota(frame: Record<string, unknown>): RemoteQuota | undefined {
+  if (!isAlertTitle(frame.providerID) || Array.from(frame.providerID).length > 64 ||
+    !isAlertTitle(frame.windowID) || Array.from(frame.windowID).length > 64 ||
+    !isCount(frame.resetAt) || frame.resetAt === 0 ||
+    frame.milestone !== "almost-out" && frame.milestone !== "cutting-it-close" && frame.milestone !== "will-run-out") return undefined
+  return { providerID: frame.providerID, windowID: frame.windowID, milestone: frame.milestone, resetAt: frame.resetAt }
+}
+
 function parseNoticeRequest(frame: Record<string, unknown>): ParseResult<RemoteNoticeRequest> {
   const id = requireID(frame.id)
   if (!id.ok) return id
@@ -1118,6 +1156,13 @@ function parseNoticeRequest(frame: Record<string, unknown>): ParseResult<RemoteN
 }
 
 function parseNoticeFrame(frame: Record<string, unknown>): ParseResult<RemoteNoticeFrame> {
+  if (frame.type === "notice.quota") {
+    const keys = withOnlyKeys(frame, ["type", ...quotaFields, "at"], frame)
+    const quota = parseQuota(frame)
+    return keys.ok && quota && isCount(frame.at) && frame.at > 0
+      ? { ok: true, value: { type: "notice.quota", ...quota, at: frame.at } }
+      : invalid()
+  }
   if (frame.type === "notice.cleared" || frame.type === "notice.unavailable") {
     const keys = withOnlyKeys(frame, ["type"], frame.type)
     return keys.ok ? { ok: true, value: { type: frame.type } } : keys
@@ -1150,6 +1195,13 @@ function parsePresentations(values: unknown): ParseResult<RemoteNoticeFrame> {
   const items: RemoteNoticePresentation[] = []
   for (const value of values) {
     if (!isRecord(value)) return invalid()
+    if (value.kind === "quota") {
+      const quota = parseQuota(value)
+      if (!quota || !withOnlyKeys(value, ["kind", ...quotaFields], value).ok ||
+        items.some((item) => item.kind === "quota" && quotaKey(item) === quotaKey(quota))) return invalid()
+      items.push({ kind: "quota", ...quota })
+      continue
+    }
     if (value.kind === "offline") {
       const at = value.at
       if (!withOnlyKeys(value, ["kind", "at"], value).ok || !isCount(at) || at <= 0 || items.some((item) => item.kind === "offline" && item.at === at)) return invalid()
@@ -1358,7 +1410,7 @@ export type DeviceTokenResponse = {
 
 export type ApiErrorResponse = { readonly error: RemoteError }
 
-export const pushCategories = ["agent-completed", "approval-requested", "machine-offline"] as const
+export const pushCategories = ["agent-completed", "approval-requested", "machine-offline", "quota-pace"] as const
 export type PushCategory = (typeof pushCategories)[number]
 export type PushCategories = { readonly [Category in PushCategory]: boolean }
 export type PushKeys = { readonly p256dh: string; readonly auth: string }
@@ -1434,6 +1486,7 @@ export type RemoteUsageTaskCost = { readonly sessionID: string; readonly usageAn
   readonly total: RemoteUsageBreakdown; readonly main: RemoteUsageBreakdown; readonly children: RemoteUsageBreakdown; readonly helpers: readonly RemoteUsageHelper[] }
 export type RemoteUsageTaskCostsValue = { readonly data: { readonly tasks: readonly RemoteUsageTaskCost[]; readonly total: RemoteUsageBreakdown; readonly history: "retained" | "partial" } }
 export type RemoteUsageForecastInput = { readonly localScope: "backend" | "location" }
+export type RemoteQuotaPace = { readonly verdict: "ahead" | "cutting-it-close" | "will-run-out"; readonly projectedUsedAtReset: number; readonly exhaustionAt?: number }
 export type RemoteUsageForecast = { readonly asOf: number; readonly localScope: "backend" | "location";
   readonly localRates?: readonly { readonly providerID: string; readonly profile?: string; readonly modelID?: string;
     readonly observedFrom: number; readonly observedTo: number; readonly tokensPerMinute: number; readonly tokensPerMinute5?: number;
@@ -1443,7 +1496,7 @@ export type RemoteUsageForecast = { readonly asOf: number; readonly localScope: 
     readonly updatedAt: number; readonly state: "estimated" | "insufficient" | "exhausted" | "unlimited";
     readonly method?: "quota-delta-ema" | "window-mean"; readonly evidence: "low" | "medium" | "insufficient";
     readonly reason?: string; readonly observedFrom?: number; readonly observedTo?: number; readonly ratePerHour?: number;
-    readonly exhaustionAt?: number; readonly projectedUsedAtReset?: number }[] }
+    readonly exhaustionAt?: number; readonly projectedUsedAtReset?: number; readonly pace?: RemoteQuotaPace }[] }
 export type RemoteUsageForecastValue = { readonly data: RemoteUsageForecast }
 
 export type RemoteIncidentKind = "fallback" | "guardrail-escalated" | "guardrail-rejected"
@@ -1475,6 +1528,7 @@ export function parsePushSubscription(value: unknown): ParseResult<PushSubscript
     "agent-completed": categories["agent-completed"] === true,
     "approval-requested": categories["approval-requested"] === true,
     "machine-offline": categories["machine-offline"] === true,
+    "quota-pace": categories["quota-pace"] === true,
   } } }
 }
 

@@ -30,6 +30,7 @@ import { SessionRunnerModel } from "./session/runner/model"
 import { GoUsage } from "./provider-usage/go"
 import { ProviderUsageCache } from "./provider-usage/cache"
 import { ProviderUsageForecast } from "./provider-usage/forecast"
+import { ProviderUsagePaceAlerts } from "./provider-usage/pace-alerts"
 import { UsageForecast } from "@ycoding-ai/schema/usage-forecast"
 import { Money } from "@ycoding-ai/schema/money"
 import { Location } from "./location"
@@ -71,12 +72,13 @@ export interface MakeInput {
   readonly cache?: ProviderUsageCache.Interface
   readonly ttlMs?: Readonly<Record<string, number>>
   readonly now?: () => number
+  readonly alerts?: Pick<ProviderUsagePaceAlerts.Interface, "observe">
   readonly localSpend?: () => Effect.Effect<ReadonlyArray<LocalSpend>, unknown>
   readonly localUsage?: (
     scope: UsageForecast.LocalScope,
     asOf: number,
   ) => Effect.Effect<ReadonlyArray<LocalUsageBin>, unknown>
-  readonly accountUnknown?: (refresh?: boolean) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
+  readonly accountUnknown?: (refresh?: boolean, cachedOnly?: boolean) => Effect.Effect<ReadonlyArray<ProviderUsage.Snapshot>>
 }
 
 const localSpendProviders = new Set(["anthropic", "openai", "opencode", "opencode-go", "xai"])
@@ -134,15 +136,15 @@ export function make(input: MakeInput): Interface {
   const forecast = ProviderUsageForecast.make()
   const accounts = new WeakMap<ProviderUsage.Snapshot, string>()
   const retain = (snapshot: ProviderUsage.Snapshot, account?: string) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       if (account === undefined) return snapshot
       accounts.set(snapshot, account)
-      for (const window of snapshot.windows)
-        forecast.observe({
-          account,
-          snapshot: new ProviderUsage.Snapshot({ ...snapshot, windows: [window] }),
-          semantics: quotaSemantics(snapshot, window),
-        })
+      for (const window of snapshot.windows) {
+        const single = new ProviderUsage.Snapshot({ ...snapshot, windows: [window] })
+        const semantics = quotaSemantics(snapshot, window)
+        forecast.observe({ account, snapshot: single, semantics })
+        if (input.alerts) yield* input.alerts.observe({ account, snapshot: single, semantics, now: now() })
+      }
       return snapshot
     }).pipe(Effect.catchCause(() => Effect.succeed(snapshot)))
 
@@ -173,6 +175,7 @@ export function make(input: MakeInput): Interface {
     candidates: ReadonlyArray<Credential.Info>,
     credentialID: Credential.ID | undefined,
     refresh: boolean | undefined,
+    cachedOnly = false,
   ) {
     // With several profiles stored for one provider, quota must follow the requested profile;
     // falling back to the first row would report another account's usage.
@@ -231,10 +234,18 @@ export function make(input: MakeInput): Interface {
         : unavailable(providerID, "unsupported", "No supported credential is configured")
     }
 
+    const cacheKey = `${providerID}:${selected.id}:${selected.accountGeneration}`
+    if (cachedOnly) {
+      const cached = yield* cache.peek({ key: cacheKey, generation: selected.generation })
+      return cached
+        ? yield* profiled(cached)
+        : unavailable(providerID, "unsupported", "Provider usage has not been loaded", selected.value)
+    }
+
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
       .get({
-        key: `${providerID}:${selected.id}:${selected.accountGeneration}`,
+        key: cacheKey,
         generation: selected.generation,
         ttlMs: input.ttlMs?.[providerID] ?? minute,
         refresh,
@@ -276,7 +287,7 @@ export function make(input: MakeInput): Interface {
   })
 
   const list = Effect.fn("ProviderUsage.list")(function* (
-    request?: { readonly refresh?: boolean },
+    request?: { readonly refresh?: boolean; readonly cachedOnly?: boolean },
     includeLocal = true,
   ) {
     const providers = yield* input.providers.available()
@@ -291,7 +302,7 @@ export function make(input: MakeInput): Interface {
     })
     const snapshots = yield* Effect.forEach(
       targets,
-      (target) => load(target.providerID, target.candidates, target.credentialID, request?.refresh),
+      (target) => load(target.providerID, target.candidates, target.credentialID, request?.refresh, request?.cachedOnly),
       { concurrency: 4 },
     )
     const local =
@@ -302,7 +313,7 @@ export function make(input: MakeInput): Interface {
           )
         : []
     const available = new Set(providers.map((provider) => provider.id))
-    const unknown = input.accountUnknown ? yield* input.accountUnknown(request?.refresh) : []
+    const unknown = input.accountUnknown ? yield* input.accountUnknown(request?.refresh, request?.cachedOnly) : []
     const unbound = [...observations].flatMap(([key, snapshot]) =>
       key.endsWith(":") &&
       available.has(snapshot.providerID) &&
@@ -333,7 +344,7 @@ export function make(input: MakeInput): Interface {
       const asOf = Math.max(0, Math.trunc(now()))
       const [snapshots, bins] = yield* Effect.all(
         [
-          list(undefined, false).pipe(Effect.catchCause(() => Effect.succeed(undefined))),
+          list({ cachedOnly: true }, false).pipe(Effect.catchCause(() => Effect.succeed(undefined))),
           input.localUsage
             ? Effect.suspend(() => input.localUsage!(request.localScope, asOf)).pipe(
                 Effect.catchCause(() => Effect.succeed(undefined)),
@@ -497,6 +508,7 @@ const layer = Layer.effect(
     const http = yield* HttpClient.HttpClient
     const database = yield* Database.Service
     const location = yield* Location.Service
+    const alerts = yield* ProviderUsagePaceAlerts.Service
     const providerUsage = Config.latest(yield* config.entries(), "provider_usage")
     const cache = ProviderUsageCache.make()
     const claude = createClaudeCodeCredentialStore({
@@ -505,6 +517,7 @@ const layer = Layer.effect(
     return Service.of(
       make({
         cache,
+        alerts,
         credentials,
         providers: catalog.provider,
         adapters: {
@@ -524,8 +537,12 @@ const layer = Layer.effect(
         ...(providerUsage?.codex_app_server === undefined
           ? {}
           : {
-              accountUnknown: (refresh?: boolean) =>
-                cache
+              accountUnknown: (refresh?: boolean, cachedOnly?: boolean) =>
+                cachedOnly
+                  ? cache
+                      .peek({ key: "openai:codex-app-server" })
+                      .pipe(Effect.map((snapshot) => (snapshot ? [snapshot] : [])))
+                  : cache
                   .get({
                     key: "openai:codex-app-server",
                     ttlMs: minute,
@@ -565,6 +582,7 @@ export const node = makeLocationNode({
     Database.node,
     Global.node,
     Location.node,
+    ProviderUsagePaceAlerts.node,
     httpClient,
   ],
 })

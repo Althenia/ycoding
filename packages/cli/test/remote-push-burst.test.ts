@@ -29,7 +29,7 @@ test("a fast 2355-delta provider stream preserves explicit completion push witho
   const subscription = { endpoint: "https://fcm.googleapis.com/fcm/send/burst-test", accountID: "usr_1", browserSessionID: "bs_0",
     keys: { p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", receiver.publicKey))),
       auth: base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))) },
-    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true }, createdAt: 1, failures: 0 }
+    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }, createdAt: 1, failures: 0 }
   const clientEvents = [0, 0, 0]
   let stream: LocalEventStream | undefined
   let running = true

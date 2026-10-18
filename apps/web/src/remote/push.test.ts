@@ -2,8 +2,8 @@ import { expect, test } from "bun:test"
 import type { PushCategories, PushSubscriptionInput } from "@ycoding-ai/remote"
 import { enablePush, disablePush, savePushCategories, syncPushState, pushSupport, pushStatusView, type PushPlatform } from "./push"
 
-const allOn: PushCategories = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
-const quiet: PushCategories = { "agent-completed": false, "approval-requested": true, "machine-offline": false }
+const allOn: PushCategories = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
+const quiet: PushCategories = { "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": false }
 
 type FixtureSubscription = { endpoint: string; getKey: (name: string) => ArrayBuffer | null; unsubscribe: () => Promise<boolean>;
   options?: { applicationServerKey: ArrayBuffer | null } }

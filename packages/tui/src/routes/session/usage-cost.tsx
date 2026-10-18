@@ -4,7 +4,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { Keymap } from "../../context/keymap"
 import { DialogHeader, DialogTitle, useDialog } from "../../ui/dialog"
 import { useTheme } from "../../context/theme"
-import { forecastLines, forecastSummary, measuredSpeedLines, unitCostLines, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "../../util/usage-accounting"
+import { forecastLines, forecastSummary, measuredSpeedLines, paceSummary, unitCostLines, type ForecastPresentation, type SpeedPresentation, type UnitCostPresentation } from "../../util/usage-accounting"
 
 export function UsageSpeedDetails(props: { speed?: SpeedPresentation }) {
   const { theme } = useTheme()
@@ -26,8 +26,10 @@ export function QuotaForecastBlock(props: { forecast: ForecastPresentation; now:
 
 export function QuotaForecastSummary(props: { forecast: ForecastPresentation; now: number; asOf?: number }) {
   const { theme } = useTheme()
+  const ink = (tone: "error" | "warning" | "subdued") => tone === "error" ? theme.text.feedback.error.default : tone === "warning" ? theme.text.feedback.warning.default : theme.text.subdued
   const summary = () => forecastSummary(props.forecast, props.now, props.asOf)
-  return <text fg={summary().tone === "error" ? theme.text.feedback.error.default : summary().tone === "warning" ? theme.text.feedback.warning.default : theme.text.subdued} wrapMode="word">{summary().text}</text>
+  const pace = () => props.forecast.pace && paceSummary(props.forecast.pace, props.now, props.asOf)
+  return <text fg={ink(summary().tone)} wrapMode="word">{summary().text}<Show when={pace()}>{(value) => <span style={{ fg: ink(value().tone) }}> · Pace: {value().text}</span>}</Show></text>
 }
 
 export function TaskCostDialog(props: { unit?: Omit<UnitCostPresentation, "inputID">; loading: boolean; onRefresh: () => void }) {

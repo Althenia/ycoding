@@ -89,6 +89,7 @@ function harness(options: {
   disconnect?: () => Promise<void>
   reloadSessions?: () => Promise<readonly AllowlistSession[]>
   advertiseCoalesceMs?: number
+  onSend?: (frame: string) => void
 }) {
   const { local, calls, streams } = fakeLocal({
     listPage: async () => ({
@@ -134,6 +135,7 @@ function harness(options: {
             throw new Error("Status frame rejected")
           }
           record.sent.push(value)
+          options.onSend?.(value)
         },
         onMessage: (next) => {
           handler = next
@@ -192,6 +194,92 @@ function sentEvents(record: ConnectionRecord) {
     frame.type === "events" ? frame.events.map((event) => ({ sessionID: frame.sessionID, event })) : [],
   )
 }
+
+test("quota observations use the global control frame without Session subscriptions or private fields", async () => {
+  const stream = Promise.withResolvers<LocalEventStream>()
+  const sent = Promise.withResolvers<string>()
+  const value = harness({ sessions: [], results: { events: (input: LocalEventStream) => { stream.resolve(input); return async () => {} } }, onSend: (frame) => { if (JSON.parse(frame).type === "quota") sent.resolve(frame) } })
+  try {
+    await value.bridge.connect()
+    const events = await stream.promise
+    const before = value.calls.length
+    const data = { providerID: "anthropic", windowID: "five-hour", milestone: "will-run-out", resetAt: 1_000_000,
+      title: "Will run out", body: "Quota use is projected to exceed its limit before reset.", profile: "synthetic-private-profile", account: "synthetic-private-account" } as const
+    for (let index = 0; index < 100; index++) events.onEvent({ id: `evt_quota_${index}`, type: "provider.quota.pace", data })
+    const frame = await sent.promise
+    expect(parseAgentMessage(frame)).toEqual({ ok: true, value: { type: "quota", providerID: data.providerID, windowID: data.windowID, milestone: data.milestone, resetAt: data.resetAt } })
+    expect(frame).not.toContain("synthetic-private")
+    expect(value.calls.slice(before)).toEqual([])
+    expect(sentFrames(value.records[0]!).filter((item) => item.type === "quota")).toHaveLength(1)
+    expect(sentEvents(value.records[0]!)).toEqual([])
+  } finally { await value.bridge.close() }
+}, 5000)
+
+test("quota pending results retry through the existing refresh and settled results stop retries", async () => {
+  const stream = Promise.withResolvers<LocalEventStream>()
+  const sent = Promise.withResolvers<void>()
+  const value = harness({ results: { events: (input: LocalEventStream) => { stream.resolve(input); return async () => {} } }, onSend: (frame) => { if (JSON.parse(frame).type === "quota") sent.resolve() } })
+  const quota = { providerID: "anthropic", windowID: "five-hour", milestone: "almost-out", resetAt: 1_000_000 }
+  try {
+    await value.bridge.connect()
+    const events = await stream.promise
+    events.onEvent({ id: "evt_quota_pending", type: "provider.quota.pace", data: { ...quota, title: "Almost out", body: "Less than 10% of this quota remains." } })
+    await sent.promise
+    const connection = value.records[0]!
+    connection.deliver({ type: "quota.result", ...quota, status: "pending" })
+    await value.bridge.republish()
+    expect(sentFrames(connection).filter((item) => item.type === "quota")).toHaveLength(2)
+    connection.deliver({ type: "quota.result", ...quota, status: "settled" })
+    await value.bridge.republish()
+    events.onEvent({ id: "evt_quota_recovered", type: "provider.quota.pace", data: { ...quota, title: "Almost out", body: "Less than 10% of this quota remains." } })
+    await value.bridge.republish()
+    expect(sentFrames(connection).filter((item) => item.type === "quota")).toHaveLength(2)
+  } finally { await value.bridge.close() }
+}, 5000)
+
+test("expired and malformed quota events never enter the relay queue", async () => {
+  const stream = Promise.withResolvers<LocalEventStream>()
+  const value = harness({ results: { events: (input: LocalEventStream) => { stream.resolve(input); return async () => {} } } })
+  try {
+    await value.bridge.connect()
+    const events = await stream.promise
+    const data = { providerID: "anthropic", windowID: "five-hour", milestone: "will-run-out", title: "Will run out", body: "Quota use is projected to exceed its limit before reset." }
+    events.onEvent({ type: "provider.quota.pace", data: { ...data, resetAt: 1000 } })
+    events.onEvent({ type: "provider.quota.pace", data: { ...data, resetAt: 1_000_000, milestone: "ahead" } })
+    events.onEvent({ type: "provider.quota.pace", data })
+    await value.bridge.republish()
+    expect(sentFrames(value.records[0]!).filter((item) => item.type === "quota")).toEqual([])
+  } finally { await value.bridge.close() }
+})
+
+test("quota retry survives connection replacement and ignores the replaced connection's receipt", async () => {
+  const stream = Promise.withResolvers<LocalEventStream>()
+  const first = Promise.withResolvers<void>()
+  const replaced = Promise.withResolvers<void>()
+  const frames: string[] = []
+  const value = harness({ results: { events: (input: LocalEventStream) => { stream.resolve(input); return async () => {} } }, onSend: (frame) => {
+    if (JSON.parse(frame).type !== "quota") return
+    frames.push(frame)
+    if (frames.length === 1) first.resolve()
+    if (frames.length === 2) replaced.resolve()
+  } })
+  const quota = { providerID: "anthropic", windowID: "five-hour", milestone: "will-run-out", resetAt: 1_000_000 }
+  try {
+    await value.bridge.connect()
+    ;(await stream.promise).onEvent({ type: "provider.quota.pace", data: { ...quota, title: "Will run out", body: "Quota use is projected to exceed its limit before reset." } })
+    await first.promise
+    const original = value.records[0]!
+    value.advance(30_001)
+    original.input.onClose(RemoteCloseCode.unauthorized)
+    await replaced.promise
+    original.deliver({ type: "quota.result", ...quota, status: "settled" })
+    await value.bridge.republish()
+    expect(sentFrames(value.records[1]!).filter((frame) => frame.type === "quota")).toHaveLength(2)
+    value.records[1]!.deliver({ type: "quota.result", ...quota, status: "settled" })
+    await value.bridge.republish()
+    expect(sentFrames(value.records[1]!).filter((frame) => frame.type === "quota")).toHaveLength(2)
+  } finally { await value.bridge.close() }
+}, 5000)
 
 test("ID-only shell deletions invalidate family lists without forwarding shell identities", async () => {
   const test = harness({ advertiseCoalesceMs: 0 })

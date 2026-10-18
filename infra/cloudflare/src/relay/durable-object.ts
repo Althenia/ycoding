@@ -14,8 +14,9 @@ import { createD1McpStore } from "../auth/mcp/d1-store"
 import { createAuthService } from "../auth/service"
 import type { WorkerEnv } from "../env"
 import { createD1PushStore } from "../push/d1-store"
-import { sendPushToOwner } from "../push/send"
+import { sendPush, sendPushToOwner } from "../push/send"
 import { createNoticeStore } from "./notice-store"
+import { createQuotaClaims, parseQuotaClaimRequest, parseQuotaReservation, type QuotaClaimRequest } from "./quota-claims"
 import { createRelay, type RelayAuthority, type RelayConnection } from "./core"
 import { McpRelayError, createMcpAuthority, createMcpRelay, mcpFailureStatus, parseMcpForward, readBoundedText, routeMcpFrame, type McpAttachment } from "./mcp"
 
@@ -54,6 +55,7 @@ type MessageStream = {
 export class DeviceRelay extends DurableObject<WorkerEnv> {
   readonly #service = createAuthService(createD1AuthStore(this.env.DB))
   readonly #messageStreams = new Map<string, MessageStream>()
+  readonly #quotaClaims = createQuotaClaims(this.ctx.storage.kv, Date.now)
   readonly #notices = createNoticeStore({
     sql: this.ctx.storage.sql,
     kv: this.ctx.storage.kv,
@@ -131,6 +133,20 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
         console.error(JSON.stringify({ component: "web-push", category: event.category, host: "unknown", targetCount: null, errorClass: "dispatch_error" }))
         throw cause
       })
+    },
+    quota: {
+      subscriptions: async (ownerID) => vapidKeys(this.env) === undefined ? [] : createD1PushStore(this.env.DB).list(ownerID),
+      reserve: async (ownerID, key, until, members) => {
+        const reservation = parseQuotaReservation(await this.#claimQuota(ownerID, { op: "reserve", key, until, members }))
+        if (reservation === undefined) throw new Error("Quota claim coordinator answered an invalid reservation")
+        return reservation
+      },
+      release: async (ownerID, key, members) => { await this.#claimQuota(ownerID, { op: "release", key, members }) },
+      push: async (_ownerID, event, subscriptions) => {
+        const keys = vapidKeys(this.env)
+        if (keys === undefined) return []
+        return sendPush({ store: createD1PushStore(this.env.DB), event, subscriptions, ...keys, now: Date.now, fetch: (input, init) => globalThis.fetch(input, init) })
+      },
     },
   })
   readonly #attached = new Set<string>()
@@ -250,6 +266,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
 
   async #internal(url: URL, request: Request): Promise<Response> {
     if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
+    if (url.pathname === "/_ycoding/quota") return this.#answerQuotaClaim(request)
     await this.#restoreConnections()
     if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment")
       return this.#streamContent(request, url.pathname === "/_ycoding/stream-message")
@@ -269,6 +286,23 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     }
     await this.#armAlarm()
     return new Response(null, { status: 204 })
+  }
+
+  async #answerQuotaClaim(request: Request): Promise<Response> {
+    const claim = parseQuotaClaimRequest(await request.json().catch(() => undefined))
+    if (claim === undefined) return new Response("Invalid quota claim", { status: 400 })
+    if (claim.op === "release") {
+      this.#quotaClaims.release(claim.key, claim.members)
+      return Response.json({})
+    }
+    return Response.json(this.#quotaClaims.reserve(claim.key, claim.until, claim.members))
+  }
+
+  async #claimQuota(ownerID: string, claim: QuotaClaimRequest): Promise<unknown> {
+    const response = await this.env.DEVICE_RELAY.getByName(`${ownerID}:quota`).fetch(new Request("https://relay.internal/_ycoding/quota", {
+      method: "POST", headers: { "x-ycoding-internal": "1", "content-type": "application/json" }, body: JSON.stringify(claim) }))
+    if (!response.ok) throw new Error("Quota claim coordinator is unavailable")
+    return response.json()
   }
 
   async #streamContent(request: Request, message: boolean): Promise<Response> {
@@ -454,6 +488,13 @@ function transportError(status: number, code: string, message: string): Response
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   })
+}
+
+function vapidKeys(env: WorkerEnv): { readonly publicKey: string; readonly privateKey: string; readonly subject: string } | undefined {
+  const publicKey = env.VAPID_PUBLIC_KEY
+  const privateKey = env.VAPID_PRIVATE_KEY
+  const subject = env.VAPID_SUBJECT
+  return publicKey && privateKey && subject ? { publicKey, privateKey, subject } : undefined
 }
 
 function toAuthority(outcome: { readonly ok: true } | { readonly ok: false; readonly reason: string }): RelayAuthority {

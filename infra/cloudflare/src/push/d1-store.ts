@@ -12,9 +12,10 @@ type Row = {
   readonly agent_completed: number
   readonly approval_requested: number
   readonly machine_offline: number
+  readonly quota_pace: number
 }
 
-const columns = "endpoint, account_id, browser_session_id, p256dh, auth, created_at, failures, agent_completed, approval_requested, machine_offline"
+const columns = "endpoint, account_id, browser_session_id, p256dh, auth, created_at, failures, agent_completed, approval_requested, machine_offline, quota_pace"
 const retention = "DELETE FROM push_subscription WHERE account_id = ? AND endpoint NOT IN (SELECT endpoint FROM push_subscription WHERE account_id = ? ORDER BY created_at DESC, endpoint DESC LIMIT 10)"
 const liveSession = "EXISTS (SELECT 1 FROM browser_session WHERE user_id = ? AND id = ? AND revoked_at IS NULL AND expires_at > ?)"
 
@@ -23,9 +24,9 @@ export function createD1PushStore(db: D1Database): PushStore {
     async upsert(accountID: string, browserSessionID: string, input: PushRegistration, now: number) {
       const results = await db.batch([
         db.prepare(`DELETE FROM push_subscription WHERE browser_session_id = ? AND endpoint <> ? AND ${liveSession}`).bind(browserSessionID, input.endpoint, accountID, browserSessionID, now),
-        db.prepare(`INSERT INTO push_subscription (endpoint, account_id, browser_session_id, p256dh, auth, created_at, agent_completed, approval_requested, machine_offline) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${liveSession} ON CONFLICT(endpoint) DO UPDATE SET account_id = excluded.account_id, browser_session_id = excluded.browser_session_id, p256dh = excluded.p256dh, auth = excluded.auth, created_at = excluded.created_at, failures = 0, agent_completed = excluded.agent_completed, approval_requested = excluded.approval_requested, machine_offline = excluded.machine_offline`)
+        db.prepare(`INSERT INTO push_subscription (endpoint, account_id, browser_session_id, p256dh, auth, created_at, agent_completed, approval_requested, machine_offline, quota_pace) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${liveSession} ON CONFLICT(endpoint) DO UPDATE SET account_id = excluded.account_id, browser_session_id = excluded.browser_session_id, p256dh = excluded.p256dh, auth = excluded.auth, created_at = excluded.created_at, failures = 0, agent_completed = excluded.agent_completed, approval_requested = excluded.approval_requested, machine_offline = excluded.machine_offline, quota_pace = excluded.quota_pace`)
           .bind(input.endpoint, accountID, browserSessionID, input.keys.p256dh, input.keys.auth, now,
-            Number(input.categories["agent-completed"]), Number(input.categories["approval-requested"]), Number(input.categories["machine-offline"]), accountID, browserSessionID, now),
+            Number(input.categories["agent-completed"]), Number(input.categories["approval-requested"]), Number(input.categories["machine-offline"]), Number(input.categories["quota-pace"]), accountID, browserSessionID, now),
         db.prepare(`${retention} AND ${liveSession}`).bind(accountID, accountID, accountID, browserSessionID, now),
       ])
       return (results[1]?.meta.changes ?? 0) > 0
@@ -81,5 +82,5 @@ export function createD1PushStore(db: D1Database): PushStore {
 
 function subscription(row: Row): PushSubscription {
   return { endpoint: row.endpoint, accountID: row.account_id, browserSessionID: row.browser_session_id, keys: { p256dh: row.p256dh, auth: row.auth }, createdAt: row.created_at, failures: row.failures,
-    categories: { "agent-completed": row.agent_completed === 1, "approval-requested": row.approval_requested === 1, "machine-offline": row.machine_offline === 1 } }
+    categories: { "agent-completed": row.agent_completed === 1, "approval-requested": row.approval_requested === 1, "machine-offline": row.machine_offline === 1, "quota-pace": row.quota_pace === 1 } }
 }

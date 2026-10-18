@@ -165,7 +165,7 @@ test("a picker kill cannot remove its old family shell after verification settle
   const screen = await renderScreen({ width: 100, height: 40, args: { sessionID: root.id }, kittyKeyboard: true,
     config: { keybinds: { session_child_first: "ctrl+t", session_list: "ctrl+l" } }, settle: "Message YCoding", route: fixture((url, request) => {
       if (url.pathname === "/api/session") return json({ data: [root.id, other.id].includes(url.searchParams.get("parentID") ?? "") ? [] : [other, root], cursor: {} })
-      if (url.pathname === `/api/session/${root.id}` && hold) { started.resolve(); return verification.promise }
+      if (url.pathname === `/api/session/${root.id}` && hold) { started.resolve(); return verification.promise.then((response) => response.clone()) }
       if (url.pathname === `/api/session/${other.id}`) return json({ data: other })
       if (url.pathname === `/api/session/${other.id}/snapshot`) { selectedOther = true; return sessionSnapshot(other.id, [{ id: "msg_other_family", type: "user", text: "Family B selected", time: { created: 1 } }], { session: other }) }
       if (url.pathname === `/api/session/${other.id}/subagent`) return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
@@ -207,7 +207,7 @@ test("leaving during family discovery stops descendant pages and owner reads", a
   const screen = await renderScreen({ width: 100, height: 40, config: { keybinds: { shell_output_back: "q" } }, settle: "Loading shell data", route: fixture((url) => {
     if (url.pathname === "/api/session" && url.searchParams.get("parentID") === root.id) {
       requests.push(`page:${url.searchParams.get("cursor") ?? "first"}`)
-      if (!url.searchParams.has("cursor")) { started.resolve(); return page.promise }
+      if (!url.searchParams.has("cursor")) { started.resolve(); return page.promise.then((response) => response.clone()) }
       return json({ data: [], cursor: {} })
     }
     if (url.pathname === `/api/session/${child.id}`) { requests.push("owner"); return json({ data: child }) }

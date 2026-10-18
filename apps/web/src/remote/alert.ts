@@ -1,4 +1,4 @@
-import { isSessionID, noticeSequence, type RemoteAlertDetail, type RemoteNoticeCategory } from "@ycoding-ai/remote"
+import { isAlertTitle, isSessionID, noticeSequence, type RemoteAlertDetail, type RemoteNoticeCategory, type RemoteQuota } from "@ycoding-ai/remote"
 
 export type AlertNotice = { readonly deviceID: string; readonly noticeID: string }
 
@@ -18,6 +18,27 @@ export function overflowCopy(category: RemoteNoticeCategory, count: number): { r
   const sessions = count === 1 ? "1 more session" : `${count} more sessions`
   if (category === "agent-completed") return { title: "YCoding — more work finished", body: `${sessions} finished ${count === 1 ? "its" : "their"} work. Open YCoding to see them.` }
   return { title: "YCoding — more sessions need attention", body: `${sessions} ${count === 1 ? "needs" : "need"} attention. Open YCoding to see them.` }
+}
+
+export function quotaCopy(milestone: RemoteQuota["milestone"]): { readonly title: string; readonly body: string } {
+  if (milestone === "almost-out") return { title: "YCoding — quota almost out", body: "A provider quota is almost out. Open Usage to review." }
+  if (milestone === "will-run-out") return { title: "YCoding — quota will run out", body: "A provider quota will run out before it resets. Open Usage to review." }
+  return { title: "YCoding — quota pace", body: "A provider quota is on pace to run out close to its reset. Open Usage to review." }
+}
+
+export function readQuota(value: unknown, extraKeys: readonly string[] = []): RemoteQuota | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const allowed = new Set(["providerID", "windowID", "milestone", "resetAt", ...extraKeys])
+  if (Object.keys(value).some((key) => !allowed.has(key))) return undefined
+  const { providerID, windowID, milestone, resetAt } = value as Record<string, unknown>
+  if (!isAlertTitle(providerID) || Array.from(providerID).length > 64 || !isAlertTitle(windowID) || Array.from(windowID).length > 64) return undefined
+  if (milestone !== "almost-out" && milestone !== "cutting-it-close" && milestone !== "will-run-out") return undefined
+  if (typeof resetAt !== "number" || !Number.isSafeInteger(resetAt) || resetAt <= 0) return undefined
+  return { providerID, windowID, milestone, resetAt }
+}
+
+export function usageURL(deviceID: string): string {
+  return `/remote/usage?${new URLSearchParams({ device_id: deviceID })}`
 }
 
 export function sessionSearch(sessionID: string, deviceID?: string, noticeID?: string): { session_id: string; device_id?: string; notice_id?: string } {

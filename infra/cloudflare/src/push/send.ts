@@ -1,4 +1,4 @@
-import { parsePushEndpoint, type PushTestResponse, type RemoteAlertDetail, type RemoteNoticeCategory } from "../../../../packages/remote/src/index"
+import { parsePushEndpoint, quotaKey, type PushTestResponse, type RemoteAlertDetail, type RemoteNoticeCategory, type RemoteQuota } from "../../../../packages/remote/src/index"
 import { base64UrlEncode, cryptoBytes } from "../auth/crypto"
 import { encryptWebPushPayload, vapidJwt } from "./crypto"
 import type { PushStore, PushSubscription } from "./store"
@@ -7,6 +7,9 @@ export type PushEvent =
   | ({ readonly category: RemoteNoticeCategory; readonly sessionID: string; readonly deviceID: string; readonly noticeID?: string } & RemoteAlertDetail)
   | { readonly category: "machine-offline"; readonly deviceID: string; readonly offlineAt: number }
   | { readonly category: RemoteNoticeCategory; readonly deviceID: string; readonly overflow: number }
+  | QuotaPushEvent
+
+export type QuotaPushEvent = { readonly category: "quota-pace"; readonly deviceID: string } & RemoteQuota
 
 export const pushDeliveryTimeoutMs = 10_000
 
@@ -30,7 +33,11 @@ type PushMessage = {
 }
 
 export async function sendPushToOwner(input: PushSender & { readonly store: PushStore; readonly accountID: string; readonly event: PushEvent }): Promise<readonly PushOutcome[]> {
-  const subscriptions = await input.store.list(input.accountID)
+  return sendPush({ ...input, subscriptions: await input.store.list(input.accountID) })
+}
+
+export async function sendPush(input: PushSender & { readonly store: PushStore; readonly event: PushEvent; readonly subscriptions: readonly PushSubscription[] }): Promise<readonly PushOutcome[]> {
+  const subscriptions = input.subscriptions
   const targets = subscriptions.filter((subscription) => subscription.categories[input.event.category])
   const unsent = subscriptions.filter((subscription) => !subscription.categories[input.event.category])
     .map((subscription): PushOutcome => ({ owner: subscription.browserSessionID, outcome: "unsent" }))
@@ -39,12 +46,15 @@ export async function sendPushToOwner(input: PushSender & { readonly store: Push
       errorClass: subscriptions.length === 0 ? "no_subscriptions" : "category_off" }))
     return unsent
   }
-  const scope = "offlineAt" in input.event ? `${input.event.deviceID}:${input.event.offlineAt}`
+  const quota = input.event.category === "quota-pace" ? input.event : undefined
+  const scope = input.event.category === "quota-pace" ? `quota:${quotaKey(input.event)}`
+    : "offlineAt" in input.event ? `${input.event.deviceID}:${input.event.offlineAt}`
     : "overflow" in input.event ? `${input.event.deviceID}:overflow` : `${input.event.deviceID}:${input.event.noticeID ?? input.event.sessionID}`
   const message: PushMessage = {
     category: input.event.category,
-    payload: new TextEncoder().encode(JSON.stringify(input.event)),
-    ttl: "3600",
+    payload: new TextEncoder().encode(JSON.stringify(quota === undefined ? input.event : { category: quota.category, deviceID: quota.deviceID,
+      providerID: quota.providerID, windowID: quota.windowID, milestone: quota.milestone, resetAt: quota.resetAt })),
+    ttl: quota === undefined ? "3600" : String(Math.max(1, Math.min(3600, Math.floor((quota.resetAt - input.now()) / 1000)))),
     urgency: input.event.category === "approval-requested" ? "high" : "normal",
     topic: base64UrlEncode(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${scope}:${input.event.category}`)))).slice(0, 32),
     targetCount: targets.length,

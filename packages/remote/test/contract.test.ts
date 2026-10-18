@@ -258,7 +258,7 @@ test("cancel frames carry the sender's own correlation ID on both control surfac
 })
 
 test("push subscription input admits only bounded known push services and key shapes", () => {
-  const categories = { "agent-completed": true, "approval-requested": false, "machine-offline": true }
+  const categories = { "agent-completed": true, "approval-requested": false, "machine-offline": true, "quota-pace": true }
   const input = { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "BA" + "A".repeat(85), auth: "A".repeat(22) }, categories }
   expect(parsePushSubscription(input)).toMatchObject({ ok: true, value: input })
   expect(parsePushEndpoint({ endpoint: input.endpoint })).toMatchObject({ ok: true, value: { endpoint: input.endpoint } })

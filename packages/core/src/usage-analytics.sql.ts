@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm"
 import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core"
 import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
@@ -30,5 +31,40 @@ export const UsageAnalyticsRequestTable = sqliteTable(
     timing: text({ mode: "json" }).$type<ProviderRequest.Timing>(),
     time_created: integer().notNull(),
   },
-  (table) => [index("usage_analytics_request_time_created_id_idx").on(table.time_created, table.id)],
+  (table) => [
+    index("usage_analytics_request_time_created_id_idx").on(table.time_created, table.id),
+    index("usage_analytics_request_unpriced_time_created_id_idx")
+      .on(table.time_created, table.id)
+      .where(sql`cost IS NULL AND source <> 'decision'`),
+    index("usage_analytics_request_metrics_idx").on(
+      table.time_created,
+      table.id,
+      table.session_id,
+      table.project_id,
+      table.directory,
+      table.workspace_id,
+      table.session_updated,
+      table.agent,
+      table.source,
+      table.model,
+      table.usage_anchor,
+      table.task_path,
+      table.request,
+      table.attempts,
+      table.continuation,
+      table.cache_read_reported,
+      table.cost,
+      sql`json_extract(tokens, '$.input')`,
+      sql`json_extract(tokens, '$.output')`,
+      sql`json_extract(tokens, '$.reasoning')`,
+      sql`json_extract(tokens, '$.cache.read')`,
+      sql`json_extract(tokens, '$.cache.write')`,
+      sql`json_extract(timing, '$.firstOutputMs')`,
+      sql`json_extract(timing, '$.totalMs')`,
+      sql`json_extract(timing, '$.generatedTokens')`,
+      sql`json_extract(timing, '$.generationDurationNs')`,
+      sql`json_extract(timing, '$.observedGenerationDurationNs')`,
+      sql`json_type(timing, '$.generationDurationNs')`,
+    ),
+  ],
 )

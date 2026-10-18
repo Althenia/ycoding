@@ -30,11 +30,12 @@ function storage(initial: Record<string, string> = {}) {
 }
 
 describe("notification categories", () => {
-  test("Settings offers exactly three device-neutral categories and channels", () => {
+  test("Settings offers exactly four device-neutral categories and channels", () => {
     expect(NOTIFICATION_CATEGORIES).toEqual([
       { id: "agent-completed", label: "Work finished", detail: "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work." },
       { id: "approval-requested", label: "Needs your attention", detail: "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails." },
       { id: "machine-offline", label: "Machine offline", detail: "Get notified when a paired machine stops reporting." },
+      { id: "quota-pace", label: "Quota pace", detail: "Get notified when a provider quota is almost out or on pace to run out before it resets." },
     ])
     expect(NOTIFICATION_CHANNELS).toEqual([{ id: "in-app", label: "In app" }, { id: "desktop", label: "System" }])
   })
@@ -43,6 +44,7 @@ describe("notification categories", () => {
       "agent-completed",
       "approval-requested",
       "machine-offline",
+      "quota-pace",
     ])
     for (const category of NOTIFICATION_CATEGORIES) {
       expect(category.label.length).toBeGreaterThan(0)
@@ -136,6 +138,7 @@ describe("notification preference persistence", () => {
       "agent-completed": { "in-app": true, desktop: true },
       "approval-requested": { "in-app": false, desktop: false },
       "machine-offline": { "in-app": true, desktop: true },
+      "quota-pace": { "in-app": true, desktop: true },
     })
     expect(readNotificationPreferences(storage({ [NOTIFICATION_STORAGE_KEY]: "{not json" }))).toEqual(
       DEFAULT_NOTIFICATION_PREFERENCES,
@@ -192,7 +195,28 @@ describe("describeNotificationPermission", () => {
 
 test("push to this device follows only each category's System switch", () => {
   const preferences = toggleNotificationChannel(toggleNotificationChannel(DEFAULT_NOTIFICATION_PREFERENCES, "agent-completed", "desktop"), "machine-offline", "in-app")
-  expect(pushCategoriesFor(preferences)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": true })
+  expect(pushCategoriesFor(preferences)).toEqual({ "agent-completed": false, "approval-requested": true, "machine-offline": true, "quota-pace": true })
+})
+
+describe("quota pace preferences", () => {
+  test("a stored map without the category enables both channels and ignores unknown category keys", () => {
+    const stored = storage({ [NOTIFICATION_STORAGE_KEY]: JSON.stringify({
+      "agent-completed": { "in-app": false, desktop: false }, "quota-alerts": { "in-app": false, desktop: false } }) })
+    const preferences = readNotificationPreferences(stored)
+    expect(preferences["quota-pace"]).toEqual({ "in-app": true, desktop: true })
+    expect(preferences["agent-completed"]).toEqual({ "in-app": false, desktop: false })
+    expect(Object.keys(preferences)).not.toContain("quota-alerts")
+  })
+
+  test("the In app and System switches change independently and only System reaches push", () => {
+    const inAppOff = toggleNotificationChannel(DEFAULT_NOTIFICATION_PREFERENCES, "quota-pace", "in-app")
+    expect(inAppOff["quota-pace"]).toEqual({ "in-app": false, desktop: true })
+    expect(pushCategoriesFor(inAppOff)["quota-pace"]).toBe(true)
+    const systemOff = toggleNotificationChannel(DEFAULT_NOTIFICATION_PREFERENCES, "quota-pace", "desktop")
+    expect(systemOff["quota-pace"]).toEqual({ "in-app": true, desktop: false })
+    expect(pushCategoriesFor(systemOff)["quota-pace"]).toBe(false)
+    expect(systemOff["machine-offline"]).toEqual(DEFAULT_NOTIFICATION_PREFERENCES["machine-offline"])
+  })
 })
 
 describe("notification preferences store", () => {

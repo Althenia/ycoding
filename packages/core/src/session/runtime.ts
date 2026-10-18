@@ -1087,6 +1087,7 @@ const layer = Layer.effect(
       return {
         sessions,
         where: SessionUsageRead.usageWhere(range, sessions),
+        range: { from: range.from, to: range.to },
       }
     })
     const pricingCache = SessionUsagePricing.make()
@@ -1118,7 +1119,13 @@ const layer = Layer.effect(
                 for (const sessionID of selection.sessions ?? [undefined]) {
                   let after: string | undefined
                   while (true) {
-                    const page = yield* SessionUsageRead.pricingRefs(usageDb, selection.where, after, sessionID)
+                    const page = yield* SessionUsageRead.pricingRefs(
+                      usageDb,
+                      selection.where,
+                      after,
+                      sessionID,
+                      selection.range,
+                    )
                     page.refs.filter((ref) => !pricing.has(ref.key)).forEach((ref) => missing.set(ref.key, ref))
                     if (page.after === undefined) break
                     after = page.after
@@ -1130,48 +1137,56 @@ const layer = Layer.effect(
             )
             .pipe(Effect.catchIf((error): error is SqlError => error instanceof SqlError, Effect.die))
           if (settled.type === "complete") return settled.value
-          for (const ref of settled.refs.values()) {
-            const location = Location.Ref.make({
-              directory: AbsolutePath.make(ref.directory),
-              workspaceID: ref.workspaceID ? Workspace.ID.make(ref.workspaceID) : undefined,
-            })
-            const identity = JSON.stringify([ref.directory, ref.workspaceID])
-            if (!catalogs.has(identity)) {
-              const context = yield* locations
-                .contextEffect(location)
-                .pipe(
-                  Effect.catchCause((cause) =>
-                    isMissingLocation(Cause.squash(cause)) ? Effect.succeed(undefined) : Effect.failCause(cause),
-                  ),
-                )
-              catalogs.set(identity, context ? Context.get(context, Catalog.Service) : undefined)
-            }
-            const catalog = catalogs.get(identity)
-            if (!catalog) {
-              resolved.set(ref.key, undefined)
-              continue
-            }
-            const cache = pricingCache.location(identity, catalog)
-            const cached = cache.get(ref.key)
-            if (cached) {
-              resolved.set(ref.key, cached)
-              continue
-            }
-            const provider = yield* catalog.model.get(
-              Provider.ID.make(ref.provider),
-              CatalogModel.ID.make(ref.model),
-              ref.profile ?? undefined,
-            )
-            const router = yield* catalog.model.get(
-              Provider.ID.openrouter,
-              CatalogModel.ID.make(
-                ref.provider === Provider.ID.openrouter ? ref.model : `${ref.provider}/${ref.model}`,
-              ),
-            )
-            const entry = { provider: provider?.cost ?? [], router: router?.cost ?? [] }
-            resolved.set(ref.key, entry)
-            cache.store(ref.key, entry)
-          }
+          const byLocation = Map.groupBy(settled.refs.values(), (ref) => JSON.stringify([ref.directory, ref.workspaceID]))
+          yield* Effect.forEach(
+            byLocation,
+            ([identity, refs]) =>
+              Effect.gen(function* () {
+                if (!catalogs.has(identity)) {
+                  const context = yield* locations
+                    .contextEffect(
+                      Location.Ref.make({
+                        directory: AbsolutePath.make(refs[0].directory),
+                        workspaceID: refs[0].workspaceID ? Workspace.ID.make(refs[0].workspaceID) : undefined,
+                      }),
+                    )
+                    .pipe(
+                      Effect.catchCause((cause) =>
+                        isMissingLocation(Cause.squash(cause)) ? Effect.succeed(undefined) : Effect.failCause(cause),
+                      ),
+                    )
+                  catalogs.set(identity, context ? Context.get(context, Catalog.Service) : undefined)
+                }
+                const catalog = catalogs.get(identity)
+                if (!catalog) {
+                  refs.forEach((ref) => resolved.set(ref.key, undefined))
+                  return
+                }
+                const cache = pricingCache.location(identity, catalog)
+                for (const ref of refs) {
+                  const cached = cache.get(ref.key)
+                  if (cached) {
+                    resolved.set(ref.key, cached)
+                    continue
+                  }
+                  const provider = yield* catalog.model.get(
+                    Provider.ID.make(ref.provider),
+                    CatalogModel.ID.make(ref.model),
+                    ref.profile ?? undefined,
+                  )
+                  const router = yield* catalog.model.get(
+                    Provider.ID.openrouter,
+                    CatalogModel.ID.make(
+                      ref.provider === Provider.ID.openrouter ? ref.model : `${ref.provider}/${ref.model}`,
+                    ),
+                  )
+                  const entry = { provider: provider?.cost ?? [], router: router?.cost ?? [] }
+                  resolved.set(ref.key, entry)
+                  cache.store(ref.key, entry)
+                }
+              }),
+            { concurrency: 4, discard: true },
+          )
         }
       }).pipe(Effect.scoped)
     const readUsageReport: (
@@ -1204,6 +1219,7 @@ const layer = Layer.effect(
             where,
             after,
             sessionID,
+            { from: input.from, to: input.to },
           )
           for (const item of page.rows) {
             const anchor =

@@ -783,6 +783,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     if (!isCurrentConnection(owner)) return
+    if (frame.type === "notice.quota") {
+      delivery.quota(frame, ownerDeviceID, frame.at)
+      setState({ notifications: delivery.entries() })
+      return
+    }
     if (frame.type === "notice.unavailable") {
       noticeFault = true
       failNoticeSync(noticeUnavailableMessage)

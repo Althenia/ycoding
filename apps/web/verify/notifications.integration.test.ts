@@ -40,6 +40,7 @@ describe("notification center and live toasts", () => {
     for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
       const page = await open(width, theme, "empty")
       try {
+        expect(await page.evaluate<string>(`document.visibilityState`)).toBe("visible")
         await page.evaluate(`window.remoteNotify('approval-requested', 'ses_alpha', false)`)
         for (let attempt = 0; attempt < 30 && !await page.evaluate<boolean>(`document.querySelector('.yc-toast__body span') !== null`); attempt += 1) await Bun.sleep(30)
         await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
@@ -484,6 +485,30 @@ describe("notification center and live toasts", () => {
         expect(focused.dismissVisible, `${width} dismiss`).toBe(true)
         expect(focused.timeVisible, `${width} time hidden behind dismiss`).toBe(false)
         expect(Math.abs(focused.dismissRight - focused.contentRight), `${width} dismiss edge`).toBeLessThanOrEqual(1)
+      } finally { await page.close() }
+    }
+  }, 30_000)
+
+  test("a live quota row reuses the center row without a toast, opens Usage for its machine, and leaves on dismiss", async () => {
+    for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
+      const page = await open(width, theme, "empty")
+      try {
+        await page.evaluate(`window.remoteNotifyQuota('will-run-out', 'dev_laptop'); window.remoteNotifyQuota('almost-out', 'dev_studio')`)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve(true)))`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.yc-toast') !== null`)).toBe(false)
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        expect(await page.evaluate<unknown>(`[...document.querySelectorAll('.yc-notification--quota-pace')].map(row => ({
+          label: row.querySelector('.yc-notification__open strong').textContent, body: row.querySelector('.yc-notification__open span').textContent,
+          enabled: !row.querySelector('.yc-notification__open').disabled, time: row.querySelector('time').textContent }))`)).toEqual([
+          { label: "Quota pace", body: "A provider quota is almost out. Open Usage to review.", enabled: true, time: "now" },
+          { label: "Quota pace", body: "A provider quota will run out before it resets. Open Usage to review.", enabled: true, time: "now" },
+        ])
+        await page.evaluate(`document.querySelectorAll('.yc-notification--quota-pace .yc-notification__open')[1].click()`)
+        expect(await page.evaluate<unknown>(`({ usage: window.remoteOpenedUsage(), sessions: window.remoteOpened() })`)).toEqual({ usage: ["dev_laptop"], sessions: [] })
+        await page.evaluate(`document.querySelector('.yc-notification-center__trigger').click()`)
+        expect(await page.evaluate<number>(`document.querySelectorAll('.yc-notification--quota-pace').length`)).toBe(1)
+        await page.evaluate(`document.querySelector('.yc-notification__dismiss').click()`)
+        expect(await page.evaluate<unknown>(`({ rows: document.querySelectorAll('.yc-notification').length, usage: window.remoteOpenedUsage() })`)).toEqual({ rows: 0, usage: ["dev_laptop"] })
       } finally { await page.close() }
     }
   }, 30_000)

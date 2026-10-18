@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "06485afd-95bd-4578-8431-32945eac414b",
+  "id": "1d58739f-86d4-43f6-9cc3-ae38ba37a443",
   "prevIds": [
-    "ff0a739d-6b6f-4136-94bc-7a536e3498b4"
+    "be19bfd5-44ce-4bd9-b201-4f65e6c40a35"
   ],
   "ddl": [
     {
@@ -6660,6 +6660,146 @@
       "where": null,
       "origin": "manual",
       "name": "usage_analytics_request_time_created_id_idx",
+      "entityType": "indexes",
+      "table": "usage_analytics_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "cost IS NULL AND source <> 'decision'",
+      "origin": "manual",
+      "name": "usage_analytics_request_unpriced_time_created_id_idx",
+      "entityType": "indexes",
+      "table": "usage_analytics_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        },
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "project_id",
+          "isExpression": false
+        },
+        {
+          "value": "directory",
+          "isExpression": false
+        },
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        },
+        {
+          "value": "session_updated",
+          "isExpression": false
+        },
+        {
+          "value": "agent",
+          "isExpression": false
+        },
+        {
+          "value": "source",
+          "isExpression": false
+        },
+        {
+          "value": "model",
+          "isExpression": false
+        },
+        {
+          "value": "usage_anchor",
+          "isExpression": false
+        },
+        {
+          "value": "task_path",
+          "isExpression": false
+        },
+        {
+          "value": "request",
+          "isExpression": false
+        },
+        {
+          "value": "attempts",
+          "isExpression": false
+        },
+        {
+          "value": "continuation",
+          "isExpression": false
+        },
+        {
+          "value": "cache_read_reported",
+          "isExpression": false
+        },
+        {
+          "value": "cost",
+          "isExpression": false
+        },
+        {
+          "value": "json_extract(tokens, '$.input')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(tokens, '$.output')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(tokens, '$.reasoning')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(tokens, '$.cache.read')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(tokens, '$.cache.write')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(timing, '$.firstOutputMs')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(timing, '$.totalMs')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(timing, '$.generatedTokens')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(timing, '$.generationDurationNs')",
+          "isExpression": true
+        },
+        {
+          "value": "json_extract(timing, '$.observedGenerationDurationNs')",
+          "isExpression": true
+        },
+        {
+          "value": "json_type(timing, '$.generationDurationNs')",
+          "isExpression": true
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_analytics_request_metrics_idx",
       "entityType": "indexes",
       "table": "usage_analytics_request"
     },

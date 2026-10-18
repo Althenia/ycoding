@@ -467,6 +467,12 @@ export type ProviderUsageSource =
 
 export type ProviderUsageStability = "stable" | "client_contract" | "observed" | "best_effort"
 
+export type UsageForecastPace = {
+  verdict: "ahead" | "cutting-it-close" | "will-run-out"
+  projectedUsedAtReset: number
+  exhaustionAt?: number
+}
+
 export type ProviderUsageStatus = "available" | "stale" | "unsupported" | "unauthorized" | "error"
 
 export type IntegrationWhen = { key: string; op: "eq" | "neq"; value: string }
@@ -585,6 +591,8 @@ export type PtySize = { rows: number; cols: number }
 export type QuestionTool = { messageID: string; callID: string }
 
 export type FormMetadata1 = { [x: string]: any }
+
+export type ProviderUsagePaceMilestone = "almost-out" | "cutting-it-close" | "will-run-out"
 
 export type SessionStatus =
   | { type: "idle" }
@@ -2165,6 +2173,7 @@ export type UsageForecastQuota = {
   ratePerHour?: number
   exhaustionAt?: number
   projectedUsedAtReset?: number
+  pace?: UsageForecastPace
 }
 
 export type IntegrationTextPrompt = {
@@ -2274,6 +2283,23 @@ export type Pty = {
   control: { owner: "agent" | "user" | "paused"; fence: number }
   output: { startOffset: number; endOffset: number; truncated: boolean }
   limits: { maxRuntimeSeconds: number; maxRetainedBytes: number; maxInputBytes: number }
+}
+
+export type ProviderQuotaPace = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "provider.quota.pace"
+  location?: LocationRef
+  data: {
+    providerID: string
+    windowID: string
+    milestone: ProviderUsagePaceMilestone
+    resetAt: number
+    title: string
+    body: string
+  }
 }
 
 export type SessionStatus2 = {
@@ -4346,6 +4372,7 @@ export type ServerEvent =
   | FormTimedOut
   | FormDeferred
   | TodoUpdated
+  | ProviderQuotaPace
   | SessionStatus2
   | SessionIdle
   | TuiPromptAppend
