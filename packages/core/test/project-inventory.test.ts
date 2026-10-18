@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer } from "effect"
+import { sql } from "drizzle-orm"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -148,6 +149,52 @@ describe("ProjectInventory", () => {
         AbsolutePath.make(path.join(roots.alpha, "packages", "tui")),
       ])
       expect((yield* inventory.list({ limit: 50, search: "%" })).data).toEqual([])
+    }),
+  )
+
+  it.live("decodes stored paths and encodes native paths in keyset anchors", () =>
+    Effect.gen(function* () {
+      yield* workspace
+      const sessions = yield* Session.Service
+      const inventory = yield* ProjectInventory.Service
+      const database = yield* Database.Service
+      const first = yield* sessions.create({ location: at(roots.alpha) })
+      const nested = AbsolutePath.make(path.join(roots.alpha, "packages", "tui"))
+      yield* sessions.create({ location: at(nested) })
+      yield* sessions.create({ location: at(roots.beta) })
+      const stored = yield* database.db.get<{ directory: string; worktree: string }>(sql`
+        select session.directory as directory, project.worktree as worktree
+        from session join project on project.id = session.project_id
+        where session.id = ${first.id}
+      `).pipe(Effect.orDie)
+      const storage = process.platform === "win32" ? roots.alpha.replaceAll("\\", "/") : roots.alpha
+      expect(stored).toEqual({ directory: storage, worktree: storage })
+
+      const page = yield* inventory.list({
+        limit: 1,
+        after: { projectID: alpha, projectWorktree: AbsolutePath.make(roots.alpha), directory: AbsolutePath.make(roots.alpha) },
+      })
+      expect(page.data.map((entry) => ({ directory: entry.directory, projectWorktree: entry.projectWorktree }))).toEqual([
+        { directory: nested, projectWorktree: AbsolutePath.make(roots.alpha) },
+      ])
+      expect(page.next).toEqual({ projectID: alpha, projectWorktree: AbsolutePath.make(roots.alpha), directory: nested })
+      const next = yield* inventory.list({ limit: 1, after: page.next })
+      expect(next.data.map((entry) => entry.directory)).toEqual([AbsolutePath.make(roots.beta)])
+      expect(next.next).toBeUndefined()
+    }),
+  )
+
+  it.live("preserves legacy Sessions with an empty directory", () =>
+    Effect.gen(function* () {
+      yield* workspace
+      const sessions = yield* Session.Service
+      const inventory = yield* ProjectInventory.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location: at(roots.alpha) })
+      yield* database.db.run(sql`update session set directory = '' where id = ${session.id}`).pipe(Effect.orDie)
+      const page = yield* inventory.list({ limit: 1 })
+      expect(page.data).toHaveLength(1)
+      expect(page.data[0]).toMatchObject({ projectID: alpha, directory: "", sessions: 1, available: false })
     }),
   )
 
