@@ -184,6 +184,30 @@ describe("ProjectInventory", () => {
     }),
   )
 
+  it.live("searches returned native paths while preserving literal path characters", () =>
+    Effect.gen(function* () {
+      yield* workspace
+      const sessions = yield* Session.Service
+      const inventory = yield* ProjectInventory.Service
+      const directory = AbsolutePath.make(path.join(roots.alpha, "literal_%", "back\\slash"))
+      yield* Effect.promise(() => fs.mkdir(directory, { recursive: true }))
+      yield* sessions.create({ location: at(directory) })
+      const decoy = AbsolutePath.make(path.join(roots.alpha, "literalAB", "back\\slash"))
+      yield* Effect.promise(() => fs.mkdir(decoy, { recursive: true }))
+      yield* sessions.create({ location: at(decoy) })
+      const page = yield* inventory.list({ limit: 50 })
+      expect(page.data.map((entry) => entry.directory)).toContain(directory)
+      const returned = page.data.find((entry) => entry.directory === directory)!.directory
+      expect((yield* inventory.list({ limit: 50, search: returned })).data.map((entry) => entry.directory)).toEqual([directory])
+      expect((yield* inventory.list({ limit: 50, search: returned.replaceAll("\\", "/") })).data.map((entry) => entry.directory))
+        .toEqual(process.platform === "win32" ? [directory] : [])
+      expect((yield* inventory.list({ limit: 50, search: "literalAB" })).data.map((entry) => entry.directory)).toEqual([decoy])
+      const database = yield* Database.Service
+      yield* database.db.run(sql`update project set name = ${"project\\name"} where id = ${alpha}`).pipe(Effect.orDie)
+      expect((yield* inventory.list({ limit: 50, search: "project\\name" })).data).toHaveLength(2)
+    }),
+  )
+
   it.live("preserves legacy Sessions with an empty directory", () =>
     Effect.gen(function* () {
       yield* workspace

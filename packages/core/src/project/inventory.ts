@@ -137,8 +137,9 @@ function where(input: ListInput) {
 function searchFilter(search: string | undefined) {
   const value = search?.trim().toLowerCase()
   if (!value) return undefined
-  const pattern = `%${value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`
-  return sql`(lower(candidates.directory) like ${pattern} escape '\\' or lower(coalesce(${ProjectTable.name}, '')) like ${pattern} escape '\\')`
+  const directory = process.platform === "win32" ? value.replaceAll("\\", "/") : value
+  const pattern = (input: string) => `%${input.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`
+  return sql`(lower(candidates.directory) like ${pattern(directory)} escape '\\' or lower(coalesce(${ProjectTable.name}, '')) like ${pattern(value)} escape '\\')`
 }
 
 function anchorFilter(anchor: Anchor | undefined) {
