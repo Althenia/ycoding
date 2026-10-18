@@ -149,6 +149,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
     if (/^\/api\/session\/[^/]+\/(pending|skills)$/.test(url.pathname)) return json({ data: [] })
     if (url.pathname === "/api/remote") return json({ data: { state: "off" } })
+    if (url.pathname === "/api/remote/mcp") return json({ data: { state: "off" } })
     if (url.pathname === "/api/keep-awake") return json({ data: { state: "off" } })
     if (url.pathname === "/api/server/telemetry/consent")
       return json({ consent: { enabled: false, noticeVersion: 1, decidedAt: 0 }, noticeVersion: 1 })

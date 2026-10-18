@@ -13,6 +13,8 @@ import { Service } from "@ycoding-ai/client/effect/service"
 import { YCoding } from "@ycoding-ai/client/promise"
 import { ServerConnection } from "../../../services/server-connection"
 import { RemoteSetupError, type RemoteDiagnostic } from "../../../remote-error"
+import type { RemoteMcpHost } from "../../../remote-mcp-host"
+import { mcpResource } from "@ycoding-ai/remote"
 
 export function privateLocalServer(endpoint: Endpoint) {
   RemoteLocal.assertPrivateEndpoint(endpoint)
@@ -22,6 +24,7 @@ export function privateLocalServer(endpoint: Endpoint) {
 export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (input: {
   endpoint: Endpoint
   onDiagnostic?: RemoteDiagnostic
+  mcp?: RemoteMcpHost
 }) {
   const identity = yield* requireIdentity()
   const relayURL = yield* Effect.try({
@@ -45,6 +48,7 @@ export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (
     notice,
     onDiagnostic: input.onDiagnostic,
     makeBridge: (hooks) => new RemoteAgent({
+      ...(input.mcp === undefined ? {} : { mcp: { host: input.mcp, resource: mcpResource(relayURL, identity.deviceID), deviceID: identity.deviceID, home: global.home } }),
       relayURL,
       local,
       credentials: (signal) => run(Effect.gen(function* () {

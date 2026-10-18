@@ -6,6 +6,8 @@ import { Context } from "effect"
 export interface Interface {
   readonly status: () => Promise<Remote.Status>
   readonly set: (enabled: boolean) => Promise<Remote.Status>
+  readonly mcpStatus: () => Promise<Remote.McpStatus>
+  readonly setMcp: (enabled: boolean) => Promise<Remote.McpStatus>
   readonly shutdown: () => Promise<void>
 }
 
@@ -14,5 +16,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding-ai/
 export const unavailable: Interface = {
   status: async () => ({ state: "off" }),
   set: async () => ({ state: "error", message: "Remote connection is unavailable in this server" }),
+  mcpStatus: async () => ({ state: "off" }),
+  setMcp: async () => ({ state: "error", message: "Relay MCP is unavailable in this server; run `ycoding update` and restart the service" }),
   shutdown: async () => {},
 }

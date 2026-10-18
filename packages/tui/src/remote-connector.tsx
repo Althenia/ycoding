@@ -8,36 +8,74 @@ import type { PaletteStatusCommand } from "./component/command-palette"
 
 export type RemoteStatus = Remote.Status
 
+export type RemoteMcpStatus = Remote.McpStatus
+
 type RemoteServer = {
   get: () => Promise<RemoteStatus>
   set: (enabled: boolean) => Promise<RemoteStatus>
 }
 
+type RemoteMcpServer = {
+  get: () => Promise<RemoteMcpStatus>
+  set: (enabled: boolean) => Promise<RemoteMcpStatus>
+}
+
 type RemoteContextValue = {
   status: () => RemoteStatus
   toggle: () => Promise<void>
+  mcp: () => RemoteMcpStatus
+  toggleMcp: () => Promise<void>
 }
 
 const Context = createContext<RemoteContextValue>()
 const unavailable: RemoteContextValue = {
   status: () => ({ state: "off" }),
   toggle: async () => {},
+  mcp: () => ({ state: "off" }),
+  toggleMcp: async () => {},
 }
 
 export function useRemote() {
   return useContext(Context) ?? unavailable
 }
 
-export function RemoteProvider(props: ParentProps<{ server?: RemoteServer }>) {
-  const server = props.server ?? (() => {
-    const client = useClient()
-    return {
-      get: () => client.api.remote.get(),
-      set: (enabled: boolean) => client.api.remote.set({ enabled }),
-    }
-  })()
+export function RemoteProvider(props: ParentProps<{ server?: RemoteServer; mcp?: RemoteMcpServer }>) {
+  const client = props.server && props.mcp ? undefined : useClient()
+  const server = props.server ?? {
+    get: () => client!.api.remote.get(),
+    set: (enabled: boolean) => client!.api.remote.set({ enabled }),
+  }
+  const mcpServer = props.mcp ?? {
+    get: () => client!.api.remote.mcp.get(),
+    set: (enabled: boolean) => client!.api.remote.mcp.set({ enabled }),
+  }
   const toast = useToast()
-  const [status, setStatus] = createSignal<RemoteStatus>({ state: "off" })
+  const connection = createSwitch(server, (next) => {
+    if (next.state === "connecting" || next.state === "on")
+      toast.show({ variant: "info", title: "Remote access", message: "Connecting grants the machine owner access to every existing and future Session on this backend.", duration: 6000 })
+  }, (message) => toast.show({ variant: "error", title: "Remote connection", message, duration: 6000 }))
+  const relayMcp = createSwitch(mcpServer, (next) => {
+    if (next.state === "connecting" || next.state === "on")
+      toast.show({ variant: "info", title: "Relay MCP", message: "Approved MCP access:\nAll existing and\nfuture Sessions on\nthis machine.\nCreate Sessions in\nexisting folders\nstrictly below home.\nGive Always approvals.\nChange YOLO/autonomy.\nRuntime limits apply.", duration: 8000 })
+  }, (message) => toast.show({ variant: "error", title: "Relay MCP", message, duration: 6000 }))
+
+  async function toggleMcp() {
+    if (connection.status().state === "off" && relayMcp.status().state === "off") {
+      toast.show({ variant: "error", title: "Relay MCP", message: "Remote is off. Run `ycoding remote connect` or turn on Remote connection first.", duration: 6000 })
+      return
+    }
+    await relayMcp.toggle()
+  }
+
+  return <Context.Provider value={{ status: connection.status, toggle: connection.toggle, mcp: relayMcp.status, toggleMcp }}><RemoteCommands />{props.children}</Context.Provider>
+}
+
+function createSwitch<Status extends { state: "off" | "connecting" | "on" | "error"; message?: string }>(
+  server: { get: () => Promise<Status>; set: (enabled: boolean) => Promise<Status> },
+  onEnabled: (next: Status) => void,
+  onFailure: (message: string) => void,
+) {
+  const [status, setStatus] = createSignal<Status>({ state: "off" } as Status)
   let generation = 0
   let disposed = false
   let requested: boolean | undefined
@@ -48,10 +86,10 @@ export function RemoteProvider(props: ParentProps<{ server?: RemoteServer }>) {
     const cycle = generation
     try {
       const next = await server.get()
-      if (!disposed && cycle === generation && requested === undefined) setStatus(next)
+      if (!disposed && cycle === generation && requested === undefined) setStatus(() => next)
     } catch (error) {
       if (!disposed && cycle === generation && requested === undefined)
-        setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
+        setStatus(() => ({ state: "error", message: error instanceof Error ? error.message : String(error) }) as Status)
     }
   }
 
@@ -62,15 +100,14 @@ export function RemoteProvider(props: ParentProps<{ server?: RemoteServer }>) {
     try {
       const next = await server.set(enabled)
       if (!disposed && cycle === generation) {
-        setStatus(next)
-        if (enabled && (next.state === "connecting" || next.state === "on"))
-          toast.show({ variant: "info", title: "Remote access", message: "Connecting grants the machine owner access to every existing and future Session on this backend.", duration: 6000 })
+        setStatus(() => next)
+        if (enabled) onEnabled(next)
       }
     } catch (error) {
       if (disposed || cycle !== generation) return
       const message = error instanceof Error ? error.message : String(error)
-      setStatus({ state: "error", message })
-      toast.show({ variant: "error", title: "Remote connection", message, duration: 6000 })
+      setStatus(() => ({ state: "error", message }) as Status)
+      onFailure(message)
     } finally {
       if (cycle === generation) requested = undefined
     }
@@ -85,7 +122,7 @@ export function RemoteProvider(props: ParentProps<{ server?: RemoteServer }>) {
     if (poll) clearInterval(poll)
   })
 
-  return <Context.Provider value={{ status, toggle }}><RemoteCommands />{props.children}</Context.Provider>
+  return { status, toggle }
 }
 
 function RemoteCommands() {
@@ -98,11 +135,19 @@ function RemoteCommands() {
     paletteStatus: () => <RemotePaletteStatus status={remote.status} />,
     run: () => { void remote.toggle() },
   } satisfies PaletteStatusCommand
-  Keymap.createLayer(() => ({ mode: "global", commands: [command] }))
+  const relayMcp = {
+    id: "remote.mcp.toggle",
+    title: "Relay MCP",
+    group: "Remote",
+    palette: true,
+    paletteStatus: () => <RemotePaletteStatus status={remote.mcp} />,
+    run: () => { void remote.toggleMcp() },
+  } satisfies PaletteStatusCommand
+  Keymap.createLayer(() => ({ mode: "global", commands: [command, relayMcp] }))
   return null
 }
 
-function RemotePaletteStatus(props: { status: () => RemoteStatus }) {
+function RemotePaletteStatus(props: { status: () => { state: string } }) {
   const { theme } = useTheme().contextual("elevated")
   return <span style={{ fg: props.status().state === "on" ? theme.text.feedback.success.default : theme.text.subdued }}>● {props.status().state}</span>
 }

@@ -10,3 +10,10 @@ export const Status = Schema.Struct({
   message: Schema.optional(Schema.String),
 })
 export type Status = typeof Status.Type
+
+export const McpStatus = Schema.Struct({
+  state: State,
+  message: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+})
+export type McpStatus = typeof McpStatus.Type

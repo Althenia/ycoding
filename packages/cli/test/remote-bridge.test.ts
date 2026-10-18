@@ -5,6 +5,7 @@ import { RemoteAgent, type BridgeCredentials, type ConnectionInput, type RelayCo
 import type { AllowlistSession } from "../src/remote-config"
 import { DeviceAuthorizationError } from "../src/remote-credentials"
 import { LocalFailure, type LocalEventStream, type LocalServer } from "../src/remote-local"
+import type { RemoteMcpHost } from "../src/remote-mcp-host"
 
 const entry: AllowlistSession = { sessionID: "ses_1", directory: "/work", workspaceID: undefined, title: "One" }
 const second: AllowlistSession = { sessionID: "ses_2", directory: "/work", workspaceID: undefined, title: "Two" }
@@ -80,6 +81,7 @@ type ConnectionRecord = {
 }
 
 function harness(options: {
+  mcp?: { host: RemoteMcpHost; resource: string; deviceID: string; home: string }
   sessions?: readonly AllowlistSession[]
   failStatusOnce?: boolean
   results?: Partial<Record<keyof LocalServer, unknown>>
@@ -106,6 +108,7 @@ function harness(options: {
   let tokens = 0
   let failStatus = options.failStatusOnce ?? false
   const bridge = new RemoteAgent({
+    ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
     relayURL: "https://relay.example",
     local,
     credentials: options.credentials ?? (async () => ({ accessToken: `token_${++tokens}`, accessExpiresAt: clock + 600_000 })),
@@ -207,6 +210,36 @@ test("ID-only shell deletions invalidate family lists without forwarding shell i
     expect(connection.sent.join("")).not.toContain("sh_running_deleted")
     expect(connection.sent.join("")).not.toContain("sh_exited_deleted")
   } finally { await test.bridge.close() }
+})
+
+test("relay MCP state is acknowledged only for the current enable epoch", async () => {
+  let transport: ((state: { enabled: boolean; epoch: string }) => Promise<void>) | undefined
+  let detached = 0
+  const attached = Promise.withResolvers<void>()
+  const host: RemoteMcpHost = {
+    status: () => ({ state: "off" }),
+    advertisement: () => ({ enabled: false, epoch: "epoch_test" }),
+    allowed: () => false,
+    attach: async (_url, send) => { transport = send; attached.resolve() },
+    detach: () => { detached++ },
+    set: async () => ({ state: "off" }),
+    settled: async () => {},
+  }
+  const fixture = harness({ mcp: { host, resource: "https://relay.example/api/mcp/devices/dev_test", deviceID: "dev_test", home: "/home/synthetic" } })
+  await fixture.bridge.connect()
+  try {
+    await attached.promise
+    let acknowledged = false
+    const state = transport!({ enabled: true, epoch: "epoch_test" }).then(() => { acknowledged = true })
+    const frame = await waitFor(() => fixture.records[0]?.sent.map((text) => JSON.parse(text)).find((value) => value.type === "mcp.state"))
+    fixture.records[0]!.deliver({ ...frame, type: "mcp.state.ack", epoch: "epoch_other" })
+    await Promise.resolve()
+    expect(acknowledged).toBe(false)
+    fixture.records[0]!.deliver({ ...frame, type: "mcp.state.ack" })
+    await state
+    expect(acknowledged).toBe(true)
+  } finally { await fixture.bridge.close() }
+  expect(detached).toBeGreaterThan(0)
 })
 
 const completion = (sessionID: string, seq = 12) => ({

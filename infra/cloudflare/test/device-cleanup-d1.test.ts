@@ -58,3 +58,27 @@ test("D1 cleanup removes only owned revoked devices and their dependent metadata
     }
   } finally { sqlite.close() }
 })
+
+test("device revocation atomically removes its MCP grants without touching another owner", async () => {
+  const sqlite = new Database(":memory:")
+  try {
+    sqlite.exec("PRAGMA foreign_keys = ON")
+    sqlite.exec(await Bun.file(new URL("../migrations/0001_auth.sql", import.meta.url)).text())
+    sqlite.exec(await Bun.file(new URL("../migrations/0006_relay_mcp.sql", import.meta.url)).text())
+    sqlite.exec(`INSERT INTO "user" (id, created_at) VALUES ('owner', 1), ('other', 1);
+      INSERT INTO device (id, user_id, name, public_key_jwk, key_algorithm, created_at)
+        VALUES ('device', 'owner', 'Synthetic device', '{}', 'P-256', 1);
+      INSERT INTO mcp_device VALUES ('device', 1, 'epoch_test', 1);
+      INSERT INTO mcp_client (client_id,kind,name,redirect_uris,auth_method,created_at) VALUES ('client', 'dcr', 'Synthetic client', '[]', 'none', 1);
+      INSERT INTO mcp_grant (id,client_id,device_id,owner_id,resource,scope,enable_epoch,consented_at,expires_at)
+        VALUES ('grant','client','device','owner','https://relay.example.invalid/api/mcp/devices/device','ycoding:remote','epoch_test',1,100);
+      INSERT INTO mcp_token (token_hash,grant_id,kind,created_at,expires_at) VALUES ('synthetic_hash','grant','access',1,100);`)
+    const store = createD1AuthStore(databasePort(sqlite))
+    expect(await store.revokeDevice("device", "other", 2)).toBe(false)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_grant").get()?.n).toBe(1)
+    expect(await store.revokeDevice("device", "owner", 3)).toBe(true)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_grant").get()?.n).toBe(0)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_token").get()?.n).toBe(0)
+    expect(sqlite.prepare("SELECT enabled FROM mcp_device").get()?.enabled).toBe(0)
+  } finally { sqlite.close() }
+})

@@ -135,13 +135,14 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           const { createRemoteHost } = await import("./remote-host")
           return createRemoteHost({
             file: path.join(global.state, "remote.json"),
-            create: async () => {
+            create: async (mcp) => {
               const { makeRemoteConnector } = await import("./commands/handlers/remote/connect")
               const url = new URL(HttpServer.formatAddress(address))
               if (url.hostname === "0.0.0.0") url.hostname = "127.0.0.1"
               if (url.hostname === "[::]") url.hostname = "[::1]"
               return Effect.runPromise(
                 makeRemoteConnector({
+                  mcp,
                   endpoint: { url: url.toString(), auth: { type: "basic", username: "ycoding", password } },
                   onDiagnostic: (message, fields) => {
                     logRemoteDiagnostic(

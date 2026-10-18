@@ -3,7 +3,7 @@ export * as RemoteOperations from "./remote-operations"
 import { createHash } from "node:crypto"
 import { realpath, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { basename, relative, resolve, sep } from "node:path"
+import { basename, isAbsolute, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { Project } from "@ycoding-ai/schema/project"
 import type { FormAnswer, ReviewDecideInput, SessionInfo } from "@ycoding-ai/client/promise"
@@ -699,7 +699,10 @@ async function createRootSession(input: OperationInput, id: string, workspaceID:
   const currentProject = await input.local.projectCurrent(candidate.location)
   if (currentProject.id !== candidate.info.projectID)
     throw new OperationError("invalid_message", "Workspace project changed; refresh the workspace list and reopen it")
+  return adoptOrCreateRoot(input, id, candidate, agent, model)
+}
 
+async function adoptOrCreateRoot(input: Pick<OperationInput, "local" | "sessions" | "signal">, id: string, candidate: WorkspaceCandidate, agent?: string, model?: ModelSelection): Promise<SessionInfo> {
   const existing = input.sessions.snapshot().find((session) => session.id === id) ?? await findSession(input.local, id)
   if (existing !== undefined) {
     assertRootPlacement(existing, id, candidate)
@@ -754,9 +757,12 @@ export type OperationInput = {
 }
 
 export async function executeRemoteOperation(input: OperationInput): Promise<readonly RemoteResponse[]> {
-  const request = input.request
+  return settle(input.request, () => run(input))
+}
+
+async function settle(request: RemoteRequest, work: () => Promise<unknown>): Promise<readonly RemoteResponse[]> {
   try {
-    const value = await run(input)
+    const value = await work()
     return value instanceof PreparedFrames ? value.frames : successFrames(request.id, value)
   } catch (cause) {
     if (cause instanceof ProviderAuthError) return [failureFrame(request.id, "invalid_message", cause.message)]
@@ -764,6 +770,43 @@ export async function executeRemoteOperation(input: OperationInput): Promise<rea
     if (cause instanceof LocalFailure) return [failureFrame(request.id, ...localError(cause, request))]
     return [failureFrame(request.id, "internal_error", "The local agent could not complete the request")]
   }
+}
+
+export type DirectorySessionInput = Omit<OperationInput, "request" | "uploads" | "cache"> & {
+  readonly id: string
+  readonly home: string
+  readonly input: Readonly<Record<string, unknown>>
+}
+
+export async function executeRemoteDirectorySession(input: DirectorySessionInput): Promise<readonly RemoteResponse[]> {
+  return settle({ type: "request", id: input.id, operation: "session.create" }, async () => {
+    for (const key of Object.keys(input.input))
+      if (!["id", "directory", "agent", "model"].includes(key)) throw new OperationError("invalid_message", `Unknown input field "${key}"`)
+    const id = sessionID(input.input.id, "id")
+    const directory = requireString(input.input.directory, "directory", 4_096)
+    const agent = input.input.agent === undefined ? undefined : requireString(input.input.agent, "agent", 128)
+    const model = input.input.model === undefined ? undefined : modelSelection(input.input.model)
+    const location = { directory: await homeDescendant(input.home, directory) }
+    const current = await input.local.projectCurrent(location)
+    const candidate: WorkspaceCandidate = {
+      location,
+      info: { id: workspaceKey(current.id, location.directory), projectID: current.id, directory: location.directory, name: basename(location.directory) },
+    }
+    return { data: await adoptOrCreateRoot(input, id, candidate, agent, model) }
+  })
+}
+
+async function homeDescendant(home: string, directory: string) {
+  if (!isAbsolute(directory)) throw new OperationError("invalid_message", "Directory must be an absolute path")
+  const root = await realpath(home).catch(() => undefined)
+  if (root === undefined) throw new OperationError("internal_error", "The home directory is unavailable")
+  const canonical = await realpath(directory).catch(() => undefined)
+  if (canonical === undefined || !(await stat(canonical).then((value) => value.isDirectory(), () => false)))
+    throw new OperationError("invalid_message", "Directory does not exist")
+  const path = relative(root, canonical)
+  if (path === "" || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path))
+    throw new OperationError("invalid_message", "Directory must be strictly below the home directory")
+  return canonical
 }
 
 async function run(input: OperationInput) {

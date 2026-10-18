@@ -224,6 +224,9 @@ export function createD1AuthStore(db: D1Database): AuthStore {
             "UPDATE device_credential SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM device WHERE id = ? AND user_id = ?)",
           )
           .bind(now, id, id, userID),
+        db.prepare("DELETE FROM mcp_grant WHERE device_id = ? AND EXISTS (SELECT 1 FROM device WHERE id = ? AND user_id = ?)").bind(id, id, userID),
+        db.prepare("DELETE FROM mcp_authorization WHERE device_id = ? AND EXISTS (SELECT 1 FROM device WHERE id = ? AND user_id = ?)").bind(id, id, userID),
+        db.prepare("UPDATE mcp_device SET enabled = 0, updated_at = ? WHERE device_id = ? AND EXISTS (SELECT 1 FROM device WHERE id = ? AND user_id = ?)").bind(now, id, id, userID),
       ])
       return device !== undefined && changed(device)
     },

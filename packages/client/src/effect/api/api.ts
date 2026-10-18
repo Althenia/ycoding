@@ -2079,9 +2079,18 @@ export type Endpoint34_1Input = { readonly enabled: Endpoint34_1Request["payload
 export type Endpoint34_1Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.set"]>>["data"]
 export type RemoteSetOperation<E = never> = (input: Endpoint34_1Input) => Effect.Effect<Endpoint34_1Output, E>
 
+export type Endpoint34_2Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.mcp.get"]>>["data"]
+export type RemoteMcpGetOperation<E = never> = () => Effect.Effect<Endpoint34_2Output, E>
+
+type Endpoint34_3Request = Parameters<RawClient["server.remote"]["remote.mcp.set"]>[0]
+export type Endpoint34_3Input = { readonly enabled: Endpoint34_3Request["payload"]["enabled"] }
+export type Endpoint34_3Output = EffectValue<ReturnType<RawClient["server.remote"]["remote.mcp.set"]>>["data"]
+export type RemoteMcpSetOperation<E = never> = (input: Endpoint34_3Input) => Effect.Effect<Endpoint34_3Output, E>
+
 export interface RemoteApi<E = never> {
   readonly get: RemoteGetOperation<E>
   readonly set: RemoteSetOperation<E>
+  readonly mcp: { readonly get: RemoteMcpGetOperation<E>; readonly set: RemoteMcpSetOperation<E> }
 }
 
 export type Endpoint35_0Output = EffectValue<ReturnType<RawClient["server.keepAwake"]["keepAwake.get"]>>["data"]

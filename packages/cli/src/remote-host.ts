@@ -3,16 +3,19 @@ import type { createRemoteConnector } from "./commands/handlers/remote/connector
 import { createRemotePreferenceRepository } from "./remote-preference"
 import { RemoteSetupError } from "./remote-error"
 import { DeviceAuthorizationError } from "./remote-credentials"
+import path from "node:path"
+import { createRemoteMcpHost, type RemoteMcpHost } from "./remote-mcp-host"
 
 type Connector = ReturnType<typeof createRemoteConnector>
 
 export async function createRemoteHost(input: {
   file: string
-  create: () => Promise<Connector>
+  create: (mcp: RemoteMcpHost) => Promise<Connector>
   scheduleRetry?: (retry: () => void, delayMs: number) => () => void
 }): Promise<RemoteConnection.Interface> {
   const repository = createRemotePreferenceRepository(input.file)
   let current: Awaited<ReturnType<RemoteConnection.Interface["status"]>> = { state: "off" }
+  const mcp = await createRemoteMcpHost({ file: path.join(path.dirname(input.file), "remote-mcp.json"), remote: () => current.state })
   let connector: Connector | undefined
   let unsubscribe: (() => void) | undefined
   let generation = 0
@@ -57,7 +60,7 @@ export async function createRemoteHost(input: {
       try {
         await previous?.stop()
         if (cycle !== generation) return
-        const next = connector ?? await input.create()
+        const next = connector ?? await input.create(mcp)
         if (cycle !== generation) { await next.stop(); return }
         connector = next
         unsubscribe ??= next.subscribe((status) => {
@@ -84,6 +87,7 @@ export async function createRemoteHost(input: {
   }
 
   async function stop() {
+    mcp.detach()
     desired = false
     generation++
     cancelRetry?.()
@@ -100,18 +104,22 @@ export async function createRemoteHost(input: {
     return false
   })
   if (enabled) start()
+  if (!enabled && mcp.advertisement().enabled) await mcp.set(false)
   return {
     status: async () => current,
     set: (enabled) => {
       const next = transition.then(async () => {
         await repository.save(enabled)
         if (enabled) return start()
+        await mcp.set(false)
         await stop()
         return current
       })
       transition = next.then(() => undefined, () => undefined)
       return next
     },
+    mcpStatus: async () => mcp.status(),
+    setMcp: (enabled) => mcp.set(enabled),
     shutdown: async () => { await transition; await stop(); await Promise.all(pending) },
   }
 }

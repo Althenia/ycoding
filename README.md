@@ -77,6 +77,21 @@ ycoding remote connect
 
 See [remote workspace](https://ycoding.althenia.app/docs/usage/remote) for sign-in options, recovery, and connection states.
 
+### Relay MCP
+
+Relay MCP is an opt-in way for an MCP client such as ChatGPT to control the Sessions on a connected machine through the same relay. It is off by default, and connecting the machine does not enable it. Turn it on with `ycoding remote mcp on` or the TUI **Relay MCP** toggle, then add the URL printed by `ycoding remote mcp status` (`<relay origin>/api/mcp/devices/<device ID>`) to the client.
+
+```sh
+ycoding remote mcp on
+ycoding remote mcp status
+ycoding remote mcp off
+```
+
+> [!WARNING]
+> An approved client acts on every existing and future Session on the machine with the same abilities as the web workspace, including persistent Always approvals where YCoding offers them and YOLO changes, and it can start a Session in any existing folder below your home directory. Each client needs a fresh Google sign-in by an allowlisted owner and an explicit approval. `ycoding remote mcp off` or disconnecting revokes every client.
+
+It exposes 73 tools on MCP revision 2026-07-28. Operators provision it with one D1 migration and one additional Google redirect URI; see [Remote relay deployment](docs/remote-deployment.md#relay-mcp). This is separate from the localhost task interface below.
+
 ## Guardrails
 
 Permissions decide what an agent may attempt; guardrails review or deny high-impact operations across the main Session and its subagents. An approval never overrides an explicit permission denial or a built-in catastrophic denial.

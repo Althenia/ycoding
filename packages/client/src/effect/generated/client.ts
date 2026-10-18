@@ -2623,7 +2623,25 @@ const Endpoint34_1 = (raw: RawClient["server.remote"]) => (input: Endpoint34_1In
     Effect.map((value) => value.data),
   )
 
-const adaptGroup34 = (raw: RawClient["server.remote"]) => ({ get: Endpoint34_0(raw), set: Endpoint34_1(raw) })
+const Endpoint34_2 = (raw: RawClient["server.remote"]) => () =>
+  raw["remote.mcp.get"]({}).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint34_3Request = Parameters<RawClient["server.remote"]["remote.mcp.set"]>[0]
+type Endpoint34_3Input = { readonly enabled: Endpoint34_3Request["payload"]["enabled"] }
+const Endpoint34_3 = (raw: RawClient["server.remote"]) => (input: Endpoint34_3Input) =>
+  raw["remote.mcp.set"]({ payload: { enabled: input["enabled"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup34 = (raw: RawClient["server.remote"]) => ({
+  get: Endpoint34_0(raw),
+  set: Endpoint34_1(raw),
+  mcp: { get: Endpoint34_2(raw), set: Endpoint34_3(raw) },
+})
 
 const Endpoint35_0 = (raw: RawClient["server.keepAwake"]) => () =>
   raw["keepAwake.get"]({}).pipe(

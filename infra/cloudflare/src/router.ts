@@ -60,6 +60,8 @@ export type RelayNamespace = {
 }
 
 export type RouterDeps = {
+  readonly mcp?: (request: Request, rateLimit: (key: string) => boolean) => Promise<Response | undefined>
+  readonly cleanupMcp?: () => Promise<unknown>
   readonly service: AuthService
   readonly relay: RelayNamespace
   readonly endpoints: GoogleEndpoints
@@ -120,8 +122,11 @@ export function createRouter(deps: RouterDeps) {
     if (now() - lastCleanupAt >= cleanupEveryMs) {
       lastCleanupAt = now()
       await deps.service.cleanup().catch(() => undefined)
+      await deps.cleanupMcp?.().catch(() => undefined)
     }
     if (url.pathname === "/health") return health(deps)
+    const mcp = await deps.mcp?.(request, rateLimit)
+    if (mcp) return withSecurityHeaders(mcp)
 
     if (url.pathname.startsWith("/api/admin/")) return adminRoute(deps, request, url, rateLimit, now())
     if (url.pathname === "/api/auth/invite" || url.pathname === "/api/auth/key") {

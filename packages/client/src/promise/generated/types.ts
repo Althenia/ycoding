@@ -10177,6 +10177,16 @@ export type RemoteSetOutput = {
   data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined }
 }["data"]
 
+export type RemoteMcpGetOutput = {
+  data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined; url?: string | undefined }
+}["data"]
+
+export type RemoteMcpSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
+
+export type RemoteMcpSetOutput = {
+  data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined; url?: string | undefined }
+}["data"]
+
 export type KeepAwakeGetOutput = { data: KeepAwakeStatus }["data"]
 
 export type KeepAwakeSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }

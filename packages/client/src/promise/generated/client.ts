@@ -392,6 +392,9 @@ import type {
   RemoteGetOutput,
   RemoteSetInput,
   RemoteSetOutput,
+  RemoteMcpGetOutput,
+  RemoteMcpSetInput,
+  RemoteMcpSetOutput,
   KeepAwakeGetOutput,
   KeepAwakeSetInput,
   KeepAwakeSetOutput,
@@ -3196,6 +3199,25 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      mcp: {
+        get: (requestOptions?: RequestOptions) =>
+          request<{ readonly data: RemoteMcpGetOutput }>(
+            { method: "GET", path: `/api/remote/mcp`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
+            requestOptions,
+          ).then((value) => value.data),
+        set: (input: RemoteMcpSetInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: RemoteMcpSetOutput }>(
+            {
+              method: "PUT",
+              path: `/api/remote/mcp`,
+              body: { enabled: input["enabled"] },
+              successStatus: 200,
+              declaredStatuses: [401, 400],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
     },
     keepAwake: {
       get: (requestOptions?: RequestOptions) =>

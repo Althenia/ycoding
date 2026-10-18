@@ -132,6 +132,10 @@ describe("CLI frontend import boundaries", () => {
             file !== "packages/cli/src/commands/handlers/remote/sessions.ts" &&
             file !== "packages/cli/src/commands/handlers/remote/allow.ts" &&
             file !== "packages/cli/src/commands/handlers/remote/deny.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/mcp/on.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/mcp/off.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/mcp/status.ts" &&
+            file !== "packages/cli/src/commands/handlers/remote/mcp/shared.ts" &&
             file !== "packages/cli/src/commands/handlers/remote/shared.ts",
         ),
       ).toEqual([])

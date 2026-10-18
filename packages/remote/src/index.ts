@@ -26,6 +26,7 @@
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
 import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth.ts"
+export { remoteMcpOperations, mcpScope, mcpHeaderNames, mcpResource, parseMcpRequest, parseMcpState, parseMcpStateAck, type McpHeaders, type McpPrincipal, type McpRequest, type McpState, type McpStateAck, type McpResponse } from "./mcp.ts"
 export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthPrompt } from "./provider-auth.ts"
 
 export const RemoteProtocolVersion = 4

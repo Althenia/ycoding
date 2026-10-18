@@ -20,6 +20,8 @@ test("adopts the existing production Worker, only the requested Cloudflare resou
     run_worker_first: [
       "/api",
       "/api/*",
+      "/.well-known",
+      "/.well-known/*",
       "/ws",
       "/ws/*",
       "/health",

@@ -169,6 +169,23 @@ test("a malformed remote preference leaves the server host available with a visi
   }
 })
 
+test("startup retires a saved MCP enablement when the Remote preference is off", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-host-"))
+  const file = path.join(directory, "remote-mcp.json")
+  await Bun.write(file, JSON.stringify({ enabled: true, epoch: "epoch_saved" }))
+  const host = await createRemoteHost({ file: path.join(directory, "remote.json"), create: async () => {
+    throw new Error("Remote must remain disabled")
+  } })
+  try {
+    expect(await host.status()).toEqual({ state: "off" })
+    expect(await host.mcpStatus()).toMatchObject({ state: "error", message: expect.stringContaining("ycoding remote connect") })
+    expect(await Bun.file(file).json()).toMatchObject({ enabled: false, pendingRevocation: true })
+  } finally {
+    await host.shutdown()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 function retries() {
   const pending = new Map<() => void, number>()
   return {

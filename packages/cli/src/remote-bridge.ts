@@ -1,4 +1,6 @@
 export * as RemoteBridge from "./remote-bridge"
+import { parseMcpRequest, parseMcpStateAck, type McpRequest } from "@ycoding-ai/remote"
+import type { RemoteMcpHost, RemoteMcpPreference } from "./remote-mcp-host"
 
 import {
   RemoteCloseCode,
@@ -25,6 +27,7 @@ import {
   attentionDetails,
   createSubscriptions,
   executeRemoteOperation,
+  successFrames,
   sessionStatus,
   lossOnly,
   type OperationCache,
@@ -66,6 +69,7 @@ export type ConnectionInput = {
 export type BridgeCredentials = { readonly accessToken: string; readonly accessExpiresAt: number }
 
 export type RemoteBridgeOptions = {
+  readonly mcp?: { readonly host: RemoteMcpHost; readonly resource: string; readonly deviceID: string; readonly home: string }
   /** Enrolled relay origin. Device credentials are only ever sent here. */
   readonly relayURL: string
   readonly local: LocalServer
@@ -106,6 +110,8 @@ const interactiveCoalesceMs = 40
 const backgroundCoalesceMs = 750
 
 export class RemoteAgent {
+  private readonly mcpAcknowledgements = new Map<string, { state: RemoteMcpPreference; resolve: () => void; reject: () => void }>()
+  private mcpServer?: Promise<ReturnType<typeof import("./remote-mcp")["createRemoteMcp"]>>
   private readonly registry: SessionRegistry
   private readonly subscriptions: SubscriptionRegistry
   private uploads = createAttachmentUploads()
@@ -193,6 +199,11 @@ export class RemoteAgent {
 
   private setConnected(connected: boolean) {
     this.connected = connected
+    if (!connected) {
+      this.options.mcp?.host.detach()
+      for (const pending of this.mcpAcknowledgements.values()) pending.reject()
+      this.mcpAcknowledgements.clear()
+    }
     this.listeners.forEach((listener) => listener(connected))
   }
 
@@ -226,6 +237,7 @@ export class RemoteAgent {
       await this.stopEventStream()
     } finally {
       await connection?.disconnect(code, reason)
+      await (await this.mcpServer)?.close()
     }
   }
 
@@ -251,6 +263,7 @@ export class RemoteAgent {
         this.resetCompletionRetry()
         this.statusOwner = {}
         this.scheduler.reset()
+        if (this.options.mcp) void this.options.mcp.host.attach(this.options.mcp.resource, (state) => this.sendMcpState(state))
         this.subscriptions.clear()
         this.uploads.clear()
         this.uploads = createAttachmentUploads()
@@ -292,9 +305,26 @@ export class RemoteAgent {
   }
 
   private onFrame(frame: unknown) {
+    const raw = typeof frame === "string" ? frame : JSON.stringify(frame)
+    const acknowledgement = parseMcpStateAck(raw)
+    if (acknowledgement) {
+      const pending = this.mcpAcknowledgements.get(acknowledgement.id)
+      if (pending && pending.state.epoch === acknowledgement.epoch && pending.state.enabled === acknowledgement.enabled) {
+        this.mcpAcknowledgements.delete(acknowledgement.id)
+        pending.resolve()
+      }
+      return
+    }
+    const mcp = parseMcpRequest(raw)
+    if (mcp && this.options.mcp) {
+      const controller = new AbortController()
+      this.inFlight.set(mcp.id, controller)
+      void this.handleMcpRequest(mcp, controller)
+      return
+    }
     // The transport already decoded the frame; re-encoding runs the shared parser
     // so no frame reaches the local server without contract validation.
-    const parsed = parseRelayToAgentMessage(typeof frame === "string" ? frame : JSON.stringify(frame))
+    const parsed = parseRelayToAgentMessage(raw)
     if (!parsed.ok) {
       if (parsed.id !== undefined)
         void this.send(serializeResponse({ type: "response", id: parsed.id, ok: false, error: parsed.error }), this.connection)
@@ -353,6 +383,67 @@ export class RemoteAgent {
   private abortRequests() {
     for (const controller of this.inFlight.values()) controller.abort()
     this.inFlight.clear()
+  }
+
+  private async sendMcpState(state: RemoteMcpPreference) {
+    const id = crypto.randomUUID()
+    const result = Promise.withResolvers<void>()
+    const timeout = setTimeout(() => result.reject(new Error("Relay MCP acknowledgement timed out")), 5_000)
+    this.mcpAcknowledgements.set(id, { state, resolve: () => result.resolve(), reject: () => result.reject(new Error("Remote disconnected")) })
+    try {
+      if (!await this.send(JSON.stringify({ type: "mcp.state", id, ...state }))) result.reject(new Error("Remote disconnected"))
+      await result.promise
+    } finally {
+      clearTimeout(timeout)
+      this.mcpAcknowledgements.delete(id)
+    }
+  }
+
+  private async handleMcpRequest(request: McpRequest, controller: AbortController) {
+    const owner = this.connection
+    const mcp = this.options.mcp
+    try {
+      if (!mcp || request.input.principal.deviceID !== mcp.deviceID || !mcp.host.allowed(request.input.epoch)) {
+        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "forbidden", message: "Relay MCP is off or its authorization epoch changed" } }), owner)
+        return
+      }
+      this.mcpServer ??= (async () => {
+        const { createRemoteMcp } = await import("./remote-mcp")
+        return createRemoteMcp({ local: this.options.local, sessions: this.registry, subscriptions: this.subscriptions,
+          cache: this.cache, home: mcp.home, resource: mcp.resource, allowed: (epoch) => mcp.host.allowed(epoch) })
+      })()
+      const server = await this.mcpServer
+      if (controller.signal.aborted || !mcp.host.allowed(request.input.epoch)) return
+      const response = await server.fetch(new Request(mcp.resource, { method: "POST", body: request.input.body,
+        headers: request.input.headers, signal: controller.signal }), { epoch: request.input.epoch, principal: request.input.principal })
+      const reader = response.body?.getReader()
+      const chunks: Uint8Array[] = []
+      let bytes = 0
+      if (reader) {
+        for (;;) {
+          const next = await reader.read()
+          if (next.done) break
+          bytes += next.value.byteLength
+          if (bytes > RemoteLimits.maxAgentMessageChars * RemoteLimits.maxChunksPerResponse) {
+            await reader.cancel()
+            await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "message_too_large", message: "MCP response exceeds the relay response bound" } }), owner)
+            return
+          }
+          chunks.push(next.value)
+        }
+      }
+      if (this.connection !== owner || controller.signal.aborted || !mcp.host.allowed(request.input.epoch)) return
+      const body = Buffer.concat(chunks).toString("utf8")
+      for (const frame of successFrames(request.id, { status: response.status, contentType: response.headers.get("content-type") ?? "application/json", body })) {
+        if (controller.signal.aborted || this.connection !== owner) return
+        await this.send(serializeResponse(frame), owner)
+      }
+    } catch {
+      if (!controller.signal.aborted && this.connection === owner)
+        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "outcome_unknown", message: "MCP request outcome is unknown; inspect the Session before retrying" } }), owner)
+    } finally {
+      if (this.inFlight.get(request.id) === controller) this.inFlight.delete(request.id)
+    }
   }
 
   private send(frame: string, connection = this.connection) {

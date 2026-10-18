@@ -307,6 +307,9 @@ export const usePages: readonly DocPage[] = [
               ["ycoding remote disconnect", "Optional --server <url> or --standalone", "Turn off the machine's remote connection."],
               ["ycoding remote status", "Optional --server <url> or --standalone", "Show device enrollment, backend Session access, and the remote connection state."],
               ["ycoding remote sessions", "Optional --server <url> or --standalone", "List Sessions available to the enrolled machine owner."],
+              ["ycoding remote mcp on", "Optional --server <url> or --standalone", "Allow approved MCP clients to control this machine's Sessions through the relay. Requires the remote connection to be on."],
+              ["ycoding remote mcp off", "Optional --server <url> or --standalone", "Turn off Relay MCP and revoke every client's access."],
+              ["ycoding remote mcp status", "Optional --server <url> or --standalone", "Show the Relay MCP state and the MCP server URL for this machine."],
             ],
           },
           { kind: "code", language: "sh", label: "Update to the latest published release", code: "ycoding update" },
@@ -434,6 +437,23 @@ export const usePages: readonly DocPage[] = [
           },
           { kind: "paragraph", text: "Selecting Remote connection while it is connecting, on, or in error turns it off. A second toggle during a pending enable also requests disable. Disabling with the toggle or `ycoding remote disconnect` aborts pending authentication, cancels recovery, and prevents late replies from reopening the connection. When you stop the background service, the live connection closes but its saved enabled choice remains for the next start." },
           { kind: "code", language: "sh", label: "Inspect or disable remote access", code: "ycoding remote status\nycoding remote disconnect" },
+        ],
+      },
+      {
+        heading: "Connect an MCP client",
+        blocks: [
+          { kind: "paragraph", text: "Relay MCP lets an MCP client, such as ChatGPT, work with the Sessions on your connected machine. It is off by default, and turning on the remote connection does not turn it on. Run ycoding remote mcp on, or select Relay MCP in the TUI command palette; the machine's remote connection must be on first." },
+          { kind: "callout", tone: "warning", title: "Broad access", text: "An approved client can act on every existing and future Session on the machine. It can send prompts, interrupt work, answer questions and forms, approve or reject permissions and reviews, including Always approvals where YCoding offers them, change YOLO and goals, manage provider connections and shell controls, and read usage. It can start a Session in any existing folder below your home directory, but cannot create folders. Connect only clients you trust." },
+          {
+            kind: "steps",
+            items: [
+              { title: "Copy the server URL", text: "Run ycoding remote mcp status, or open Status in the TUI. When the state is on, it shows the machine's MCP server URL. Success: the URL ends in /api/mcp/devices/ followed by the device ID." },
+              { title: "Add it in the client", text: "Add the URL as a custom MCP server and start its sign-in. Success: the browser opens the YCoding approval page, which names the client and the access it requests." },
+              { title: "Sign in and allow", text: "Continue to Google with an account that is allowed on this relay and owns the machine, then select Allow. Success: the client returns to its own page and lists the YCoding tools." },
+            ],
+          },
+          { kind: "paragraph", text: "Every new client connection asks again, even after an earlier approval. Access tokens last five minutes and renew automatically for up to 30 days. Run ycoding remote mcp off, or disconnect the remote connection, to revoke all client access. Turning it on again requires each client to be approved again. If a request reports an unknown outcome, check the Session before retrying; YCoding never repeats it, and further changes to that Session are refused until you run ycoding remote disconnect and ycoding remote connect (an automatic reconnect does not clear it). Results larger than 2 MiB fail with a message to narrow the request." },
+          { kind: "code", language: "sh", label: "Turn Relay MCP on or off", code: "ycoding remote mcp on\nycoding remote mcp status\nycoding remote mcp off" },
         ],
       },
       {

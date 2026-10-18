@@ -14,7 +14,7 @@
 
 import { spawn, type Subprocess } from "bun"
 import { readdirSync } from "node:fs"
-import { RemoteWebSocketPath, deviceSignaturePayload } from "../../../../packages/remote/src/index"
+import { RemoteCloseCode, RemoteWebSocketPath, deviceSignaturePayload } from "../../../../packages/remote/src/index"
 import { base64UrlEncode, sha256Hex } from "../../src/auth/crypto"
 
 const repositoryRoot = new URL("../../../../", import.meta.url).pathname
@@ -337,11 +337,23 @@ try {
   expect(second.pending() === 0, "unsubscribed client received an event")
   checks.push("events delivered only to the subscribed client")
 
+  const competingAgent = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, {
+    authorization: `Bearer ${tokens.accessToken}`,
+  })
+  await competingAgent.opened
+  const conflict = await competingAgent.closed
+  expect(conflict.code === RemoteCloseCode.agentConflict, `competing agent was not refused: ${JSON.stringify(conflict)}`)
+  first.send({ type: "request", id: "live-after-conflict", operation: "session.get", sessionID: "ses_a" })
+  const survivingRequest = await agent.next()
+  expect(survivingRequest.operation === "session.get", "the existing agent did not retain its connection")
+  agent.send({ type: "response", id: survivingRequest.id, ok: true, value: { data: { id: "ses_a" } } })
+  expect((await first.next()).ok === true, "the existing agent did not settle the request after a connector conflict")
+  checks.push("a competing connector was refused while the live connector continued serving requests")
+  await agent.close()
   const replacementAgent = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, {
     authorization: `Bearer ${tokens.accessToken}`,
   })
   await replacementAgent.opened
-  expect((await agent.closed).code === 1012, "replaced agent did not close with service restart")
   const retained = await replacementAgent.next()
   expect(
     retained.type === "subscriptions" && JSON.stringify(retained.sessionIDs) === '["ses_a"]',
@@ -755,6 +767,7 @@ function connect(url: string, headers: Record<string, string>) {
   return {
     opened,
     closed,
+    close: () => { socket.close(1000, "Connector stopped"); return closed },
     pending: () => queue.length,
     send: (frame: unknown) => socket.send(JSON.stringify(frame)),
     next: (timeoutMs = 10_000) =>
