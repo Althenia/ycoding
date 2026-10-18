@@ -244,7 +244,12 @@ describe("LocationMutation", () => {
             const canonical = yield* LocationMutationPath.Service
             const aliases = [managed]
             if (process.platform === "win32") {
-              const result = spawnSync("cmd.exe", ["/d", "/c", `for %I in ("${managed}") do @echo %~sI`], { encoding: "utf8" })
+              // cmd parses its own quoting; CRT argv escaping would insert literal backslashes.
+              const result = spawnSync("cmd.exe", ["/d", "/e:on", "/v:off", "/c", 'for %I in ("%YCODING_SHORT_PATH%") do @echo %~sI'], {
+                encoding: "utf8",
+                windowsVerbatimArguments: true,
+                env: { ...process.env, YCODING_SHORT_PATH: managed },
+              })
               expect(result.status).toBe(0)
               const short = result.stdout.trim()
               expect(short).toMatch(/~\d/)

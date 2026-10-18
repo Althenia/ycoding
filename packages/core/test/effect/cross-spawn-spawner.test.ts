@@ -704,29 +704,44 @@ describe("Windows taskkill close race", () => {
 
   test("preserves failure after root exit while a descendant keeps its output pipe open", async () => {
     const completion = closed()
+    const control = await tmpdir()
+    const release = path.join(control.path, "release")
+    const probe = path.join(control.path, "probe")
     const parent = spawn(process.execPath, ["-e", `
       const { spawn } = require("node:child_process")
       const child = spawn(process.execPath, ["-e", ${JSON.stringify(String.raw`
-        process.stdin.once("end", () => process.exit(0))
-        process.stdin.once("error", () => process.exit(0))
-        process.stdin.resume()
-        process.stdout.write(String(process.pid) + "\n")
-      `)}], { stdio: [3, 1, 2] })
+        const fs = require("node:fs")
+        let acknowledged = false
+        setInterval(() => {
+          if (fs.existsSync(process.argv[1])) process.exit(0)
+          if (!acknowledged && fs.existsSync(process.argv[2])) {
+            acknowledged = true
+            process.stdout.write(String(process.pid) + "\n")
+          }
+        }, 10)
+      `)}, ${JSON.stringify(release)}, ${JSON.stringify(probe)}], { stdio: ["ignore", 1, 2] })
       child.unref()
-    `], { stdio: ["ignore", "pipe", "pipe", "pipe"] })
+    `], { stdio: ["ignore", "pipe", "pipe"] })
+    let stderr = ""
+    parent.stderr.on("data", (chunk) => { stderr = (stderr + chunk.toString()).slice(-8192) })
     const exit = once(parent, "exit")
     const close = new Promise<void>((resolve) => parent.once("close", (code, signal) => {
       Deferred.doneUnsafe(completion, Exit.succeed([code, signal] as const))
       resolve()
     }))
-    // Closing the test-owned control pipe ends the descendant even if its PID
-    // handshake is missing, incomplete, or the test times out.
-    const cleanup = async () => {
-      parent.stdio[3]?.destroy()
+    // The release file outlives the root's stdio handles. Cleanup releases the
+    // descendant even if its PID handshake fails or the test times out.
+    let finished = false
+    let probeWrite: Promise<void> | undefined
+    let cleaning: Promise<void> | undefined
+    const cleanup = () => cleaning ??= (async () => {
+      await fs.writeFile(release, "")
       if (parent.exitCode === null && parent.signalCode === null) parent.kill("SIGKILL")
       await close
-    }
-    let finished = false
+      // A write admitted before cleanup must settle before its directory is removed.
+      if (probeWrite) await Promise.allSettled([probeWrite])
+      await control[Symbol.asyncDispose]()
+    })()
     onTestFinished(() => {
       finished = true
       return cleanup()
@@ -741,11 +756,15 @@ describe("Windows taskkill close race", () => {
       parent.once("error", reject)
       parent.once("close", () => {
         if (finished) resolve(0) // The original test timeout already failed.
-        else reject(new Error("Descendant closed before its PID handshake"))
+        else reject(new Error(`Descendant closed before its PID handshake (exit=${parent.exitCode}, signal=${parent.signalCode}): ${stderr}`))
       })
     })
     try {
-      const [pid] = await Promise.all([ready, exit])
+      // The descendant must acknowledge activity after the root has exited.
+      const [pid] = await Promise.all([ready, exit.then(() => {
+        if (finished || cleaning) return
+        return probeWrite = fs.writeFile(probe, "")
+      })])
       if (finished) return
       expect(parent.exitCode).toBe(0)
       expect(Number.isInteger(pid) && pid > 0).toBe(true)
