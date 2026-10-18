@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
-import { join } from "node:path"
+import { join, posix, win32 } from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
@@ -11,6 +11,7 @@ import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestra
 import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
+  contained,
   createSessionRegistry,
   createOperationCache,
   createAttachmentUploads,
@@ -2833,5 +2834,22 @@ describe("session list paging", () => {
       parseListQuery({ parentID: null, limit: 10 }),
     ) as { data: SessionInfo[] }
     expect(roots.data.map((session) => session.id)).toEqual(["ses_c", "ses_b", "ses_a"])
+  })
+})
+
+describe("directory containment across host path semantics", () => {
+  test("rejects Windows drive and UNC root changes", () => {
+    expect(contained("C:\\Temp", "D:\\repo", win32)).toBe(false)
+    expect(contained("C:\\repo", "D:\\private\\file.txt", win32)).toBe(false)
+    expect(contained("//server/share/repo", "//other/share/private", win32)).toBe(false)
+  })
+
+  test("keeps same-root and descendant checks while rejecting parent and sibling paths", () => {
+    for (const [paths, root] of [[posix, "/repo"], [win32, "C:\\repo"]] as const) {
+      expect(contained(root, root, paths)).toBe(true)
+      expect(contained(root, paths.join(root, "child", "file.txt"), paths)).toBe(true)
+      expect(contained(root, paths.dirname(root), paths)).toBe(false)
+      expect(contained(root, `${root}-sibling`, paths)).toBe(false)
+    }
   })
 })

@@ -581,9 +581,9 @@ async function allowedWorkspaceDirectory(directory: string): Promise<boolean> {
   return !/^\/(?:private\/)?var\/folders\/[^/]+\/[^/]+\/T(?:\/|$)/.test(canonical)
 }
 
-function contained(root: string, target: string): boolean {
-  const path = relative(root, target)
-  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !path.startsWith(sep) && !path.startsWith("/"))
+export function contained(root: string, target: string, paths = { relative, isAbsolute, sep }): boolean {
+  const path = paths.relative(root, target)
+  return path === "" || (!paths.isAbsolute(path) && path !== ".." && !path.startsWith(`..${paths.sep}`) && !path.startsWith(paths.sep) && !path.startsWith("/"))
 }
 
 async function catalog(local: LocalServer, location: LocalLocation) {
