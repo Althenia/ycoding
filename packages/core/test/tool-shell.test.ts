@@ -20,6 +20,7 @@ import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Git } from "@ycoding-ai/core/git"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationMutationPath } from "@ycoding-ai/core/location-mutation-path"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Provider } from "@ycoding-ai/core/provider"
@@ -375,6 +376,7 @@ const executionNode = makeGlobalNode({
 const layer = AppNodeBuilder.build(
   LayerNode.group([
     Git.node,
+    LocationMutationPath.node,
     Database.node,
     EventRuntime.node,
     Job.node,
@@ -1113,14 +1115,14 @@ describe("ShellTool", () => {
             withSession(tmp.path, (registry) =>
               Effect.gen(function* () {
                 const git = yield* Git.Service
-                const fsUtil = yield* FSUtil.Service
+                const canonical = yield* LocationMutationPath.Service
                 const location = yield* Location.Service
                 const repository = yield* git.repo.discover(location.directory)
                 expect(repository, "active Location repository discovery").toBeDefined()
                 if (!repository) throw new Error("Active Location repository was not discovered")
-                const canonicalWorktree = yield* fsUtil.realPath(worktree)
+                const canonicalWorktree = yield* canonical.realPath(worktree)
                 const entries = yield* git.worktree.list(repository)
-                const checkouts = yield* Effect.forEach(entries, (entry) => fsUtil.realPath(entry.directory))
+                const checkouts = yield* Effect.forEach(entries, (entry) => canonical.realPath(entry.directory))
                 expect(checkouts, "linked checkout is listed by the active repository").toContain(canonicalWorktree)
                 expect(
                   checkouts.some((checkout) => FSUtil.contains(checkout, canonicalWorktree)),
@@ -1130,9 +1132,9 @@ describe("ShellTool", () => {
                 expect(linked, "linked checkout repository discovery").toBeDefined()
                 if (!linked) throw new Error("Linked checkout repository was not discovered")
                 expect(
-                  yield* fsUtil.realPath(linked.commonDirectory),
+                  yield* canonical.realPath(linked.commonDirectory),
                   "linked and active repositories share their canonical Git common directory",
-                ).toBe(yield* fsUtil.realPath(repository.commonDirectory))
+                ).toBe(yield* canonical.realPath(repository.commonDirectory))
                 return yield* executeTool(registry, call({ command: cwdCommand, workdir: worktree }))
               }),
             ),

@@ -3,7 +3,8 @@ import path from "path"
 import { $ } from "bun"
 import { createHash } from "crypto"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Exit, Layer, PlatformError, Schema } from "effect"
+import { spawnSync } from "node:child_process"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Git } from "@ycoding-ai/core/git"
 import { Global } from "@ycoding-ai/core/global"
@@ -11,6 +12,7 @@ import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationMutation } from "@ycoding-ai/core/location-mutation"
+import { LocationMutationPath } from "@ycoding-ai/core/location-mutation-path"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { tmpdir } from "./fixture/tmpdir"
 import { location } from "./fixture/location"
@@ -45,10 +47,11 @@ async function initRepository(directory: string) {
   await $`git commit --allow-empty -m root`.cwd(directory).quiet()
 }
 
-function provideRepository(directory: string, data: string) {
+function provideRepository(directory: string, data: string, canonical?: (path: string) => Effect.Effect<string, FSUtil.Error>) {
   return LayerNode.compile(
     LayerNode.group([
       LocationMutation.node,
+      LocationMutationPath.node,
       Git.node,
       FSUtil.node,
       LayerNodePlatform.filesystem,
@@ -60,6 +63,7 @@ function provideRepository(directory: string, data: string) {
         Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
       ],
       [Global.node, Global.layerWith({ data })],
+      ...(canonical ? [[LocationMutationPath.node, Layer.succeed(LocationMutationPath.Service, { realPath: canonical })] as const] : []),
     ],
   )
 }
@@ -237,6 +241,33 @@ describe("LocationMutation", () => {
         yield* Effect.provide(
           Effect.gen(function* () {
             const mutation = yield* LocationMutation.Service
+            const canonical = yield* LocationMutationPath.Service
+            const aliases = [managed]
+            if (process.platform === "win32") {
+              const result = spawnSync("cmd.exe", ["/d", "/c", `for %I in ("${managed}") do @echo %~sI`], { encoding: "utf8" })
+              expect(result.status).toBe(0)
+              const short = result.stdout.trim()
+              expect(short).toMatch(/~\d/)
+              const long = yield* canonical.realPath(managed)
+              expect(short).not.toBe(long)
+              expect(yield* canonical.realPath(short)).toBe(long)
+              aliases.push(short, long)
+              const junction = path.join(managed, "outside-junction")
+              yield* Effect.promise(() => fs.symlink(otherRoot, junction, "junction"))
+              for (const alias of [short, long]) {
+                for (const descendant of ["", "missing.txt"]) {
+                  const escaped = path.join(alias, "outside-junction", descendant)
+                  expect(yield* mutation.repositoryWorktree(escaped)).toBe(false)
+                  expect((yield* mutation.resolve({ path: escaped })).externalDirectory).toBeDefined()
+                }
+              }
+            }
+            for (const alias of aliases) {
+              expect(yield* mutation.repositoryWorktree(alias)).toBe(true)
+              expect((yield* mutation.resolve({ path: alias, kind: "directory" })).externalDirectory).toBeUndefined()
+              expect((yield* mutation.resolve({ path: path.join(alias, "missing", "file.txt") })).externalDirectory).toBeUndefined()
+            }
+            expect(Exit.isFailure(yield* canonical.realPath(path.join(managed, "missing")).pipe(Effect.exit))).toBe(true)
             for (const kind of ["file", "directory"] as const) {
               expect(
                 (yield* mutation.resolve({ path: path.join(managed, "file.txt"), kind })).externalDirectory,
@@ -251,6 +282,25 @@ describe("LocationMutation", () => {
         )
       }),
     ),
+  )
+
+  it.live("fails closed when checkout canonicalization is denied", () =>
+    withTmp((base) => Effect.gen(function* () {
+      const root = path.join(base, "repo")
+      const outside = path.join(base, "outside")
+      yield* Effect.promise(async () => {
+        await initRepository(root)
+        await fs.mkdir(outside)
+      })
+      const denied = PlatformError.systemError({ _tag: "PermissionDenied", module: "FileSystem", method: "realPath" })
+      yield* Effect.provide(Effect.gen(function* () {
+        const mutation = yield* LocationMutation.Service
+        const result = yield* mutation.resolve({ path: outside, kind: "directory" }).pipe(Effect.exit)
+        expect(Exit.isFailure(result)).toBe(true)
+        const trusted = yield* mutation.repositoryWorktree(outside).pipe(Effect.exit)
+        expect(Exit.isFailure(trusted)).toBe(true)
+      }), provideRepository(root, path.join(base, "data"), () => Effect.fail(denied)))
+    })),
   )
 
   it.live("recognizes every checkout of the Location repository through canonical paths and no other repository", () =>

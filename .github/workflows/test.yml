@@ -152,7 +152,7 @@ jobs:
       - name: Verify CLI portability regressions
         timeout-minutes: 10
         working-directory: packages/cli
-        run: bun test --timeout 30000 test/binary-name.test.ts test/chrome-extension-packaging.test.ts test/computer-use-packaging.test.ts test/update.test.ts test/remote-operations.test.ts test-integration/task-mcp-node.test.ts
+        run: bun test --timeout 30000 test/binary-name.test.ts test/install-local.test.ts test/chrome-extension-packaging.test.ts test/computer-use-packaging.test.ts test/update.test.ts test/remote-operations.test.ts test-integration/task-mcp-node.test.ts
       - name: Verify exact shell output bytes
         if: always()
         timeout-minutes: 10
@@ -162,7 +162,7 @@ jobs:
         if: always()
         timeout-minutes: 10
         working-directory: packages/core
-        run: bun test --timeout 30000 test/browser-extension.test.ts test/tool-shell.test.ts test/session-guardrail-service.test.ts
+        run: bun test --timeout 30000 test/browser-extension.test.ts test/tool-shell.test.ts test/session-guardrail-service.test.ts test/location-mutation.test.ts test/effect/cross-spawn-spawner.test.ts
       - name: Verify native inventory paths and pagination
         if: always()
         timeout-minutes: 5
