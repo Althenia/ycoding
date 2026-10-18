@@ -1,4 +1,4 @@
-import { wireContract } from "./wire-contract.js"
+import { domainLabel, wireContract, withDomainLiteral } from "./wire-contract.js"
 import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { Schema, SchemaAST } from "effect"
 import { resourceEndpoints, middlewareErrors, allEndpoints } from "./resources-source.js"
@@ -288,7 +288,7 @@ export function resourceProto(sharedFile = false, allocation: WireAllocation = w
         .filter(([name]) => shared.has(name) === sharedFile)
         .map(
           ([name, values]) =>
-            `enum ${name} {\n${values.map((value, index) => `  ${name.toUpperCase()}_${typeof value === "string" ? identifier(value).toUpperCase() : String(value).replace("-", "MINUS_")} = ${enumNumbers(name, values, allocation)[index]};`).join("\n")}\n${reservedLine("enum", name, allocation)}}`,
+            `enum ${name} {\n${values.map((value, index) => `  ${name.toUpperCase()}_${typeof value === "string" ? identifier(value).toUpperCase() : String(value).replace("-", "MINUS_")} = ${enumNumbers(name, values, allocation)[index]}${domainLabel(value)};`).join("\n")}\n${reservedLine("enum", name, allocation)}}`,
         )
         .join("\n\n") +
       "\n\n" +
@@ -296,7 +296,7 @@ export function resourceProto(sharedFile = false, allocation: WireAllocation = w
         .filter(([name]) => shared.has(name) === sharedFile)
         .map(
           ([name, message]) =>
-            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
+            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${withDomainLiteral(fieldOption(field), message, field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
         )
         .join("\n\n") +
       "\n\n" +

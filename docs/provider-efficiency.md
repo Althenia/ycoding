@@ -136,6 +136,19 @@ Prepared requests preserve append-only chronological observations, a prior eligi
 
 Direct GPT-5.6 Responses requests send `reasoning.context: "all_turns"` and `context_management: [{ type: "compaction", compact_threshold: 200000 }]`. In `stored` state mode, compatible later requests may send `previous_response_id` plus only the new suffix. In `stateless` mode, YCoding sends `store: false`, retains the returned opaque encrypted compaction item outside public messages, replays it only for the same provider model, and omits input before that provider boundary. The native `web_search` tool is provider-executed and its returned call item is replayed on stateless follow-ups. This is OpenAI-hosted search, not Core's provider-independent local Exa/Parallel `websearch` tool. YCoding exposes no standalone `/responses/compact` endpoint.
 
+## Provider-enforced JSON schemas
+
+The native OpenAI Responses HTTP/WebSocket, OpenAI Chat Completions and Anthropic
+Messages protocols accept JSON response schemas. Responses sends strict
+`text.format`; Chat Completions sends strict `response_format.json_schema`;
+Anthropic sends `output_config.format`. Existing verbosity and effort settings
+remain present. Protocols without the selected response-format capability reject
+it before transport preparation; ordinary text requests add no format fields.
+
+Schema projection removes unenforced numeric, string-length and collection
+constraints. It preserves property names, schema maps, `enum`, `const`,
+`default`, `examples`, `required`, and supported `minItems` values.
+
 ## Adaptive Anthropic TTL
 
 Adaptive TTL depends only on the request source and the model profile, and a source never changes its TTL. Changing a breakpoint's TTL partway through a Session misses every cache entry written earlier and rewrites the whole prefix.

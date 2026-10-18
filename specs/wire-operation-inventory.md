@@ -1,6 +1,6 @@
 # Wire operation inventory
 
-The operation manifest reconciles the following baseline inventory against live Protocol endpoint declarations and Remote operation arrays. It requires 207 local endpoints, 79 connector operations, four relay notices, exact membership, consistent row counts, and exactly one runtime owner per member.
+The operation manifest reconciles the local reference inventory and current connector contracts against live Protocol declarations. It requires 207 local endpoints, 87 connector names, four relay notices, exact membership, consistent row counts, and exactly one runtime owner per member.
 
 Names inside braces share the prefix before the braces. Endpoint IDs are literal declarations, not group names or OpenAPI annotation IDs. The disposition text is the manifest's classification input; proposed transport details in these verbatim table cells do not assert that those transports are implemented. Current typed transport contracts are specified in [resources](./wire-resources.md), [platform](./wire-platform.md), [session](./wire-session.md), and [connector](./wire-connector.md).
 
@@ -73,7 +73,7 @@ Names inside braces share the prefix before the braces. Endpoint IDs are literal
 
 ## Additive frontend-boundary operations
 
-The v5-only operations below extend the frozen TS HTTP baseline without changing its operation IDs or semantics. They are not additional HTTP endpoints. All permit LOCAL_CLIENT only, are completed/unpaged typed-bulk mutations, and exclude REMOTE_CLIENT, RELAY, AGENT and SERVER.
+The v5-only operations below extend the frozen TS HTTP baseline without changing its operation IDs or semantics. They are not additional HTTP endpoints. All permit LOCAL_CLIENT only, are completed/unpaged typed-bulk mutations except the `remote.mcp.get` read, and exclude REMOTE_CLIENT, RELAY, AGENT and SERVER.
 
 | Operation                 | ID   | Scope    | Backend owner                                                | Consumer and TS reference boundary                                                                                                  |
 | ------------------------- | ---- | -------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -81,6 +81,8 @@ The v5-only operations below extend the frozen TS HTTP baseline without changing
 | `mcp.configure`           | 2061 | Location | Persistent config write and MCP reload                       | CLI `mcp add`; `packages/cli/src/commands/handlers/mcp/add.ts:33–67`                                                                |
 | `frontendPackage.resolve` | 2062 | Location | Guarded npm installation/resolution of presentation packages | CLI/TUI package loading; `packages/cli/src/commands/handlers/tui-shared.ts:45,81`, `packages/core/src/npm.ts:122–147`               |
 | `remote.enroll`           | 3053 | Machine  | Connector enrollment and private credentials                 | CLI enrollment; `packages/cli/src/commands/handlers/remote/enroll.ts:13–49`, `packages/cli/src/remote-credentials.ts:47–93,111–190` |
+| `remote.mcp.get`          | 3054 | Machine  | Machine relay MCP state and device resource URL              | CLI/TUI relay MCP status; generated `client.remote.mcp.get()`                                                                       |
+| `remote.mcp.set`          | 3055 | Machine  | Persistent relay MCP enablement                              | CLI/TUI relay MCP toggle; generated `client.remote.mcp.set({ enabled })`                                                            |
 
 Full shapes, budgets, closed errors, explicit scope policy and partial failure settlement are specified in [wire-resources](./wire-resources.md#backend-owned-configuration-and-frontend-packages) and [wire-platform](./wire-platform.md#backend-owned-device-enrollment). Keys remain on `integration.connect.key` and `credential.activate`; `mcp.add` remains live-only. Enrollment ID/name/replacement retain the current CLI flow. No removal operation is needed: CLI disconnect only calls `remote.set` with false.
 
@@ -110,6 +112,8 @@ Optional backend-owned `Location_Info.backendPaths` (tag 4), `Skill_Info.scope` 
 | `machine.latency.{append,list}`                                                                                                                                                                                                                                                                                                                                                      | 2     | REPLACE with `telemetry.{append,list}` in machine scope; preserve consent and bounded payload-free samples.                                                                                                                                                   |
 
 | `incident.{report,recent,guidance.get}` | 3 | DERIVED: retain canonical model incident reads; report and recent use Machine scope, guidance resolves Location from verified Session scope. |
+| `artifact.demo.{preview,export}` | 2 | DERIVED: connector-owned fixed resources through typed Machine-scoped operations; require trusted MCP access without path or content selectors. |
+| `local.app.{register,list,revoke,open,status,http}` | 6 | DERIVED: connector-owned Session-scoped registered local HTTP apps; require trusted MCP context bound to owner, device, Session, client, exact grant and enable epoch. Preserve registration generation, expiry and explicit route/method allowlists; expose no arbitrary Location or URL proxy. |
 
 ### Relay-owned notice operations
 
@@ -117,10 +121,10 @@ Optional backend-owned `Location_Info.backendPaths` (tag 4), `Skill_Info.scope` 
 
 ## Complete Application Event Inventory
 
-`event.subscribe` (4000) carries `PublicEvent` through EventBatch. Its exact 116-member inventory is `EventManifest.ServerDefinitions`: 58 durable Session branches reused from SessionLogItem and 58 ephemeral branches. This includes all eight Session ephemerals, among them the live-only `session.tool.progress` at tag 51 and all public catalog/integration/filesystem/permission/guardrail/plugin/project/command/config/skill/PTY/shell/question/Form/todo/status/TUI/installation/VCS/MCP families. Local subscriptions may use the public global stream; remote subscriptions use verified Session scopes only.
+`event.subscribe` (4000) carries `PublicEvent` through EventBatch. Its exact 116-member inventory is `EventManifest.ServerDefinitions`: 58 durable Session branches reused from SessionLogItem and 58 ephemeral branches. This includes all eight Session ephemerals, among them the live-only `session.tool.progress` at tag 51 and all public catalog/integration/filesystem/permission/guardrail/plugin/project/command/config/skill/PTY/shell/question/Form/todo/provider-quota-pace/status/TUI/installation/VCS/MCP families. Local subscriptions may use the public global stream; remote subscriptions use verified Session scopes only.
 
 `session.log` (4039) carries its 59-member SessionLogItem union: the 58 public durable events plus log.synced across slots 1–60, with slot 40 reserved for the retired durable `session.tool.progress`. PublicEvent excludes log.synced, server.connected, internal profile/usage/provider-request facts, historical compaction.replaced and runtime-only families outside ServerDefinitions. Ready owns connection/source-epoch establishment. Protobuf event annotations generate TS/Rust diagnostic membership and durability catalogs; [wire-session.md](./wire-session.md) defines payload associations and generation.
 
 ## Canonical generated remote disposition
 
-The 79 source connector names above resolve to 75 unique canonical descriptors, plus four role-2 relay notices. Preserve live `session.prediction` (4082) and `session.promptGenerate` (4083) authority. Shared operations retain local IDs; source names classified REPLACE are migration evidence only, not aliases or split dispatchers. `catalog.get` has fresh ID 5043 and accepts backend-resolved Session/workspace Scope. `provider.auth.*`, `workspace.list` and the nine derived Session workflows retain their canonical names; `session.compaction.list` shares local ID 4081. All typed allocations and role-scoped admission obligations are in [wire-connector.md](./wire-connector.md).
+The 87 source connector names above resolve to 83 unique canonical descriptors, plus four role-2 relay notices. Preserve live `session.prediction` (4082) and `session.promptGenerate` (4083) authority. Shared operations retain local IDs; source names classified REPLACE are migration evidence only, not aliases or split dispatchers. `catalog.get` has fresh ID 5043 and accepts backend-resolved Session/workspace Scope. `provider.auth.*`, `workspace.list`, the nine derived Session workflows, connector-owned fixed demos and six local-application operations retain their canonical names; `session.compaction.list` shares local ID 4081. All typed allocations and role-scoped admission obligations are in [wire-connector.md](./wire-connector.md).

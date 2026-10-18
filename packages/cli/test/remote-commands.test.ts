@@ -24,7 +24,8 @@ async function run(args: string[], root?: string) {
 test("remote help exposes backend enrollment and controls without per-Session access commands", async () => {
   const result = await run(["remote", "--help"])
   expect(result.exitCode).toBe(0)
-  for (const name of ["enroll", "connect", "disconnect", "status", "sessions"]) expect(result.stdout).toContain(name)
+  for (const name of ["enroll", "connect", "disconnect", "status", "sessions", "mcp"])
+    expect(result.stdout).toContain(name)
   for (const name of ["allow", "deny"]) expect(result.stdout).not.toContain(`  ${name}`)
 })
 
@@ -140,3 +141,82 @@ test("remote sessions follows every opaque backend inventory page", async () => 
     await server.close()
   }
 })
+
+test("relay MCP controls the same backend without enabling Remote and states its authority", async () => {
+  let remote: "off" | "on" = "off"
+  let enrolled = false
+  let mcp: { state: "off" | "on" | "error"; message?: string; url?: string } = { state: "off" }
+  const url = "https://relay.example/api/mcp/devices/dev_fixture"
+  const writes: { remote: unknown[]; mcp: unknown[] } = { remote: [], mcp: [] }
+  const device = {
+    name: "Fixture",
+    deviceID: "dev_fixture",
+    relayOrigin: "https://relay.example",
+    enrolledAt: 1,
+    credentialState: "not_authenticated",
+  }
+  const server = v5Server((name, data) => {
+    if (name === "health.get")
+      return { data: { healthy: true, version: "local", pid: process.pid, sourceEpoch: "source_fixture" } }
+    if (name === "remote.get") return { data: { state: remote, ...(enrolled ? { device } : {}) } }
+    if (name === "remote.set") {
+      writes.remote.push(data)
+      return { data: { state: remote } }
+    }
+    if (name === "remote.mcp.get") return { data: mcp }
+    if (name === "remote.mcp.set") {
+      const enabled = (data as { payload: { enabled: boolean } }).payload.enabled
+      writes.mcp.push(enabled)
+      if (mcp.state === "error") return { data: mcp }
+      mcp = enabled ? { state: "on", url } : { state: "off" }
+      return { data: mcp }
+    }
+    throw new Error(name)
+  })
+  try {
+    const help = await run(["remote", "mcp", "--help"])
+    expect(help.exitCode, help.stderr).toBe(0)
+    for (const name of ["on", "off", "status"]) expect(help.stdout).toContain(name)
+
+    const unenrolled = await run(["remote", "mcp", "on", "--server", server.url])
+    expect(unenrolled.exitCode).not.toBe(0)
+    expect(unenrolled.stdout + unenrolled.stderr).toContain("ycoding remote enroll")
+
+    enrolled = true
+    const dependency = await run(["remote", "mcp", "on", "--server", server.url])
+    expect(dependency.exitCode).not.toBe(0)
+    expect(dependency.stdout + dependency.stderr).toContain("ycoding remote connect")
+    expect(writes).toEqual({ remote: [], mcp: [] })
+
+    const idle = await run(["remote", "mcp", "status", "--server", server.url])
+    expect(idle.exitCode, idle.stderr).toBe(0)
+    expect(idle.stdout).toContain("Relay MCP  off")
+
+    remote = "on"
+    const on = await run(["remote", "mcp", "on", "--server", server.url])
+    expect(on.exitCode, on.stderr).toBe(0)
+    for (const phrase of ["every existing and future Session", "below your home", "Always approvals", "YOLO"])
+      expect(on.stdout.replace(/\s+/g, " ")).toContain(phrase)
+    expect(on.stdout).toContain(url)
+    expect(writes.mcp).toEqual([true])
+
+    const status = await run(["remote", "mcp", "status", "--server", server.url])
+    expect(status.exitCode, status.stderr).toBe(0)
+    expect(status.stdout).toContain("Relay MCP  on")
+    expect(status.stdout).toContain(url)
+
+    const off = await run(["remote", "mcp", "off", "--server", server.url])
+    expect(off.exitCode, off.stderr).toBe(0)
+    expect(off.stdout).toContain("Relay MCP off.")
+    expect(writes).toEqual({ remote: [], mcp: [true, false] })
+
+    mcp = { state: "error", message: "relay revocation unconfirmed" }
+    const failed = await run(["remote", "mcp", "status", "--server", server.url])
+    expect(failed.exitCode, failed.stderr).toBe(0)
+    expect(failed.stdout).toContain("Relay MCP  error · relay revocation unconfirmed")
+    const failedOff = await run(["remote", "mcp", "off", "--server", server.url])
+    expect(failedOff.exitCode).not.toBe(0)
+  } finally {
+    await server.close()
+  }
+}, 60_000)

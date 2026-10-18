@@ -7,7 +7,7 @@ use ycoding_schema::{JsonValue, LosslessString, parse_json};
 use ycoding_store::{
     Catalog, KeyPart, Metadata, Options, Store, TableDeclaration, TableSpec, backup,
     import::{self, DatabaseKind},
-    model_incident, project, resources, session,
+    mcp_events, model_incident, project, resources, session,
     session::Document,
     tuple_key,
     upgrade::{self, Outcome, Predecessor},
@@ -19,7 +19,7 @@ const REWRITTEN: [&str; 4] = [
     "session_compaction_job",
     "session_provider_request",
 ];
-const ADDED_BEFORE_ANALYTICS: [&str; 9] = [
+const ADDED_BEFORE_ANALYTICS: [&str; 18] = [
     "usage_analytics_request",
     "usage_analytics_request_time_created_id_idx",
     "model_incident",
@@ -29,6 +29,15 @@ const ADDED_BEFORE_ANALYTICS: [&str; 9] = [
     "model_incident_guidance_idx",
     "model_incident_request_idx",
     "model_guidance_clear",
+    "mcp_event_subscription",
+    "mcp_event_subscription_identity_idx",
+    "mcp_event_subscription_session_idx",
+    "mcp_event_subscription_expiry_idx",
+    "mcp_event_outbox",
+    "mcp_event_outbox_id_idx",
+    "mcp_event_outbox_dedupe_idx",
+    "mcp_event_outbox_dispatch_idx",
+    "mcp_event_outbox_subscription_seq_idx",
 ];
 const SESSIONS: usize = 1_200;
 const NOW: i64 = 1_000;
@@ -107,7 +116,16 @@ fn without(names: &[&str]) -> Catalog {
 }
 
 fn before_incidents() -> Catalog {
-    without(&["model_incident", "model_guidance_clear"])
+    without(&[
+        "model_incident",
+        "model_guidance_clear",
+        "mcp_event_subscription",
+        "mcp_event_outbox",
+    ])
+}
+
+fn before_mcp_events() -> Catalog {
+    without(&["mcp_event_subscription", "mcp_event_outbox"])
 }
 
 fn before_analytics() -> Catalog {
@@ -115,6 +133,8 @@ fn before_analytics() -> Catalog {
         "model_incident",
         "model_guidance_clear",
         "usage_analytics_request",
+        "mcp_event_subscription",
+        "mcp_event_outbox",
     ])
 }
 
@@ -456,7 +476,7 @@ fn a_current_store_is_reported_current_without_any_write_or_copy() {
 }
 
 #[test]
-fn the_analytics_predecessor_gains_only_the_incident_tables() {
+fn the_analytics_predecessor_gains_only_the_incident_and_events_tables() {
     let directory = Directory::new();
     let path = directory.database();
     create(&path, before_incidents());
@@ -931,19 +951,21 @@ fn a_tampered_marker_still_blocks_cleanup_after_an_upgrade() {
 }
 
 #[test]
-fn both_predecessors_are_recognized_from_the_live_declarations() {
+fn all_predecessors_are_recognized_from_the_live_declarations() {
     let mut names = target()
         .tables()
         .iter()
         .map(|table| table.name)
         .collect::<Vec<_>>();
     names.sort();
-    assert_eq!(names.len(), 56);
+    assert_eq!(names.len(), 58);
+    assert_eq!(before_mcp_events().tables().len(), 56);
     assert_eq!(before_incidents().tables().len(), 54);
     assert_eq!(before_analytics().tables().len(), 53);
     assert!(
         model_incident::TABLES
             .iter()
+            .chain(mcp_events::TABLES)
             .chain([&TableDeclaration::of::<resources::UsageAnalyticsRequestTable>()])
             .all(|table| target().tables().contains(table))
     );

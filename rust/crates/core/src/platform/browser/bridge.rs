@@ -991,8 +991,17 @@ impl Bridge {
             return Ok(());
         }
         if message.kind == Kind::Revoked {
-            if state.pending.as_ref().is_some_and(|p| p.tab == id) {
-                fail_pending(&mut state, "Chrome tab was revoked");
+            match state.pending.as_ref() {
+                Some(pending) if pending.tab == id && pending.kind == PendingKind::Open => finish(
+                    &mut state,
+                    Err(Error::InvalidFrame(
+                        "Chrome tab access was revoked before opening completed".into(),
+                    )),
+                ),
+                Some(pending) if pending.tab == id => {
+                    fail_pending(&mut state, "Chrome tab was revoked")
+                }
+                _ => {}
             }
             state.tabs.remove(&id);
             return Ok(());
@@ -1119,7 +1128,7 @@ impl Bridge {
             if kind == PendingKind::Open {
                 finish(
                     &mut state,
-                    Err(Error::Unavailable(
+                    Err(Error::InvalidFrame(
                         "Chrome could not open a background tab".into(),
                     )),
                 );

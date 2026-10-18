@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import { expect, test } from "bun:test"
+import { InputRenderable } from "@opentui/core"
+import { expect, jest, spyOn, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { createEffect, createMemo, onMount, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, onMount, Show, type JSX } from "solid-js"
 import { DialogAgent } from "../../src/component/dialog-agent"
 import { DialogConfig } from "../../src/component/dialog-config"
 import { DialogCustomEndpoint } from "../../src/component/dialog-custom-endpoint"
@@ -900,6 +901,60 @@ const directories = [
   { directory: "/tmp/ycoding/home/Workspace/Personal/Weeeee", strategy: "copy" as const },
   { directory: "/tmp/ycoding/home/Workspace/work/bkof", strategy: "copy" as const },
 ]
+
+test("a mounted rename dialog focuses its current title", async () => {
+  const app = await testRender(
+    () => <DialogProviders><DialogSessionRename sessionID={sessionID} currentTitle="Rename this session" /></DialogProviders>,
+    { width: 100, height: 30 },
+  )
+  app.renderer.start()
+  try {
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+    const input = app.renderer.currentFocusedEditor
+    expect(input instanceof InputRenderable ? input.value : undefined).toBe("Rename this session")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("closing rename before deferred focus does not touch its destroyed input", async () => {
+  const [visible, setVisible] = createSignal(false)
+  const app = await testRender(
+    () => (
+      <DialogProviders>
+        <text>Ready</text>
+        <Show when={visible()}><DialogSessionRename sessionID={sessionID} currentTitle="Close immediately" /></Show>
+      </DialogProviders>
+    ),
+    { width: 100, height: 30 },
+  )
+  try {
+    app.renderer.start()
+    await app.waitForFrame((frame) => frame.includes("Ready"))
+    const elapsed = performance.now()
+    jest.useFakeTimers()
+    jest.advanceTimersByTime(Math.ceil(elapsed))
+    const focus = spyOn(InputRenderable.prototype, "focus")
+    try {
+      setVisible(true)
+      await Promise.resolve()
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("Close immediately")
+      setVisible(false)
+      await Promise.resolve()
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("Close immediately")
+      focus.mockClear()
+      expect(() => jest.advanceTimersByTime(1)).not.toThrow()
+      expect(focus).not.toHaveBeenCalled()
+    } finally {
+      focus.mockRestore()
+    }
+  } finally {
+    app.renderer.destroy()
+    jest.useRealTimers()
+  }
+})
 
 test("captures concrete remaining dialog fixtures at canonical terminal dimensions", async () => {
   await mkdir(state, { recursive: true })

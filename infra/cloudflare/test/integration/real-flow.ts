@@ -541,7 +541,7 @@ try {
   const registeredPush = await pushHttp.subscribe({
     endpoint,
     keys: pushKeys,
-    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true },
+    categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true },
   })
   const decryptPush = async (request: { readonly body: Uint8Array }): Promise<Record<string, unknown>> => {
     const sender = request.body.slice(21, 86)
@@ -2359,7 +2359,7 @@ try {
         absentMessage.error._tag === "MessageNotFoundError",
       `an unknown indexed message was not refused: ${JSON.stringify(absentMessage)}`,
     )
-    const offlineOnly = { "agent-completed": false, "approval-requested": false, "machine-offline": true }
+    const offlineOnly = { "agent-completed": false, "approval-requested": false, "machine-offline": true, "quota-pace": false }
     expect(
       (await pushHttp.subscribe({ endpoint, keys: pushKeys, categories: offlineOnly })).ok,
       "the push subscription could not store this device's System choices",
@@ -2411,7 +2411,7 @@ try {
         await pushHttp.subscribe({
           endpoint,
           keys: pushKeys,
-          categories: { "agent-completed": false, "approval-requested": false, "machine-offline": true },
+          categories: { "agent-completed": false, "approval-requested": false, "machine-offline": true, "quota-pace": false },
         })
       ).ok,
       "the offline receiver preferences were not saved",
@@ -2508,7 +2508,7 @@ try {
         await pushHttp.subscribe({
           endpoint,
           keys: pushKeys,
-          categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true },
+          categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true },
         })
       ).ok,
       "the completion receiver could not be restored after the offline proof",
@@ -2540,7 +2540,10 @@ try {
     await store.selectSession(sessionID)
     await store.setYolo(2)
     const socket = clientSockets.at(-1)
-    expect(socket?.readyState === 1, "Held-commit test requires the selected native browser socket")
+    expect(
+      socket?.readyState === 1,
+      `Held-commit test requires the selected native browser socket: ${JSON.stringify({ sockets: clientSockets.map((socket) => socket.readyState), transport: store.state().transport, connection: store.state().connection.kind, statuses: browserStatuses.slice(-6) })}`,
+    )
     const text = "Hold the admission acknowledgement while preserving a newer draft"
     const newer = "A newer draft must survive old acknowledgement callbacks"
     const result = Promise.withResolvers<void>()

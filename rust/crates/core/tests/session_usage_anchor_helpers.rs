@@ -133,7 +133,7 @@ fn reply(text: &str) -> (u16, String) {
     (
         200,
         format!(
-            "data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\ndata: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n",
+            "data: {{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_reply\",\"delta\":{}}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"reply\",\"output\":[],\"usage\":{{\"input_tokens\":3,\"output_tokens\":2}}}}}}\n\n",
             stringify_json(&JsonValue::String(text.into()))
         ),
     )
@@ -155,16 +155,20 @@ struct World {
     server: tokio::task::JoinHandle<()>,
 }
 
-async fn world(first: First) -> World {
+async fn world(first: First, decision_reply: bool) -> World {
     let store = support::store();
     let sessions = Service::new(store.client());
-    let (endpoint, requests, server) = scripted(reply("Fix build")).await;
+    let (endpoint, requests, server) = scripted(reply(if decision_reply {
+        r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":"review","score":null,"confidence":0.9}]}}"#
+    } else {
+        "Fix build"
+    })).await;
     let source =
         include_str!("../../../../packages/core/test/plugin/fixtures/models-dev-reasoning.json");
     let mut catalog = Catalog::new(models_dev::normalize(&parse_json(source).unwrap()).unwrap());
     catalog
         .configure(&[parse_json(&format!(
-            r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#
+            r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai","settings":{{"apiKey":"fixture","baseURL":"{endpoint}"}}}}}}}}"#
         ))
         .unwrap()])
         .unwrap();
@@ -270,7 +274,7 @@ impl World {
 
     async fn decision(&mut self) -> Ledger {
         let id = session::Id::new("ses_one").unwrap();
-        let _ = within(self.decision.evaluate(
+        within(self.decision.evaluate(
             &parse_json(DECISION).unwrap(),
             decision::Invocation {
                 session_id: &id,
@@ -279,7 +283,8 @@ impl World {
                 cancellation: &Cancellation::default(),
             },
         ))
-        .await;
+        .await
+        .unwrap();
         within(self.requests.recv()).await.unwrap();
         ledger(&self.store, "ses_one", "decision")
     }
@@ -312,7 +317,7 @@ async fn a_title_request_is_attributed_to_the_resolved_first_prompt() {
         ),
         (First::SeededWithoutAdmission, None),
     ] {
-        let mut world = world(first).await;
+        let mut world = world(first, false).await;
         assert_eq!(recorded_anchor(&world.title().await), expected);
         within(world.server).await.unwrap();
     }
@@ -328,7 +333,7 @@ async fn a_decision_request_is_attributed_to_the_sessions_current_prompt_or_to_n
         ),
         (First::SeededWithoutAdmission, None),
     ] {
-        let mut world = world(first).await;
+        let mut world = world(first, true).await;
         assert_eq!(recorded_anchor(&world.decision().await), expected);
         within(world.server).await.unwrap();
     }

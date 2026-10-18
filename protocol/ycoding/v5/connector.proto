@@ -8,107 +8,323 @@ import "ycoding/v5/session.proto";
 
 option (ycoding.v5.operation_range) = { first: 5000 last: 5099 };
 
-enum Connector_AuthInfo_methodsItem_type {
-  CONNECTOR_AUTHINFO_METHODSITEM_TYPE_KEY = 1;
-  CONNECTOR_AUTHINFO_METHODSITEM_TYPE_OAUTH = 2;
-  CONNECTOR_AUTHINFO_METHODSITEM_TYPE_COMMAND = 3;
+enum Connector_LocalAppRegister_host {
+  CONNECTOR_LOCALAPPREGISTER_HOST_127_0_0_1 = 1 [(ycoding.v5.domain_label) = "127.0.0.1"];
+  CONNECTOR_LOCALAPPREGISTER_HOST____1_ = 2 [(ycoding.v5.domain_label) = "[::1]"];
 }
 
-enum Connector_AuthPromptValue1_type {
-  CONNECTOR_AUTHPROMPTVALUE1_TYPE_TEXT = 1;
+enum Connector_LocalAppRoute_match {
+  CONNECTOR_LOCALAPPROUTE_MATCH_EXACT = 1 [(ycoding.v5.domain_label) = "exact"];
+  CONNECTOR_LOCALAPPROUTE_MATCH_PREFIX = 2 [(ycoding.v5.domain_label) = "prefix"];
 }
 
-enum Connector_AuthPromptValue1_when_op {
-  CONNECTOR_AUTHPROMPTVALUE1_WHEN_OP_EQ = 1;
-  CONNECTOR_AUTHPROMPTVALUE1_WHEN_OP_NEQ = 2;
-}
-
-enum Connector_AuthPromptValue2_type {
-  CONNECTOR_AUTHPROMPTVALUE2_TYPE_SELECT = 1;
-}
-
-enum Connector_AuthPromptValue2_when_op {
-  CONNECTOR_AUTHPROMPTVALUE2_WHEN_OP_EQ = 1;
-  CONNECTOR_AUTHPROMPTVALUE2_WHEN_OP_NEQ = 2;
+enum Connector_LocalAppMethod {
+  CONNECTOR_LOCALAPPMETHOD_GET = 1 [(ycoding.v5.domain_label) = "GET"];
+  CONNECTOR_LOCALAPPMETHOD_HEAD = 2 [(ycoding.v5.domain_label) = "HEAD"];
+  CONNECTOR_LOCALAPPMETHOD_POST = 3 [(ycoding.v5.domain_label) = "POST"];
+  CONNECTOR_LOCALAPPMETHOD_PUT = 4 [(ycoding.v5.domain_label) = "PUT"];
+  CONNECTOR_LOCALAPPMETHOD_PATCH = 5 [(ycoding.v5.domain_label) = "PATCH"];
+  CONNECTOR_LOCALAPPMETHOD_DELETE = 6 [(ycoding.v5.domain_label) = "DELETE"];
+  CONNECTOR_LOCALAPPMETHOD_OPTIONS = 7 [(ycoding.v5.domain_label) = "OPTIONS"];
 }
 
 enum Connector_Error_code {
-  CONNECTOR_ERROR_CODE_INVALID_MESSAGE = 1;
-  CONNECTOR_ERROR_CODE_MESSAGE_TOO_LARGE = 2;
-  CONNECTOR_ERROR_CODE_UNKNOWN_OPERATION = 3;
-  CONNECTOR_ERROR_CODE_SESSION_REQUIRED = 4;
-  CONNECTOR_ERROR_CODE_SESSION_NOT_ALLOWED = 5;
-  CONNECTOR_ERROR_CODE_SUBAGENT_READ_ONLY = 6;
-  CONNECTOR_ERROR_CODE_NOT_FOUND = 7;
-  CONNECTOR_ERROR_CODE_NOT_SUBSCRIBED = 8;
-  CONNECTOR_ERROR_CODE_RATE_LIMITED = 9;
-  CONNECTOR_ERROR_CODE_AGENT_UNAVAILABLE = 10;
-  CONNECTOR_ERROR_CODE_OUTCOME_UNKNOWN = 11;
-  CONNECTOR_ERROR_CODE_FORBIDDEN = 12;
-  CONNECTOR_ERROR_CODE_TELEMETRY_DISABLED = 13;
-  CONNECTOR_ERROR_CODE_UNAUTHORIZED = 14;
-  CONNECTOR_ERROR_CODE_INTERNAL_ERROR = 15;
+  CONNECTOR_ERROR_CODE_INVALID_MESSAGE = 1 [(ycoding.v5.domain_label) = "invalid_message"];
+  CONNECTOR_ERROR_CODE_MESSAGE_TOO_LARGE = 2 [(ycoding.v5.domain_label) = "message_too_large"];
+  CONNECTOR_ERROR_CODE_UNKNOWN_OPERATION = 3 [(ycoding.v5.domain_label) = "unknown_operation"];
+  CONNECTOR_ERROR_CODE_SESSION_REQUIRED = 4 [(ycoding.v5.domain_label) = "session_required"];
+  CONNECTOR_ERROR_CODE_SESSION_NOT_ALLOWED = 5 [(ycoding.v5.domain_label) = "session_not_allowed"];
+  CONNECTOR_ERROR_CODE_SUBAGENT_READ_ONLY = 6 [(ycoding.v5.domain_label) = "subagent_read_only"];
+  CONNECTOR_ERROR_CODE_NOT_FOUND = 7 [(ycoding.v5.domain_label) = "not_found"];
+  CONNECTOR_ERROR_CODE_NOT_SUBSCRIBED = 8 [(ycoding.v5.domain_label) = "not_subscribed"];
+  CONNECTOR_ERROR_CODE_RATE_LIMITED = 9 [(ycoding.v5.domain_label) = "rate_limited"];
+  CONNECTOR_ERROR_CODE_AGENT_UNAVAILABLE = 10 [(ycoding.v5.domain_label) = "agent_unavailable"];
+  CONNECTOR_ERROR_CODE_OUTCOME_UNKNOWN = 11 [(ycoding.v5.domain_label) = "outcome_unknown"];
+  CONNECTOR_ERROR_CODE_FORBIDDEN = 12 [(ycoding.v5.domain_label) = "forbidden"];
+  CONNECTOR_ERROR_CODE_TELEMETRY_DISABLED = 13 [(ycoding.v5.domain_label) = "telemetry_disabled"];
+  CONNECTOR_ERROR_CODE_UNAUTHORIZED = 14 [(ycoding.v5.domain_label) = "unauthorized"];
+  CONNECTOR_ERROR_CODE_INTERNAL_ERROR = 15 [(ycoding.v5.domain_label) = "internal_error"];
+}
+
+enum Connector_LocalAppView_kind {
+  CONNECTOR_LOCALAPPVIEW_KIND_LOCAL_HTTP_APP = 1 [(ycoding.v5.domain_label) = "local-http-app"];
+}
+
+enum Connector_LocalAppView_status {
+  CONNECTOR_LOCALAPPVIEW_STATUS_READY = 1 [(ycoding.v5.domain_label) = "ready"];
+  CONNECTOR_LOCALAPPVIEW_STATUS_UNAVAILABLE = 2 [(ycoding.v5.domain_label) = "unavailable"];
+  CONNECTOR_LOCALAPPVIEW_STATUS_EXPIRED = 3 [(ycoding.v5.domain_label) = "expired"];
+  CONNECTOR_LOCALAPPVIEW_STATUS_REVOKED = 4 [(ycoding.v5.domain_label) = "revoked"];
+}
+
+enum Connector_LocalAppView_reason {
+  CONNECTOR_LOCALAPPVIEW_REASON_PREVIEW_UNCONFIGURED = 1 [(ycoding.v5.domain_label) = "preview_unconfigured"];
+  CONNECTOR_LOCALAPPVIEW_REASON_NOT_REGISTERED = 2 [(ycoding.v5.domain_label) = "not_registered"];
+  CONNECTOR_LOCALAPPVIEW_REASON_ACCESS_UNAVAILABLE = 3 [(ycoding.v5.domain_label) = "access_unavailable"];
+  CONNECTOR_LOCALAPPVIEW_REASON_EXPIRED = 4 [(ycoding.v5.domain_label) = "expired"];
+  CONNECTOR_LOCALAPPVIEW_REASON_REVOKED = 5 [(ycoding.v5.domain_label) = "revoked"];
+}
+
+enum Connector_AuthInfo_methodsItem_type {
+  CONNECTOR_AUTHINFO_METHODSITEM_TYPE_KEY = 1 [(ycoding.v5.domain_label) = "key"];
+  CONNECTOR_AUTHINFO_METHODSITEM_TYPE_OAUTH = 2 [(ycoding.v5.domain_label) = "oauth"];
+  CONNECTOR_AUTHINFO_METHODSITEM_TYPE_COMMAND = 3 [(ycoding.v5.domain_label) = "command"];
+}
+
+enum Connector_AuthPromptValue1_type {
+  CONNECTOR_AUTHPROMPTVALUE1_TYPE_TEXT = 1 [(ycoding.v5.domain_label) = "text"];
+}
+
+enum Connector_AuthPromptValue1_when_op {
+  CONNECTOR_AUTHPROMPTVALUE1_WHEN_OP_EQ = 1 [(ycoding.v5.domain_label) = "eq"];
+  CONNECTOR_AUTHPROMPTVALUE1_WHEN_OP_NEQ = 2 [(ycoding.v5.domain_label) = "neq"];
+}
+
+enum Connector_AuthPromptValue2_type {
+  CONNECTOR_AUTHPROMPTVALUE2_TYPE_SELECT = 1 [(ycoding.v5.domain_label) = "select"];
+}
+
+enum Connector_AuthPromptValue2_when_op {
+  CONNECTOR_AUTHPROMPTVALUE2_WHEN_OP_EQ = 1 [(ycoding.v5.domain_label) = "eq"];
+  CONNECTOR_AUTHPROMPTVALUE2_WHEN_OP_NEQ = 2 [(ycoding.v5.domain_label) = "neq"];
 }
 
 enum provider_auth_key_Result_data_status {
-  PROVIDER_AUTH_KEY_RESULT_DATA_STATUS_COMPLETE = 1;
+  PROVIDER_AUTH_KEY_RESULT_DATA_STATUS_COMPLETE = 1 [(ycoding.v5.domain_label) = "complete"];
 }
 
 enum Connector_AuthAttempt_type {
-  CONNECTOR_AUTHATTEMPT_TYPE_OAUTH = 1;
-  CONNECTOR_AUTHATTEMPT_TYPE_COMMAND = 2;
+  CONNECTOR_AUTHATTEMPT_TYPE_OAUTH = 1 [(ycoding.v5.domain_label) = "oauth"];
+  CONNECTOR_AUTHATTEMPT_TYPE_COMMAND = 2 [(ycoding.v5.domain_label) = "command"];
 }
 
 enum Connector_AuthAttempt_mode {
-  CONNECTOR_AUTHATTEMPT_MODE_AUTO = 1;
-  CONNECTOR_AUTHATTEMPT_MODE_CODE = 2;
+  CONNECTOR_AUTHATTEMPT_MODE_AUTO = 1 [(ycoding.v5.domain_label) = "auto"];
+  CONNECTOR_AUTHATTEMPT_MODE_CODE = 2 [(ycoding.v5.domain_label) = "code"];
 }
 
 enum provider_auth_status_Result_data_status {
-  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_PENDING = 1;
-  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_COMPLETE = 2;
-  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_FAILED = 3;
-  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_EXPIRED = 4;
+  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_PENDING = 1 [(ycoding.v5.domain_label) = "pending"];
+  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_COMPLETE = 2 [(ycoding.v5.domain_label) = "complete"];
+  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_FAILED = 3 [(ycoding.v5.domain_label) = "failed"];
+  PROVIDER_AUTH_STATUS_RESULT_DATA_STATUS_EXPIRED = 4 [(ycoding.v5.domain_label) = "expired"];
 }
 
 enum provider_auth_complete_Result_data_status {
-  PROVIDER_AUTH_COMPLETE_RESULT_DATA_STATUS_SUBMITTED = 1;
+  PROVIDER_AUTH_COMPLETE_RESULT_DATA_STATUS_SUBMITTED = 1 [(ycoding.v5.domain_label) = "submitted"];
 }
 
 enum provider_auth_cancel_Result_data_status {
-  PROVIDER_AUTH_CANCEL_RESULT_DATA_STATUS_CANCELLED = 1;
+  PROVIDER_AUTH_CANCEL_RESULT_DATA_STATUS_CANCELLED = 1 [(ycoding.v5.domain_label) = "cancelled"];
 }
 
 enum Connector_CapturedGroup_status {
-  CONNECTOR_CAPTUREDGROUP_STATUS_CREATED = 1;
-  CONNECTOR_CAPTUREDGROUP_STATUS_DELETED = 2;
-  CONNECTOR_CAPTUREDGROUP_STATUS_MODIFIED = 3;
+  CONNECTOR_CAPTUREDGROUP_STATUS_CREATED = 1 [(ycoding.v5.domain_label) = "created"];
+  CONNECTOR_CAPTUREDGROUP_STATUS_DELETED = 2 [(ycoding.v5.domain_label) = "deleted"];
+  CONNECTOR_CAPTUREDGROUP_STATUS_MODIFIED = 3 [(ycoding.v5.domain_label) = "modified"];
 }
 
 enum Connector_CapturedFile_status {
-  CONNECTOR_CAPTUREDFILE_STATUS_CREATED = 1;
-  CONNECTOR_CAPTUREDFILE_STATUS_DELETED = 2;
-  CONNECTOR_CAPTUREDFILE_STATUS_MODIFIED = 3;
+  CONNECTOR_CAPTUREDFILE_STATUS_CREATED = 1 [(ycoding.v5.domain_label) = "created"];
+  CONNECTOR_CAPTUREDFILE_STATUS_DELETED = 2 [(ycoding.v5.domain_label) = "deleted"];
+  CONNECTOR_CAPTUREDFILE_STATUS_MODIFIED = 3 [(ycoding.v5.domain_label) = "modified"];
 }
 
 enum session_family_activity_Result_dataItem_activity_kind {
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_KIND_TOOL = 1;
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_KIND_THINKING = 2;
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_KIND_REPLYING = 3;
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_KIND_TOOL = 1 [(ycoding.v5.domain_label) = "tool"];
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_KIND_THINKING = 2 [(ycoding.v5.domain_label) = "thinking"];
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_KIND_REPLYING = 3 [(ycoding.v5.domain_label) = "replying"];
 }
 
 enum session_family_activity_Result_dataItem_activity_room {
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_RESEARCH = 1;
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_QA = 2;
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_MEETING = 3;
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_DEVELOPER = 4;
-  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_HOLD = 5;
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_RESEARCH = 1 [(ycoding.v5.domain_label) = "research"];
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_QA = 2 [(ycoding.v5.domain_label) = "qa"];
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_MEETING = 3 [(ycoding.v5.domain_label) = "meeting"];
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_DEVELOPER = 4 [(ycoding.v5.domain_label) = "developer"];
+  SESSION_FAMILY_ACTIVITY_RESULT_DATAITEM_ACTIVITY_ROOM_HOLD = 5 [(ycoding.v5.domain_label) = "hold"];
 }
 
 enum Connector_Catalog_agentsItem_mode {
-  CONNECTOR_CATALOG_AGENTSITEM_MODE_PRIMARY = 1;
-  CONNECTOR_CATALOG_AGENTSITEM_MODE_SUBAGENT = 2;
-  CONNECTOR_CATALOG_AGENTSITEM_MODE_ALL = 3;
+  CONNECTOR_CATALOG_AGENTSITEM_MODE_PRIMARY = 1 [(ycoding.v5.domain_label) = "primary"];
+  CONNECTOR_CATALOG_AGENTSITEM_MODE_SUBAGENT = 2 [(ycoding.v5.domain_label) = "subagent"];
+  CONNECTOR_CATALOG_AGENTSITEM_MODE_ALL = 3 [(ycoding.v5.domain_label) = "all"];
+}
+
+message Connector_LocalAppRegister {
+  required Connector_LocalAppRegister_host host = 1;
+  required int64 port = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" integer_min: "1" integer_max: "65535" }];
+  required LosslessString entryPath = 3 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 4096 }];
+  required Connector_LocalAppRegister_routes routes = 4 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }];
+  optional int64 ttlMs = 5 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" integer_min: "1" integer_max: "3600000" }];
+}
+
+message Connector_LocalAppRegister_routes {
+  repeated Connector_LocalAppRoute items = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" count_min: 1 count_max: 64 }];
+}
+
+message Connector_LocalAppRoute {
+  required LosslessString path = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 4096 }];
+  required Connector_LocalAppRoute_match match = 2;
+  required Connector_LocalAppRoute_methods methods = 3 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }];
+}
+
+message Connector_LocalAppRoute_methods {
+  repeated Connector_LocalAppMethod items = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" count_min: 1 count_max: 7 }];
+}
+
+message local_app_register_Request {
+  required Connector_LocalAppRegister payload = 1;
+}
+
+message local_app_register_Result {
+  required Connector_LocalAppRegistration data = 1;
+}
+
+message Connector_LocalAppRegistration {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 36 utf16_max: 36 }];
+  required LosslessString generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 43 utf16_max: 43 }];
+  required LosslessString sessionID = 3 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 128 }];
+  required uint64 expiresAt = 4 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString entryPath = 5 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 4096 }];
+  required Connector_LocalAppRegistration_allowedMethods allowedMethods = 6 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }];
+  required Connector_LocalAppRegistration_routes routes = 7 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }];
+}
+
+message Connector_LocalAppRegistration_allowedMethods {
+  repeated Connector_LocalAppMethod items = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" count_min: 1 count_max: 7 }];
+}
+
+message Connector_LocalAppRegistration_routes {
+  repeated Connector_LocalAppRoute items = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" count_min: 1 count_max: 64 }];
+}
+
+message Connector_Error {
+  required Connector_Error_code code = 1;
+  required LosslessString message = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/v5/connection/index.ts#validResult" utf16_min: 0 utf16_max: 512 }];
+}
+
+message local_app_list_Request {
+
+}
+
+message local_app_list_Result {
+  required local_app_list_Result_data data = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }];
+}
+
+message local_app_list_Result_data {
+  repeated Connector_LocalAppRegistration items = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" count_max: 64 }];
+}
+
+message Connector_LocalAppID {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 36 utf16_max: 36 }];
+}
+
+message local_app_revoke_Request {
+  required Connector_LocalAppID payload = 1;
+}
+
+message local_app_revoke_Result {
+  required Connector_LocalAppView data = 1;
+}
+
+message Connector_LocalAppView {
+  required Connector_LocalAppView_kind kind = 1;
+  required double version = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }];
+  required LosslessString appID = 3 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 36 utf16_max: 36 }];
+  required LosslessString sessionID = 4 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 128 }];
+  required Connector_LocalAppView_expiresAt expiresAt = 5;
+  required Connector_LocalAppView_status status = 6;
+  optional Connector_LocalAppView_reason reason = 7;
+}
+
+message Connector_LocalAppView_expiresAt {
+  oneof kind {
+    Empty clear = 1;
+    LosslessString value_2 = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 40 }];
+  }
+}
+
+message Connector_LocalAppGeneration {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 36 utf16_max: 36 }];
+  required LosslessString generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 43 utf16_max: 43 }];
+}
+
+message local_app_open_Request {
+  required Connector_LocalAppGeneration payload = 1;
+}
+
+message local_app_open_Result {
+  required Connector_LocalAppView data = 1;
+  optional Connector_LocalAppMetadata metadata = 2;
+}
+
+message Connector_LocalAppMetadata {
+  required Connector_LocalAppMetadata_localApp localApp = 1;
+}
+
+message Connector_LocalAppMetadata_localApp {
+  required LosslessString url = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 8192 }];
+  required LosslessString origin = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 2048 }];
+}
+
+message local_app_status_Request {
+  required Connector_LocalAppID payload = 1;
+}
+
+message local_app_status_Result {
+  required Connector_LocalAppView data = 1;
+}
+
+message Connector_LocalAppHttp {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 36 utf16_max: 36 }];
+  required LosslessString generation = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 43 utf16_max: 43 }];
+  required Connector_LocalAppMethod method = 3;
+  required LosslessString path = 4 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 4096 }];
+  optional Connector_LocalAppHttp_headers headers = 5;
+  optional LosslessString body = 6 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 0 utf16_max: 349528 }];
+}
+
+message Connector_LocalAppHttp_headers {
+  repeated Connector_LocalAppHttp_headersEntry entries = 1;
+}
+
+message Connector_LocalAppHttp_headersEntry {
+  required LosslessString key = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 128 }];
+  required LosslessString value = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 0 utf16_max: 8192 }];
+}
+
+message local_app_http_Request {
+  required Connector_LocalAppHttp payload = 1;
+}
+
+message local_app_http_Result {
+  required Connector_LocalAppResponse data = 1;
+}
+
+message Connector_LocalAppResponse {
+  required int64 status = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" integer_min: "200" integer_max: "599" }];
+  required Connector_LocalAppResponse_headers headers = 2;
+  required LosslessString body = 3 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 0 utf16_max: 2796204 }];
+}
+
+message Connector_LocalAppResponse_headers {
+  repeated Connector_LocalAppResponse_headersEntry entries = 1;
+}
+
+message Connector_LocalAppResponse_headersEntryValue {
+  oneof kind {
+    LosslessString value_1 = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 0 utf16_max: 8192 }];
+    Connector_LocalAppResponse_headersEntryValueValue2 value_2 = 2;
+  }
+}
+
+message Connector_LocalAppResponse_headersEntryValueValue2 {
+  repeated LosslessString items = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 0 utf16_max: 8192 }];
+}
+
+message Connector_LocalAppResponse_headersEntry {
+  required LosslessString key = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" utf16_min: 1 utf16_max: 128 }];
+  required Connector_LocalAppResponse_headersEntryValue value = 2;
 }
 
 message provider_auth_list_Request_payload {
@@ -223,11 +439,6 @@ message Connector_AuthPromptValue2_when {
   required LosslessString key = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
   required Connector_AuthPromptValue2_when_op op = 2;
   required LosslessString value = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/cli/src/remote-operations.ts#run" utf16_min: 0 utf16_max: 9007199254740991 }];
-}
-
-message Connector_Error {
-  required Connector_Error_code code = 1;
-  required LosslessString message = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/protocol/src/v5/connection/index.ts#validResult" utf16_min: 0 utf16_max: 512 }];
 }
 
 message provider_auth_key_Request_payload {
@@ -719,7 +930,192 @@ message ConnectorNoticeIDs { repeated string ids = 1 [(ycoding.v5.constraints) =
 message ConnectorNoticePage { required Notice notice = 1; optional string next = 2; required bool unavailable = 3; }
 message ConnectorNoticeSettlement { required Empty data = 1; optional Notice notification = 2; }
 
+message mcp_request_Request {
+  required Connector_McpRequest payload = 1;
+}
+
+message Connector_McpRequest {
+  required LosslessString body = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 32768 }];
+  repeated Connector_McpHeader headers = 2 [(ycoding.v5.constraints) = { count_max: 5 }];
+  required Connector_McpPrincipal principal = 3;
+  required string epoch = 4 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 64 }];
+}
+
+message Connector_McpHeader {
+  required string name = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 64 }];
+  required LosslessString value = 2 [(ycoding.v5.constraints) = { utf16_max: 1024 }];
+}
+
+message Connector_McpPrincipal {
+  required string ownerID = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 64 }];
+  required string deviceID = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 64 }];
+  required LosslessString clientID = 3 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 2048 }];
+}
+
+message mcp_request_Result {
+  required Connector_McpResponse data = 1;
+}
+
+message Connector_McpResponse {
+  required uint32 status = 1 [(ycoding.v5.constraints) = { integer_min: "200" integer_max: "599" }];
+  required string contentType = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 256 }];
+  required LosslessString body = 3 [(ycoding.v5.constraints) = { utf16_max: 2097152 }];
+}
+
+enum artifact_demo_preview_Result_variantsItem {
+  ARTIFACT_DEMO_PREVIEW_RESULT_VARIANTSITEM_LIST = 1 [(ycoding.v5.domain_label) = "list"];
+  ARTIFACT_DEMO_PREVIEW_RESULT_VARIANTSITEM_CARDS = 2 [(ycoding.v5.domain_label) = "cards"];
+}
+
+enum artifact_demo_preview_Result_hostVerification {
+  ARTIFACT_DEMO_PREVIEW_RESULT_HOSTVERIFICATION_REQUIRED = 1 [(ycoding.v5.domain_label) = "required"];
+}
+
+enum artifact_demo_export_Result_mime {
+  ARTIFACT_DEMO_EXPORT_RESULT_MIME_IMAGE_PNG = 1 [(ycoding.v5.domain_label) = "image/png"];
+}
+
+enum artifact_demo_export_Result_delivery {
+  ARTIFACT_DEMO_EXPORT_RESULT_DELIVERY_HOST_NATIVE_ATTACHMENT_REQUIRED = 1 [(ycoding.v5.domain_label) = "host-native-attachment-required"];
+}
+
+message artifact_demo_preview_Request {}
+message artifact_demo_preview_Result {
+  repeated artifact_demo_preview_Result_variantsItem variants = 1 [(ycoding.v5.constraints) = { count_min: 2 count_max: 2 }];
+  required artifact_demo_preview_Result_hostVerification hostVerification = 2;
+}
+message artifact_demo_export_Request {}
+message artifact_demo_export_Result {
+  required string id = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required string filename = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required artifact_demo_export_Result_mime mime = 3;
+  required uint32 size = 4;
+  required string sha256 = 5 [(ycoding.v5.constraints) = { utf16_min: 64 utf16_max: 64 }];
+  required uint64 expiresAt = 6 [(ycoding.v5.constraints) = { integer_min: "0" integer_max: "9007199254740991" }];
+  required artifact_demo_export_Result_delivery delivery = 7;
+}
+
 service connector {
+  rpc artifact_demo_preview(artifact_demo_preview_Request) returns (artifact_demo_preview_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5045
+      diagnostic_name: "artifact.demo.preview"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc artifact_demo_export(artifact_demo_export_Request) returns (artifact_demo_export_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5046
+      diagnostic_name: "artifact.demo.export"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc local_app_register(local_app_register_Request) returns (local_app_register_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5047
+      diagnostic_name: "local.app.register"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc local_app_list(local_app_list_Request) returns (local_app_list_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5048
+      diagnostic_name: "local.app.list"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc local_app_revoke(local_app_revoke_Request) returns (local_app_revoke_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5049
+      diagnostic_name: "local.app.revoke"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc local_app_open(local_app_open_Request) returns (local_app_open_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5050
+      diagnostic_name: "local.app.open"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc local_app_status(local_app_status_Request) returns (local_app_status_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5051
+      diagnostic_name: "local.app.status"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
+  rpc local_app_http(local_app_http_Request) returns (local_app_http_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5052
+      diagnostic_name: "local.app.http"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: REMOTE_CLIENT
+      roles: RELAY
+      scope: SESSION
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
+    };
+  }
   rpc provider_auth_list(provider_auth_list_Request) returns (provider_auth_list_Result) {
     option (ycoding.v5.operation) = {
       operation_id: 5000
@@ -1034,6 +1430,20 @@ service connector {
       paging: UNPAGED
       streaming: TYPED_BULK
       sensitivity: PRIVATE
+    };
+  }
+  rpc mcp_request(mcp_request_Request) returns (mcp_request_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 5044
+      diagnostic_name: "mcp.request"
+      error_types: "ycoding.v5.Connector_Error"
+      roles: RELAY
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: SECRET
     };
   }
 }

@@ -7508,6 +7508,120 @@
     "negativeZeros": []
   },
   {
+    "name": "ProviderUsage.PaceMilestone",
+    "input": "\"almost-out\"",
+    "output": "\"almost-out\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.PaceMilestone",
+    "input": "\"cutting-it-close\"",
+    "output": "\"cutting-it-close\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.PaceMilestone",
+    "input": "\"will-run-out\"",
+    "output": "\"will-run-out\"",
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.PaceMilestone",
+    "input": "\"healthy\"",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.QuotaPaceAlert",
+    "input": "{\"providerID\":\"anthropic\",\"windowID\":\"five-hour\",\"milestone\":\"will-run-out\",\"resetAt\":1800001800000,\"title\":\"Will run out\",\"body\":\"Quota use is at its limit or projected to exceed it before reset.\"}",
+    "output": "{\"providerID\":\"anthropic\",\"windowID\":\"five-hour\",\"milestone\":\"will-run-out\",\"resetAt\":1800001800000,\"title\":\"Will run out\",\"body\":\"Quota use is at its limit or projected to exceed it before reset.\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.QuotaPaceAlert",
+    "input": "{\"providerID\":\"anthropic\",\"windowID\":\"\",\"milestone\":\"almost-out\",\"resetAt\":1,\"title\":\"t\",\"body\":\"b\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.QuotaPaceAlert",
+    "input": "{\"providerID\":\"anthropic\",\"windowID\":\"w\",\"milestone\":\"healthy\",\"resetAt\":1,\"title\":\"t\",\"body\":\"b\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.QuotaPaceAlert",
+    "input": "{\"providerID\":\"anthropic\",\"windowID\":\"w\",\"milestone\":\"almost-out\",\"resetAt\":-1,\"title\":\"t\",\"body\":\"b\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.QuotaPaceAlert",
+    "input": "{\"providerID\":\"anthropic\",\"windowID\":\"w\",\"milestone\":\"almost-out\",\"resetAt\":1,\"title\":\"\",\"body\":\"b\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "ProviderUsage.QuotaPaceAlert",
+    "input": "{\"providerID\":\"anthropic\",\"windowID\":\"w\",\"milestone\":\"almost-out\",\"resetAt\":1,\"title\":\"t\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Pace",
+    "input": "{\"verdict\":\"ahead\",\"projectedUsedAtReset\":0}",
+    "output": "{\"verdict\":\"ahead\",\"projectedUsedAtReset\":0}",
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Pace",
+    "input": "{\"verdict\":\"will-run-out\",\"projectedUsedAtReset\":120.5,\"exhaustionAt\":1800000000000}",
+    "output": "{\"verdict\":\"will-run-out\",\"projectedUsedAtReset\":120.5,\"exhaustionAt\":1800000000000}",
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Pace",
+    "input": "{\"verdict\":\"healthy\",\"projectedUsedAtReset\":1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Pace",
+    "input": "{\"verdict\":\"ahead\",\"projectedUsedAtReset\":-1}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Pace",
+    "input": "{\"verdict\":\"ahead\",\"projectedUsedAtReset\":1,\"exhaustionAt\":1.5}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Pace",
+    "input": "{\"verdict\":\"ahead\"}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Quota",
+    "input": "{\"providerID\":\"openai\",\"windowID\":\"weekly\",\"unit\":\"percent\",\"source\":\"provider_api\",\"stability\":\"stable\",\"updatedAt\":1,\"state\":\"estimated\",\"evidence\":\"medium\",\"pace\":{\"verdict\":\"cutting-it-close\",\"projectedUsedAtReset\":98}}",
+    "output": "{\"providerID\":\"openai\",\"windowID\":\"weekly\",\"unit\":\"percent\",\"source\":\"provider_api\",\"stability\":\"stable\",\"updatedAt\":1,\"state\":\"estimated\",\"evidence\":\"medium\",\"pace\":{\"verdict\":\"cutting-it-close\",\"projectedUsedAtReset\":98}}",
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Quota",
+    "input": "{\"providerID\":\"openai\",\"windowID\":\"weekly\",\"unit\":\"percent\",\"source\":\"provider_api\",\"stability\":\"stable\",\"updatedAt\":1,\"state\":\"estimated\",\"evidence\":\"medium\"}",
+    "output": "{\"providerID\":\"openai\",\"windowID\":\"weekly\",\"unit\":\"percent\",\"source\":\"provider_api\",\"stability\":\"stable\",\"updatedAt\":1,\"state\":\"estimated\",\"evidence\":\"medium\"}",
+    "negativeZeros": []
+  },
+  {
+    "name": "UsageForecast.Quota",
+    "input": "{\"providerID\":\"openai\",\"windowID\":\"weekly\",\"unit\":\"percent\",\"source\":\"provider_api\",\"stability\":\"stable\",\"updatedAt\":1,\"state\":\"estimated\",\"evidence\":\"medium\",\"pace\":{\"verdict\":\"bad\",\"projectedUsedAtReset\":1}}",
+    "output": null,
+    "negativeZeros": []
+  },
+  {
     "name": "Config.Diagnostic",
     "input": "{\"path\":\"ycoding.json\",\"reason\":\"invalid-values\",\"message\":\"bad field\"}",
     "output": "{\"path\":\"ycoding.json\",\"reason\":\"invalid-values\",\"message\":\"bad field\"}",

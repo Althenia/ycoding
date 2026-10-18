@@ -1,6 +1,6 @@
-import { noticeSequence } from "@ycoding-ai/remote"
+import { noticeSequence, quotaKey, type RemoteQuota } from "@ycoding-ai/remote"
 import type { NoticePresentationView } from "./wire-views"
-import { alertCopy, type AlertNotice } from "./alert"
+import { alertCopy, quotaCopy, type AlertNotice } from "./alert"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
 
 export type RemoteNotificationView = {
@@ -11,12 +11,14 @@ export type RemoteNotificationView = {
   readonly at: number
   readonly sessionID?: string
   readonly sessionTitle?: string
+  readonly deviceID?: string
   readonly synced: boolean
   readonly live: boolean
 }
 
 export const NOTICE_WINDOW = 200
 const LOCAL_LIMIT = 50
+const QUOTA_SEEN_LIMIT = 100
 
 type SyncedNotice = {
   readonly id: string
@@ -37,6 +39,7 @@ export const NOTIFICATION_TEXT: Record<NotificationCategory, { readonly title: s
     body: "A session needs attention. Open it to review.",
   },
   "machine-offline": { title: "YCoding — machine offline", body: "The connected machine stopped reporting." },
+  "quota-pace": { title: "YCoding — quota pace", body: "A provider quota needs attention. Open Usage to review." },
 }
 
 /**
@@ -62,6 +65,7 @@ export type DesktopAlert = {
   readonly tag: string
   readonly sessionID?: string
   readonly notice?: AlertNotice
+  readonly usageDeviceID?: string
   readonly renotify?: true
 }
 
@@ -100,7 +104,11 @@ export function createDesktopNotifier(
             ...(alert.renotify ? { renotify: true } : {}),
             icon: "/icons/icon-256.png",
             badge: "/icons/icon-256.png",
-            ...(alert.sessionID === undefined ? {} : { data: { sessionID: alert.sessionID, ...alert.notice } }),
+            ...(alert.sessionID !== undefined
+              ? { data: { sessionID: alert.sessionID, ...alert.notice } }
+              : alert.usageDeviceID !== undefined
+                ? { data: { quota: true, deviceID: alert.usageDeviceID } }
+                : {}),
           }),
         )
         .catch(() => undefined)
@@ -141,6 +149,7 @@ export type NotificationDelivery = {
   readonly receive: (notice: SyncedNotice, deviceID: string) => void
   readonly offline: (deviceID: string, at: number) => void
   readonly present: (items: readonly NoticePresentationView[], deviceID: string) => void
+  readonly quota: (quota: RemoteQuota, deviceID: string, at: number) => void
   readonly replaceSynced: (notices: readonly SyncedNotice[]) => void
   readonly appendSynced: (notices: readonly SyncedNotice[]) => void
   readonly entries: () => readonly RemoteNotificationView[]
@@ -160,6 +169,7 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
   let entries: readonly RemoteNotificationView[] = []
   let hidden = new Set<string>()
   let nextID = 0
+  const quotaSeen = new Set<string>()
 
   const alert = (
     category: NotificationCategory,
@@ -228,9 +238,28 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
       if (known(id)) return
       if (listed("machine-offline")) bounded([...entries, view({ id, category: "machine-offline", at }, false, true)])
     },
+    quota: (quota, deviceID, at) => {
+      const id = `quota_${deviceID}_${quotaKey(quota)}`
+      if (quotaSeen.has(id)) return
+      quotaSeen.add(id)
+      for (const oldest of [...quotaSeen].slice(0, Math.max(0, quotaSeen.size - QUOTA_SEEN_LIMIT))) quotaSeen.delete(oldest)
+      if (listed("quota-pace"))
+        bounded([
+          ...entries,
+          { ...view({ id, category: "quota-pace", at }, false, true), ...quotaCopy(quota.milestone), deviceID },
+        ])
+    },
     present: (items, deviceID) => {
       for (const item of items) {
-        if (item.kind === "offline") alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${item.at}`)
+        if (item.kind === "quota") {
+          if (preferences()["quota-pace"].desktop)
+            desktop.show({
+              ...quotaCopy(item.milestone),
+              tag: `ycoding-${deviceID}-quota-${quotaKey(item)}`,
+              usageDeviceID: deviceID,
+            })
+        } else if (item.kind === "offline")
+          alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${item.at}`)
         else if (preferences()[item.notice.category].desktop)
           desktop.show({
             ...alertCopy(item.notice.category, item.detail),
@@ -283,6 +312,7 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
       hidden = new Set()
     },
     dispose: (retainMachineOffline = false, closeSystemAlerts = true) => {
+      quotaSeen.clear()
       if (closeSystemAlerts) desktop.dispose(retainMachineOffline)
       entries = retainMachineOffline ? entries.filter((entry) => entry.category === "machine-offline") : []
       hidden = new Set()

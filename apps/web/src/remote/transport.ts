@@ -14,6 +14,7 @@ import {
   remotePayloadCodecs,
   ConnectorNoticePageSchema,
   decodeLossless,
+  quotaFromWire,
   PriorityMode,
   AttentionNeed,
   LedgerClass,
@@ -751,11 +752,21 @@ function noticeView(notice: import("@ycoding-ai/remote").Notice): NoticeFrame {
       })),
     }
   if (kind.case === "present") return { type: "notice.present", items: kind.value.items.map(presentationView) }
+  if (kind.case === "quotaPace") {
+    const quota = kind.value.quota && quotaFromWire(kind.value.quota)
+    if (!quota || kind.value.at <= 0n || kind.value.at > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Invalid quota notice")
+    return { type: "notice.quota", ...quota, at: Number(kind.value.at) }
+  }
   throw new Error("Invalid notice")
 }
 
 function presentationView(item: Presentation): import("./wire-views").NoticePresentationView {
   if (item.kind.case === "offline") return { kind: "offline", at: Number(item.kind.value.atMs) }
+  if (item.kind.case === "quotaPace") {
+    const quota = quotaFromWire(item.kind.value)
+    if (!quota) throw new Error("Invalid quota presentation")
+    return { kind: "quota", ...quota }
+  }
   if (item.kind.case !== "notice" || !item.kind.value.notice) throw new Error("Invalid notice presentation")
   const notice = item.kind.value.notice
   const detail = item.kind.value.detail

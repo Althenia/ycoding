@@ -18,6 +18,7 @@ pub use state::{Change, Delivery, DeliveryTable, Intent, IntentTable, privacy_ch
 pub const INTENT_LIMIT: usize = 4096;
 pub const INTENT_BYTES: usize = 8 * 1024 * 1024;
 pub const BATCH_SIZE: usize = 128;
+pub const REBUILD_SLICE_PAGES: usize = 64;
 pub const REPORT_DEADLINE: Duration = Duration::from_secs(5);
 pub const REPORT_STACK_BYTES: usize = 8 * 1024 * 1024;
 pub const ROW_BYTES: usize = 64 * 1024;
@@ -25,6 +26,12 @@ pub const REPORT_ROWS: usize = 4096;
 pub const REPORT_BYTES: usize = 8 * 1024 * 1024;
 static INSTANCE: AtomicBool = AtomicBool::new(false);
 pub type ReportRows = Vec<Vec<Vec<Value>>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Maintenance {
+    Complete,
+    Pending,
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -297,11 +304,17 @@ enum Operation {
     Report(Delivery, Vec<Query>),
     SnapshotReport(Delivery, Box<Snapshot>, &'static [&'static str], Vec<Query>),
 }
+enum Request {
+    Operation(
+        Operation,
+        Option<mpsc::SyncSender<Result<ReportRows, Error>>>,
+    ),
+    Maintain(mpsc::SyncSender<Result<Maintenance, Error>>),
+}
 struct Command {
-    operation: Operation,
+    request: Request,
     cancellation: Cancellation,
     deadline: Instant,
-    reply: Option<mpsc::SyncSender<Result<ReportRows, Error>>>,
 }
 impl Handle {
     pub fn report_snapshot(
@@ -327,17 +340,21 @@ impl Handle {
         }
         validate_queries(&queries)?;
         self.call(
-            Operation::SnapshotReport(state, Box::new(snapshot), sources, queries),
+            |reply| {
+                Request::Operation(
+                    Operation::SnapshotReport(state, Box::new(snapshot), sources, queries),
+                    Some(reply),
+                )
+            },
             Cancellation::default(),
         )
     }
 
     pub fn notify(&self) -> Result<(), Error> {
         let command = Command {
-            operation: Operation::Wake,
+            request: Request::Operation(Operation::Wake, None),
             cancellation: Cancellation::default(),
             deadline: Instant::now() + REPORT_DEADLINE,
-            reply: None,
         };
         match self.send(command) {
             Err(Error::Busy) => Ok(()),
@@ -345,12 +362,21 @@ impl Handle {
         }
     }
     pub fn rebuild(&self) -> Result<(), Error> {
-        self.call(Operation::Rebuild, Cancellation::default())
-            .map(|_| ())
+        self.call(
+            |reply| Request::Operation(Operation::Rebuild, Some(reply)),
+            Cancellation::default(),
+        )
+        .map(|_| ())
     }
     pub fn purge(&self) -> Result<(), Error> {
-        self.call(Operation::Purge, Cancellation::default())
-            .map(|_| ())
+        self.call(
+            |reply| Request::Operation(Operation::Purge, Some(reply)),
+            Cancellation::default(),
+        )
+        .map(|_| ())
+    }
+    pub fn maintain(&self) -> Result<Maintenance, Error> {
+        self.call(Request::Maintain, Cancellation::default())
     }
     pub fn report(&self, queries: Vec<Query>) -> Result<ReportRows, Error> {
         self.report_cancellable(queries, Cancellation::default())
@@ -369,7 +395,10 @@ impl Handle {
             return Err(Error::Privacy);
         }
         validate_queries(&queries)?;
-        self.call(Operation::Report(state, queries), cancellation)
+        self.call(
+            |reply| Request::Operation(Operation::Report(state, queries), Some(reply)),
+            cancellation,
+        )
     }
     fn send(&self, command: Command) -> Result<(), Error> {
         if thread::current().id() == self.0.writer {
@@ -387,7 +416,11 @@ impl Handle {
                 mpsc::TrySendError::Disconnected(_) => Error::Closed,
             })
     }
-    fn call(&self, operation: Operation, cancellation: Cancellation) -> Result<ReportRows, Error> {
+    fn call<T>(
+        &self,
+        request: impl FnOnce(mpsc::SyncSender<Result<T, Error>>) -> Request,
+        cancellation: Cancellation,
+    ) -> Result<T, Error> {
         if cancellation.0.claimed.swap(true, Ordering::AcqRel) {
             return Err(Error::Configuration);
         }
@@ -395,10 +428,9 @@ impl Handle {
         cancellation.check(deadline)?;
         let (reply, receipt) = mpsc::sync_channel(1);
         self.send(Command {
-            operation,
+            request: request(reply),
             cancellation: cancellation.clone(),
             deadline,
-            reply: Some(reply),
         })?;
         match receipt.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(result) => result,

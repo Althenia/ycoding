@@ -1,14 +1,19 @@
 import { DurableObject } from "cloudflare:workers"
-import { RemoteWebSocketPath } from "../../../../packages/remote/src/index"
+import { McpLimits, RemoteWebSocketPath } from "../../../../packages/remote/src/index"
 import { randomToken } from "../auth/crypto"
 import { createD1AuthStore } from "../auth/d1-store"
+import { createD1McpStore } from "../auth/mcp/d1-store"
 import { createAuthService } from "../auth/service"
 import type { WorkerEnv } from "../env"
 import { createD1PushStore } from "../push/d1-store"
-import { sendPushToOwner } from "../push/send"
+import { sendPush, sendPushToOwner } from "../push/send"
 import { createNoticeStore } from "./notice-store"
 import { createRelay } from "./core"
 import type { RelayAuthority, RelayConnection } from "./core"
+import { McpRelayError, createMcpAuthority, mcpFailureStatus, parseMcpForward, readBoundedText } from "./mcp"
+import { authorizationBodyBytes, parseAuthorizationRequest } from "./mcp-events"
+import { createQuotaClaims, parseQuotaClaimRequest, parseQuotaReservation } from "./quota-claims"
+import type { QuotaClaimRequest } from "./quota-claims"
 
 export class DeviceRelay extends DurableObject<WorkerEnv> {
   readonly #service = createAuthService(createD1AuthStore(this.env.DB))
@@ -17,6 +22,8 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     kv: this.ctx.storage.kv,
     transactionSync: (operation) => this.ctx.storage.transactionSync(operation),
   })
+  readonly #quotaClaims = createQuotaClaims(this.ctx.storage.kv, Date.now)
+  #mcpTurn: Promise<void> = Promise.resolve()
   readonly #relay = createRelay({
     now: () => Date.now(),
     monotonic: () => performance.now(),
@@ -66,6 +73,36 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
         fetch: (input, init) => globalThis.fetch(input, init),
       })
     },
+    mcp: createMcpAuthority({
+      store: createD1McpStore(this.env.DB),
+      authorizeDevice: (deviceID) => this.#service.authorizeAgentCommand(deviceID),
+    }),
+    quota: {
+      subscriptions: async (ownerID) =>
+        vapidKeys(this.env) === undefined ? [] : createD1PushStore(this.env.DB).list(ownerID),
+      reserve: async (ownerID, key, until, members) => {
+        const reservation = parseQuotaReservation(
+          await this.#claimQuota(ownerID, { op: "reserve", key, until, members }),
+        )
+        if (reservation === undefined) throw new Error("Quota claim coordinator answered an invalid reservation")
+        return reservation
+      },
+      release: async (ownerID, key, members) => {
+        await this.#claimQuota(ownerID, { op: "release", key, members })
+      },
+      push: async (_ownerID, event, subscriptions) => {
+        const keys = vapidKeys(this.env)
+        if (keys === undefined) return []
+        return sendPush({
+          store: createD1PushStore(this.env.DB),
+          event,
+          subscriptions,
+          ...keys,
+          now: Date.now,
+          fetch: (input, init) => globalThis.fetch(input, init),
+        })
+      },
+    },
   })
   readonly #attached = new Set<string>()
 
@@ -88,6 +125,9 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     const url = new URL(request.url)
     if (url.pathname.startsWith("/_ycoding/")) {
       if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
+      if (url.pathname === "/_ycoding/mcp") return this.#forwardMcp(request)
+      if (url.pathname === "/_ycoding/mcp-events/authorize") return this.#authorizeMcpEvent(request)
+      if (url.pathname === "/_ycoding/quota") return this.#answerQuotaClaim(request)
       if (url.pathname === "/_ycoding/presence")
         return Response.json({ online: this.#relay.agentConnected() }, { headers: { "cache-control": "no-store" } })
       if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment") {
@@ -165,6 +205,92 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     await this.#relay.settleDeliveries()
   }
 
+  async #forwardMcp(request: Request): Promise<Response> {
+    const admission = this.#admitMcp(request, this.#mcpTurn)
+    this.#mcpTurn = admission.then(
+      () => undefined,
+      () => undefined,
+    )
+    const admitted = await admission
+    if (admitted instanceof Response) return admitted
+    const response = await admitted.pending.then(
+      (result) =>
+        new Response(result.body.length === 0 ? null : result.body, {
+          status: result.status,
+          headers: { "content-type": result.contentType, "cache-control": "no-store" },
+        }),
+      (error: unknown) =>
+        error instanceof McpRelayError
+          ? transportError(mcpFailureStatus(error.code), error.code, error.message)
+          : transportError(502, "internal_error", "MCP forwarding failed"),
+    )
+    await this.#armAlarm()
+    return response
+  }
+
+  async #admitMcp(request: Request, previous: Promise<void>) {
+    if (request.method !== "POST") return transportError(405, "invalid_message", "MCP accepts POST only")
+    const forward = parseMcpForward(request.headers)
+    if (!forward) return transportError(400, "invalid_message", "Trusted MCP headers are missing")
+    const limit = McpLimits.bodyChars * 4
+    if (Number(request.headers.get("content-length") ?? 0) > limit)
+      return transportError(413, "message_too_large", "Request exceeds the frame bound")
+    const body = await readBoundedText(request.body, limit).catch(() => null)
+    await previous
+    if (body === null) return transportError(400, "invalid_message", "Request body could not be read")
+    if (body === undefined) return transportError(413, "message_too_large", "Request exceeds the frame bound")
+    return { pending: this.#relay.requestMcp({ ...forward, body, signal: request.signal }) }
+  }
+
+  async #authorizeMcpEvent(request: Request): Promise<Response> {
+    if (request.method !== "POST")
+      return transportError(405, "invalid_message", "MCP events authorization accepts POST only")
+    const ownerID = request.headers.get("x-ycoding-owner")
+    const deviceID = request.headers.get("x-ycoding-device")
+    const resource = request.headers.get("x-ycoding-mcp-resource")
+    if (!ownerID || !deviceID || !resource)
+      return transportError(400, "invalid_message", "Trusted device headers are missing")
+    if (Number(request.headers.get("content-length") ?? 0) > authorizationBodyBytes)
+      return transportError(413, "message_too_large", "Request exceeds the authorization bound")
+    const body = await readBoundedText(request.body, authorizationBodyBytes).catch(() => undefined)
+    if (body === undefined) return transportError(400, "invalid_message", "Request body could not be read")
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return transportError(400, "invalid_message", "Request body is not valid JSON")
+    }
+    const authorization = parseAuthorizationRequest(parsed)
+    if (authorization === undefined)
+      return transportError(400, "invalid_message", "Request is not a valid MCP events authorization")
+    return this.#relay.authorizeMcpEvent({ ownerID, deviceID, resource }, authorization).then(
+      (result) => Response.json(result, { headers: { "cache-control": "no-store" } }),
+      () => transportError(503, "agent_unavailable", "MCP events authorization is unavailable"),
+    )
+  }
+
+  async #answerQuotaClaim(request: Request): Promise<Response> {
+    const claim = parseQuotaClaimRequest(await request.json().catch(() => undefined))
+    if (claim === undefined) return new Response("Invalid quota claim", { status: 400 })
+    if (claim.op === "release") {
+      this.#quotaClaims.release(claim.key, claim.members)
+      return Response.json({})
+    }
+    return Response.json(this.#quotaClaims.reserve(claim.key, claim.until, claim.members))
+  }
+
+  async #claimQuota(ownerID: string, claim: QuotaClaimRequest): Promise<unknown> {
+    const response = await this.env.DEVICE_RELAY.getByName(`${ownerID}:quota`).fetch(
+      new Request("https://relay.internal/_ycoding/quota", {
+        method: "POST",
+        headers: { "x-ycoding-internal": "1", "content-type": "application/json" },
+        body: JSON.stringify(claim),
+      }),
+    )
+    if (!response.ok) throw new Error("Quota claim coordinator is unavailable")
+    return response.json()
+  }
+
   #socketFor(connectionID: string) {
     return this.ctx.getWebSockets().find((socket) => readAttachment(socket)?.connectionID === connectionID)
   }
@@ -226,6 +352,22 @@ function readAttachment(socket: WebSocket): RelayConnection | undefined {
     browserSessionID: value.browserSessionID,
     credentialExpiresAt: value.credentialExpiresAt,
   }
+}
+
+function transportError(status: number, code: string, message: string): Response {
+  return new Response(JSON.stringify({ error: { code, message } }), {
+    status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  })
+}
+
+function vapidKeys(
+  env: WorkerEnv,
+): { readonly publicKey: string; readonly privateKey: string; readonly subject: string } | undefined {
+  const publicKey = env.VAPID_PUBLIC_KEY
+  const privateKey = env.VAPID_PRIVATE_KEY
+  const subject = env.VAPID_SUBJECT
+  return publicKey && privateKey && subject ? { publicKey, privateKey, subject } : undefined
 }
 
 function toAuthority(

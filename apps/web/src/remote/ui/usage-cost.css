@@ -17,6 +17,8 @@
 }
 .usage-page th .usage-statistics-details { max-inline-size: var(--yc-measure-narrow); white-space: normal; }
 .usage-quota-forecast { margin: var(--yc-space-1) 0 0; }
+.usage-quota-pace[data-verdict="cutting-it-close"] { color: var(--yc-yellow-strong); }
+.usage-quota-pace[data-verdict="will-run-out"] { color: var(--yc-danger); }
 .usage-details__title { color: var(--yc-text); font-weight: var(--yc-weight-medium); }
 .usage-statistics-details section + section { margin-top: var(--yc-space-2); }
 .usage-details-trigger {

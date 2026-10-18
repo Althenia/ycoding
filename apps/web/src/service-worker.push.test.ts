@@ -141,6 +141,37 @@ test("service worker shows one notification per push including malformed and foc
     await emit("notificationclick", { notification: { data: shown[3]?.options.data, close: () => undefined } })
     expect(posted).toEqual([])
     expect(opened).toBe("/remote/session?session_id=ses_1&device_id=dev_1")
+    const quota = { category: "quota-pace", deviceID: "dev_1", providerID: "prov_a", windowID: "weekly", milestone: "will-run-out", resetAt: 1_790_000_000_000 }
+    const quotaStart = shown.length
+    await emit("push", { data: { json: () => quota } })
+    expect(shown.length).toBe(quotaStart + 1)
+    expect(shown[quotaStart]).toMatchObject({ title: "YCoding — quota will run out", options: { body: "A provider quota will run out before it resets. Open Usage to review.",
+      data: { quota: true, deviceID: "dev_1" } } })
+    expect(JSON.stringify(shown[quotaStart]?.options.data)).not.toContain("prov_a")
+    expect(String(shown[quotaStart]?.options.body)).not.toContain("prov_a")
+    for (const bad of [{ ...quota, email: "a@b.c" }, { ...quota, resetAt: undefined }, { ...quota, resetAt: 0 }, { ...quota, milestone: "soon" }, { ...quota, deviceID: "bad id" },
+      { ...quota, providerID: "" }, { category: "quota-pace", deviceID: "dev_1" }])
+      await emit("push", { data: { json: () => bad } })
+    expect(shown.slice(quotaStart + 1).map((entry) => [entry.title, entry.options.tag])).toEqual(Array(7).fill(["YCoding — update", "ycoding-update"]))
+    shown.splice(quotaStart + 1)
+    const quotaData = shown[quotaStart]?.options.data
+    posted.length = 0
+    opened = ""
+    windowClients.splice(0, windowClients.length, { ...windowClient, url: "https://relay.test/docs" })
+    await emit("notificationclick", { notification: { data: quotaData, close: () => undefined } })
+    expect(opened).toBe("/remote/usage?device_id=dev_1")
+    expect(posted).toEqual([])
+    opened = ""
+    windowClients.splice(0, windowClients.length, windowClient)
+    await emit("notificationclick", { notification: { data: quotaData, close: () => undefined } })
+    expect(posted).toEqual([{ type: "ycoding:open-usage", deviceID: "dev_1" }])
+    expect(opened).toBe("")
+    focusFails = true
+    await emit("notificationclick", { notification: { data: quotaData, close: () => undefined } })
+    expect(opened).toBe("/remote/usage?device_id=dev_1")
+    focusFails = false
+    opened = ""
+    shown.splice(quotaStart)
     const paused = { title: "YCoding — alerts paused", options: { body: "Push alerts to this device stopped. Open YCoding to turn them back on.",
       tag: "ycoding-push-renewal", icon: "/icons/icon-256.png", badge: "/icons/icon-256.png" } }
     const beforeChange = shown.length

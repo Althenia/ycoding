@@ -681,6 +681,10 @@ pub fn record(
             v5::SessionLogItemValue54Data {
                 session_id: text(data, "sessionID")?,
                 request_id: text(data, "requestID")?,
+                reason: data
+                    .opt("reason")
+                    .map(payload::escalation_reason)
+                    .transpose()?,
                 choice: opt_literal(data, "choice", payload::CHOICE)?,
                 confidence: opt_number(data, "confidence")?,
                 grades: data

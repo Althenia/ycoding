@@ -13,6 +13,9 @@ fn claude_scoped_lanes_cents_and_reset_preserve_unknown_values() {
     assert_eq!(snapshot.windows[1].used, None);
     assert_eq!(snapshot.windows[1].limit, Some(10.0));
     assert_eq!(snapshot.windows[2].label, "Sonnet weekly".into());
+    assert_eq!(snapshot.windows[0].period_seconds.unwrap().get(), 18_000);
+    assert_eq!(snapshot.windows[1].period_seconds, None);
+    assert_eq!(snapshot.windows[2].period_seconds.unwrap().get(), 604_800);
 }
 
 #[test]
@@ -244,6 +247,9 @@ fn claude_all_model_buckets_deduplicate_scoped_lanes_and_validate_numeric_inputs
     assert_eq!(result.windows[1].label, "Sonnet weekly".into());
     assert_eq!(result.windows[2].used, Some(12.0));
     assert_eq!(result.windows[2].remaining, Some(0.0));
+    assert_eq!(result.windows[0].period_seconds.unwrap().get(), 604_800);
+    assert_eq!(result.windows[1].period_seconds.unwrap().get(), 604_800);
+    assert_eq!(result.windows[2].period_seconds, None);
     for response in [
         r#"{"seven_day":{"utilization":101}}"#,
         r#"{"extra_usage":{"is_enabled":true,"monthly_limit":"unknown"}}"#,

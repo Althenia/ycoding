@@ -53,7 +53,7 @@ fn roots() -> Roots {
 }
 
 #[test]
-fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
+fn all_builtin_fields_and_full_prompts_match_contract_fixtures() {
     let service = Service::new(agent::builtin::catalog(&roots()).unwrap());
     let project = ts_template("YCODING_PROJECT_PROMPT");
     let main = ts_template("MAINCHAT_CAPABILITIES");
@@ -222,7 +222,7 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
         (
             "decision",
             "Decision",
-            "2f5ed653376389e685d93fecf3e6e809330e1183e90268a7f7a71a72f0d72d87",
+            "e12ef401a99100be7f09670c0a8ce273104c8ce3508cd19187db5918f4de0b2c",
         ),
         (
             "summary",
@@ -230,7 +230,13 @@ fn all_builtin_fields_and_full_prompts_equal_main_ts_fixtures() {
             "0d10c2647ab3eb40aedd87b2a277a961f1e2e2bc58b5290c5cd2d5eefbddb28a",
         ),
     ] {
-        let expected = ts_template(&format!("PROMPT_{}", id.to_uppercase()));
+        let expected = if id == "decision" {
+            include_str!("fixtures/decision-json-prompt.md")
+                .trim_end()
+                .to_owned()
+        } else {
+            ts_template(&format!("PROMPT_{}", id.to_uppercase()))
+        };
         assert_eq!(hash(&expected), digest);
         let actual = service.get(&id.into()).unwrap();
         assert_eq!(actual.system, Some(expected.into()));

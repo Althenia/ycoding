@@ -532,18 +532,24 @@ test("main team surface reopens a BTW chat and returns without submitting or int
     args: { sessionID: parentID },
     route: state.route,
     settle: "Message YCoding…",
+    sessionReady: true,
   })
   try {
     await screen.input.pressKey("x", { ctrl: true })
     await screen.input.pressKey("ARROW_DOWN")
-    await waitFor(() => screen.frame().includes("Side chats"), "side chats tab")
-    const tabRow = screen.lines().findIndex((line) => line.includes("Side chats"))
+    await waitFor(
+      () =>
+        screen.frame().includes("Side chats") &&
+        screen.lines().some((line) => /\brunning\s+reviewer\b/.test(line)),
+      "loaded team surface",
+    )
     await screen.renderer.idle()
+    const tabRow = screen.lines().findIndex((line) => line.includes("Side chats"))
     await screen.mouse.click(screen.lines()[tabRow]!.indexOf("Side chats") + 1, tabRow)
     await waitFor(() => screen.frame().includes("Investigate the side issue"), "existing BTW entry")
     expect(screen.frame()).toContain("+ New side chat")
-    const chatRow = screen.lines().findIndex((line) => line.includes("Investigate the side issue"))
     await screen.renderer.idle()
+    const chatRow = screen.lines().findIndex((line) => line.includes("Investigate the side issue"))
     await screen.mouse.click(screen.lines()[chatRow]!.indexOf("Investigate the side issue") + 1, chatRow)
     await waitFor(() => screen.frame().includes("BTW SIDE CHAT"), "BTW route")
     await screen.input.pressKey("x", { ctrl: true })

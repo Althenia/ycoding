@@ -83,12 +83,12 @@ test.each(cases)("M7 $name rejects an unrelated scope and server/agent request a
   expect(endpoints.server.request(item.id, session("ses_root"), item.payload(), 512, 0).requestID).toBeUndefined()
 })
 
-test("M7 widens exactly three connector reads without adding remote operations", () => {
+test("M7 keeps exactly three connector reads available to local clients", () => {
   expect(
     operations
       .filter((item) => item.operationId >= 5000 && item.roles.includes(PeerRole.LOCAL_CLIENT))
       .map((item) => item.operationId),
   ).toEqual([5008, 5013, 5018])
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(87)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(84)
 })

@@ -1,4 +1,4 @@
-use super::{Error, toon};
+use super::Error;
 use ycoding_schema::{DomainDecode, JsonObject, JsonValue, LosslessString, ObjectEncoder, domain};
 
 pub const BYTE_LIMIT: usize = 1_048_576;
@@ -117,7 +117,7 @@ impl Request {
         })
     }
     pub fn template(&self) -> String {
-        toon::encode(
+        ycoding_schema::stringify_json(
             &ObjectEncoder::new()
                 .field(
                     "decisions",
@@ -145,11 +145,45 @@ impl Request {
                 .finish(),
         )
     }
+    pub fn response_schema(&self) -> JsonValue {
+        object_schema([(
+            "decisions",
+            object_schema([
+                (
+                    "version",
+                    enum_schema(Some("integer"), vec![JsonValue::Number(1.0)]),
+                ),
+                (
+                    "answers",
+                    ObjectEncoder::new()
+                        .field("type", "array")
+                        .field("minItems", &1.0)
+                        .field(
+                            "items",
+                            &ObjectEncoder::new()
+                                .field(
+                                    "anyOf",
+                                    &self
+                                        .questions
+                                        .iter()
+                                        .flat_map(|question| {
+                                            [question.schema(false), question.schema(true)]
+                                        })
+                                        .collect::<Vec<_>>(),
+                                )
+                                .finish(),
+                        )
+                        .finish(),
+                ),
+            ]),
+        )])
+    }
     pub fn parse(&self, document_text: &str) -> Result<Vec<JsonValue>, Error> {
         if document_text.len() > BYTE_LIMIT {
             return Err(Error::InvalidOutput);
         }
-        let document = toon::decode(document_text).map_err(|_| Error::InvalidOutput)?;
+        let document =
+            ycoding_schema::parse_json(document_text).map_err(|_| Error::InvalidOutput)?;
         let root = object(&document, &["decisions"]).map_err(|_| Error::InvalidOutput)?;
         let decisions = object(
             field(root, "decisions").map_err(|_| Error::InvalidOutput)?,
@@ -203,6 +237,78 @@ impl Request {
     }
 }
 impl Question {
+    fn schema(&self, refusal: bool) -> JsonValue {
+        let kind = if refusal {
+            "refusal"
+        } else {
+            match &self.kind {
+                Kind::Predicate => "predicate",
+                Kind::Choice(_) | Kind::Grade(_) => "choice",
+                Kind::Score(_) => "score",
+            }
+        };
+        let mut fields = vec![
+            (
+                "name",
+                enum_schema(Some("string"), vec![JsonValue::String(self.name.clone())]),
+            ),
+            (
+                "type",
+                enum_schema(Some("string"), vec![JsonValue::String(kind.into())]),
+            ),
+            (
+                "answer",
+                type_schema(if !refusal && matches!(self.kind, Kind::Predicate) {
+                    "boolean"
+                } else {
+                    "null"
+                }),
+            ),
+            (
+                "choice",
+                match &self.kind {
+                    Kind::Choice(choices) if !refusal => enum_schema(None, choices.clone()),
+                    _ => type_schema("null"),
+                },
+            ),
+            (
+                "score",
+                type_schema(if !refusal && matches!(self.kind, Kind::Score(_)) {
+                    "integer"
+                } else {
+                    "null"
+                }),
+            ),
+            (
+                "confidence",
+                if refusal || matches!(self.kind, Kind::Grade(_)) {
+                    enum_schema(Some("number"), vec![JsonValue::Number(0.0)])
+                } else {
+                    type_schema("number")
+                },
+            ),
+        ];
+        if let Kind::Grade(choices) = &self.kind
+            && !refusal
+        {
+            fields.push((
+                "grades",
+                ObjectEncoder::new()
+                    .field("type", "array")
+                    .field("minItems", &1.0)
+                    .field(
+                        "items",
+                        &object_schema([
+                            ("choice", enum_schema(None, choices.clone())),
+                            ("confidence", type_schema("number")),
+                            ("evidence", type_schema("string")),
+                        ]),
+                    )
+                    .finish(),
+            ));
+        }
+        object_schema(fields)
+    }
     fn answer(&self, value: &JsonValue) -> Result<JsonValue, Error> {
         let JsonValue::Object(answer) = value else {
             return Err(Error::InvalidOutput);
@@ -272,6 +378,41 @@ impl Question {
             .optional("grades", &canonical.map(JsonValue::Array))
             .finish())
     }
+}
+fn type_schema(kind: &str) -> JsonValue {
+    ObjectEncoder::new().field("type", kind).finish()
+}
+fn enum_schema(kind: Option<&str>, values: Vec<JsonValue>) -> JsonValue {
+    let fields = ObjectEncoder::new();
+    let fields = if let Some(kind) = kind {
+        fields.field("type", kind)
+    } else {
+        fields
+    };
+    fields.field("enum", &values).finish()
+}
+fn object_schema(fields: impl IntoIterator<Item = (&'static str, JsonValue)>) -> JsonValue {
+    let fields = fields.into_iter().collect::<Vec<_>>();
+    ObjectEncoder::new()
+        .field("type", "object")
+        .field(
+            "properties",
+            &fields
+                .iter()
+                .fold(ObjectEncoder::new(), |object, (name, schema)| {
+                    object.field(name, schema)
+                })
+                .finish(),
+        )
+        .field(
+            "required",
+            &fields
+                .iter()
+                .map(|(name, _)| LosslessString::from(*name))
+                .collect::<Vec<_>>(),
+        )
+        .field("additionalProperties", &false)
+        .finish()
 }
 fn graded(value: &JsonValue, choices: &[JsonValue]) -> Option<Vec<JsonValue>> {
     let JsonValue::Array(grades) = value else {

@@ -154,7 +154,7 @@ try {
         body: JSON.stringify(body),
       })
     ).status
-  const categories = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+  const categories = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
   expect(
     (await register(browsers.laptop, { endpoint: endpoint("laptop"), keys, categories })) === 200,
     "The laptop subscription was not registered",

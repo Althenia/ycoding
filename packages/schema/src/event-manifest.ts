@@ -19,6 +19,7 @@ import { Permission } from "./permission.js"
 import { Plugin } from "./plugin.js"
 import { Project } from "./project.js"
 import { ProjectDirectories } from "./project-directories.js"
+import { ProviderUsage } from "./provider-usage.js"
 import { Pty } from "./pty.js"
 import { Question } from "./question.js"
 import { Reference } from "./reference.js"
@@ -59,6 +60,7 @@ const featureDefinitions = Event.inventory(
   ...Question.Event.Definitions,
   ...Form.Event.Definitions,
   ...SessionTodo.Event.Definitions,
+  ...ProviderUsage.Event.Definitions,
 )
 
 export const ServerDefinitions = Event.inventory(

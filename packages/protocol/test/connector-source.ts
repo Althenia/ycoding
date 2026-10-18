@@ -1,4 +1,12 @@
 export const connectorOperations = {
+  "local.app.register": [5047, "local.app.register", "C", "MUTATION"],
+  "local.app.list": [5048, "local.app.list", "C", "READ"],
+  "local.app.revoke": [5049, "local.app.revoke", "C", "MUTATION"],
+  "local.app.open": [5050, "local.app.open", "C", "MUTATION"],
+  "local.app.status": [5051, "local.app.status", "C", "READ"],
+  "local.app.http": [5052, "local.app.http", "C", "MUTATION"],
+  "artifact.demo.preview": [5045, "artifact.demo.preview", "C", "READ"],
+  "artifact.demo.export": [5046, "artifact.demo.export", "C", "READ"],
   "provider.auth.list": [5000, "provider.auth.list", "C", "READ"],
   "provider.auth.key": [5001, "provider.auth.key", "C", "MUTATION"],
   "provider.auth.begin": [5002, "provider.auth.begin", "C", "MUTATION"],
@@ -85,6 +93,10 @@ export const noticeOperations = {
   "notice.list": [5040, "notice.list", "C", "READ"],
   "notice.read": [5041, "notice.read", "C", "MUTATION"],
   "notice.readAll": [5042, "notice.readAll", "C", "MUTATION"],
+} as const
+
+export const relayOperations = {
+  "mcp.request": [5044, "mcp.request", "C", "MUTATION"],
 } as const
 
 export const connectorRoles = (name: string) =>

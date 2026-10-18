@@ -490,6 +490,8 @@ pub async fn side_create(
         },
         request_id: invocation.request_id.clone(),
         remote: invocation.remote,
+        mcp: None,
+        cancelled: invocation.cancelled.clone(),
     };
     crate::session_services::synthetic(
         child,

@@ -14,7 +14,7 @@ import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { createApi, createFetch } from "./fixture/tui-client"
 
-const { ReviewBox, ReviewItemEditor } = await import("../src/routes/session/review-box")
+const { ReviewBox, ReviewItemEditor, reviewReasonLabel } = await import("../src/routes/session/review-box")
 
 const fingerprint = "a".repeat(64)
 const guardrailItem: SessionReviewItem = {
@@ -139,6 +139,77 @@ async function mount(body: () => JSX.Element, settle: string, height = 30, mode:
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes(settle))
   return app
+}
+
+test.each([
+  ["unavailable", "Decision unavailable · the decision model or its authenticated route is unavailable"],
+  ["invalid-request", "Decision unavailable · the decision request is invalid"],
+  ["provider-failed", "Decision unavailable · the provider request failed"],
+  ["input-too-large", "Decision unavailable · the decision input exceeds the supported size"],
+  ["invalid-output", "Decision unavailable · the decision response failed validation"],
+  ["truncated-output", "Decision unavailable · the decision response was truncated or did not finish"],
+  ["unsupported-output", "Decision unavailable · the selected route does not support strict structured decisions"],
+  ["conflicting_grades", "Decision requires human review · conflicting approval and rejection grades"],
+  ["refused", "decision model refused"],
+  ["timeout", "decision model timed out"],
+  ["escalated", "decision model escalated"],
+  ["low_confidence", "decision model was unsure"],
+])("review reason %s retains its diagnostic meaning", (reason, label) => {
+  expect(reviewReasonLabel(reason as SessionReviewItem["reason"])).toBe(label)
+})
+
+for (const mode of ["dark", "light"] as const) {
+  test(`unsupported-output remains informational in the rendered review row and editor in ${mode} mode`, async () => {
+    const item: SessionReviewItem = {
+      ...ordinaryItem,
+      reason: "unsupported-output" as SessionReviewItem["reason"],
+      choice: undefined,
+      confidence: undefined,
+      grades: undefined,
+    }
+    const decisions: SessionReviewDecision[] = []
+    const opened: string[] = []
+    const app = await mount(
+      () => (
+        <>
+          <ReviewBox
+            items={[item]}
+            currentSessionID="ses_root"
+            asleep={false}
+            failed={{}}
+            onOpen={(value) => opened.push(value.itemID)}
+            onJump={() => {}}
+            onDismiss={() => {}}
+          />
+          <ReviewItemEditor
+            item={item}
+            disabled={false}
+            onDecide={async (_item, decision) => { decisions.push(decision) }}
+            onClose={() => {}}
+          />
+        </>
+      ),
+      "Guardrail blocked",
+      60,
+      mode,
+    )
+    try {
+      const frame = app.captureCharFrame()
+      expect(frame.match(/Decision unavailable · the selected route does not support strict structured decisions/g)).toHaveLength(2)
+      expect(frame).not.toContain("decision model escalated")
+      expect(frame).not.toContain("unreported")
+      expect(frame).not.toContain("(selected)")
+      expect(frame).not.toContain("grade ")
+      expect(frame).toContain("Write outside the repository")
+      expect(frame).toContain("Allow once")
+      expect(frame).toContain("Allow for this session")
+      expect(frame).toContain("Deny")
+      expect(decisions).toEqual([])
+      expect(opened).toEqual([])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 }
 
 for (const mode of ["dark", "light"] as const) {

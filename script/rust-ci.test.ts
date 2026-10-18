@@ -293,7 +293,7 @@ test("every protoc fallback resolves PROTOC, then protoc on PATH", async () => {
   })
   expect(new TextDecoder().decode(hardcoded.stdout)).toBe("")
   const lookups = [
-    ["rust/crates/protocol/tests/operation_generation.rs", 'std::env::var("PROTOC").unwrap_or_else(|_| "protoc".into())', 4],
+    ["rust/crates/protocol/tests/operation_generation.rs", 'std::env::var("PROTOC").unwrap_or_else(|_| "protoc".into())', 5],
     ["packages/protocol/src/v5/generate.ts", 'process.env.PROTOC ?? "protoc"', 2],
     ["packages/protocol/test/operation-generation.test.ts", 'process.env.PROTOC ?? "protoc"', 1],
     ["protocol/ycoding/v5/testdata/generate.py", 'os.environ.get("PROTOC", "protoc")', 1],

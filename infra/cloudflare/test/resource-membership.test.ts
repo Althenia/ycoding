@@ -235,6 +235,10 @@ const storeCoverage = {
     store + "tests/analytics.rs",
     "watermarked_rebuild_catches_up_delete_and_new_changes",
   ),
+  "rust/crates/store/src/analytics/mod.rs::REBUILD_SLICE_PAGES": boundary(
+    store + "tests/analytics.rs",
+    "maintenance_rebuilds_in_bounded_slices_that_interleave_snapshot_reads",
+  ),
   "rust/crates/store/src/analytics/mod.rs::REPORT_DEADLINE": boundary(
     store + "tests/analytics.rs",
     "report_deadline_is_explicit_and_native_work_releases_its_connection",
@@ -334,6 +338,14 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
                 protocol + "wire_conformance.rs",
                 "title_codepoints_lossless_whitespace_controls_and_bidi",
               ),
+              QUOTA_PACE_PROVIDER_ID_MAX_CODEPOINTS: boundary(
+                "packages/protocol/test/mcp-quota-wire-contract.test.ts",
+                "quota pace text is nonempty, trim-stable, control-free and at most 64 code points",
+              ),
+              QUOTA_PACE_WINDOW_ID_MAX_CODEPOINTS: boundary(
+                "packages/protocol/test/mcp-quota-wire-contract.test.ts",
+                "quota pace text is nonempty, trim-stable, control-free and at most 64 code points",
+              ),
             },
     )
   }
@@ -381,7 +393,12 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
       ),
     )
   }
-  expect(protocolConstants, "review new protocol resource constants alongside WireLimit and Budgets").toEqual([])
+  await check("Protocol constants", protocolConstants, {
+    "rust/crates/protocol/src/domain_json.rs::DEPTH": boundary(
+      protocol + "domain_json.rs",
+      "byte_depth_and_field_budgets_fail_closed",
+    ),
+  })
   const protocolGuards: string[] = []
   for await (const file of new Bun.Glob("rust/crates/protocol/src/**/*.rs").scan({ cwd: root })) {
     if (file.endsWith("/tests.rs")) continue
@@ -404,6 +421,7 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
     "rust/crates/protocol/src/connection/state.rs::freed > 0",
     "rust/crates/protocol/src/connection/state.rs::id > 0",
     "rust/crates/protocol/src/connection/state.rs::receive.pending_bytes > 0",
+    "rust/crates/protocol/src/domain_json.rs::literal.len() >= 2",
   ]
   expect(structuralGuards.every((guard) => protocolGuards.includes(guard))).toBe(true)
   await check(
@@ -471,6 +489,10 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
       "an admin test alert reaches only the selected account's registered endpoint and reports push-service acceptance",
     ),
   })
+  const quotaPush = boundary(
+    "infra/cloudflare/test/relay-quota.test.ts",
+    "a quota alert beyond the twenty-a-minute push budget stays pending and a later retry delivers it",
+  )
   const inlineOwners = {
     "rust/crates/store/src/analytics/mod.rs": {
       "queries.len() > 16": report,
@@ -486,7 +508,12 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
       "source.columns.len() > 64": sourceConfiguration,
       "sources.len() > 64": sourceConfiguration,
     },
-    "infra/cloudflare/src/relay/core.ts": { "pushCount < 20": push, "pushWindow >= 60_000": push },
+    "infra/cloudflare/src/relay/core.ts": {
+      "pushCount < 20": push,
+      "pushWindow >= 60_000": push,
+      "pushCount >= 20": quotaPush,
+      "pushCount > 0": quotaPush,
+    },
   }
   for (const [file, members] of Object.entries(inlineOwners)) {
     const source = await read(file)
@@ -514,9 +541,10 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
   )
   await check(
     "relay asynchronous reservation declarations",
-    [...relaySource.matchAll(/const (reservation) = \d+\s*\*\s*\d+/g)].map((item) => item[1]!),
+    [...relaySource.matchAll(/const (\w*[rR]eservation) = \d+\s*\*\s*\d+/g)].map((item) => item[1]!),
     {
       reservation: push,
+      quotaReservation: quotaPush,
     },
   )
   const channelOwners: Record<string, Record<string, ReturnType<typeof boundary>>> = {
@@ -549,7 +577,16 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
       ].map((item) => `${file}::${item[1]}`),
     )
   await check("relay numeric declarations", relayDeclarations, {
+    "infra/cloudflare/src/relay/mcp-events.ts::authorizationBodyBytes": boundary(
+      "infra/cloudflare/test/mcp-durable.test.ts",
+      "Events authorization enforces the exact byte cap and cancels unbounded excess",
+    ),
     "infra/cloudflare/src/relay/core.ts::reservation": push,
+    "infra/cloudflare/src/relay/core.ts::quotaReservation": quotaPush,
+    "infra/cloudflare/src/relay/core.ts::quotaClaimGraceMs": boundary(
+      "infra/cloudflare/test/relay-quota.test.ts",
+      "an account-wide claim outlives its rounded reset by the two-minute grace",
+    ),
     "infra/cloudflare/src/relay/notice-store.ts::attentionRepeatMs": boundary(
       "infra/cloudflare/test/notice-store.test.ts",
       "attention repetition enforces the exact ten-minute boundary across reopening",
@@ -573,6 +610,18 @@ test("TEST-055 every declared resource limit has a reviewed enforcement boundary
         "a stalled HTTP piece expires at its own consumption deadline and teardown refunds its entire owner",
       ),
       "64 KiB": http,
+      "256 KiB": boundary(
+        "rust/crates/core/tests/local_app.rs",
+        "request_response_stream_and_upgrade_limits_fail_without_truncation",
+      ),
+      "2 MiB": boundary(
+        "rust/crates/core/tests/local_app.rs",
+        "request_response_stream_and_upgrade_limits_fail_without_truncation",
+      ),
+      "1 MiB": boundary(
+        "rust/crates/runtime/tests/connector_local_apps.rs",
+        "facade_http_enforces_canonical_base64_and_its_smaller_body_bounds_before_contact",
+      ),
     },
     "packages/protocol/src/v5/connection/README.md": {
       "25 ms": budgetCoverage.creditDelayMs,

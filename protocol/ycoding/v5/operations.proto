@@ -45,6 +45,10 @@ message FieldConstraints {
 extend google.protobuf.FieldOptions {
   optional FieldConstraints constraints = 51000;
   optional PublicEventOptions public_event = 51001;
+  optional string domain_literal = 51002;
+}
+extend google.protobuf.EnumValueOptions {
+  optional string domain_label = 51000;
 }
 message PublicEventOptions {
   required string diagnostic_name = 1;

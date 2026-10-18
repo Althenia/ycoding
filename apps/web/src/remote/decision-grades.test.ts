@@ -14,6 +14,28 @@ test("guardrail provenance retains all four grades and the selected choice witho
   expect(readGuardrailProvenance({})).toEqual({})
 })
 
+test.each([
+  "unavailable", "invalid-request", "provider-failed", "timeout", "input-too-large",
+  "invalid-output", "refused", "truncated-output", "unsupported-output",
+])("failure-only guardrail provenance preserves %s without inventing a judgment", (reason) => {
+  expect(readGuardrailProvenance({ reason })).toEqual({ reason })
+})
+
+test.each(["escalated", "low_confidence", "conflicting_grades"])(
+  "guardrail provenance retains the %s handoff with its reported grades",
+  (reason) => {
+    const provenance = { reason, choice: "escalate", confidence: 0.934567, grades }
+    expect(readGuardrailProvenance(provenance)).toEqual(provenance)
+  },
+)
+
+test("guardrail provenance rejects unknown, empty, and mistyped escalation reasons", () => {
+  for (const reason of ["", "unknown-failure", "<script>reason</script>", null, 1, {}, []]) {
+    expect(readGuardrailProvenance({ reason })).toBeUndefined()
+    expect(readGuardrailProvenance({ reason, choice: "escalate", confidence: 0.9, grades })).toBeUndefined()
+  }
+})
+
 test("grade evidence stays literal at its 500-character boundary and malformed grades are unavailable", () => {
   expect(readGrades([{ choice: "route-a", confidence: 0.5, evidence: "<script>" + "x".repeat(492) }])?.[0]?.evidence).toHaveLength(500)
   for (const grade of [

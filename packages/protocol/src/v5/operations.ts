@@ -65,7 +65,10 @@ export function readConstraints(bytes: Uint8Array) {
           if (
             value.domainObligations.some(
               (source) =>
-                !/^packages\/(schema|protocol|remote|cli)\/src\/[A-Za-z0-9_./-]+\.ts#[A-Za-z0-9_.]+$/.test(source),
+                !/^packages\/(schema|protocol|remote|cli)\/src\/[A-Za-z0-9_./-]+\.ts#[A-Za-z0-9_.]+$/.test(source) &&
+                !/^rust\/crates\/(schema|core|runtime)\/src\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.rs#[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$/.test(
+                  source,
+                ),
             )
           )
             throw new Error("invalid domain obligation source")

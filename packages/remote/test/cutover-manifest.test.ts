@@ -9,8 +9,8 @@ const root = path.resolve(import.meta.dir, "../../..")
 
 test("TEST-057 every manifest member has exactly one owner and a live descriptor or endpoint source", async () => {
   const manifest = await generateManifest(root)
-  expect(manifest.counts).toEqual({ endpoint: 207, connector: 75, notice: 4 })
-  expect(manifest.members).toHaveLength(286)
+  expect(manifest.counts).toEqual({ endpoint: 207, connector: 83, notice: 4 })
+  expect(manifest.members).toHaveLength(294)
   expect(manifest.unresolved).toEqual([])
   const keys = manifest.members.map((member) => `${member.kind}:${member.name}`)
   expect(new Set(keys).size).toBe(keys.length)
@@ -21,8 +21,13 @@ test("TEST-057 every manifest member has exactly one owner and a live descriptor
   }
   const byKind = (kind: string) =>
     manifest.members.filter((member) => member.kind === kind).map((member) => member.name)
+  expect(
+    operations
+      .filter((operation) => operation.roles.includes(PeerRole.RELAY) && !operation.roles.includes(PeerRole.REMOTE_CLIENT))
+      .map((operation) => [operation.operationId, operation.diagnosticName, operation.roles]),
+  ).toEqual([[5044, "mcp.request", [PeerRole.RELAY]]])
   const relay = operations
-    .filter((operation) => operation.roles.includes(PeerRole.RELAY))
+    .filter((operation) => operation.roles.includes(PeerRole.RELAY) && operation.roles.includes(PeerRole.REMOTE_CLIENT))
     .map((operation) => operation.diagnosticName)
     .sort()
   const remote = operations

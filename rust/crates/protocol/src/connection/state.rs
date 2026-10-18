@@ -2476,6 +2476,7 @@ impl Connection {
         if !boundary::allowed(&body, self.config.local_role)? {
             return Err(ProtocolError::Direction);
         }
+        boundary::bounded(&body)?;
         let frame = v5::Frame {
             revision: 5,
             connection_epoch: Some(self.epoch.clone()),

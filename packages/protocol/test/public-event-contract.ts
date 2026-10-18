@@ -1,7 +1,7 @@
 import { Schema, SchemaAST } from "effect"
 import { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import { SessionEvent } from "@ycoding-ai/schema/session-event"
-import { wireContract } from "./wire-contract.js"
+import { domainLabel, wireContract, withDomainLiteral } from "./wire-contract.js"
 import { sessionContract } from "./session-contract.js"
 import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { resourceFieldConstraints } from "./resources-contract.js"
@@ -61,7 +61,7 @@ export function publicEventProto(allocation: WireAllocation = wireAllocation) {
             (value, index) =>
               `  ${name.toUpperCase()}_${String(value)
                 .replace(/[^a-zA-Z0-9]/g, "_")
-                .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]};`,
+                .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]}${domainLabel(value)};`,
           )
           .join("\n")}\n${reservedLine("enum", name, allocation)}}`,
     )
@@ -75,7 +75,7 @@ export function publicEventProto(allocation: WireAllocation = wireAllocation) {
               const metadata =
                 name === "PublicEvent"
                   ? ` [(ycoding.v5.public_event) = { diagnostic_name: ${JSON.stringify(EventManifest.ServerDefinitions[index].type)} durable: ${EventManifest.ServerDefinitions[index].durability === "durable"} }]`
-                  : fieldOptions(field)
+                  : withDomainLiteral(fieldOptions(field), message, field)
               return `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${metadata};`
             })
             .join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,

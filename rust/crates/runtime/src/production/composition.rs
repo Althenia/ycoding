@@ -171,8 +171,17 @@ fn maintain(
     let handle = engine.handle();
     let mut stop_requested = false;
     loop {
-        match attempt(&client, &handle) {
-            Ok(()) => break,
+        match handle.maintain() {
+            Ok(ycoding_core::ycoding_store::analytics::Maintenance::Complete) => break,
+            Ok(ycoding_core::ycoding_store::analytics::Maintenance::Pending) => {
+                if !matches!(
+                    stopped.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                ) {
+                    stop_requested = true;
+                    break;
+                }
+            }
             Err(error) => {
                 tracing::error!(
                     "analytics purge/rebuild failed ({error:?}); report reads remain unavailable until it succeeds"
@@ -198,22 +207,6 @@ fn wait_stop(stopped: &std::sync::mpsc::Receiver<()>) -> bool {
         Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => true,
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => false,
     }
-}
-
-fn attempt(
-    client: &ycoding_core::ycoding_store::Client,
-    handle: &ycoding_core::ycoding_store::analytics::Handle,
-) -> Result<(), ycoding_core::ycoding_store::analytics::Error> {
-    let pending = client
-        .snapshot()?
-        .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])?
-        .is_some_and(|delivery| delivery.purge_all || !delivery.purges.is_empty());
-    if pending {
-        handle.purge()?;
-        return Ok(());
-    }
-    handle.rebuild()?;
-    Ok(())
 }
 
 impl Drop for Composition {

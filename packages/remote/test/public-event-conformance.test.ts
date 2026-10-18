@@ -38,7 +38,8 @@ test("REQ-WIRE-005 shared public event corpus preserves ephemeral lone UTF16 and
   expect(decodeStrict(SessionLogItemSchema, encodeStrict(SessionLogItemSchema, log)).kind.case).toBe("value50")
   for (const name of ["public-catalog", "public-text-delta", "public-durable"])
     expect(encodeStrict(PublicEventSchema, decodeStrict(PublicEventSchema, vector(name)))).toEqual(vector(name))
-  expect(publicEvents).toHaveLength(115)
+  expect(publicEvents).toHaveLength(116)
+  expect(publicEvents.find((event) => event.name === "provider.quota.pace")).toMatchObject({ durable: false, tag: 117 })
   expect(publicEvents.map((event) => event.name)).not.toContain("shell.updated")
   expect(PublicEventSchema.fields.some((field) => field.number === 116)).toBe(false)
   expect(PublicEventSchema.proto.reservedRange.map(({ start, end }) => ({ start, end }))).toContainEqual({

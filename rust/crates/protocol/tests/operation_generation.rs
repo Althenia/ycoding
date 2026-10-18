@@ -108,7 +108,7 @@ fn canonical_descriptor_and_metadata_are_extracted() {
     fs::write(dir.join("fixture.proto"), r#"syntax = "proto2"; package ycoding.v5;
 import "ycoding/v5/foundation.proto"; import "ycoding/v5/operations.proto";
 option (ycoding.v5.operation_range) = { first: 3000 last: 3999 };
-message Checked { required int64 value = 1 [(ycoding.v5.constraints) = { integer_min: "-9007199254740991" integer_max: "9007199254740991" domain_obligations: "packages/schema/src/schema.ts#PositiveInt" }]; }
+message Checked { required int64 value = 1 [(ycoding.v5.constraints) = { integer_min: "-9007199254740991" integer_max: "9007199254740991" domain_obligations: "packages/schema/src/schema.ts#PositiveInt" }]; required LosslessString native = 2 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }]; }
 service Fixture { rpc Read(Checked) returns (Empty) { option (ycoding.v5.operation) = {
 operation_id: 3000 diagnostic_name: "test.read" roles: LOCAL_CLIENT roles: LOCAL_CLIENT scope: MACHINE mutation: READ settlement: COMPLETED paging: UNPAGED streaming: INLINE sensitivity: PRIVATE
 }; } }"#).unwrap();
@@ -160,6 +160,51 @@ operation_id: 3000 diagnostic_name: "test.read" roles: LOCAL_CLIENT roles: LOCAL
         operation_generation::read_constraints(&bytes).unwrap()["ycoding.v5.Checked.1"].obligations,
         ["packages/schema/src/schema.ts#PositiveInt"]
     );
+    assert_eq!(
+        operation_generation::read_constraints(&bytes).unwrap()["ycoding.v5.Checked.2"].obligations,
+        ["rust/crates/runtime/src/connector/local_apps.rs#Facade"]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native_domain_owners_reject_unscoped_paths() {
+    let dir = std::env::temp_dir().join(format!("ycoding-native-owner-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for source in [
+        "rust/crates/runtime/src/../connector/local_apps.rs#Facade",
+        "rust/crates/unknown/src/handler.rs#Handler",
+    ] {
+        fs::write(
+            dir.join("fixture.proto"),
+            format!(
+                r#"syntax = "proto2"; package ycoding.v5;
+import "ycoding/v5/foundation.proto"; import "ycoding/v5/operations.proto";
+message Checked {{ required LosslessString value = 1 [(ycoding.v5.constraints) = {{ domain_obligations: "{source}" }}]; }}"#
+            ),
+        )
+        .unwrap();
+        let result = Command::new(std::env::var("PROTOC").unwrap_or_else(|_| "protoc".into()))
+            .arg(format!("--proto_path={}/protocol", root.display()))
+            .arg(format!("--proto_path={}", dir.display()))
+            .arg("--include_imports")
+            .arg(format!(
+                "--descriptor_set_out={}/contract.bin",
+                dir.display()
+            ))
+            .arg(dir.join("fixture.proto"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{source}");
+        assert_eq!(
+            operation_generation::read_constraints(&fs::read(dir.join("contract.bin")).unwrap())
+                .err()
+                .as_deref(),
+            Some("invalid domain obligation source"),
+            "{source}"
+        );
+    }
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -167,12 +212,18 @@ operation_id: 3000 diagnostic_name: "test.read" roles: LOCAL_CLIENT roles: LOCAL
 fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
     use std::collections::BTreeMap;
     let operations = &*ycoding_protocol::OPERATIONS;
-    assert_eq!(operations.len(), 231);
+    assert_eq!(operations.len(), 242);
     for (name, id, roles) in [
         ("incident.report", 2064, &[1, 2, 3][..]),
         ("incident.recent", 2065, &[1, 2, 3][..]),
         ("incident.guidance.get", 2066, &[1, 2, 3][..]),
         ("incident.guidance.clear", 2067, &[1][..]),
+        ("remote.enroll", 3053, &[1][..]),
+        ("remote.mcp.get", 3054, &[1][..]),
+        ("remote.mcp.set", 3055, &[1][..]),
+        ("mcp.request", 5044, &[3][..]),
+        ("artifact.demo.preview", 5045, &[2, 3][..]),
+        ("artifact.demo.export", 5046, &[2, 3][..]),
     ] {
         let operation = operations
             .iter()
@@ -238,10 +289,11 @@ fn test_027_descriptor_membership_is_exhaustive_and_partitioned_by_role() {
     assert_eq!(
         patterns,
         BTreeMap::from([
-            (vec![1], 152),
+            (vec![1], 154),
             (vec![1, 2, 3], 61),
-            (vec![2, 3], 14),
+            (vec![2, 3], 22),
             (vec![2], 4),
+            (vec![3], 1),
         ]),
         "a new operation role pattern or count needs an explicit assertion mapping"
     );

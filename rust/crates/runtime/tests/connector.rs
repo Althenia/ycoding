@@ -761,6 +761,15 @@ async fn mismatched_device_or_origin_never_reaches_the_relay_and_late_credential
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn established_disconnect_reconnects_and_unknown_mutations_are_never_replayed() {
+    reconnect_without_replay(Some(1001)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abrupt_tcp_disconnect_reconnects_and_unknown_mutations_are_never_replayed() {
+    reconnect_without_replay(None).await;
+}
+
+async fn reconnect_without_replay(close_code: Option<u16>) {
     let mut relay = Relay::start(5, false, Budgets::default()).await;
     let calls = Arc::new(AtomicUsize::new(0));
     let started = Arc::new(Notify::new());
@@ -808,7 +817,10 @@ async fn established_disconnect_reconnects_and_unknown_mutations_are_never_repla
     tokio::time::timeout(connector_support::WAIT, started.notified())
         .await
         .unwrap();
-    first.commands.send(Command::Close(1001)).await.unwrap();
+    if let Some(code) = close_code {
+        first.commands.send(Command::Close(code)).await.unwrap();
+    }
+    drop(first);
     let second = relay.opening().await;
     wait_state(&control, State::On).await;
     let new_id = second

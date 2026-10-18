@@ -66,6 +66,8 @@ export type RemoteDevice = {
 }
 export type RemoteEnrollOutput = RemoteDevice
 export type RemoteStatusOutput = RemoteGetOutput & { device?: RemoteDevice }
+export type RemoteMcpStatus = RemoteGetOutput & { url?: string }
+export type RemoteMcpSetInput = { enabled: boolean }
 export type BackendPaths = { home: string; state: string; worktree: string; config: string }
 export type BackendSessionsQuery = Omit<SessionListInput, "order"> & {
   order?: "asc" | "desc" | "pinned" | "active"
@@ -122,6 +124,10 @@ export type FrontendBoundaryClient = {
   remote: {
     enroll: (input: RemoteEnrollInput, requestOptions?: RequestOptions) => Promise<RemoteEnrollOutput>
     get: (requestOptions?: RequestOptions) => Promise<RemoteStatusOutput>
+    mcp: {
+      get: (requestOptions?: RequestOptions) => Promise<RemoteMcpStatus>
+      set: (input: RemoteMcpSetInput, requestOptions?: RequestOptions) => Promise<RemoteMcpStatus>
+    }
   }
   location: { get: (input?: LocationGetInput, requestOptions?: RequestOptions) => Promise<BackendLocationOutput> }
   skill: { list: (input?: SkillListInput, requestOptions?: RequestOptions) => Promise<BackendSkillListOutput> }

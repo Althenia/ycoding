@@ -3,7 +3,7 @@ use crate::{
     auth::{Auth, Input, ProviderAuth},
     framing::{AwsEventStream, Framing, Sse},
     json,
-    llm::{Defaults, Event, Model, Request, Response},
+    llm::{Defaults, Event, Model, Request, Response, ResponseFormat},
     provider_error::{Failure, HttpContext, classify, rate_limit_details, retry_after_ms},
     websocket,
 };
@@ -26,6 +26,9 @@ pub trait StreamParser: Send {
     fn finish(&mut self) -> Result<Vec<Event>, Error>;
 }
 pub trait Protocol: Send + Sync {
+    fn response_formats(&self) -> &'static [&'static str] {
+        &[]
+    }
     fn request_headers(&self, _request: &Request, headers: HeaderMap) -> Result<HeaderMap, Error> {
         Ok(headers)
     }
@@ -200,6 +203,19 @@ impl Route {
     pub fn prepare(&self, request: &Request) -> Result<Prepared, Error> {
         let mut request = request.resolved();
         crate::cache::apply(&mut request);
+        let format = match &request.response_format {
+            Some(ResponseFormat::Json(_)) => Some("json"),
+            Some(ResponseFormat::Tool(_)) => Some("tool"),
+            _ => None,
+        };
+        if let Some(format) = format
+            && !self.protocol.response_formats().contains(&format)
+        {
+            return Err(Error::invalid(format!(
+                "Route {} does not support provider-enforced {format} response format",
+                self.id
+            )));
+        }
         if let Some(native) = self.protocol.native() {
             return native.prepare(self, request);
         }

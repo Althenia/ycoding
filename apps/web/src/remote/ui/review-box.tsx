@@ -6,6 +6,7 @@ import type { ReviewDecision } from "../store"
 import { FormRequest } from "./form-request"
 import { TeamAnswerForm } from "./subagent-bar"
 import { DecisionProvenance } from "./decision-grades"
+import { escalationText } from "../decision-grades"
 
 export function ReviewBox(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
@@ -54,7 +55,7 @@ function ReviewItemCard(props: { readonly item: () => ReviewItemView; readonly o
       dismiss: () => decide({ kind: "subagent_question", dismissed: true }),
     }} />}</Show>
     <Show when={guardrail()}>{(item) => <>
-      <DecisionProvenance provenance={item()} />
+      <DecisionProvenance provenance={{ choice: item().choice, confidence: item().confidence, grades: item().grades }} />
       <p class="request__body"><strong>{item().action}</strong><span> — {item().detail}</span></p>
       <Show when={item().ruleIDs.length}><p class="request__note">Rules: <For each={item().ruleIDs}>{(rule) => <code>{rule}</code>}</For></p></Show>
       <Show when={item().resources.length}><p class="request__body">Targets / command: <For each={item().resources}>{(resource) => <code>{resource}</code>}</For></p></Show>
@@ -100,8 +101,16 @@ const reasonLabel: Readonly<Record<ReviewReason, string>> = {
   refused: "The decision model declined to decide",
   low_confidence: "The decision model was not confident",
   escalated: "The decision model handed this to you",
+  conflicting_grades: escalationText({ reason: "conflicting_grades" }),
   error: "The decision model failed",
   timeout: "The decision model timed out",
+  unavailable: escalationText({ reason: "unavailable" }),
+  "invalid-request": escalationText({ reason: "invalid-request" }),
+  "provider-failed": escalationText({ reason: "provider-failed" }),
+  "input-too-large": escalationText({ reason: "input-too-large" }),
+  "invalid-output": escalationText({ reason: "invalid-output" }),
+  "truncated-output": escalationText({ reason: "truncated-output" }),
+  "unsupported-output": escalationText({ reason: "unsupported-output" }),
   sleep_entry: "Pending when the family went to sleep",
   restart: "The service restarted while this subagent was working",
 }

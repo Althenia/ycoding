@@ -2,6 +2,7 @@ export * as SessionReview from "./session-review.js"
 
 import { Schema } from "effect"
 import { Agent } from "./agent.js"
+import { DecisionFailure } from "./decision-failure.js"
 import { Form } from "./form.js"
 import { Guardrail } from "./guardrail.js"
 import { Permission } from "./permission.js"
@@ -20,16 +21,9 @@ export const Kind = Schema.Literals(["question", "subagent_question", "guardrail
 })
 export type Kind = typeof Kind.Type
 
-export const Reason = Schema.Literals([
-  "disabled",
-  "free_text",
-  "refused",
-  "low_confidence",
-  "escalated",
-  "error",
-  "timeout",
-  "sleep_entry",
-  "restart",
+export const Reason = Schema.Union([
+  DecisionFailure.Reason,
+  Schema.Literals(["disabled", "free_text", "low_confidence", "escalated", "conflicting_grades", "error", "sleep_entry", "restart"]),
 ]).annotate({ identifier: "SessionReview.Reason" })
 export type Reason = typeof Reason.Type
 

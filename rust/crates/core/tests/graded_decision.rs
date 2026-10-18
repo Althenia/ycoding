@@ -1,4 +1,4 @@
-use ycoding_core::resources::decision::{self, judgment::Request, toon};
+use ycoding_core::resources::decision::{self, judgment::Request};
 use ycoding_schema::{JsonValue, parse_json, stringify_json};
 
 fn graded_request(grade: &str) -> Request {
@@ -26,7 +26,7 @@ fn answer(fields: &str) -> String {
 }
 
 fn wire(answer: &str) -> String {
-    toon::encode(
+    stringify_json(
         &parse_json(&format!(
             r#"{{"decisions":{{"version":1,"answers":[{answer}]}}}}"#
         ))
@@ -126,7 +126,10 @@ fn grades_reject_out_of_range_confidence_and_blank_or_oversized_evidence() {
             "{first}"
         );
     }
-    let text = wire(&valid()).replace("false,0,Unsupported", "false,NaN,Unsupported");
+    let text = wire(&valid()).replace(
+        r#""confidence":0,"evidence":"Unsupported""#,
+        r#""confidence":NaN,"evidence":"Unsupported""#,
+    );
     assert_eq!(request.parse(&text), Err(decision::Error::InvalidOutput));
 }
 
@@ -186,7 +189,7 @@ fn grades_are_valid_only_for_choice_answers_to_graded_choice_questions() {
     )
     .unwrap();
     let wire = |predicate: &str, score: &str| {
-        toon::encode(
+        stringify_json(
             &parse_json(&format!(
                 r#"{{"decisions":{{"version":1,"answers":[{predicate},{score}]}}}}"#
             ))
@@ -223,7 +226,7 @@ fn a_graded_question_may_coexist_with_ordinary_questions_in_one_request() {
     )
     .unwrap();
     let document = |route: &str| {
-        toon::encode(
+        stringify_json(
             &parse_json(&format!(
                 r#"{{"decisions":{{"version":1,"answers":[{{"name":"pick","type":"choice","answer":null,"choice":"b","score":null,"confidence":0.6}},{route},{{"name":"safe","type":"predicate","answer":false,"choice":null,"score":null,"confidence":0.9}}]}}}}"#
             ))
@@ -280,7 +283,7 @@ fn grade_must_be_a_boolean_on_a_choice_question_and_is_rejected_elsewhere() {
 #[test]
 fn the_graded_template_is_a_plain_refusal() {
     let request = graded();
-    let template = toon::decode(&request.template()).unwrap();
+    let template = parse_json(&request.template()).unwrap();
     let JsonValue::Object(root) = &template else {
         panic!()
     };

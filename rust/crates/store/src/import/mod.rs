@@ -6,8 +6,8 @@ mod provenance;
 mod read;
 
 use crate::{
-    Catalog, Metadata, Options, Store, TableDeclaration, analytics, artifacts, model_incident,
-    project, resources, session,
+    Catalog, Metadata, Options, Store, TableDeclaration, analytics, artifacts, mcp_events,
+    model_incident, project, resources, session,
 };
 pub use provenance::{IMPORTER_VERSION, ProvenanceTable, Report, TableSummary};
 use rusqlite::{Connection, OpenFlags};
@@ -138,6 +138,7 @@ pub fn catalog(kind: DatabaseKind) -> Catalog {
                 .chain(artifacts::TABLES)
                 .chain(resources::TABLES)
                 .chain(model_incident::TABLES)
+                .chain(mcp_events::TABLES)
                 .copied()
                 .chain([
                     TableDeclaration::of::<analytics::DeliveryTable>(),

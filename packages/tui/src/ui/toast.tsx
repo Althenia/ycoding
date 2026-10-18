@@ -63,7 +63,13 @@ export function Toast() {
             {glyph()} {label()}
             <Show when={current().title}> · {current().title}</Show>
           </text>
-          <text width="100%" fg={theme.text.default} wrapMode="word">
+          <text
+            width="100%"
+            flexShrink={0}
+            minHeight={current().message.split("\n").length}
+            fg={theme.text.default}
+            wrapMode="word"
+          >
             {current().message}
           </text>
         </box>

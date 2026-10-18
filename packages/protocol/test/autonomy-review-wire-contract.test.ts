@@ -35,7 +35,9 @@ const proto = (file: string) => Bun.file(path.resolve(import.meta.dir, "../../..
 const enumValues = (source: string, name: string) => {
   const body = source.match(new RegExp(`^enum ${name} \\{\\n([\\s\\S]*?)^\\}`, "m"))
   if (!body) throw new Error(`missing enum ${name}`)
-  return Object.fromEntries([...body[1].matchAll(/^\s+(\w+) = (\d+);/gm)].map((match) => [match[1], Number(match[2])]))
+  return Object.fromEntries(
+    [...body[1].matchAll(/^\s+(\w+) = (\d+)(?: \[[^\]]*\])?;/gm)].map((match) => [match[1], Number(match[2])]),
+  )
 }
 const errors = (name: string) => [...operation(name).errorTypes].map((type) => type.replace("ycoding.v5.", "")).sort()
 
@@ -143,11 +145,11 @@ describe("review operations", () => {
     expect(operation("providerUsage.forecast").operationId).toBe(2063)
   })
 
-  test("the current inventory grows by the two review operations and the four incident operations", () => {
-    expect(operations).toHaveLength(231)
-    expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(213)
-    expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
-    expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
+  test("the current inventory includes review, incident, relay-MCP, fixed demo and local app operations", () => {
+    expect(operations).toHaveLength(242)
+    expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(215)
+    expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(87)
+    expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(84)
   })
 
   test("web latency values append the two review operations after the usage values and the incident values after them", async () => {
@@ -172,11 +174,12 @@ describe("review operations", () => {
 describe("public events", () => {
   const entry = (name: string) => publicEvents.find((event) => event.name === name)
 
-  test("the inventory is 115 branches (shell update tag 116 retired), 58 durable, with the old numbering intact", () => {
-    expect(publicEvents).toHaveLength(115)
+  test("the inventory is 116 branches (shell update tag 116 retired), 58 durable, with the old numbering intact", () => {
+    expect(publicEvents).toHaveLength(116)
     expect(publicEvents.filter((event) => event.durable)).toHaveLength(58)
-    expect(new Set(publicEvents.map((event) => event.tag)).size).toBe(115)
-    expect(Math.max(...publicEvents.map((event) => event.tag))).toBe(115)
+    expect(new Set(publicEvents.map((event) => event.tag)).size).toBe(116)
+    expect(Math.max(...publicEvents.map((event) => event.tag))).toBe(117)
+    expect(entry("provider.quota.pace")).toMatchObject({ tag: 117, durable: false })
     expect(entry("session.tool.progress")).toMatchObject({ tag: 51, durable: false })
   })
 
@@ -229,7 +232,10 @@ describe("public events", () => {
 
   test.each([
     ["SessionLogItemValue53", ["sessionID", "reviewSessionID", "ruleID", "confidence", "source"]],
-    ["SessionLogItemValue54", ["sessionID", "requestID", "choice", "confidence", "grades", "ruleIDs", "source"]],
+    [
+      "SessionLogItemValue54",
+      ["sessionID", "requestID", "choice", "confidence", "grades", "ruleIDs", "source", "reason"],
+    ],
     [
       "SessionLogItemValue55",
       ["sessionID", "reviewSessionID", "requestID", "reply", "choice", "grades", "confidence", "ruleIDs", "source"],
@@ -242,11 +248,11 @@ describe("public events", () => {
     ["SessionLogItemValue58", ["sessionID", "itemID", "reason"]],
     ["SessionLogItemValue59", ["sessionID", "itemID"]],
     ["SessionLogItemValue60", ["sessionID", "assistantMessageID", "model", "error"]],
-  ] as const)("%s carries its data fields in declaration order", (envelope, fields) => {
+  ] as const)("%s preserves its published data field allocations", (envelope, fields) => {
     expect(tags(envelope).data).toBe(8)
     const data = tags(target(envelope, "data"))
-    expect(Object.keys(data)).toEqual([...fields])
-    expect(Object.values(data)).toEqual(fields.map((_, index) => index + 1))
+    expect(Object.keys(data).sort()).toEqual([...fields].sort())
+    expect(fields.map((field) => data[field])).toEqual(fields.map((_, index) => index + 1))
   })
 
   test.each([

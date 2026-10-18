@@ -24,7 +24,7 @@ import {
 import { capturedChangesVisible, latestPromptProcessing, promptReceipt, shellOutputPaging } from "../view-model"
 import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
 import { FormRequest } from "./form-request"
-import { readGradedAnswers } from "../decision-grades"
+import { escalationText, readGradedAnswers } from "../decision-grades"
 import { DecisionGrades, DecisionProvenance } from "./decision-grades"
 import { guardrailHeading } from "./guardrail-label"
 import { Markdown } from "./markdown"
@@ -818,9 +818,11 @@ export function RequestCard(props: {
           <span> — {guardrailReason(props.request())}</span>
         </p>
         <Show when={review()?.escalation}>
-          <p class="request__note" role="status">
-            Decision model escalated this review to you. Your decision is required.
-          </p>
+          {(escalation) => (
+            <p class="request__note" role="status">
+              {escalationText(escalation())} — your decision is required.
+            </p>
+          )}
         </Show>
         <p class="request__note">
           Owning Session: <code>{review()?.sessionID}</code>

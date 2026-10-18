@@ -124,7 +124,7 @@ pub enum Grading {
 enum Call {
     Answer(JsonObject),
     Missing,
-    Failed,
+    Failed(decision::Error),
     Timeout,
     Cancelled,
 }
@@ -183,7 +183,7 @@ impl Adapter {
                     confidence,
                 }
             }),
-            Call::Missing | Call::Failed | Call::Timeout => Verification::Kept,
+            Call::Missing | Call::Failed(_) | Call::Timeout => Verification::Kept,
         }
     }
 
@@ -235,13 +235,14 @@ impl Adapter {
             Call::Answer(answer) => answer,
             Call::Cancelled => return Grading::Cancelled,
             Call::Timeout => return unsettled(session_review::Reason::Timeout),
-            Call::Missing | Call::Failed => return unsettled(session_review::Reason::Error),
+            Call::Missing => return unsettled(session_review::Reason::InvalidOutput),
+            Call::Failed(error) => return unsettled(error.review_reason()),
         };
         if answer.get(&"type".into()) == Some(&JsonValue::String("refusal".into())) {
             return unsettled(session_review::Reason::Refused);
         }
         let Some(grades) = grades(&answer, &offered) else {
-            return unsettled(session_review::Reason::Error);
+            return unsettled(session_review::Reason::InvalidOutput);
         };
         let grades = grades
             .into_iter()
@@ -283,7 +284,7 @@ impl Adapter {
         match settled {
             Err(_) => Call::Timeout,
             Ok(Err(decision::Error::Cancelled)) => Call::Cancelled,
-            Ok(Err(_)) => Call::Failed,
+            Ok(Err(error)) => Call::Failed(error),
             Ok(Ok(response)) => answer(&response, name).map_or(Call::Missing, Call::Answer),
         }
     }
@@ -446,13 +447,30 @@ fn select(grades: Vec<guardrail::Grade>, hard: bool) -> Grading {
     let choice = selected.choice;
     let low_confidence = qualifying.is_empty() && choice != DecisionChoice::Escalate;
     let provenance = guardrail::Escalation {
+        reason: if escalated {
+            Some(if choice == DecisionChoice::Escalate {
+                guardrail::EscalationReason::Escalated
+            } else if approves && rejects {
+                guardrail::EscalationReason::ConflictingGrades
+            } else if low_confidence {
+                guardrail::EscalationReason::LowConfidence
+            } else {
+                guardrail::EscalationReason::Escalated
+            })
+        } else {
+            None
+        },
         choice: Some(choice),
         confidence: Some(selected.confidence),
         grades: Some(grades.clone()),
     };
     if escalated {
         return Grading::Escalated {
-            reason: if low_confidence {
+            reason: if choice == DecisionChoice::Escalate {
+                session_review::Reason::Escalated
+            } else if approves && rejects {
+                session_review::Reason::ConflictingGrades
+            } else if low_confidence {
                 session_review::Reason::LowConfidence
             } else {
                 session_review::Reason::Escalated
@@ -474,6 +492,32 @@ fn unsettled(reason: session_review::Reason) -> Grading {
     Grading::Escalated {
         reason,
         provenance: guardrail::Escalation {
+            reason: match reason {
+                session_review::Reason::Unavailable => {
+                    Some(guardrail::EscalationReason::Unavailable)
+                }
+                session_review::Reason::InvalidRequest => {
+                    Some(guardrail::EscalationReason::InvalidRequest)
+                }
+                session_review::Reason::ProviderFailed => {
+                    Some(guardrail::EscalationReason::ProviderFailed)
+                }
+                session_review::Reason::Timeout => Some(guardrail::EscalationReason::Timeout),
+                session_review::Reason::InputTooLarge => {
+                    Some(guardrail::EscalationReason::InputTooLarge)
+                }
+                session_review::Reason::InvalidOutput => {
+                    Some(guardrail::EscalationReason::InvalidOutput)
+                }
+                session_review::Reason::Refused => Some(guardrail::EscalationReason::Refused),
+                session_review::Reason::TruncatedOutput => {
+                    Some(guardrail::EscalationReason::TruncatedOutput)
+                }
+                session_review::Reason::UnsupportedOutput => {
+                    Some(guardrail::EscalationReason::UnsupportedOutput)
+                }
+                _ => None,
+            },
             choice: None,
             confidence: None,
             grades: None,

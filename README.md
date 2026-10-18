@@ -96,6 +96,17 @@ ycoding remote connect
 
 See [remote workspace](https://ycoding.althenia.app/docs/usage/remote) for sign-in options, recovery, and connection states.
 
+### Relay MCP
+
+Relay MCP is a separate, off-by-default control surface for approved MCP clients. After enrolling the machine and connecting Remote, enable it locally:
+
+```sh
+ycoding remote mcp on
+ycoding remote mcp status
+```
+
+Configure the returned device URL in an MCP client supporting `2026-07-28`, then complete Google sign-in and client consent. Consent grants control of every existing and future Session on that backend, including persistent approvals and autonomy changes. It also permits Session creation in existing directories strictly below the machine's home directory. Starting Remote alone does not enable MCP. Use `ycoding remote mcp off` to disable it; see [Relay MCP configuration](./docs/configuration.md#relay-mcp).
+
 ## Guardrails
 
 Permissions decide what an agent may attempt; guardrails review or deny high-impact operations across the main Session and its subagents. An approval never overrides an explicit permission denial or a built-in catastrophic denial.

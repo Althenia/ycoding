@@ -29,9 +29,12 @@ export async function harness(
     monotonic?: RelayDeps["monotonic"]
     send?: RelayDeps["send"]
     noticeStorage?: NoticeStorage
+    mcp?: RelayDeps["mcp"]
+    quota?: RelayDeps["quota"]
+    start?: number
   } = {},
 ) {
-  let now = 0
+  let now = options.start ?? 0
   let id = 0
   const ownerID = options.ownerID ?? "owner"
   const deviceID = options.deviceID ?? "device"
@@ -56,6 +59,8 @@ export async function harness(
     loadOfflineCheck: async () => undefined,
     saveOfflineCheck: async () => undefined,
     notifyPush: options.notifyPush,
+    mcp: options.mcp,
+    quota: options.quota,
   })
   const connections = new Map<string, Connection>()
   const collected = new Map<string, { frame?: Frame; decisions: Decision[] }[]>()

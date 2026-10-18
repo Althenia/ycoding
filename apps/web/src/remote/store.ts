@@ -330,6 +330,7 @@ export type RemoteStoreState = {
   readonly sessionListNotice?: string
   readonly sessionRowsStale?: boolean
   readonly sessionPageLoading: boolean
+  readonly sessionPaginationLoading: boolean
   readonly sessionHasNext: boolean
   readonly sessionHasPrevious: boolean
   readonly selectedSessionInfo?: SessionInfoView
@@ -644,6 +645,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     sessionListStatus: "idle",
     sessionRowsStale: false,
     sessionPageLoading: false,
+    sessionPaginationLoading: false,
     sessionHasNext: false,
     sessionHasPrevious: false,
     drafts: {},
@@ -1131,6 +1133,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     if (!isCurrentConnection(owner)) return
+    if (frame.type === "notice.quota") {
+      delivery.quota(frame, ownerDeviceID, frame.at)
+      setState({ notifications: delivery.entries() })
+      return
+    }
     if (frame.type === "notice.unavailable") {
       noticeFault = true
       failNoticeSync(noticeUnavailableMessage)
@@ -2273,6 +2280,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionListStatus: "idle",
         sessionListNotice: undefined,
         sessionPageLoading: false,
+        sessionPaginationLoading: false,
         sessionHasNext: false,
         sessionHasPrevious: false,
         selectedSessionInfo: undefined,
@@ -3443,7 +3451,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const workspace = container.state.selectedWorkspaceID
     if (!active || workspace === undefined || loadingPageToken === token) return
     loadingPageToken = token
-    setState({ sessionPageLoading: cursor !== undefined || rebase })
+    setState({ sessionPageLoading: cursor !== undefined || rebase, sessionPaginationLoading: cursor !== undefined })
     const current = () =>
       token === sessionsToken && isCurrentConnection(active) && workspace === container.state.selectedWorkspaceID
     const query = {
@@ -3521,7 +3529,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     })
     if (first === "stale") {
       loadingPageToken = undefined
-      setState({ sessionPageLoading: false })
+      setState({ sessionPageLoading: false, sessionPaginationLoading: false })
       if (!rebase) await loadSessions(token, undefined, "next", true)
       return
     }
@@ -3549,7 +3557,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     if (loadingPageToken === token) loadingPageToken = undefined
     if (!current()) return
-    setState({ sessionPageLoading: false })
+    setState({ sessionPageLoading: false, sessionPaginationLoading: false })
     if (first === undefined || stale || failed) {
       if (stale) {
         statusReloadLocal = true
@@ -3585,6 +3593,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionListNotice: undefined,
       sessionRowsStale: false,
       sessionPageLoading: false,
+      sessionPaginationLoading: false,
       sessionHasPrevious: sessionPages[0]?.previous !== undefined,
       sessionHasNext: sessionPages.at(-1)?.next !== undefined,
     })
@@ -4435,6 +4444,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionListStatus: "idle",
       sessionListNotice: undefined,
       sessionPageLoading: false,
+      sessionPaginationLoading: false,
       sessionHasNext: false,
       sessionHasPrevious: false,
       drafts: {},
@@ -4711,6 +4721,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           selectedWorkspaceID,
           sessionListStatus: "ready",
           sessionPageLoading: false,
+          sessionPaginationLoading: false,
           sessionHasNext: false,
           sessionHasPrevious: false,
           drafts,
@@ -4866,6 +4877,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         sessionListNotice: undefined,
         sessionRowsStale: false,
         sessionPageLoading: false,
+        sessionPaginationLoading: false,
         sessionHasNext: false,
         sessionHasPrevious: false,
         sessionCreation:

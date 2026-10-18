@@ -1261,7 +1261,11 @@ fn test_041_namespace_partition_round_trips_preserve_canonical_prefix_and_wire_k
     let mut distinct = BTreeSet::new();
     distinct.insert(baseline.clone());
     input.variant = Some("high".into());
-    assert!(distinct.insert(prompt_cache::namespace(&input)));
+    assert_eq!(
+        prompt_cache::namespace(&input),
+        baseline,
+        "variant is not a namespace input"
+    );
     input.variant = None;
     assert_eq!(prompt_cache::namespace(&input), baseline);
     input.account_identity_digest = Some("account-b");
@@ -1560,13 +1564,17 @@ async fn test_041_runner_instruction_tool_permission_profile_variant_away_back_a
         coordinator.run(&id).await.unwrap();
     }
     let before = support::requests(&store, "ses_one");
-    for restored in [2, 4, 6, 8, 10] {
+    for restored in [2, 4, 6, 8, 9, 10] {
         assert_eq!(
             before[restored].prompt_cache_key, before[0].prompt_cache_key,
             "partition {restored}: gratuitous namespace rotation"
         );
     }
-    for changed in [1, 5, 7, 9] {
+    assert_ne!(
+        before[9].model, before[8].model,
+        "variant selection is recorded without rotating the cache key"
+    );
+    for changed in [1, 5, 7] {
         assert_ne!(
             before[changed].prompt_cache_key, before[0].prompt_cache_key,
             "partition {changed}: namespace not isolated"
@@ -1635,7 +1643,7 @@ async fn test_041_runner_instruction_tool_permission_profile_variant_away_back_a
     let after = support::requests(&store, "ses_one");
     assert_eq!(after.len(), 13);
     let body = |index: usize| parse_json(&actual[index].body).unwrap();
-    for restored in [2, 4, 6, 8, 10] {
+    for restored in [2, 4, 6, 8, 9, 10] {
         assert_eq!(field(&body(restored), "tools"), field(&body(0), "tools"));
         assert_eq!(
             field(&body(restored), "prompt_cache_key"),

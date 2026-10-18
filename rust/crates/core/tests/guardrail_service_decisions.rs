@@ -416,14 +416,22 @@ async fn a_qualified_grade_settles_once_with_redacted_canonical_durable_provenan
 async fn unsettled_grading_hands_off_awake_and_defers_asleep_without_inventing_approval() {
     for asleep in [false, true] {
         for (reply, reason, has_grades) in [
-            (grades(Some(0.1), 0.9, 0.85, 0.1), Reason::Escalated, true),
+            (
+                grades(Some(0.1), 0.9, 0.85, 0.1),
+                Reason::ConflictingGrades,
+                true,
+            ),
             (
                 grades(Some(0.1), 0.7, 0.1, 0.1),
                 Reason::LowConfidence,
                 true,
             ),
             (refusal("guardrail"), Reason::Refused, false),
-            (Err(decision::Error::ProviderFailed), Reason::Error, false),
+            (
+                Err(decision::Error::ProviderFailed),
+                Reason::ProviderFailed,
+                false,
+            ),
         ] {
             let harness = Harness::new();
             let root = harness.fixture.session("ses_root", None, 0, false, None);

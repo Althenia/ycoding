@@ -8,6 +8,17 @@ export type WireAllocation = {
 
 export const wireAllocation: WireAllocation = {
   messages: {
+    Guardrail_Escalation: ["choice", "confidence", "grades", "reason"],
+    SessionLogItemValue54_data: [
+      "sessionID",
+      "requestID",
+      "choice",
+      "confidence",
+      "grades",
+      "ruleIDs",
+      "source",
+      "reason",
+    ],
     Shell_Info: [
       "id",
       "status",
@@ -299,6 +310,7 @@ export const wireAllocation: WireAllocation = {
       "question_deferred",
       "form_deferred",
       { reserved: "shell_updated", wireName: "shell_updated" },
+      "provider_quota_pace",
     ],
     SessionLogItemValue24_data_change: [
       "launched",
@@ -345,6 +357,25 @@ export const wireAllocation: WireAllocation = {
     ],
   },
   enums: {
+    SessionReview_Reason: [
+      "disabled",
+      "free_text",
+      "refused",
+      "low_confidence",
+      "escalated",
+      "error",
+      "timeout",
+      "sleep_entry",
+      "restart",
+      "unavailable",
+      "invalid-request",
+      "provider-failed",
+      "input-too-large",
+      "invalid-output",
+      "truncated-output",
+      "unsupported-output",
+      "conflicting_grades",
+    ],
     Shell_Info_status: [
       "running",
       "exited",

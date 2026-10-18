@@ -108,6 +108,7 @@ impl DomainEncode for Grade {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Escalation {
+    pub reason: Option<EscalationReason>,
     pub choice: Option<DecisionChoice>,
     pub confidence: Option<Confidence>,
     pub grades: Option<Vec<Grade>>,
@@ -116,6 +117,7 @@ impl DomainDecode for Escalation {
     fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
         let o = ObjectDecoder::new(v, p)?;
         Ok(Self {
+            reason: o.optional("reason")?,
             choice: o.optional("choice")?,
             confidence: o.optional("confidence")?,
             grades: o.optional("grades")?,
@@ -125,12 +127,14 @@ impl DomainDecode for Escalation {
 impl DomainEncode for Escalation {
     fn encode(&self) -> JsonValue {
         ObjectEncoder::new()
+            .optional("reason", &self.reason)
             .optional("choice", &self.choice)
             .optional("confidence", &self.confidence)
             .optional("grades", &self.grades)
             .finish()
     }
 }
+crate::schema::literal_enum_type!(EscalationReason,{Unavailable=>"unavailable",InvalidRequest=>"invalid-request",ProviderFailed=>"provider-failed",Timeout=>"timeout",InputTooLarge=>"input-too-large",InvalidOutput=>"invalid-output",Refused=>"refused",TruncatedOutput=>"truncated-output",UnsupportedOutput=>"unsupported-output",Escalated=>"escalated",LowConfidence=>"low_confidence",ConflictingGrades=>"conflicting_grades"});
 crate::schema::literal_enum_type!(RuleSource,{Standard=>"standard",Custom=>"custom"});
 crate::schema::literal_enum_type!(RuleDecision,{Allow=>"allow",Ask=>"ask",HardReview=>"hard_review",Deny=>"deny"});
 crate::schema::literal_enum_type!(Decision,{Allow=>"allow",Ask=>"ask",Deny=>"deny",CapExceeded=>"cap_exceeded"});

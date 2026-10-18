@@ -678,7 +678,7 @@ try {
     body: JSON.stringify({
       endpoint: "https://fcm.googleapis.com/fcm/send/flow-local-only",
       keys: pushKeys,
-      categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true },
+      categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true },
     }),
   })
   expect(registration.status === 200, "Push subscription was not registered")

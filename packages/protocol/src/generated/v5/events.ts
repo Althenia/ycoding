@@ -624,6 +624,12 @@ export const publicEvents = [
     type: "ycoding.v5.PublicEvent_todo_updated",
   },
   {
+    name: "provider.quota.pace",
+    durable: false,
+    tag: 117,
+    type: "ycoding.v5.PublicEvent_provider_quota_pace",
+  },
+  {
     name: "session.status",
     durable: false,
     tag: 91,

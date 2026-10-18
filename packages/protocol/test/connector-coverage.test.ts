@@ -1,21 +1,64 @@
 import { expect, test } from "bun:test"
-import { operations, operationIDsByRole, PeerRole, MutationClass } from "../src/generated/v5/index.js"
-import { connectorOperations, noticeOperations } from "./connector-source.js"
+import {
+  operations,
+  operationIDsByRole,
+  PeerRole,
+  MutationClass,
+  ScopeKind,
+  Settlement,
+  Paging,
+  Streaming,
+  Sensitivity,
+} from "../src/generated/v5/index.js"
+import { connectorOperations, noticeOperations, relayOperations } from "./connector-source.js"
 import { connectorContract, connectorProto, connectorFieldConstraints } from "./connector-contract.js"
 import { messages } from "../src/generated/v5/contract.js"
 import type { Constraints } from "../src/v5/constraints.js"
 import path from "node:path"
 
-test("79 live source names resolve to 75 canonical connector and four relay notice operations", () => {
+test("fixed demo operations have empty machine reads and closed typed results", () => {
+  for (const [id, name] of [
+    [5045, "artifact.demo.preview"],
+    [5046, "artifact.demo.export"],
+  ] as const) {
+    const descriptor = operations.find((item) => item.operationId === id)!
+    expect(descriptor.diagnosticName).toBe(name)
+    expect(descriptor.roles).toEqual([PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
+    expect(descriptor.mutation).toBe(MutationClass.READ)
+    expect(descriptor.scope).toBe(ScopeKind.MACHINE)
+    expect(descriptor.settlement).toBe(Settlement.COMPLETED)
+    expect(descriptor.paging).toBe(Paging.UNPAGED)
+    expect(descriptor.streaming).toBe(Streaming.TYPED_BULK)
+    expect(descriptor.sensitivity).toBe(Sensitivity.PRIVATE)
+    expect(descriptor.errorTypes).toEqual(["ycoding.v5.Connector_Error"])
+    expect(Object.entries(messages).find(([name]) => name === descriptor.requestType)?.[1].fields).toEqual([])
+  }
+  expect(messages["ycoding.v5.artifact_demo_preview_Result"]!.fields.map((field) => field.name)).toEqual([
+    "variants",
+    "hostVerification",
+  ])
+  expect(messages["ycoding.v5.artifact_demo_export_Result"]!.fields.map((field) => field.name)).toEqual([
+    "id",
+    "filename",
+    "mime",
+    "size",
+    "sha256",
+    "expiresAt",
+    "delivery",
+  ])
+  expect(messages["ycoding.v5.Connector_McpRequest"]!.fields[0]!.constraints).toEqual({ utf16Min: 1, utf16Max: 32768 })
+})
+
+test("87 live source names resolve to 83 canonical connector and four relay notice operations", () => {
   const expected = [
     ...new Map(
       [...Object.values(connectorOperations), ...Object.values(noticeOperations)].map((item) => [item[0], item]),
     ).values(),
   ]
-  expect(expected).toHaveLength(79)
-  expect(new Set(expected.map(([id]) => id)).size).toBe(79)
+  expect(expected).toHaveLength(87)
+  expect(new Set(expected.map(([id]) => id)).size).toBe(87)
   const actual = operations.filter((item) => item.roles.includes(PeerRole.REMOTE_CLIENT))
-  expect(actual).toHaveLength(79)
+  expect(actual).toHaveLength(87)
   expect(actual.map((item) => [item.operationId, item.diagnosticName]).sort()).toEqual(
     expected.map(([id, name]) => [id, name]).sort(),
   )
@@ -28,8 +71,8 @@ test("generated per-role allowlists equal descriptor roles including empty agent
     expect(operationIDsByRole[role]).toEqual(
       operations.filter((item) => item.roles.includes(role)).map((item) => item.operationId),
     )
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(87)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(84)
 })
 
 test("descriptor role-scope and event payload metadata append fresh fields", () => {
@@ -160,19 +203,27 @@ test("spec admission table matches the connector inventory, descriptor roles and
   }
 })
 
-test("relay forwards exactly the connector set; agents and servers send no operation requests", () => {
+test("relay forwards exactly the connector set plus the relay-only raw MCP request; agents and servers send none", () => {
   const actual = operations.filter((item) => item.roles.includes(PeerRole.RELAY))
-  expect(actual).toHaveLength(75)
+  expect(actual).toHaveLength(84)
   expect(actual.map((item) => item.operationId).sort()).toEqual(
-    [...new Set(Object.values(connectorOperations).map(([id]) => id))].sort(),
+    [...new Set([...Object.values(connectorOperations), ...Object.values(relayOperations)].map(([id]) => id))].sort(),
   )
+  for (const [id, name, , mutation] of Object.values(relayOperations))
+    expect(operations.find((item) => item.operationId === id)).toMatchObject({
+      diagnosticName: name,
+      roles: [PeerRole.RELAY],
+      mutation: MutationClass[mutation],
+    })
   for (const role of [PeerRole.AGENT, PeerRole.SERVER])
     expect(operations.filter((item) => item.roles.includes(role))).toEqual([])
 })
 
 test("no local-only operation gains remote authority and all shared IDs retain local authority", () => {
   const remoteIDs = new Set<number>(
-    [...Object.values(connectorOperations), ...Object.values(noticeOperations)].map(([id]) => id),
+    [...Object.values(connectorOperations), ...Object.values(noticeOperations), ...Object.values(relayOperations)].map(
+      ([id]) => id,
+    ),
   )
   for (const operation of operations) {
     if (!remoteIDs.has(operation.operationId))

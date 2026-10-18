@@ -25,8 +25,8 @@ use std::{
     time::Duration,
 };
 use ycoding_schema::{
-    DomainDecode, JsonValue, LosslessString, ObjectEncoder, agent, domain, guardrail, model,
-    permission, session, session_message,
+    DomainDecode, DomainEncode, JsonValue, LosslessString, ObjectEncoder, agent, domain, guardrail,
+    model, permission, session, session_message,
     session_orchestration::{Answer, Change, Question, QuestionId, Task},
     session_pending,
     session_review::{Kind, Origin, Reason},
@@ -895,6 +895,8 @@ impl Service {
             time: non_negative(now())?,
             deferred: None,
         };
+        Question::decode(&question.encode())
+            .map_err(|error| Error::InvalidRequest(error.to_string()))?;
         let effective = self
             .autonomy
             .effective(child_id)
@@ -1278,7 +1280,7 @@ impl Service {
             return SleepAnswer::deferred(Reason::FreeText);
         }
         let Some(evaluator) = (self.question_evaluator)(child_id) else {
-            return SleepAnswer::deferred(Reason::Error);
+            return SleepAnswer::deferred(Reason::Unavailable);
         };
         let redacted = options
             .iter()
@@ -1293,13 +1295,21 @@ impl Service {
                 .enumerate()
                 .any(|(index, value)| redacted[..index].contains(value))
         {
-            return SleepAnswer::deferred(Reason::Error);
+            return SleepAnswer::deferred(Reason::InvalidRequest);
         }
-        let request = ObjectEncoder::new().field("provider", "agent").field("request", &ObjectEncoder::new()
+        let request = ObjectEncoder::new()
             .field("state", &crate::process::guardrails::redact_value(&ObjectEncoder::new().field("question", &question.text).field("options", &options).finish()))
-            .field("questions", &vec![crate::tools::policy::option_question("subagent_question", "The user is asleep and cannot answer this subagent's question. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal defers the question to the user's review box.", redacted.iter().map(|value| ObjectEncoder::new().field("value", value).finish()).collect())]).finish()).finish();
+            .field("questions", &vec![crate::tools::policy::option_question("subagent_question", "The user is asleep and cannot answer this subagent's question. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal defers the question to the user's review box.", redacted.iter().map(|value| ObjectEncoder::new().field("value", value).finish()).collect())]).finish();
+        let judgment = match crate::resources::decision::judgment::Request::decode(&request) {
+            Ok(request) => request,
+            Err(error) => return SleepAnswer::deferred(error.review_reason()),
+        };
+        let request = ObjectEncoder::new()
+            .field("provider", "agent")
+            .field("request", &request)
+            .finish();
         if stringify_json(&request).len() > crate::resources::decision::judgment::BYTE_LIMIT {
-            return SleepAnswer::deferred(Reason::Error);
+            return SleepAnswer::deferred(Reason::InputTooLarge);
         }
         let cancellation = Cancellation::default();
         let response = tokio::time::timeout(
@@ -1318,10 +1328,10 @@ impl Service {
         cancellation.cancel();
         let response = match response {
             Err(_) => return SleepAnswer::deferred(Reason::Timeout),
-            Ok(Err(_)) => return SleepAnswer::deferred(Reason::Error),
+            Ok(Err(error)) => return SleepAnswer::deferred(error.review_reason()),
             Ok(Ok(response)) => response,
         };
-        sleep_choice(&response, &options, &redacted)
+        sleep_choice(&response, &options, &redacted, &judgment)
     }
 
     pub async fn settle(
@@ -1932,47 +1942,58 @@ fn sleep_choice(
     response: &JsonValue,
     options: &[LosslessString],
     redacted: &[JsonValue],
+    judgment: &crate::resources::decision::judgment::Request,
 ) -> SleepAnswer {
     let JsonValue::Object(response) = response else {
-        return SleepAnswer::deferred(Reason::Error);
+        return SleepAnswer::deferred(Reason::InvalidOutput);
     };
     let Some(JsonValue::Object(response)) = response.get(&"response".into()) else {
-        return SleepAnswer::deferred(Reason::Error);
+        return SleepAnswer::deferred(Reason::InvalidOutput);
     };
     let Some(JsonValue::Array(answers)) = response.get(&"answers".into()) else {
-        return SleepAnswer::deferred(Reason::Error);
+        return SleepAnswer::deferred(Reason::InvalidOutput);
+    };
+    let answers = match judgment.parse(&stringify_json(
+        &ObjectEncoder::new()
+            .field(
+                "decisions",
+                &ObjectEncoder::new()
+                    .field("version", &1.0)
+                    .field("answers", answers)
+                    .finish(),
+            )
+            .finish(),
+    )) {
+        Ok(answers) => answers,
+        Err(error) => return SleepAnswer::deferred(error.review_reason()),
     };
     let [JsonValue::Object(answer)] = answers.as_slice() else {
-        return SleepAnswer::deferred(Reason::Error);
+        return SleepAnswer::deferred(Reason::InvalidOutput);
     };
-    if answer.get(&"name".into()) != Some(&JsonValue::String("subagent_question".into())) {
-        return SleepAnswer::deferred(Reason::Error);
-    }
     if answer.get(&"type".into()) == Some(&JsonValue::String("refusal".into())) {
         return SleepAnswer::deferred(Reason::Refused);
     }
     if answer.get(&"type".into()) != Some(&JsonValue::String("choice".into())) {
-        return SleepAnswer::deferred(Reason::Error);
+        return SleepAnswer::deferred(Reason::InvalidOutput);
     }
     let Some(index) = answer
         .get(&"choice".into())
         .and_then(|choice| redacted.iter().position(|value| value == choice))
     else {
-        return SleepAnswer::deferred(Reason::Error);
+        return SleepAnswer::deferred(Reason::InvalidOutput);
     };
-    let confidence = answer
+    let Some(confidence) = answer
         .get(&"confidence".into())
-        .and_then(|value| guardrail::Confidence::decode(value).ok());
-    match confidence {
-        Some(confidence) if confidence.get() >= 0.8 => SleepAnswer::Answer(options[index].clone()),
-        confidence => SleepAnswer::Deferred {
-            reason: if confidence.is_some() {
-                Reason::LowConfidence
-            } else {
-                Reason::Error
-            },
-            choice: Some(options[index].clone()),
-            confidence,
-        },
+        .and_then(|value| guardrail::Confidence::decode(value).ok())
+    else {
+        return SleepAnswer::deferred(Reason::InvalidOutput);
+    };
+    if confidence.get() >= 0.8 {
+        return SleepAnswer::Answer(options[index].clone());
+    }
+    SleepAnswer::Deferred {
+        reason: Reason::LowConfidence,
+        choice: Some(options[index].clone()),
+        confidence: Some(confidence),
     }
 }

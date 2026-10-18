@@ -12,6 +12,7 @@ import {
   TypedPayloadSchema,
   NoticeCategory,
   AttentionNeed,
+  quotaToWire,
   type RemoteErrorCode,
   type Decision,
   type Notice,
@@ -920,12 +921,21 @@ function noticeWire(frame: NoticeFrame): Notice {
       $typeName: "ycoding.v5.Notice",
       kind: { case: "offline", value: { $typeName: "ycoding.v5.Offline", atMs: BigInt(frame.at) } },
     }
+  if (frame.type === "notice.quota")
+    return {
+      $typeName: "ycoding.v5.Notice",
+      kind: {
+        case: "quotaPace",
+        value: { $typeName: "ycoding.v5.QuotaPaceNotice", quota: quotaToWire(frame), at: BigInt(frame.at) },
+      },
+    }
   return create(ControlSchema.fields.find((field) => field.name === "notice")!.message!, {
     kind: {
       case: "present",
       value: {
         items: frame.items.map((item) => {
           if (item.kind === "offline") return { kind: { case: "offline", value: { atMs: BigInt(item.at) } } }
+          if (item.kind === "quota") return { kind: { case: "quotaPace", value: quotaToWire(item) } }
           return {
             kind: {
               case: "notice",

@@ -374,6 +374,7 @@ impl Connection {
         if !allowed(body, sender)? {
             return Err(ProtocolError::Direction);
         }
+        bounded(body)?;
         if matches!(body, v5::frame::Body::Hello(_) | v5::frame::Body::Ready(_)) {
             if frame.ledger.is_some()
                 || frame.delivery_ordinal.is_some()
@@ -447,9 +448,209 @@ pub(super) fn allowed(body: &v5::frame::Body, sender: v5::PeerRole) -> Result<bo
                 v5::control::Kind::Completions(_) | v5::control::Kind::Blocked(_) => {
                     v5::SenderMask::CompletionsSenders
                 }
-                _ => v5::SenderMask::ResultSenders,
+                v5::control::Kind::McpState(_) | v5::control::Kind::QuotaPace(_) => {
+                    v5::SenderMask::McpStateSenders
+                }
+                v5::control::Kind::McpStateAck(_) | v5::control::Kind::QuotaPaceResult(_) => {
+                    v5::SenderMask::SubscriptionSnapshotSenders
+                }
+                v5::control::Kind::InventoryInvalidated(_)
+                | v5::control::Kind::Status(_)
+                | v5::control::Kind::ResyncRequired(_) => v5::SenderMask::ResultSenders,
             }
         }
     };
     Ok((mask as i32) & (1 << (sender as i32 - 1)) != 0)
+}
+
+pub(super) fn bounded(body: &v5::frame::Body) -> Result<(), ProtocolError> {
+    let v5::frame::Body::Control(v5::Control { kind: Some(kind) }) = body else {
+        return Ok(());
+    };
+    let valid = match kind {
+        v5::control::Kind::McpState(v5::McpState { id, epoch, .. })
+        | v5::control::Kind::McpStateAck(v5::McpStateAck { id, epoch, .. }) => {
+            stable_id(id) && stable_id(epoch)
+        }
+        v5::control::Kind::QuotaPace(quota) => instant(quota.reset_at),
+        v5::control::Kind::QuotaPaceResult(result) => instant(result.quota.reset_at),
+        v5::control::Kind::Notice(v5::Notice {
+            kind: Some(v5::notice::Kind::QuotaPace(notice)),
+        }) => instant(notice.quota.reset_at) && instant(notice.at),
+        v5::control::Kind::Notice(v5::Notice {
+            kind: Some(v5::notice::Kind::Present(present)),
+        }) => present.items.iter().all(|item| match &item.kind {
+            Some(v5::presentation::Kind::QuotaPace(quota)) => instant(quota.reset_at),
+            _ => true,
+        }),
+        _ => true,
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(ProtocolError::Malformed)
+}
+
+fn stable_id(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn instant(value: u64) -> bool {
+    (1..=9_007_199_254_740_991).contains(&value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{allowed, bounded};
+    use crate::connection::ProtocolError;
+    use crate::{encode_lossless, v5};
+
+    fn control(kind: v5::control::Kind) -> v5::frame::Body {
+        v5::frame::Body::Control(v5::Control { kind: Some(kind) })
+    }
+
+    fn quota(reset_at: u64) -> v5::QuotaPace {
+        v5::QuotaPace {
+            provider_id: encode_lossless(&"openai".encode_utf16().collect::<Vec<_>>()),
+            window_id: encode_lossless(&"weekly".encode_utf16().collect::<Vec<_>>()),
+            milestone: v5::QuotaPaceMilestone::CuttingItClose as i32,
+            reset_at,
+        }
+    }
+
+    fn state(id: &str, epoch: &str) -> v5::McpState {
+        v5::McpState {
+            id: id.into(),
+            enabled: true,
+            epoch: epoch.into(),
+        }
+    }
+
+    fn ack(id: &str, epoch: &str) -> v5::McpStateAck {
+        v5::McpStateAck {
+            id: id.into(),
+            enabled: false,
+            epoch: epoch.into(),
+        }
+    }
+
+    #[test]
+    fn agents_send_mcp_state_and_quota_pace_while_relays_acknowledge_and_settle() {
+        let cases = [
+            (
+                control(v5::control::Kind::McpState(state("s", "e"))),
+                v5::PeerRole::Agent,
+            ),
+            (
+                control(v5::control::Kind::McpStateAck(ack("s", "e"))),
+                v5::PeerRole::Relay,
+            ),
+            (
+                control(v5::control::Kind::QuotaPace(quota(1))),
+                v5::PeerRole::Agent,
+            ),
+            (
+                control(v5::control::Kind::QuotaPaceResult(v5::QuotaPaceResult {
+                    quota: quota(1),
+                    status: v5::QuotaPaceStatus::Pending as i32,
+                })),
+                v5::PeerRole::Relay,
+            ),
+        ];
+        let roles = [
+            v5::PeerRole::LocalClient,
+            v5::PeerRole::RemoteClient,
+            v5::PeerRole::Relay,
+            v5::PeerRole::Agent,
+            v5::PeerRole::Server,
+        ];
+        for (body, sender) in cases {
+            for role in roles {
+                assert_eq!(
+                    allowed(&body, role),
+                    Ok(role == sender),
+                    "{role:?} {body:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_state_identifiers_and_quota_instants_are_bounded() {
+        let id = "A".repeat(64);
+        for (body, valid) in [
+            (
+                control(v5::control::Kind::McpState(state(&id, "epoch_1-2"))),
+                true,
+            ),
+            (control(v5::control::Kind::McpStateAck(ack("s", &id))), true),
+            (control(v5::control::Kind::McpState(state("", "e"))), false),
+            (
+                control(v5::control::Kind::McpState(state(&"A".repeat(65), "e"))),
+                false,
+            ),
+            (
+                control(v5::control::Kind::McpStateAck(ack("s", "e.1"))),
+                false,
+            ),
+            (control(v5::control::Kind::McpState(state("s", "é"))), false),
+            (
+                control(v5::control::Kind::QuotaPace(quota(9_007_199_254_740_991))),
+                true,
+            ),
+            (control(v5::control::Kind::QuotaPace(quota(0))), false),
+            (
+                control(v5::control::Kind::QuotaPace(quota(9_007_199_254_740_992))),
+                false,
+            ),
+            (
+                control(v5::control::Kind::QuotaPaceResult(v5::QuotaPaceResult {
+                    quota: quota(0),
+                    status: v5::QuotaPaceStatus::Settled as i32,
+                })),
+                false,
+            ),
+            (
+                control(v5::control::Kind::Notice(v5::Notice {
+                    kind: Some(v5::notice::Kind::QuotaPace(v5::QuotaPaceNotice {
+                        quota: quota(1),
+                        at: 1,
+                    })),
+                })),
+                true,
+            ),
+            (
+                control(v5::control::Kind::Notice(v5::Notice {
+                    kind: Some(v5::notice::Kind::QuotaPace(v5::QuotaPaceNotice {
+                        quota: quota(1),
+                        at: 0,
+                    })),
+                })),
+                false,
+            ),
+            (
+                control(v5::control::Kind::Notice(v5::Notice {
+                    kind: Some(v5::notice::Kind::Present(v5::NoticesPresent {
+                        items: vec![v5::Presentation {
+                            kind: Some(v5::presentation::Kind::QuotaPace(quota(0))),
+                        }],
+                    })),
+                })),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                bounded(&body),
+                if valid {
+                    Ok(())
+                } else {
+                    Err(ProtocolError::Malformed)
+                },
+                "{body:?}"
+            );
+        }
+    }
 }

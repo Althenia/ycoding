@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { RemoteAlertDetail } from "@ycoding-ai/remote"
+import { quotaKey, type RemoteAlertDetail } from "@ycoding-ai/remote"
 import {
   NOTIFICATION_CATEGORIES,
   normalizeNotificationPreferences,
@@ -204,6 +204,55 @@ describe("createNotificationDelivery", () => {
     earlier.delivery.deliver("approval-requested", { sessionID: "ses_a" })
     earlier.delivery.deliver("approval-requested", { sessionID: "ses_b" })
     expect(earlier.delivery.entries().map((entry) => entry.sessionID)).toEqual(["ses_b", "ses_a"])
+  })
+
+  describe("quota pace", () => {
+    const quota = { providerID: "prov_a", windowID: "five_hour", milestone: "will-run-out", resetAt: 1_790_000_030_000 } as const
+
+    test("a live quota frame adds one local row per device and quota key, never a Session identity", () => {
+      const test = deliveryWith({})
+      test.delivery.quota(quota, "dev_1", 5_000)
+      test.delivery.quota({ ...quota, resetAt: quota.resetAt + 20_000 }, "dev_1", 5_001)
+      expect(test.delivery.entries()).toHaveLength(1)
+      test.delivery.quota({ ...quota, milestone: "almost-out" }, "dev_1", 5_002)
+      test.delivery.quota(quota, "dev_2", 5_003)
+      const entries = test.delivery.entries()
+      expect(entries).toHaveLength(3)
+      expect(entries.every((entry) => entry.category === "quota-pace" && !entry.synced && entry.live && entry.sessionID === undefined)).toBe(true)
+      expect(entries.map((entry) => entry.deviceID).sort()).toEqual(["dev_1", "dev_1", "dev_2"])
+      expect(entries.map((entry) => `${entry.title} ${entry.body}`).join(" ")).not.toContain("prov_a")
+      expect(test.recorder.alerts).toEqual([])
+    })
+
+    test("a dismissed quota row does not return for the same key", () => {
+      const test = deliveryWith({})
+      test.delivery.quota(quota, "dev_1", 5_000)
+      test.delivery.remove(test.delivery.entries().map((entry) => entry.id))
+      test.delivery.quota(quota, "dev_1", 5_001)
+      expect(test.delivery.entries()).toEqual([])
+    })
+
+    test("In app off hides the row but System still raises the fallback alert, and System off suppresses it", () => {
+      const inAppOff = deliveryWith({ preferences: () => mute("quota-pace", "in-app") })
+      inAppOff.delivery.quota(quota, "dev_1", 5_000)
+      inAppOff.delivery.present([{ kind: "quota", ...quota }], "dev_1")
+      expect(inAppOff.delivery.entries()).toEqual([])
+      expect(inAppOff.recorder.alerts).toEqual([{ title: "YCoding — quota will run out", body: "A provider quota will run out before it resets. Open Usage to review.",
+        tag: `ycoding-dev_1-quota-${quotaKey(quota)}`, usageDeviceID: "dev_1" }])
+      const systemOff = deliveryWith({ preferences: () => mute("quota-pace", "desktop") })
+      systemOff.delivery.quota(quota, "dev_1", 5_000)
+      systemOff.delivery.present([{ kind: "quota", ...quota }], "dev_1")
+      expect(systemOff.delivery.entries()).toHaveLength(1)
+      expect(systemOff.recorder.alerts).toEqual([])
+    })
+
+    test("quota rows are bounded and cleared with the connection", () => {
+      const test = deliveryWith({})
+      for (let index = 0; index < 80; index += 1) test.delivery.quota({ ...quota, windowID: `w${index}` }, "dev_1", 5_000 + index)
+      expect(test.delivery.entries()).toHaveLength(50)
+      test.delivery.dispose()
+      expect(test.delivery.entries()).toEqual([])
+    })
   })
 
   test("each confirmed machine outage adds one fixed in-app notice, and only a relay directive raises its System alert", () => {

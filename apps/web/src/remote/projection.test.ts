@@ -69,6 +69,80 @@ test("guardrail grades survive review items, pending escalations, and live settl
   expect(applySessionEvent(createSessionView("ses_a"), { id: "evt_escalation", type: "session.guardrail.escalated.1", created: 2, data: { sessionID: "ses_a", ...escalation } }, 2).messages[0]).toMatchObject({ kind: "system", guardrail: escalation })
 })
 
+test.each([
+  ["unavailable", "the decision model or its authenticated route is unavailable"],
+  ["invalid-request", "the decision request is invalid"],
+  ["provider-failed", "the provider request failed"],
+  ["timeout", "the decision request timed out"],
+  ["input-too-large", "the decision input exceeds the supported size"],
+  ["invalid-output", "the decision response failed validation"],
+  ["refused", "the provider or model refused the decision request"],
+  ["truncated-output", "the decision response was truncated or did not finish"],
+  ["unsupported-output", "the selected route does not support strict structured decisions"],
+] as const)("decision failure %s survives review reads, pending requests, and chronological provenance", (reason, description) => {
+  const escalation = { reason }
+  const request = { id: "grq_failure", sessionID: "ses_a", action: "write", resources: ["fixture.txt"], reason: "Outside", escalation }
+  const requests = readGuardrailRequests({ data: [request] }, 1)
+  expect(requests[0]).toMatchObject({ escalation })
+  expect(requests[0]?.kind === "guardrail" ? requests[0].escalation : undefined).toEqual(escalation)
+  const pending = applySessionEvent(createSessionView("ses_a"), { type: "guardrail.asked", created: 1, data: request }, 1)
+  expect(pending.requests[0]).toMatchObject({ escalation })
+
+  const items = readReviewItems({ data: [{
+    itemID: "rvw_failure", kind: "guardrail", sessionID: "ses_a", rootSessionID: "ses_a",
+    sessionTitle: "Fixture review", created: 2, reason,
+    payload: { type: "guardrail", action: "write", resources: ["fixture.txt"], ruleIDs: [], reason: "Outside", hardReview: false, directories: ["/fixture"] },
+  }] })
+  expect(items).toHaveLength(1)
+  expect(items?.[0]).toMatchObject({ itemID: "rvw_failure", reason })
+  expect(items?.[0]).not.toHaveProperty("choice")
+  expect(items?.[0]).not.toHaveProperty("confidence")
+  expect(items?.[0]).not.toHaveProperty("grades")
+
+  for (const type of ["session.guardrail.escalated", "session.guardrail.escalated.1"]) {
+    const event = { id: "evt_failure", type, created: 3, data: { sessionID: "ses_a", requestID: "grq_failure", reason } }
+    const view = applySessionEvent(pending, event, 3)
+    expect(view.messages).toEqual([{
+      kind: "system", id: "msg_failure", text: `Decision unavailable · ${description}`, guardrail: escalation, created: 3,
+    }])
+    expect(view.requests).toEqual(pending.requests)
+    expect(applySessionEvent(view, event, 4).messages).toEqual(view.messages)
+    expect(applySessionEvent(createSessionView("ses_other"), event, 3).messages).toEqual([])
+  }
+})
+
+test.each([
+  ["escalated", "Decision model escalated this guardrail review · choice escalate · confidence 0.934567"],
+  ["low_confidence", "Decision requires human review · confidence below the approval threshold · choice escalate · confidence 0.934567"],
+  ["conflicting_grades", "Decision requires human review · conflicting approval and rejection grades · choice escalate · confidence 0.934567"],
+] as const)("chronological %s handoffs retain their distinct explanation and grades", (reason, text) => {
+  const provenance = { reason, choice: "escalate", confidence: 0.934567, grades: [
+    { choice: "approve", confidence: 0.4, evidence: "The target is bounded." },
+    { choice: "escalate", confidence: 0.934567, evidence: "A human must confirm the target." },
+  ] }
+  const view = applySessionEvent(createSessionView("ses_a"), {
+    id: "evt_handoff", type: "session.guardrail.escalated", created: 2, data: { sessionID: "ses_a", ...provenance },
+  }, 2)
+  expect(view.messages).toEqual([{ kind: "system", id: "msg_handoff", text, guardrail: provenance, created: 2 }])
+})
+
+test("an empty historical escalation reports missing diagnostics without manufacturing a choice", () => {
+  const view = applySessionEvent(createSessionView("ses_a"), {
+    id: "evt_missing", type: "session.guardrail.escalated", created: 2, data: { sessionID: "ses_a" },
+  }, 2)
+  expect(view.messages).toEqual([{
+    kind: "system", id: "msg_missing", text: "Decision unavailable · diagnostic reason was not recorded", guardrail: {}, created: 2,
+  }])
+})
+
+test.each(["unknown-failure", "", null, 1, {}])("malformed reason %j cannot become an escalation notice", (reason) => {
+  const view = createSessionView("ses_a")
+  expect(applySessionEvent(view, {
+    id: "evt_invalid", type: "session.guardrail.escalated", created: 2,
+    data: { sessionID: "ses_a", reason, choice: "escalate", confidence: 0.9 },
+  }, 2)).toEqual(view)
+})
+
 test("model metadata preserves profile identity through remote projection", () => {
   const model = readModelRef({ providerID: "openai", id: "gpt", profile: "work" })
   expect(model).toEqual({ providerID: "openai", id: "gpt", profile: "work" })

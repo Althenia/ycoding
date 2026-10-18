@@ -7,6 +7,10 @@ import {
   encodeStrict,
   decodeStrict,
   encodeLossless,
+  decodeLossless,
+  QuotaPaceSchema,
+  QuotaPaceMilestone,
+  QuotaPaceStatus,
   PeerRole,
   LedgerClass,
   ScopeSchema,
@@ -38,27 +42,43 @@ import type { Frame } from "../../../../packages/protocol/src/v5"
 import type { Decision } from "../../../../packages/protocol/src/v5/connection"
 import { randomToken, sha256Hex, base64UrlEncode } from "../../src/auth/crypto"
 import { generateVapidKeys } from "../../script/vapid-keys"
-import { RelayLimits, WireLimit, readHttpBulk, httpBulkQuery } from "../../../../packages/remote/src/index"
+import { RelayLimits, WireLimit, readHttpBulk, httpBulkQuery, quotaToWire } from "../../../../packages/remote/src/index"
+import type { RemoteQuota } from "../../../../packages/remote/src/index"
+import { deriveWebPushKeys } from "../../src/push/crypto"
 
 const root = path.resolve(import.meta.dir, "../../../..")
 const selected = process.argv
   .find((argument) => argument.startsWith("--group="))
   ?.slice(8)
   .split(",")
-const groups = ["storage", "predecessor", "stall", "disposal", "http", "limits", "authority", "d1"]
+const groups = ["storage", "predecessor", "stall", "disposal", "http", "limits", "authority", "d1", "quota"]
 expect(!selected?.some((name) => !groups.includes(name)), "Unknown native wire-flow group")
 const enabled = (name: string) => selected === undefined || selected.includes(name)
+const quotaSelected = selected?.includes("quota") === true
+if (quotaSelected)
+  expect(
+    process.env.YCODING_TEST_QUOTA_CONNECTOR_BIN,
+    "YCODING_TEST_QUOTA_CONNECTOR_BIN is required for --group=quota; build it with cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test connector_quota_workerd --no-run",
+  )
 await mkdir(path.join(root, ".cache/tmp"), { recursive: true })
 const scratch = await mkdtemp(path.join(root, ".cache/tmp/wire-native-"))
 const peers: TestPeer[] = []
 const receipts: string[] = []
 const pushes: number[] = []
+const pushRequests: { body: Uint8Array; ttl: string | null; topic: string | null; urgency: string | null }[] = []
 const receiver = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   fetch: async (request) => {
     expect(request.headers.get("content-encoding") === "aes128gcm", "Push must be encrypted")
-    pushes.push((await request.arrayBuffer()).byteLength)
+    const body = new Uint8Array(await request.arrayBuffer())
+    pushes.push(body.byteLength)
+    pushRequests.push({
+      body,
+      ttl: request.headers.get("ttl"),
+      topic: request.headers.get("topic"),
+      urgency: request.headers.get("urgency"),
+    })
     return new Response(null, { status: 201 })
   },
 })
@@ -304,14 +324,14 @@ async function until<T>(read: () => T | undefined | Promise<T | undefined>, labe
     await Bun.sleep(10)
   }
 }
-async function device(label: string, expires = Date.now() + 600_000): Promise<Fixture> {
+async function device(label: string, expires = Date.now() + 600_000, userID = owner): Promise<Fixture> {
   const device = `dev_${label}`
   const access = randomToken()
   const key = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])
   const publicKey = await crypto.subtle.exportKey("jwk", key.publicKey)
   await sql("INSERT INTO device (id,user_id,name,public_key_jwk,key_algorithm,created_at) VALUES (?,?,?,?,?,?)", [
     device,
-    owner,
+    userID,
     label,
     JSON.stringify({ kty: "EC", crv: "P-256", x: publicKey.x, y: publicKey.y }),
     "ES256",
@@ -323,7 +343,7 @@ async function device(label: string, expires = Date.now() + 600_000): Promise<Fi
     Date.now(),
     expires,
   ])
-  return { device, access, name: `${owner}:${device}` }
+  return { device, access, name: `${userID}:${device}` }
 }
 function peer(
   fixture: Fixture,
@@ -1723,6 +1743,382 @@ async function d1Rollback() {
   )
 }
 
+async function quotaAlerts() {
+  const resetAt = Math.floor((Date.now() + 1_800_000) / 60_000) * 60_000
+  const alert: RemoteQuota = { providerID: "anthropic", windowID: "five-hour", milestone: "will-run-out", resetAt }
+  const pace = (quota: RemoteQuota): Frame["body"] => ({
+    case: "control",
+    value: create(ControlSchema, { kind: { case: "quotaPace", value: quotaToWire(quota) } }),
+  })
+  const invalidPace = (body: Frame["body"], target: TestPeer) =>
+    target.socket.send(
+      toBinary(
+        FrameSchema,
+        create(FrameSchema, {
+          revision: 5,
+          connectionEpoch: target.connection.connectionEpoch,
+          ledger: LedgerClass.NORMAL,
+          deliveryOrdinal: target.connection.ledger(LedgerClass.NORMAL).sentOrdinal + 1n,
+          tinyConsumedThrough: target.connection.ledger(LedgerClass.TINY).receivedOrdinal,
+          body,
+        }),
+      ),
+    )
+  type PushReceiver = { privateKey: CryptoKey; publicRaw: Uint8Array; auth: Uint8Array }
+  const pushReceiver = async (): Promise<PushReceiver> => {
+    const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
+    if (!("privateKey" in pair)) throw new Error("Quota push receiver key pair unavailable")
+    return {
+      privateKey: pair.privateKey,
+      publicRaw: new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)),
+      auth: crypto.getRandomValues(new Uint8Array(16)),
+    }
+  }
+  const registerPush = async (token: string, bundle: PushReceiver, label: string) => {
+    const registration = await fetch(`${origin}/api/push/subscriptions`, {
+      method: "POST",
+      headers: { cookie: `yc_session=${token}`, origin, "content-type": "application/json" },
+      body: JSON.stringify({
+        endpoint: `https://fcm.googleapis.com/fcm/send/${label}`,
+        keys: { p256dh: base64UrlEncode(bundle.publicRaw), auth: base64UrlEncode(bundle.auth) },
+        categories: { "agent-completed": false, "approval-requested": false, "machine-offline": false, "quota-pace": true },
+      }),
+    })
+    expect(registration.ok, `Quota push registration failed (${registration.status}): ${await registration.text()}`)
+  }
+  const decrypt = async (entry: (typeof pushRequests)[number], bundle: PushReceiver) => {
+    const sender = entry.body.slice(21, 86)
+    const senderKey = await crypto.subtle.importKey("raw", sender, { name: "ECDH", namedCurve: "P-256" }, false, [])
+    const shared = new Uint8Array(
+      await crypto.subtle.deriveBits({ name: "ECDH", public: senderKey }, bundle.privateKey, 256),
+    )
+    const derived = await deriveWebPushKeys(shared, bundle.auth, bundle.publicRaw, sender, entry.body.slice(0, 16))
+    const key = await crypto.subtle.importKey("raw", derived.cek, "AES-GCM", false, ["decrypt"])
+    const plain = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: derived.nonce }, key, entry.body.slice(86)))
+    return JSON.parse(new TextDecoder().decode(plain.slice(0, -1))) as Record<string, unknown>
+  }
+  const decrypted = async (bundle: PushReceiver, since: number) => {
+    const found: { payload: Record<string, unknown>; entry: (typeof pushRequests)[number] }[] = []
+    for (const entry of pushRequests.slice(since)) {
+      const payload = await decrypt(entry, bundle).catch(() => undefined)
+      if (payload?.category === "quota-pace") found.push({ payload, entry })
+    }
+    return found
+  }
+  const untilLong = async <T,>(read: () => Promise<T | undefined>, label: string): Promise<T> => {
+    const end = Date.now() + 180_000
+    while (true) {
+      const result = await read()
+      if (result !== undefined) return result
+      expect(Date.now() < end, label)
+      await Bun.sleep(25)
+    }
+  }
+  const quotaResults = (agent: TestPeer) =>
+    agent.raw.flatMap((frame) =>
+      frame.body.case === "control" && frame.body.value.kind.case === "quotaPaceResult"
+        ? [frame.body.value.kind.value]
+        : [],
+    )
+  const settledFor = (agent: TestPeer, windowID: string, count = 1) =>
+    quotaResults(agent).filter(
+      (result) =>
+        result.status === QuotaPaceStatus.SETTLED &&
+        result.quota !== undefined &&
+        decodeLossless(result.quota.windowId!) === windowID,
+    ).length >= count
+  const quotaNotices = (client: TestPeer) =>
+    client.raw.flatMap((frame) => {
+      if (frame.body.case !== "control" || frame.body.value.kind.case !== "notice") return []
+      const notice = frame.body.value.kind.value.kind
+      return notice.case === "quotaPace" ? [notice.value] : []
+    })
+  const subscribeNotices = async (client: TestPeer) => {
+    const id = client.request("notice.subscribe", machine, encodeStrict(EmptySchema, create(EmptySchema)))
+    expect((await client.next("settled", id)).status === "success", "Quota notice subscription failed")
+  }
+  const expectPayload = (
+    item: { payload: Record<string, unknown>; entry: (typeof pushRequests)[number] },
+    expected: RemoteQuota & { deviceID: string },
+  ) => {
+    expect(
+      Object.keys(item.payload).sort().join(",") === "category,deviceID,milestone,providerID,resetAt,windowID" &&
+        item.payload.category === "quota-pace" &&
+        item.payload.deviceID === expected.deviceID &&
+        item.payload.providerID === expected.providerID &&
+        item.payload.windowID === expected.windowID &&
+        item.payload.milestone === expected.milestone &&
+        item.payload.resetAt === expected.resetAt,
+      `Quota push payload was not the exact minimal identity: ${JSON.stringify(item.payload)}`,
+    )
+  }
+
+  const first = await device("quota_a")
+  const second = await device("quota_b")
+  const bundle = await pushReceiver()
+  await registerPush(cookie, bundle, "quota-owner")
+  const agentA = peer(first, PeerRole.AGENT)
+  await agentA.ready
+  const browser = peer(first, PeerRole.REMOTE_CLIENT)
+  await browser.ready
+  await subscribeNotices(browser)
+  const base = pushRequests.length
+  send(pace(alert), agentA)
+  await agentA.wait(() => settledFor(agentA, "five-hour"), 15_000)
+  const delivered = await until(async () => {
+    const items = await decrypted(bundle, base)
+    return items.length ? items : undefined
+  }, "Quota push did not reach the local encrypted receiver")
+  expect(delivered.length === 1, "Owner quota alert did not produce exactly one encrypted push")
+  expectPayload(delivered[0]!, { ...alert, deviceID: first.device })
+  const ttl = Number(delivered[0]!.entry.ttl)
+  expect(
+    delivered[0]!.entry.urgency === "normal" &&
+      (delivered[0]!.entry.topic?.length ?? 33) <= 32 &&
+      ttl >= 1500 &&
+      ttl <= 1800,
+    "Quota push headers did not carry normal urgency, a bounded topic and the reset-bounded TTL",
+  )
+  await browser.wait(() => quotaNotices(browser).length === 1, 15_000)
+  const live = quotaNotices(browser)[0]!
+  expect(
+    decodeLossless(live.quota!.providerId!) === "anthropic" &&
+      decodeLossless(live.quota!.windowId!) === "five-hour" &&
+      live.quota!.milestone === QuotaPaceMilestone.WILL_RUN_OUT &&
+      Number(live.quota!.resetAt) === resetAt,
+    "Subscribed browser did not receive the live quota notice identity",
+  )
+
+  const agentB = peer(second, PeerRole.AGENT)
+  await agentB.ready
+  send(pace({ ...alert, resetAt: resetAt + 1_000 }), agentB)
+  await agentB.wait(() => settledFor(agentB, "five-hour"), 15_000)
+  await notice(browser)
+  expect((await decrypted(bundle, base)).length === 1, "Second machine of the same owner duplicated the quota push")
+  expect(quotaNotices(browser).length === 1, "Second machine of the same owner duplicated the live quota notice")
+
+  await control("/evict", { name: `${owner}:quota` })
+  send(pace(alert), agentA)
+  await agentA.wait(() => settledFor(agentA, "five-hour", 2), 15_000)
+  await notice(browser)
+  expect((await decrypted(bundle, base)).length === 1, "Quota claim dedupe did not survive quota Durable Object eviction")
+  expect(quotaNotices(browser).length === 1, "Quota notice dedupe did not survive quota Durable Object eviction")
+
+  const generationBefore = (await dump(first)).generation
+  await control("/evict", { name: first.name })
+  expect((await dump(first)).generation !== generationBefore, "Quota device Durable Object was not reconstructed")
+  expect(
+    (await agentA.closed).code === 1012 && (await browser.closed).code === 1012,
+    "Quota device eviction did not epoch-fence its sockets",
+  )
+  const agentA2 = peer(first, PeerRole.AGENT)
+  await agentA2.ready
+  const browser2 = peer(first, PeerRole.REMOTE_CLIENT)
+  await browser2.ready
+  await subscribeNotices(browser2)
+  send(pace(alert), agentA2)
+  await agentA2.wait(() => settledFor(agentA2, "five-hour"), 15_000)
+  await notice(browser2)
+  expect((await decrypted(bundle, base)).length === 1, "Quota push dedupe did not survive device Durable Object eviction")
+  expect(quotaNotices(browser2).length === 0, "Reconnected browser received a duplicate live quota notice")
+
+  send(pace({ ...alert, milestone: "almost-out" }), agentA2)
+  const distinct = await until(async () => {
+    const items = await decrypted(bundle, base)
+    return items.length === 2 ? items : undefined
+  }, "Distinct quota milestone did not deliver")
+  expectPayload(distinct[1]!, { ...alert, milestone: "almost-out", deviceID: first.device })
+
+  const noticesBefore = quotaNotices(browser2).length
+  const clientBase = pushRequests.length
+  const attackingClient = peer(first, PeerRole.REMOTE_CLIENT)
+  await attackingClient.ready
+  invalidPace(pace({ ...alert, windowID: "client-forged" }), attackingClient)
+  expect(
+    (await nativeClosed(attackingClient, "client-role quota frame")).code === 1002,
+    "Client-role quota frame was not rejected at the native boundary",
+  )
+  expect(
+    (await dump(first)).received.some((entry) => entry.role === "client" && entry.kind === "quotaPace"),
+    "Client-role quota frame did not reach workerd",
+  )
+  await notice(browser2)
+  expect(
+    pushRequests.length === clientBase && quotaNotices(browser2).length === noticesBefore,
+    "Client-role quota frame produced a push or a live notice",
+  )
+
+  const negative = await device("quota_neg")
+  const malformedAgent = peer(negative, PeerRole.AGENT)
+  await malformedAgent.ready
+  const malformedBase = pushRequests.length
+  invalidPace(
+    {
+      case: "control",
+      value: create(ControlSchema, {
+        kind: {
+          case: "quotaPace",
+          value: create(QuotaPaceSchema, {
+            providerId: encodeLossless("anthropic"),
+            windowId: encodeLossless("five-hour"),
+            milestone: 9 as QuotaPaceMilestone,
+            resetAt: BigInt(resetAt),
+          }),
+        },
+      }),
+    },
+    malformedAgent,
+  )
+  expect(
+    (await nativeClosed(malformedAgent, "malformed quota milestone")).code === 1002,
+    "Quota frame with an unknown milestone was not dropped as malformed",
+  )
+  expect(pushRequests.length === malformedBase, "Malformed quota frame produced a push")
+
+  const oversizeAgent = peer(negative, PeerRole.AGENT)
+  await oversizeAgent.ready
+  invalidPace(
+    {
+      case: "control",
+      value: create(ControlSchema, {
+        kind: {
+          case: "quotaPace",
+          value: create(QuotaPaceSchema, {
+            providerId: encodeLossless("anthropic"),
+            windowId: encodeLossless("five-hour"),
+            milestone: QuotaPaceMilestone.WILL_RUN_OUT,
+            resetAt: 9_007_199_254_740_992n,
+          }),
+        },
+      }),
+    },
+    oversizeAgent,
+  )
+  expect(
+    (await nativeClosed(oversizeAgent, "oversize quota reset")).code === 1002,
+    "Quota frame beyond the safe reset instant was not rejected",
+  )
+  expect(pushRequests.length === malformedBase, "Oversize quota frame produced a push")
+
+  const otherBundle = await pushReceiver()
+  await registerPush(otherCookie, otherBundle, "quota-other")
+  const stranger = await device("quota_other", Date.now() + 600_000, "usr_wire_other")
+  const otherAgent = peer(stranger, PeerRole.AGENT)
+  await otherAgent.ready
+  const otherBase = pushRequests.length
+  send(pace(alert), otherAgent)
+  await otherAgent.wait(() => settledFor(otherAgent, "five-hour"), 15_000)
+  const otherDelivered = await until(async () => {
+    const items = await decrypted(otherBundle, otherBase)
+    return items.length ? items : undefined
+  }, "Cross-owner quota alert did not reach its own owner's push receiver")
+  expect(otherDelivered.length === 1, "Cross-owner quota alert did not produce exactly one own-owner push")
+  expectPayload(otherDelivered[0]!, { ...alert, deviceID: stranger.device })
+  await notice(browser2)
+  expect((await decrypted(bundle, base)).length === 2, "Another owner's quota alert leaked into the first owner's pushes")
+  expect(quotaNotices(browser2).length === noticesBefore, "Another owner's quota alert leaked a live notice")
+
+  const bin = process.env.YCODING_TEST_QUOTA_CONNECTOR_BIN!
+  const rust = await device("quota_rust")
+  const rustBrowser = peer(rust, PeerRole.REMOTE_CLIENT)
+  await rustBrowser.ready
+  await subscribeNotices(rustBrowser)
+  const phaseDir = path.join(scratch, "quota-phases")
+  await mkdir(phaseDir, { recursive: true })
+  const window = `rust-${Date.now()}`
+  const rustBase = pushRequests.length
+  const proc = spawn([bin, "quota_connector_delivers_through_workerd", "--exact", "--ignored", "--nocapture"], {
+    cwd: root,
+    env: {
+      ...process.env,
+      YCODING_TEST_QUOTA_RELAY_ORIGIN: origin,
+      YCODING_TEST_QUOTA_DEVICE_ID: rust.device,
+      YCODING_TEST_QUOTA_DEVICE_TOKEN: rust.access,
+      YCODING_TEST_QUOTA_WINDOW: window,
+      YCODING_TEST_QUOTA_RESET_AT: String(resetAt),
+      YCODING_TEST_QUOTA_PHASE_DIR: phaseDir,
+    },
+    stdout: Bun.file(path.join(scratch, "quota-connector.out.log")),
+    stderr: Bun.file(path.join(scratch, "quota-connector.err.log")),
+  })
+  try {
+    const phase = async (name: string) => {
+      const end = Date.now() + 180_000
+      while (!(await Bun.file(path.join(phaseDir, name)).exists())) {
+        expect(
+          proc.exitCode === null,
+          `Rust quota connector exited (${proc.exitCode}) before phase ${name}; see quota-connector.err.log in ${scratch}`,
+        )
+        expect(Date.now() < end, `Rust quota connector phase ${name} not reached; see quota-connector.err.log in ${scratch}`)
+        await Bun.sleep(25)
+      }
+    }
+    const rustPush = (windowID: string) =>
+      untilLong(async () => (await decrypted(bundle, rustBase)).find((item) => item.payload.windowID === windowID), `Rust quota push for ${windowID} missing`)
+    await phase("emitted-1")
+    expectPayload(await rustPush(window), {
+      providerID: "openai",
+      windowID: window,
+      milestone: "almost-out",
+      resetAt,
+      deviceID: rust.device,
+    })
+    await rustBrowser.wait(() => quotaNotices(rustBrowser).length === 1, 30_000)
+    await Bun.write(path.join(phaseDir, "emit-marker"), "")
+    await phase("emitted-marker")
+    expectPayload(await rustPush(`${window}-marker`), {
+      providerID: "openai",
+      windowID: `${window}-marker`,
+      milestone: "cutting-it-close",
+      resetAt,
+      deviceID: rust.device,
+    })
+    await untilLong(async () => {
+      const measured = await inspection(rust)
+      const normal = measured.budget.peers
+        .find((entry) => entry.role === "agent")
+        ?.ledgers.find((entry) => entry.kind === LedgerClass.NORMAL)
+      return normal !== undefined && normal.received === 0 && normal.queued === 0 && normal.handed === 0 ? true : undefined
+    }, "Rust quota settlement was not consumed and credited before eviction")
+    const rustGeneration = (await dump(rust)).generation
+    await control("/evict", { name: rust.name })
+    expect((await dump(rust)).generation !== rustGeneration, "Rust quota device Durable Object was not reconstructed")
+    await Bun.write(path.join(phaseDir, "evicted"), "")
+    await phase("emitted-2")
+    expectPayload(await rustPush(`${window}-b`), {
+      providerID: "openai",
+      windowID: `${window}-b`,
+      milestone: "will-run-out",
+      resetAt,
+      deviceID: rust.device,
+    })
+    const reconstructed = await dump(rust)
+    expect(
+      reconstructed.received.filter((entry) => entry.kind === "quotaPace").length === 1,
+      "Settled Rust quota alert replayed after the connector reconnected to the reconstructed relay",
+    )
+    expect(
+      (await decrypted(bundle, rustBase)).filter((item) => item.payload.windowID === window).length === 1,
+      "Rust quota alert produced a duplicate push across reconnect",
+    )
+    await Bun.write(path.join(phaseDir, "release"), "")
+    const exited = await proc.exited
+    expect(exited === 0, `Rust quota connector fixture failed (${exited}); see quota-connector.err.log in ${scratch}`)
+  } finally {
+    if (proc.exitCode === null) {
+      proc.kill()
+      await proc.exited
+    }
+  }
+
+  receipts.push(
+    "quota actual workerd: owner quota claims dedupe one encrypted push + live notice across two machines, quota/device Durable Object eviction and reconnect; client-role, malformed-milestone and unsafe-reset frames deliver nothing; another owner's identical alert reaches only its own receiver",
+  )
+  receipts.push(
+    "quota actual Rust connector: synthetic feed alert crosses the real binary connector to workerd, settles, and is not replayed after Durable Object eviction and reconnect",
+  )
+}
+
 try {
   for (const file of [
     "0001_auth.sql",
@@ -1730,6 +2126,8 @@ try {
     "0003_invite.sql",
     "0004_push_categories.sql",
     "0005_push_browser_owner.sql",
+    "0006_relay_mcp.sql",
+    "0007_push_quota_pace.sql",
   ])
     await control("/migrate", { query: await Bun.file(path.join(root, "infra/cloudflare/migrations", file)).text() })
   const now = Date.now()
@@ -1760,7 +2158,7 @@ try {
           p256dh: base64UrlEncode(new Uint8Array(await crypto.subtle.exportKey("raw", receiveKey.publicKey))),
           auth: randomToken(16),
         },
-        categories: { "agent-completed": true, "approval-requested": false, "machine-offline": false },
+        categories: { "agent-completed": true, "approval-requested": false, "machine-offline": false, "quota-pace": false },
       }),
     })
     expect(registration.ok, "Native push registration failed")
@@ -1906,6 +2304,7 @@ try {
   if (enabled("limits")) await nativeLimits()
   if (enabled("authority")) await authorityMatrix()
   if (enabled("d1")) await d1Rollback()
+  if (quotaSelected) await quotaAlerts()
 
   if (enabled("authority")) {
     const denied = await device("authority")

@@ -6,6 +6,7 @@ mod engine;
 mod error;
 pub mod import;
 mod key;
+pub mod mcp_events;
 pub mod meeting;
 mod metadata;
 pub mod model_incident;

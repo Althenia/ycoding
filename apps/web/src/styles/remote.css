@@ -2705,6 +2705,7 @@ body:has(.app) {
 @supports (scrollbar-gutter: stable) and selector(::-webkit-scrollbar) {
   @media (min-width: 768px) and (pointer: fine) and (forced-colors: none) {
     .workspace__scroll,
+    .workspace__rail-body,
     .command-palette__list {
       scrollbar-gutter: stable;
     }

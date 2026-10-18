@@ -520,6 +520,11 @@ pub struct Streamed {
     pub finished: bool,
     pub cancelled: bool,
     pub too_large: bool,
+    pub error: Option<ycoding_ai::Error>,
+    pub finish_reason: Option<ycoding_ai::llm::FinishReason>,
+    pub step_reason: Option<ycoding_ai::llm::FinishReason>,
+    pub saw_tool_call: bool,
+    pub saw_provider_error: bool,
 }
 pub async fn stream(
     store: &crate::session::store::Service,
@@ -608,13 +613,21 @@ async fn consume<S: Events>(
         finished: false,
         cancelled: false,
         too_large: false,
+        error: None,
+        finish_reason: None,
+        step_reason: None,
+        saw_tool_call: false,
+        saw_provider_error: false,
     };
     let mut units = Vec::new();
     let mut bytes = 0;
     let opened = tokio::select! {biased; _ = input.cancellation.cancelled() => {result.cancelled = true; None}, opened = open => Some(opened)};
     match opened {
         None => {}
-        Some(Err(_)) => result.failed = true,
+        Some(Err(error)) => {
+            result.failed = true;
+            result.error = Some(error);
+        }
         Some(Ok(mut response)) => loop {
             let next = tokio::select! {biased; _ = input.cancellation.cancelled() => {result.cancelled = true; break;}, next = response.next() => next};
             match next {
@@ -626,11 +639,17 @@ async fn consume<S: Events>(
                     }
                     units.extend(delta.text.code_units());
                 }
-                Ok(Some(llm::Event::ProviderError { .. } | llm::Event::ToolCall(_))) => {
-                    result.failed = true
+                Ok(Some(llm::Event::ProviderError { .. })) => {
+                    result.failed = true;
+                    result.saw_provider_error = true;
+                }
+                Ok(Some(llm::Event::ToolCall(_))) => {
+                    result.failed = true;
+                    result.saw_tool_call = true;
                 }
                 Ok(Some(llm::Event::Finish(finish))) => {
                     result.finished = true;
+                    result.finish_reason = Some(finish.reason);
                     if (input.require_stop && finish.reason != llm::FinishReason::Stop)
                         || (input.source == "title"
                             && finish.reason == llm::FinishReason::ContentFilter)
@@ -639,6 +658,7 @@ async fn consume<S: Events>(
                     }
                 }
                 Ok(Some(llm::Event::StepFinish { finish, .. })) => {
+                    result.step_reason = Some(finish.reason);
                     if input.source == "title" && finish.reason == llm::FinishReason::ContentFilter
                     {
                         result.failed = true;
@@ -697,8 +717,9 @@ async fn consume<S: Events>(
                 }
                 Ok(Some(_)) => {}
                 Ok(None) => break,
-                Err(_) => {
+                Err(error) => {
                     result.failed = true;
+                    result.error = Some(error);
                     break;
                 }
             }

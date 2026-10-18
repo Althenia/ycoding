@@ -1,3 +1,4 @@
+import { quotaKey } from "@ycoding-ai/remote"
 import { validAlertTitle } from "./remote/wire-views"
 import {
   CACHE_NAME,
@@ -7,7 +8,7 @@ import {
   shouldCacheStaticAsset,
   shouldHandleNavigation,
 } from "./pwa/offline"
-import { alertCopy, isAlertDeviceID, overflowCopy, sessionURL } from "./remote/alert"
+import { alertCopy, isAlertDeviceID, overflowCopy, quotaCopy, readQuota, sessionURL, usageURL } from "./remote/alert"
 
 /**
  * Static shell service worker.
@@ -136,6 +137,20 @@ scope.addEventListener(
             url.origin === scope.location.origin && (url.pathname === "/remote" || url.pathname.startsWith("/remote/"))
           )
         })
+        if (isRecord(data) && data.quota === true && isAlertDeviceID(data.deviceID) && Object.keys(data).length === 2) {
+          const deviceID = data.deviceID
+          const delivered =
+            current !== undefined &&
+            (await current
+              .focus()
+              .then(() => {
+                current.postMessage({ type: "ycoding:open-usage", deviceID })
+                return true
+              })
+              .catch(() => false))
+          if (!delivered) await scope.clients.openWindow(usageURL(deviceID))
+          return
+        }
         if (!isRecord(data) || !isSessionID(data.sessionID)) {
           if (
             current &&
@@ -250,6 +265,18 @@ function pushAlert(value: unknown): { readonly title: string; readonly options: 
         tag: `ycoding-${value.deviceID}-offline-${value.offlineAt}`,
       },
     }
+  if (isRecord(value) && value.category === "quota-pace" && isAlertDeviceID(value.deviceID)) {
+    const quota = readQuota(value, ["category", "deviceID"])
+    if (quota !== undefined)
+      return {
+        title: quotaCopy(quota.milestone).title,
+        options: {
+          body: quotaCopy(quota.milestone).body,
+          tag: `ycoding-${value.deviceID}-quota-${quotaKey(quota)}`,
+          data: { quota: true, deviceID: value.deviceID },
+        },
+      }
+  }
   if (
     isRecord(value) &&
     (value.category === "approval-requested" || value.category === "agent-completed") &&

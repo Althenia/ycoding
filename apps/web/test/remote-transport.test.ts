@@ -70,6 +70,35 @@ describe("remote transport integration", () => {
     }
   })
 
+  test("delivers a quota notice frame to the notice handler instead of settling a request", async () => {
+    const quota = {
+      type: "notice.quota",
+      providerID: "prov_a",
+      windowID: "weekly",
+      milestone: "almost-out",
+      resetAt: 1_790_000_000_000,
+      at: 5_000,
+    } as const
+    const relay = await startRelayDouble({})
+    const frames: unknown[] = []
+    const transport = createRemoteTransport({
+      url: relay.wsURL("dev_1"),
+      handlers: { onNotices: (frame) => frames.push(frame) },
+      resetDelayMs: 10,
+    })
+    try {
+      transport.connect()
+      await waitFor(() => transport.status().kind === "open")
+      relay.pushNotices(quota)
+      await waitFor(() => frames.length === 1)
+      expect(frames).toEqual([quota])
+      expect(transport.status().kind).toBe("open")
+    } finally {
+      transport.close()
+      await relay.stop()
+    }
+  })
+
   test("delivers relay notice frames to the handler and settles a notice request", async () => {
     const notice = { id: "ntc_1", category: "agent-completed", sessionID: "ses_a", createdAt: 5 } as const
     const relay = await startRelayDouble({ noticePage: { notices: [notice], total: 1, unavailable: false } })

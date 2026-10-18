@@ -44,6 +44,8 @@ export function wireContract(
     const types = ast.types.filter((type) => type._tag !== "Undefined")
     return types.length === 1 ? [...own, ...checks(types[0])] : own
   }
+  const literalBranches = (ast: SchemaAST.AST): SchemaAST.AST[] =>
+    ast._tag === "Union" && !ast.checks?.length ? ast.types.flatMap(literalBranches) : [ast]
   const build = (input: SchemaAST.AST, hint: string): string => {
     const ast = Schema.toType(Schema.make(input)).ast
     const name = identifier(typeof ast.annotations?.identifier === "string" ? ast.annotations.identifier : hint)
@@ -83,10 +85,11 @@ export function wireContract(
     if (ast._tag === "Union") {
       const types = ast.context?.isOptional ? ast.types.filter((type) => type._tag !== "Undefined") : ast.types
       if (types.length === 1) return build(types[0], name)
-      if (types.every((type) => type._tag === "Literal" && typeof type.literal === "string")) {
+      const branches = types.flatMap(literalBranches)
+      if (branches.every((type) => type._tag === "Literal" && typeof type.literal === "string")) {
         enums.set(
           name,
-          types.flatMap((type) => (type._tag === "Literal" && typeof type.literal === "string" ? [type.literal] : [])),
+          branches.flatMap((type) => (type._tag === "Literal" && typeof type.literal === "string" ? [type.literal] : [])),
         )
         return name
       }
@@ -271,6 +274,18 @@ export function wireContract(
     build(schema.ast, name)
   })
   return { messages, enums, operations }
+}
+
+export function domainLabel(value: string | number | boolean) {
+  return ` [(ycoding.v5.domain_label) = ${JSON.stringify(String(value))}]`
+}
+
+export function withDomainLiteral(options: string, message: WireMessage, field: WireField) {
+  const ast = field.ast
+  if (!message.oneof || ast?._tag !== "Literal" || typeof ast.literal === "string") return options
+  if (message.fields.filter((item) => item.type === field.type).length !== 1) return options
+  const option = `(ycoding.v5.domain_literal) = ${JSON.stringify(JSON.stringify(ast.literal))}`
+  return options ? `${options.slice(0, -1)}, ${option}]` : ` [${option}]`
 }
 
 function memberIdentity(ast: SchemaAST.AST) {

@@ -8,6 +8,7 @@ import {
   forecastLines,
   forecastSummary,
   measuredSpeedLines,
+  paceSummary,
   unitCostLines,
   type ForecastPresentation,
   type SpeedPresentation,
@@ -64,19 +65,20 @@ export function QuotaForecastBlock(props: { forecast: ForecastPresentation; now:
 
 export function QuotaForecastSummary(props: { forecast: ForecastPresentation; now: number; asOf?: number }) {
   const { theme } = useTheme()
+  const ink = (tone: "error" | "warning" | "subdued") =>
+    tone === "error"
+      ? theme.text.feedback.error.default
+      : tone === "warning"
+        ? theme.text.feedback.warning.default
+        : theme.text.subdued
   const summary = () => forecastSummary(props.forecast, props.now, props.asOf)
+  const pace = () => props.forecast.pace && paceSummary(props.forecast.pace, props.now, props.asOf)
   return (
-    <text
-      fg={
-        summary().tone === "error"
-          ? theme.text.feedback.error.default
-          : summary().tone === "warning"
-            ? theme.text.feedback.warning.default
-            : theme.text.subdued
-      }
-      wrapMode="word"
-    >
+    <text fg={ink(summary().tone)} wrapMode="word">
       {summary().text}
+      <Show when={pace()}>
+        {(value) => <span style={{ fg: ink(value().tone) }}> · Pace: {value().text}</span>}
+      </Show>
     </text>
   )
 }

@@ -29,6 +29,13 @@ export const LocalRate = Schema.Struct({
 }).annotate({ identifier: "UsageForecast.LocalRate" })
 export interface LocalRate extends Schema.Schema.Type<typeof LocalRate> {}
 
+export const Pace = Schema.Struct({
+  verdict: Schema.Literals(["ahead", "cutting-it-close", "will-run-out"]),
+  projectedUsedAtReset: Rate,
+  exhaustionAt: NonNegativeInt.pipe(optional),
+}).annotate({ identifier: "UsageForecast.Pace" })
+export interface Pace extends Schema.Schema.Type<typeof Pace> {}
+
 export const Quota = Schema.Struct({
   providerID: Provider.ID,
   profile: Model.ProfileName.pipe(optional),
@@ -46,6 +53,7 @@ export const Quota = Schema.Struct({
   ratePerHour: Rate.pipe(optional),
   exhaustionAt: NonNegativeInt.pipe(optional),
   projectedUsedAtReset: Rate.pipe(optional),
+  pace: Pace.pipe(optional),
 }).annotate({ identifier: "UsageForecast.Quota" })
 export interface Quota extends Schema.Schema.Type<typeof Quota> {}
 

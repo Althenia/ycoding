@@ -190,6 +190,161 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     fs::write(out.join("rules.rs"), rules)?;
+    fs::write(
+        out.join("domain_metadata.rs"),
+        domain_metadata(&fs::read(out.join("contract.bin"))?)?,
+    )?;
     config.compile_fds(set)?;
     Ok(())
+}
+
+fn domain_metadata(contract: &[u8]) -> Result<String, String> {
+    let mut messages = Vec::new();
+    let mut enums = Vec::new();
+    for file in wire_fields(contract)?
+        .into_iter()
+        .filter(|field| field.0 == 1)
+    {
+        let file = wire_fields(file.2)?;
+        let package = wire_text(&file, 2)?.unwrap_or_default();
+        for message in file.iter().filter(|field| field.0 == 4) {
+            let message = wire_fields(message.2)?;
+            let name = format!("{package}.{}", wire_text(&message, 1)?.unwrap_or_default());
+            let oneofs = message
+                .iter()
+                .filter(|field| field.0 == 8)
+                .map(|oneof| wire_text(&wire_fields(oneof.2)?, 1).map(Option::unwrap_or_default))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut fields = Vec::new();
+            for field in message.iter().filter(|field| field.0 == 2) {
+                let field = wire_fields(field.2)?;
+                fields.push((
+                    wire_number(&field, 3)?,
+                    format!(
+                        "Field {{ name: {:?}, tag: {}, kind: {}, required: {}, repeated: {}, target: {:?}, oneof: {:?}, literal: {:?} }},",
+                        wire_text(&field, 1)?.unwrap_or_default(),
+                        wire_number(&field, 3)?,
+                        wire_number(&field, 5)?,
+                        wire_number(&field, 4)? == 2,
+                        wire_number(&field, 4)? == 3,
+                        wire_text(&field, 6)?.unwrap_or_default().trim_start_matches('.'),
+                        field
+                            .iter()
+                            .find(|item| item.0 == 9 && item.1 == 0)
+                            .map(|item| item.3 as u32),
+                        wire_option(&field, 8, 51002)?,
+                    ),
+                ));
+            }
+            fields.sort_by_key(|field| field.0);
+            messages.push((
+                name.clone(),
+                format!(
+                    "Message {{ name: {name:?}, oneofs: &{oneofs:?}, fields: &[{}] }},\n",
+                    fields.into_iter().map(|field| field.1).collect::<String>()
+                ),
+            ));
+        }
+        for item in file.iter().filter(|field| field.0 == 5) {
+            let item = wire_fields(item.2)?;
+            let name = format!("{package}.{}", wire_text(&item, 1)?.unwrap_or_default());
+            let mut values = String::new();
+            for value in item.iter().filter(|field| field.0 == 2) {
+                let value = wire_fields(value.2)?;
+                values.push_str(&format!(
+                    "Value {{ number: {}, name: {:?}, label: {:?} }},",
+                    wire_number(&value, 2)?,
+                    wire_text(&value, 1)?.unwrap_or_default(),
+                    wire_option(&value, 3, 51000)?,
+                ));
+            }
+            enums.push((
+                name.clone(),
+                format!("Enumeration {{ name: {name:?}, values: &[{values}] }},\n"),
+            ));
+        }
+    }
+    messages.sort();
+    enums.sort();
+    Ok(format!(
+        "static MESSAGES: &[Message] = &[\n{}];\nstatic ENUMERATIONS: &[Enumeration] = &[\n{}];\n",
+        messages.into_iter().map(|item| item.1).collect::<String>(),
+        enums.into_iter().map(|item| item.1).collect::<String>(),
+    ))
+}
+
+type WireField<'a> = (u64, u64, &'a [u8], u64);
+
+fn wire_fields(mut bytes: &[u8]) -> Result<Vec<WireField<'_>>, String> {
+    let mut fields = Vec::new();
+    while !bytes.is_empty() {
+        let key = wire_varint(&mut bytes)?;
+        let (tag, kind) = (key >> 3, key & 7);
+        match kind {
+            0 => {
+                let value = wire_varint(&mut bytes)?;
+                fields.push((tag, kind, &[][..], value));
+            }
+            1 | 5 => {
+                let width = if kind == 1 { 8 } else { 4 };
+                let (value, rest) = bytes
+                    .split_at_checked(width)
+                    .ok_or("truncated fixed descriptor field")?;
+                fields.push((tag, kind, value, 0));
+                bytes = rest;
+            }
+            2 => {
+                let length = wire_varint(&mut bytes)? as usize;
+                let (value, rest) = bytes
+                    .split_at_checked(length)
+                    .ok_or("truncated descriptor field")?;
+                fields.push((tag, kind, value, 0));
+                bytes = rest;
+            }
+            _ => return Err(format!("unsupported descriptor wire type {kind}")),
+        }
+    }
+    Ok(fields)
+}
+
+fn wire_varint(bytes: &mut &[u8]) -> Result<u64, String> {
+    let mut value = 0u64;
+    for shift in (0..64).step_by(7) {
+        let (&byte, rest) = bytes.split_first().ok_or("truncated descriptor varint")?;
+        *bytes = rest;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err("overlong descriptor varint".into())
+}
+
+fn wire_text(fields: &[WireField<'_>], tag: u64) -> Result<Option<String>, String> {
+    fields
+        .iter()
+        .find(|field| field.0 == tag && field.1 == 2)
+        .map(|field| {
+            String::from_utf8(field.2.to_vec()).map_err(|_| "descriptor text is not UTF-8".into())
+        })
+        .transpose()
+}
+
+fn wire_number(fields: &[WireField<'_>], tag: u64) -> Result<u64, String> {
+    fields
+        .iter()
+        .find(|field| field.0 == tag && field.1 == 0)
+        .map(|field| field.3)
+        .ok_or_else(|| format!("descriptor number {tag} missing"))
+}
+
+fn wire_option(
+    fields: &[WireField<'_>],
+    tag: u64,
+    extension: u64,
+) -> Result<Option<String>, String> {
+    let Some(options) = fields.iter().find(|field| field.0 == tag && field.1 == 2) else {
+        return Ok(None);
+    };
+    wire_text(&wire_fields(options.2)?, extension)
 }

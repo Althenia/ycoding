@@ -1,9 +1,10 @@
 use super::numeric;
 use super::{
     BATCH_SIZE, Cancellation, ColumnType, Command, Delivery, DeliveryTable, Error, Intent,
-    IntentTable, Operation, Query, REPORT_BYTES, REPORT_ROWS, ROW_BYTES, ReportRows, Source,
-    SourceRow, identifier, state,
+    IntentTable, Maintenance, Operation, Query, REBUILD_SLICE_PAGES, REPORT_BYTES, REPORT_ROWS,
+    ROW_BYTES, ReportRows, Request, Source, SourceRow, identifier, state,
 };
+use crate::engine::SnapshotView;
 use crate::{Snapshot, TableSpec};
 use duckdb::types::Value;
 use duckdb::{Connection, appender_params_from_iter, params_from_iter};
@@ -52,27 +53,102 @@ pub(super) fn run(
         sources,
         connection: None,
         generation: None,
+        progress: None,
+        staged: None,
+        rebuilt: false,
         #[cfg(test)]
         before_release: None,
     };
     while let Ok(command) = receiver.recv() {
-        let guard = DeadlineGuard::start(command.cancellation.clone(), command.deadline);
-        let result = guard.and_then(|guard| {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                worker.execute(command.operation, &command.cancellation, command.deadline)
-            }))
+        let cancellation = &command.cancellation;
+        let deadline = command.deadline;
+        match command.request {
+            Request::Operation(operation, reply) => {
+                let result = serve(&mut worker, cancellation, deadline, |worker| {
+                    worker.execute(operation, cancellation, deadline)
+                });
+                if let Some(reply) = reply {
+                    let _ = reply.send(result);
+                }
+            }
+            Request::Maintain(reply) => {
+                let result = serve(&mut worker, cancellation, deadline, |worker| {
+                    worker.maintain(cancellation, deadline)
+                });
+                let _ = reply.send(result);
+            }
+        }
+    }
+}
+
+fn serve<T>(
+    worker: &mut Worker,
+    cancellation: &Cancellation,
+    deadline: Instant,
+    work: impl FnOnce(&mut Worker) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let result = DeadlineGuard::start(cancellation.clone(), deadline).and_then(|guard| {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(worker)))
             .unwrap_or(Err(Error::Unavailable));
-            drop(guard);
-            command.cancellation.check(command.deadline).and(result)
-        });
-        if result.is_err() {
-            worker.connection.take();
-            worker.generation = None;
+        drop(guard);
+        cancellation.check(deadline).and(result)
+    });
+    if let Err(error) = &result {
+        worker.connection.take();
+        worker.staged.take();
+        worker.generation = None;
+        if !matches!(error, Error::Cancelled | Error::Deadline) {
+            worker.progress = None;
         }
-        command.cancellation.finish();
-        if let Some(reply) = command.reply {
-            let _ = reply.send(result);
-        }
+    }
+    cancellation.finish();
+    result
+}
+
+struct Progress {
+    captured: Delivery,
+    snapshot: Snapshot,
+    connection: numeric::Native,
+    source: usize,
+    after: Option<Vec<u8>>,
+}
+impl Progress {
+    fn resumable(&self, current: &Delivery, metadata: &crate::Metadata) -> bool {
+        current.valid
+            && current.rebuilding
+            && current.generation == self.captured.generation
+            && current.identity == self.captured.identity
+            && current.source_generation == self.captured.source_generation
+            && current.matches(metadata)
+    }
+}
+
+struct StagedReport {
+    view: SnapshotView,
+    reads: BTreeSet<&'static str>,
+    names: Vec<&'static str>,
+    schema: Vec<u8>,
+    identity: [u8; 16],
+    source_generation: u64,
+    privacy: u64,
+    order: u64,
+    connection: numeric::Native,
+}
+impl StagedReport {
+    fn matches(
+        &self,
+        view: &SnapshotView,
+        names: &[&'static str],
+        schema: &[u8],
+        captured: &Delivery,
+    ) -> bool {
+        self.view.same_reads(view, &self.reads)
+            && self.names == names
+            && self.schema == schema
+            && self.identity == captured.identity
+            && self.source_generation == captured.source_generation
+            && self.privacy == captured.privacy
+            && self.order == captured.order
     }
 }
 
@@ -83,6 +159,9 @@ struct Worker {
     schema: Vec<u8>,
     connection: Option<numeric::Native>,
     generation: Option<u64>,
+    progress: Option<Progress>,
+    staged: Option<StagedReport>,
+    rebuilt: bool,
     #[cfg(test)]
     before_release: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -151,10 +230,27 @@ impl Worker {
     }
 
     fn snapshot_report(
-        &self,
+        &mut self,
         captured: Delivery,
         snapshot: Snapshot,
-        names: &[&str],
+        names: &'static [&'static str],
+        queries: Vec<Query>,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<ReportRows, Error> {
+        let result =
+            self.snapshot_report_staged(captured, snapshot, names, queries, cancellation, deadline);
+        if result.is_err() {
+            self.staged.take();
+        }
+        result
+    }
+
+    fn snapshot_report_staged(
+        &mut self,
+        captured: Delivery,
+        snapshot: Snapshot,
+        names: &'static [&'static str],
         queries: Vec<Query>,
         cancellation: &Cancellation,
         deadline: Instant,
@@ -163,54 +259,114 @@ impl Worker {
         if current.pending_purge() || current.privacy != captured.privacy {
             return Err(Error::Privacy);
         }
-        private_root(&self.root)?;
-        let mut connection = numeric::open(Path::new(":memory:"), &self.root.join("spill"))?;
-        cancellation.attach(&connection);
-        cancellation.querying();
-        let transaction = connection.transaction()?;
         let mut seen = BTreeSet::new();
+        let mut selected = Vec::with_capacity(names.len());
         for name in names {
             if !seen.insert(name) {
                 return Err(Error::Configuration);
             }
-            let source = self
-                .sources
-                .iter()
-                .find(|source| source.name == *name)
-                .ok_or(Error::Configuration)?;
-            let table = format!("report_{name}");
-            create_source(&transaction, source, &table, true)?;
-            let mut after = None::<Vec<u8>>;
-            loop {
+            selected.push(
+                self.sources
+                    .iter()
+                    .find(|source| source.name == *name)
+                    .ok_or(Error::Configuration)?,
+            );
+        }
+        let selected_schema = schema_of(&selected);
+        let view = snapshot.view().cloned();
+        private_root(&self.root)?;
+        if let Some(view) = &view
+            && self
+                .staged
+                .as_ref()
+                .is_some_and(|staged| staged.matches(view, names, &selected_schema, &captured))
+        {
+            drop(snapshot);
+            let result = {
+                let staged = self.staged.as_mut().ok_or(Error::Unavailable)?;
+                cancellation.attach(&staged.connection);
+                cancellation.querying();
                 cancellation.check(deadline)?;
-                let rows = (source.page)(&snapshot, after.as_deref(), BATCH_SIZE)?;
-                if rows.len() > BATCH_SIZE {
-                    return Err(Error::Limit);
-                }
-                if rows.is_empty() {
-                    break;
-                }
+                let transaction = staged.connection.transaction()?;
+                let result = read_queries(&transaction, queries, cancellation, deadline)?;
+                transaction.commit()?;
+                result
+            };
+            cancellation.check(deadline)?;
+            return self.finish_snapshot_report(&captured, result);
+        }
+        self.staged.take();
+        let mut connection = numeric::open(Path::new(":memory:"), &self.root.join("spill"))?;
+        cancellation.attach(&connection);
+        cancellation.querying();
+        snapshot.reset_reads();
+        {
+            let transaction = connection.transaction()?;
+            for (name, source) in names.iter().zip(&selected) {
+                let table = format!("report_{name}");
+                create_source(&transaction, source, &table, true)?;
                 let mut appender = transaction.appender(&table)?;
-                for row in rows {
-                    if after.as_ref().is_some_and(|after| row.identity <= *after) {
-                        return Err(Error::Configuration);
+                let mut after = None::<Vec<u8>>;
+                loop {
+                    cancellation.check(deadline)?;
+                    let rows = (source.page)(&snapshot, after.as_deref(), BATCH_SIZE)?;
+                    if rows.len() > BATCH_SIZE {
+                        return Err(Error::Limit);
                     }
-                    validate_row(source, &row)?;
-                    after = Some(row.identity.clone());
-                    if !(source.allowed)(&snapshot, &row.scope)? {
-                        continue;
+                    if rows.is_empty() {
+                        break;
                     }
-                    let values = values(row, captured.order);
-                    appender.append_row(appender_params_from_iter(values.iter()))?;
+                    for row in rows {
+                        if after.as_ref().is_some_and(|after| row.identity <= *after) {
+                            return Err(Error::Configuration);
+                        }
+                        validate_row(source, &row)?;
+                        after = Some(row.identity.clone());
+                        if !(source.allowed)(&snapshot, &row.scope)? {
+                            continue;
+                        }
+                        let values = values(row, captured.order);
+                        appender.append_row(appender_params_from_iter(values.iter()))?;
+                    }
+                    std::thread::yield_now();
                 }
                 appender.flush()?;
                 drop(appender);
-                std::thread::yield_now();
             }
+            cancellation.check(deadline)?;
+            transaction.commit()?;
         }
-        let result = read_queries(&transaction, queries, cancellation, deadline)?;
-        transaction.commit()?;
+        let reads = snapshot.reads();
+        drop(snapshot);
+        let result = {
+            let transaction = connection.transaction()?;
+            let result = read_queries(&transaction, queries, cancellation, deadline)?;
+            transaction.commit()?;
+            result
+        };
         cancellation.check(deadline)?;
+        let result = self.finish_snapshot_report(&captured, result)?;
+        if let Some(view) = view {
+            self.staged = Some(StagedReport {
+                view,
+                reads,
+                names: names.to_vec(),
+                schema: selected_schema,
+                identity: captured.identity,
+                source_generation: captured.source_generation,
+                privacy: captured.privacy,
+                order: captured.order,
+                connection,
+            });
+        }
+        Ok(result)
+    }
+
+    fn finish_snapshot_report(
+        &self,
+        captured: &Delivery,
+        result: ReportRows,
+    ) -> Result<ReportRows, Error> {
         let current = self.read_state()?;
         if current.pending_purge() || current.privacy != captured.privacy {
             return Err(Error::Privacy);
@@ -288,8 +444,32 @@ impl Worker {
         }
         drop(snapshot);
         cancellation.check(deadline)?;
-        acknowledge(&self.store, &captured, intents, false)?;
+        if captured.applied != captured.order || !intents.is_empty() {
+            acknowledge(&self.store, &captured, intents, false)?;
+        }
         self.read_state()
+    }
+
+    fn maintain(
+        &mut self,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<Maintenance, Error> {
+        cancellation.check(deadline)?;
+        let current = self.read_state()?;
+        let settled = self.rebuilt
+            && self.progress.is_none()
+            && current.valid
+            && !current.rebuilding
+            && current.matches(self.store.metadata())
+            && !current.pending_purge();
+        if !settled && self.rebuild_slice(cancellation, deadline)?.is_none() {
+            return Ok(Maintenance::Pending);
+        }
+        if self.read_state()?.pending_purge() {
+            self.finish_purge(cancellation, deadline)?;
+        }
+        Ok(Maintenance::Complete)
     }
 
     fn rebuild(
@@ -297,9 +477,43 @@ impl Worker {
         cancellation: &Cancellation,
         deadline: Instant,
     ) -> Result<Delivery, Error> {
+        loop {
+            if let Some(active) = self.rebuild_slice(cancellation, deadline)? {
+                return Ok(active);
+            }
+        }
+    }
+
+    fn rebuild_slice(
+        &mut self,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<Option<Delivery>, Error> {
         cancellation.check(deadline)?;
         private_root(&self.root)?;
+        let current = self.read_state()?;
+        let metadata = self.store.metadata();
+        if !self
+            .progress
+            .as_ref()
+            .is_some_and(|progress| progress.resumable(&current, metadata))
+        {
+            self.start_rebuild(cancellation, deadline)?;
+        }
+        if !self.copy_slice(cancellation, deadline)? {
+            return Ok(None);
+        }
+        self.activate(cancellation, deadline).map(Some)
+    }
+
+    fn start_rebuild(
+        &mut self,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<(), Error> {
+        self.progress = None;
         self.connection.take();
+        self.staged.take();
         self.generation = None;
         let old = self.read_state()?;
         self.store
@@ -365,49 +579,86 @@ impl Worker {
             })?
             .wait()?;
         cancellation.check(deadline)?;
-        let mut connection = open(&self.root, &captured)?;
+        let connection = open(&self.root, &captured)?;
         cancellation.attach(&connection);
         create(&connection, self.sources)?;
-        let transaction = connection.transaction()?;
-        for source in self.sources {
-            let mut after: Option<Vec<u8>> = None;
-            loop {
-                cancellation.check(deadline)?;
-                let rows = (source.page)(&snapshot, after.as_deref(), BATCH_SIZE)?;
-                if rows.len() > BATCH_SIZE {
-                    return Err(Error::Limit);
-                }
-                if rows.is_empty() {
-                    break;
-                }
-                let mut appender = transaction.appender(source.name)?;
-                for row in rows {
-                    if after.as_ref().is_some_and(|after| row.identity <= *after) {
-                        return Err(Error::Configuration);
-                    }
-                    validate_row(source, &row)?;
-                    after = Some(row.identity.clone());
-                    if !(source.allowed)(&snapshot, &row.scope)? {
-                        continue;
-                    }
-                    let values = values(row, captured.order);
-                    appender.append_row(appender_params_from_iter(values.iter()))?;
-                }
-                appender.flush()?;
+        self.progress = Some(Progress {
+            captured,
+            snapshot,
+            connection,
+            source: 0,
+            after: None,
+        });
+        Ok(())
+    }
+
+    fn copy_slice(
+        &mut self,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<bool, Error> {
+        let progress = self.progress.as_mut().ok_or(Error::Unavailable)?;
+        cancellation.attach(&progress.connection);
+        let mut source = progress.source;
+        let mut after = progress.after.clone();
+        let transaction = progress.connection.transaction()?;
+        let mut pages = 0;
+        while source < self.sources.len() && pages < REBUILD_SLICE_PAGES {
+            cancellation.check(deadline)?;
+            let definition = &self.sources[source];
+            let rows = (definition.page)(&progress.snapshot, after.as_deref(), BATCH_SIZE)?;
+            if rows.len() > BATCH_SIZE {
+                return Err(Error::Limit);
             }
+            if rows.is_empty() {
+                source += 1;
+                after = None;
+                continue;
+            }
+            pages += 1;
+            let mut appender = transaction.appender(definition.name)?;
+            for row in rows {
+                if after.as_ref().is_some_and(|after| row.identity <= *after) {
+                    return Err(Error::Configuration);
+                }
+                validate_row(definition, &row)?;
+                after = Some(row.identity.clone());
+                if !(definition.allowed)(&progress.snapshot, &row.scope)? {
+                    continue;
+                }
+                let values = values(row, progress.captured.order);
+                appender.append_row(appender_params_from_iter(values.iter()))?;
+            }
+            appender.flush()?;
         }
-        write_checkpoint(&transaction, &captured, &self.schema)?;
+        let complete = source == self.sources.len();
+        if complete {
+            write_checkpoint(&transaction, &progress.captured, &self.schema)?;
+        }
         cancellation.check(deadline)?;
         transaction.commit()?;
-        drop(snapshot);
-        self.connection = Some(connection);
-        self.generation = Some(captured.generation);
+        progress.source = source;
+        progress.after = after;
+        Ok(complete)
+    }
+
+    fn activate(
+        &mut self,
+        cancellation: &Cancellation,
+        deadline: Instant,
+    ) -> Result<Delivery, Error> {
+        let generation = self
+            .progress
+            .as_ref()
+            .ok_or(Error::Unavailable)?
+            .captured
+            .generation;
         loop {
             cancellation.check(deadline)?;
             let snapshot = self.store.snapshot()?;
             let current = snapshot.get::<DeliveryTable>(&[])?.ok_or(Error::Invalid)?;
             if !current.valid
-                || current.generation != captured.generation
+                || current.generation != generation
                 || !current.matches(self.store.metadata())
             {
                 return Err(Error::Invalid);
@@ -420,14 +671,13 @@ impl Worker {
             if !complete_boundary(&current, &intents)? {
                 return Err(Error::Invalid);
             }
-            let connection = self.connection.as_mut().ok_or(Error::Unavailable)?;
-            let checkpoint = checkpoint(connection)?;
-            if checkpoint.order < current.order {
+            let progress = self.progress.as_mut().ok_or(Error::Unavailable)?;
+            if checkpoint(&progress.connection)?.order < current.order {
                 if intents.is_empty() {
                     return Err(Error::Invalid);
                 }
                 apply(
-                    connection,
+                    &mut progress.connection,
                     &snapshot,
                     &current,
                     &intents,
@@ -437,8 +687,11 @@ impl Worker {
                 )?;
             }
             drop(snapshot);
-            let activated = acknowledge(&self.store, &current, intents, true)?;
-            if activated {
+            if acknowledge(&self.store, &current, intents, true)? {
+                let progress = self.progress.take().ok_or(Error::Unavailable)?;
+                self.connection = Some(progress.connection);
+                self.generation = Some(generation);
+                self.rebuilt = true;
                 cleanup(&self.root, Some(&filename(&current)))?;
                 return self.read_state();
             }
@@ -451,6 +704,7 @@ impl Worker {
         deadline: Instant,
     ) -> Result<(), Error> {
         cancellation.check(deadline)?;
+        self.staged.take();
         let active = self.read_state()?;
         if !active.valid || active.rebuilding || active.applied != active.order {
             return Err(Error::Invalid);
@@ -732,6 +986,9 @@ fn create_source(
     Ok(())
 }
 fn schema(sources: &[Source]) -> Vec<u8> {
+    schema_of(&sources.iter().collect::<Vec<_>>())
+}
+fn schema_of(sources: &[&Source]) -> Vec<u8> {
     sources
         .iter()
         .flat_map(|source| {

@@ -45,6 +45,9 @@ impl AnthropicMessages {
     }
 }
 impl Protocol for AnthropicMessages {
+    fn response_formats(&self) -> &'static [&'static str] {
+        &["json"]
+    }
     fn request_headers(
         &self,
         request: &Request,
@@ -551,6 +554,18 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
             "output_config",
             json::object([("effort", s(effort.clone()))]),
         );
+    }
+    if let Some(schema) = crate::structured_output::request_schema(request) {
+        let output = json::merge(
+            &get(&body, "output_config")
+                .cloned()
+                .unwrap_or_else(json::empty),
+            &json::object([(
+                "format",
+                json::object([("type", s("json_schema")), ("schema", schema)]),
+            )]),
+        );
+        json::set(&mut body, "output_config", output);
     }
     if breakpoints.dropped > 0 {
         tracing::warn!(

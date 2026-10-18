@@ -96,6 +96,7 @@ pub async fn serve_with(
     });
     let router = Router::new()
         .route(ROUTE, get(upgrade))
+        .route("/api/browser/connect", get(crate::browser_stream::upgrade))
         .route("/api/pty/{id}/connect", get(crate::pty_stream::upgrade))
         .route("/api/health", get(health))
         .route("/health", get(health))

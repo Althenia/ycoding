@@ -41,7 +41,7 @@ test("platform slice exactly matches all 55 baseline and live endpoint declarati
   const live = platformEndpoints().map(({ endpoint }) => endpoint.identifier)
   expect(live).toHaveLength(55)
   const manifest = await generateManifest(path.resolve(import.meta.dir, "../../.."))
-  expect(manifest.counts).toEqual({ endpoint: 207, connector: 75, notice: 4 })
+  expect(manifest.counts).toEqual({ endpoint: 207, connector: 83, notice: 4 })
   const baseline = manifest.members.filter((member) => member.kind === "endpoint" && platformGroups.has(member.group))
   expect(baseline.map((member) => member.name).sort()).toEqual([...live].sort())
   expect(
@@ -159,9 +159,15 @@ test("every platform field, presence, enum and typed error matches the live Effe
       "RemoteDevice",
       "RemoteEnrollmentError",
       "RemoteEnrollmentPartialFailure",
+      "RemoteMcpStatus",
       "remote_enroll_Request",
       "remote_enroll_Request_payload",
       "remote_enroll_Result",
+      "remote_mcp_get_Request",
+      "remote_mcp_get_Result",
+      "remote_mcp_set_Request",
+      "remote_mcp_set_Request_payload",
+      "remote_mcp_set_Result",
     ].sort(),
   )
   expect(platform.enumType.map((item) => item.name).sort()).toEqual(

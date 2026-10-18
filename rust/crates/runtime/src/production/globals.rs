@@ -85,6 +85,7 @@ impl Globals {
                 .map_err(|_| unavailable("provider usage"))?
                 .with_version(env!("CARGO_PKG_VERSION"))
                 .with_auth(preparation.clone(), Some(accounts.clone()))
+                .with_events(events.clone())
                 .with_store(client.clone());
         let claude = model::ClaudeHost {
             accounts: accounts.clone(),

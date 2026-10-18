@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { alertCopy, overflowCopy, readSessionSearch, sessionSearch, sessionURL } from "./alert"
+import { alertCopy, overflowCopy, quotaCopy, readQuota, readSessionSearch, sessionSearch, sessionURL, usageURL } from "./alert"
 
 test("lost and unclassified attention never claims a pending user request", () => {
   expect(alertCopy("approval-requested", { title: "Stock audit", need: "lost" })).toEqual({
@@ -32,4 +32,22 @@ test("Session query reader validates the Session and each optional identifier", 
   expect(readSessionSearch({ session_id: "ses_1", notice_id: "ntc_3" })).toEqual({ sessionID: "ses_1" })
   for (const search of [undefined, "session_id=ses_1", [], {}, { session_id: ["ses_1"] }, { session_id: "wrong" }])
     expect(readSessionSearch(search)).toBeUndefined()
+})
+
+test("quota copy is generic per milestone and the Usage URL carries only the machine", () => {
+  expect(quotaCopy("almost-out")).toEqual({ title: "YCoding — quota almost out", body: "A provider quota is almost out. Open Usage to review." })
+  expect(quotaCopy("cutting-it-close").title).toBe("YCoding — quota pace")
+  expect(quotaCopy("will-run-out").title).toBe("YCoding — quota will run out")
+  expect(usageURL("dev_2")).toBe("/remote/usage?device_id=dev_2")
+  expect(usageURL("dev 2&x")).toBe("/remote/usage?device_id=dev+2%26x")
+})
+
+test("the quota reader accepts only identifiers, milestone, and a positive reset", () => {
+  const quota = { providerID: "prov_a", windowID: "weekly", milestone: "almost-out", resetAt: 1_790_000_000_000 } as const
+  expect(readQuota(quota)).toEqual(quota)
+  expect(readQuota({ ...quota, category: "quota-pace" }, ["category"])).toEqual(quota)
+  for (const bad of [{ ...quota, email: "a@b.c" }, { ...quota, resetAt: 0 }, { ...quota, resetAt: 1.5 }, { ...quota, resetAt: "1" }, { ...quota, milestone: "soon" },
+    { ...quota, providerID: " prov" }, { ...quota, windowID: "x".repeat(65) }, { ...quota, resetAt: undefined }, [], null, "quota"])
+    expect(readQuota(bad)).toBeUndefined()
+  expect(readQuota({ ...quota, category: "quota-pace" })).toBeUndefined()
 })

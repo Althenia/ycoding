@@ -33,4 +33,19 @@ bun infra/cloudflare/test/integration/binary-flow.ts --group=http
 
 The suite starts Wrangler's installed Miniflare/workerd on ephemeral numeric-loopback ports with isolated D1 and SQLite Durable Object storage. Its test adapter delegates to the production Worker and DeviceRelay, holds native callbacks, injects SQL transaction faults and invokes native hibernation eviction. Push delivery terminates at a local encrypted-payload receiver; no external push service is contacted. Run it separately from unit suites and serialize it with builds, typechecks and package-wide suites.
 
-Groups are `storage`, `predecessor`, `stall`, `http`, `limits`, `authority` and `d1`. They cover completion rollback/reconstruction, delayed predecessor callbacks, delivery-credit ownership, HTTP bulk termination, native/application frame limits, fresh request/Result authority and atomic D1 browser-session rotation. The read-only inspector records production aggregate reservations and per-connection ledgers alongside isolate-wide V8 heap/backing-store totals. Those totals do not measure per-socket native allocations; unavailable native allocation values remain unreported. Fixture buffers are test-owned, not production relay reservations. The suite fails when the installed tooling cannot expose the required storage, hibernation or reservation observer.
+Groups are `storage`, `predecessor`, `stall`, `disposal`, `http`, `limits`, `authority`, `d1` and `quota`. The default run includes every group except `quota`. They cover completion rollback/reconstruction, delayed predecessor callbacks, delivery-credit ownership, HTTP bulk termination, native/application frame limits, fresh request/Result authority and atomic D1 browser-session rotation. The read-only inspector records production aggregate reservations and per-connection ledgers alongside isolate-wide V8 heap/backing-store totals. Those totals do not measure per-socket native allocations; unavailable native allocation values remain unreported. Fixture buffers are test-owned, not production relay reservations. The suite fails when the installed tooling cannot expose the required storage, hibernation or reservation observer.
+
+### Quota delivery
+
+Build the native connector fixture, select the executable reported by Cargo, then run the explicit quota group:
+
+```sh
+mkdir -p .cache
+CARGO_TARGET_DIR="$PWD/rust/target" cargo test --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --test connector_quota_workerd --no-run --message-format=json > .cache/quota-connector-build.jsonl
+export YCODING_TEST_QUOTA_CONNECTOR_BIN="$(bun -e 'const rows = (await Bun.file(".cache/quota-connector-build.jsonl").text()).trim().split("\n").map(JSON.parse); const item = rows.findLast(row => row.reason === "compiler-artifact" && row.target.name === "connector_quota_workerd" && row.executable); if (!item) throw new Error("Native quota fixture executable missing"); console.log(item.executable)')"
+bun infra/cloudflare/test/integration/binary-flow.ts --group=quota
+```
+
+The group requires that executable and fails before starting workerd when it is absent. It sends synthetic native feed alerts through the real Rust connector, workerd, owner-scoped quota claims and a local encrypted-push receiver. Assertions cover delivery, settlement, cross-machine deduplication, owner isolation, malformed controls and persisted claims across Durable Object eviction. A credited native-ledger barrier precedes eviction to distinguish settled no-replay from interrupted delivery. Failed scenarios terminate and await their native fixture before releasing workerd and scratch storage.
+
+The Cargo fixture is ignored in ordinary test runs because its host supplies isolated relay credentials and phase signals. The quota group invokes it explicitly; a direct ignored-test invocation without those variables fails. This flow does not contact a real provider or Chrome push service and does not verify closed-page service-worker or operating-system notification delivery.

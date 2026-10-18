@@ -5,6 +5,7 @@ import path from "node:path"
 
 const siteURL = "https://ycoding.althenia.app/"
 const schemaPath = "ycoding.schema.json"
+const brandFonts = ["Geist.woff2", "GeistMono.woff2"]
 
 /**
  * Adds the public download assets to the web application build output. The web
@@ -22,6 +23,14 @@ export async function buildWebAssets(options: { readonly root: string; readonly 
   const fontLicense = Bun.file(path.join(options.root, "assets", "brand", "fonts", "OFL.txt"))
   if (!(await fontLicense.exists())) throw new Error("Missing required font license: assets/brand/fonts/OFL.txt")
 
+  const fonts = await Promise.all(
+    brandFonts.map(async (name) => {
+      const font = Bun.file(path.join(options.root, "assets", "brand", "fonts", name))
+      if (!(await font.exists())) throw new Error(`Missing required font: assets/brand/fonts/${name}`)
+      return { name, font }
+    }),
+  )
+
   const providerLicense = Bun.file(path.join(options.root, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub"))
   if (!(await providerLicense.exists())) throw new Error("Missing required provider-logo license: apps/web/src/assets/providers/LICENSE.lobehub")
 
@@ -32,6 +41,7 @@ export async function buildWebAssets(options: { readonly root: string; readonly 
     Bun.write(path.join(outdir, schemaPath), JSON.stringify(schema, null, 2) + "\n"),
     Bun.write(path.join(outdir, "examples", "ycoding.jsonc"), example),
     Bun.write(path.join(outdir, "fonts", "OFL.txt"), fontLicense),
+    ...fonts.map((entry) => Bun.write(path.join(outdir, "fonts", entry.name), entry.font)),
     Bun.write(path.join(outdir, "licenses", "provider-logos.txt"), providerLicense),
   ])
 }

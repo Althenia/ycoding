@@ -176,7 +176,7 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
     ));
     harness.phase("subscribed");
     assert_eq!(control.status().state, State::On);
-    assert_eq!(feed.subscribers(), 2);
+    assert_eq!(feed.subscribers(), 3);
     for index in 0..3 {
         emit(&feed, "ses_real_connector", index);
     }
@@ -195,11 +195,11 @@ async fn real_workerd_enrollment_snapshot_events_and_release_are_driven_by_the_r
     );
     harness.send("{}");
     harness.phase("released-one");
-    assert_eq!(feed.subscribers(), 2);
+    assert_eq!(feed.subscribers(), 3);
     emit(&feed, "ses_real_connector", 3);
     harness.send("{}");
     harness.phase("released-all");
-    assert_eq!(feed.subscribers(), 1);
+    assert_eq!(feed.subscribers(), 2);
     harness.send("{}");
     harness.phase("notifications-ready");
     let root = session::Id::new("ses_real_connector").unwrap();

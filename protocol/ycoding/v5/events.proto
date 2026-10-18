@@ -6,302 +6,312 @@ import "ycoding/v5/shared.proto";
 import "ycoding/v5/session.proto";
 
 enum PublicEvent_models_dev_refreshed_type {
-  PUBLICEVENT_MODELS_DEV_REFRESHED_TYPE_MODELS_DEV_REFRESHED = 1;
+  PUBLICEVENT_MODELS_DEV_REFRESHED_TYPE_MODELS_DEV_REFRESHED = 1 [(ycoding.v5.domain_label) = "models-dev.refreshed"];
 }
 
 enum PublicEvent_integration_updated_type {
-  PUBLICEVENT_INTEGRATION_UPDATED_TYPE_INTEGRATION_UPDATED = 1;
+  PUBLICEVENT_INTEGRATION_UPDATED_TYPE_INTEGRATION_UPDATED = 1 [(ycoding.v5.domain_label) = "integration.updated"];
 }
 
 enum PublicEvent_integration_connection_updated_type {
-  PUBLICEVENT_INTEGRATION_CONNECTION_UPDATED_TYPE_INTEGRATION_CONNECTION_UPDATED = 1;
+  PUBLICEVENT_INTEGRATION_CONNECTION_UPDATED_TYPE_INTEGRATION_CONNECTION_UPDATED = 1 [(ycoding.v5.domain_label) = "integration.connection.updated"];
 }
 
 enum PublicEvent_catalog_updated_type {
-  PUBLICEVENT_CATALOG_UPDATED_TYPE_CATALOG_UPDATED = 1;
+  PUBLICEVENT_CATALOG_UPDATED_TYPE_CATALOG_UPDATED = 1 [(ycoding.v5.domain_label) = "catalog.updated"];
 }
 
 enum PublicEvent_agent_updated_type {
-  PUBLICEVENT_AGENT_UPDATED_TYPE_AGENT_UPDATED = 1;
+  PUBLICEVENT_AGENT_UPDATED_TYPE_AGENT_UPDATED = 1 [(ycoding.v5.domain_label) = "agent.updated"];
 }
 
 enum PublicEvent_session_usage_updated_type {
-  PUBLICEVENT_SESSION_USAGE_UPDATED_TYPE_SESSION_USAGE_UPDATED = 1;
+  PUBLICEVENT_SESSION_USAGE_UPDATED_TYPE_SESSION_USAGE_UPDATED = 1 [(ycoding.v5.domain_label) = "session.usage.updated"];
 }
 
 enum PublicEvent_session_prediction_updated_type {
-  PUBLICEVENT_SESSION_PREDICTION_UPDATED_TYPE_SESSION_PREDICTION_UPDATED = 1;
+  PUBLICEVENT_SESSION_PREDICTION_UPDATED_TYPE_SESSION_PREDICTION_UPDATED = 1 [(ycoding.v5.domain_label) = "session.prediction.updated"];
 }
 
 enum PublicEvent_session_diagnostics_updated_type {
-  PUBLICEVENT_SESSION_DIAGNOSTICS_UPDATED_TYPE_SESSION_DIAGNOSTICS_UPDATED = 1;
+  PUBLICEVENT_SESSION_DIAGNOSTICS_UPDATED_TYPE_SESSION_DIAGNOSTICS_UPDATED = 1 [(ycoding.v5.domain_label) = "session.diagnostics.updated"];
 }
 
 enum PublicEvent_session_text_delta_type {
-  PUBLICEVENT_SESSION_TEXT_DELTA_TYPE_SESSION_TEXT_DELTA = 1;
+  PUBLICEVENT_SESSION_TEXT_DELTA_TYPE_SESSION_TEXT_DELTA = 1 [(ycoding.v5.domain_label) = "session.text.delta"];
 }
 
 enum PublicEvent_session_reasoning_delta_type {
-  PUBLICEVENT_SESSION_REASONING_DELTA_TYPE_SESSION_REASONING_DELTA = 1;
+  PUBLICEVENT_SESSION_REASONING_DELTA_TYPE_SESSION_REASONING_DELTA = 1 [(ycoding.v5.domain_label) = "session.reasoning.delta"];
 }
 
 enum PublicEvent_session_tool_input_delta_type {
-  PUBLICEVENT_SESSION_TOOL_INPUT_DELTA_TYPE_SESSION_TOOL_INPUT_DELTA = 1;
+  PUBLICEVENT_SESSION_TOOL_INPUT_DELTA_TYPE_SESSION_TOOL_INPUT_DELTA = 1 [(ycoding.v5.domain_label) = "session.tool.input.delta"];
 }
 
 enum PublicEvent_session_tool_progress_type {
-  PUBLICEVENT_SESSION_TOOL_PROGRESS_TYPE_SESSION_TOOL_PROGRESS = 1;
+  PUBLICEVENT_SESSION_TOOL_PROGRESS_TYPE_SESSION_TOOL_PROGRESS = 1 [(ycoding.v5.domain_label) = "session.tool.progress"];
 }
 
 enum PublicEvent_session_compaction_delta_type {
-  PUBLICEVENT_SESSION_COMPACTION_DELTA_TYPE_SESSION_COMPACTION_DELTA = 1;
+  PUBLICEVENT_SESSION_COMPACTION_DELTA_TYPE_SESSION_COMPACTION_DELTA = 1 [(ycoding.v5.domain_label) = "session.compaction.delta"];
 }
 
 enum PublicEvent_filesystem_changed_type {
-  PUBLICEVENT_FILESYSTEM_CHANGED_TYPE_FILESYSTEM_CHANGED = 1;
+  PUBLICEVENT_FILESYSTEM_CHANGED_TYPE_FILESYSTEM_CHANGED = 1 [(ycoding.v5.domain_label) = "filesystem.changed"];
 }
 
 enum PublicEvent_filesystem_changed_data_event {
-  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_ADD = 1;
-  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_CHANGE = 2;
-  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_UNLINK = 3;
+  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_ADD = 1 [(ycoding.v5.domain_label) = "add"];
+  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_CHANGE = 2 [(ycoding.v5.domain_label) = "change"];
+  PUBLICEVENT_FILESYSTEM_CHANGED_DATA_EVENT_UNLINK = 3 [(ycoding.v5.domain_label) = "unlink"];
 }
 
 enum PublicEvent_reference_updated_type {
-  PUBLICEVENT_REFERENCE_UPDATED_TYPE_REFERENCE_UPDATED = 1;
+  PUBLICEVENT_REFERENCE_UPDATED_TYPE_REFERENCE_UPDATED = 1 [(ycoding.v5.domain_label) = "reference.updated"];
 }
 
 enum PublicEvent_permission_asked_type {
-  PUBLICEVENT_PERMISSION_ASKED_TYPE_PERMISSION_ASKED = 1;
+  PUBLICEVENT_PERMISSION_ASKED_TYPE_PERMISSION_ASKED = 1 [(ycoding.v5.domain_label) = "permission.asked"];
 }
 
 enum PublicEvent_permission_replied_type {
-  PUBLICEVENT_PERMISSION_REPLIED_TYPE_PERMISSION_REPLIED = 1;
+  PUBLICEVENT_PERMISSION_REPLIED_TYPE_PERMISSION_REPLIED = 1 [(ycoding.v5.domain_label) = "permission.replied"];
 }
 
 enum PublicEvent_permission_deferred_type {
-  PUBLICEVENT_PERMISSION_DEFERRED_TYPE_PERMISSION_DEFERRED = 1;
+  PUBLICEVENT_PERMISSION_DEFERRED_TYPE_PERMISSION_DEFERRED = 1 [(ycoding.v5.domain_label) = "permission.deferred"];
 }
 
 enum PublicEvent_guardrail_asked_type {
-  PUBLICEVENT_GUARDRAIL_ASKED_TYPE_GUARDRAIL_ASKED = 1;
+  PUBLICEVENT_GUARDRAIL_ASKED_TYPE_GUARDRAIL_ASKED = 1 [(ycoding.v5.domain_label) = "guardrail.asked"];
 }
 
 enum PublicEvent_guardrail_replied_type {
-  PUBLICEVENT_GUARDRAIL_REPLIED_TYPE_GUARDRAIL_REPLIED = 1;
+  PUBLICEVENT_GUARDRAIL_REPLIED_TYPE_GUARDRAIL_REPLIED = 1 [(ycoding.v5.domain_label) = "guardrail.replied"];
 }
 
 enum PublicEvent_guardrail_replied_data_decidedBy {
-  PUBLICEVENT_GUARDRAIL_REPLIED_DATA_DECIDEDBY_DECISION_MODEL = 1;
+  PUBLICEVENT_GUARDRAIL_REPLIED_DATA_DECIDEDBY_DECISION_MODEL = 1 [(ycoding.v5.domain_label) = "decision-model"];
 }
 
 enum PublicEvent_guardrail_decided_type {
-  PUBLICEVENT_GUARDRAIL_DECIDED_TYPE_GUARDRAIL_DECIDED = 1;
+  PUBLICEVENT_GUARDRAIL_DECIDED_TYPE_GUARDRAIL_DECIDED = 1 [(ycoding.v5.domain_label) = "guardrail.decided"];
 }
 
 enum Guardrail_Decision {
-  GUARDRAIL_DECISION_ALLOW = 1;
-  GUARDRAIL_DECISION_ASK = 2;
-  GUARDRAIL_DECISION_DENY = 3;
-  GUARDRAIL_DECISION_CAP_EXCEEDED = 4;
+  GUARDRAIL_DECISION_ALLOW = 1 [(ycoding.v5.domain_label) = "allow"];
+  GUARDRAIL_DECISION_ASK = 2 [(ycoding.v5.domain_label) = "ask"];
+  GUARDRAIL_DECISION_DENY = 3 [(ycoding.v5.domain_label) = "deny"];
+  GUARDRAIL_DECISION_CAP_EXCEEDED = 4 [(ycoding.v5.domain_label) = "cap_exceeded"];
 }
 
 enum PublicEvent_guardrail_deferred_type {
-  PUBLICEVENT_GUARDRAIL_DEFERRED_TYPE_GUARDRAIL_DEFERRED = 1;
+  PUBLICEVENT_GUARDRAIL_DEFERRED_TYPE_GUARDRAIL_DEFERRED = 1 [(ycoding.v5.domain_label) = "guardrail.deferred"];
 }
 
 enum PublicEvent_plugin_added_type {
-  PUBLICEVENT_PLUGIN_ADDED_TYPE_PLUGIN_ADDED = 1;
+  PUBLICEVENT_PLUGIN_ADDED_TYPE_PLUGIN_ADDED = 1 [(ycoding.v5.domain_label) = "plugin.added"];
 }
 
 enum PublicEvent_plugin_updated_type {
-  PUBLICEVENT_PLUGIN_UPDATED_TYPE_PLUGIN_UPDATED = 1;
+  PUBLICEVENT_PLUGIN_UPDATED_TYPE_PLUGIN_UPDATED = 1 [(ycoding.v5.domain_label) = "plugin.updated"];
 }
 
 enum PublicEvent_project_directories_updated_type {
-  PUBLICEVENT_PROJECT_DIRECTORIES_UPDATED_TYPE_PROJECT_DIRECTORIES_UPDATED = 1;
+  PUBLICEVENT_PROJECT_DIRECTORIES_UPDATED_TYPE_PROJECT_DIRECTORIES_UPDATED = 1 [(ycoding.v5.domain_label) = "project.directories.updated"];
 }
 
 enum PublicEvent_command_updated_type {
-  PUBLICEVENT_COMMAND_UPDATED_TYPE_COMMAND_UPDATED = 1;
+  PUBLICEVENT_COMMAND_UPDATED_TYPE_COMMAND_UPDATED = 1 [(ycoding.v5.domain_label) = "command.updated"];
 }
 
 enum PublicEvent_config_updated_type {
-  PUBLICEVENT_CONFIG_UPDATED_TYPE_CONFIG_UPDATED = 1;
+  PUBLICEVENT_CONFIG_UPDATED_TYPE_CONFIG_UPDATED = 1 [(ycoding.v5.domain_label) = "config.updated"];
 }
 
 enum PublicEvent_skill_updated_type {
-  PUBLICEVENT_SKILL_UPDATED_TYPE_SKILL_UPDATED = 1;
+  PUBLICEVENT_SKILL_UPDATED_TYPE_SKILL_UPDATED = 1 [(ycoding.v5.domain_label) = "skill.updated"];
 }
 
 enum PublicEvent_pty_created_type {
-  PUBLICEVENT_PTY_CREATED_TYPE_PTY_CREATED = 1;
+  PUBLICEVENT_PTY_CREATED_TYPE_PTY_CREATED = 1 [(ycoding.v5.domain_label) = "pty.created"];
 }
 
 enum PublicEvent_pty_updated_type {
-  PUBLICEVENT_PTY_UPDATED_TYPE_PTY_UPDATED = 1;
+  PUBLICEVENT_PTY_UPDATED_TYPE_PTY_UPDATED = 1 [(ycoding.v5.domain_label) = "pty.updated"];
 }
 
 enum PublicEvent_pty_exited_type {
-  PUBLICEVENT_PTY_EXITED_TYPE_PTY_EXITED = 1;
+  PUBLICEVENT_PTY_EXITED_TYPE_PTY_EXITED = 1 [(ycoding.v5.domain_label) = "pty.exited"];
 }
 
 enum PublicEvent_pty_exited_data_reason {
-  PUBLICEVENT_PTY_EXITED_DATA_REASON_EXIT = 1;
-  PUBLICEVENT_PTY_EXITED_DATA_REASON_TIMEOUT = 2;
+  PUBLICEVENT_PTY_EXITED_DATA_REASON_EXIT = 1 [(ycoding.v5.domain_label) = "exit"];
+  PUBLICEVENT_PTY_EXITED_DATA_REASON_TIMEOUT = 2 [(ycoding.v5.domain_label) = "timeout"];
 }
 
 enum PublicEvent_pty_deleted_type {
-  PUBLICEVENT_PTY_DELETED_TYPE_PTY_DELETED = 1;
+  PUBLICEVENT_PTY_DELETED_TYPE_PTY_DELETED = 1 [(ycoding.v5.domain_label) = "pty.deleted"];
 }
 
 enum PublicEvent_shell_created_type {
-  PUBLICEVENT_SHELL_CREATED_TYPE_SHELL_CREATED = 1;
+  PUBLICEVENT_SHELL_CREATED_TYPE_SHELL_CREATED = 1 [(ycoding.v5.domain_label) = "shell.created"];
 }
 
 enum PublicEvent_shell_exited_type {
-  PUBLICEVENT_SHELL_EXITED_TYPE_SHELL_EXITED = 1;
+  PUBLICEVENT_SHELL_EXITED_TYPE_SHELL_EXITED = 1 [(ycoding.v5.domain_label) = "shell.exited"];
 }
 
 enum PublicEvent_shell_exited_data_status {
-  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_RUNNING = 1;
-  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_EXITED = 2;
-  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_TIMEOUT = 3;
-  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_MEMORY_LIMIT = 4;
-  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_KILLED = 5;
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_RUNNING = 1 [(ycoding.v5.domain_label) = "running"];
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_EXITED = 2 [(ycoding.v5.domain_label) = "exited"];
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_TIMEOUT = 3 [(ycoding.v5.domain_label) = "timeout"];
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_MEMORY_LIMIT = 4 [(ycoding.v5.domain_label) = "memory-limit"];
+  PUBLICEVENT_SHELL_EXITED_DATA_STATUS_KILLED = 5 [(ycoding.v5.domain_label) = "killed"];
   reserved 6;
   reserved "PUBLICEVENT_SHELL_EXITED_DATA_STATUS_QUEUED";
 }
 
 enum PublicEvent_shell_deleted_type {
-  PUBLICEVENT_SHELL_DELETED_TYPE_SHELL_DELETED = 1;
+  PUBLICEVENT_SHELL_DELETED_TYPE_SHELL_DELETED = 1 [(ycoding.v5.domain_label) = "shell.deleted"];
 }
 
 enum PublicEvent_question_asked_type {
-  PUBLICEVENT_QUESTION_ASKED_TYPE_QUESTION_ASKED = 1;
+  PUBLICEVENT_QUESTION_ASKED_TYPE_QUESTION_ASKED = 1 [(ycoding.v5.domain_label) = "question.asked"];
 }
 
 enum PublicEvent_question_replied_type {
-  PUBLICEVENT_QUESTION_REPLIED_TYPE_QUESTION_REPLIED = 1;
+  PUBLICEVENT_QUESTION_REPLIED_TYPE_QUESTION_REPLIED = 1 [(ycoding.v5.domain_label) = "question.replied"];
 }
 
 enum PublicEvent_question_rejected_type {
-  PUBLICEVENT_QUESTION_REJECTED_TYPE_QUESTION_REJECTED = 1;
+  PUBLICEVENT_QUESTION_REJECTED_TYPE_QUESTION_REJECTED = 1 [(ycoding.v5.domain_label) = "question.rejected"];
 }
 
 enum PublicEvent_question_timed_out_type {
-  PUBLICEVENT_QUESTION_TIMED_OUT_TYPE_QUESTION_TIMED_OUT = 1;
+  PUBLICEVENT_QUESTION_TIMED_OUT_TYPE_QUESTION_TIMED_OUT = 1 [(ycoding.v5.domain_label) = "question.timed_out"];
 }
 
 enum PublicEvent_question_deferred_type {
-  PUBLICEVENT_QUESTION_DEFERRED_TYPE_QUESTION_DEFERRED = 1;
+  PUBLICEVENT_QUESTION_DEFERRED_TYPE_QUESTION_DEFERRED = 1 [(ycoding.v5.domain_label) = "question.deferred"];
 }
 
 enum PublicEvent_form_created_type {
-  PUBLICEVENT_FORM_CREATED_TYPE_FORM_CREATED = 1;
+  PUBLICEVENT_FORM_CREATED_TYPE_FORM_CREATED = 1 [(ycoding.v5.domain_label) = "form.created"];
 }
 
 enum PublicEvent_form_replied_type {
-  PUBLICEVENT_FORM_REPLIED_TYPE_FORM_REPLIED = 1;
+  PUBLICEVENT_FORM_REPLIED_TYPE_FORM_REPLIED = 1 [(ycoding.v5.domain_label) = "form.replied"];
 }
 
 enum PublicEvent_form_cancelled_type {
-  PUBLICEVENT_FORM_CANCELLED_TYPE_FORM_CANCELLED = 1;
+  PUBLICEVENT_FORM_CANCELLED_TYPE_FORM_CANCELLED = 1 [(ycoding.v5.domain_label) = "form.cancelled"];
 }
 
 enum PublicEvent_form_timed_out_type {
-  PUBLICEVENT_FORM_TIMED_OUT_TYPE_FORM_TIMED_OUT = 1;
+  PUBLICEVENT_FORM_TIMED_OUT_TYPE_FORM_TIMED_OUT = 1 [(ycoding.v5.domain_label) = "form.timed_out"];
 }
 
 enum PublicEvent_form_deferred_type {
-  PUBLICEVENT_FORM_DEFERRED_TYPE_FORM_DEFERRED = 1;
+  PUBLICEVENT_FORM_DEFERRED_TYPE_FORM_DEFERRED = 1 [(ycoding.v5.domain_label) = "form.deferred"];
 }
 
 enum PublicEvent_todo_updated_type {
-  PUBLICEVENT_TODO_UPDATED_TYPE_TODO_UPDATED = 1;
+  PUBLICEVENT_TODO_UPDATED_TYPE_TODO_UPDATED = 1 [(ycoding.v5.domain_label) = "todo.updated"];
+}
+
+enum PublicEvent_provider_quota_pace_type {
+  PUBLICEVENT_PROVIDER_QUOTA_PACE_TYPE_PROVIDER_QUOTA_PACE = 1 [(ycoding.v5.domain_label) = "provider.quota.pace"];
+}
+
+enum ProviderUsage_PaceMilestone {
+  PROVIDERUSAGE_PACEMILESTONE_ALMOST_OUT = 1 [(ycoding.v5.domain_label) = "almost-out"];
+  PROVIDERUSAGE_PACEMILESTONE_CUTTING_IT_CLOSE = 2 [(ycoding.v5.domain_label) = "cutting-it-close"];
+  PROVIDERUSAGE_PACEMILESTONE_WILL_RUN_OUT = 3 [(ycoding.v5.domain_label) = "will-run-out"];
 }
 
 enum PublicEvent_session_status_type {
-  PUBLICEVENT_SESSION_STATUS_TYPE_SESSION_STATUS = 1;
+  PUBLICEVENT_SESSION_STATUS_TYPE_SESSION_STATUS = 1 [(ycoding.v5.domain_label) = "session.status"];
 }
 
 enum SessionStatusValue1_type {
-  SESSIONSTATUSVALUE1_TYPE_IDLE = 1;
+  SESSIONSTATUSVALUE1_TYPE_IDLE = 1 [(ycoding.v5.domain_label) = "idle"];
 }
 
 enum SessionStatusValue2_type {
-  SESSIONSTATUSVALUE2_TYPE_RETRY = 1;
+  SESSIONSTATUSVALUE2_TYPE_RETRY = 1 [(ycoding.v5.domain_label) = "retry"];
 }
 
 enum SessionStatusValue3_type {
-  SESSIONSTATUSVALUE3_TYPE_BUSY = 1;
+  SESSIONSTATUSVALUE3_TYPE_BUSY = 1 [(ycoding.v5.domain_label) = "busy"];
 }
 
 enum PublicEvent_session_idle_type {
-  PUBLICEVENT_SESSION_IDLE_TYPE_SESSION_IDLE = 1;
+  PUBLICEVENT_SESSION_IDLE_TYPE_SESSION_IDLE = 1 [(ycoding.v5.domain_label) = "session.idle"];
 }
 
 enum PublicEvent_tui_prompt_append_type {
-  PUBLICEVENT_TUI_PROMPT_APPEND_TYPE_TUI_PROMPT_APPEND = 1;
+  PUBLICEVENT_TUI_PROMPT_APPEND_TYPE_TUI_PROMPT_APPEND = 1 [(ycoding.v5.domain_label) = "tui.prompt.append"];
 }
 
 enum PublicEvent_tui_command_execute_type {
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_TYPE_TUI_COMMAND_EXECUTE = 1;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_TYPE_TUI_COMMAND_EXECUTE = 1 [(ycoding.v5.domain_label) = "tui.command.execute"];
 }
 
 enum PublicEvent_tui_command_execute_data_commandValue1 {
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LIST = 1;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_NEW = 2;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_SHARE = 3;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_INTERRUPT = 4;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_BACKGROUND = 5;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_COMPACT = 6;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_PAGE_UP = 7;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_PAGE_DOWN = 8;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LINE_UP = 9;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LINE_DOWN = 10;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_HALF_PAGE_UP = 11;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_HALF_PAGE_DOWN = 12;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_FIRST = 13;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LAST = 14;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_PROMPT_CLEAR = 15;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_PROMPT_SUBMIT = 16;
-  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_AGENT_CYCLE = 17;
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LIST = 1 [(ycoding.v5.domain_label) = "session.list"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_NEW = 2 [(ycoding.v5.domain_label) = "session.new"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_SHARE = 3 [(ycoding.v5.domain_label) = "session.share"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_INTERRUPT = 4 [(ycoding.v5.domain_label) = "session.interrupt"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_BACKGROUND = 5 [(ycoding.v5.domain_label) = "session.background"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_COMPACT = 6 [(ycoding.v5.domain_label) = "session.compact"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_PAGE_UP = 7 [(ycoding.v5.domain_label) = "session.page.up"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_PAGE_DOWN = 8 [(ycoding.v5.domain_label) = "session.page.down"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LINE_UP = 9 [(ycoding.v5.domain_label) = "session.line.up"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LINE_DOWN = 10 [(ycoding.v5.domain_label) = "session.line.down"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_HALF_PAGE_UP = 11 [(ycoding.v5.domain_label) = "session.half.page.up"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_HALF_PAGE_DOWN = 12 [(ycoding.v5.domain_label) = "session.half.page.down"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_FIRST = 13 [(ycoding.v5.domain_label) = "session.first"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_SESSION_LAST = 14 [(ycoding.v5.domain_label) = "session.last"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_PROMPT_CLEAR = 15 [(ycoding.v5.domain_label) = "prompt.clear"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_PROMPT_SUBMIT = 16 [(ycoding.v5.domain_label) = "prompt.submit"];
+  PUBLICEVENT_TUI_COMMAND_EXECUTE_DATA_COMMANDVALUE1_AGENT_CYCLE = 17 [(ycoding.v5.domain_label) = "agent.cycle"];
 }
 
 enum PublicEvent_tui_toast_show_type {
-  PUBLICEVENT_TUI_TOAST_SHOW_TYPE_TUI_TOAST_SHOW = 1;
+  PUBLICEVENT_TUI_TOAST_SHOW_TYPE_TUI_TOAST_SHOW = 1 [(ycoding.v5.domain_label) = "tui.toast.show"];
 }
 
 enum PublicEvent_tui_toast_show_data_variant {
-  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_INFO = 1;
-  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_SUCCESS = 2;
-  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_WARNING = 3;
-  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_ERROR = 4;
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_INFO = 1 [(ycoding.v5.domain_label) = "info"];
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_SUCCESS = 2 [(ycoding.v5.domain_label) = "success"];
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_WARNING = 3 [(ycoding.v5.domain_label) = "warning"];
+  PUBLICEVENT_TUI_TOAST_SHOW_DATA_VARIANT_ERROR = 4 [(ycoding.v5.domain_label) = "error"];
 }
 
 enum PublicEvent_tui_session_select_type {
-  PUBLICEVENT_TUI_SESSION_SELECT_TYPE_TUI_SESSION_SELECT = 1;
+  PUBLICEVENT_TUI_SESSION_SELECT_TYPE_TUI_SESSION_SELECT = 1 [(ycoding.v5.domain_label) = "tui.session.select"];
 }
 
 enum PublicEvent_installation_updated_type {
-  PUBLICEVENT_INSTALLATION_UPDATED_TYPE_INSTALLATION_UPDATED = 1;
+  PUBLICEVENT_INSTALLATION_UPDATED_TYPE_INSTALLATION_UPDATED = 1 [(ycoding.v5.domain_label) = "installation.updated"];
 }
 
 enum PublicEvent_installation_update_available_type {
-  PUBLICEVENT_INSTALLATION_UPDATE_AVAILABLE_TYPE_INSTALLATION_UPDATE_AVAILABLE = 1;
+  PUBLICEVENT_INSTALLATION_UPDATE_AVAILABLE_TYPE_INSTALLATION_UPDATE_AVAILABLE = 1 [(ycoding.v5.domain_label) = "installation.update-available"];
 }
 
 enum PublicEvent_vcs_branch_updated_type {
-  PUBLICEVENT_VCS_BRANCH_UPDATED_TYPE_VCS_BRANCH_UPDATED = 1;
+  PUBLICEVENT_VCS_BRANCH_UPDATED_TYPE_VCS_BRANCH_UPDATED = 1 [(ycoding.v5.domain_label) = "vcs.branch.updated"];
 }
 
 enum PublicEvent_mcp_status_changed_type {
-  PUBLICEVENT_MCP_STATUS_CHANGED_TYPE_MCP_STATUS_CHANGED = 1;
+  PUBLICEVENT_MCP_STATUS_CHANGED_TYPE_MCP_STATUS_CHANGED = 1 [(ycoding.v5.domain_label) = "mcp.status.changed"];
 }
 
 enum PublicEvent_mcp_resources_changed_type {
-  PUBLICEVENT_MCP_RESOURCES_CHANGED_TYPE_MCP_RESOURCES_CHANGED = 1;
+  PUBLICEVENT_MCP_RESOURCES_CHANGED_TYPE_MCP_RESOURCES_CHANGED = 1 [(ycoding.v5.domain_label) = "mcp.resources.changed"];
 }
 
 message PublicEvent_models_dev_refreshed {
@@ -1504,6 +1514,34 @@ message PublicEvent_todo_updated_data_todos {
   repeated SessionTodo_Info items = 1;
 }
 
+message PublicEvent_provider_quota_pace {
+  required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
+  optional PublicEvent_provider_quota_pace_metadata metadata = 3;
+  optional LosslessString sourceEpoch = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required PublicEvent_provider_quota_pace_type type = 5;
+  optional Location_Ref location = 6;
+  required PublicEvent_provider_quota_pace_data data = 7;
+}
+
+message PublicEvent_provider_quota_pace_metadata {
+  repeated PublicEvent_provider_quota_pace_metadataEntry entries = 1;
+}
+
+message PublicEvent_provider_quota_pace_metadataEntry {
+  required LosslessString key = 1;
+  required Value value = 2;
+}
+
+message PublicEvent_provider_quota_pace_data {
+  required LosslessString providerID = 1;
+  required LosslessString windowID = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required ProviderUsage_PaceMilestone milestone = 3;
+  required uint64 resetAt = 4 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" integer_min: "0" integer_max: "9007199254740991" }];
+  required LosslessString title = 5 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+  required LosslessString body = 6 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" utf16_min: 1 }];
+}
+
 message PublicEvent_session_status {
   required LosslessString id = 1 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
   required double created = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/event-manifest.ts#ServerDefinitions" }];
@@ -1907,6 +1945,7 @@ message PublicEvent {
     PublicEvent_form_timed_out form_timed_out = 103 [(ycoding.v5.public_event) = { diagnostic_name: "form.timed_out" durable: false }];
     PublicEvent_form_deferred form_deferred = 115 [(ycoding.v5.public_event) = { diagnostic_name: "form.deferred" durable: false }];
     PublicEvent_todo_updated todo_updated = 90 [(ycoding.v5.public_event) = { diagnostic_name: "todo.updated" durable: false }];
+    PublicEvent_provider_quota_pace provider_quota_pace = 117 [(ycoding.v5.public_event) = { diagnostic_name: "provider.quota.pace" durable: false }];
     PublicEvent_session_status session_status = 91 [(ycoding.v5.public_event) = { diagnostic_name: "session.status" durable: false }];
     PublicEvent_session_idle session_idle = 92 [(ycoding.v5.public_event) = { diagnostic_name: "session.idle" durable: false }];
     PublicEvent_tui_prompt_append tui_prompt_append = 93 [(ycoding.v5.public_event) = { diagnostic_name: "tui.prompt.append" durable: false }];

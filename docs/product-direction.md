@@ -44,6 +44,8 @@ Supported presentation surfaces are the terminal application and the SolidJS rem
 
 The beta runs a local Rust backend with redb durable storage and binary revision 5 operations. The native CLI launches its embedded runtime; the full TUI, Mini, and remote web client are presentation clients. Rust Core owns Session execution, tools, providers, permissions, guardrails, resources, and persistence. See [architecture](./architecture.md).
 
+Relay MCP is independently opt-in and defaults off. Approved clients use fresh allowlisted Google sign-in and per-client consent to control the enrolled owner's backend through its existing outbound connection. Calls use the closed remote operation set; execution remains local. Session Locations come from backend records. Only the explicit MCP directory-creation tool accepts an existing directory strictly below the real home directory; browser creation remains limited to recorded repositories.
+
 New changes extend current contracts; there is one current runtime. Changing stored data requires an explicit, tested migration.
 
 ### 3. Durable execution

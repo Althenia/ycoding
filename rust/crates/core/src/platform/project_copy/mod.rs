@@ -284,6 +284,9 @@ impl Copies {
                 discovered.insert(entry.directory.to_string_lossy().into_owned(), entry.copy);
             }
         }
+        if discovered.is_empty() && missing.is_empty() {
+            return Ok(());
+        }
         let changed = self
             .store
             .submit(move |tx| {

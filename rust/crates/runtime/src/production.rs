@@ -606,10 +606,14 @@ impl Core {
             })
         });
         let browser = factory.globals.browser.clone();
-        let remote = crate::connector::Control::open(&factory.options.roots.state)
-            .await
-            .map_err(|_| unavailable("remote control"))?;
+        let remote = crate::connector::Control::open_with_home(
+            &factory.options.roots.state,
+            &factory.options.roots.home,
+        )
+        .await
+        .map_err(|_| unavailable("remote control"))?;
         let maintenance = Arc::new(Maintenance::new(&factory));
+        let events_key = factory.options.roots.data.join("mcp-events-native.key");
         started.maintenance = Some(maintenance.clone());
         let telemetry_settings = factory.settings.clone();
         maintenance
@@ -622,6 +626,58 @@ impl Core {
             )
             .await?;
         let incidents = ycoding_core::model_incident::Service::new(client.clone());
+        let event_authorization = Arc::new(
+            crate::connector::mcp_events_authorization::Authorizer::production(remote.clone())
+                .map_err(|_| unavailable("MCP Events authorization"))?,
+        );
+        remote
+            .mcp()
+            .server()
+            .install_authorization(event_authorization.clone())?;
+        let local_app_store = client.clone();
+        let local_app_authorization = event_authorization.clone();
+        remote
+            .mcp()
+            .server()
+            .install_local_apps_factory(Arc::new(move || {
+                let registry = Arc::new(ycoding_core::local_app::Service::new(
+                    ycoding_core::local_app::Dependencies {
+                        sessions: Arc::new(crate::connector::local_apps::BackendSessions {
+                            store: local_app_store.clone(),
+                        }),
+                        authorization: local_app_authorization.clone(),
+                        transport: Arc::new(
+                            ycoding_core::local_app::HttpTransport::new()
+                                .map_err(|_| unavailable("Local application transport"))?,
+                        ),
+                        clock: Arc::new(crate::ids::now_millis),
+                    },
+                ));
+                Ok(Arc::new(crate::connector::local_apps::Facade::new(
+                    crate::connector::local_apps::Dependencies {
+                        registry,
+                        authorization: local_app_authorization.clone(),
+                        preview: None,
+                        clock: Arc::new(crate::ids::now_millis),
+                    },
+                )))
+            }))?;
+        let event_service = Arc::new(ycoding_core::mcp_events::Service::new(
+            ycoding_core::mcp_events::Dependencies {
+                store: client.clone(),
+                authorization: event_authorization,
+                transport: Arc::new(ycoding_core::mcp_events::protected_http::ProtectedHttp::new()),
+                secrets: ycoding_core::mcp_events::Secrets::File(events_key),
+                clock: Arc::new(crate::ids::now_millis),
+            },
+        ));
+        remote
+            .mcp()
+            .server()
+            .install_events(event_service.clone())?;
+        event_service
+            .start(events.clone())
+            .map_err(|_| unavailable("MCP Events capture"))?;
         Ok(Self {
             captured: crate::remote_derived::captured::Cache::attach(&client),
             integrations: Some(integrations),
@@ -655,8 +711,14 @@ impl Core {
     }
 
     pub async fn shutdown(&self) -> Result<(), Failure> {
+        let events = self.remote.as_ref().map(|remote| {
+            if let Some(lease) = remote.mcp().events_lease(None) {
+                lease.revoke();
+            }
+            remote.mcp().server()
+        });
         if let Some(maintenance) = &self.maintenance {
-            return release(
+            let released = release(
                 &maintenance.globals,
                 &maintenance.credentials,
                 Some(self.execution),
@@ -664,6 +726,11 @@ impl Core {
                 Some(maintenance.as_ref()),
             )
             .await;
+            let events = match events {
+                Some(events) => events.shutdown().await,
+                None => Ok(()),
+            };
+            return released.and(events);
         }
         let execution = self
             .execution
@@ -676,7 +743,11 @@ impl Core {
             .shutdown()
             .await
             .map_err(|_| unavailable("Jobs"));
-        execution.and(jobs).and(self.locations.close())
+        let events = match events {
+            Some(events) => events.shutdown().await,
+            None => Ok(()),
+        };
+        execution.and(jobs).and(self.locations.close()).and(events)
     }
 }
 
@@ -1972,6 +2043,20 @@ fn retention_settings(
     }))
 }
 
+fn reconcile_retention_analytics(
+    client: &Client,
+    deleted: usize,
+) -> Result<(), ycoding_core::ycoding_store::analytics::Error> {
+    let pending = client
+        .snapshot()?
+        .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])?
+        .is_some_and(|state| state.purge_all || !state.purges.is_empty());
+    if deleted == 0 && !pending {
+        return Ok(());
+    }
+    client.analytics()?.purge()
+}
+
 pub(crate) struct Maintenance {
     stop: watch::Sender<bool>,
     task: Mutex<Option<JoinHandle<()>>>,
@@ -2117,13 +2202,17 @@ impl Maintenance {
                             {
                                 Ok(sweep) => {
                                     let client = factory.client.clone();
-                                    if tokio::task::spawn_blocking(move || {
-                                        client.analytics().and_then(|analytics| analytics.purge())
-                                    })
-                                    .await
-                                    .is_err()
-                                    {
-                                        tracing::error!("retention analytics purge worker failed");
+                                    let deleted = sweep.deleted;
+                                    if !matches!(
+                                        tokio::task::spawn_blocking(move || {
+                                            reconcile_retention_analytics(&client, deleted)
+                                        })
+                                        .await,
+                                        Ok(Ok(()))
+                                    ) {
+                                        tracing::error!(
+                                            "retention analytics reconciliation failed"
+                                        );
                                     }
                                     if !sweep.failures.is_empty() {
                                         tracing::error!(

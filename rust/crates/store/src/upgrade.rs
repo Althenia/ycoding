@@ -21,6 +21,7 @@ use ycoding_schema::{
 pub enum Predecessor {
     BeforeAnalytics,
     BeforeIncidents,
+    BeforeMcpEvents,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +32,7 @@ pub enum Outcome {
 
 const BEFORE_ANALYTICS: &str = "843dd129682457a44d2a4ed4cb82f6e701a4d5a202cb2fb8073a6e1bd52dc097";
 const BEFORE_INCIDENTS: &str = "1f4a70c9d374ab7c72c2c008b215b0a2ffa311998c8642852d21a561293e01a4";
+const BEFORE_MCP_EVENTS: &str = "eae73fc56ca9922bb834c6dc96fc72fafce5b2daf9c948f087edacdb727ae15b";
 const BATCH: usize = 256;
 const MANIFEST: &[u8] = b"catalog_manifest";
 const FACTS: &str = "usage_analytics_request";
@@ -58,6 +60,7 @@ fn upgrade(path: &Path, options: Options, free_bytes: FreeBytes<'_>) -> Result<O
     let read = database.begin_read()?;
     let manifest = stored_manifest(&read)?;
     if manifest == target.manifest() {
+        inspect(&read, target)?;
         return Ok(Outcome::Current);
     }
     let predecessor = Predecessor::identify(&manifest)?;
@@ -174,6 +177,7 @@ impl Predecessor {
         match digest.finish().as_str() {
             BEFORE_ANALYTICS => Some(Self::BeforeAnalytics),
             BEFORE_INCIDENTS => Some(Self::BeforeIncidents),
+            BEFORE_MCP_EVENTS => Some(Self::BeforeMcpEvents),
             _ => None,
         }
     }
@@ -181,15 +185,25 @@ impl Predecessor {
     fn catalog(self) -> Result<Catalog, Error> {
         static BEFORE_ANALYTICS_TABLES: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
         static BEFORE_INCIDENTS_TABLES: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
-        const INCIDENTS: &[&str] = &["model_incident", "model_guidance_clear"];
+        static BEFORE_MCP_EVENTS_TABLES: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
+        const MCP_EVENTS: &[&str] = &["mcp_event_subscription", "mcp_event_outbox"];
+        const INCIDENTS: &[&str] = &[
+            "model_incident",
+            "model_guidance_clear",
+            "mcp_event_subscription",
+            "mcp_event_outbox",
+        ];
         const ANALYTICS: &[&str] = &[
             "model_incident",
             "model_guidance_clear",
             "usage_analytics_request",
+            "mcp_event_subscription",
+            "mcp_event_outbox",
         ];
         let (tables, removed) = match self {
             Self::BeforeAnalytics => (&BEFORE_ANALYTICS_TABLES, ANALYTICS),
             Self::BeforeIncidents => (&BEFORE_INCIDENTS_TABLES, INCIDENTS),
+            Self::BeforeMcpEvents => (&BEFORE_MCP_EVENTS_TABLES, MCP_EVENTS),
         };
         let catalog = Catalog::new(
             1,
@@ -549,3 +563,490 @@ frozen!(request, RequestTable, Request, usage_anchor, {
     request: i64, attempts: i64, invalidation: LosslessString, continuation: LosslessString, cache_read_reported: Option<i64>,
     timing: Option<Document<provider_request::Timing>>, cost: Option<f64>, tokens: Document<token_usage::Info>, time_created: i64
 });
+
+#[cfg(test)]
+mod mcp_events_tests {
+    use super::{MANIFEST, Outcome, Predecessor, core, derive};
+    use crate::{
+        Catalog, Error, KeyPart, Metadata, Options, Store, TableDeclaration, TableSpec, backup,
+        catalog::definition,
+        engine::index_storage_key,
+        import::{self, DatabaseKind},
+        resources::{Request, RequestTable, UsageAnalyticsRequestTable},
+        session::{Document, Session, SessionTable, TaskTable},
+        tuple_key,
+    };
+    use redb::{
+        Database, ReadOnlyDatabase, ReadableDatabase, ReadableTable, TableHandle, WriteTransaction,
+    };
+    use std::collections::BTreeMap;
+    use std::ops::Bound;
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use ycoding_schema::LosslessString;
+
+    const ADDED: [&str; 9] = [
+        "mcp_event_subscription",
+        "mcp_event_subscription_identity_idx",
+        "mcp_event_subscription_session_idx",
+        "mcp_event_subscription_expiry_idx",
+        "mcp_event_outbox",
+        "mcp_event_outbox_id_idx",
+        "mcp_event_outbox_dedupe_idx",
+        "mcp_event_outbox_dispatch_idx",
+        "mcp_event_outbox_subscription_seq_idx",
+    ];
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            let directory = std::env::temp_dir().join(format!(
+                "ycoding-mcp-events-upgrade-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&directory).unwrap();
+            Self(directory)
+        }
+
+        fn path(&self) -> PathBuf {
+            self.0.join("synthetic.redb")
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn target() -> Catalog {
+        import::catalog(DatabaseKind::Core)
+    }
+
+    fn previous() -> Catalog {
+        static TABLES: OnceLock<Vec<TableDeclaration>> = OnceLock::new();
+        Catalog::new(
+            1,
+            TABLES.get_or_init(|| {
+                target()
+                    .tables()
+                    .iter()
+                    .copied()
+                    .filter(|table| !ADDED.contains(&table.name))
+                    .collect()
+            }),
+        )
+    }
+
+    fn identity() -> Metadata {
+        Metadata::new([84; 16], 7)
+    }
+
+    fn s(value: &str) -> LosslessString {
+        value.into()
+    }
+
+    fn seed(path: &Path) {
+        Store::initialize(path, Options::core(), previous(), identity())
+            .unwrap()
+            .shutdown()
+            .unwrap();
+        let database = Database::open(path).unwrap();
+        let write = database.begin_write().unwrap();
+        let owner = Session {
+            id: s("ses_synthetic"),
+            project_id: s("prj_synthetic"),
+            workspace_id: Some(s("wrk_synthetic")),
+            parent_id: None,
+            fork_session_id: None,
+            fork_message_id: None,
+            fork_seq: None,
+            directory: s("/synthetic-project"),
+            path: None,
+            title: s("synthetic"),
+            cost: 1.5,
+            tokens_input: 3,
+            tokens_output: 4,
+            tokens_reasoning: 5,
+            tokens_cache_read: 6,
+            tokens_cache_write: 7,
+            revert: None,
+            permission: None,
+            autonomy: None,
+            autonomy_revision: 0,
+            orchestration_revision: 0,
+            agent: Some(s("build")),
+            model: None,
+            profile_binding: None,
+            daybreak: None,
+            time_created: 10,
+            time_updated: 20,
+            time_archived: None,
+            time_active: None,
+            time_pinned: None,
+            time_suspended: None,
+            usage_pruned_through: Some(2),
+        };
+        let request = Request {
+            id: s("prq_synthetic"),
+            session_id: owner.id.clone(),
+            input_id: None,
+            assistant_message_id: None,
+            connection_identity_digest: None,
+            source: s("step"),
+            agent: s("build"),
+            model: Document::new(
+                ycoding_schema::parse_json(r#"{"providerID":"synthetic","id":"model"}"#).unwrap(),
+            )
+            .unwrap(),
+            usage_anchor: None,
+            route_id: s("synthetic-route"),
+            prompt_cache_key: s("synthetic-cache"),
+            system_digest: s("synthetic-system"),
+            tool_digest: s("synthetic-tools"),
+            request: 3,
+            attempts: 2,
+            invalidation: s("first-request"),
+            continuation: s("full"),
+            cache_read_reported: Some(1),
+            timing: None,
+            cost: Some(0.25),
+            tokens: Document::new(
+                ycoding_schema::parse_json(
+                    r#"{"input":3,"output":4,"reasoning":5,"cache":{"read":6,"write":7}}"#,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            time_created: 30,
+        };
+        put::<SessionTable>(&write, &owner);
+        put::<RequestTable>(&write, &request);
+        let mut fact = derive(
+            &request,
+            &write.open_table(definition(SessionTable::NAME)).unwrap(),
+            &write.open_table(definition(TaskTable::NAME)).unwrap(),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        fact.directory = s("/synthetic-captured-project");
+        fact.session_updated = 11;
+        put::<UsageAnalyticsRequestTable>(&write, &fact);
+        write.commit().unwrap();
+    }
+
+    fn put<T: TableSpec>(write: &WriteTransaction, record: &T::Record) {
+        let primary = T::primary_key(record);
+        write
+            .open_table(definition(T::NAME))
+            .unwrap()
+            .insert(primary.as_slice(), T::encode(record).unwrap().as_slice())
+            .unwrap();
+        for index in T::INDEXES {
+            if let Some(logical) = T::index_key(index, record).unwrap() {
+                write
+                    .open_table(definition(index.name))
+                    .unwrap()
+                    .insert(
+                        index_storage_key(index, &logical, &primary).as_slice(),
+                        primary.as_slice(),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    type Rows = BTreeMap<String, Vec<(Vec<u8>, Vec<u8>)>>;
+
+    fn rows(path: &Path) -> Rows {
+        let database = ReadOnlyDatabase::open(path).unwrap();
+        let read = database.begin_read().unwrap();
+        read.list_tables()
+            .unwrap()
+            .map(|table| {
+                let name = table.name().to_owned();
+                let values = read
+                    .open_table(redb::TableDefinition::<&[u8], &[u8]>::new(&name))
+                    .unwrap()
+                    .iter()
+                    .unwrap()
+                    .map(|entry| {
+                        let (key, value) = entry.unwrap();
+                        (key.value().to_vec(), value.value().to_vec())
+                    })
+                    .collect();
+                (name, values)
+            })
+            .collect()
+    }
+
+    fn run(path: &Path) -> Result<Outcome, Error> {
+        core(path, Options::core(), |_| Ok(u64::MAX))
+    }
+
+    fn bytes(path: &Path) -> Vec<Option<Vec<u8>>> {
+        [
+            path.to_path_buf(),
+            backup::path(path),
+            backup::marker(path),
+            backup::upgrade_path(path),
+            backup::upgrade_path(&backup::path(path)),
+        ]
+        .iter()
+        .map(|path| std::fs::read(path).ok())
+        .collect()
+    }
+
+    #[test]
+    fn previous_current_manifest_requires_an_explicit_backed_up_upgrade() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        seed(&path);
+        assert_eq!(previous().tables().len(), 56);
+        assert_ne!(
+            previous().manifest(),
+            target().manifest(),
+            "Events must extend the current native catalog"
+        );
+        assert!(Store::open(&path, Options::core(), target()).is_err());
+        let before = rows(&path);
+        assert_eq!(
+            run(&path).unwrap(),
+            Outcome::Upgraded(Predecessor::BeforeMcpEvents)
+        );
+        assert_eq!(rows(&backup::upgrade_path(&path)), before);
+        let after = rows(&path);
+        for (name, records) in &before {
+            if name == "storage_metadata" {
+                assert_eq!(
+                    records
+                        .iter()
+                        .filter(|(key, _)| key != MANIFEST)
+                        .collect::<Vec<_>>(),
+                    after[name]
+                        .iter()
+                        .filter(|(key, _)| key != MANIFEST)
+                        .collect::<Vec<_>>()
+                );
+                continue;
+            }
+            assert_eq!(&after[name], records, "{name}");
+        }
+        assert_eq!(after.len(), before.len() + ADDED.len());
+        for name in ADDED {
+            assert!(after[name].is_empty(), "{name}");
+        }
+        let store = Store::open(&path, Options::core(), target()).unwrap();
+        assert_eq!(store.metadata(), &identity());
+        let snapshot = store.snapshot().unwrap();
+        let owner = snapshot
+            .get::<SessionTable>(&tuple_key(&[KeyPart::String(&s("ses_synthetic"))]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(owner.usage_pruned_through, Some(2));
+        assert_eq!(
+            snapshot
+                .scan::<RequestTable>(Bound::Unbounded, Bound::Unbounded, 2)
+                .unwrap()[0]
+                .attempts,
+            2
+        );
+        let facts = snapshot
+            .scan::<UsageAnalyticsRequestTable>(Bound::Unbounded, Bound::Unbounded, 2)
+            .unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].directory, s("/synthetic-captured-project"));
+        assert_eq!(facts[0].session_updated, 11);
+        drop(snapshot);
+        store.shutdown().unwrap();
+        let before_reopen = bytes(&path);
+        assert_eq!(run(&path).unwrap(), Outcome::Current);
+        assert_eq!(run(&path).unwrap(), Outcome::Current);
+        assert_eq!(bytes(&path), before_reopen);
+    }
+
+    #[test]
+    fn low_space_and_free_space_failure_preserve_the_previous_current_store_byte_for_byte() {
+        for unavailable in [false, true] {
+            let fixture = Fixture::new();
+            let path = fixture.path();
+            seed(&path);
+            let before = bytes(&path);
+            let result = core(&path, Options::core(), |_| {
+                if unavailable {
+                    return Err(Error::Rejected("synthetic free-space failure"));
+                }
+                Ok(0)
+            });
+            if unavailable {
+                assert!(matches!(
+                    result,
+                    Err(Error::Rejected("synthetic free-space failure"))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(Error::Domain {
+                        kind: "backup_space",
+                        ..
+                    })
+                ));
+            }
+            assert_eq!(bytes(&path), before);
+        }
+    }
+
+    #[test]
+    fn corrupt_or_non_file_backup_is_never_replaced_and_blocks_the_upgrade() {
+        for directory in [false, true] {
+            let fixture = Fixture::new();
+            let path = fixture.path();
+            seed(&path);
+            let copy = backup::upgrade_path(&path);
+            if directory {
+                std::fs::create_dir(&copy).unwrap();
+            }
+            if !directory {
+                std::fs::write(&copy, b"synthetic corrupt backup").unwrap();
+            }
+            let before = bytes(&path);
+            assert!(run(&path).is_err());
+            assert_eq!(bytes(&path), before);
+            assert_eq!(copy.is_dir(), directory);
+        }
+    }
+
+    #[test]
+    fn unknown_manifest_and_corrupt_source_are_refused_without_a_backup_or_write() {
+        for corrupt in [false, true] {
+            let fixture = Fixture::new();
+            let path = fixture.path();
+            if corrupt {
+                std::fs::write(&path, b"synthetic corrupt database").unwrap();
+            }
+            if !corrupt {
+                seed(&path);
+                let database = Database::open(&path).unwrap();
+                let write = database.begin_write().unwrap();
+                write
+                    .open_table(definition("storage_metadata"))
+                    .unwrap()
+                    .insert(MANIFEST, b"synthetic unknown catalog".as_slice())
+                    .unwrap();
+                write.commit().unwrap();
+            }
+            let before = bytes(&path);
+            assert!(run(&path).is_err());
+            assert_eq!(bytes(&path), before);
+        }
+    }
+
+    #[test]
+    fn a_recognized_manifest_with_a_missing_table_or_wrong_metadata_is_refused_without_writes() {
+        for missing in [false, true] {
+            let fixture = Fixture::new();
+            let path = fixture.path();
+            seed(&path);
+            let database = Database::open(&path).unwrap();
+            let write = database.begin_write().unwrap();
+            if missing {
+                assert!(write.delete_table(definition("session_usage")).unwrap());
+            }
+            if !missing {
+                write
+                    .open_table(definition("storage_metadata"))
+                    .unwrap()
+                    .insert(
+                        b"record_codec_version".as_slice(),
+                        999u64.to_be_bytes().as_slice(),
+                    )
+                    .unwrap();
+            }
+            write.commit().unwrap();
+            drop(database);
+            let before = bytes(&path);
+            assert!(run(&path).is_err());
+            assert_eq!(bytes(&path), before);
+        }
+    }
+
+    #[test]
+    fn a_different_synthetic_database_is_not_accepted_as_the_pre_upgrade_backup() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        seed(&path);
+        Store::initialize(
+            backup::upgrade_path(&path),
+            Options::core(),
+            previous(),
+            Metadata::new([85; 16], 7),
+        )
+        .unwrap()
+        .shutdown()
+        .unwrap();
+        let before = bytes(&path);
+        assert!(run(&path).is_err());
+        assert_eq!(bytes(&path), before);
+    }
+
+    #[test]
+    fn previous_current_pre_prune_snapshot_keeps_its_own_copy_and_is_resealed() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        seed(&path);
+        let store = Store::open(&path, Options::core(), previous()).unwrap();
+        assert_eq!(
+            store.prepare_pruning(1_000, |_| Ok(u64::MAX)).unwrap(),
+            backup::Status::Ready
+        );
+        store.shutdown().unwrap();
+        let original_backup = rows(&backup::path(&path));
+        assert_eq!(
+            run(&path).unwrap(),
+            Outcome::Upgraded(Predecessor::BeforeMcpEvents)
+        );
+        assert_eq!(
+            rows(&backup::upgrade_path(&backup::path(&path))),
+            original_backup
+        );
+        let store = Store::open(&path, Options::core(), target()).unwrap();
+        assert_eq!(
+            store.prepare_pruning(1_001, |_| Ok(u64::MAX)).unwrap(),
+            backup::Status::Ready
+        );
+        store.shutdown().unwrap();
+        let restored = fixture.0.join("synthetic-restored.redb");
+        std::fs::copy(backup::path(&path), &restored).unwrap();
+        Store::open(&restored, Options::core(), target())
+            .unwrap()
+            .shutdown()
+            .unwrap();
+        let before = bytes(&path);
+        assert_eq!(run(&path).unwrap(), Outcome::Current);
+        assert_eq!(bytes(&path), before);
+    }
+
+    #[test]
+    fn failed_preservation_of_the_pre_prune_copy_keeps_the_original_backup_and_marker() {
+        let fixture = Fixture::new();
+        let path = fixture.path();
+        seed(&path);
+        let store = Store::open(&path, Options::core(), previous()).unwrap();
+        assert_eq!(
+            store.prepare_pruning(1_000, |_| Ok(u64::MAX)).unwrap(),
+            backup::Status::Ready
+        );
+        store.shutdown().unwrap();
+        std::fs::create_dir(backup::upgrade_path(&backup::path(&path))).unwrap();
+        let before = bytes(&path);
+        assert!(run(&path).is_err());
+        let after = bytes(&path);
+        assert_eq!(after[..3], before[..3]);
+        assert_eq!(after[4], before[4]);
+    }
+}

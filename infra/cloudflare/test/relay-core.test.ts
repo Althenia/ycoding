@@ -674,6 +674,50 @@ test("aggregate reservation caps retained input and every socket-handed fanout f
   expect(h.relay.reservation.used).toBe(0)
 })
 
+test("cancelling a request after agent credit preserves the browser and unrelated input ownership", async () => {
+  const h = await harness()
+  const agent = await h.attach("agent", "agent")
+  const browser = await h.attach("browser")
+  const cancelledID = h.request(browser)
+  const retainedID = h.request(browser)
+  await h.send("browser")
+  const requests = h
+    .receive("agent")
+    .flatMap((entry) => entry.decisions)
+    .filter((entry) => entry.type === "dispatch")
+  expect(requests).toHaveLength(2)
+  const before = h.relay.connection("browser")!.ledger(LedgerClass.NORMAL).receivedBytes
+  expect(before).toBeGreaterThan(0)
+  agent.consume(LedgerClass.NORMAL, requests[0]!.ordinal, 0)
+  h.at(25)
+  agent.advance(25)
+  await h.send("agent")
+  const retained = h.relay.connection("browser")!.ledger(LedgerClass.NORMAL).receivedBytes
+  expect(retained).toBeGreaterThan(0)
+  expect(retained).toBeLessThan(before)
+  expect(h.close).toEqual([])
+  expect(browser.cancel(cancelledID, 25)).toContainEqual(
+    expect.objectContaining({ type: "settled", requestID: cancelledID, status: "unknown" }),
+  )
+  await h.send("browser")
+  expect(h.close).toEqual([])
+  expect(h.relay.connection("browser")!.ledger(LedgerClass.NORMAL).receivedBytes).toBe(retained)
+  expect(h.receive("agent").flatMap((entry) => entry.decisions)).toContainEqual(
+    expect.objectContaining({ type: "cancelled", requestID: requests[0]!.requestID }),
+  )
+  agent.enqueue(h.result(requests[1]!), 512, 25)
+  await h.send("agent")
+  expect(h.receive("browser").flatMap((entry) => entry.decisions).filter((entry) => entry.type === "settled")).toEqual([
+    expect.objectContaining({ requestID: retainedID, status: "success" }),
+  ])
+  expect(
+    h.collected.get("agent")!.flatMap((entry) => entry.decisions).filter((entry) => entry.type === "dispatch"),
+  ).toHaveLength(2)
+  expect(h.close).toEqual([])
+  h.relay.closeDevice()
+  expect(h.relay.reservation.used).toBe(0)
+})
+
 test("cancellation releases a queued-unsent result without refunding another socket-handed result", async () => {
   const h = await harness()
   const agent = await h.attach("agent", "agent")

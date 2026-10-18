@@ -13,6 +13,7 @@ const kinds: Record<NotificationCategory, { readonly icon: IconName; readonly la
   "agent-completed": { icon: "check", label: "Work finished" },
   "approval-requested": { icon: "shield", label: "Needs your attention" },
   "machine-offline": { icon: "devices", label: "Machine offline" },
+  "quota-pace": { icon: "usage", label: "Quota pace" },
 }
 
 export function notificationAge(at: number, now: number): string {
@@ -74,7 +75,7 @@ export function systemAlertsView(status: PushStatus | undefined, enabled: boolea
   }
 }
 
-export function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
+export function NotificationCenter(props: { readonly onOpenSession: (sessionID: string) => void; readonly onOpenUsage: (deviceID: string) => void }): JSX.Element {
   const remote = useRemote()
   const [open, setOpen] = createSignal(false)
   const [leaving, setLeaving] = createSignal(false)
@@ -198,12 +199,14 @@ export function NotificationCenter(props: { readonly onOpenSession: (sessionID: 
                       <li class={`yc-notification yc-notification--${item().category}`}>
                         <span class="yc-notification__unread" aria-label="Unread" />
                         <span class="yc-notification__icon" aria-hidden="true"><Icon name={kinds[item().category].icon} size={16} /></span>
-                        <button type="button" class="yc-notification__open" disabled={!item().sessionID} onClick={() => {
+                        <button type="button" class="yc-notification__open" disabled={!item().sessionID && !item().deviceID} onClick={() => {
                           const sessionID = item().sessionID
-                          if (!sessionID) return
+                          const deviceID = item().deviceID
+                          if (!sessionID && !deviceID) return
                           void remote.store.readNotification(id)
                           close(false)
-                          props.onOpenSession(sessionID)
+                          if (sessionID) props.onOpenSession(sessionID)
+                          else if (deviceID) props.onOpenUsage(deviceID)
                         }}>
                           <strong>{kinds[item().category].label}</strong>
                           <span>{item().sessionTitle ?? item().body}</span>

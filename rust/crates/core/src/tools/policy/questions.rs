@@ -152,7 +152,7 @@ impl Questions {
                         Some(evaluator) => {
                             automatic(evaluator.as_ref(), &request, &cancellation).await
                         }
-                        None => Err(reason),
+                        None => Err(session_review::Reason::Unavailable),
                     }
                 } else {
                     Err(reason)
@@ -452,7 +452,7 @@ async fn automatic(
             }
             match answers.get(&format!("q{index}").into()) {
                 Some(JsonValue::String(value)) => Ok(vec![value.clone()]),
-                _ => Err(session_review::Reason::Error),
+                _ => Err(session_review::Reason::InvalidOutput),
             }
         })
         .collect()

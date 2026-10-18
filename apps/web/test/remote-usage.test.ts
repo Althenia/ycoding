@@ -624,7 +624,7 @@ test("a report whose row dimensions disagree with the requested group is unreada
   }
 })
 
-test("the usage forecast is one backend-scoped native read that follows quota refresh", async () => {
+test("the usage forecast is one backend-scoped native read that starts with and follows quota refresh", async () => {
   const forecast = { asOf: 2_000, localScope: "backend", localRates: [], quotas: [] }
   const relay = await startRelayDouble({ usageForecast: () => forecast })
   const { store, queries, scope, usage } = await connected(relay)
@@ -639,7 +639,13 @@ test("the usage forecast is one backend-scoped native read that follows quota re
     await fetch(queries.usageProviders(scope(), true))
     await queries.refreshUsage(scope())
     const order = relay.requests.map((request) => request.operation).filter((operation) => operation === "providerUsage.list" || operation === "providerUsage.forecast")
-    expect(order).toEqual(["providerUsage.forecast", "providerUsage.list", "providerUsage.list", "providerUsage.forecast"])
+    expect(order).toEqual([
+      "providerUsage.forecast",
+      "providerUsage.list",
+      "providerUsage.forecast",
+      "providerUsage.list",
+      "providerUsage.forecast",
+    ])
   } finally {
     store.dispose()
     await relay.stop()

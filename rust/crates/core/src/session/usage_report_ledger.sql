@@ -11,9 +11,10 @@ family(id, depth, position) AS (
     SELECT s.id, f.depth + 1, list_append(f.position, s.child_order) FROM children s JOIN family f ON s.parent_id = f.id, args a
     WHERE EXISTS (SELECT 1 FROM report_session root WHERE root.id = a.root AND root.parent_id IS NULL)
 ),
-offsets AS (SELECT split_part(value, '|', 1)::BIGINT AS start,
+offset_values AS (SELECT split_part(value, '|', 1)::BIGINT AS start,
     split_part(value, '|', 2)::INTEGER AS seconds, split_part(value, '|', 3) AS label
     FROM args, unnest(string_split(offsets, ';')) AS entries(value) WHERE value <> ''),
+offsets AS (SELECT *, lead(start) OVER (ORDER BY start) AS end_time FROM offset_values),
 hints AS (SELECT decode(from_hex(split_part(value, '|', 1))) AS hint_lookup,
     decode(from_hex(split_part(value, '|', 2))) AS hint_anchor_session, decode(from_hex(split_part(value, '|', 3))) AS hint_anchor_input,
     decode(from_hex(split_part(value, '|', 4))) AS hint_key, decode(from_hex(split_part(value, '|', 5))) AS hint_json
@@ -30,7 +31,28 @@ prices AS (SELECT split_part(value, '|', 1) AS reference,
     split_part(value, '|', 6)::DOUBLE AS output_price, split_part(value, '|', 7)::DOUBLE AS read_price,
     split_part(value, '|', 8)::DOUBLE AS write_price
     FROM args, unnest(string_split(prices, ';')) AS entries(value) WHERE value <> ''),
-candidates AS MATERIALIZED (
+estimates AS MATERIALIZED (
+    SELECT r.source_id,
+        (r.input * estimated.input_price + (r.output + r.reasoning) * estimated.output_price
+            + r.cache_read * estimated.read_price + r.cache_write * estimated.write_price) / 1000000 AS estimate
+    FROM report_session_provider_request r JOIN report_session s ON s.id = r.session_id
+    CROSS JOIN args a
+    LEFT JOIN LATERAL (
+        SELECT input_price, output_price, read_price, write_price
+        FROM prices WHERE reference = hex(s.directory) || ':' || coalesce(hex(s.workspace_id), '~') || ':' || hex(r.provider) || ':' || hex(r.model) || ':' || coalesce(hex(r.profile), '~')
+            AND (tier IS NULL OR r.input + r.cache_read + r.cache_write > tier)
+        ORDER BY priority, tier DESC NULLS LAST, ordinal LIMIT 1
+    ) estimated ON true
+    WHERE r.cost IS NULL AND r.source <> 'decision'
+        AND (a.root IS NULL OR s.id IN (SELECT id FROM family))
+        AND (a.from_time IS NULL OR r.time_created >= a.from_time)
+        AND (a.to_time IS NULL OR r.time_created < a.to_time)
+        AND (a.selected_provider IS NULL OR r.provider = a.selected_provider)
+        AND (a.selected_model IS NULL OR r.model = a.selected_model)
+        AND (a.selected_profile IS NULL OR r.profile = a.selected_profile)
+        AND (a.selected_effort IS NULL OR r.variant = a.selected_effort)
+),
+candidates AS NOT MATERIALIZED (
     SELECT r.* REPLACE (
         CASE WHEN r.anchor_session_id IS NULL AND h.hint_key IS NOT NULL THEN h.hint_key ELSE r.prompt_key END AS prompt_key,
         CASE WHEN r.anchor_session_id IS NULL THEN h.hint_json ELSE r.anchor_json END AS anchor_json,
@@ -40,22 +62,15 @@ candidates AS MATERIALIZED (
         (coalesce(f.depth, 0), coalesce(f.position, [0::BIGINT]), CASE WHEN a.root IS NULL THEN s.time_updated ELSE 0 END, s.id, r.request_order) AS observation_order,
         coalesce(o.seconds, 0) AS seconds, o.label AS zone_label,
         TIMESTAMP '1970-01-01' + (r.time_created::DOUBLE / 1000 + coalesce(o.seconds, 0)) * INTERVAL '1 second' AS local_time,
-        estimated.amount AS estimate,
+        e.estimate AS estimate,
         coalesce((SELECT string_agg(t.path_entry, '|') FROM task_ancestry x JOIN report_task t ON t.session_id = x.id WHERE x.origin = r.session_id), '') AS task_entries
     FROM report_session_provider_request r JOIN report_session s ON s.id = r.session_id
     LEFT JOIN report_project p ON p.id = s.project_id
     LEFT JOIN family f ON f.id = s.id
     LEFT JOIN hints h ON h.hint_lookup = r.input_key AND r.anchor_session_id IS NULL
-    -- Keep the request on the left side of both correlated enrichment joins.
     CROSS JOIN args a
-    LEFT JOIN LATERAL (SELECT seconds, label FROM offsets WHERE start <= r.time_created ORDER BY start DESC LIMIT 1) o ON true
-    LEFT JOIN LATERAL (
-        SELECT (r.input * input_price + (r.output + r.reasoning) * output_price + r.cache_read * read_price + r.cache_write * write_price) / 1000000 AS amount
-        FROM prices WHERE r.cost IS NULL AND r.source <> 'decision'
-            AND reference = hex(s.directory) || ':' || coalesce(hex(s.workspace_id), '~') || ':' || hex(r.provider) || ':' || hex(r.model) || ':' || coalesce(hex(r.profile), '~')
-            AND (tier IS NULL OR r.input + r.cache_read + r.cache_write > tier)
-        ORDER BY priority, tier DESC NULLS LAST, ordinal LIMIT 1
-    ) estimated ON true
+    LEFT JOIN offsets o ON o.start <= r.time_created AND (o.end_time IS NULL OR r.time_created < o.end_time)
+    LEFT JOIN estimates e ON e.source_id = r.source_id
     WHERE (a.root IS NULL OR s.id IN (SELECT id FROM family))
         AND (a.from_time IS NULL OR r.time_created >= a.from_time)
         AND (a.to_time IS NULL OR r.time_created < a.to_time)

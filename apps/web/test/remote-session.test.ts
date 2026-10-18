@@ -1103,12 +1103,54 @@ describe("remote store integration", () => {
       expect(test.store.state().sessionListStatus).toBe("ready")
       expect(test.store.state().sessionRowsStale).toBe(false)
       expect(test.store.state().sessions).toHaveLength(2)
+      expect(test.store.state().sessionPageLoading).toBe(true)
+      expect(test.store.state().sessionPaginationLoading).toBe(false)
       release()
-      await test.runUntil(() => test.store.state().sessionListStatus === "ready")
+      await test.runUntil(() => !test.store.state().sessionPageLoading)
       expect(test.store.state().sessionRowsStale).toBe(false)
+      expect(test.store.state().sessionPaginationLoading).toBe(false)
     } finally {
       release()
       await test.stop()
+    }
+  })
+
+  test("shows pagination loading only while a cursor page is pending and clears it on success or failure", async () => {
+    for (const failed of [false, true]) {
+      const gate = Promise.withResolvers<void>()
+      const row = { id: "ses_a", title: "Alpha", time: { created: 1, updated: 1 } }
+      const test = await harness({
+        handler: async (request) => {
+          if (request.operation !== "session.list" || request.input?.workspace === undefined) return "default"
+          if (request.input.cursor === undefined)
+            return { ok: true, value: { data: [row], cursor: { next: "next_page" } } }
+          await gate.promise
+          return failed
+            ? { ok: false, code: "internal_error", message: "Session page unavailable" }
+            : { ok: true, value: { data: [{ ...row, id: "ses_b", title: "Beta" }], cursor: {} } }
+        },
+      })
+      try {
+        await test.store.load()
+        await test.runUntil(() => test.store.state().sessionHasNext)
+        expect(test.store.state().sessionPaginationLoading).toBe(false)
+        const pending = test.store.nextSessionsPage()
+        await test.runUntil(() => test.relay.requests.some((request) => request.input?.cursor === "next_page"))
+        expect(test.store.state().sessionPageLoading).toBe(true)
+        expect(test.store.state().sessionPaginationLoading).toBe(true)
+        expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a"])
+        gate.resolve()
+        await pending
+        expect(test.store.state().sessionPageLoading).toBe(false)
+        expect(test.store.state().sessionPaginationLoading).toBe(false)
+        expect(test.store.state().sessionListStatus).toBe(failed ? "error" : "ready")
+        expect(test.store.state().sessions.map((session) => session.id)).toEqual(
+          failed ? ["ses_a"] : ["ses_a", "ses_b"],
+        )
+      } finally {
+        gate.resolve()
+        await test.stop()
+      }
     }
   })
 

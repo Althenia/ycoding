@@ -8,6 +8,7 @@ literal_type!(Status["available","stale","unsupported","unauthorized","error"]);
 literal_type!(Source["provider_api","local_client_rpc","response_headers","response_stream","provider_internal_api","local_session"]);
 literal_type!(Stability["stable","client_contract","observed","best_effort"]);
 literal_type!(Unit["percent","usd","requests","tokens","count"]);
+literal_type!(PaceMilestone["almost-out","cutting-it-close","will-run-out"]);
 fn nonempty(v: &JsonValue, p: &JsonPath) -> Result<LosslessString, DecodeError> {
     let s = LosslessString::decode_at(v, p)?;
     if s.is_empty() {
@@ -176,6 +177,43 @@ impl DomainEncode for Observation {
             .field("stability", &self.stability)
             .field("observedAt", &self.observed_at)
             .field("windows", &self.windows)
+            .finish()
+    }
+}
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuotaPaceAlert {
+    pub provider_id: provider::Id,
+    pub window_id: LosslessString,
+    pub milestone: PaceMilestone,
+    pub reset_at: NonNegativeInt,
+    pub title: LosslessString,
+    pub body: LosslessString,
+}
+impl DomainDecode for QuotaPaceAlert {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        let text = |key: &str| -> Result<LosslessString, DecodeError> {
+            nonempty(&o.field::<JsonValue>(key)?, &p.key(key))
+        };
+        Ok(Self {
+            provider_id: o.field("providerID")?,
+            window_id: text("windowID")?,
+            milestone: o.field("milestone")?,
+            reset_at: o.field("resetAt")?,
+            title: text("title")?,
+            body: text("body")?,
+        })
+    }
+}
+impl DomainEncode for QuotaPaceAlert {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("providerID", &self.provider_id)
+            .field("windowID", &self.window_id)
+            .field("milestone", &self.milestone)
+            .field("resetAt", &self.reset_at)
+            .field("title", &self.title)
+            .field("body", &self.body)
             .finish()
     }
 }

@@ -1,6 +1,11 @@
 use crate::{convert, locations::LocationServices, services::Environment};
 use prost::{Message, Name};
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, atomic::AtomicBool},
+};
 use ycoding_core::ycoding_schema::{DomainDecode, JsonValue, LosslessString, session};
 use ycoding_protocol::{Asset, AssetMetadata, decode_strict, limits, v5};
 
@@ -14,6 +19,8 @@ pub struct Invocation {
     pub scope: v5::Scope,
     pub request_id: String,
     pub remote: bool,
+    pub mcp: Option<crate::connector::mcp::Access>,
+    pub cancelled: Arc<AtomicBool>,
 }
 
 impl Invocation {
@@ -407,7 +414,16 @@ impl Dispatcher {
             return None;
         }
         let request_id = request.request_id.clone();
-        let outcome = run(entry, environment, connection_id, request, false).await;
+        let outcome = run(
+            entry,
+            environment,
+            connection_id,
+            request,
+            false,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await;
         Some(settle(&entry.descriptor, request_id, outcome))
     }
 
@@ -417,6 +433,30 @@ impl Dispatcher {
         connection_id: String,
         peer: &crate::connector::Peer,
         request: v5::Request,
+    ) -> Option<Settled> {
+        self.dispatch_remote(environment, connection_id, peer, request, None)
+            .await
+    }
+
+    pub(crate) async fn dispatch_mcp(
+        &self,
+        environment: Arc<Environment>,
+        connection_id: String,
+        peer: &crate::connector::Peer,
+        request: v5::Request,
+        access: crate::connector::mcp::Access,
+    ) -> Option<Settled> {
+        self.dispatch_remote(environment, connection_id, peer, request, Some(access))
+            .await
+    }
+
+    async fn dispatch_remote(
+        &self,
+        environment: Arc<Environment>,
+        connection_id: String,
+        peer: &crate::connector::Peer,
+        request: v5::Request,
+        mcp: Option<crate::connector::mcp::Access>,
     ) -> Option<Settled> {
         let entry = self.entries.get(&request.operation_id)?;
         if !entry
@@ -431,7 +471,11 @@ impl Dispatcher {
             return None;
         }
         let request_id = request.request_id.clone();
-        let authorized = if peer.authorized() {
+        let authorized = if peer.authorized()
+            && mcp
+                .as_ref()
+                .is_none_or(|access| access.authorized(&connection_id, peer))
+        {
             ycoding_protocol::validate_binary(&entry.descriptor.request_type, &request.payload)
                 .map_err(|_| Failure::Invalid("Invalid remote payload".into()))
                 .and_then(|_| {
@@ -458,8 +502,69 @@ impl Dispatcher {
                     "Canonical remote stream binding is not ready".into(),
                 ))
             }
-            Ok(()) => run(entry, environment, connection_id, request, true).await,
+            Ok(()) => {
+                let cancelled = mcp.as_ref().map_or_else(
+                    || Arc::new(AtomicBool::new(false)),
+                    |access| access.cancellation(),
+                );
+                run(
+                    entry,
+                    environment,
+                    connection_id,
+                    request,
+                    true,
+                    mcp,
+                    cancelled,
+                )
+                .await
+            }
             Err(error) => Err(error),
+        };
+        Some(settle(&entry.descriptor, request_id, outcome))
+    }
+
+    pub(crate) async fn invoke_relay(
+        &self,
+        environment: Arc<Environment>,
+        connection_id: String,
+        peer: &crate::connector::Peer,
+        request: v5::Request,
+        cancelled: Arc<AtomicBool>,
+    ) -> Option<Settled> {
+        let entry = self.entries.get(&request.operation_id)?;
+        if entry.descriptor.diagnostic_name != "mcp.request"
+            || entry.descriptor.roles != [v5::PeerRole::Relay as i32]
+            || entry.descriptor.scope != v5::ScopeKind::Machine as i32
+        {
+            return None;
+        }
+        let request_id = request.request_id.clone();
+        let outcome = if !peer.authorized() {
+            Err(Failure::Unauthorized(
+                "Remote peer is no longer authenticated".into(),
+            ))
+        } else if !matches!(request.scope.target, Some(v5::scope::Target::Machine(_))) {
+            Err(Failure::Invalid(
+                "Relay MCP requests are machine-scoped".into(),
+            ))
+        } else if ycoding_protocol::validate_binary(
+            &entry.descriptor.request_type,
+            &request.payload,
+        )
+        .is_err()
+        {
+            Err(Failure::Invalid("Invalid relay MCP payload".into()))
+        } else {
+            run(
+                entry,
+                environment,
+                connection_id,
+                request,
+                true,
+                None,
+                cancelled,
+            )
+            .await
         };
         Some(settle(&entry.descriptor, request_id, outcome))
     }
@@ -478,6 +583,8 @@ async fn run(
     connection_id: String,
     request: v5::Request,
     remote: bool,
+    mcp: Option<crate::connector::mcp::Access>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<Body, Failure> {
     (entry.authorize)(&environment, &request)?;
     let handler = entry.handler.as_ref().ok_or_else(|| {
@@ -493,6 +600,8 @@ async fn run(
             scope: request.scope,
             request_id: request.request_id,
             remote,
+            mcp,
+            cancelled,
         },
         request.payload,
     )

@@ -49,7 +49,12 @@ test("session requirement and workspace placement use existing scope metadata", 
 })
 
 test("relay descriptors are the canonical ordered-lane authority and exclude relay-owned notices", () => {
-  expect(relayDescriptors).toHaveLength(75)
+  expect(relayDescriptors).toHaveLength(84)
+  expect(
+    relayDescriptors
+      .filter((item) => !item.roles.includes(PeerRole.REMOTE_CLIENT))
+      .map((item) => [item.operationId, item.diagnosticName, item.roles, item.scope]),
+  ).toEqual([[5044, "mcp.request", [PeerRole.RELAY], ScopeKind.MACHINE]])
   expect(relayDescriptors.every((item) => [MutationClass.READ, MutationClass.MUTATION].includes(item.mutation))).toBe(
     true,
   )
@@ -220,8 +225,10 @@ test("Rust/TS notice pages reuse foundation Notice while mutation settlement rem
 })
 
 test("remote bindings expose the same closed generated per-role operation allowlists", () => {
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(87)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(84)
+  expect(operationIDsByRole[PeerRole.RELAY]).toContain(5044)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).not.toContain(5044)
   expect(operationIDsByRole[PeerRole.AGENT]).toEqual([])
   expect(operationIDsByRole[PeerRole.SERVER]).toEqual([])
   expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toEqual(

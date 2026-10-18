@@ -70,6 +70,7 @@ message Checked {
   required int64 value = 1 [(ycoding.v5.constraints) = { integer_min: "-9007199254740991" integer_max: "9007199254740991" }];
   required LosslessString text = 2 [(ycoding.v5.constraints) = { utf16_max: 10 codepoints_max: 8 utf8_bytes_max: 32 domain_obligations: "packages/schema/src/browser.ts#Browser.Tab" }];
   repeated Empty items = 3 [(ycoding.v5.constraints) = { count_min: 1 count_max: 2 }];
+  required LosslessString native = 4 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/connector/local_apps.rs#Facade" }];
 }
 service Fixture { rpc Read(Checked) returns (Empty) { ${annotation} } }`,
     )
@@ -104,6 +105,7 @@ service Fixture { rpc Read(Checked) returns (Empty) { ${annotation} } }`,
         domainObligations: ["packages/schema/src/browser.ts#Browser.Tab"],
       },
       "ycoding.v5.Checked.3": { countMin: 1, countMax: 2 },
+      "ycoding.v5.Checked.4": { domainObligations: ["rust/crates/runtime/src/connector/local_apps.rs#Facade"] },
     })
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -118,6 +120,14 @@ for (const [field, error] of [
   ["required bool value = 1 [(ycoding.v5.constraints) = { utf16_max: 5 }];", "constraint type mismatch"],
   [
     'required LosslessString value = 1 [(ycoding.v5.constraints) = { domain_obligations: "unknown" }];',
+    "invalid domain obligation source",
+  ],
+  [
+    'required LosslessString value = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/runtime/src/../connector/local_apps.rs#Facade" }];',
+    "invalid domain obligation source",
+  ],
+  [
+    'required LosslessString value = 1 [(ycoding.v5.constraints) = { domain_obligations: "rust/crates/unknown/src/handler.rs#Handler" }];',
     "invalid domain obligation source",
   ],
 ] as const) {

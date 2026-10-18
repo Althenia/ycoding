@@ -32,7 +32,7 @@ type PushServer = {
   readonly owners: () => Promise<readonly (readonly [string, string])[]>
   readonly close: () => void
 }
-const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
 const endpointFor = (name: string) => `https://fcm.googleapis.com/fcm/send/${name}`
 const encode = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64url")
 

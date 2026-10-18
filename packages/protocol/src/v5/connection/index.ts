@@ -40,7 +40,7 @@ import type {
   AssetMetadataResult,
   SubscriptionSnapshot,
 } from "../../generated/v5/index.js"
-import { validateBinary } from "../validate.js"
+import { boundedControl, validateBinary } from "../validate.js"
 import { validateAssetMetadata } from "../asset.js"
 import { defaultBudgets, ReservationBudget } from "./budgets.js"
 import type { Budgets, ConfigurableBudgets } from "./budgets.js"
@@ -995,6 +995,7 @@ export class Connection {
     }
     const kind = this.classify(frame)
     if (!kind || !allowed(frame, this.options.role)) return this.close(FailureCategory.DIRECTION)
+    if (!boundedControl(frame)) return this.close(FailureCategory.MALFORMED)
     if (!Number.isSafeInteger(reserveBytes) || reserveBytes < 1 || reserveBytes > this.frameCap(this.options.role))
       return this.close(FailureCategory.LIMIT)
     if (reserveBytes > this.sendWindows.get(kind)!) return this.close(FailureCategory.LIMIT)
@@ -1384,6 +1385,7 @@ export class Connection {
     if (!has(frame, "connectionEpoch") || frame.connectionEpoch !== this.epoch) return this.close(FailureCategory.EPOCH)
     const kind = this.classify(frame)
     if (!kind || !allowed(frame, this.options.peer)) return this.close(FailureCategory.DIRECTION)
+    if (!boundedControl(frame)) return this.close(FailureCategory.MALFORMED)
     if (!has(frame, "ledger") || frame.ledger !== kind || !has(frame, "deliveryOrdinal"))
       return this.close(FailureCategory.MALFORMED)
     if (this.phase === "confirm") {

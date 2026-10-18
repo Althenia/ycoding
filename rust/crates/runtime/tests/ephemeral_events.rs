@@ -175,6 +175,84 @@ async fn all_ephemerals_cross_real_subscription_with_global_and_session_filterin
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quota_pace_milestones_cross_the_real_wire_without_becoming_session_events() {
+    let _serial = SERIAL.lock().await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let server = start(services(LocalAuth::disabled(), true), standard().unwrap()).await;
+        let mut client = Client::open(server.address(), &[]).await.unwrap();
+        let global = subscribe(&mut client, global()).await;
+        let own = subscribe(&mut client, session_scope("ses_prompt")).await;
+        let milestones = [
+            (
+                "almost-out",
+                "Almost out",
+                "Less than 10% of this quota remains.",
+            ),
+            (
+                "cutting-it-close",
+                "Cutting it close",
+                "Projected quota use exceeds 90% of its limit at reset.",
+            ),
+            (
+                "will-run-out",
+                "Will run out",
+                "Quota use is at its limit or projected to exceed it before reset.",
+            ),
+        ];
+        for (milestone, title, body) in milestones {
+            let mut data = JsonObject::new();
+            for (key, value) in [
+                ("providerID", JsonValue::String("anthropic".into())),
+                ("windowID", JsonValue::String("five-hour".into())),
+                ("milestone", JsonValue::String(milestone.into())),
+                ("resetAt", JsonValue::Number(1_800_000_300_000.0)),
+                ("title", JsonValue::String(title.into())),
+                ("body", JsonValue::String(body.into())),
+            ] {
+                data.insert(key.into(), value);
+            }
+            world()
+                .core
+                .events
+                .emit(
+                    Data::decode("provider.quota.pace", &JsonValue::Object(data)).unwrap(),
+                    None,
+                )
+                .unwrap();
+        }
+        until(&mut client, |client| {
+            publications(client, &global)
+                .iter()
+                .filter(|event| matches!(event, v5::public_event::Kind::ProviderQuotaPace(_)))
+                .count()
+                == milestones.len()
+        })
+        .await;
+        let events = publications(&client, &global)
+            .into_iter()
+            .filter_map(|event| match event {
+                v5::public_event::Kind::ProviderQuotaPace(event) => Some(event),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), milestones.len());
+        for (index, event) in events.iter().enumerate() {
+            assert!(event.location.is_none());
+            assert_eq!(support::units(&event.data.provider_id), "anthropic");
+            assert_eq!(support::units(&event.data.window_id), "five-hour");
+            assert_eq!(event.data.milestone, index as i32 + 1);
+            assert_eq!(event.data.reset_at, 1_800_000_300_000);
+            assert_eq!(support::units(&event.data.title), milestones[index].1);
+            assert_eq!(support::units(&event.data.body), milestones[index].2);
+        }
+        assert!(publications(&client, &own).is_empty());
+        server.shutdown().await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resource_owner_transitions_publish_to_the_real_wire_before_returning() {
     let _serial = SERIAL.lock().await;
     use ycoding_core::resources::{agent, catalog, command, skill};

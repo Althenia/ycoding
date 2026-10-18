@@ -63,6 +63,8 @@ pub fn normalize_claude(
         let mut w = window(&key.replace('_', "-"), &label, "percent");
         w.used = Some(round(used));
         w.reset_at = reset(field(value, "resets_at"))?;
+        w.period_seconds =
+            NonNegativeInt::new(if key == "five_hour" { 18_000 } else { 604_800 }).ok();
         snapshot.windows.push(w);
     }
     if let Some(JsonValue::Array(limits)) = field(response, "limits") {
@@ -89,6 +91,7 @@ pub fn normalize_claude(
             let mut w = window(&id, &format!("{model} weekly"), "percent");
             w.used = Some(round(used));
             w.reset_at = reset(field(entry, "resets_at"))?;
+            w.period_seconds = NonNegativeInt::new(604_800).ok();
             snapshot.windows.push(w);
         }
     }

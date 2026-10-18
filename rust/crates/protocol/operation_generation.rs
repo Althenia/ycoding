@@ -203,18 +203,37 @@ pub fn read_constraints(
                     let (path, export) = source
                         .split_once('#')
                         .ok_or("invalid domain obligation source")?;
-                    if !(path.starts_with("packages/schema/src/")
-                        || path.starts_with("packages/remote/src/")
-                        || path.starts_with("packages/cli/src/")
-                        || path.starts_with("packages/protocol/src/"))
-                        || !path.ends_with(".ts")
-                        || !path
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b"_./-".contains(&byte))
-                        || export.is_empty()
-                        || !export
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b"_.".contains(&byte))
+                    let native = (path.starts_with("rust/crates/schema/src/")
+                        || path.starts_with("rust/crates/core/src/")
+                        || path.starts_with("rust/crates/runtime/src/"))
+                        && path.strip_suffix(".rs").is_some_and(|path| {
+                            path.split('/').all(|segment| {
+                                !segment.is_empty()
+                                    && segment.bytes().all(|byte| {
+                                        byte.is_ascii_alphanumeric() || b"_-".contains(&byte)
+                                    })
+                            })
+                        })
+                        && export.split("::").all(|symbol| {
+                            let mut bytes = symbol.bytes();
+                            bytes
+                                .next()
+                                .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                                && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                        });
+                    if !native
+                        && (!(path.starts_with("packages/schema/src/")
+                            || path.starts_with("packages/remote/src/")
+                            || path.starts_with("packages/cli/src/")
+                            || path.starts_with("packages/protocol/src/"))
+                            || !path.ends_with(".ts")
+                            || !path.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || b"_./-".contains(&byte)
+                            })
+                            || export.is_empty()
+                            || !export
+                                .bytes()
+                                .all(|byte| byte.is_ascii_alphanumeric() || b"_.".contains(&byte)))
                     {
                         return Err("invalid domain obligation source".into());
                     }

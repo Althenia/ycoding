@@ -6,9 +6,9 @@ import { HttpApiEndpoint } from "effect/unstable/httpapi"
 import { Session } from "@ycoding-ai/schema/session"
 import { Shell } from "@ycoding-ai/schema/shell"
 import { Model } from "@ycoding-ai/schema/model"
-import { wireContract } from "./wire-contract.js"
+import { domainLabel, wireContract, withDomainLiteral } from "./wire-contract.js"
 import { resourceFieldConstraints } from "./resources-contract.js"
-import { connectorOperations, noticeOperations, connectorScopeOptions } from "./connector-source.js"
+import { connectorOperations, noticeOperations, relayOperations, connectorScopeOptions } from "./connector-source.js"
 import type { WireField } from "./wire-contract.js"
 
 const text = (min = 0, max = Number.MAX_SAFE_INTEGER) =>
@@ -144,9 +144,101 @@ const catalog = named(
   }),
 )
 const memberIDs = Schema.Array(text(1, 128)).check(Schema.isMaxLength(128))
+const localAppMethod = named(
+  "LocalAppMethod",
+  Schema.Literals(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]),
+)
+const localAppRoute = named(
+  "LocalAppRoute",
+  Schema.Struct({
+    path: text(1, 4096),
+    match: Schema.Literals(["exact", "prefix"]),
+    methods: Schema.Array(localAppMethod).check(Schema.isMinLength(1), Schema.isMaxLength(7)),
+  }),
+)
+const localAppRoutes = Schema.Array(localAppRoute).check(Schema.isMinLength(1), Schema.isMaxLength(64))
+const localAppRegistration = named(
+  "LocalAppRegistration",
+  Schema.Struct({
+    id: text(36, 36),
+    generation: text(43, 43),
+    sessionID: text(1, 128),
+    expiresAt: integer(),
+    entryPath: text(1, 4096),
+    allowedMethods: Schema.Array(localAppMethod).check(Schema.isMinLength(1), Schema.isMaxLength(7)),
+    routes: localAppRoutes,
+  }),
+)
+const localAppView = named(
+  "LocalAppView",
+  Schema.Struct({
+    kind: Schema.Literal("local-http-app"),
+    version: Schema.Literal(1),
+    appID: text(36, 36),
+    sessionID: text(1, 128),
+    expiresAt: Schema.Union([Schema.Null, text(1, 40)]),
+    status: Schema.Literals(["ready", "unavailable", "expired", "revoked"]),
+    reason: optional(
+      Schema.Literals(["preview_unconfigured", "not_registered", "access_unavailable", "expired", "revoked"]),
+    ),
+  }),
+)
+const localAppID = named("LocalAppID", Schema.Struct({ id: text(36, 36) }))
+const localAppGeneration = named("LocalAppGeneration", Schema.Struct({ id: text(36, 36), generation: text(43, 43) }))
 const body = <S extends Schema.Top>(data: S) => Schema.Struct({ data })
 const empty = Schema.Void
 const schemas = {
+  "local.app.register": [
+    named(
+      "LocalAppRegister",
+      Schema.Struct({
+        host: Schema.Literals(["127.0.0.1", "[::1]"]),
+        port: integer(1, 65535),
+        entryPath: text(1, 4096),
+        routes: localAppRoutes,
+        ttlMs: optional(integer(1, 3600000)),
+      }),
+    ),
+    body(localAppRegistration),
+  ],
+  "local.app.list": [empty, body(Schema.Array(localAppRegistration).check(Schema.isMaxLength(64)))],
+  "local.app.revoke": [localAppID, body(localAppView)],
+  "local.app.open": [
+    localAppGeneration,
+    Schema.Struct({
+      data: localAppView,
+      metadata: optional(
+        named(
+          "LocalAppMetadata",
+          Schema.Struct({ localApp: Schema.Struct({ url: text(1, 8192), origin: text(1, 2048) }) }),
+        ),
+      ),
+    }),
+  ],
+  "local.app.status": [localAppID, body(localAppView)],
+  "local.app.http": [
+    named(
+      "LocalAppHttp",
+      Schema.Struct({
+        id: text(36, 36),
+        generation: text(43, 43),
+        method: localAppMethod,
+        path: text(1, 4096),
+        headers: optional(Schema.Record(text(1, 128), text(0, 8192))),
+        body: optional(text(0, 349528)),
+      }),
+    ),
+    body(
+      named(
+        "LocalAppResponse",
+        Schema.Struct({
+          status: integer(200, 599),
+          headers: Schema.Record(text(1, 128), Schema.Union([text(0, 8192), Schema.Array(text(0, 8192))])),
+          body: text(0, 2796204),
+        }),
+      ),
+    ),
+  ],
   "provider.auth.list": [Schema.Struct({ target }), body(Schema.Array(authInfo))],
   "provider.auth.key": [
     Schema.Struct({ target, integrationID: text(1, 128), label: text(1, 128), key: text(1, 8192) }),
@@ -295,6 +387,8 @@ export function connectorSourceIdentity(ast: SchemaAST.AST, hint: string) {
       ast.checks?.flatMap((check) => (check._tag === "Filter" ? [check.annotations?.identifier] : [])).find(Boolean) ??
       "",
   )
+  if (name.startsWith("Connector.LocalApp") || hint.startsWith("Connector_LocalApp") || hint.startsWith("local_app_"))
+    return "rust/crates/runtime/src/connector/local_apps.rs#Facade"
   if (name === "Connector.AuthTarget") return "packages/protocol/src/v5/connection/index.ts#validRequest"
   if (name === "Connector.ActivityText") return "packages/cli/src/remote-operations.ts#boundedActivity"
   if (name.startsWith("Connector.Auth")) return "packages/cli/src/remote-provider-auth.ts#executeProviderAuth"
@@ -387,7 +481,7 @@ export function connectorProto() {
             (value, index) =>
               `  ${name.toUpperCase()}_${String(value)
                 .replace(/[^a-zA-Z0-9]/g, "_")
-                .toUpperCase()} = ${index + 1};`,
+                .toUpperCase()} = ${index + 1}${domainLabel(value)};`,
           )
           .join("\n")}\n}`,
     )
@@ -396,7 +490,7 @@ export function connectorProto() {
         .filter(([name]) => !existing.has(name))
         .map(
           ([name, message]) =>
-            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields)[index]}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name)}}`,
+            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields)[index]}${withDomainLiteral(fieldOption(field), message, field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name)}}`,
         ),
     )
   return `syntax = "proto2";\npackage ycoding.v5;\n\n${["foundation", "operations", "shared", "session"].map((file) => `import "ycoding/v5/${file}.proto";`).join("\n")}\n\noption (ycoding.v5.operation_range) = { first: 5000 last: 5099 };\n\n${declarations.join("\n\n")}\n\n${connectorServices(contract)}\n`
@@ -406,6 +500,8 @@ function connectorServices(contract: ReturnType<typeof connectorContract>) {
   const scopes = new Set(["workspace.catalog", "workspace.file.find", "session.create"])
   const sessions = new Set(["session.list", "session.status"])
   const reads = new Set([
+    "local.app.list",
+    "local.app.status",
     "provider.auth.list",
     "workspace.list",
     "session.list",
@@ -435,9 +531,9 @@ function connectorServices(contract: ReturnType<typeof connectorContract>) {
     result: string,
     mutation: string,
     scope: string,
-    notice = false,
+    roles = ["REMOTE_CLIENT", "RELAY"],
   ) =>
-    `  rpc ${name.replace(/[^a-zA-Z0-9]/g, "_")}(${request}) returns (${result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${id}\n      diagnostic_name: "${name}"\n      error_types: "ycoding.v5.Connector_Error"\n${["session.capturedChanges.list", "session.team.economics", "session.family.activity"].includes(name) ? "      roles: LOCAL_CLIENT\n" : ""}      roles: REMOTE_CLIENT\n${notice ? "" : "      roles: RELAY\n"}${connectorScopeOptions(name)}      scope: ${scope}\n      mutation: ${mutation}\n      settlement: COMPLETED\n      paging: ${["session.capturedChanges.list", "session.side-chat.list", "notice.subscribe", "notice.list"].includes(name) ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${name.startsWith("provider.auth.") || name === "session.attachment.upload" ? "SECRET" : "PRIVATE"}\n    };\n  }`
+    `  rpc ${name.replace(/[^a-zA-Z0-9]/g, "_")}(${request}) returns (${result}) {\n    option (ycoding.v5.operation) = {\n      operation_id: ${id}\n      diagnostic_name: "${name}"\n      error_types: "ycoding.v5.Connector_Error"\n${["session.capturedChanges.list", "session.team.economics", "session.family.activity"].includes(name) ? "      roles: LOCAL_CLIENT\n" : ""}${roles.map((role) => `      roles: ${role}\n`).join("")}${connectorScopeOptions(name)}      scope: ${scope}\n      mutation: ${mutation}\n      settlement: COMPLETED\n      paging: ${["session.capturedChanges.list", "session.side-chat.list", "notice.subscribe", "notice.list"].includes(name) ? "CURSOR" : "UNPAGED"}\n      streaming: TYPED_BULK\n      sensitivity: ${name.startsWith("provider.auth.") || name.startsWith("local.app.") || name === "session.attachment.upload" || name === "mcp.request" ? "SECRET" : "PRIVATE"}\n    };\n  }`
   const operations = contract.operations.map((item) => {
     const source = Object.entries(connectorOperations).find(([, value]) => value[0] === item.id)![0]
     return rpc(
@@ -448,7 +544,7 @@ function connectorServices(contract: ReturnType<typeof connectorContract>) {
       reads.has(source) ? "READ" : "MUTATION",
       scopes.has(source)
         ? "WORKSPACE"
-        : source.startsWith("session.") && !sessions.has(source)
+        : (source.startsWith("session.") && !sessions.has(source)) || source.startsWith("local.app.")
           ? "SESSION"
           : source.startsWith("provider.auth.")
             ? "GLOBAL"
@@ -463,8 +559,89 @@ function connectorServices(contract: ReturnType<typeof connectorContract>) {
       source === "notice.subscribe" || source === "notice.list" ? "ConnectorNoticePage" : "ConnectorNoticeSettlement",
       source === "notice.list" ? "READ" : "MUTATION",
       "MACHINE",
-      true,
+      ["REMOTE_CLIENT"],
     ),
   )
-  return `message ConnectorNoticeBefore { required LosslessString before = 1; }\nmessage ConnectorNoticeIDs { repeated string ids = 1 [(ycoding.v5.constraints) = { count_min: 1 count_max: 100 }]; }\nmessage ConnectorNoticePage { required Notice notice = 1; optional string next = 2; required bool unavailable = 3; }\nmessage ConnectorNoticeSettlement { required Empty data = 1; optional Notice notification = 2; }\n\nservice connector {\n${operations.join("\n")}\n${notices.join("\n")}\n}`
+  const relay = Object.values(relayOperations).map(([id, name, , mutation]) =>
+    rpc(id, name, "mcp_request_Request", "mcp_request_Result", mutation, "MACHINE", ["RELAY"]),
+  )
+  const demo = ["preview", "export"].map((name, index) =>
+    rpc(
+      5045 + index,
+      `artifact.demo.${name}`,
+      `artifact_demo_${name}_Request`,
+      `artifact_demo_${name}_Result`,
+      "READ",
+      "MACHINE",
+    ),
+  )
+  return `message ConnectorNoticeBefore { required LosslessString before = 1; }\nmessage ConnectorNoticeIDs { repeated string ids = 1 [(ycoding.v5.constraints) = { count_min: 1 count_max: 100 }]; }\nmessage ConnectorNoticePage { required Notice notice = 1; optional string next = 2; required bool unavailable = 3; }\nmessage ConnectorNoticeSettlement { required Empty data = 1; optional Notice notification = 2; }\n${mcpDeclarations}\n${demoDeclarations}\n\nservice connector {\n${demo.join("\n")}\n${operations.join("\n")}\n${notices.join("\n")}\n${relay.join("\n")}\n}`
 }
+
+const utf16 = (min: number | undefined, max: number) =>
+  ` [(ycoding.v5.constraints) = { ${min === undefined ? "" : `utf16_min: ${min} `}utf16_max: ${max} }]`
+const demoDeclarations = `enum artifact_demo_preview_Result_variantsItem {
+  ARTIFACT_DEMO_PREVIEW_RESULT_VARIANTSITEM_LIST = 1 [(ycoding.v5.domain_label) = "list"];
+  ARTIFACT_DEMO_PREVIEW_RESULT_VARIANTSITEM_CARDS = 2 [(ycoding.v5.domain_label) = "cards"];
+}
+
+enum artifact_demo_preview_Result_hostVerification {
+  ARTIFACT_DEMO_PREVIEW_RESULT_HOSTVERIFICATION_REQUIRED = 1 [(ycoding.v5.domain_label) = "required"];
+}
+
+enum artifact_demo_export_Result_mime {
+  ARTIFACT_DEMO_EXPORT_RESULT_MIME_IMAGE_PNG = 1 [(ycoding.v5.domain_label) = "image/png"];
+}
+
+enum artifact_demo_export_Result_delivery {
+  ARTIFACT_DEMO_EXPORT_RESULT_DELIVERY_HOST_NATIVE_ATTACHMENT_REQUIRED = 1 [(ycoding.v5.domain_label) = "host-native-attachment-required"];
+}
+
+message artifact_demo_preview_Request {}
+message artifact_demo_preview_Result {
+  repeated artifact_demo_preview_Result_variantsItem variants = 1 [(ycoding.v5.constraints) = { count_min: 2 count_max: 2 }];
+  required artifact_demo_preview_Result_hostVerification hostVerification = 2;
+}
+message artifact_demo_export_Request {}
+message artifact_demo_export_Result {
+  required string id = 1 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required string filename = 2 [(ycoding.v5.constraints) = { utf16_min: 1 utf16_max: 128 }];
+  required artifact_demo_export_Result_mime mime = 3;
+  required uint32 size = 4;
+  required string sha256 = 5 [(ycoding.v5.constraints) = { utf16_min: 64 utf16_max: 64 }];
+  required uint64 expiresAt = 6 [(ycoding.v5.constraints) = { integer_min: "0" integer_max: "9007199254740991" }];
+  required artifact_demo_export_Result_delivery delivery = 7;
+}`
+const mcpDeclarations = `
+message mcp_request_Request {
+  required Connector_McpRequest payload = 1;
+}
+
+message Connector_McpRequest {
+  required LosslessString body = 1${utf16(1, 32768)};
+  repeated Connector_McpHeader headers = 2 [(ycoding.v5.constraints) = { count_max: 5 }];
+  required Connector_McpPrincipal principal = 3;
+  required string epoch = 4${utf16(1, 64)};
+}
+
+message Connector_McpHeader {
+  required string name = 1${utf16(1, 64)};
+  required LosslessString value = 2${utf16(undefined, 1024)};
+}
+
+message Connector_McpPrincipal {
+  required string ownerID = 1${utf16(1, 64)};
+  required string deviceID = 2${utf16(1, 64)};
+  required LosslessString clientID = 3${utf16(1, 2048)};
+}
+
+message mcp_request_Result {
+  required Connector_McpResponse data = 1;
+}
+
+message Connector_McpResponse {
+  required uint32 status = 1 [(ycoding.v5.constraints) = { integer_min: "200" integer_max: "599" }];
+  required string contentType = 2${utf16(1, 256)};
+  required LosslessString body = 3${utf16(undefined, 2097152)};
+}
+`

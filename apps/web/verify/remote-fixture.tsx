@@ -23,7 +23,7 @@ import type {
   RemoteTransportStatus,
 } from "../src/remote/transport"
 import { RemoteLimits, noticeSequence, type RemoteDeviceInfo, type RemoteNotice } from "@ycoding-ai/remote"
-import { validLatencySample, type CapturedChangesView, type LatencySampleView } from "../src/remote/wire-views"
+import { validLatencySample, type CapturedChangesView, type LatencySampleView, type NoticeFrame } from "../src/remote/wire-views"
 import { typedFixtureOutcome } from "../test/wire-fixture"
 import { accountedTask } from "../test/usage-fixture"
 import { remoteScenario } from "./remote-scenarios"
@@ -88,7 +88,12 @@ const fixtureGrades = [
 ]
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
-const deviceRequests: { readonly deviceID: string; readonly operation: string; readonly sessionID?: string }[] = []
+const deviceRequests: {
+  readonly deviceID: string
+  readonly operation: string
+  readonly sessionID?: string
+  readonly sent?: boolean
+}[] = []
 Object.assign(window, { remoteDeviceRequests: deviceRequests })
 const attachmentGate = Promise.withResolvers<void>()
 Object.assign(window, { remoteReleaseAttachments: () => attachmentGate.resolve() })
@@ -157,6 +162,32 @@ if (machineName !== null)
 if (deviceMode === "none") devices = []
 if (deviceMode === "offline") devices = devices.map((device) => ({ ...device, online: false }))
 if (deviceMode === "revoked") devices = devices.map((device) => ({ ...device, status: "revoked", online: false }))
+const distinctMachines = accountParams.get("machines") === "distinct"
+if (distinctMachines) {
+  const laptop = accountParams.get("laptop")
+  devices = [
+    ...devices.flatMap((device) =>
+      device.id !== "dev_laptop"
+        ? [device]
+        : laptop === "unlisted"
+          ? []
+          : laptop === "offline"
+            ? [{ ...device, online: false }]
+            : [device],
+    ),
+    { id: "dev_retired", name: "Retired Mac", createdAt: 3, status: "revoked", online: false, revokedAt: Date.now() - 86_400_000 },
+    { id: "dev_asleep", name: "Sleeping Mac", createdAt: 4, status: "active", online: false },
+  ]
+  window.localStorage.setItem("ycoding.remote.machine", "dev_studio")
+  Object.assign(window, {
+    remoteBringLaptopOnline: () => {
+      devices = [
+        ...devices.filter((device) => device.id !== "dev_laptop"),
+        { id: "dev_laptop", name: "Laptop", createdAt: 2, status: "active", online: true },
+      ]
+    },
+  })
+}
 if (accountParams.get("deviceCleanup") === "two")
   devices = [
     ...devices,
@@ -192,8 +223,12 @@ window.fetch = Object.assign(
 )
 Object.assign(window, { remoteCleanupReport: () => cleanupRequests })
 
+let accountReads = 0
 const syntheticHttp: RemoteHttp = {
   me: async () => {
+    accountReads++
+    if (accountReads > 1 && accountParams.get("accountRefresh") === "failed")
+      return { ok: false, status: 503, message: "Synthetic account refresh failed", kind: "http" }
     if (accountDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, accountDelayMs))
     if (accountMode === "pending") return new Promise<never>(() => {})
     if (accountMode === "signedout") return { ok: false, status: 401, message: "unauthorized", kind: "http" }
@@ -386,7 +421,6 @@ const defaultMessages = [
             truncated: false,
             status: "running",
           },
-          time: { created: ago(35), ran: ago(35), completed: ago(34) },
         },
         time: { created: ago(35), ran: ago(35), completed: ago(34) },
       },
@@ -843,7 +877,35 @@ const usageMetrics = (scale: number, cost?: number) => ({
   cacheReadReported: true,
   ...(cost === undefined ? {} : { cost, costProvenance: "recorded" as const }),
 })
+const paceFixture = accountParams.get("usageForecast") === "pace"
+const paceFixtureNow = Date.now()
+const paceWindows = [
+  { id: "five-hour", label: "5 hour", used: 45, periodSeconds: 18_000, pace: { verdict: "ahead" as const, projectedUsedAtReset: 90 } },
+  { id: "seven-day", label: "7 day", used: 47.5, periodSeconds: 604_800, pace: { verdict: "cutting-it-close" as const, projectedUsedAtReset: 95 } },
+  { id: "seven-day-sonnet", label: "7 day Sonnet", used: 70, periodSeconds: 604_800, pace: { verdict: "will-run-out" as const, projectedUsedAtReset: 140 } },
+]
+const paceProviderUpdatedAt = paceFixtureNow - 90_000
 const fixtureUsageProviders = (now: number) => [
+  ...(paceFixture
+    ? [
+        {
+          providerID: "anthropic",
+          label: "Anthropic",
+          status: "available",
+          source: "provider_internal_api",
+          stability: "best_effort",
+          updatedAt: paceProviderUpdatedAt,
+          windows: paceWindows.map((window) => ({
+            id: window.id,
+            label: window.label,
+            unit: "percent",
+            used: window.used,
+            resetAt: paceFixtureNow + window.periodSeconds * 500,
+            periodSeconds: window.periodSeconds,
+          })),
+        },
+      ]
+    : []),
   {
     providerID: "openai",
     label: "Codex",
@@ -954,6 +1016,7 @@ const fixtureUsageReport = (input: Readonly<Record<string, unknown>> | undefined
 }
 
 type Fixture = {
+  readonly noticeFrame: (frame: NoticeFrame) => void
   readonly store: RemoteStore
   readonly drop: () => void
   readonly stream: () => void
@@ -1564,6 +1627,40 @@ function createFixtureStore(): Fixture {
         value: {
           location: { directory: "/workspace/ycoding", project: { id: "prj_remote", directory: "/workspace/ycoding" } },
           data: fixtureUsageProviders(Date.now()),
+        },
+      }
+    if (operation === "providerUsage.forecast" && accountParams.get("usageForecast") === "unsupported")
+      return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
+    if (operation === "providerUsage.forecast" && accountParams.get("usageForecast") === "error")
+      return { status: "failed", error: { code: "internal_error", message: "Synthetic forecast failure" } }
+    if (operation === "providerUsage.forecast" && accountParams.get("usageForecast") === "empty")
+      return { status: "ok", value: { data: { asOf: Date.now(), localScope: "backend", localRates: [], quotas: [] } } }
+    if (operation === "providerUsage.forecast" && paceFixture)
+      return {
+        status: "ok",
+        value: {
+          data: {
+            asOf: paceFixtureNow,
+            localScope: "backend",
+            localRates: [],
+            quotas: paceWindows.map((window, index) => ({
+              providerID: "anthropic",
+              windowID: window.id,
+              unit: "percent",
+              source: "provider_internal_api",
+              stability: "best_effort",
+              updatedAt: paceProviderUpdatedAt,
+              state: "estimated",
+              method: "quota-delta-ema",
+              evidence: "medium",
+              ratePerHour: 12,
+              ...(index === 0 ? { exhaustionAt: paceFixtureNow + 300_000 } : {}),
+              pace: {
+                ...window.pace,
+                ...(window.pace.verdict === "will-run-out" ? { exhaustionAt: paceFixtureNow + 36 * 3_600_000 } : {}),
+              },
+            })),
+          },
         },
       }
     if (operation === "usage.get") return { status: "ok", value: { data: usageMetrics(10, 26.3) } }
@@ -2342,6 +2439,125 @@ function createFixtureStore(): Fixture {
     },
   })
 
+  const laptopSession = {
+    id: "ses_laptop",
+    title: "Laptop release check",
+    projectID: "prj_laptop",
+    location: { directory: "/workspace/laptop" },
+    agent: "god",
+    model,
+    time: { created: ago(20), updated: ago(2) },
+  }
+  const laptopGroup = { id: "workspace_laptop", projectID: "prj_laptop", directory: "/workspace/laptop", name: "Laptop repository" }
+  let laptopNotices: readonly RemoteNotice[] = [
+    { id: "ntc_7", category: "agent-completed", sessionID: laptopSession.id, createdAt: ago(1) },
+  ]
+  const machineStatuses: { readonly deviceID: string; readonly kind: RemoteTransportStatus["kind"] }[] = []
+  Object.assign(window, { remoteMachineStatuses: machineStatuses })
+  const laptopOutcome = (
+    operation: string,
+    input: Readonly<Record<string, unknown>> | undefined,
+    targetSessionID: string | undefined,
+    own: RemoteTransportHandlers,
+  ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation === "notice.subscribe" || operation === "notice.list")
+      return {
+        status: "ok",
+        value: {
+          notices: operation === "notice.list" ? [] : [...laptopNotices],
+          total: laptopNotices.length,
+          unavailable: false,
+        },
+      }
+    if (operation === "notice.read" || operation === "notice.readAll") {
+      const ids =
+        operation === "notice.readAll"
+          ? laptopNotices.map((notice) => notice.id)
+          : Array.isArray(input?.ids)
+            ? input.ids.filter((id): id is string => typeof id === "string")
+            : []
+      laptopNotices = laptopNotices.filter((notice) => !ids.includes(notice.id))
+      own.onNotices?.({ type: "notice.removed", ids, total: laptopNotices.length })
+      return { status: "ok", value: null }
+    }
+    if (targetSessionID !== undefined && targetSessionID !== laptopSession.id)
+      return { status: "failed", error: { code: "session_not_allowed", message: "Session not found" } }
+    if (operation === "workspace.list") return { status: "ok", value: { data: [laptopGroup] } }
+    if (operation === "session.status") return { status: "ok", value: { running: [], attention: [], failed: [], lost: [] } }
+    if (operation === "session.list")
+      return {
+        status: "ok",
+        value: { data: input?.status === undefined || input.status === "idle" ? [laptopSession] : [], cursor: {} },
+      }
+    if (operation === "session.get") return { status: "ok", value: { data: laptopSession } }
+    if (operation === "session.snapshot")
+      return {
+        status: "ok",
+        value: {
+          sourceEpoch: "epoch_laptop",
+          session: laptopSession,
+          messages: [
+            { id: "msg_laptop_user", type: "user", text: "Check the laptop release build.", time: { created: ago(19), consumed: ago(19) } },
+            {
+              id: "msg_laptop_assistant",
+              type: "assistant",
+              agent: "god",
+              model,
+              content: [{ type: "text", text: "The laptop release build passed." }],
+              time: { created: ago(18), completed: ago(17) },
+            },
+          ],
+          watermark: { type: "log.synced", aggregateID: laptopSession.id, seq: 0 },
+        },
+      }
+    if (operation === "session.subagent.list")
+      return { status: "ok", value: { data: [], summary: { total: 0 }, cursor: {} } }
+    if (operation === "session.autonomy.get") return autonomyResponse({ mode: "normal", yolo: 0 })
+    if (targetSessionID !== undefined && operation.endsWith(".list")) return { status: "ok", value: { data: [], cursor: {} } }
+    return outcome(operation, input, targetSessionID)
+  }
+  const machineTransport = (deviceID: string, own: RemoteTransportHandlers): RemoteTransport => {
+    let current: RemoteTransportStatus = { kind: "idle" }
+    let opening: ReturnType<typeof setTimeout> | undefined
+    const publish = (status: RemoteTransportStatus) => {
+      current = status
+      machineStatuses.push({ deviceID, kind: status.kind })
+      own.onStatus?.(status)
+    }
+    return {
+      connect: () => {
+        publish({ kind: "connecting", attempt: 0 })
+        opening = setTimeout(() => {
+          publish({ kind: "open" })
+          own.onSessions?.()
+        }, 200)
+      },
+      close: (code = 1000, reason = "client closed") => {
+        clearTimeout(opening)
+        publish({ kind: "closed", code, reason, retryable: false })
+      },
+      setPriority: () => {},
+      status: () => current,
+      request: async (operation, request) => {
+        deviceRequests.push({
+          deviceID,
+          operation,
+          ...(request?.sessionID === undefined ? {} : { sessionID: request.sessionID }),
+          sent: current.kind === "open",
+        })
+        if (current.kind !== "open") return { status: "unavailable", reason: "not-connected" }
+        requestLog.push({
+          at: Math.round(performance.now()),
+          operation,
+          ...(request?.input === undefined ? {} : { input: request.input }),
+        })
+        return deviceID === "dev_laptop"
+          ? laptopOutcome(operation, request?.input, request?.sessionID, own)
+          : outcome(operation, request?.input, request?.sessionID)
+      },
+    }
+  }
+
   const transport: RemoteTransport = {
     connect: () => {
       handlers?.onStatus?.({ kind: "open" })
@@ -2396,6 +2612,7 @@ function createFixtureStore(): Fixture {
     createTransport: (deviceID, transportHandlers) => {
       transportsCreated += 1
       handlers = transportHandlers
+      if (distinctMachines) return machineTransport(deviceID, transportHandlers)
       if (relayAddress !== undefined) {
         const wire = createRemoteTransport({ url: relayAddress.href, handlers: transportHandlers })
         return {
@@ -2543,6 +2760,7 @@ function createFixtureStore(): Fixture {
   }
 
   return {
+    noticeFrame: (frame: NoticeFrame) => handlers?.onNotices?.(frame),
     store,
     drop,
     stream,
@@ -2813,6 +3031,7 @@ Object.assign(window, {
 })
 Object.assign(window, { remoteReadingTail: fixture.readingTail })
 Object.assign(window, { providerAuthState: () => fixture.store.state() })
+Object.assign(window, { remoteQuotaNotice: (frame: NoticeFrame) => fixture.noticeFrame(frame) })
 Object.assign(window, { remoteReloadMessages: fixture.store.reloadMessages })
 Object.assign(window, {
   remoteInventoryReport: () => ({
@@ -2835,6 +3054,7 @@ async function openFixtureWorkspace(store: RemoteStore) {
   await store.load()
   const requestedDevice = accountParams.get("device_id") ?? "dev_studio"
   if (
+    !distinctMachines &&
     devices.some((device) => device.id === requestedDevice && device.status === "active" && device.online) &&
     store.state().activeDeviceID !== requestedDevice
   )

@@ -155,11 +155,19 @@ fn startup_upgrades_recognized_native_catalogs_and_preserves_the_first_copy() {
     use ycoding_core::ycoding_store::{Catalog, Metadata, Options, Store, backup, import};
 
     for removed in [
-        &["model_incident", "model_guidance_clear"][..],
+        &["mcp_event_subscription", "mcp_event_outbox"][..],
+        &[
+            "model_incident",
+            "model_guidance_clear",
+            "mcp_event_subscription",
+            "mcp_event_outbox",
+        ][..],
         &[
             "model_incident",
             "model_guidance_clear",
             "usage_analytics_request",
+            "mcp_event_subscription",
+            "mcp_event_outbox",
         ][..],
     ] {
         let directory = Directory::new();

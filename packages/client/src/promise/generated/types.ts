@@ -327,22 +327,22 @@ export type SessionEventArtifactProvenance = {
 
 export type GuardrailSource = { messageID: string; callID: string }
 
+export type DecisionFailureReason =
+  | "unavailable"
+  | "invalid-request"
+  | "provider-failed"
+  | "timeout"
+  | "input-too-large"
+  | "invalid-output"
+  | "refused"
+  | "truncated-output"
+  | "unsupported-output"
+
 export type GuardrailDecisionChoice = "approve_all" | "approve" | "reject" | "escalate"
 
 export type GuardrailReply = "once" | "always" | "reject"
 
 export type SessionReviewKind = "question" | "subagent_question" | "guardrail" | "permission" | "recovery"
-
-export type SessionReviewReason =
-  | "disabled"
-  | "free_text"
-  | "refused"
-  | "low_confidence"
-  | "escalated"
-  | "error"
-  | "timeout"
-  | "sleep_entry"
-  | "restart"
 
 export type GuardrailConfidence = number
 
@@ -467,6 +467,12 @@ export type ProviderUsageSource =
 
 export type ProviderUsageStability = "stable" | "client_contract" | "observed" | "best_effort"
 
+export type UsageForecastPace = {
+  verdict: "ahead" | "cutting-it-close" | "will-run-out"
+  projectedUsedAtReset: number
+  exhaustionAt?: number
+}
+
 export type ProviderUsageStatus = "available" | "stale" | "unsupported" | "unauthorized" | "error"
 
 export type IntegrationWhen = { key: string; op: "eq" | "neq"; value: string }
@@ -585,6 +591,8 @@ export type PtySize = { rows: number; cols: number }
 export type QuestionTool = { messageID: string; callID: string }
 
 export type FormMetadata1 = { [x: string]: any }
+
+export type ProviderUsagePaceMilestone = "almost-out" | "cutting-it-close" | "will-run-out"
 
 export type SessionStatus =
   | { type: "idle" }
@@ -1912,6 +1920,19 @@ export type SessionGuardrailDismissed = {
   data: { sessionID: string; reviewSessionID: string; ruleID: string; confidence: number; source?: GuardrailSource }
 }
 
+export type GuardrailEscalationReason = DecisionFailureReason | "escalated" | "low_confidence" | "conflicting_grades"
+
+export type SessionReviewReason =
+  | DecisionFailureReason
+  | "disabled"
+  | "free_text"
+  | "low_confidence"
+  | "escalated"
+  | "conflicting_grades"
+  | "error"
+  | "sleep_entry"
+  | "restart"
+
 export type GuardrailGrade = { choice: GuardrailDecisionChoice; confidence: number; evidence: string }
 
 export type FormNumberField = {
@@ -2165,6 +2186,7 @@ export type UsageForecastQuota = {
   ratePerHour?: number
   exhaustionAt?: number
   projectedUsedAtReset?: number
+  pace?: UsageForecastPace
 }
 
 export type IntegrationTextPrompt = {
@@ -2274,6 +2296,23 @@ export type Pty = {
   control: { owner: "agent" | "user" | "paused"; fence: number }
   output: { startOffset: number; endOffset: number; truncated: boolean }
   limits: { maxRuntimeSeconds: number; maxRetainedBytes: number; maxInputBytes: number }
+}
+
+export type ProviderQuotaPace = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "provider.quota.pace"
+  location?: LocationRef
+  data: {
+    providerID: string
+    windowID: string
+    milestone: ProviderUsagePaceMilestone
+    resetAt: number
+    title: string
+    body: string
+  }
 }
 
 export type SessionStatus2 = {
@@ -2801,6 +2840,7 @@ export type ProviderRequestReport = {
 }
 
 export type GuardrailEscalation = {
+  reason?: GuardrailEscalationReason
   choice?: GuardrailDecisionChoice
   confidence?: number
   grades?: Array<GuardrailGrade>
@@ -2817,6 +2857,7 @@ export type SessionGuardrailEscalated = {
   data: {
     sessionID: string
     requestID: string
+    reason?: GuardrailEscalationReason
     choice?: GuardrailDecisionChoice
     confidence?: number
     grades?: Array<GuardrailGrade>
@@ -3608,6 +3649,7 @@ export type SessionLogItem =
       data: {
         sessionID: string
         requestID: string
+        reason?: GuardrailEscalationReason
         choice?: GuardrailDecisionChoice
         confidence?: number
         grades?: Array<GuardrailGrade>
@@ -4395,6 +4437,7 @@ export type ServerEvent =
   | FormTimedOut
   | FormDeferred
   | TodoUpdated
+  | ProviderQuotaPace
   | SessionStatus2
   | SessionIdle
   | TuiPromptAppend

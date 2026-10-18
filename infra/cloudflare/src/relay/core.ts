@@ -34,6 +34,12 @@ import {
   session_log_ResultSchema,
   session_message_RequestSchema,
   session_attachment_read_RequestSchema,
+  McpStateAckSchema,
+  QuotaPaceResultSchema,
+  QuotaPaceStatus,
+  ScopeSchema,
+  RequestSchema,
+  operations,
 } from "../../../../packages/protocol/src/v5"
 import type {
   Frame,
@@ -42,20 +48,37 @@ import type {
   Scope,
   OperationDescriptor,
   BulkStart,
+  QuotaPace,
 } from "../../../../packages/protocol/src/v5"
 import type { Connection, Decision } from "../../../../packages/protocol/src/v5/connection"
 import { ReservationBudget } from "../../../../packages/protocol/src/v5/connection"
 import {
+  McpLimits,
   RelayLimits,
   RemoteLimits,
+  decodeMcpResponse,
   noticeSequence,
+  quotaKey,
+  quotaFromWire,
+  quotaToWire,
+  remoteErrorCodes,
   createRelayConnection,
   receiveBinary,
   frameReservation,
 } from "../../../../packages/remote/src/index"
-import type { RemoteNotice, RemoteAlertDetail } from "../../../../packages/remote/src/index"
+import type {
+  RemoteNotice,
+  RemoteAlertDetail,
+  RemoteErrorCode,
+  RemoteQuota,
+} from "../../../../packages/remote/src/index"
 import type { NoticeEvent, NoticeStore } from "./notice-store"
-import type { PushEvent, PushOutcome } from "../push/send"
+import type { PushEvent, PushOutcome, QuotaPushEvent } from "../push/send"
+import type { PushSubscription } from "../push/store"
+import type { QuotaReservation } from "./quota-claims"
+import { McpRelayError, createMcpRelay } from "./mcp"
+import type { McpOutcome, McpRelayDeps, McpRelayRequest } from "./mcp"
+import type { AuthorizationContext, AuthorizationRequest, AuthorizationResponse } from "./mcp-events"
 
 export type RelayConnection = {
   readonly connectionID: string
@@ -69,6 +92,21 @@ export type OfflineCheck = { readonly ownerID: string; readonly deviceID: string
 export type RelayAuthority =
   | { readonly ok: true; readonly ownerID: string }
   | { readonly ok: false; readonly reason: string }
+export type QuotaDelivery = {
+  readonly subscriptions: (ownerID: string) => Promise<readonly PushSubscription[]>
+  readonly reserve: (
+    ownerID: string,
+    key: string,
+    until: number,
+    members: readonly string[],
+  ) => Promise<QuotaReservation>
+  readonly release: (ownerID: string, key: string, members: readonly string[]) => Promise<void>
+  readonly push: (
+    ownerID: string,
+    event: QuotaPushEvent,
+    subscriptions: readonly PushSubscription[],
+  ) => Promise<readonly PushOutcome[]>
+}
 export type RelayDeps = {
   readonly now: () => number
   readonly monotonic: () => number
@@ -81,6 +119,8 @@ export type RelayDeps = {
   readonly loadOfflineCheck: () => Promise<OfflineCheck | undefined>
   readonly saveOfflineCheck: (check: OfflineCheck | undefined) => Promise<void>
   readonly notifyPush?: (ownerID: string, event: PushEvent) => Promise<readonly PushOutcome[]>
+  readonly mcp?: Omit<McpRelayDeps, "now" | "reservation">
+  readonly quota?: QuotaDelivery
 }
 type Peer = {
   identity: RelayConnection
@@ -146,6 +186,8 @@ export function createRelay(deps: RelayDeps) {
   let pushWindow = deps.monotonic()
   let pushCount = 0
   const summarized = new Set<PushEvent["category"]>()
+  const mcp = deps.mcp && createMcpRelay({ ...deps.mcp, now: deps.now, reservation: budget })
+  const mcpTransfers = new Map<string, McpTransfer>()
 
   function alive(peer: Peer) {
     return peers.get(peer.identity.connectionID) === peer && peer.connection.state !== "closed"
@@ -373,6 +415,9 @@ export function createRelay(deps: RelayDeps) {
     deps.close(peer.identity.connectionID, code, reason)
     if (agent === peer) {
       agent = undefined
+      for (const transfer of mcpTransfers.values()) budget.release(transfer.data.length)
+      mcpTransfers.clear()
+      mcp?.clearAgent(peer.identity.connectionID)
       for (const admission of [...agentRequests.values()]) drop(admission.peer, 1012, "EPOCH")
       agentRequests.clear()
       for (const entry of backendEpochs.values()) budget.release(entry.bytes)
@@ -663,18 +708,24 @@ export function createRelay(deps: RelayDeps) {
     agentRequests.set(outgoing.requestID, admission)
     flushAll()
   }
-  async function alerts(ownerID: string, events: readonly { event: PushEvent; presentation: Presentation }[]) {
+  function rollPushWindow() {
     if (deps.monotonic() - pushWindow >= 60_000) {
       pushWindow = deps.monotonic()
       pushCount = 0
       summarized.clear()
     }
+  }
+  async function alerts(
+    ownerID: string,
+    events: readonly { event: Exclude<PushEvent, QuotaPushEvent>; presentation: Presentation }[],
+  ) {
+    rollPushWindow()
     for (const item of events) {
       const bounded = pushCount < 20
       const overflow = !bounded && !summarized.has(item.event.category)
       if (overflow) summarized.add(item.event.category)
       if (bounded) pushCount++
-      const event: PushEvent =
+      const event: Exclude<PushEvent, QuotaPushEvent> =
         bounded || item.event.category === "machine-offline"
           ? item.event
           : { category: item.event.category, deviceID: item.event.deviceID, overflow: events.length }
@@ -1152,6 +1203,234 @@ export function createRelay(deps: RelayDeps) {
       consume(peer, LedgerClass.EVENT, entry.ordinal)
     flushAll()
   }
+  function mcpPort(peer: Peer) {
+    const operation = operations.find((item) => item.diagnosticName === "mcp.request")!
+    const scope = create(ScopeSchema, { target: { case: "machine", value: {} } })
+    return {
+      request: (payload: Uint8Array) => {
+        if (!alive(peer) || peer.connection.state !== "established") return undefined
+        const outgoing = peer.connection.request(
+          operation.operationId,
+          scope,
+          payload,
+          frameReservation({
+            case: "request",
+            value: create(RequestSchema, {
+              requestId: "18446744073709551615",
+              operationId: operation.operationId,
+              scope,
+              payload,
+            }),
+          }),
+          deps.monotonic(),
+        )
+        decisions(peer, outgoing.decisions)
+        if (!outgoing.requestID || !alive(peer)) return undefined
+        flushAll()
+        return outgoing.requestID
+      },
+      cancel: (requestID: string) => {
+        releaseMcpTransfer(requestID)
+        if (!alive(peer)) return "unknown" as const
+        const cancelled = peer.connection.cancel(requestID, deps.monotonic())
+        decisions(peer, cancelled)
+        flushAll()
+        return cancelled.some((entry) => entry.type === "settled" && entry.status === "unsent")
+          ? ("unsent" as const)
+          : ("unknown" as const)
+      },
+      acknowledge: (state: { readonly id: string; readonly enabled: boolean; readonly epoch: string }) => {
+        queued(peer, {
+          case: "control",
+          value: create(ControlSchema, {
+            kind: {
+              case: "mcpStateAck",
+              value: create(McpStateAckSchema, { id: state.id, enabled: state.enabled, epoch: state.epoch }),
+            },
+          }),
+        })
+        flushAll()
+      },
+    }
+  }
+  function releaseMcpTransfer(requestID: string) {
+    for (const [transferID, transfer] of mcpTransfers) {
+      if (transfer.requestID !== requestID) continue
+      mcpTransfers.delete(transferID)
+      budget.release(transfer.data.length)
+    }
+  }
+  function mcpBulk(peer: Peer, frame: Frame) {
+    const relay = mcp!
+    const connectionID = peer.identity.connectionID
+    consume(peer, frame.ledger, frame.deliveryOrdinal)
+    if (frame.body.case === "bulkStart") {
+      const start = frame.body.value
+      if (start.byteCount > BigInt(McpLimits.responseBytes) || !budget.reserve(Number(start.byteCount))) {
+        relay.complete(connectionID, start.requestId, {
+          type: "violation",
+          code: "message_too_large",
+          message: "MCP response exceeds the relay bound",
+        })
+        return
+      }
+      mcpTransfers.set(start.transferId, {
+        requestID: start.requestId,
+        data: new Uint8Array(Number(start.byteCount)),
+      })
+      return
+    }
+    if (frame.body.case !== "bulkPiece" && frame.body.case !== "bulkEnd") return
+    const transfer = mcpTransfers.get(frame.body.value.transferId)
+    if (!transfer) return
+    if (frame.body.case === "bulkPiece") {
+      transfer.data.set(frame.body.value.data, Number(frame.body.value.offset))
+      return
+    }
+    mcpTransfers.delete(frame.body.value.transferId)
+    budget.release(transfer.data.length)
+    const settled = transfer.settled
+    relay.complete(
+      connectionID,
+      transfer.requestID,
+      mcpOutcome(settled?.status, settled?.status === "success" ? transfer.data : settled?.payload?.payload),
+    )
+  }
+  async function mcpControl(peer: Peer, frame: Frame, state: { id: string; enabled: boolean; epoch: string }) {
+    if (!(await authorize(peer))) return
+    await mcp?.handleState(peer.identity.connectionID, { id: state.id, enabled: state.enabled, epoch: state.epoch })
+    consume(peer, frame.ledger, frame.deliveryOrdinal)
+    flushAll()
+  }
+  async function quotaControl(peer: Peer, frame: Frame, pace: QuotaPace) {
+    if (!(await authorize(peer))) return
+    const quota = quotaFromWire(pace)
+    if (!quota) {
+      drop(peer, 1002, "MALFORMED")
+      return
+    }
+    const quotaReservation = 32 * 1024
+    if (!budget.reserve(quotaReservation)) {
+      drop(peer, 1009, "LIMIT")
+      return
+    }
+    try {
+      const status = await deliverQuota(peer, quota)
+      if (agent === peer && alive(peer))
+        queued(peer, {
+          case: "control",
+          value: create(ControlSchema, {
+            kind: {
+              case: "quotaPaceResult",
+              value: create(QuotaPaceResultSchema, {
+                quota: quotaToWire(quota),
+                status: status === "settled" ? QuotaPaceStatus.SETTLED : QuotaPaceStatus.PENDING,
+              }),
+            },
+          }),
+        })
+    } finally {
+      budget.release(quotaReservation)
+    }
+    consume(peer, frame.ledger, frame.deliveryOrdinal)
+    flushAll()
+  }
+  async function deliverQuota(peer: Peer, quota: RemoteQuota): Promise<"settled" | "pending"> {
+    if (quota.resetAt <= deps.now()) return "settled"
+    const delivery = deps.quota
+    if (!delivery) return "pending"
+    rollPushWindow()
+    if (pushCount >= 20) return "pending"
+    pushCount++
+    const windowStart = pushWindow
+    const refund = () => {
+      if (pushWindow === windowStart && pushCount > 0) pushCount--
+    }
+    const ownerID = peer.identity.ownerID
+    const subscriptions = await delivery.subscriptions(ownerID).catch(() => undefined)
+    if (!subscriptions) {
+      refund()
+      return "pending"
+    }
+    const owned = new Set(subscriptions.map((subscription) => subscription.browserSessionID))
+    const targets = subscriptions.filter((subscription) => subscription.categories["quota-pace"])
+    const subscribed = [
+      ...new Set([...peers.values()].filter((item) => item.notices).map((item) => item.identity.browserSessionID)),
+    ]
+    const viewers = subscribed.filter((browserSessionID) => !owned.has(browserSessionID))
+    const key = quotaKey(quota)
+    const claim = await delivery
+      .reserve(ownerID, key, quota.resetAt + quotaClaimGraceMs, [
+        ...subscribed.map(noticeMember),
+        ...targets.map((subscription) => browserMember(subscription.browserSessionID)),
+        ...viewers.map(browserMember),
+      ])
+      .catch(() => undefined)
+    if (claim?.status !== "reserved") {
+      refund()
+      return "pending"
+    }
+    const granted = new Set(claim.granted)
+    const pushed = targets.filter((subscription) => granted.has(browserMember(subscription.browserSessionID)))
+    if (pushed.length === 0) refund()
+    const wire = quotaToWire(quota)
+    const noticed = new Set(subscribed.filter((browserSessionID) => granted.has(noticeMember(browserSessionID))))
+    const presented = new Set(viewers.filter((browserSessionID) => granted.has(browserMember(browserSessionID))))
+    const shown = new Set<string>()
+    for (const client of [...peers.values()]) {
+      if (!client.notices) continue
+      const browserSessionID = client.identity.browserSessionID
+      const present = presented.has(browserSessionID) && !shown.has(browserSessionID)
+      if (!noticed.has(browserSessionID) && !present) continue
+      if (!(await authorize(client))) continue
+      if (noticed.has(browserSessionID))
+        queued(client, {
+          case: "control",
+          value: create(ControlSchema, {
+            kind: {
+              case: "notice",
+              value: create(NoticeSchema, {
+                kind: { case: "quotaPace", value: { quota: wire, at: BigInt(deps.now()) } },
+              }),
+            },
+          }),
+        })
+      if (!present) continue
+      shown.add(browserSessionID)
+      queued(client, {
+        case: "control",
+        value: create(ControlSchema, {
+          kind: {
+            case: "notice",
+            value: create(NoticeSchema, {
+              kind: {
+                case: "present",
+                value: { items: [create(PresentationSchema, { kind: { case: "quotaPace", value: wire } })] },
+              },
+            }),
+          },
+        }),
+      })
+    }
+    flushAll()
+    if (pushed.length === 0) return "settled"
+    const sent = await delivery
+      .push(ownerID, { category: "quota-pace", deviceID: peer.identity.deviceID, ...quota }, pushed)
+      .then(
+        () => true,
+        () => false,
+      )
+    if (sent) return "settled"
+    refund()
+    await delivery
+      .release(
+        ownerID,
+        key,
+        pushed.map((subscription) => browserMember(subscription.browserSessionID)),
+      )
+      .catch(() => undefined)
+    return "pending"
+  }
   async function message(connectionID: string, data: string | ArrayBuffer) {
     const peer = peers.get(connectionID)
     if (!peer) return
@@ -1168,6 +1447,16 @@ export function createRelay(deps: RelayDeps) {
     ) {
       queued(peer, { case: "control", value: decodeStrict(ControlSchema, statusBytes) })
     }
+    if (
+      !established &&
+      peer.identity.role === "agent" &&
+      agent === peer &&
+      peer.connection.state === "established"
+    )
+      mcp?.setAgent(
+        { agentID: connectionID, ownerID: peer.identity.ownerID, deviceID: peer.identity.deviceID },
+        mcpPort(peer),
+      )
     receipts()
     const tasks: Promise<void>[] = []
     for (const entry of received.decisions) {
@@ -1202,7 +1491,8 @@ export function createRelay(deps: RelayDeps) {
           (item) =>
             item.from === peer && item.ledger === LedgerClass.NORMAL && item.ordinal === admission.dispatch.ordinal,
         )
-        if (!forwarded.length) consume(peer, LedgerClass.NORMAL, admission.dispatch.ordinal)
+        if (!forwarded.length && admission.agentID === undefined)
+          consume(peer, LedgerClass.NORMAL, admission.dispatch.ordinal)
         for (const item of forwarded) if (item.handed === undefined) releaseForward(item)
         finish(admission)
         sendInterestSnapshot(peer)
@@ -1211,6 +1501,33 @@ export function createRelay(deps: RelayDeps) {
       if (entry.type === "transferCancelled" && peer.identity.role === "client") {
         const admission = [...peer.requests.values()].find((item) => item.clientTransferID === entry.transferID)
         if (admission) cancelHttp(admission)
+      }
+      if (
+        entry.type === "settled" &&
+        peer.identity.role === "agent" &&
+        received.frame &&
+        mcp?.owns(connectionID, entry.requestID)
+      ) {
+        if (received.frame.body.case === "result") {
+          consume(peer, received.frame.ledger, received.frame.deliveryOrdinal)
+          mcp.complete(connectionID, entry.requestID, mcpOutcome(entry.status, entry.payload?.payload))
+          continue
+        }
+        const transfer = [...mcpTransfers.values()].find((item) => item.requestID === entry.requestID)
+        if (transfer) transfer.settled = entry
+        continue
+      }
+      if (
+        entry.type === "bulkForward" &&
+        peer.identity.role === "agent" &&
+        mcp &&
+        (entry.frame.body.case === "bulkStart"
+          ? mcp.owns(connectionID, entry.frame.body.value.requestId)
+          : (entry.frame.body.case === "bulkPiece" || entry.frame.body.case === "bulkEnd") &&
+            mcpTransfers.has(entry.frame.body.value.transferId))
+      ) {
+        mcpBulk(peer, entry.frame)
+        continue
       }
       if (entry.type === "settled" && peer.identity.role === "agent" && received.frame?.body.case === "result") {
         const admission = agentRequests.get(entry.requestID)
@@ -1359,10 +1676,15 @@ export function createRelay(deps: RelayDeps) {
             continue
           }
           const byteLength = typeof data === "string" ? 0 : data.byteLength
+          const frame = received.frame
+          const kind = frame.body.case === "control" ? frame.body.value.kind : undefined
           tasks.push(
-            inLane(`${connectionID}:control`, () => agentControl(peer, received.frame!, byteLength)).finally(() =>
-              budget.release(RelayLimits.forwardingMetadataBytes),
-            ),
+            (kind?.case === "mcpState"
+              ? inLane(`${connectionID}:mcp`, () => mcpControl(peer, frame, kind.value))
+              : kind?.case === "quotaPace"
+                ? inLane(`${connectionID}:quota`, () => quotaControl(peer, frame, kind.value))
+                : inLane(`${connectionID}:control`, () => agentControl(peer, frame, byteLength))
+            ).finally(() => budget.release(RelayLimits.forwardingMetadataBytes)),
           )
         } else {
           if (!(await authorize(peer))) continue
@@ -1377,6 +1699,16 @@ export function createRelay(deps: RelayDeps) {
 
   return {
     reservation: budget,
+    requestMcp: (input: McpRelayRequest) =>
+      mcp ? mcp.request(input) : Promise.reject(new McpRelayError("agent_unavailable", "Relay MCP is not ready")),
+    authorizeMcpEvent: (
+      trusted: AuthorizationContext,
+      request: AuthorizationRequest,
+    ): Promise<AuthorizationResponse> =>
+      mcp
+        ? mcp.authorizeEvent(trusted, request)
+        : Promise.reject(new McpRelayError("agent_unavailable", "Relay MCP is not ready")),
+    mcpGate: () => mcp?.gate(),
     connection: (connectionID: string) => peers.get(connectionID)?.connection,
     async readContent(request: Request, message: boolean) {
       const epoch = request.headers.get("x-ycoding-connection-epoch")
@@ -1585,6 +1917,40 @@ export function createRelay(deps: RelayDeps) {
   }
 }
 
+type McpTransfer = {
+  readonly requestID: string
+  readonly data: Uint8Array
+  settled?: Extract<Decision, { type: "settled" }>
+}
+const quotaClaimGraceMs = 120_000
+function browserMember(browserSessionID: string) {
+  return `browser:${browserSessionID}`
+}
+function noticeMember(browserSessionID: string) {
+  return `notice:${browserSessionID}`
+}
+function mcpOutcome(status: string | undefined, payload: Uint8Array | undefined): McpOutcome {
+  if (status === "success") {
+    const response = payload && decodeMcpResponse(payload)
+    return response
+      ? { type: "response", response }
+      : { type: "violation", code: "internal_error", message: "Agent returned an invalid MCP response" }
+  }
+  const error = status === "rejected" && payload ? connectorError(payload) : undefined
+  return error
+    ? { type: "error", ...error }
+    : { type: "violation", code: "internal_error", message: "Agent returned an invalid MCP response" }
+}
+function connectorError(payload: Uint8Array): { code: RemoteErrorCode; message: string } | undefined {
+  try {
+    const error = decodeStrict(Connector_ErrorSchema, payload)
+    const label = Connector_Error_code[error.code]?.replace("CONNECTOR_ERROR_CODE_", "").toLowerCase()
+    const code = remoteErrorCodes.find((item) => item === label)
+    return code && { code, message: decodeLossless(error.message!) }
+  } catch {
+    return undefined
+  }
+}
 function frameKey(frame: Frame) {
   const body = frame.body
   if (body.case === "request" || body.case === "result") return `${body.case}:${body.value.requestId}`

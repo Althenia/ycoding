@@ -270,10 +270,121 @@ fn reencode<T: Message + Default + prost::Name>(bytes: &[u8]) -> Vec<u8> {
     decode_strict::<T>(bytes).unwrap().encode_to_vec()
 }
 
+const GOLDEN_VECTORS: [&str; 59] = [
+    "empty-string",
+    "scalar-string",
+    "lone-high",
+    "lone-low",
+    "mixed-units",
+    "null",
+    "false",
+    "zero",
+    "fraction",
+    "bytes",
+    "value-string",
+    "empty-list",
+    "empty-object",
+    "object-lone-key",
+    "clear",
+    "present-empty",
+    "present-false",
+    "bigint",
+    "present-empty-list",
+    "hello",
+    "ready",
+    "request",
+    "result",
+    "error",
+    "events",
+    "stream-end",
+    "bulk-start",
+    "bulk-piece",
+    "bulk-end",
+    "bulk-error",
+    "descriptor",
+    "public-catalog",
+    "public-text-delta",
+    "public-durable",
+    "upload-raw",
+    "global-form-scope",
+    "fs-asset-metadata",
+    "asset-empty-start",
+    "ping",
+    "pong",
+    "cancel",
+    "credit",
+    "subscription_snapshot",
+    "priority",
+    "inventory_invalidated",
+    "status",
+    "completions",
+    "blocked",
+    "notice",
+    "resync_required",
+    "failure",
+    "mcp_state",
+    "mcp_state_ack",
+    "quota_pace",
+    "quota_pace_result",
+    "http-credit",
+    "notice-quota-pace",
+    "notice-present-quota-pace",
+    "asset-metadata-empty",
+];
+
+const NEGATIVE_VECTORS: [&str; 45] = [
+    "asset-metadata-client",
+    "asset-bad-mime",
+    "asset-oversize",
+    "asset-empty-extra-piece",
+    "bad-utf8",
+    "surrogate-utf8",
+    "odd-utf16",
+    "paired-only",
+    "both-branches",
+    "neither-branch",
+    "duplicate-singular",
+    "unknown-command",
+    "hello-epoch",
+    "hello-ledger",
+    "hello-inner-epoch",
+    "before-ready",
+    "depth-overflow",
+    "field-overflow",
+    "duplicate-key",
+    "nan",
+    "infinity",
+    "bad-bool",
+    "bad-varint",
+    "bad-length",
+    "wrong-wire",
+    "concatenated-frame",
+    "duplicate-command",
+    "unknown-control",
+    "mcp-state-local",
+    "quota-pace-local",
+    "quota-pace-untrimmed",
+    "missing-command-field",
+    "missing-frame-body",
+    "both-frame-bodies",
+    "unknown-enum",
+    "tiny-credit",
+    "zero-credit",
+    "http-credit-normal",
+    "http-credit-empty-id",
+    "stream-end-client",
+    "stream-end-duplicate",
+    "public-event-empty",
+    "public-event-duplicate",
+    "ephemeral-durable",
+    "upload-empty",
+];
+
 #[test]
 fn independent_golden_and_negative_vectors() {
     let manifest = fs::read_to_string(fixtures().join("manifest.tsv")).unwrap();
-    let mut counts = (0, 0);
+    let mut golden = Vec::new();
+    let mut negative = Vec::new();
     for line in manifest.lines() {
         let row: Vec<_> = line.split('\t').collect();
         let bytes = vector(row[0]);
@@ -288,7 +399,7 @@ fn independent_golden_and_negative_vectors() {
             } else {
                 assert!(validate_binary(row[1], &bytes).is_err(), "{}", row[0]);
             }
-            counts.1 += 1;
+            negative.push(row[0]);
             continue;
         }
         let encoded = match row[1] {
@@ -310,9 +421,10 @@ fn independent_golden_and_negative_vectors() {
             name => panic!("unhandled golden type {name}"),
         };
         assert_eq!(encoded, bytes, "{}", row[0]);
-        counts.0 += 1;
+        golden.push(row[0]);
     }
-    assert_eq!(counts, (53, 42));
+    assert_eq!(golden, GOLDEN_VECTORS);
+    assert_eq!(negative, NEGATIVE_VECTORS);
 }
 
 #[test]

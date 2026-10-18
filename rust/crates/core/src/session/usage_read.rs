@@ -19,7 +19,7 @@ use ycoding_store::{
 const PAGE: usize = 128;
 const DEFAULT_LIMIT: usize = 100;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PricingRef {
     pub directory: LosslessString,
     pub workspace_id: Option<LosslessString>,
@@ -35,6 +35,12 @@ pub struct Pricing {
 }
 
 pub type Pricer<'a> = Option<&'a dyn Fn(&PricingRef) -> Option<Pricing>>;
+
+#[derive(Default)]
+struct SummaryPrices {
+    order: VecDeque<PricingRef>,
+    values: BTreeMap<PricingRef, Option<Pricing>>,
+}
 
 impl Service {
     pub fn usage(
@@ -101,26 +107,32 @@ fn analytics_report(
     let mut resolved = std::collections::BTreeSet::new();
     let mut first = None::<i64>;
     let mut last = None::<i64>;
+    let filters_model = input.provider_id.is_some()
+        || input.model_id.is_some()
+        || input.profile.is_some()
+        || input.selected_effort.is_some();
     let mut observe = |_: Family, row: Row| -> Result<(), Error> {
-        let model = row.model.domain()?;
-        if input
-            .provider_id
-            .as_ref()
-            .is_some_and(|value| value != &model.provider_id)
-            || input
-                .model_id
+        if filters_model {
+            let model = row.model.domain()?;
+            if input
+                .provider_id
                 .as_ref()
-                .is_some_and(|value| value != &model.id)
-            || input
-                .profile
-                .as_ref()
-                .is_some_and(|value| Some(value) != model.profile.as_ref())
-            || input
-                .selected_effort
-                .as_ref()
-                .is_some_and(|value| Some(value) != model.variant.as_ref())
-        {
-            return Ok(());
+                .is_some_and(|value| value != &model.provider_id)
+                || input
+                    .model_id
+                    .as_ref()
+                    .is_some_and(|value| value != &model.id)
+                || input
+                    .profile
+                    .as_ref()
+                    .is_some_and(|value| Some(value) != model.profile.as_ref())
+                || input
+                    .selected_effort
+                    .as_ref()
+                    .is_some_and(|value| Some(value) != model.variant.as_ref())
+            {
+                return Ok(());
+            }
         }
         if input.from.is_some_and(|from| row.time_created < from.get())
             || input.to.is_some_and(|to| row.time_created >= to.get())
@@ -870,24 +882,24 @@ fn sample(
     family: Family,
     row: Row,
     pricer: Pricer<'_>,
-    prices: &mut VecDeque<(PricingRef, Option<Pricing>)>,
+    prices: &mut SummaryPrices,
 ) -> Result<Sample, Error> {
     let model = row.model.domain()?;
     let tokens = row.tokens.domain()?;
     let estimate = match pricer {
         Some(pricer) if row.cost.is_none() && row.source.as_str() != Some("decision") => {
             let reference = pricing_ref(&row, &model);
-            if !prices.iter().any(|(key, _)| key == &reference) {
-                if prices.len() == 256 {
-                    prices.pop_front();
+            if !prices.values.contains_key(&reference) {
+                if prices.order.len() == 256
+                    && let Some(expired) = prices.order.pop_front()
+                {
+                    prices.values.remove(&expired);
                 }
                 let pricing = pricer(&reference);
-                prices.push_back((reference.clone(), pricing));
+                prices.order.push_back(reference.clone());
+                prices.values.insert(reference.clone(), pricing);
             }
-            let pricing = prices
-                .iter()
-                .find(|(key, _)| key == &reference)
-                .and_then(|(_, value)| value.as_ref());
+            let pricing = prices.values.get(&reference).and_then(Option::as_ref);
             pricing.and_then(|pricing| {
                 let encoded = tokens.encode();
                 usage::estimated_cost(&pricing.provider, &encoded, None)
@@ -923,7 +935,7 @@ fn read_summary(
     let mut total = Acc::default();
     let mut groups: BTreeMap<String, (model::Ref, Acc)> = BTreeMap::new();
     let mut latest = None::<Sample>;
-    let mut prices = VecDeque::new();
+    let mut prices = SummaryPrices::default();
     let mut observe = |family: Family, row: Row| -> Result<(), Error> {
         let sample = sample(family, row, pricer, &mut prices)?;
         total.add(&sample);

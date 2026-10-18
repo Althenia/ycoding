@@ -55,6 +55,7 @@ export async function launchBrowser(executable: string, width: number, height: n
       socket.addEventListener("message", observeFailure)
       await call("Page.enable")
       await call("Runtime.enable")
+      await call("Emulation.setFocusEmulationEnabled", { enabled: true })
       await call("Network.enable")
       await call("Network.setBlockedURLs", { urls: ["*sw.js*"] })
       await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false })

@@ -2,6 +2,7 @@ mod artifact;
 mod auth;
 mod browser;
 mod browser_convert;
+mod browser_stream;
 mod catalog_convert;
 mod catalog_ops;
 mod config_ops;

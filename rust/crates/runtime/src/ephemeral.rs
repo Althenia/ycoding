@@ -537,6 +537,25 @@ pub(crate) fn record(event: &Ephemeral, epoch: &LosslessString) -> R<v5::EventRe
                 },
             }
         ),
+        Data::ProviderQuotaPace(data) => envelope!(
+            ProviderQuotaPace,
+            PublicEventProviderQuotaPace,
+            v5::PublicEventProviderQuotaPaceData {
+                provider_id: convert::wire(&data.provider_id.0),
+                window_id: convert::wire(&data.window_id),
+                milestone: enumeration(
+                    &data.milestone.encode(),
+                    &[
+                        ("almost-out", 1),
+                        ("cutting-it-close", 2),
+                        ("will-run-out", 3)
+                    ]
+                )?,
+                reset_at: data.reset_at.get() as u64,
+                title: convert::wire(&data.title),
+                body: convert::wire(&data.body),
+            }
+        ),
         Data::SessionStatus(data) => envelope!(
             SessionStatus,
             PublicEventSessionStatus,
@@ -750,9 +769,9 @@ mod tests {
         let path = Default::default();
         let fixture = ObjectDecoder::new(&fixture, &path).unwrap();
         let variants = fixture.field::<Vec<LosslessString>>("variants").unwrap();
-        assert_eq!(variants.len(), 57);
+        assert_eq!(variants.len(), 58);
         let cases = fixture.field::<Vec<JsonValue>>("cases").unwrap();
-        assert_eq!(cases.len(), 131);
+        assert_eq!(cases.len(), 133);
         for case in cases {
             let case = ObjectDecoder::new(&case, &path).unwrap();
             let name = case.field::<LosslessString>("name").unwrap();

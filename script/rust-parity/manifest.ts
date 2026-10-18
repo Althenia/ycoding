@@ -138,6 +138,20 @@ export const ownerRules: readonly OwnerRule[] = [
   {
     kind: "connector",
     group: "remote",
+    prefix: "artifact.demo.",
+    owner: "WP-014",
+    evidence: "protocol/ycoding/v5/connector.proto; rust/crates/runtime/src/connector/mcp/resources.rs; rust/crates/runtime/src/connector/operations.rs",
+  },
+  {
+    kind: "connector",
+    group: "remote",
+    prefix: "local.app.",
+    owner: "WP-014",
+    evidence: "protocol/ycoding/v5/connector.proto; rust/crates/runtime/src/connector/local_apps.rs",
+  },
+  {
+    kind: "connector",
+    group: "remote",
     prefix: "session.",
     except: connectorRules.map((rule) => rule.prefix),
     owner: "WP-007",

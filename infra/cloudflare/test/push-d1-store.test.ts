@@ -3,7 +3,7 @@ import { createD1AuthStore } from "../src/auth/d1-store"
 import { createD1PushStore } from "../src/push/d1-store"
 import { migratedDatabase, sqliteD1 } from "./support/d1-sqlite"
 
-const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
 
 async function migrate() {
   const sqlite = await migratedDatabase()
@@ -52,12 +52,14 @@ test("D1 push store keeps each subscription's own System categories across re-re
     const store = createD1PushStore(sqliteD1(sqlite))
     const iphone = "https://web.push.apple.com/iphone"
     const mac = "https://fcm.googleapis.com/send/mac"
-    const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false }
+    const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true }
     await store.upsert("usr_1", "bs_iphone", { endpoint: iphone, keys: { p256dh: "phone", auth: "auth" }, categories: quiet }, 1)
     await store.upsert("usr_1", "bs_mac", { endpoint: mac, keys: { p256dh: "mac", auth: "auth" }, categories: allOn }, 2)
     expect((await store.list("usr_1")).map((row) => [row.endpoint, row.categories])).toEqual([[mac, allOn], [iphone, quiet]])
     await store.upsert("usr_1", "bs_mac", { endpoint: mac, keys: { p256dh: "mac", auth: "auth" }, categories: { ...allOn, "machine-offline": false } }, 3)
     expect((await store.list("usr_1")).find((row) => row.endpoint === mac)?.categories).toEqual({ ...allOn, "machine-offline": false })
+    await store.upsert("usr_1", "bs_mac", { endpoint: mac, keys: { p256dh: "mac", auth: "auth" }, categories: { ...allOn, "quota-pace": false } }, 4)
+    expect((await store.list("usr_1")).find((row) => row.endpoint === mac)?.categories).toEqual({ ...allOn, "quota-pace": false })
 
     const renewed = "https://web.push.apple.com/iphone-renewed"
     expect(await store.renew("usr_2", "bs_usr_2", { endpoint: renewed, keys: { p256dh: "other", auth: "auth" }, replaces: iphone }, 4)).toBe("missing")
@@ -114,7 +116,7 @@ test("each verified browser keeps exactly one current registration: a new endpoi
   const sqlite = await migrate()
   try {
     const store = createD1PushStore(sqliteD1(sqlite))
-    const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false }
+    const quiet = { "agent-completed": false, "approval-requested": true, "machine-offline": false, "quota-pace": true }
     const endpoint = (name: string) => `https://fcm.googleapis.com/send/${name}`
     const owners = async () => (await store.list("usr_1")).map((row) => [row.endpoint, row.browserSessionID, row.categories])
     await store.upsert("usr_1", "bs_laptop", { endpoint: endpoint("old"), keys: { p256dh: "old", auth: "auth" }, categories: quiet }, 1)

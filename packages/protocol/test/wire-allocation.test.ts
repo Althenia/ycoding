@@ -19,6 +19,47 @@ const allocation = (
   enums,
 })
 
+test("diagnostic reasons stay scalar and append escalation metadata without moving existing tags", () => {
+  const contract = sessionContract()
+  expect(contract.enums.get("Guardrail_EscalationReason")).toEqual([
+    "unavailable",
+    "invalid-request",
+    "provider-failed",
+    "timeout",
+    "input-too-large",
+    "invalid-output",
+    "refused",
+    "truncated-output",
+    "unsupported-output",
+    "escalated",
+    "low_confidence",
+    "conflicting_grades",
+  ])
+  expect(contract.messages.has("Guardrail_EscalationReason")).toBe(false)
+  expect(messageTags("Guardrail_Escalation", contract.messages.get("Guardrail_Escalation")!.fields)).toEqual([
+    4, 1, 2, 3,
+  ])
+  expect(
+    messageTags("SessionLogItemValue54_data", contract.messages.get("SessionLogItemValue54_data")!.fields),
+  ).toEqual([1, 2, 8, 3, 4, 5, 6, 7])
+  const reasons = contract.enums.get("SessionReview_Reason")!
+  const ordinals = Object.fromEntries(
+    reasons.map((reason, index) => [reason, enumNumbers("SessionReview_Reason", reasons)[index]]),
+  )
+  expect(ordinals).toMatchObject({
+    disabled: 1,
+    free_text: 2,
+    refused: 3,
+    low_confidence: 4,
+    escalated: 5,
+    error: 6,
+    timeout: 7,
+    sleep_entry: 8,
+    restart: 9,
+  })
+  expect(reasons).toHaveLength(17)
+})
+
 describe("message field tags", () => {
   test("a message without an allocation keeps declaration order", () => {
     expect(messageTags("M", named("a", "b", "c"), allocation())).toEqual([1, 2, 3])
@@ -209,7 +250,7 @@ describe("projection", () => {
     proto.match(new RegExp(`^${kind} ${name} \\{\\n([\\s\\S]*?)^\\}`, "m"))![1]
   const numbered = (body: string, pattern: RegExp) => [...body.matchAll(pattern)].map((m) => [m[1], Number(m[2])])
   const fieldPattern = /^\s+(?:(?:required|optional|repeated) )?\S+ (\w+) = (\d+)/gm
-  const valuePattern = /^\s+(\w+) = (\d+);/gm
+  const valuePattern = /^\s+(\w+) = (\d+)(?: \[[^\]]*\])?;/gm
   const firstMessage = (proto: string) =>
     [...proto.matchAll(/^message (\w+) \{\n([\s\S]*?)^\}/gm)].find(
       (m) => !m[2].includes("oneof") && numbered(m[2], fieldPattern).length >= 3,

@@ -67,6 +67,8 @@ Claude Code OAuth accounts use two sources:
 
 Live response observations replace overlapping older OAuth windows. The OAuth usage request retries once after a forced credential refresh on HTTP 401.
 
+The five-hour window reports a period of 18,000 seconds. Weekly and model-scoped weekly windows report 604,800 seconds. Extra usage has no fixed period.
+
 ### Codex and Spark
 
 When configured, YCoding invokes a Codex app-server process directly with an argv array, performs the documented `initialize`, `initialized`, and `account/rateLimits/read` sequence, then terminates the process. Its snapshot is a separate **Codex app-server** source with unknown account attribution, not a stored credential profile's quota.
@@ -91,9 +93,31 @@ Other seats keep the legacy entitlement path, whose lanes report a percentage of
 
 Successful API snapshots are cached by provider and credential identity. Concurrent refreshes for the same cache key are single-flight. A refresh failure returns a stale copy when one exists.
 
+Forecasts read existing observations without starting or awaiting a provider refresh. A cold or failed cache contributes no quota windows. The last cached observation remains readable after expiry and during refresh, but a replaced account or rotated credential cannot reuse another cache generation. The optional app-server source follows the same cache-only rule for forecasts.
+
 Observed response data is stored separately by provider and applies only to the provider's default profile. A newer observation takes precedence over that profile's older API snapshot. A forced API refresh does not erase a newer observation.
 
 No cache key contains a credential secret.
+
+## Whole-window quota pace
+
+`providerUsage.forecast` may attach `pace` to a quota independently of the recent-history estimate, account binding, and local consumption rates. It uses only an available snapshot no newer than the forecast time and no more than ten minutes old.
+
+A pace requires fixed-reset semantics, a future reset, a positive reported period, positive finite used quota, and a positive finite limit. Percentage windows use a limit of 100 when none is reported. Unlimited windows, credit balances, unknown reset semantics, and missing quantities have no pace. At least one minute and 1% of the window must have elapsed.
+
+Whole-window projected usage is used quota multiplied by the period divided by the elapsed portion of that window. The verdict is:
+
+- `will-run-out` when used quota has reached its limit or projected usage exceeds it;
+- `cutting-it-close` when projected usage exceeds 90% of the limit without exceeding the limit;
+- `ahead` otherwise.
+
+`projectedUsedAtReset` is finite and non-negative. `exhaustionAt` is present only for `will-run-out` when the calculated exhaustion is strictly after the forecast time and before reset. A missing pace remains unreported; consumers never derive it from a recent-history forecast.
+
+### Quota alerts
+
+Account-bound observations track each provider/window independently in bounded process-local state. The first usable observation establishes a silent baseline. Later observations may publish `provider.quota.pace` for a worsening pace or for remaining quota falling strictly below 10%. Recovery or a reset change greater than one second rearms the relevant milestones. Older observations, expired windows, and repeated accepted snapshots do not raise duplicate alerts. A refused publication remains pending for a later ordinary observation or quota read; forecast reads never publish alerts.
+
+The event contains only `providerID`, `windowID`, `milestone`, `resetAt`, and fixed generic `title` and `body` text. Milestones are `almost-out`, `cutting-it-close`, and `will-run-out`. It has no Session, Location, account identifier, credential profile, provider response, or durable milestone record. Restart establishes new silent baselines.
 
 ## Optional Codex app-server configuration
 

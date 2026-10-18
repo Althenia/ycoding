@@ -315,6 +315,12 @@ fn usage_headers_preserve_unreported_validate_and_normalize_only_allowed_fields(
             HeaderValue::from_static("25"),
         ),
         (
+            reqwest::header::HeaderName::from_static(
+                "anthropic-ratelimit-unified-overage-utilization",
+            ),
+            HeaderValue::from_static("0.1"),
+        ),
+        (
             reqwest::header::HeaderName::from_static("private-account"),
             HeaderValue::from_static("fixture-private"),
         ),
@@ -327,6 +333,13 @@ fn usage_headers_preserve_unreported_validate_and_normalize_only_allowed_fields(
         1767225600000
     );
     assert_eq!(observation.windows[1].used, Some(75.0));
+    assert_eq!(observation.windows[0].period_seconds.unwrap().get(), 18_000);
+    assert_eq!(
+        observation.windows[1].period_seconds.unwrap().get(),
+        604_800
+    );
+    assert_eq!(observation.windows[2].id, "overage".into());
+    assert_eq!(observation.windows[2].period_seconds, None);
     assert!(!format!("{observation:?}").contains("fixture-private"));
     for raw in ["-1", "101", "NaN", "", "invalid"] {
         let mut headers = headers.clone();

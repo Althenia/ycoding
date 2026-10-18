@@ -1410,6 +1410,31 @@ async fn artifact_manifest_is_fully_registered_location_only_and_missing_composi
         .into_iter()
         .filter(|item| item.diagnostic_name.starts_with("artifact."))
         .collect::<Vec<_>>();
+    assert_eq!(descriptors.len(), 20);
+    for name in ["artifact.demo.preview", "artifact.demo.export"] {
+        let descriptor = descriptors
+            .iter()
+            .find(|item| item.diagnostic_name == name)
+            .unwrap();
+        assert_eq!(
+            descriptor.roles,
+            vec![
+                v5::PeerRole::RemoteClient as i32,
+                v5::PeerRole::Relay as i32
+            ]
+        );
+        assert_eq!(descriptor.scope, v5::ScopeKind::Machine as i32);
+        assert!(dispatcher.wired().contains(&name));
+    }
+    let descriptors = descriptors
+        .into_iter()
+        .filter(|item| {
+            !matches!(
+                item.diagnostic_name.as_str(),
+                "artifact.demo.preview" | "artifact.demo.export"
+            )
+        })
+        .collect::<Vec<_>>();
     assert_eq!(descriptors.len(), 18);
     for descriptor in descriptors {
         assert_eq!(descriptor.roles, vec![v5::PeerRole::LocalClient as i32]);

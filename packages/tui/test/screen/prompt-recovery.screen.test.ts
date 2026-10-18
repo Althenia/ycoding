@@ -716,7 +716,14 @@ test("shell rejection retains the draft and restores the local retry without dup
   resetFixture()
   const gate = Promise.withResolvers<void>()
   shellGate = gate.promise
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+    sessionReady: true,
+  })
   try {
     await focusComposer(screen)
     screen.input.pressKey("!")

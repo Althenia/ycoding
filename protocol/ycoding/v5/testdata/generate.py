@@ -52,6 +52,7 @@ cases = [
     ("fs-asset-metadata", "fs_read_Result", 'data { mime { utf8: "text/plain" } byteCount: 0 }', 0),
     ("asset-empty-start", "Frame", f'{header} ledger: NORMAL bulk_start {{ request_id: "r" transfer_id: "t" operation_id: 1007 type_name: "ycoding.v5.fs_read_Result" content_kind: ASSET byte_count: 0 chunk_count: 0 }}', 5),
 ]
+quota = 'provider_id { utf8: "openai" } window_id { utf8: "weekly" } milestone: QUOTA_PACE_MILESTONE_CUTTING_IT_CLOSE reset_at: 1800000000000'
 controls = [
     ("ping", "id: 0", 1), ("pong", "id: 0", 5), ("cancel", 'request_id: "r"', 1),
     ("credit", "ledger: NORMAL consumed_through: 1", 1),
@@ -62,11 +63,17 @@ controls = [
     ("blocked", 'session_id: "s" title { utf16_le_units: "\\000\\330" }', 5),
     ("notice", "cleared {}", 3), ("resync_required", 'scope { session: "s" } source_epoch: "source"', 5),
     ("failure", "category: MALFORMED", 5),
+    ("mcp_state", 'id: "state" enabled: true epoch: "epoch"', 4),
+    ("mcp_state_ack", 'id: "state" enabled: true epoch: "epoch"', 3),
+    ("quota_pace", quota, 4),
+    ("quota_pace_result", f"quota {{ {quota} }} status: QUOTA_PACE_STATUS_PENDING", 3),
 ]
 for name, body, sender in controls:
     ledger = "TINY" if name in {"ping", "pong", "cancel", "credit"} else "NORMAL"
     cases.append((name, "Frame", f"{header} ledger: {ledger} control {{ {name} {{ {body} }} }}", sender))
 cases.append(("http-credit", "Credit", 'ledger: BULK consumed_through: 1 transfer_id: "http-transfer"', 0))
+cases.append(("notice-quota-pace", "Frame", f"{header} ledger: NORMAL control {{ notice {{ quota_pace {{ quota {{ {quota} }} at: 1800000000001 }} }} }}", 3))
+cases.append(("notice-present-quota-pace", "Frame", f"{header} ledger: NORMAL control {{ notice {{ present {{ items {{ quota_pace {{ {quota} }} }} }} }} }}", 3))
 rows = []
 encoded = {}
 def encode(message, text):
@@ -121,7 +128,10 @@ negatives = [
     ("wrong-wire", "LosslessString", b"\x08\x00", 0),
     ("concatenated-frame", "Frame", encoded["hello"] * 2, 1),
     ("duplicate-command", "Frame", encoded["hello"] + b"\x08\x05", 1),
-    ("unknown-control", "Control", blob(1, b"\x08\x00") + b"\x70\x01", 0),
+    ("unknown-control", "Control", blob(1, b"\x08\x00") + b"\x90\x01\x01", 0),
+    ("mcp-state-local", "Frame", encoded["mcp_state"], 1),
+    ("quota-pace-local", "Frame", encoded["quota_pace"], 1),
+    ("quota-pace-untrimmed", "QuotaPace", encode("QuotaPace", quota.replace('utf8: "openai"', 'utf8: " openai"')), 0),
     ("missing-command-field", "Request", b"\x0a\x01r", 0),
     ("missing-frame-body", "Frame", b"\x08\x05", 1),
     ("both-frame-bodies", "Frame", encoded["hello"] + blob(11, b""), 1),

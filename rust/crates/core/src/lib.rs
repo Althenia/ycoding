@@ -5,6 +5,8 @@ pub mod event_feed;
 pub mod extension;
 pub mod instructions;
 pub mod job;
+pub mod local_app;
+pub mod mcp_events;
 pub mod meeting;
 pub mod model_incident;
 pub mod observability;

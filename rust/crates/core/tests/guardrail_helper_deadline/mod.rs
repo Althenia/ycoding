@@ -50,7 +50,7 @@ impl World {
         let Reply::Value(reply) = reply else {
             panic!("the provider fixture requires a valid answer")
         };
-        let text = decision::toon::encode(
+        let text = stringify_json(
             &ObjectEncoder::new()
                 .field(
                     "decisions",

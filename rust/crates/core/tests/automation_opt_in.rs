@@ -3,18 +3,19 @@ include!("policy_fixture.rs");
 #[path = "autonomy_support/mod.rs"]
 mod support;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use ycoding_core::{
     process::guardrails::{Guardrails, Limits, Paths, Settings},
     session::{
         autonomy::{self, Error as AutonomyError, Goal, Service as Autonomy, YoloLevel},
         orchestration::{Execution, LaunchInput, Prepared, Service as Orchestration},
+        review::{self, ChildAnswer, Delivery, DeliveryFuture, RecoveryResolution},
         run_coordinator::{Outcome, RunFuture},
         store,
         usage_attribution::Attribution,
     },
     tools::policy::{
-        Authority, Publisher,
+        Authority, Publisher, Reviews,
         forms::Forms,
         permissions::Permissions,
         questions::{Admission, Questions},
@@ -22,7 +23,9 @@ use ycoding_core::{
 };
 use ycoding_schema::{
     DomainDecode, JsonValue, LosslessString, form, model, parse_json, permission, question,
-    session, session_message, session_orchestration::State,
+    session, session_message,
+    session_orchestration::State,
+    session_review::{Kind, Reason},
 };
 use ycoding_store::{KeyPart, Store, session::SessionTable, tuple_key};
 
@@ -349,19 +352,42 @@ impl Execution for Recorder {
     }
 }
 
+#[derive(Default)]
+struct Bridge(OnceLock<Orchestration>);
+
+impl Delivery for Bridge {
+    fn wake(&self, _: &session::Id) {}
+    fn answer_child<'a>(&'a self, answer: ChildAnswer) -> DeliveryFuture<'a> {
+        Box::pin(self.0.get().unwrap().answer_review(answer))
+    }
+    fn resolve_recovery<'a>(&'a self, resolution: RecoveryResolution) -> DeliveryFuture<'a> {
+        Box::pin(self.0.get().unwrap().resolve_recovery(resolution))
+    }
+}
+
 struct Family {
     store: ycoding_store::Store,
     service: Orchestration,
+    reviews: review::Service,
 }
 
 impl Family {
     fn new() -> Self {
         let store = support::store();
-        let service = Orchestration::new(
-            store::Service::new(store.client()),
-            Arc::new(Recorder::default()),
-        );
-        Self { store, service }
+        let sessions = store::Service::new(store.client());
+        let bridge = Arc::new(Bridge::default());
+        let reviews = review::Service::new(sessions.clone(), bridge.clone());
+        let service =
+            Orchestration::new(sessions, Arc::new(Recorder::default())).with_reviews(Reviews {
+                service: reviews.clone(),
+                limit: Limits::default().reviews as usize,
+            });
+        assert!(bridge.0.set(service.clone()).is_ok());
+        Self {
+            store,
+            service,
+            reviews,
+        }
     }
 
     async fn child(&self, call: &str) -> session::Id {
@@ -527,6 +553,17 @@ async fn a_sleeping_family_child_question_waits_and_the_toggle_reads_live() {
     assert!(autonomy.effective(&child).unwrap().asleep);
     assert!(autonomy.can_auto_answer(&child).unwrap());
     assert!(!family.asked(&child).await);
+    let deferred = family
+        .reviews
+        .list(&id("ses_one"))
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.session_id.as_lossless() == child.as_lossless())
+        .collect::<Vec<_>>();
+    assert_eq!(deferred.len(), 1);
+    assert_eq!(deferred[0].deferral.kind, Kind::SubagentQuestion);
+    assert_eq!(deferred[0].deferral.reason, Reason::FreeText);
+    assert_eq!(deferred[0].deferral.choice, None);
 
     autonomy.set_auto_answer(&child, false).await.unwrap();
     assert!(!autonomy.can_auto_answer(&child).unwrap());

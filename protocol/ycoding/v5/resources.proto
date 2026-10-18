@@ -7,449 +7,455 @@ import "ycoding/v5/shared.proto";
 option (ycoding.v5.operation_range) = { first: 2000 last: 2067 };
 
 enum Agent_Info_mode {
-  AGENT_INFO_MODE_SUBAGENT = 1;
-  AGENT_INFO_MODE_PRIMARY = 2;
-  AGENT_INFO_MODE_ALL = 3;
+  AGENT_INFO_MODE_SUBAGENT = 1 [(ycoding.v5.domain_label) = "subagent"];
+  AGENT_INFO_MODE_PRIMARY = 2 [(ycoding.v5.domain_label) = "primary"];
+  AGENT_INFO_MODE_ALL = 3 [(ycoding.v5.domain_label) = "all"];
 }
 
 enum Agent_ColorValue2 {
-  AGENT_COLORVALUE2_PRIMARY = 1;
-  AGENT_COLORVALUE2_SECONDARY = 2;
-  AGENT_COLORVALUE2_ACCENT = 3;
-  AGENT_COLORVALUE2_SUCCESS = 4;
-  AGENT_COLORVALUE2_WARNING = 5;
-  AGENT_COLORVALUE2_ERROR = 6;
-  AGENT_COLORVALUE2_INFO = 7;
+  AGENT_COLORVALUE2_PRIMARY = 1 [(ycoding.v5.domain_label) = "primary"];
+  AGENT_COLORVALUE2_SECONDARY = 2 [(ycoding.v5.domain_label) = "secondary"];
+  AGENT_COLORVALUE2_ACCENT = 3 [(ycoding.v5.domain_label) = "accent"];
+  AGENT_COLORVALUE2_SUCCESS = 4 [(ycoding.v5.domain_label) = "success"];
+  AGENT_COLORVALUE2_WARNING = 5 [(ycoding.v5.domain_label) = "warning"];
+  AGENT_COLORVALUE2_ERROR = 6 [(ycoding.v5.domain_label) = "error"];
+  AGENT_COLORVALUE2_INFO = 7 [(ycoding.v5.domain_label) = "info"];
 }
 
 enum ProjectArtifact_AutomaticWriteResult {
-  PROJECTARTIFACT_AUTOMATICWRITERESULT_CREATED = 1;
-  PROJECTARTIFACT_AUTOMATICWRITERESULT_UPDATED = 2;
-  PROJECTARTIFACT_AUTOMATICWRITERESULT_RECONCILED = 3;
+  PROJECTARTIFACT_AUTOMATICWRITERESULT_CREATED = 1 [(ycoding.v5.domain_label) = "created"];
+  PROJECTARTIFACT_AUTOMATICWRITERESULT_UPDATED = 2 [(ycoding.v5.domain_label) = "updated"];
+  PROJECTARTIFACT_AUTOMATICWRITERESULT_RECONCILED = 3 [(ycoding.v5.domain_label) = "reconciled"];
 }
 
 enum ProjectArtifact_Kind {
-  PROJECTARTIFACT_KIND_SKILL = 1;
-  PROJECTARTIFACT_KIND_COMMAND = 2;
-  PROJECTARTIFACT_KIND_AGENT = 3;
-  PROJECTARTIFACT_KIND_PLUGIN = 4;
+  PROJECTARTIFACT_KIND_SKILL = 1 [(ycoding.v5.domain_label) = "skill"];
+  PROJECTARTIFACT_KIND_COMMAND = 2 [(ycoding.v5.domain_label) = "command"];
+  PROJECTARTIFACT_KIND_AGENT = 3 [(ycoding.v5.domain_label) = "agent"];
+  PROJECTARTIFACT_KIND_PLUGIN = 4 [(ycoding.v5.domain_label) = "plugin"];
 }
 
 enum ProjectArtifact_ApiMutationResult_stage {
-  PROJECTARTIFACT_APIMUTATIONRESULT_STAGE_TRIAL = 1;
+  PROJECTARTIFACT_APIMUTATIONRESULT_STAGE_TRIAL = 1 [(ycoding.v5.domain_label) = "trial"];
 }
 
 enum ArtifactBadRequest__tag {
-  ARTIFACTBADREQUEST__TAG_ARTIFACTBADREQUEST = 1;
+  ARTIFACTBADREQUEST__TAG_ARTIFACTBADREQUEST = 1 [(ycoding.v5.domain_label) = "ArtifactBadRequest"];
 }
 
 enum ArtifactBadRequest_code {
-  ARTIFACTBADREQUEST_CODE_PROJECTIDENTITYUNAVAILABLE = 1;
-  ARTIFACTBADREQUEST_CODE_INVALIDARTIFACT = 2;
-  ARTIFACTBADREQUEST_CODE_UNSAFECONTENT = 3;
-  ARTIFACTBADREQUEST_CODE_UNSUPPORTEDKIND = 4;
-  ARTIFACTBADREQUEST_CODE_INVALIDSCOPE = 5;
+  ARTIFACTBADREQUEST_CODE_PROJECTIDENTITYUNAVAILABLE = 1 [(ycoding.v5.domain_label) = "ProjectIdentityUnavailable"];
+  ARTIFACTBADREQUEST_CODE_INVALIDARTIFACT = 2 [(ycoding.v5.domain_label) = "InvalidArtifact"];
+  ARTIFACTBADREQUEST_CODE_UNSAFECONTENT = 3 [(ycoding.v5.domain_label) = "UnsafeContent"];
+  ARTIFACTBADREQUEST_CODE_UNSUPPORTEDKIND = 4 [(ycoding.v5.domain_label) = "UnsupportedKind"];
+  ARTIFACTBADREQUEST_CODE_INVALIDSCOPE = 5 [(ycoding.v5.domain_label) = "InvalidScope"];
 }
 
 enum ArtifactNotFound__tag {
-  ARTIFACTNOTFOUND__TAG_ARTIFACTNOTFOUND = 1;
+  ARTIFACTNOTFOUND__TAG_ARTIFACTNOTFOUND = 1 [(ycoding.v5.domain_label) = "ArtifactNotFound"];
 }
 
 enum ArtifactNotFound_code {
-  ARTIFACTNOTFOUND_CODE_ARTIFACTNOTFOUND = 1;
-  ARTIFACTNOTFOUND_CODE_VERSIONNOTFOUND = 2;
-  ARTIFACTNOTFOUND_CODE_DELETIONNOTFOUND = 3;
+  ARTIFACTNOTFOUND_CODE_ARTIFACTNOTFOUND = 1 [(ycoding.v5.domain_label) = "ArtifactNotFound"];
+  ARTIFACTNOTFOUND_CODE_VERSIONNOTFOUND = 2 [(ycoding.v5.domain_label) = "VersionNotFound"];
+  ARTIFACTNOTFOUND_CODE_DELETIONNOTFOUND = 3 [(ycoding.v5.domain_label) = "DeletionNotFound"];
 }
 
 enum ArtifactConflict__tag {
-  ARTIFACTCONFLICT__TAG_ARTIFACTCONFLICT = 1;
+  ARTIFACTCONFLICT__TAG_ARTIFACTCONFLICT = 1 [(ycoding.v5.domain_label) = "ArtifactConflict"];
 }
 
 enum ArtifactConflict_code {
-  ARTIFACTCONFLICT_CODE_ARTIFACTCOLLISION = 1;
-  ARTIFACTCONFLICT_CODE_SCOPECOLLISION = 2;
-  ARTIFACTCONFLICT_CODE_VERSIONCONFLICT = 3;
-  ARTIFACTCONFLICT_CODE_OWNERSHIPMISMATCH = 4;
-  ARTIFACTCONFLICT_CODE_DESTINATIONEXISTS = 5;
-  ARTIFACTCONFLICT_CODE_PROJECTADOPTIONCONFLICT = 6;
+  ARTIFACTCONFLICT_CODE_ARTIFACTCOLLISION = 1 [(ycoding.v5.domain_label) = "ArtifactCollision"];
+  ARTIFACTCONFLICT_CODE_SCOPECOLLISION = 2 [(ycoding.v5.domain_label) = "ScopeCollision"];
+  ARTIFACTCONFLICT_CODE_VERSIONCONFLICT = 3 [(ycoding.v5.domain_label) = "VersionConflict"];
+  ARTIFACTCONFLICT_CODE_OWNERSHIPMISMATCH = 4 [(ycoding.v5.domain_label) = "OwnershipMismatch"];
+  ARTIFACTCONFLICT_CODE_DESTINATIONEXISTS = 5 [(ycoding.v5.domain_label) = "DestinationExists"];
+  ARTIFACTCONFLICT_CODE_PROJECTADOPTIONCONFLICT = 6 [(ycoding.v5.domain_label) = "ProjectAdoptionConflict"];
 }
 
 enum ArtifactGone__tag {
-  ARTIFACTGONE__TAG_ARTIFACTGONE = 1;
+  ARTIFACTGONE__TAG_ARTIFACTGONE = 1 [(ycoding.v5.domain_label) = "ArtifactGone"];
 }
 
 enum ArtifactGone_code {
-  ARTIFACTGONE_CODE_CONFIRMATIONEXPIRED = 1;
-  ARTIFACTGONE_CODE_TRASHEXPIRED = 2;
+  ARTIFACTGONE_CODE_CONFIRMATIONEXPIRED = 1 [(ycoding.v5.domain_label) = "ConfirmationExpired"];
+  ARTIFACTGONE_CODE_TRASHEXPIRED = 2 [(ycoding.v5.domain_label) = "TrashExpired"];
 }
 
 enum ArtifactTooLarge__tag {
-  ARTIFACTTOOLARGE__TAG_ARTIFACTTOOLARGE = 1;
+  ARTIFACTTOOLARGE__TAG_ARTIFACTTOOLARGE = 1 [(ycoding.v5.domain_label) = "ArtifactTooLarge"];
 }
 
 enum ArtifactTooLarge_code {
-  ARTIFACTTOOLARGE_CODE_CONTENTTOOLARGE = 1;
-  ARTIFACTTOOLARGE_CODE_SCOPEQUOTAEXCEEDED = 2;
+  ARTIFACTTOOLARGE_CODE_CONTENTTOOLARGE = 1 [(ycoding.v5.domain_label) = "ContentTooLarge"];
+  ARTIFACTTOOLARGE_CODE_SCOPEQUOTAEXCEEDED = 2 [(ycoding.v5.domain_label) = "ScopeQuotaExceeded"];
 }
 
 enum ArtifactRateLimited__tag {
-  ARTIFACTRATELIMITED__TAG_ARTIFACTRATELIMITED = 1;
+  ARTIFACTRATELIMITED__TAG_ARTIFACTRATELIMITED = 1 [(ycoding.v5.domain_label) = "ArtifactRateLimited"];
 }
 
 enum ArtifactRateLimited_code {
-  ARTIFACTRATELIMITED_CODE_WRITERATEEXCEEDED = 1;
-  ARTIFACTRATELIMITED_CODE_ARTIFACTCOOLDOWN = 2;
+  ARTIFACTRATELIMITED_CODE_WRITERATEEXCEEDED = 1 [(ycoding.v5.domain_label) = "WriteRateExceeded"];
+  ARTIFACTRATELIMITED_CODE_ARTIFACTCOOLDOWN = 2 [(ycoding.v5.domain_label) = "ArtifactCooldown"];
 }
 
 enum ArtifactUnavailable__tag {
-  ARTIFACTUNAVAILABLE__TAG_ARTIFACTUNAVAILABLE = 1;
+  ARTIFACTUNAVAILABLE__TAG_ARTIFACTUNAVAILABLE = 1 [(ycoding.v5.domain_label) = "ArtifactUnavailable"];
 }
 
 enum ArtifactUnavailable_code {
-  ARTIFACTUNAVAILABLE_CODE_STORAGEUNAVAILABLE = 1;
-  ARTIFACTUNAVAILABLE_CODE_LOCKTIMEOUT = 2;
-  ARTIFACTUNAVAILABLE_CODE_RECONCILIATIONREQUIRED = 3;
+  ARTIFACTUNAVAILABLE_CODE_STORAGEUNAVAILABLE = 1 [(ycoding.v5.domain_label) = "StorageUnavailable"];
+  ARTIFACTUNAVAILABLE_CODE_LOCKTIMEOUT = 2 [(ycoding.v5.domain_label) = "LockTimeout"];
+  ARTIFACTUNAVAILABLE_CODE_RECONCILIATIONREQUIRED = 3 [(ycoding.v5.domain_label) = "ReconciliationRequired"];
 }
 
 enum ProjectArtifact_ApiScope {
-  PROJECTARTIFACT_APISCOPE_PROJECT = 1;
-  PROJECTARTIFACT_APISCOPE_GLOBAL = 2;
+  PROJECTARTIFACT_APISCOPE_PROJECT = 1 [(ycoding.v5.domain_label) = "project"];
+  PROJECTARTIFACT_APISCOPE_GLOBAL = 2 [(ycoding.v5.domain_label) = "global"];
 }
 
 enum ProjectArtifact_SkillDefinition_kind {
-  PROJECTARTIFACT_SKILLDEFINITION_KIND_SKILL = 1;
+  PROJECTARTIFACT_SKILLDEFINITION_KIND_SKILL = 1 [(ycoding.v5.domain_label) = "skill"];
 }
 
 enum ProjectArtifact_CommandDefinition_kind {
-  PROJECTARTIFACT_COMMANDDEFINITION_KIND_COMMAND = 1;
+  PROJECTARTIFACT_COMMANDDEFINITION_KIND_COMMAND = 1 [(ycoding.v5.domain_label) = "command"];
 }
 
 enum ProjectArtifact_AgentDefinition_kind {
-  PROJECTARTIFACT_AGENTDEFINITION_KIND_AGENT = 1;
+  PROJECTARTIFACT_AGENTDEFINITION_KIND_AGENT = 1 [(ycoding.v5.domain_label) = "agent"];
 }
 
 enum ProjectArtifact_AgentDefinition_mode {
-  PROJECTARTIFACT_AGENTDEFINITION_MODE_SUBAGENT = 1;
+  PROJECTARTIFACT_AGENTDEFINITION_MODE_SUBAGENT = 1 [(ycoding.v5.domain_label) = "subagent"];
 }
 
 enum ProjectArtifact_PluginDefinition_kind {
-  PROJECTARTIFACT_PLUGINDEFINITION_KIND_PLUGIN = 1;
+  PROJECTARTIFACT_PLUGINDEFINITION_KIND_PLUGIN = 1 [(ycoding.v5.domain_label) = "plugin"];
 }
 
 enum ProjectArtifact_ProjectScope_type {
-  PROJECTARTIFACT_PROJECTSCOPE_TYPE_PROJECT = 1;
+  PROJECTARTIFACT_PROJECTSCOPE_TYPE_PROJECT = 1 [(ycoding.v5.domain_label) = "project"];
 }
 
 enum ProjectArtifact_GlobalScope_type {
-  PROJECTARTIFACT_GLOBALSCOPE_TYPE_GLOBAL = 1;
+  PROJECTARTIFACT_GLOBALSCOPE_TYPE_GLOBAL = 1 [(ycoding.v5.domain_label) = "global"];
 }
 
 enum ProjectArtifact_Stage {
-  PROJECTARTIFACT_STAGE_TRIAL = 1;
-  PROJECTARTIFACT_STAGE_ACTIVE = 2;
-  PROJECTARTIFACT_STAGE_DEGRADED = 3;
-  PROJECTARTIFACT_STAGE_DISABLED = 4;
-  PROJECTARTIFACT_STAGE_QUARANTINE = 5;
+  PROJECTARTIFACT_STAGE_TRIAL = 1 [(ycoding.v5.domain_label) = "trial"];
+  PROJECTARTIFACT_STAGE_ACTIVE = 2 [(ycoding.v5.domain_label) = "active"];
+  PROJECTARTIFACT_STAGE_DEGRADED = 3 [(ycoding.v5.domain_label) = "degraded"];
+  PROJECTARTIFACT_STAGE_DISABLED = 4 [(ycoding.v5.domain_label) = "disabled"];
+  PROJECTARTIFACT_STAGE_QUARANTINE = 5 [(ycoding.v5.domain_label) = "quarantine"];
 }
 
 enum ProjectArtifact_VersionState {
-  PROJECTARTIFACT_VERSIONSTATE_TRIAL = 1;
-  PROJECTARTIFACT_VERSIONSTATE_ACTIVE = 2;
-  PROJECTARTIFACT_VERSIONSTATE_DEGRADED = 3;
-  PROJECTARTIFACT_VERSIONSTATE_DISABLED = 4;
-  PROJECTARTIFACT_VERSIONSTATE_QUARANTINE = 5;
-  PROJECTARTIFACT_VERSIONSTATE_SUPERSEDED = 6;
+  PROJECTARTIFACT_VERSIONSTATE_TRIAL = 1 [(ycoding.v5.domain_label) = "trial"];
+  PROJECTARTIFACT_VERSIONSTATE_ACTIVE = 2 [(ycoding.v5.domain_label) = "active"];
+  PROJECTARTIFACT_VERSIONSTATE_DEGRADED = 3 [(ycoding.v5.domain_label) = "degraded"];
+  PROJECTARTIFACT_VERSIONSTATE_DISABLED = 4 [(ycoding.v5.domain_label) = "disabled"];
+  PROJECTARTIFACT_VERSIONSTATE_QUARANTINE = 5 [(ycoding.v5.domain_label) = "quarantine"];
+  PROJECTARTIFACT_VERSIONSTATE_SUPERSEDED = 6 [(ycoding.v5.domain_label) = "superseded"];
 }
 
 enum ProjectArtifact_Source {
-  PROJECTARTIFACT_SOURCE_AGENT = 1;
-  PROJECTARTIFACT_SOURCE_USER = 2;
-  PROJECTARTIFACT_SOURCE_PROMOTION = 3;
-  PROJECTARTIFACT_SOURCE_FORK = 4;
-  PROJECTARTIFACT_SOURCE_RESTORE = 5;
+  PROJECTARTIFACT_SOURCE_AGENT = 1 [(ycoding.v5.domain_label) = "agent"];
+  PROJECTARTIFACT_SOURCE_USER = 2 [(ycoding.v5.domain_label) = "user"];
+  PROJECTARTIFACT_SOURCE_PROMOTION = 3 [(ycoding.v5.domain_label) = "promotion"];
+  PROJECTARTIFACT_SOURCE_FORK = 4 [(ycoding.v5.domain_label) = "fork"];
+  PROJECTARTIFACT_SOURCE_RESTORE = 5 [(ycoding.v5.domain_label) = "restore"];
 }
 
 enum ProjectArtifact_CollisionDiagnostic_type {
-  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_EXISTING_SOURCE = 1;
-  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_CROSS_SCOPE = 2;
-  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_PROJECT_OVER_GLOBAL_SHADOW = 3;
+  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_EXISTING_SOURCE = 1 [(ycoding.v5.domain_label) = "existing-source"];
+  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_CROSS_SCOPE = 2 [(ycoding.v5.domain_label) = "cross-scope"];
+  PROJECTARTIFACT_COLLISIONDIAGNOSTIC_TYPE_PROJECT_OVER_GLOBAL_SHADOW = 3 [(ycoding.v5.domain_label) = "project-over-global-shadow"];
 }
 
 enum ProjectArtifact_ApiListScope {
-  PROJECTARTIFACT_APILISTSCOPE_PROJECT = 1;
-  PROJECTARTIFACT_APILISTSCOPE_GLOBAL = 2;
-  PROJECTARTIFACT_APILISTSCOPE_TRASH = 3;
+  PROJECTARTIFACT_APILISTSCOPE_PROJECT = 1 [(ycoding.v5.domain_label) = "project"];
+  PROJECTARTIFACT_APILISTSCOPE_GLOBAL = 2 [(ycoding.v5.domain_label) = "global"];
+  PROJECTARTIFACT_APILISTSCOPE_TRASH = 3 [(ycoding.v5.domain_label) = "trash"];
 }
 
 enum ProjectArtifact_PromotionPreview_risk {
-  PROJECTARTIFACT_PROMOTIONPREVIEW_RISK_DECLARATIVE = 1;
-  PROJECTARTIFACT_PROMOTIONPREVIEW_RISK_EXECUTABLE = 2;
+  PROJECTARTIFACT_PROMOTIONPREVIEW_RISK_DECLARATIVE = 1 [(ycoding.v5.domain_label) = "declarative"];
+  PROJECTARTIFACT_PROMOTIONPREVIEW_RISK_EXECUTABLE = 2 [(ycoding.v5.domain_label) = "executable"];
 }
 
 enum Config_DiagnosticReason {
-  CONFIG_DIAGNOSTICREASON_INVALID_JSON = 1;
-  CONFIG_DIAGNOSTICREASON_INVALID_VALUES = 2;
-  CONFIG_DIAGNOSTICREASON_REMOVED_KEYS = 3;
+  CONFIG_DIAGNOSTICREASON_INVALID_JSON = 1 [(ycoding.v5.domain_label) = "invalid-json"];
+  CONFIG_DIAGNOSTICREASON_INVALID_VALUES = 2 [(ycoding.v5.domain_label) = "invalid-values"];
+  CONFIG_DIAGNOSTICREASON_REMOVED_KEYS = 3 [(ycoding.v5.domain_label) = "removed-keys"];
 }
 
 enum ModelIncident_Kind {
-  MODELINCIDENT_KIND_FALLBACK = 1;
-  MODELINCIDENT_KIND_GUARDRAIL_ESCALATED = 2;
-  MODELINCIDENT_KIND_GUARDRAIL_REJECTED = 3;
+  MODELINCIDENT_KIND_FALLBACK = 1 [(ycoding.v5.domain_label) = "fallback"];
+  MODELINCIDENT_KIND_GUARDRAIL_ESCALATED = 2 [(ycoding.v5.domain_label) = "guardrail-escalated"];
+  MODELINCIDENT_KIND_GUARDRAIL_REJECTED = 3 [(ycoding.v5.domain_label) = "guardrail-rejected"];
 }
 
 enum ModelIncident_DecidedBy {
-  MODELINCIDENT_DECIDEDBY_DECISION_MODEL = 1;
-  MODELINCIDENT_DECIDEDBY_HUMAN = 2;
+  MODELINCIDENT_DECIDEDBY_DECISION_MODEL = 1 [(ycoding.v5.domain_label) = "decision-model"];
+  MODELINCIDENT_DECIDEDBY_HUMAN = 2 [(ycoding.v5.domain_label) = "human"];
 }
 
 enum ModelIncident_Group {
-  MODELINCIDENT_GROUP_MODEL = 1;
-  MODELINCIDENT_GROUP_AGENT = 2;
+  MODELINCIDENT_GROUP_MODEL = 1 [(ycoding.v5.domain_label) = "model"];
+  MODELINCIDENT_GROUP_AGENT = 2 [(ycoding.v5.domain_label) = "agent"];
 }
 
 enum Integration_CommandAttemptStatusValue1_status {
-  INTEGRATION_COMMANDATTEMPTSTATUSVALUE1_STATUS_PENDING = 1;
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE1_STATUS_PENDING = 1 [(ycoding.v5.domain_label) = "pending"];
 }
 
 enum Integration_CommandAttemptStatusValue2_status {
-  INTEGRATION_COMMANDATTEMPTSTATUSVALUE2_STATUS_COMPLETE = 1;
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE2_STATUS_COMPLETE = 1 [(ycoding.v5.domain_label) = "complete"];
 }
 
 enum Integration_CommandAttemptStatusValue3_status {
-  INTEGRATION_COMMANDATTEMPTSTATUSVALUE3_STATUS_FAILED = 1;
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE3_STATUS_FAILED = 1 [(ycoding.v5.domain_label) = "failed"];
 }
 
 enum Integration_CommandAttemptStatusValue4_status {
-  INTEGRATION_COMMANDATTEMPTSTATUSVALUE4_STATUS_EXPIRED = 1;
+  INTEGRATION_COMMANDATTEMPTSTATUSVALUE4_STATUS_EXPIRED = 1 [(ycoding.v5.domain_label) = "expired"];
 }
 
 enum Integration_OAuthMethod_type {
-  INTEGRATION_OAUTHMETHOD_TYPE_OAUTH = 1;
+  INTEGRATION_OAUTHMETHOD_TYPE_OAUTH = 1 [(ycoding.v5.domain_label) = "oauth"];
 }
 
 enum Integration_TextPrompt_type {
-  INTEGRATION_TEXTPROMPT_TYPE_TEXT = 1;
+  INTEGRATION_TEXTPROMPT_TYPE_TEXT = 1 [(ycoding.v5.domain_label) = "text"];
 }
 
 enum Integration_When_op {
-  INTEGRATION_WHEN_OP_EQ = 1;
-  INTEGRATION_WHEN_OP_NEQ = 2;
+  INTEGRATION_WHEN_OP_EQ = 1 [(ycoding.v5.domain_label) = "eq"];
+  INTEGRATION_WHEN_OP_NEQ = 2 [(ycoding.v5.domain_label) = "neq"];
 }
 
 enum Integration_SelectPrompt_type {
-  INTEGRATION_SELECTPROMPT_TYPE_SELECT = 1;
+  INTEGRATION_SELECTPROMPT_TYPE_SELECT = 1 [(ycoding.v5.domain_label) = "select"];
 }
 
 enum Integration_CommandMethod_type {
-  INTEGRATION_COMMANDMETHOD_TYPE_COMMAND = 1;
+  INTEGRATION_COMMANDMETHOD_TYPE_COMMAND = 1 [(ycoding.v5.domain_label) = "command"];
 }
 
 enum Integration_KeyMethod_type {
-  INTEGRATION_KEYMETHOD_TYPE_KEY = 1;
+  INTEGRATION_KEYMETHOD_TYPE_KEY = 1 [(ycoding.v5.domain_label) = "key"];
 }
 
 enum Integration_EnvMethod_type {
-  INTEGRATION_ENVMETHOD_TYPE_ENV = 1;
+  INTEGRATION_ENVMETHOD_TYPE_ENV = 1 [(ycoding.v5.domain_label) = "env"];
 }
 
 enum Connection_CredentialInfo_type {
-  CONNECTION_CREDENTIALINFO_TYPE_CREDENTIAL = 1;
+  CONNECTION_CREDENTIALINFO_TYPE_CREDENTIAL = 1 [(ycoding.v5.domain_label) = "credential"];
 }
 
 enum Connection_EnvInfo_type {
-  CONNECTION_ENVINFO_TYPE_ENV = 1;
+  CONNECTION_ENVINFO_TYPE_ENV = 1 [(ycoding.v5.domain_label) = "env"];
 }
 
 enum Integration_Attempt_mode {
-  INTEGRATION_ATTEMPT_MODE_AUTO = 1;
-  INTEGRATION_ATTEMPT_MODE_CODE = 2;
+  INTEGRATION_ATTEMPT_MODE_AUTO = 1 [(ycoding.v5.domain_label) = "auto"];
+  INTEGRATION_ATTEMPT_MODE_CODE = 2 [(ycoding.v5.domain_label) = "code"];
 }
 
 enum Integration_AttemptStatusValue1_status {
-  INTEGRATION_ATTEMPTSTATUSVALUE1_STATUS_PENDING = 1;
+  INTEGRATION_ATTEMPTSTATUSVALUE1_STATUS_PENDING = 1 [(ycoding.v5.domain_label) = "pending"];
 }
 
 enum Integration_AttemptStatusValue2_status {
-  INTEGRATION_ATTEMPTSTATUSVALUE2_STATUS_COMPLETE = 1;
+  INTEGRATION_ATTEMPTSTATUSVALUE2_STATUS_COMPLETE = 1 [(ycoding.v5.domain_label) = "complete"];
 }
 
 enum Integration_AttemptStatusValue3_status {
-  INTEGRATION_ATTEMPTSTATUSVALUE3_STATUS_FAILED = 1;
+  INTEGRATION_ATTEMPTSTATUSVALUE3_STATUS_FAILED = 1 [(ycoding.v5.domain_label) = "failed"];
 }
 
 enum Integration_AttemptStatusValue4_status {
-  INTEGRATION_ATTEMPTSTATUSVALUE4_STATUS_EXPIRED = 1;
+  INTEGRATION_ATTEMPTSTATUSVALUE4_STATUS_EXPIRED = 1 [(ycoding.v5.domain_label) = "expired"];
 }
 
 enum Mcp_LocalConfig_type {
-  MCP_LOCALCONFIG_TYPE_LOCAL = 1;
+  MCP_LOCALCONFIG_TYPE_LOCAL = 1 [(ycoding.v5.domain_label) = "local"];
 }
 
 enum Mcp_RemoteConfig_type {
-  MCP_REMOTECONFIG_TYPE_REMOTE = 1;
+  MCP_REMOTECONFIG_TYPE_REMOTE = 1 [(ycoding.v5.domain_label) = "remote"];
 }
 
 enum McpServerNotFoundError__tag {
-  MCPSERVERNOTFOUNDERROR__TAG_MCPSERVERNOTFOUNDERROR = 1;
+  MCPSERVERNOTFOUNDERROR__TAG_MCPSERVERNOTFOUNDERROR = 1 [(ycoding.v5.domain_label) = "McpServerNotFoundError"];
 }
 
 enum Mcp_Status_Connected_status {
-  MCP_STATUS_CONNECTED_STATUS_CONNECTED = 1;
+  MCP_STATUS_CONNECTED_STATUS_CONNECTED = 1 [(ycoding.v5.domain_label) = "connected"];
 }
 
 enum Mcp_Status_Pending_status {
-  MCP_STATUS_PENDING_STATUS_PENDING = 1;
+  MCP_STATUS_PENDING_STATUS_PENDING = 1 [(ycoding.v5.domain_label) = "pending"];
 }
 
 enum Mcp_Status_Disabled_status {
-  MCP_STATUS_DISABLED_STATUS_DISABLED = 1;
+  MCP_STATUS_DISABLED_STATUS_DISABLED = 1 [(ycoding.v5.domain_label) = "disabled"];
 }
 
 enum Mcp_Status_Failed_status {
-  MCP_STATUS_FAILED_STATUS_FAILED = 1;
+  MCP_STATUS_FAILED_STATUS_FAILED = 1 [(ycoding.v5.domain_label) = "failed"];
 }
 
 enum Mcp_Status_NeedsAuth_status {
-  MCP_STATUS_NEEDSAUTH_STATUS_NEEDS_AUTH = 1;
+  MCP_STATUS_NEEDSAUTH_STATUS_NEEDS_AUTH = 1 [(ycoding.v5.domain_label) = "needs_auth"];
 }
 
 enum Mcp_Status_NeedsClientRegistration_status {
-  MCP_STATUS_NEEDSCLIENTREGISTRATION_STATUS_NEEDS_CLIENT_REGISTRATION = 1;
+  MCP_STATUS_NEEDSCLIENTREGISTRATION_STATUS_NEEDS_CLIENT_REGISTRATION = 1 [(ycoding.v5.domain_label) = "needs_client_registration"];
 }
 
 enum Model_Cost_tier_type {
-  MODEL_COST_TIER_TYPE_CONTEXT = 1;
+  MODEL_COST_TIER_TYPE_CONTEXT = 1 [(ycoding.v5.domain_label) = "context"];
 }
 
 enum Model_Default_status {
-  MODEL_DEFAULT_STATUS_ALPHA = 1;
-  MODEL_DEFAULT_STATUS_BETA = 2;
-  MODEL_DEFAULT_STATUS_DEPRECATED = 3;
-  MODEL_DEFAULT_STATUS_ACTIVE = 4;
+  MODEL_DEFAULT_STATUS_ALPHA = 1 [(ycoding.v5.domain_label) = "alpha"];
+  MODEL_DEFAULT_STATUS_BETA = 2 [(ycoding.v5.domain_label) = "beta"];
+  MODEL_DEFAULT_STATUS_DEPRECATED = 3 [(ycoding.v5.domain_label) = "deprecated"];
+  MODEL_DEFAULT_STATUS_ACTIVE = 4 [(ycoding.v5.domain_label) = "active"];
 }
 
 enum Model_API {
-  MODEL_API_CHAT = 1;
-  MODEL_API_RESPONSES = 2;
+  MODEL_API_CHAT = 1 [(ycoding.v5.domain_label) = "chat"];
+  MODEL_API_RESPONSES = 2 [(ycoding.v5.domain_label) = "responses"];
 }
 
 enum Model_Info_status {
-  MODEL_INFO_STATUS_ALPHA = 1;
-  MODEL_INFO_STATUS_BETA = 2;
-  MODEL_INFO_STATUS_DEPRECATED = 3;
-  MODEL_INFO_STATUS_ACTIVE = 4;
+  MODEL_INFO_STATUS_ALPHA = 1 [(ycoding.v5.domain_label) = "alpha"];
+  MODEL_INFO_STATUS_BETA = 2 [(ycoding.v5.domain_label) = "beta"];
+  MODEL_INFO_STATUS_DEPRECATED = 3 [(ycoding.v5.domain_label) = "deprecated"];
+  MODEL_INFO_STATUS_ACTIVE = 4 [(ycoding.v5.domain_label) = "active"];
 }
 
 enum Project_Vcs {
-  PROJECT_VCS_GIT = 1;
-  PROJECT_VCS_HG = 2;
+  PROJECT_VCS_GIT = 1 [(ycoding.v5.domain_label) = "git"];
+  PROJECT_VCS_HG = 2 [(ycoding.v5.domain_label) = "hg"];
 }
 
 enum ProviderNotFoundError__tag {
-  PROVIDERNOTFOUNDERROR__TAG_PROVIDERNOTFOUNDERROR = 1;
+  PROVIDERNOTFOUNDERROR__TAG_PROVIDERNOTFOUNDERROR = 1 [(ycoding.v5.domain_label) = "ProviderNotFoundError"];
 }
 
 enum providerUsage_forecast_Request_query_localScope {
-  PROVIDERUSAGE_FORECAST_REQUEST_QUERY_LOCALSCOPE_BACKEND = 1;
-  PROVIDERUSAGE_FORECAST_REQUEST_QUERY_LOCALSCOPE_LOCATION = 2;
+  PROVIDERUSAGE_FORECAST_REQUEST_QUERY_LOCALSCOPE_BACKEND = 1 [(ycoding.v5.domain_label) = "backend"];
+  PROVIDERUSAGE_FORECAST_REQUEST_QUERY_LOCALSCOPE_LOCATION = 2 [(ycoding.v5.domain_label) = "location"];
 }
 
 enum UsageForecast_Info_localScope {
-  USAGEFORECAST_INFO_LOCALSCOPE_BACKEND = 1;
-  USAGEFORECAST_INFO_LOCALSCOPE_LOCATION = 2;
+  USAGEFORECAST_INFO_LOCALSCOPE_BACKEND = 1 [(ycoding.v5.domain_label) = "backend"];
+  USAGEFORECAST_INFO_LOCALSCOPE_LOCATION = 2 [(ycoding.v5.domain_label) = "location"];
 }
 
 enum ProviderUsage_Unit {
-  PROVIDERUSAGE_UNIT_PERCENT = 1;
-  PROVIDERUSAGE_UNIT_USD = 2;
-  PROVIDERUSAGE_UNIT_REQUESTS = 3;
-  PROVIDERUSAGE_UNIT_TOKENS = 4;
-  PROVIDERUSAGE_UNIT_COUNT = 5;
+  PROVIDERUSAGE_UNIT_PERCENT = 1 [(ycoding.v5.domain_label) = "percent"];
+  PROVIDERUSAGE_UNIT_USD = 2 [(ycoding.v5.domain_label) = "usd"];
+  PROVIDERUSAGE_UNIT_REQUESTS = 3 [(ycoding.v5.domain_label) = "requests"];
+  PROVIDERUSAGE_UNIT_TOKENS = 4 [(ycoding.v5.domain_label) = "tokens"];
+  PROVIDERUSAGE_UNIT_COUNT = 5 [(ycoding.v5.domain_label) = "count"];
 }
 
 enum ProviderUsage_Source {
-  PROVIDERUSAGE_SOURCE_PROVIDER_API = 1;
-  PROVIDERUSAGE_SOURCE_LOCAL_CLIENT_RPC = 2;
-  PROVIDERUSAGE_SOURCE_RESPONSE_HEADERS = 3;
-  PROVIDERUSAGE_SOURCE_PROVIDER_INTERNAL_API = 4;
-  PROVIDERUSAGE_SOURCE_LOCAL_SESSION = 5;
-  PROVIDERUSAGE_SOURCE_RESPONSE_STREAM = 6;
+  PROVIDERUSAGE_SOURCE_PROVIDER_API = 1 [(ycoding.v5.domain_label) = "provider_api"];
+  PROVIDERUSAGE_SOURCE_LOCAL_CLIENT_RPC = 2 [(ycoding.v5.domain_label) = "local_client_rpc"];
+  PROVIDERUSAGE_SOURCE_RESPONSE_HEADERS = 3 [(ycoding.v5.domain_label) = "response_headers"];
+  PROVIDERUSAGE_SOURCE_PROVIDER_INTERNAL_API = 4 [(ycoding.v5.domain_label) = "provider_internal_api"];
+  PROVIDERUSAGE_SOURCE_LOCAL_SESSION = 5 [(ycoding.v5.domain_label) = "local_session"];
+  PROVIDERUSAGE_SOURCE_RESPONSE_STREAM = 6 [(ycoding.v5.domain_label) = "response_stream"];
 }
 
 enum ProviderUsage_Stability {
-  PROVIDERUSAGE_STABILITY_STABLE = 1;
-  PROVIDERUSAGE_STABILITY_CLIENT_CONTRACT = 2;
-  PROVIDERUSAGE_STABILITY_OBSERVED = 3;
-  PROVIDERUSAGE_STABILITY_BEST_EFFORT = 4;
+  PROVIDERUSAGE_STABILITY_STABLE = 1 [(ycoding.v5.domain_label) = "stable"];
+  PROVIDERUSAGE_STABILITY_CLIENT_CONTRACT = 2 [(ycoding.v5.domain_label) = "client_contract"];
+  PROVIDERUSAGE_STABILITY_OBSERVED = 3 [(ycoding.v5.domain_label) = "observed"];
+  PROVIDERUSAGE_STABILITY_BEST_EFFORT = 4 [(ycoding.v5.domain_label) = "best_effort"];
 }
 
 enum UsageForecast_Quota_state {
-  USAGEFORECAST_QUOTA_STATE_ESTIMATED = 1;
-  USAGEFORECAST_QUOTA_STATE_INSUFFICIENT = 2;
-  USAGEFORECAST_QUOTA_STATE_EXHAUSTED = 3;
-  USAGEFORECAST_QUOTA_STATE_UNLIMITED = 4;
+  USAGEFORECAST_QUOTA_STATE_ESTIMATED = 1 [(ycoding.v5.domain_label) = "estimated"];
+  USAGEFORECAST_QUOTA_STATE_INSUFFICIENT = 2 [(ycoding.v5.domain_label) = "insufficient"];
+  USAGEFORECAST_QUOTA_STATE_EXHAUSTED = 3 [(ycoding.v5.domain_label) = "exhausted"];
+  USAGEFORECAST_QUOTA_STATE_UNLIMITED = 4 [(ycoding.v5.domain_label) = "unlimited"];
 }
 
 enum UsageForecast_Quota_method {
-  USAGEFORECAST_QUOTA_METHOD_QUOTA_DELTA_EMA = 1;
-  USAGEFORECAST_QUOTA_METHOD_WINDOW_MEAN = 2;
+  USAGEFORECAST_QUOTA_METHOD_QUOTA_DELTA_EMA = 1 [(ycoding.v5.domain_label) = "quota-delta-ema"];
+  USAGEFORECAST_QUOTA_METHOD_WINDOW_MEAN = 2 [(ycoding.v5.domain_label) = "window-mean"];
 }
 
 enum UsageForecast_Quota_evidence {
-  USAGEFORECAST_QUOTA_EVIDENCE_LOW = 1;
-  USAGEFORECAST_QUOTA_EVIDENCE_MEDIUM = 2;
-  USAGEFORECAST_QUOTA_EVIDENCE_INSUFFICIENT = 3;
+  USAGEFORECAST_QUOTA_EVIDENCE_LOW = 1 [(ycoding.v5.domain_label) = "low"];
+  USAGEFORECAST_QUOTA_EVIDENCE_MEDIUM = 2 [(ycoding.v5.domain_label) = "medium"];
+  USAGEFORECAST_QUOTA_EVIDENCE_INSUFFICIENT = 3 [(ycoding.v5.domain_label) = "insufficient"];
+}
+
+enum UsageForecast_Pace_verdict {
+  USAGEFORECAST_PACE_VERDICT_AHEAD = 1 [(ycoding.v5.domain_label) = "ahead"];
+  USAGEFORECAST_PACE_VERDICT_CUTTING_IT_CLOSE = 2 [(ycoding.v5.domain_label) = "cutting-it-close"];
+  USAGEFORECAST_PACE_VERDICT_WILL_RUN_OUT = 3 [(ycoding.v5.domain_label) = "will-run-out"];
 }
 
 enum ProviderUsage_Status {
-  PROVIDERUSAGE_STATUS_AVAILABLE = 1;
-  PROVIDERUSAGE_STATUS_STALE = 2;
-  PROVIDERUSAGE_STATUS_UNSUPPORTED = 3;
-  PROVIDERUSAGE_STATUS_UNAUTHORIZED = 4;
-  PROVIDERUSAGE_STATUS_ERROR = 5;
+  PROVIDERUSAGE_STATUS_AVAILABLE = 1 [(ycoding.v5.domain_label) = "available"];
+  PROVIDERUSAGE_STATUS_STALE = 2 [(ycoding.v5.domain_label) = "stale"];
+  PROVIDERUSAGE_STATUS_UNSUPPORTED = 3 [(ycoding.v5.domain_label) = "unsupported"];
+  PROVIDERUSAGE_STATUS_UNAUTHORIZED = 4 [(ycoding.v5.domain_label) = "unauthorized"];
+  PROVIDERUSAGE_STATUS_ERROR = 5 [(ycoding.v5.domain_label) = "error"];
 }
 
 enum Reference_LocalSource_type {
-  REFERENCE_LOCALSOURCE_TYPE_LOCAL = 1;
+  REFERENCE_LOCALSOURCE_TYPE_LOCAL = 1 [(ycoding.v5.domain_label) = "local"];
 }
 
 enum Reference_GitSource_type {
-  REFERENCE_GITSOURCE_TYPE_GIT = 1;
+  REFERENCE_GITSOURCE_TYPE_GIT = 1 [(ycoding.v5.domain_label) = "git"];
 }
 
 enum usage_report_Request_query_group {
-  USAGE_REPORT_REQUEST_QUERY_GROUP_MODEL = 1;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_HOUR = 2;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_DAY = 3;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_MONTH = 4;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_SESSION = 5;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_PROJECT = 6;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_AGENT = 7;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER = 8;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER_PROFILE_MODEL = 9;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER_MODEL = 10;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_MODEL_ID = 11;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_PROFILE = 12;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_PROMPT = 13;
-  USAGE_REPORT_REQUEST_QUERY_GROUP_TASK = 14;
+  USAGE_REPORT_REQUEST_QUERY_GROUP_MODEL = 1 [(ycoding.v5.domain_label) = "model"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_HOUR = 2 [(ycoding.v5.domain_label) = "hour"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_DAY = 3 [(ycoding.v5.domain_label) = "day"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_MONTH = 4 [(ycoding.v5.domain_label) = "month"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_SESSION = 5 [(ycoding.v5.domain_label) = "session"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROJECT = 6 [(ycoding.v5.domain_label) = "project"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_AGENT = 7 [(ycoding.v5.domain_label) = "agent"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER = 8 [(ycoding.v5.domain_label) = "provider"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER_PROFILE_MODEL = 9 [(ycoding.v5.domain_label) = "provider-profile-model"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROVIDER_MODEL = 10 [(ycoding.v5.domain_label) = "provider-model"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_MODEL_ID = 11 [(ycoding.v5.domain_label) = "model-id"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROFILE = 12 [(ycoding.v5.domain_label) = "profile"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_PROMPT = 13 [(ycoding.v5.domain_label) = "prompt"];
+  USAGE_REPORT_REQUEST_QUERY_GROUP_TASK = 14 [(ycoding.v5.domain_label) = "task"];
 }
 
 enum usage_report_Request_query_sort {
-  USAGE_REPORT_REQUEST_QUERY_SORT_KEY = 1;
-  USAGE_REPORT_REQUEST_QUERY_SORT_TOKENS = 2;
-  USAGE_REPORT_REQUEST_QUERY_SORT_COST = 3;
-  USAGE_REPORT_REQUEST_QUERY_SORT_STEPS = 4;
-  USAGE_REPORT_REQUEST_QUERY_SORT_INPUT = 5;
-  USAGE_REPORT_REQUEST_QUERY_SORT_OUTPUT = 6;
-  USAGE_REPORT_REQUEST_QUERY_SORT_REASONING = 7;
-  USAGE_REPORT_REQUEST_QUERY_SORT_CACHEREAD = 8;
-  USAGE_REPORT_REQUEST_QUERY_SORT_CACHEWRITE = 9;
+  USAGE_REPORT_REQUEST_QUERY_SORT_KEY = 1 [(ycoding.v5.domain_label) = "key"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_TOKENS = 2 [(ycoding.v5.domain_label) = "tokens"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_COST = 3 [(ycoding.v5.domain_label) = "cost"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_STEPS = 4 [(ycoding.v5.domain_label) = "steps"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_INPUT = 5 [(ycoding.v5.domain_label) = "input"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_OUTPUT = 6 [(ycoding.v5.domain_label) = "output"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_REASONING = 7 [(ycoding.v5.domain_label) = "reasoning"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_CACHEREAD = 8 [(ycoding.v5.domain_label) = "cacheRead"];
+  USAGE_REPORT_REQUEST_QUERY_SORT_CACHEWRITE = 9 [(ycoding.v5.domain_label) = "cacheWrite"];
 }
 
 enum usage_report_Request_query_order {
-  USAGE_REPORT_REQUEST_QUERY_ORDER_ASC = 1;
-  USAGE_REPORT_REQUEST_QUERY_ORDER_DESC = 2;
+  USAGE_REPORT_REQUEST_QUERY_ORDER_ASC = 1 [(ycoding.v5.domain_label) = "asc"];
+  USAGE_REPORT_REQUEST_QUERY_ORDER_DESC = 2 [(ycoding.v5.domain_label) = "desc"];
 }
 
 message agent_list_Request {
@@ -1813,7 +1819,7 @@ message Mcp_RemoteConfig_headersEntry {
 message Mcp_RemoteConfig_oauth {
   oneof kind {
     Mcp_OAuthConfig value_1 = 1;
-    bool value_2 = 2;
+    bool value_2 = 2 [(ycoding.v5.domain_literal) = "false"];
   }
 }
 
@@ -2541,6 +2547,13 @@ message UsageForecast_Quota {
   optional double ratePerHour = 14 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" }];
   optional uint64 exhaustionAt = 15 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" integer_min: "0" integer_max: "9007199254740991" }];
   optional double projectedUsedAtReset = 16 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Quota" }];
+  optional UsageForecast_Pace pace = 17;
+}
+
+message UsageForecast_Pace {
+  required UsageForecast_Pace_verdict verdict = 1;
+  required double projectedUsedAtReset = 2 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Pace" }];
+  optional uint64 exhaustionAt = 3 [(ycoding.v5.constraints) = { domain_obligations: "packages/schema/src/usage-forecast.ts#UsageForecast.Pace" integer_min: "0" integer_max: "9007199254740991" }];
 }
 
 message providerUsage_get_Request_params {
@@ -3894,8 +3907,8 @@ service server_usage {
 }
 
 enum ConfigurationScope {
-  CONFIGURATIONSCOPE_GLOBAL = 1;
-  CONFIGURATIONSCOPE_PROJECT = 2;
+  CONFIGURATIONSCOPE_GLOBAL = 1 [(ycoding.v5.domain_label) = "global"];
+  CONFIGURATIONSCOPE_PROJECT = 2 [(ycoding.v5.domain_label) = "project"];
 }
 
 message ConfigurationTarget {
@@ -3904,14 +3917,14 @@ message ConfigurationTarget {
 }
 
 enum ConfigurationWriteError__tag {
-  CONFIGURATIONWRITEERROR__TAG_CONFIGURATIONWRITEERROR = 1;
+  CONFIGURATIONWRITEERROR__TAG_CONFIGURATIONWRITEERROR = 1 [(ycoding.v5.domain_label) = "ConfigurationWriteError"];
 }
 
 enum ConfigurationWriteError_code {
-  CONFIGURATIONWRITEERROR_CODE_INVALID_CONFIG = 1;
-  CONFIGURATIONWRITEERROR_CODE_SCOPE_NOT_ALLOWED = 2;
-  CONFIGURATIONWRITEERROR_CODE_PROVIDER_COLLISION = 3;
-  CONFIGURATIONWRITEERROR_CODE_WRITE_FAILED = 4;
+  CONFIGURATIONWRITEERROR_CODE_INVALID_CONFIG = 1 [(ycoding.v5.domain_label) = "invalid_config"];
+  CONFIGURATIONWRITEERROR_CODE_SCOPE_NOT_ALLOWED = 2 [(ycoding.v5.domain_label) = "scope_not_allowed"];
+  CONFIGURATIONWRITEERROR_CODE_PROVIDER_COLLISION = 3 [(ycoding.v5.domain_label) = "provider_collision"];
+  CONFIGURATIONWRITEERROR_CODE_WRITE_FAILED = 4 [(ycoding.v5.domain_label) = "write_failed"];
 }
 
 message ConfigurationWriteError {
@@ -3920,12 +3933,12 @@ message ConfigurationWriteError {
 }
 
 enum ConfigurationPartialFailure__tag {
-  CONFIGURATIONPARTIALFAILURE__TAG_CONFIGURATIONPARTIALFAILURE = 1;
+  CONFIGURATIONPARTIALFAILURE__TAG_CONFIGURATIONPARTIALFAILURE = 1 [(ycoding.v5.domain_label) = "ConfigurationPartialFailure"];
 }
 
 enum ConfigurationPartialFailure_stage {
-  CONFIGURATIONPARTIALFAILURE_STAGE_RELOAD = 1;
-  CONFIGURATIONPARTIALFAILURE_STAGE_REGISTRATION = 2;
+  CONFIGURATIONPARTIALFAILURE_STAGE_RELOAD = 1 [(ycoding.v5.domain_label) = "reload"];
+  CONFIGURATIONPARTIALFAILURE_STAGE_REGISTRATION = 2 [(ycoding.v5.domain_label) = "registration"];
 }
 
 message ConfigurationPartialFailure {
@@ -3935,12 +3948,12 @@ message ConfigurationPartialFailure {
 }
 
 enum ProviderEndpointAPI {
-  PROVIDERENDPOINTAPI_CHAT = 1;
-  PROVIDERENDPOINTAPI_RESPONSES = 2;
+  PROVIDERENDPOINTAPI_CHAT = 1 [(ycoding.v5.domain_label) = "chat"];
+  PROVIDERENDPOINTAPI_RESPONSES = 2 [(ycoding.v5.domain_label) = "responses"];
 }
 
 enum ProviderEndpointCatalog {
-  PROVIDERENDPOINTCATALOG_OPENAI_MODELS = 1;
+  PROVIDERENDPOINTCATALOG_OPENAI_MODELS = 1 [(ycoding.v5.domain_label) = "openai-models"];
 }
 
 message ProviderEndpoint {
@@ -4013,15 +4026,15 @@ message mcp_configure_Result_data {
 }
 
 enum FrontendPackageError__tag {
-  FRONTENDPACKAGEERROR__TAG_FRONTENDPACKAGEERROR = 1;
+  FRONTENDPACKAGEERROR__TAG_FRONTENDPACKAGEERROR = 1 [(ycoding.v5.domain_label) = "FrontendPackageError"];
 }
 
 enum FrontendPackageError_code {
-  FRONTENDPACKAGEERROR_CODE_INVALID_PACKAGE = 1;
-  FRONTENDPACKAGEERROR_CODE_PERMISSION_DENIED = 2;
-  FRONTENDPACKAGEERROR_CODE_INSTALL_FAILED = 3;
-  FRONTENDPACKAGEERROR_CODE_ENTRYPOINT_MISSING = 4;
-  FRONTENDPACKAGEERROR_CODE_INTEGRITY_FAILED = 5;
+  FRONTENDPACKAGEERROR_CODE_INVALID_PACKAGE = 1 [(ycoding.v5.domain_label) = "invalid_package"];
+  FRONTENDPACKAGEERROR_CODE_PERMISSION_DENIED = 2 [(ycoding.v5.domain_label) = "permission_denied"];
+  FRONTENDPACKAGEERROR_CODE_INSTALL_FAILED = 3 [(ycoding.v5.domain_label) = "install_failed"];
+  FRONTENDPACKAGEERROR_CODE_ENTRYPOINT_MISSING = 4 [(ycoding.v5.domain_label) = "entrypoint_missing"];
+  FRONTENDPACKAGEERROR_CODE_INTEGRITY_FAILED = 5 [(ycoding.v5.domain_label) = "integrity_failed"];
 }
 
 message FrontendPackageError {

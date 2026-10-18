@@ -66,6 +66,8 @@ pub async fn upgrade(
         },
         request_id: String::new(),
         remote: false,
+        mcp: None,
+        cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     let directory = convert::text(directory);
     let workspace = scope.workspace_id.as_deref().map(convert::text);

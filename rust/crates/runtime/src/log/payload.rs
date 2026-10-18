@@ -4,7 +4,7 @@ use crate::{
 };
 use message::{count, literal, number, opt_count, opt_literal, opt_number, opt_text, text};
 use ycoding_core::ycoding_schema::{
-    DomainDecode, DomainEncode, JsonValue, location, session_pending,
+    DomainDecode, DomainEncode, JsonValue, guardrail, location, session_pending,
 };
 use ycoding_protocol::v5;
 
@@ -347,8 +347,22 @@ pub(super) const REVIEW_REASON: &[(&str, i32)] = &[
     ("timeout", 7),
     ("sleep_entry", 8),
     ("restart", 9),
+    ("unavailable", 10),
+    ("invalid-request", 11),
+    ("provider-failed", 12),
+    ("input-too-large", 13),
+    ("invalid-output", 14),
+    ("truncated-output", 15),
+    ("unsupported-output", 16),
+    ("conflicting_grades", 17),
 ];
 pub(super) const WITHDRAWN: &[(&str, i32)] = &[("reverted", 1), ("task_closed", 2)];
+
+pub(super) fn escalation_reason(json: J) -> R<i32> {
+    guardrail::EscalationReason::decode(json.0)
+        .map(convert::escalation_reason)
+        .map_err(|_| Unrepresentable("guardrail escalation reason"))
+}
 
 pub(super) fn source(json: J) -> R<v5::GuardrailSource> {
     Ok(v5::GuardrailSource {

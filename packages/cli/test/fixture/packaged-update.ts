@@ -204,6 +204,9 @@ export async function localRelay(scratch: string) {
     return {
       origin,
       cookie,
+      async logs() {
+        return { stdout: await output, stderr: await errors }
+      },
       async json(route: string, body?: unknown) {
         const response = await fetch(`${origin}${route}`, {
           method: body === undefined ? "GET" : "POST",

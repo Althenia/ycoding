@@ -26,6 +26,7 @@ import {
   type PushKeyResponse,
   type PushTestResponse,
 } from "../../../packages/remote/src/index"
+import { parseAuthorizationRequest } from "./relay/mcp-events"
 import { sendTestPush } from "./push/send"
 import type { PushStore } from "./push/store"
 import type { AuthRejection, AuthService } from "./auth/service"
@@ -60,6 +61,8 @@ export type RelayNamespace = {
 }
 
 export type RouterDeps = {
+  readonly mcp?: (request: Request, rateLimit: (key: string) => boolean) => Promise<Response | undefined>
+  readonly cleanupMcp?: () => Promise<unknown>
   readonly service: AuthService
   readonly relay: RelayNamespace
   readonly endpoints: GoogleEndpoints
@@ -126,8 +129,11 @@ export function createRouter(deps: RouterDeps) {
     if (now() - lastCleanupAt >= cleanupEveryMs) {
       lastCleanupAt = now()
       await deps.service.cleanup().catch(() => undefined)
+      await deps.cleanupMcp?.().catch(() => undefined)
     }
     if (url.pathname === "/health") return health(deps)
+    const mcp = await deps.mcp?.(request, rateLimit)
+    if (mcp) return withSecurityHeaders(mcp)
 
     if (url.pathname.startsWith("/api/admin/")) return adminRoute(deps, request, url, rateLimit, now())
     if (url.pathname === "/api/auth/invite" || url.pathname === "/api/auth/key") {
@@ -195,6 +201,11 @@ export function createRouter(deps: RouterDeps) {
     if (url.pathname === "/api/devices/refresh") {
       if (request.method !== "POST") return methodNotAllowed()
       return refreshDeviceCredentials(deps, request, rateLimit)
+    }
+    const mcpEventsAuthorize = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})\/mcp\/events\/authorize$/.exec(url.pathname)
+    if (mcpEventsAuthorize) {
+      if (request.method !== "POST") return methodNotAllowed()
+      return authorizeMcpEvents(deps, request, mcpEventsAuthorize[1]!, rateLimit)
     }
     const revoke = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})\/revoke$/.exec(url.pathname)
     if (revoke) {
@@ -786,6 +797,44 @@ async function streamSessionContent(
         },
       }),
     ),
+  )
+}
+
+async function authorizeMcpEvents(
+  deps: RouterDeps,
+  request: Request,
+  deviceID: string,
+  rateLimit: (key: string) => boolean,
+): Promise<Response> {
+  if (!rateLimit(`mcp-events-authorize:${clientAddress(request)}`))
+    return apiError(429, "rate_limited", "Too many requests")
+  const token = parseBearerToken(request.headers.get("authorization"))
+  if (token === undefined) return apiError(401, "unauthorized", "Device credential is required")
+  const credential = await deps.service.authorizeAgentToken(token)
+  if (!credential.ok) return apiError(401, "unauthorized", "Device credential is not valid")
+  if (credential.value.deviceID !== deviceID)
+    return apiError(403, "forbidden", "Device credential does not belong to this device")
+  const authorization = parseAuthorizationRequest(await readJsonBody(request))
+  if (authorization === undefined)
+    return apiError(400, "invalid_message", "Request is not a valid MCP events authorization")
+  const forwarded = await deps.relay.getByName(`${credential.value.userID}:${deviceID}`).fetch(
+    new Request("https://relay.internal/_ycoding/mcp-events/authorize", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-ycoding-internal": "1",
+        "x-ycoding-owner": credential.value.userID,
+        "x-ycoding-device": deviceID,
+        "x-ycoding-mcp-resource": `${new URL(request.url).origin}/api/mcp/devices/${deviceID}`,
+      },
+      body: JSON.stringify(authorization),
+      signal: request.signal,
+    }),
+  )
+  const headers = new Headers(forwarded.headers)
+  headers.set("cache-control", "no-store")
+  return withSecurityHeaders(
+    new Response(forwarded.body, { status: forwarded.status, statusText: forwarded.statusText, headers }),
   )
 }
 

@@ -184,6 +184,7 @@ pub fn grades(grades: &[guardrail::Grade]) -> Vec<v5::GuardrailGrade> {
 
 pub fn escalation(escalation: &guardrail::Escalation) -> v5::GuardrailEscalation {
     v5::GuardrailEscalation {
+        reason: escalation.reason.map(escalation_reason),
         choice: escalation.choice.map(decision_choice),
         confidence: escalation.confidence.map(guardrail::Confidence::get),
         grades: escalation
@@ -192,6 +193,23 @@ pub fn escalation(escalation: &guardrail::Escalation) -> v5::GuardrailEscalation
             .map(|items| v5::GuardrailEscalationGrades {
                 items: grades(items),
             }),
+    }
+}
+
+pub fn escalation_reason(reason: guardrail::EscalationReason) -> i32 {
+    match reason {
+        guardrail::EscalationReason::Unavailable => 1,
+        guardrail::EscalationReason::InvalidRequest => 2,
+        guardrail::EscalationReason::ProviderFailed => 3,
+        guardrail::EscalationReason::Timeout => 4,
+        guardrail::EscalationReason::InputTooLarge => 5,
+        guardrail::EscalationReason::InvalidOutput => 6,
+        guardrail::EscalationReason::Refused => 7,
+        guardrail::EscalationReason::TruncatedOutput => 8,
+        guardrail::EscalationReason::UnsupportedOutput => 9,
+        guardrail::EscalationReason::Escalated => 10,
+        guardrail::EscalationReason::LowConfidence => 11,
+        guardrail::EscalationReason::ConflictingGrades => 12,
     }
 }
 
@@ -851,5 +869,38 @@ mod task_tests {
             .unwrap(),
         );
         assert_eq!(empty, v5::GuardrailEscalation::default());
+    }
+
+    #[test]
+    fn guardrail_diagnostic_causes_survive_native_conversion_without_judgments() {
+        for reason in [
+            "unavailable",
+            "invalid-request",
+            "provider-failed",
+            "timeout",
+            "input-too-large",
+            "invalid-output",
+            "refused",
+            "truncated-output",
+            "unsupported-output",
+            "escalated",
+            "low_confidence",
+            "conflicting_grades",
+        ] {
+            let value = guardrail::Escalation::decode(
+                &ycoding_core::ycoding_schema::parse_json(&format!(r#"{{"reason":"{reason}"}}"#))
+                    .unwrap(),
+            )
+            .unwrap();
+            let bytes = prost::Message::encode_to_vec(&super::escalation(&value));
+            assert_eq!(
+                ycoding_protocol::domain_json::decode("ycoding.v5.Guardrail_Escalation", &bytes)
+                    .unwrap(),
+                ycoding_protocol::domain_json::Domain::Object(vec![(
+                    "reason".encode_utf16().collect(),
+                    ycoding_protocol::domain_json::Domain::Text(reason.encode_utf16().collect()),
+                )]),
+            );
+        }
     }
 }

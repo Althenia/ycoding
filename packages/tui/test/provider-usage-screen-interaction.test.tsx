@@ -235,6 +235,37 @@ async function waitFor(screen: Awaited<ReturnType<typeof renderScreen>>, text: s
   expect(screen.frame()).toContain(text)
 }
 
+test("backend, report, and recorded-consumption sections settle before a quota refresh", async () => {
+  const quotaGate = Promise.withResolvers<void>()
+  let quotaPending = false
+  let forecastReads = 0
+  const screen = await renderScreen({ width: 189, height: 69, args: { sessionID }, settle: "Message YCoding…", route: async (url, request) => {
+    if (url.pathname === "/api/provider/usage") { quotaPending = true; await quotaGate.promise; quotaPending = false }
+    if (url.pathname === "/api/provider/usage/forecast") {
+      forecastReads++
+      return json({ location, data: { asOf: Date.now(), localScope: "backend", quotas: [], localRates: [{ providerID: "openai", modelID: "independent-consumption", observedFrom: 1, observedTo: 60_001, tokensPerMinute: 456, coverage: { pricedRequests: 0, unpricedRequests: 1 } }] } })
+    }
+    return route(url, request)
+  } })
+  try {
+    await screen.input.pressKey("x", { ctrl: true })
+    await screen.input.pressKey("u", { shift: true })
+    await waitFor(screen, "Backend-wide model")
+    await until(() => quotaPending)
+    await screen.input.pressKey("ARROW_RIGHT")
+    await waitFor(screen, "independent-consumption")
+    expect(forecastReads).toBeGreaterThan(0)
+    expect(screen.frame()).not.toContain("Recorded consumption unreported")
+    expect(quotaPending).toBe(true)
+    await screen.input.pressKey("ARROW_RIGHT")
+    await waitFor(screen, "Keyboard Model 01")
+    expect(quotaPending).toBe(true)
+  } finally {
+    quotaGate.resolve()
+    await screen.dispose()
+  }
+}, 30_000)
+
 test("opens provider usage without submitting a draft and returns by keyboard or mouse", async () => {
   const screen = await renderScreen({ width: 120, height: 40, args: { sessionID }, route, settle: "Message YCoding…" })
   try {

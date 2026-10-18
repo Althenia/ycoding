@@ -1,4 +1,4 @@
-use super::{Control, Credentials, Error, Intent, Peer, State};
+use super::{Control, Credentials, Error, Intent, Peer, State, quota};
 use crate::{Bulk, Dispatcher, Environment, Settled, ids};
 use axum::http::header::AUTHORIZATION;
 use futures_util::{SinkExt, StreamExt};
@@ -20,7 +20,7 @@ use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{self, client::IntoClientRequest, protocol::WebSocketConfig},
 };
-use ycoding_core::event_feed::{Payload, Scope};
+use ycoding_core::event_feed::{Payload, Scope, Subscriber};
 use ycoding_protocol::{
     connection::{Config, Connection, Decision, ProtocolError},
     decode_strict, limits, v5,
@@ -30,6 +30,8 @@ use ycoding_protocol::{
 mod events;
 #[path = "notifications.rs"]
 mod notifications;
+#[path = "relay.rs"]
+mod relay;
 
 pub struct Settings {
     pub credentials: Arc<dyn Credentials>,
@@ -112,7 +114,13 @@ async fn supervise(
         jobs: Vec::new(),
         permits: Arc::new(Semaphore::new(limits::PENDING_REQUESTS as usize)),
         lanes: BTreeMap::new(),
+        pacing: Pacing {
+            quota: quota::Quota::default(),
+            feed: None,
+            serial: 0,
+        },
     };
+    tasks.pacing.drain(&environment);
     loop {
         let current = *intent.borrow_and_update();
         if *stopped.borrow() {
@@ -205,10 +213,42 @@ async fn reap(jobs: &mut Vec<JoinHandle<()>>) -> Result<(), Error> {
     Ok(())
 }
 
+struct Pacing {
+    quota: quota::Quota,
+    feed: Option<Subscriber>,
+    serial: u64,
+}
+
+impl Pacing {
+    fn drain(&mut self, environment: &Environment) {
+        let Some(core) = environment.services.core.as_ref() else {
+            return;
+        };
+        if self.feed.is_none() {
+            self.feed = core
+                .events
+                .subscribe_types(Scope::Global, quota::TYPES, || {})
+                .ok();
+        }
+        let now = ids::now_millis().max(0) as u64;
+        while let Some(feed) = &self.feed {
+            match feed.next() {
+                Ok(Some(item)) => self.quota.offer_item(&item, now),
+                Ok(None) => return,
+                Err(_) => {
+                    tracing::warn!("quota pace subscription overflowed; resubscribing");
+                    self.feed = None;
+                }
+            }
+        }
+    }
+}
+
 struct DispatchTasks {
     jobs: Vec<JoinHandle<()>>,
     permits: Arc<Semaphore>,
     lanes: BTreeMap<String, Weak<Mutex<()>>>,
+    pacing: Pacing,
 }
 
 struct Work {
@@ -227,10 +267,15 @@ struct Transfer {
 
 struct Driver {
     machine: Connection,
+    control: Control,
+    generation: u64,
+    relay: relay::Relay,
     peer: Peer,
     epoch: String,
     started: Instant,
     work: BTreeMap<String, Work>,
+    mcp_guards: BTreeMap<String, super::mcp::Access>,
+    mcp_transfers: BTreeMap<String, (String, super::mcp::Access)>,
     transfers: VecDeque<Transfer>,
     next_transfer: u64,
     established: bool,
@@ -240,6 +285,8 @@ struct Driver {
 
 impl Drop for Driver {
     fn drop(&mut self) {
+        self.abandon_all();
+        self.control.mcp().release(&self.epoch);
         self.events.environment.subscriptions.release(&self.epoch);
         self.peer.revoke();
         for work in self.work.values() {
@@ -260,6 +307,8 @@ async fn connect(
     tasks: &mut DispatchTasks,
     opened: &AtomicBool,
 ) -> Result<(), Error> {
+    tasks.pacing.serial = tasks.pacing.serial.wrapping_add(1);
+    let serial = tasks.pacing.serial;
     let environment = Arc::new(Environment {
         services: environment.services.clone(),
         urls: environment.urls.clone(),
@@ -335,10 +384,15 @@ async fn connect(
     .map_err(|_| Error::Setup)?;
     let mut driver = Driver {
         machine,
+        control: control.clone(),
+        generation: intent.generation,
+        relay: relay::Relay::default(),
         peer,
         epoch: String::new(),
         started: Instant::now(),
         work: BTreeMap::new(),
+        mcp_guards: BTreeMap::new(),
+        mcp_transfers: BTreeMap::new(),
         transfers: VecDeque::new(),
         next_transfer: 1,
         established: false,
@@ -355,6 +409,7 @@ async fn connect(
     let mut ticker = tokio::time::interval(Duration::from_millis(10));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut next_send = Instant::now();
+    let mut mcp_changes = control.mcp().changes();
     let expiry = tokio::time::sleep(Duration::from_millis(
         credential
             .expires_at
@@ -389,6 +444,28 @@ async fn connect(
             }
         }
         driver.feed_notifications(core)?;
+        tasks.pacing.drain(&environment);
+        if driver.established {
+            if mcp_changes.has_changed().unwrap_or(false) {
+                mcp_changes.borrow_and_update();
+                driver.advertise()?;
+            }
+            let now = ids::now_millis().max(0) as u64;
+            while let Some(quota) = tasks.pacing.quota.next(serial, now) {
+                let body = v5::frame::Body::Control(v5::Control {
+                    kind: Some(v5::control::Kind::QuotaPace(quota.clone())),
+                });
+                match driver.machine.enqueue(
+                    body.clone(),
+                    driver.reserve(v5::LedgerClass::Normal, body),
+                    driver.now(),
+                ) {
+                    Ok(()) => tasks.pacing.quota.sent(&quota, serial),
+                    Err(ProtocolError::Limit) => break,
+                    Err(error) => return Err(protocol_error(error)),
+                }
+            }
+        }
         if !control.current(intent.generation) {
             return Err(Error::Transport);
         }
@@ -397,9 +474,22 @@ async fn connect(
         if Instant::now() >= next_send
             && let Some(prepared) = driver.machine.prepare_handoff(driver.now())
         {
+            if !driver.mcp_frame_allowed(prepared.frame().body.as_ref()) {
+                return Err(Error::Transport);
+            }
             let bytes = prepared.frame().encode_to_vec();
             let association = match &prepared.frame().body {
                 Some(v5::frame::Body::Result(result)) => Some(result.request_id.clone()),
+                _ => None,
+            };
+            let terminal = match &prepared.frame().body {
+                Some(body @ v5::frame::Body::BulkEnd(_)) => Some(body.clone()),
+                Some(v5::frame::Body::Result(result)) => {
+                    Some(v5::frame::Body::Result(v5::Result {
+                        request_id: result.request_id.clone(),
+                        ..Default::default()
+                    }))
+                }
                 _ => None,
             };
             let length = bytes.len() as u64;
@@ -411,6 +501,9 @@ async fn connect(
             .map_err(|_| Error::Transport)?
             .map_err(|_| Error::Transport)?;
             if !control.current(intent.generation) {
+                return Err(Error::Transport);
+            }
+            if !driver.mcp_frame_allowed(prepared.frame().body.as_ref()) {
                 return Err(Error::Transport);
             }
             let decisions = driver
@@ -442,6 +535,16 @@ async fn connect(
             .await
             .map_err(|_| Error::Transport)?
             .map_err(|_| Error::Transport)?;
+            match terminal.as_ref() {
+                Some(v5::frame::Body::Result(result)) => {
+                    driver.mcp_guards.remove(&result.request_id);
+                }
+                Some(v5::frame::Body::BulkEnd(end)) => {
+                    driver.mcp_transfers.remove(&end.transfer_id);
+                }
+                _ => {}
+            }
+            driver.delivered(terminal.as_ref());
             next_send = Instant::now() + Duration::from_millis(25);
         }
         if driver
@@ -464,6 +567,11 @@ async fn connect(
             result = results.recv() => {
                 let Some((id, settled)) = result else { return Err(Error::Transport); };
                 if let Some(work) = driver.work.remove(&id) {
+                    if work.cancelled.load(Ordering::Acquire) || driver.mcp_guards.get(&id).is_some_and(|access| !access.active()) {
+                        driver.abandon(&id);
+                        driver.mcp_guards.remove(&id);
+                        continue;
+                    }
                     let settled = driver.subscription_result(settled, work.scope)?;
                     driver.complete(settled)?;
                 }
@@ -480,6 +588,9 @@ async fn connect(
                     },
                     Some(Err(tungstenite::Error::Protocol(error))) => {
                         tracing::debug!(?error, "remote websocket protocol failed");
+                        if matches!(error, tungstenite::error::ProtocolError::ResetWithoutClosingHandshake) {
+                            return Err(Error::Transport);
+                        }
                         return Err(Error::Incompatible);
                     },
                     _ => return Err(Error::Transport),
@@ -503,13 +614,31 @@ async fn connect(
                             control.publish(intent.generation, State::On, None);
                             let body = v5::frame::Body::Control(v5::Control { kind: Some(v5::control::Kind::InventoryInvalidated(v5::InventoryInvalidated {})) });
                             driver.machine.enqueue(body.clone(), driver.reserve(v5::LedgerClass::Normal, body), driver.now()).map_err(protocol_error)?;
+                            mcp_changes.borrow_and_update();
+                            driver.advertise()?;
                         },
                         Decision::Request(request) => {
                             driver.consume(ordinal)?;
                             let descriptor = dispatcher.descriptor(request.operation_id).ok_or(Error::Incompatible)?;
+                            let relay_only = descriptor.diagnostic_name == "mcp.request";
+                            let admitted = if relay_only {
+                                match driver.admit_mcp(&request) {
+                                    Ok(admitted) => Some(admitted),
+                                    Err(rejection) => {
+                                        driver.reject(&request, descriptor.settlement, rejection)?;
+                                        continue;
+                                    }
+                                }
+                            } else {
+                                None
+                            };
                             driver.stash_log(&request, &descriptor.diagnostic_name)?;
-                            let mutation = descriptor.mutation == v5::MutationClass::Mutation as i32;
+                            let mutation = admitted.as_ref().map_or(descriptor.mutation == v5::MutationClass::Mutation as i32, |admitted| admitted.lane.is_some());
                             let cancelled = Arc::new(AtomicBool::new(false));
+                            if relay_only {
+                                let binding = control.mcp().binding(&driver.epoch).ok_or(Error::Unauthorized)?;
+                                driver.mcp_guards.insert(request.request_id.clone(), super::mcp::Access::new(control.mcp().server(), binding.lease, cancelled.clone()));
+                            }
                             let cancellation = cancelled.clone();
                             let id = request.request_id.clone();
                             let request_id = id.clone();
@@ -523,15 +652,21 @@ async fn connect(
                             let permit = tasks.permits.clone().try_acquire_owned().map_err(|_| Error::Transport)?;
                             tasks.lanes.retain(|_, lane| lane.strong_count() > 0);
                             let lane = if mutation {
-                                let key = match &request.scope.target { Some(v5::scope::Target::Session(id) | v5::scope::Target::Form(id)) => id.clone(), _ => String::new() };
+                                let key = match (&admitted, &request.scope.target) { (Some(admitted), _) => admitted.lane.clone().unwrap_or_default(), (None, Some(v5::scope::Target::Session(id) | v5::scope::Target::Form(id))) => id.clone(), _ => String::new() };
                                 let lock = tasks.lanes.get(&key).and_then(Weak::upgrade).unwrap_or_else(|| Arc::new(Mutex::new(())));
                                 tasks.lanes.insert(key, Arc::downgrade(&lock)); Some(lock)
                             } else { None };
+                            let started = admitted.map(|admitted| admitted.state);
                             let job = tokio::spawn(async move {
                                 let _permit = permit;
                                 let _lane = match &lane { Some(lane) => Some(lane.lock().await), None => None };
                                 if cancellation.load(Ordering::Acquire) || !control.current(intent.generation) { return; }
-                                let settled = dispatcher.invoke_remote(environment, connection_id, &peer, request).await;
+                                if started.as_ref().is_some_and(|state| !relay::begin(state)) { return; }
+                                let settled = if relay_only {
+                                    dispatcher.invoke_relay(environment, connection_id, &peer, request, cancellation).await
+                                } else {
+                                    dispatcher.invoke_remote(environment, connection_id, &peer, request).await
+                                };
                                 let _ = completed.send((id, settled)).await;
                             });
                             driver.work.insert(request_id, Work { cancelled, read: (!mutation).then(|| job.abort_handle()), scope });
@@ -541,6 +676,8 @@ async fn connect(
                             match control.kind {
                                 Some(v5::control::Kind::Priority(_)) => {},
                                 Some(v5::control::Kind::SubscriptionSnapshot(snapshot)) => driver.snapshot(snapshot, &dispatcher).await?,
+                                Some(v5::control::Kind::McpStateAck(ack)) => driver.acknowledge(ack, &dispatcher).await?,
+                                Some(v5::control::Kind::QuotaPaceResult(result)) => tasks.pacing.quota.settle(&result),
                                 _ => {
                                     tracing::debug!("remote control has no connector handler");
                                     return Err(Error::Incompatible);
@@ -575,6 +712,25 @@ fn protocol_error(error: ProtocolError) -> Error {
 }
 
 impl Driver {
+    fn mcp_frame_allowed(&self, body: Option<&v5::frame::Body>) -> bool {
+        let access = match body {
+            Some(v5::frame::Body::Result(result)) => self.mcp_guards.get(&result.request_id),
+            Some(v5::frame::Body::BulkStart(start)) => self
+                .mcp_transfers
+                .get(&start.transfer_id)
+                .map(|(_, access)| access),
+            Some(v5::frame::Body::BulkPiece(piece)) => self
+                .mcp_transfers
+                .get(&piece.transfer_id)
+                .map(|(_, access)| access),
+            Some(v5::frame::Body::BulkEnd(end)) => self
+                .mcp_transfers
+                .get(&end.transfer_id)
+                .map(|(_, access)| access),
+            _ => None,
+        };
+        access.is_none_or(|access| access.active())
+    }
     fn now(&self) -> u64 {
         self.started.elapsed().as_millis() as u64
     }
@@ -628,6 +784,11 @@ impl Driver {
             return Err(Error::Transport);
         }
         let id = format!("connector-{}", self.next_transfer);
+        if let Some(access) = self.mcp_guards.remove(&bulk.request_id) {
+            self.mcp_transfers
+                .insert(id.clone(), (bulk.request_id.clone(), access));
+        }
+        self.bulk_ticket(&bulk.request_id, &id);
         self.next_transfer = self.next_transfer.checked_add(1).ok_or(Error::Transport)?;
         if let Some(metadata) = metadata {
             let reserved = self.reserve(
@@ -650,7 +811,25 @@ impl Driver {
 
     fn cancel(&mut self, target: &v5::cancel::Target) {
         if let v5::cancel::Target::RequestId(id) = target {
+            if let Some(access) = self.mcp_guards.remove(id) {
+                access.cancel();
+            }
+            self.mcp_transfers.retain(|_, (request, access)| {
+                if request != id {
+                    return true;
+                }
+                access.cancel();
+                false
+            });
             self.events.associations.remove(id);
+            self.abandon(id);
+        }
+        if let v5::cancel::Target::TransferId(id) = target
+            && let Some((request, access)) = self.mcp_transfers.remove(id)
+        {
+            access.cancel();
+            self.mcp_guards.remove(&request);
+            self.abandon(&request);
         }
         self.transfers.retain(|transfer| match target {
             v5::cancel::Target::RequestId(id) => &transfer.bulk.request_id != id,

@@ -20,6 +20,7 @@ mod openai_shared;
 pub mod provider_error;
 pub mod providers;
 pub mod route;
+mod structured_output;
 pub mod tool;
 mod tool_schema;
 pub mod websocket;

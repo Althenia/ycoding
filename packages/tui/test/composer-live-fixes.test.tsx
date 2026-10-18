@@ -9,7 +9,7 @@ import { materializeClipboardImage } from "../src/clipboard"
 import { testRender } from "@opentui/solid"
 import { createSignal, onMount } from "solid-js"
 import { StartupGate } from "../src/component/startup-loading"
-import { TextareaRenderable, type Renderable } from "@opentui/core"
+import { InputRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
 
 const sessionID = "ses_composer_live_fixes"
 const directory = "/tmp/ycoding/composer-live-fixes"
@@ -967,6 +967,7 @@ test("a blocked model switch retains the draft and admits nothing", async () => 
     args: { sessionID },
     route: blockedRoute,
     settle: "Message YCoding…",
+    sessionReady: true,
   })
   try {
     let promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
@@ -974,8 +975,13 @@ test("a blocked model switch retains the draft and admits nothing", async () => 
     await screen.input.typeText("/variants")
     screen.input.pressEnter()
     await waitForFrameText(screen, "Select variant")
+    await until(() => screen.renderer.currentFocusedEditor instanceof InputRenderable)
     screen.input.pressKey("ARROW_DOWN")
     screen.input.pressEnter()
+    await until(() =>
+      screen.renderer.currentFocusedEditor instanceof TextareaRenderable &&
+      !(screen.renderer.currentFocusedEditor instanceof InputRenderable),
+    )
     await waitForFrameText(screen, "Message YCoding…")
 
     promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))

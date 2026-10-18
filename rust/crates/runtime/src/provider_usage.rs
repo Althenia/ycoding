@@ -214,6 +214,20 @@ fn wire_forecast(data: &usage_forecast::Info) -> Result<v5::UsageForecastInfo, F
                                 rate_per_hour: quota.rate_per_hour,
                                 exhaustion_at: quota.exhaustion_at.map(count),
                                 projected_used_at_reset: quota.projected_used_at_reset,
+                                pace: quota
+                                    .pace
+                                    .as_ref()
+                                    .map(|pace| -> Result<_, Failure> {
+                                        Ok(v5::UsageForecastPace {
+                                            verdict: tag(
+                                                &pace.verdict.0,
+                                                &["ahead", "cutting-it-close", "will-run-out"],
+                                            )?,
+                                            projected_used_at_reset: pace.projected_used_at_reset,
+                                            exhaustion_at: pace.exhaustion_at.map(count),
+                                        })
+                                    })
+                                    .transpose()?,
                             })
                         })
                         .collect::<Result<_, _>>()?,

@@ -763,8 +763,9 @@ impl Guardrails {
                     decision::Grading::Skipped(decision::Skip::Disabled)
                 } else {
                     decision::Grading::Escalated {
-                        reason: session_review::Reason::Error,
+                        reason: session_review::Reason::Unavailable,
                         provenance: guardrail::Escalation {
+                            reason: Some(guardrail::EscalationReason::Unavailable),
                             choice: None,
                             confidence: None,
                             grades: None,

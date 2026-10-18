@@ -7,7 +7,7 @@ import type {
 } from "./wire-views"
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
-const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 const money = (value: unknown) => typeof value === "number" && Number.isFinite(value)
 const perTime = (value: unknown) => money(value) && (value as number) >= 0
 
@@ -47,6 +47,7 @@ export function readTaskCosts(value: unknown): UsageTaskCostsView | undefined {
 
 export function readUsageForecast(value: unknown): UsageForecastView | undefined {
   if (!record(value) || !count(value.asOf) || value.localScope !== "backend" && value.localScope !== "location" || value.localRates !== undefined && !Array.isArray(value.localRates) || value.quotas !== undefined && !Array.isArray(value.quotas)) return undefined
+  const asOf = value.asOf
   if (!(value.localRates ?? []).every((rate) => record(rate) && typeof rate.providerID === "string" && (rate.profile === undefined || typeof rate.profile === "string") &&
     count(rate.observedFrom) && count(rate.observedTo) && perTime(rate.tokensPerMinute) && [rate.tokensPerMinute5, rate.tokensPerMinute60].every((item) => item === undefined || perTime(item)) && (rate.estimatedUSDPerHour === undefined || money(rate.estimatedUSDPerHour)) &&
     record(rate.coverage) && count(rate.coverage.pricedRequests) && count(rate.coverage.unpricedRequests))) return undefined
@@ -56,6 +57,8 @@ export function readUsageForecast(value: unknown): UsageForecastView | undefined
     ["provider_api", "local_client_rpc", "response_headers", "response_stream", "provider_internal_api", "local_session"].includes(String(quota.source)) &&
     ["stable", "client_contract", "observed", "best_effort"].includes(String(quota.stability)) && count(quota.updatedAt) &&
     (quota.method === undefined || quota.method === "quota-delta-ema" || quota.method === "window-mean") && (quota.reason === undefined || typeof quota.reason === "string") &&
-    [quota.observedFrom, quota.observedTo, quota.exhaustionAt].every((item) => item === undefined || count(item)) && [quota.ratePerHour, quota.projectedUsedAtReset].every((item) => item === undefined || perTime(item)))) return undefined
+    [quota.observedFrom, quota.observedTo, quota.exhaustionAt].every((item) => item === undefined || count(item)) && [quota.ratePerHour, quota.projectedUsedAtReset].every((item) => item === undefined || perTime(item)) &&
+    (quota.pace === undefined || record(quota.pace) && ["ahead", "cutting-it-close", "will-run-out"].includes(String(quota.pace.verdict)) && perTime(quota.pace.projectedUsedAtReset) &&
+      (quota.pace.exhaustionAt === undefined || quota.pace.verdict === "will-run-out" && count(quota.pace.exhaustionAt) && quota.pace.exhaustionAt > asOf)))) return undefined
   return value as UsageForecastView
 }

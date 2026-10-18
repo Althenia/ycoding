@@ -4,355 +4,355 @@ import "ycoding/v5/foundation.proto";
 import "ycoding/v5/operations.proto";
 import "ycoding/v5/shared.proto";
 
-option (ycoding.v5.operation_range) = { first: 3000 last: 3053 };
+option (ycoding.v5.operation_range) = { first: 3000 last: 3055 };
 
 enum browser_action_Request_payload_actionValue1_type {
-  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1;
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1 [(ycoding.v5.domain_label) = "navigate"];
 }
 
 enum browser_action_Request_payload_actionValue2_type {
-  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE2_TYPE_CLICK = 1;
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE2_TYPE_CLICK = 1 [(ycoding.v5.domain_label) = "click"];
 }
 
 enum browser_action_Request_payload_actionValue3_type {
-  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE3_TYPE_TYPE = 1;
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE3_TYPE_TYPE = 1 [(ycoding.v5.domain_label) = "type"];
 }
 
 enum browser_action_Request_payload_actionValue4_type {
-  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE4_TYPE_SCROLL = 1;
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE4_TYPE_SCROLL = 1 [(ycoding.v5.domain_label) = "scroll"];
 }
 
 enum browser_action_Request_payload_actionValue5_type {
-  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE5_TYPE_CAPTURE = 1;
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE5_TYPE_CAPTURE = 1 [(ycoding.v5.domain_label) = "capture"];
 }
 
 enum browser_action_Request_payload_actionValue6_type {
-  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE6_TYPE_GROUP = 1;
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE6_TYPE_GROUP = 1 [(ycoding.v5.domain_label) = "group"];
 }
 
 enum browser_action_Request_payload_actionValue7_type {
-  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE7_TYPE_UNGROUP = 1;
+  BROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE7_TYPE_UNGROUP = 1 [(ycoding.v5.domain_label) = "ungroup"];
 }
 
 enum Browser_Tab_status {
-  BROWSER_TAB_STATUS_SHARED = 1;
-  BROWSER_TAB_STATUS_PAUSED = 2;
-  BROWSER_TAB_STATUS_UNAVAILABLE = 3;
+  BROWSER_TAB_STATUS_SHARED = 1 [(ycoding.v5.domain_label) = "shared"];
+  BROWSER_TAB_STATUS_PAUSED = 2 [(ycoding.v5.domain_label) = "paused"];
+  BROWSER_TAB_STATUS_UNAVAILABLE = 3 [(ycoding.v5.domain_label) = "unavailable"];
 }
 
 enum Browser_Tab_pauseReason {
-  BROWSER_TAB_PAUSEREASON_USER_ACTIVE = 1;
-  BROWSER_TAB_PAUSEREASON_REQUESTED = 2;
-  BROWSER_TAB_PAUSEREASON_UNCERTAIN = 3;
-  BROWSER_TAB_PAUSEREASON_DISCONNECTED = 4;
+  BROWSER_TAB_PAUSEREASON_USER_ACTIVE = 1 [(ycoding.v5.domain_label) = "user_active"];
+  BROWSER_TAB_PAUSEREASON_REQUESTED = 2 [(ycoding.v5.domain_label) = "requested"];
+  BROWSER_TAB_PAUSEREASON_UNCERTAIN = 3 [(ycoding.v5.domain_label) = "uncertain"];
+  BROWSER_TAB_PAUSEREASON_DISCONNECTED = 4 [(ycoding.v5.domain_label) = "disconnected"];
 }
 
 enum Browser_Tab_mode {
-  BROWSER_TAB_MODE_OWNED = 1;
-  BROWSER_TAB_MODE_PROFILE = 2;
+  BROWSER_TAB_MODE_OWNED = 1 [(ycoding.v5.domain_label) = "owned"];
+  BROWSER_TAB_MODE_PROFILE = 2 [(ycoding.v5.domain_label) = "profile"];
 }
 
 enum Browser_Tab_lease {
-  BROWSER_TAB_LEASE_SELF = 1;
-  BROWSER_TAB_LEASE_OTHER = 2;
+  BROWSER_TAB_LEASE_SELF = 1 [(ycoding.v5.domain_label) = "self"];
+  BROWSER_TAB_LEASE_OTHER = 2 [(ycoding.v5.domain_label) = "other"];
 }
 
 enum Browser_ActionResult_status {
-  BROWSER_ACTIONRESULT_STATUS_COMPLETED = 1;
-  BROWSER_ACTIONRESULT_STATUS_PAUSED = 2;
-  BROWSER_ACTIONRESULT_STATUS_REJECTED = 3;
-  BROWSER_ACTIONRESULT_STATUS_UNCERTAIN = 4;
+  BROWSER_ACTIONRESULT_STATUS_COMPLETED = 1 [(ycoding.v5.domain_label) = "completed"];
+  BROWSER_ACTIONRESULT_STATUS_PAUSED = 2 [(ycoding.v5.domain_label) = "paused"];
+  BROWSER_ACTIONRESULT_STATUS_REJECTED = 3 [(ycoding.v5.domain_label) = "rejected"];
+  BROWSER_ACTIONRESULT_STATUS_UNCERTAIN = 4 [(ycoding.v5.domain_label) = "uncertain"];
 }
 
 enum Browser_CaptureOutput_mediaType {
-  BROWSER_CAPTUREOUTPUT_MEDIATYPE_IMAGE_PNG = 1;
+  BROWSER_CAPTUREOUTPUT_MEDIATYPE_IMAGE_PNG = 1 [(ycoding.v5.domain_label) = "image/png"];
 }
 
 enum Browser_ControlInput_action {
-  BROWSER_CONTROLINPUT_ACTION_PAUSE = 1;
-  BROWSER_CONTROLINPUT_ACTION_RESUME = 2;
+  BROWSER_CONTROLINPUT_ACTION_PAUSE = 1 [(ycoding.v5.domain_label) = "pause"];
+  BROWSER_CONTROLINPUT_ACTION_RESUME = 2 [(ycoding.v5.domain_label) = "resume"];
 }
 
 enum Browser_Status_state {
-  BROWSER_STATUS_STATE_UNAVAILABLE = 1;
-  BROWSER_STATUS_STATE_PAIRING = 2;
-  BROWSER_STATUS_STATE_CONNECTED = 3;
-  BROWSER_STATUS_STATE_PAUSED = 4;
+  BROWSER_STATUS_STATE_UNAVAILABLE = 1 [(ycoding.v5.domain_label) = "unavailable"];
+  BROWSER_STATUS_STATE_PAIRING = 2 [(ycoding.v5.domain_label) = "pairing"];
+  BROWSER_STATUS_STATE_CONNECTED = 3 [(ycoding.v5.domain_label) = "connected"];
+  BROWSER_STATUS_STATE_PAUSED = 4 [(ycoding.v5.domain_label) = "paused"];
 }
 
 enum fs_find_Request_query_type {
-  FS_FIND_REQUEST_QUERY_TYPE_FILE = 1;
-  FS_FIND_REQUEST_QUERY_TYPE_DIRECTORY = 2;
+  FS_FIND_REQUEST_QUERY_TYPE_FILE = 1 [(ycoding.v5.domain_label) = "file"];
+  FS_FIND_REQUEST_QUERY_TYPE_DIRECTORY = 2 [(ycoding.v5.domain_label) = "directory"];
 }
 
 enum FileSystem_Entry_type {
-  FILESYSTEM_ENTRY_TYPE_FILE = 1;
-  FILESYSTEM_ENTRY_TYPE_DIRECTORY = 2;
+  FILESYSTEM_ENTRY_TYPE_FILE = 1 [(ycoding.v5.domain_label) = "file"];
+  FILESYSTEM_ENTRY_TYPE_DIRECTORY = 2 [(ycoding.v5.domain_label) = "directory"];
 }
 
 enum isolatedBrowser_action_Request_payload_actionValue1_type {
-  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1;
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE1_TYPE_NAVIGATE = 1 [(ycoding.v5.domain_label) = "navigate"];
 }
 
 enum isolatedBrowser_action_Request_payload_actionValue2_type {
-  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE2_TYPE_CLICK = 1;
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE2_TYPE_CLICK = 1 [(ycoding.v5.domain_label) = "click"];
 }
 
 enum isolatedBrowser_action_Request_payload_actionValue3_type {
-  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE3_TYPE_TYPE = 1;
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE3_TYPE_TYPE = 1 [(ycoding.v5.domain_label) = "type"];
 }
 
 enum isolatedBrowser_action_Request_payload_actionValue4_type {
-  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE4_TYPE_SCROLL = 1;
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE4_TYPE_SCROLL = 1 [(ycoding.v5.domain_label) = "scroll"];
 }
 
 enum isolatedBrowser_action_Request_payload_actionValue5_type {
-  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE5_TYPE_CAPTURE = 1;
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE5_TYPE_CAPTURE = 1 [(ycoding.v5.domain_label) = "capture"];
 }
 
 enum isolatedBrowser_action_Request_payload_actionValue6_type {
-  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE6_TYPE_GROUP = 1;
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE6_TYPE_GROUP = 1 [(ycoding.v5.domain_label) = "group"];
 }
 
 enum isolatedBrowser_action_Request_payload_actionValue7_type {
-  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE7_TYPE_UNGROUP = 1;
+  ISOLATEDBROWSER_ACTION_REQUEST_PAYLOAD_ACTIONVALUE7_TYPE_UNGROUP = 1 [(ycoding.v5.domain_label) = "ungroup"];
 }
 
 enum IsolatedBrowser_ActionResult_mode {
-  ISOLATEDBROWSER_ACTIONRESULT_MODE_ISOLATED = 1;
+  ISOLATEDBROWSER_ACTIONRESULT_MODE_ISOLATED = 1 [(ycoding.v5.domain_label) = "isolated"];
 }
 
 enum IsolatedBrowser_ActionResult_status {
-  ISOLATEDBROWSER_ACTIONRESULT_STATUS_COMPLETED = 1;
-  ISOLATEDBROWSER_ACTIONRESULT_STATUS_REJECTED = 2;
-  ISOLATEDBROWSER_ACTIONRESULT_STATUS_UNCERTAIN = 3;
+  ISOLATEDBROWSER_ACTIONRESULT_STATUS_COMPLETED = 1 [(ycoding.v5.domain_label) = "completed"];
+  ISOLATEDBROWSER_ACTIONRESULT_STATUS_REJECTED = 2 [(ycoding.v5.domain_label) = "rejected"];
+  ISOLATEDBROWSER_ACTIONRESULT_STATUS_UNCERTAIN = 3 [(ycoding.v5.domain_label) = "uncertain"];
 }
 
 enum IsolatedBrowser_ControlInput_action {
-  ISOLATEDBROWSER_CONTROLINPUT_ACTION_PAUSE = 1;
-  ISOLATEDBROWSER_CONTROLINPUT_ACTION_RESUME = 2;
+  ISOLATEDBROWSER_CONTROLINPUT_ACTION_PAUSE = 1 [(ycoding.v5.domain_label) = "pause"];
+  ISOLATEDBROWSER_CONTROLINPUT_ACTION_RESUME = 2 [(ycoding.v5.domain_label) = "resume"];
 }
 
 enum IsolatedBrowser_Status_mode {
-  ISOLATEDBROWSER_STATUS_MODE_ISOLATED = 1;
+  ISOLATEDBROWSER_STATUS_MODE_ISOLATED = 1 [(ycoding.v5.domain_label) = "isolated"];
 }
 
 enum IsolatedBrowser_Status_state {
-  ISOLATEDBROWSER_STATUS_STATE_UNAVAILABLE = 1;
-  ISOLATEDBROWSER_STATUS_STATE_STARTING = 2;
-  ISOLATEDBROWSER_STATUS_STATE_READY = 3;
-  ISOLATEDBROWSER_STATUS_STATE_PAUSED = 4;
-  ISOLATEDBROWSER_STATUS_STATE_STOPPED = 5;
+  ISOLATEDBROWSER_STATUS_STATE_UNAVAILABLE = 1 [(ycoding.v5.domain_label) = "unavailable"];
+  ISOLATEDBROWSER_STATUS_STATE_STARTING = 2 [(ycoding.v5.domain_label) = "starting"];
+  ISOLATEDBROWSER_STATUS_STATE_READY = 3 [(ycoding.v5.domain_label) = "ready"];
+  ISOLATEDBROWSER_STATUS_STATE_PAUSED = 4 [(ycoding.v5.domain_label) = "paused"];
+  ISOLATEDBROWSER_STATUS_STATE_STOPPED = 5 [(ycoding.v5.domain_label) = "stopped"];
 }
 
 enum IsolatedBrowser_Observation_mode {
-  ISOLATEDBROWSER_OBSERVATION_MODE_ISOLATED = 1;
+  ISOLATEDBROWSER_OBSERVATION_MODE_ISOLATED = 1 [(ycoding.v5.domain_label) = "isolated"];
 }
 
 enum KeepAwake_State {
-  KEEPAWAKE_STATE_OFF = 1;
-  KEEPAWAKE_STATE_ON = 2;
-  KEEPAWAKE_STATE_UNSUPPORTED = 3;
-  KEEPAWAKE_STATE_ERROR = 4;
+  KEEPAWAKE_STATE_OFF = 1 [(ycoding.v5.domain_label) = "off"];
+  KEEPAWAKE_STATE_ON = 2 [(ycoding.v5.domain_label) = "on"];
+  KEEPAWAKE_STATE_UNSUPPORTED = 3 [(ycoding.v5.domain_label) = "unsupported"];
+  KEEPAWAKE_STATE_ERROR = 4 [(ycoding.v5.domain_label) = "error"];
 }
 
 enum KeepAwake_Status_lid {
-  KEEPAWAKE_STATUS_LID_OFF = 1;
-  KEEPAWAKE_STATUS_LID_ON = 2;
-  KEEPAWAKE_STATUS_LID_HELD = 3;
-  KEEPAWAKE_STATUS_LID_UNSUPPORTED = 4;
-  KEEPAWAKE_STATUS_LID_ERROR = 5;
+  KEEPAWAKE_STATUS_LID_OFF = 1 [(ycoding.v5.domain_label) = "off"];
+  KEEPAWAKE_STATUS_LID_ON = 2 [(ycoding.v5.domain_label) = "on"];
+  KEEPAWAKE_STATUS_LID_HELD = 3 [(ycoding.v5.domain_label) = "held"];
+  KEEPAWAKE_STATUS_LID_UNSUPPORTED = 4 [(ycoding.v5.domain_label) = "unsupported"];
+  KEEPAWAKE_STATUS_LID_ERROR = 5 [(ycoding.v5.domain_label) = "error"];
 }
 
 enum ProjectCopyError_name {
-  PROJECTCOPYERROR_NAME_PROJECTCOPYERROR = 1;
+  PROJECTCOPYERROR_NAME_PROJECTCOPYERROR = 1 [(ycoding.v5.domain_label) = "ProjectCopyError"];
 }
 
 enum pty_connectToken_Request_headers_x_ycoding_ticket {
-  PTY_CONNECTTOKEN_REQUEST_HEADERS_X_YCODING_TICKET_1 = 1;
+  PTY_CONNECTTOKEN_REQUEST_HEADERS_X_YCODING_TICKET_1 = 1 [(ycoding.v5.domain_label) = "1"];
 }
 
 enum pty_connectToken_Request_payload_access {
-  PTY_CONNECTTOKEN_REQUEST_PAYLOAD_ACCESS_INSPECT = 1;
-  PTY_CONNECTTOKEN_REQUEST_PAYLOAD_ACCESS_CONTROL = 2;
+  PTY_CONNECTTOKEN_REQUEST_PAYLOAD_ACCESS_INSPECT = 1 [(ycoding.v5.domain_label) = "inspect"];
+  PTY_CONNECTTOKEN_REQUEST_PAYLOAD_ACCESS_CONTROL = 2 [(ycoding.v5.domain_label) = "control"];
 }
 
 enum PtyTicket_ConnectToken_access {
-  PTYTICKET_CONNECTTOKEN_ACCESS_INSPECT = 1;
-  PTYTICKET_CONNECTTOKEN_ACCESS_CONTROL = 2;
+  PTYTICKET_CONNECTTOKEN_ACCESS_INSPECT = 1 [(ycoding.v5.domain_label) = "inspect"];
+  PTYTICKET_CONNECTTOKEN_ACCESS_CONTROL = 2 [(ycoding.v5.domain_label) = "control"];
 }
 
 enum PtyConflictError__tag {
-  PTYCONFLICTERROR__TAG_PTYCONFLICTERROR = 1;
+  PTYCONFLICTERROR__TAG_PTYCONFLICTERROR = 1 [(ycoding.v5.domain_label) = "PtyConflictError"];
 }
 
 enum PtyNotFoundError__tag {
-  PTYNOTFOUNDERROR__TAG_PTYNOTFOUNDERROR = 1;
+  PTYNOTFOUNDERROR__TAG_PTYNOTFOUNDERROR = 1 [(ycoding.v5.domain_label) = "PtyNotFoundError"];
 }
 
 enum pty_control_Request_payload_action {
-  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_TAKE = 1;
-  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_PAUSE = 2;
-  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_AGENT = 3;
+  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_TAKE = 1 [(ycoding.v5.domain_label) = "take"];
+  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_PAUSE = 2 [(ycoding.v5.domain_label) = "pause"];
+  PTY_CONTROL_REQUEST_PAYLOAD_ACTION_AGENT = 3 [(ycoding.v5.domain_label) = "agent"];
 }
 
 enum PtyResourceLimitError__tag {
-  PTYRESOURCELIMITERROR__TAG_PTYRESOURCELIMITERROR = 1;
+  PTYRESOURCELIMITERROR__TAG_PTYRESOURCELIMITERROR = 1 [(ycoding.v5.domain_label) = "PtyResourceLimitError"];
 }
 
 enum pty_update_Request_payload_actor {
-  PTY_UPDATE_REQUEST_PAYLOAD_ACTOR_AGENT = 1;
-  PTY_UPDATE_REQUEST_PAYLOAD_ACTOR_USER = 2;
+  PTY_UPDATE_REQUEST_PAYLOAD_ACTOR_AGENT = 1 [(ycoding.v5.domain_label) = "agent"];
+  PTY_UPDATE_REQUEST_PAYLOAD_ACTOR_USER = 2 [(ycoding.v5.domain_label) = "user"];
 }
 
 enum remote_get_Result_data_state {
-  REMOTE_GET_RESULT_DATA_STATE_OFF = 1;
-  REMOTE_GET_RESULT_DATA_STATE_CONNECTING = 2;
-  REMOTE_GET_RESULT_DATA_STATE_ON = 3;
-  REMOTE_GET_RESULT_DATA_STATE_ERROR = 4;
+  REMOTE_GET_RESULT_DATA_STATE_OFF = 1 [(ycoding.v5.domain_label) = "off"];
+  REMOTE_GET_RESULT_DATA_STATE_CONNECTING = 2 [(ycoding.v5.domain_label) = "connecting"];
+  REMOTE_GET_RESULT_DATA_STATE_ON = 3 [(ycoding.v5.domain_label) = "on"];
+  REMOTE_GET_RESULT_DATA_STATE_ERROR = 4 [(ycoding.v5.domain_label) = "error"];
 }
 
 enum remote_set_Result_data_state {
-  REMOTE_SET_RESULT_DATA_STATE_OFF = 1;
-  REMOTE_SET_RESULT_DATA_STATE_CONNECTING = 2;
-  REMOTE_SET_RESULT_DATA_STATE_ON = 3;
-  REMOTE_SET_RESULT_DATA_STATE_ERROR = 4;
+  REMOTE_SET_RESULT_DATA_STATE_OFF = 1 [(ycoding.v5.domain_label) = "off"];
+  REMOTE_SET_RESULT_DATA_STATE_CONNECTING = 2 [(ycoding.v5.domain_label) = "connecting"];
+  REMOTE_SET_RESULT_DATA_STATE_ON = 3 [(ycoding.v5.domain_label) = "on"];
+  REMOTE_SET_RESULT_DATA_STATE_ERROR = 4 [(ycoding.v5.domain_label) = "error"];
 }
 
 enum ShellNotFoundError__tag {
-  SHELLNOTFOUNDERROR__TAG_SHELLNOTFOUNDERROR = 1;
+  SHELLNOTFOUNDERROR__TAG_SHELLNOTFOUNDERROR = 1 [(ycoding.v5.domain_label) = "ShellNotFoundError"];
 }
 
 enum Telemetry_RequestSample_kind {
-  TELEMETRY_REQUESTSAMPLE_KIND_REQUEST = 1;
+  TELEMETRY_REQUESTSAMPLE_KIND_REQUEST = 1 [(ycoding.v5.domain_label) = "request"];
 }
 
 enum Telemetry_RequestSample_operation {
-  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_LIST = 1;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_KEY = 2;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_BEGIN = 3;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_STATUS = 4;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_COMPLETE = 5;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_CANCEL = 6;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_LIST = 7;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_LIST = 8;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ACTIVE = 9;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GET = 10;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_MESSAGES = 11;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CAPTUREDCHANGES_LIST = 12;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMPACTION_LIST = 13;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMPACT = 14;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SNAPSHOT = 15;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PENDING_LIST = 16;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ATTACHMENT_READ = 17;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_MESSAGE_STREAM = 18;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TODO_LIST = 19;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_LIST = 20;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PIN = 21;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_UNPIN = 22;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_CANCEL = 23;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_ANSWER = 24;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_ECONOMICS = 25;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_SHELL_LIST = 26;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_SHELL_KILL = 27;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SIDE_CHAT_LIST = 28;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SIDE_CHAT_CREATE = 29;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FAMILY_ACTIVITY = 30;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_LOG = 31;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBSCRIBE = 32;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_UNSUBSCRIBE = 33;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPT = 34;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ATTACHMENT_UPLOAD = 35;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_INTERRUPT = 36;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PREDICTION = 37;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPTGENERATE = 38;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PERMISSION_LIST = 39;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PERMISSION_REPLY = 40;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_STATUS = 41;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_REQUEST_LIST = 42;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_REPLY = 43;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_LIST = 44;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_REPLY = 45;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_CANCEL = 46;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SHELL_OUTPUT = 47;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_AUTONOMY_GET = 48;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_AUTONOMY_SET = 49;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GOAL_SET = 50;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GOAL_STOP = 51;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CREATE = 52;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_STATUS = 53;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CATALOG = 54;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_CATALOG = 55;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FILE_FIND = 56;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_FILE_FIND = 57;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SWITCHMODEL = 58;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SWITCHAGENT = 59;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMMAND = 60;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SKILL = 61;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_PROVIDERS = 62;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_SUMMARY = 63;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_REPORT = 64;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_USAGEREPORT = 67;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPTCOSTS = 68;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TASKCOSTS = 69;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_FORECAST = 70;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_REVIEW_LIST = 71;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_REVIEW_DECIDE = 72;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_GET = 65;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_SET = 66;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_REPORT = 73;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_RECENT = 74;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE = 75;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE_GET = 76;
-  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE_CLEAR = 77;
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_LIST = 1 [(ycoding.v5.domain_label) = "provider.auth.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_KEY = 2 [(ycoding.v5.domain_label) = "provider.auth.key"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_BEGIN = 3 [(ycoding.v5.domain_label) = "provider.auth.begin"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_STATUS = 4 [(ycoding.v5.domain_label) = "provider.auth.status"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_COMPLETE = 5 [(ycoding.v5.domain_label) = "provider.auth.complete"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_PROVIDER_AUTH_CANCEL = 6 [(ycoding.v5.domain_label) = "provider.auth.cancel"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_LIST = 7 [(ycoding.v5.domain_label) = "workspace.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_LIST = 8 [(ycoding.v5.domain_label) = "session.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ACTIVE = 9 [(ycoding.v5.domain_label) = "session.active"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GET = 10 [(ycoding.v5.domain_label) = "session.get"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_MESSAGES = 11 [(ycoding.v5.domain_label) = "session.messages"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CAPTUREDCHANGES_LIST = 12 [(ycoding.v5.domain_label) = "session.capturedChanges.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMPACTION_LIST = 13 [(ycoding.v5.domain_label) = "session.compaction.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMPACT = 14 [(ycoding.v5.domain_label) = "session.compact"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SNAPSHOT = 15 [(ycoding.v5.domain_label) = "session.snapshot"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PENDING_LIST = 16 [(ycoding.v5.domain_label) = "session.pending.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ATTACHMENT_READ = 17 [(ycoding.v5.domain_label) = "session.attachment.read"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_MESSAGE_STREAM = 18 [(ycoding.v5.domain_label) = "session.message.stream"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TODO_LIST = 19 [(ycoding.v5.domain_label) = "session.todo.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_LIST = 20 [(ycoding.v5.domain_label) = "session.subagent.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PIN = 21 [(ycoding.v5.domain_label) = "session.pin"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_UNPIN = 22 [(ycoding.v5.domain_label) = "session.unpin"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_CANCEL = 23 [(ycoding.v5.domain_label) = "session.subagent.cancel"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBAGENT_ANSWER = 24 [(ycoding.v5.domain_label) = "session.subagent.answer"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_ECONOMICS = 25 [(ycoding.v5.domain_label) = "session.team.economics"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_SHELL_LIST = 26 [(ycoding.v5.domain_label) = "session.team.shell.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TEAM_SHELL_KILL = 27 [(ycoding.v5.domain_label) = "session.team.shell.kill"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SIDE_CHAT_LIST = 28 [(ycoding.v5.domain_label) = "session.side-chat.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SIDE_CHAT_CREATE = 29 [(ycoding.v5.domain_label) = "session.side-chat.create"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FAMILY_ACTIVITY = 30 [(ycoding.v5.domain_label) = "session.family.activity"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_LOG = 31 [(ycoding.v5.domain_label) = "session.log"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SUBSCRIBE = 32 [(ycoding.v5.domain_label) = "session.subscribe"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_UNSUBSCRIBE = 33 [(ycoding.v5.domain_label) = "session.unsubscribe"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPT = 34 [(ycoding.v5.domain_label) = "session.prompt"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_ATTACHMENT_UPLOAD = 35 [(ycoding.v5.domain_label) = "session.attachment.upload"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_INTERRUPT = 36 [(ycoding.v5.domain_label) = "session.interrupt"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PREDICTION = 37 [(ycoding.v5.domain_label) = "session.prediction"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPTGENERATE = 38 [(ycoding.v5.domain_label) = "session.promptGenerate"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PERMISSION_LIST = 39 [(ycoding.v5.domain_label) = "session.permission.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PERMISSION_REPLY = 40 [(ycoding.v5.domain_label) = "session.permission.reply"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_STATUS = 41 [(ycoding.v5.domain_label) = "session.guardrail.status"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_REQUEST_LIST = 42 [(ycoding.v5.domain_label) = "session.guardrail.request.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GUARDRAIL_REPLY = 43 [(ycoding.v5.domain_label) = "session.guardrail.reply"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_LIST = 44 [(ycoding.v5.domain_label) = "session.form.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_REPLY = 45 [(ycoding.v5.domain_label) = "session.form.reply"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FORM_CANCEL = 46 [(ycoding.v5.domain_label) = "session.form.cancel"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SHELL_OUTPUT = 47 [(ycoding.v5.domain_label) = "session.shell.output"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_AUTONOMY_GET = 48 [(ycoding.v5.domain_label) = "session.autonomy.get"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_AUTONOMY_SET = 49 [(ycoding.v5.domain_label) = "session.autonomy.set"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GOAL_SET = 50 [(ycoding.v5.domain_label) = "session.goal.set"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_GOAL_STOP = 51 [(ycoding.v5.domain_label) = "session.goal.stop"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CREATE = 52 [(ycoding.v5.domain_label) = "session.create"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_STATUS = 53 [(ycoding.v5.domain_label) = "session.status"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_CATALOG = 54 [(ycoding.v5.domain_label) = "session.catalog"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_CATALOG = 55 [(ycoding.v5.domain_label) = "workspace.catalog"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_FILE_FIND = 56 [(ycoding.v5.domain_label) = "session.file.find"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_WORKSPACE_FILE_FIND = 57 [(ycoding.v5.domain_label) = "workspace.file.find"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SWITCHMODEL = 58 [(ycoding.v5.domain_label) = "session.switchModel"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SWITCHAGENT = 59 [(ycoding.v5.domain_label) = "session.switchAgent"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_COMMAND = 60 [(ycoding.v5.domain_label) = "session.command"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_SKILL = 61 [(ycoding.v5.domain_label) = "session.skill"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_PROVIDERS = 62 [(ycoding.v5.domain_label) = "usage.providers"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_SUMMARY = 63 [(ycoding.v5.domain_label) = "usage.summary"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_REPORT = 64 [(ycoding.v5.domain_label) = "usage.report"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_USAGEREPORT = 67 [(ycoding.v5.domain_label) = "session.usageReport"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_PROMPTCOSTS = 68 [(ycoding.v5.domain_label) = "session.promptCosts"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_TASKCOSTS = 69 [(ycoding.v5.domain_label) = "session.taskCosts"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_USAGE_FORECAST = 70 [(ycoding.v5.domain_label) = "usage.forecast"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_REVIEW_LIST = 71 [(ycoding.v5.domain_label) = "session.review.list"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_SESSION_REVIEW_DECIDE = 72 [(ycoding.v5.domain_label) = "session.review.decide"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_GET = 65 [(ycoding.v5.domain_label) = "machine.keepAwake.get"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_MACHINE_KEEPAWAKE_SET = 66 [(ycoding.v5.domain_label) = "machine.keepAwake.set"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_REPORT = 73 [(ycoding.v5.domain_label) = "incident.report"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_RECENT = 74 [(ycoding.v5.domain_label) = "incident.recent"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE = 75 [(ycoding.v5.domain_label) = "incident.guidance"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE_GET = 76 [(ycoding.v5.domain_label) = "incident.guidance.get"];
+  TELEMETRY_REQUESTSAMPLE_OPERATION_INCIDENT_GUIDANCE_CLEAR = 77 [(ycoding.v5.domain_label) = "incident.guidance.clear"];
 }
 
 enum Telemetry_RequestSample_outcome {
-  TELEMETRY_REQUESTSAMPLE_OUTCOME_OK = 1;
-  TELEMETRY_REQUESTSAMPLE_OUTCOME_FAILED = 2;
-  TELEMETRY_REQUESTSAMPLE_OUTCOME_UNKNOWN = 3;
-  TELEMETRY_REQUESTSAMPLE_OUTCOME_UNAVAILABLE = 4;
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_OK = 1 [(ycoding.v5.domain_label) = "ok"];
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_FAILED = 2 [(ycoding.v5.domain_label) = "failed"];
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_UNKNOWN = 3 [(ycoding.v5.domain_label) = "unknown"];
+  TELEMETRY_REQUESTSAMPLE_OUTCOME_UNAVAILABLE = 4 [(ycoding.v5.domain_label) = "unavailable"];
 }
 
 enum Telemetry_RequestSample_reason {
-  TELEMETRY_REQUESTSAMPLE_REASON_NOT_CONNECTED = 1;
-  TELEMETRY_REQUESTSAMPLE_REASON_IN_FLIGHT_LIMIT = 2;
-  TELEMETRY_REQUESTSAMPLE_REASON_REQUEST_LIMIT = 3;
-  TELEMETRY_REQUESTSAMPLE_REASON_CANCELLED = 4;
+  TELEMETRY_REQUESTSAMPLE_REASON_NOT_CONNECTED = 1 [(ycoding.v5.domain_label) = "not-connected"];
+  TELEMETRY_REQUESTSAMPLE_REASON_IN_FLIGHT_LIMIT = 2 [(ycoding.v5.domain_label) = "in-flight-limit"];
+  TELEMETRY_REQUESTSAMPLE_REASON_REQUEST_LIMIT = 3 [(ycoding.v5.domain_label) = "request-limit"];
+  TELEMETRY_REQUESTSAMPLE_REASON_CANCELLED = 4 [(ycoding.v5.domain_label) = "cancelled"];
 }
 
 enum Telemetry_LongTaskSample_kind {
-  TELEMETRY_LONGTASKSAMPLE_KIND_LONG_TASK = 1;
+  TELEMETRY_LONGTASKSAMPLE_KIND_LONG_TASK = 1 [(ycoding.v5.domain_label) = "long-task"];
 }
 
 enum Telemetry_ClientSample_kind {
-  TELEMETRY_CLIENTSAMPLE_KIND_CLIENT = 1;
+  TELEMETRY_CLIENTSAMPLE_KIND_CLIENT = 1 [(ycoding.v5.domain_label) = "client"];
 }
 
 enum Telemetry_ClientSample_surface {
-  TELEMETRY_CLIENTSAMPLE_SURFACE_TUI = 1;
-  TELEMETRY_CLIENTSAMPLE_SURFACE_WEB = 2;
+  TELEMETRY_CLIENTSAMPLE_SURFACE_TUI = 1 [(ycoding.v5.domain_label) = "tui"];
+  TELEMETRY_CLIENTSAMPLE_SURFACE_WEB = 2 [(ycoding.v5.domain_label) = "web"];
 }
 
 enum Telemetry_ClientSample_metric {
-  TELEMETRY_CLIENTSAMPLE_METRIC_PROMPT_ADMIT = 1;
-  TELEMETRY_CLIENTSAMPLE_METRIC_STREAM_DELAY = 2;
-  TELEMETRY_CLIENTSAMPLE_METRIC_TRANSCRIPT_LOAD = 3;
+  TELEMETRY_CLIENTSAMPLE_METRIC_PROMPT_ADMIT = 1 [(ycoding.v5.domain_label) = "prompt.admit"];
+  TELEMETRY_CLIENTSAMPLE_METRIC_STREAM_DELAY = 2 [(ycoding.v5.domain_label) = "stream.delay"];
+  TELEMETRY_CLIENTSAMPLE_METRIC_TRANSCRIPT_LOAD = 3 [(ycoding.v5.domain_label) = "transcript.load"];
 }
 
 enum TelemetryDisabled__tag {
-  TELEMETRYDISABLED__TAG_TELEMETRYDISABLED = 1;
+  TELEMETRYDISABLED__TAG_TELEMETRYDISABLED = 1 [(ycoding.v5.domain_label) = "TelemetryDisabled"];
 }
 
 enum Vcs_Mode {
-  VCS_MODE_WORKING = 1;
-  VCS_MODE_BRANCH = 2;
+  VCS_MODE_WORKING = 1 [(ycoding.v5.domain_label) = "working"];
+  VCS_MODE_BRANCH = 2 [(ycoding.v5.domain_label) = "branch"];
 }
 
 enum Vcs_FileStatus_status {
-  VCS_FILESTATUS_STATUS_ADDED = 1;
-  VCS_FILESTATUS_STATUS_DELETED = 2;
-  VCS_FILESTATUS_STATUS_MODIFIED = 3;
+  VCS_FILESTATUS_STATUS_ADDED = 1 [(ycoding.v5.domain_label) = "added"];
+  VCS_FILESTATUS_STATUS_DELETED = 2 [(ycoding.v5.domain_label) = "deleted"];
+  VCS_FILESTATUS_STATUS_MODIFIED = 3 [(ycoding.v5.domain_label) = "modified"];
 }
 
 message browser_action_Request_params {
@@ -2549,10 +2549,10 @@ service server_vcs {
 }
 
 enum RemoteDeviceCredentialState {
-  REMOTEDEVICECREDENTIALSTATE_NOT_AUTHENTICATED = 1;
-  REMOTEDEVICECREDENTIALSTATE_VALID = 2;
-  REMOTEDEVICECREDENTIALSTATE_EXPIRED = 3;
-  REMOTEDEVICECREDENTIALSTATE_REVOKED = 4;
+  REMOTEDEVICECREDENTIALSTATE_NOT_AUTHENTICATED = 1 [(ycoding.v5.domain_label) = "not_authenticated"];
+  REMOTEDEVICECREDENTIALSTATE_VALID = 2 [(ycoding.v5.domain_label) = "valid"];
+  REMOTEDEVICECREDENTIALSTATE_EXPIRED = 3 [(ycoding.v5.domain_label) = "expired"];
+  REMOTEDEVICECREDENTIALSTATE_REVOKED = 4 [(ycoding.v5.domain_label) = "revoked"];
 }
 
 message RemoteDevice {
@@ -2565,17 +2565,17 @@ message RemoteDevice {
 }
 
 enum RemoteEnrollmentError__tag {
-  REMOTEENROLLMENTERROR__TAG_REMOTEENROLLMENTERROR = 1;
+  REMOTEENROLLMENTERROR__TAG_REMOTEENROLLMENTERROR = 1 [(ycoding.v5.domain_label) = "RemoteEnrollmentError"];
 }
 
 enum RemoteEnrollmentError_code {
-  REMOTEENROLLMENTERROR_CODE_INVALID_ORIGIN = 1;
-  REMOTEENROLLMENTERROR_CODE_INVALID_CODE = 2;
-  REMOTEENROLLMENTERROR_CODE_ALREADY_ENROLLED = 3;
-  REMOTEENROLLMENTERROR_CODE_RELAY_REJECTED = 4;
-  REMOTEENROLLMENTERROR_CODE_RELAY_UNAVAILABLE = 5;
-  REMOTEENROLLMENTERROR_CODE_KEY_FAILED = 6;
-  REMOTEENROLLMENTERROR_CODE_STORE_FAILED = 7;
+  REMOTEENROLLMENTERROR_CODE_INVALID_ORIGIN = 1 [(ycoding.v5.domain_label) = "invalid_origin"];
+  REMOTEENROLLMENTERROR_CODE_INVALID_CODE = 2 [(ycoding.v5.domain_label) = "invalid_code"];
+  REMOTEENROLLMENTERROR_CODE_ALREADY_ENROLLED = 3 [(ycoding.v5.domain_label) = "already_enrolled"];
+  REMOTEENROLLMENTERROR_CODE_RELAY_REJECTED = 4 [(ycoding.v5.domain_label) = "relay_rejected"];
+  REMOTEENROLLMENTERROR_CODE_RELAY_UNAVAILABLE = 5 [(ycoding.v5.domain_label) = "relay_unavailable"];
+  REMOTEENROLLMENTERROR_CODE_KEY_FAILED = 6 [(ycoding.v5.domain_label) = "key_failed"];
+  REMOTEENROLLMENTERROR_CODE_STORE_FAILED = 7 [(ycoding.v5.domain_label) = "store_failed"];
 }
 
 message RemoteEnrollmentError {
@@ -2584,7 +2584,7 @@ message RemoteEnrollmentError {
 }
 
 enum RemoteEnrollmentPartialFailure__tag {
-  REMOTEENROLLMENTPARTIALFAILURE__TAG_REMOTEENROLLMENTPARTIALFAILURE = 1;
+  REMOTEENROLLMENTPARTIALFAILURE__TAG_REMOTEENROLLMENTPARTIALFAILURE = 1 [(ycoding.v5.domain_label) = "RemoteEnrollmentPartialFailure"];
 }
 
 message RemoteEnrollmentPartialFailure {
@@ -2608,6 +2608,31 @@ message remote_enroll_Result {
   required RemoteDevice data = 1;
 }
 
+message RemoteMcpStatus {
+  required remote_get_Result_data_state state = 1;
+  optional LosslessString message = 2;
+  optional LosslessString url = 3;
+}
+
+message remote_mcp_get_Request {
+}
+
+message remote_mcp_get_Result {
+  required RemoteMcpStatus data = 1;
+}
+
+message remote_mcp_set_Request_payload {
+  required bool enabled = 1;
+}
+
+message remote_mcp_set_Request {
+  required remote_mcp_set_Request_payload payload = 1;
+}
+
+message remote_mcp_set_Result {
+  required RemoteMcpStatus data = 1;
+}
+
 service frontend_remote {
   rpc remote_enroll(remote_enroll_Request) returns (remote_enroll_Result) {
     option (ycoding.v5.operation) = {
@@ -2626,6 +2651,36 @@ service frontend_remote {
       streaming: TYPED_BULK
       sensitivity: SECRET
       sensitive_fields: { field_path: "payload.code" sensitivity: SECRET }
+    };
+  }
+  rpc remote_mcp_get(remote_mcp_get_Request) returns (remote_mcp_get_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3054
+      diagnostic_name: "remote.mcp.get"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: READ
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
+    };
+  }
+  rpc remote_mcp_set(remote_mcp_set_Request) returns (remote_mcp_set_Result) {
+    option (ycoding.v5.operation) = {
+      operation_id: 3055
+      diagnostic_name: "remote.mcp.set"
+      error_types: "ycoding.v5.UnauthorizedError"
+      error_types: "ycoding.v5.InvalidRequestError"
+      roles: LOCAL_CLIENT
+      scope: MACHINE
+      mutation: MUTATION
+      settlement: COMPLETED
+      paging: UNPAGED
+      streaming: TYPED_BULK
+      sensitivity: PRIVATE
     };
   }
 }

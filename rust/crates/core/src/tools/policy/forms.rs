@@ -165,9 +165,9 @@ impl Forms {
         } else if form.fields.0.iter().any(required_free_text) {
             session_review::Reason::FreeText
         } else {
-            session_review::Reason::Error
+            session_review::Reason::Unavailable
         };
-        if reason == session_review::Reason::Error && self.0.decision.get().is_some() {
+        if reason == session_review::Reason::Unavailable && self.0.decision.get().is_some() {
             return Ok(None);
         }
         let item_id = reviews
@@ -642,7 +642,7 @@ async fn automatic(
     cancellation: &Cancellation,
 ) -> Result<form::Answer, session_review::Reason> {
     use ycoding_schema::{JsonObject, ObjectEncoder, session_review::Reason};
-    let session = SessionId::new(form.session_id.clone()).map_err(|_| Reason::Error)?;
+    let session = SessionId::new(form.session_id.clone()).map_err(|_| Reason::InvalidRequest)?;
     let mut questions = vec![];
     let mut keys = vec![];
     for (index, field) in form.fields.0.iter().enumerate() {
@@ -712,11 +712,11 @@ async fn automatic(
             _ => choices
                 .get(&format!("f{index}").into())
                 .cloned()
-                .ok_or(Reason::Error)?,
+                .ok_or(Reason::InvalidOutput)?,
         };
         answer.0.insert(key, value);
     }
-    validate_answer(form, &answer).map_err(|_| Reason::Error)?;
+    validate_answer(form, &answer).map_err(|_| Reason::InvalidOutput)?;
     Ok(answer)
 }
 

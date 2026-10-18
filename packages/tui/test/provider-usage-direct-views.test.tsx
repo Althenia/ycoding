@@ -1007,3 +1007,41 @@ test("loading, failed and unreported usage states stay explicit without forecast
     unreported.renderer.destroy()
   }
 })
+
+const paceUpdatedAt = Date.UTC(2026, 8, 22, 11, 55)
+const paceSnapshots: ProviderUsageListOutput["data"] = [
+  { providerID: "anthropic", label: "Anthropic", status: "available", source: "provider_internal_api", stability: "best_effort", updatedAt: paceUpdatedAt, windows: [
+    { id: "five-hour", label: "Window five-hour", unit: "percent", used: 45, resetAt: Date.UTC(2026, 8, 22, 14, 30), periodSeconds: 18_000 },
+    { id: "seven-day", label: "Window seven-day", unit: "percent", used: 47.5, resetAt: Date.UTC(2026, 8, 25, 12), periodSeconds: 604_800 },
+    { id: "seven-day-sonnet", label: "Window seven-day-sonnet", unit: "percent", used: 70, resetAt: Date.UTC(2026, 8, 25, 12), periodSeconds: 604_800 },
+  ] },
+  { providerID: "openrouter", label: "OpenRouter", status: "available", source: "provider_api", stability: "stable", updatedAt: paceUpdatedAt, windows: [
+    { id: "balance", label: "Window balance", unit: "usd", remaining: 38.42 },
+    { id: "unknown", label: "Window unknown", unit: "usd" },
+  ] },
+]
+const paceQuota = (windowID: string, extra: object) => ({
+  providerID: "anthropic", windowID, unit: "percent" as const, source: "provider_internal_api" as const, stability: "best_effort" as const, updatedAt: paceUpdatedAt,
+  state: "estimated" as const, method: "quota-delta-ema" as const, evidence: "medium" as const, ratePerHour: 12, ...extra,
+})
+const paceForecast = {
+  asOf: Date.UTC(2026, 8, 22, 12), localScope: "backend" as const, localRates: [],
+  quotas: [
+    paceQuota("five-hour", { exhaustionAt: Date.UTC(2026, 8, 22, 12, 5), pace: { verdict: "ahead", projectedUsedAtReset: 90 } }),
+    paceQuota("seven-day", { pace: { verdict: "cutting-it-close", projectedUsedAtReset: 95 } }),
+    paceQuota("seven-day-sonnet", { pace: { verdict: "will-run-out", projectedUsedAtReset: 140, exhaustionAt: Date.UTC(2026, 8, 24, 0) } }),
+  ],
+}
+
+test.each([{ mode: "dark" as const, width: 40 }, { mode: "dark" as const, width: 100 }, { mode: "light" as const, width: 40 }, { mode: "light" as const, width: 100 }])("provider quota pace shows beside the recent forecast in $mode at $width columns", async (input) => {
+  const app = await renderUsage({ width: input.width, height: 90, initialTab: "usage", mode: input.mode, snapshots: paceSnapshots, forecast: paceForecast, load: async (query) => page(query.group, []) })
+  try {
+    const frame = await app.waitForFrame((value) => value.includes("Will run out")).then(() => app.captureCharFrame().replace(/\s+/g, " "))
+    expect(frame.match(/Pace: Ahead/g)).toHaveLength(1)
+    expect(frame.match(/Pace: Cutting it close/g)).toHaveLength(1)
+    expect(frame.match(/Pace: Will run out/g)).toHaveLength(1)
+    expect(frame.match(/Pace:/g)).toHaveLength(3)
+    expect(frame.replace(/\s/g, "")).toContain("Estimatedexhaustion2026-09-22T12:05:00.000Z")
+    expect(frame.replace(/\s/g, "").match(/Quotaburn12percentagepoints\/hour/g)).toHaveLength(2)
+  } finally { app.renderer.destroy() }
+}, 30_000)

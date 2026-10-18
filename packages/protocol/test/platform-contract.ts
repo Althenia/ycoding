@@ -1,5 +1,5 @@
 import { SchemaAST } from "effect"
-import { wireContract, wireSharedSet } from "./wire-contract.js"
+import { domainLabel, wireContract, wireSharedSet, withDomainLiteral } from "./wire-contract.js"
 import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { middlewareErrors, allEndpoints } from "./resources-source.js"
 import { resourceSharedSet, resourceContract, resourceFieldConstraints, resourceProto } from "./resources-contract.js"
@@ -202,7 +202,7 @@ function platformDeclarations(
               (value, index) =>
                 `  ${name.toUpperCase()}_${String(value)
                   .replace(/[^a-zA-Z0-9]/g, "_")
-                  .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]};`,
+                  .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]}${domainLabel(value)};`,
             )
             .join("\n")}\n${reservedLine("enum", name, allocation)}}`,
       )
@@ -212,7 +212,7 @@ function platformDeclarations(
       .filter(([name]) => names.has(name))
       .map(
         ([name, message]) =>
-          `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${platformFieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
+          `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${withDomainLiteral(platformFieldOption(field), message, field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
       )
       .join("\n\n")
   )

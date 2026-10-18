@@ -15,6 +15,7 @@ import {
 } from "./wire-views"
 import { parseUnifiedPatch } from "./file-change-diff"
 import {
+  escalationText,
   readGuardrailProvenance,
   readGuardrailDecisions,
   mergeGuardrailDecisions,
@@ -420,10 +421,18 @@ const reviewReasons = [
   "refused",
   "low_confidence",
   "escalated",
+  "conflicting_grades",
   "error",
   "timeout",
   "sleep_entry",
   "restart",
+  "unavailable",
+  "invalid-request",
+  "provider-failed",
+  "input-too-large",
+  "invalid-output",
+  "truncated-output",
+  "unsupported-output",
 ] as const
 export type ReviewReason = (typeof reviewReasons)[number]
 
@@ -1524,11 +1533,12 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "session.guardrail.escalated":
     case "session.guardrail.escalated.1": {
       if (stringField(data.sessionID) !== view.id) return view
-      const escalation = readGuardrailProvenance(data) ?? {}
+      const escalation = readGuardrailProvenance(data)
+      if (escalation === undefined) return view
       return replaceMessage(view, {
         kind: "system",
         id: (event.id ?? `escalation_${view.messages.length}`).replace(/^evt_/, "msg_"),
-        text: `Decision model escalated this guardrail review · choice ${escalation.choice ?? "unreported"} · confidence ${escalation.confidence?.toString() ?? "unreported"}`,
+        text: escalationText(escalation),
         guardrail: escalation,
         created: event.created ?? now,
       })
@@ -1745,7 +1755,9 @@ export function readReviewItems(payload: unknown): readonly ReviewItemView[] | u
       ...(typeof value.confidence === "number" && Number.isFinite(value.confidence)
         ? { confidence: value.confidence }
         : {}),
-      ...(value.kind === "guardrail" ? readGuardrailProvenance(value) : {}),
+      ...(value.kind === "guardrail"
+        ? readGuardrailProvenance({ choice: value.choice, confidence: value.confidence, grades: value.grades })
+        : {}),
       ...(child === undefined ? {} : { child }),
     }
     const payload = value.payload

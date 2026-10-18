@@ -25,6 +25,7 @@
     "refresh:models": "bun run script/refresh-models.ts",
     "dev": "bun run src/index.ts",
     "test": "bun test --timeout 30000 --only-failures",
+    "test:performance": "bun test --timeout 900000 ./test/remote-usage-dashboard.performance.ts",
     "typecheck": "bun check -p tsconfig.typecheck.json"
   },
   "dependencies": {

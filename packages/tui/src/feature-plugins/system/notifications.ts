@@ -1,10 +1,13 @@
 import type { LocationRef, SessionAutonomyView } from "@ycoding-ai/client"
 import type { TuiAttentionNotifyInput, TuiAttentionSoundName } from "../../plugin/host-api"
 import { Plugin } from "@ycoding-ai/plugin/tui"
+import { onCleanup } from "solid-js"
 import { onTuiAttentionAvailable } from "../../attention"
+import { useToast } from "../../ui/toast"
 
 const id = "internal:notifications"
 const CHECKPOINT_MS = 500
+const QUOTA_ALERT_LIMIT = 32
 
 type Schedule = (delay: number, run: () => Promise<void>) => () => void
 type RequestKind = "form" | "question" | "permission" | "guardrail"
@@ -41,7 +44,41 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
       let disposed = false
       const requests = new Map<string, RequestEpisode>()
       const terminals = new Map<string, TerminalEpisode>()
+      const quotaAlerts = new Map<
+        string,
+        { readonly input: TuiAttentionNotifyInput; delivered: boolean; sending: boolean }
+      >()
+      const quotaToasts: { readonly title: string; readonly message: string }[] = []
+      let showQuotaToast: ((toast: { readonly title: string; readonly message: string }) => void) | undefined
       let availabilityRevision = 0
+
+      function drainQuotaToasts() {
+        if (!showQuotaToast) return
+        quotaToasts.splice(0).forEach(showQuotaToast)
+      }
+
+      async function deliverQuotaAlert(eventID: string) {
+        const alert = quotaAlerts.get(eventID)
+        if (!alert || alert.delivered || alert.sending) return
+        alert.sending = true
+        const result = await send(alert.input, () => quotaAlerts.get(eventID) === alert)
+        alert.sending = false
+        if (result?.notification && quotaAlerts.get(eventID) === alert) alert.delivered = true
+      }
+
+      function addQuotaAlert(eventID: string, title: string, body: string) {
+        if (quotaAlerts.has(eventID)) return void deliverQuotaAlert(eventID)
+        quotaToasts.push({ title, message: body })
+        if (quotaToasts.length > QUOTA_ALERT_LIMIT) quotaToasts.shift()
+        drainQuotaToasts()
+        quotaAlerts.set(eventID, {
+          input: { title, message: body, notification: { when: "blurred" } },
+          delivered: false,
+          sending: false,
+        })
+        if (quotaAlerts.size > QUOTA_ALERT_LIMIT) quotaAlerts.delete(quotaAlerts.keys().next().value!)
+        void deliverQuotaAlert(eventID)
+      }
 
       function requestKey(kind: RequestKind, sessionID: string, requestID: string, location?: LocationRef) {
         if (sessionID !== "global") return `${kind}:${sessionID}:${requestID}`
@@ -166,6 +203,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         Array.from(requests.values())
           .filter((episode) => episode.state === "failed")
           .forEach(scheduleRequest)
+        Array.from(quotaAlerts.keys()).forEach((eventID) => void deliverQuotaAlert(eventID))
       }
 
       function addRequest(input: Omit<RequestEpisode, "key" | "state">) {
@@ -313,8 +351,22 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
       }
 
       const cleanups = [
+        context.ui.slot("app", () => {
+          const toast = useToast()
+          const show = (item: { readonly title: string; readonly message: string }) =>
+            toast.show({ ...item, variant: "warning" })
+          showQuotaToast = show
+          drainQuotaToasts()
+          onCleanup(() => {
+            if (showQuotaToast === show) showQuotaToast = undefined
+          })
+          return null
+        }),
         onTuiAttentionAvailable(context.attention, recoverRequests),
         context.data.on("server.connected", recoverRequests),
+        context.data.on("provider.quota.pace", (event) =>
+          addQuotaAlert(event.id, event.data.title, event.data.body),
+        ),
         context.data.on("form.created", (event) =>
           addRequest({
             kind: "form",
@@ -410,6 +462,9 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         cleanups.forEach((cleanup) => cleanup())
         Array.from(requests.values()).forEach(removeRequest)
         requests.clear()
+        quotaAlerts.clear()
+        quotaToasts.length = 0
+        showQuotaToast = undefined
         Array.from(terminals.values()).forEach(stopTerminal)
         terminals.clear()
       }

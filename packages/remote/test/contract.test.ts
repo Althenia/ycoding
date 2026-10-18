@@ -59,7 +59,7 @@ test("push HTTP contracts retain endpoint, key, renewal, category and outcome bo
       .replaceAll("=", ""),
     auth: "A".repeat(22),
   }
-  const categories = { "agent-completed": true, "approval-requested": false, "machine-offline": true }
+  const categories = { "agent-completed": true, "approval-requested": false, "machine-offline": true, "quota-pace": true }
   expect(parsePushSubscription({ endpoint, keys, categories }).ok).toBe(true)
   expect(parsePushSubscription({ endpoint, keys, replaces: endpoint }).ok).toBe(true)
   for (const value of [

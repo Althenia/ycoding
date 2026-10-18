@@ -248,8 +248,10 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
   }
 
   const refreshUsage = async (scope: QueryScope) => {
-    await refetchFresh([remoteKeys.usageProviders(scope), remoteKeys.usageSummary(scope)])
-    await refetchFresh([remoteKeys.usageForecast(scope)])
+    await Promise.all([
+      refetchFresh([remoteKeys.usageSummary(scope), remoteKeys.usageForecast(scope)]),
+      refetchFresh([remoteKeys.usageProviders(scope)]).then(() => refetchFresh([remoteKeys.usageForecast(scope)])),
+    ])
   }
 
   const retryUsageReport = (scope: QueryScope, input: UsageReportInput) =>

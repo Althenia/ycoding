@@ -354,6 +354,65 @@ fn forecast_is_a_private_location_read_with_remote_machine_and_session_scopes() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_forecast_preserves_whole_window_pace_and_its_bounded_exhaustion_time() {
+    let fixture = Fixture::new().await;
+    let seeded = seed("forecast-pace-", &fixture.directory, "PaceWork").await;
+    let time = now();
+    let reset = time + 150 * MINUTE;
+    seeded
+        .quota
+        .observe(
+            provider_usage::Observation {
+                provider_id: provider::Id("muse".into()),
+                label: "Muse (Meta)".into(),
+                source: "response_stream".into(),
+                stability: "observed".into(),
+                observed_at: NonNegativeInt::new(time).unwrap(),
+                windows: vec![provider_usage::Window {
+                    id: "window".into(),
+                    label: "Window".into(),
+                    unit: "percent".into(),
+                    used: Some(60.0),
+                    limit: Some(100.0),
+                    remaining: None,
+                    unlimited: None,
+                    reset_at: Some(NonNegativeInt::new(reset).unwrap()),
+                    period_seconds: Some(NonNegativeInt::new(18000).unwrap()),
+                }],
+            },
+            Some(seeded.account.as_str().into()),
+        )
+        .unwrap();
+    let result = success(
+        request(
+            served(&fixture, Some(seeded.quota.clone())),
+            location_scope(&fixture.directory),
+            query(BACKEND, None),
+            None,
+        )
+        .await,
+    );
+    let quota = result
+        .data
+        .quotas
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .find(|quota| units(&quota.provider_id) == "muse" && units(&quota.window_id) == "window")
+        .unwrap();
+    let pace = quota.pace.as_ref().unwrap();
+    assert_eq!(
+        pace.verdict,
+        v5::UsageForecastPaceVerdict::UsageforecastPaceVerdictWillRunOut as i32
+    );
+    assert!(pace.projected_used_at_reset > 100.0);
+    assert!((result.data.as_of + 1..reset as u64).contains(&pace.exhaustion_at.unwrap()));
+    assert_private(&result, &seeded);
+    seeded.quota.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_forecast_reads_backend_or_location_rates_and_bound_quotas_without_account_identity()
 {
     let fixture = Fixture::new().await;

@@ -144,6 +144,7 @@ const seed: RemoteStoreState = {
   sessionFilter: "all",
   sessionListStatus: "ready",
   sessionPageLoading: false,
+  sessionPaginationLoading: false,
   sessionHasNext: false,
   sessionHasPrevious: false,
   teamCues: [],

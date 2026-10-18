@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { enumNumbers, messageTags } from "./wire-allocation.js"
 import path from "node:path"
+import { relayOperations } from "./connector-source.js"
 import { resourceSources } from "./resources-source.js"
 import { resourceContract, resourceSharedSet, resourceFieldConstraints } from "./resources-contract.js"
 import { sharedSet } from "./platform-contract.js"
@@ -29,6 +30,7 @@ test("resource RPC membership equals the live 65-operation Protocol slice", asyn
     operations
       .filter((operation) => operation.roles.includes(PeerRole.RELAY))
       .map((operation) => operation.diagnosticName)
+      .filter((name) => !Object.values(relayOperations).some(([, relayOnly]) => relayOnly === name))
       .sort(),
   )
   const groups = new Set<string>(sources.map((source) => source.group))

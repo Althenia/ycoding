@@ -336,12 +336,27 @@ The Rust runtime owns the remote connection for its lifetime, including when no 
 
 The runtime owns retry and credential refresh. Disabling/shutdown cancels recovery and fences late connection work. Invalid enrollment, rejected credentials, and relay-origin mismatch require attention, not automatic reenrollment. `ycoding remote connect` requires a private loopback backend, validates a relay override against the enrolled origin, and waits up to 30 seconds for on. An explicit connect retries repaired setup. The backend runtime lock owns the service; the CLI acquires no connector lock and never reads private device credentials.
 
+#### Relay MCP
+
+Relay MCP defaults off and requires a separately enabled Remote connection. The local CLI exposes `ycoding remote mcp on`, `ycoding remote mcp off`, and `ycoding remote mcp status`, with the same `--server` and `--standalone` selection as the other Remote controls. The TUI command palette and Status dialog expose the same backend-owned state through local `remote.mcp.get` and `remote.mcp.set` operations. Starting Remote does not enable MCP; turning Remote off also turns MCP off.
+
+Enabling reports the enrolled relay's `/api/mcp/devices/<deviceID>` URL. An MCP client supporting revision `2026-07-28` must complete fresh Google sign-in through the relay's allowlist and explicit per-client consent. Browser sign-in, invite access, and device enrollment alone are not MCP consent. A grant covers every existing and future Session on that backend, persistent approvals, autonomy and goals, and Session creation in existing directories strictly below the backend's real home directory. The browser's recorded-repository creation rule is unchanged.
+
+The backend stores its choice and enable epoch privately in `remote-mcp.json`. Reads do not change preferences or start network work. Each actual on/off transition rotates the epoch; repeating the current choice does not. Access opens only after the current relay connection acknowledges that state. Disabling closes the local gate immediately; a revocation that cannot reach the relay remains pending until a later matching acknowledgement. Reconnecting Remote leaves MCP off after an explicit Remote-off action. Unreadable MCP preferences remain closed, report an error, and are not overwritten; they do not prevent Remote from being turned off.
+
+MCP requests use the authenticated outbound connector, not a local public MCP listener. The relay forwards no bearer credential to the backend. Unsettled transmitted mutations are never replayed. Within the running backend, an uncertain mutation quarantines its Session or backend mutation lane across automatic reconnects until an explicit MCP off/on transition; reads and other Session lanes remain available.
+
+Local HTTP application tools require explicit Session-owned registration of a literal loopback address, port, routes and methods. Registrations are ephemeral and belong to one connector lease. The native runtime supplies no preview issuer: open reports `preview_unconfigured`, while explicit bounded HTTP requests remain available. The generic wrapper and injected preview-gateway utility do not configure a public hostname or expose a listener. See [the local application wire contract](../specs/wire-connector.md#session-owned-local-applications).
+
+MCP Events requires exact OAuth-grant authorization and a verified public HTTPS callback. The native backend encrypts webhook signing secrets with a lazily created `mcp-events-native.key` in the channel's global data directory. It neither reads nor imports a TypeScript signing-key file. Secure file-backed Events storage requires Unix private-file semantics; unsupported platforms fail closed. Common MCP authorization and local application tools do not require the Events key or Events availability. See [MCP Events](../specs/mcp-events.md).
+
 Local state lives outside any repository checkout:
 
 | File                 | Location                         | Contents                                                                    |
 | -------------------- | -------------------------------- | --------------------------------------------------------------------------- |
 | `remote-device.json` | Channel's global state directory | Private device identity, pinned relay origin, keys, and refresh credential. |
 | `remote.json`        | Channel's global state directory | Backend-owned connection on/off preference.                                 |
+| `remote-mcp.json`    | Channel's global state directory | Relay MCP choice, enable epoch, and pending revocation.                    |
 
 The runtime writes private state atomically. The CLI reads only redacted enrollment from `remote.get` and submits the hidden one-use code through `remote.enroll`; it does not read the identity file, generate device keys, sign challenges, or refresh credentials. The private key stays on the backend; credentials use request bodies and upgrade headers, never URL/argv/environment. Malformed files fail explicitly and remain for the operator.
 
@@ -1132,7 +1147,7 @@ Requests supply JSON state and 1–32 uniquely named `predicate`, `choice`, or `
 
 ### Decision agent
 
-The hidden primary `decision` agent evaluates JSON state and bounded questions without tools and returns strict TOON. Its ID is reserved for the decision tool, not foreground Session or command selection. Select its model with `agents.decision.model`, then `efficiency.helper_models.decision`; missing helper configuration or `"session"` uses the owner Session model, or the normal default resolver when no model is selected. The selected model's existing authentication route is used, including supported subscription routes. Its provider's ordinary privacy, quotas, and pricing apply. This does not establish free usage or a zero-retention guarantee, and local Session history and tool results remain durable.
+The hidden primary `decision` agent evaluates JSON state and bounded questions without tools and returns provider-enforced strict JSON. Its ID is reserved for the decision tool and enabled runtime automation, not foreground Session or command selection. Select its model with `agents.decision.model`, then `efficiency.helper_models.decision`; missing helper configuration or `"session"` uses the owner Session model, or the normal default resolver when no model is selected. Supported strict routes are `openai-responses`, `openai-responses-websocket`, `openai-chat`, and `anthropic-messages`; other routes return `unsupported-output` before a provider request. The selected model's existing authentication route is used, including supported subscription routes. Its provider's ordinary privacy, quotas, and pricing apply. This does not establish free usage or a zero-retention guarantee, and local Session history and tool results remain durable.
 
 Retain the owner Session model for the helper:
 
@@ -1144,7 +1159,7 @@ Retain the owner Session model for the helper:
 
 Confidence is self-reported and uncalibrated. Every question type can abstain for insufficient evidence: the helper returns `type: refusal`, null `answer`, `choice`, and `score`, and confidence `0`. Refusal is distinct from a real option or low-confidence pick. The tool preserves that structured result and adds a model-visible explanation to gather missing evidence or ask the user. Set the action threshold by the cost of being wrong; treat refusal, errors, low or close confidence, and disagreement with evidence as uncertainty. Judgments never grant permission, supply the user's answer, or prove completion.
 
-Schema-invalid calls return tool errors identifying the field path, expected shape/allowed values, and a minimal valid request without echoing evidence or secrets. Empty questions explicitly request one bounded question or skipping the tool. Helper-unavailable errors identify model settings and authentication to check; invalid TOON errors identify uncertainty rather than fabricated answers. No unchanged judgment is retried automatically. See the [agent input and TOON contract](../specs/decisions.md#decision-agent-inputs).
+Schema-invalid calls return tool errors identifying the field path, expected shape/allowed values, and a minimal valid request without echoing evidence or secrets. Empty questions explicitly request one bounded question or skipping the tool. Helper-unavailable errors identify model settings and authentication to check; invalid JSON or schema-mismatched answers remain uncertainty rather than fabricated judgments. One call permits at most two physical attempts, 25 seconds each within a 60-second budget; truncation alone may expand the initial 4,096-token output limit toward 8,192, bounded by the model limit. Caller-level repetition of an unchanged failed judgment is not automatic. See the [decision contract](../specs/decisions.md#decision-agent-inputs).
 
 ### Muse (Meta)
 

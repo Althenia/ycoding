@@ -36,7 +36,7 @@ for (const source of sources) {
   for (const match of source.matchAll(/^enum (\w+) \{\n([\s\S]*?)^\}/gm))
     current.enums.set(
       match[1],
-      new Map([...match[2].matchAll(/^\s+(\w+) = (\d+);/gm)].map((value) => [value[1], Number(value[2])])),
+      new Map([...match[2].matchAll(/^\s+(\w+) = (\d+)(?: \[[^\]]*\])?;/gm)].map((value) => [value[1], Number(value[2])])),
     )
   for (const match of source.matchAll(/operation_id: (\d+)\s+diagnostic_name: "([^"]+)"/g))
     current.operations.set(match[2], Number(match[1]))

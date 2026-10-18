@@ -1,4 +1,7 @@
-use std::{cell::Cell, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    sync::Arc,
+};
 use ycoding_core::{
     resources::{config::Roots, tool_output_store},
     session::{
@@ -545,6 +548,57 @@ fn report_pricing_selects_strict_context_tiers_before_base_and_router_prices() {
         .encode();
     assert!((number(&result, "total.cost") - 0.000064).abs() < 1e-12);
     assert_eq!(string(&result, "rows.0.costProvenance"), "current_catalog");
+}
+
+#[test]
+fn report_pricing_preserves_router_gaps_strict_boundaries_and_tier_order() {
+    let (store, service) = setup();
+    insert(
+        &store,
+        [5.0, 10.0, 11.0, 20.0, 21.0, 30.0, 30.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, input)| {
+                let mut spec = Spec::new(
+                    "ses_one",
+                    &format!("prq_price_ranges_{index}"),
+                    index as i64 + 1,
+                );
+                spec.input = input;
+                spec.cost = None;
+                if index == 6 {
+                    spec.source = "decision";
+                }
+                spec
+            })
+            .collect(),
+    );
+    let pricer = |_: &PricingRef| {
+        let tier = |size, rate| {
+            let mut cost = catalog(rate).provider.remove(0);
+            cost.tier = Some(model::Tier {
+                size: ycoding_schema::schema::Int::new(size).unwrap(),
+            });
+            cost
+        };
+        Some(Pricing {
+            provider: vec![tier(10, 4.0), tier(20, 6.0), tier(20, 9.0)],
+            router: vec![catalog(2.0).provider.remove(0), tier(5, 100.0)],
+        })
+    };
+    let input = report_input(r#"{"group":"model"}"#);
+    for report in [
+        service
+            .usage_report(&id("ses_one"), &input, Some(&pricer))
+            .unwrap(),
+        service.usage_report_all(&input, Some(&pricer)).unwrap(),
+    ] {
+        let report = report.encode();
+        assert_eq!(number(&report, "total.logical"), 7.0);
+        assert!((number(&report, "total.cost") - 0.00144).abs() < 1e-12);
+        assert_eq!(number(&report, "total.costCoverage.pricedRequests"), 6.0);
+        assert_eq!(number(&report, "total.costCoverage.unpricedRequests"), 1.0);
+    }
 }
 
 fn report_days(service: &Service, input: &str) -> Vec<String> {
@@ -1131,6 +1185,55 @@ fn a_read_holds_one_coherent_snapshot_while_pricing_resolves() {
         ),
         4.0
     );
+}
+
+#[test]
+fn summary_pricing_cache_preserves_negative_results_and_fifo_eviction() {
+    let (store, service) = setup();
+    let models = (0..257)
+        .map(|index| format!("cached-{index}"))
+        .collect::<Vec<_>>();
+    let sequence = [0, 0].into_iter().chain(1..257).chain([0, 256, 1, 1]);
+    insert_rows(
+        &store,
+        sequence
+            .enumerate()
+            .map(|(ordinal, index)| {
+                let mut spec = Spec::new(
+                    "ses_one",
+                    &format!("prq_cached_{ordinal:04}"),
+                    ordinal as i64 + 1,
+                );
+                spec.model = &models[index];
+                spec.cost = None;
+                spec.input = 1000.0;
+                spec.time = ordinal as i64;
+                spec.row()
+            })
+            .collect(),
+    );
+    let calls = RefCell::new(vec![0; 257]);
+    let pricer = |reference: &PricingRef| {
+        let index = reference
+            .model
+            .to_utf8()
+            .unwrap()
+            .strip_prefix("cached-")
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        calls.borrow_mut()[index] += 1;
+        (index % 2 == 1).then(|| catalog(2.0))
+    };
+    let summary = service
+        .usage(&id("ses_one"), Some(&pricer))
+        .unwrap()
+        .encode();
+    assert_eq!(number(&summary, "logical"), 262.0);
+    assert!((number(&summary, "cost") - 0.26).abs() < 1e-12);
+    assert_eq!(calls.borrow()[0], 2);
+    assert_eq!(calls.borrow()[1], 2);
+    assert!(calls.borrow()[2..].iter().all(|count| *count == 1));
 }
 
 #[test]

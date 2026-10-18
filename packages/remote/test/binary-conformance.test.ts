@@ -381,9 +381,18 @@ test("handshake, tiny control, event bytes, bulk announcement/end and all frame 
 })
 
 test("TEST-027 descriptor membership is exhaustive for operations, fields, oneofs and events", () => {
-  expect(operations).toHaveLength(231)
-  expect(new Set(operations.map((operation) => operation.operationId)).size).toBe(231)
-  expect(new Set(operations.map((operation) => operation.diagnosticName)).size).toBe(231)
+  expect(operations).toHaveLength(242)
+  expect(new Set(operations.map((operation) => operation.operationId)).size).toBe(242)
+  expect(new Set(operations.map((operation) => operation.diagnosticName)).size).toBe(242)
+  expect(
+    operations
+      .filter((operation) => [3054, 3055, 5044].includes(operation.operationId))
+      .map((operation) => [operation.operationId, operation.diagnosticName, operation.roles]),
+  ).toEqual([
+    [3054, "remote.mcp.get", [PeerRole.LOCAL_CLIENT]],
+    [3055, "remote.mcp.set", [PeerRole.LOCAL_CLIENT]],
+    [5044, "mcp.request", [PeerRole.RELAY]],
+  ])
   expect(
     operations
       .filter((operation) => operation.diagnosticName.startsWith("incident."))
@@ -401,14 +410,14 @@ test("TEST-027 descriptor membership is exhaustive for operations, fields, oneof
       expect(typeNames.has(type), `${operation.diagnosticName} references missing schema ${type}`).toBe(true)
     expect(operation.roles.length).toBeGreaterThan(0)
   }
-  expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(213)
+  expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toHaveLength(215)
   for (const name of ["session.capturedChanges.list", "session.team.economics", "session.family.activity"]) {
     const operation = operations.find((operation) => operation.diagnosticName === name)
     expect(operation?.roles).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
     expect(operationIDsByRole[PeerRole.LOCAL_CLIENT]).toContain(operation!.operationId)
   }
-  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(79)
-  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(75)
+  expect(operationIDsByRole[PeerRole.REMOTE_CLIENT]).toHaveLength(87)
+  expect(operationIDsByRole[PeerRole.RELAY]).toHaveLength(84)
   expect(operations.filter((operation) => operation.diagnosticName.startsWith("notice."))).toHaveLength(4)
   for (const schema of schemas) {
     const numbers = schema.fields.map((field) => field.number)

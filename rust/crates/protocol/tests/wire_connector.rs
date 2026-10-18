@@ -196,8 +196,8 @@ fn generated_role_allowlists_are_closed_and_match_descriptors() {
                 .collect::<Vec<_>>()
         );
         match v5::PeerRole::try_from(*role).unwrap() {
-            v5::PeerRole::RemoteClient => assert_eq!(ids.len(), 79),
-            v5::PeerRole::Relay => assert_eq!(ids.len(), 75),
+            v5::PeerRole::RemoteClient => assert_eq!(ids.len(), 87),
+            v5::PeerRole::Relay => assert_eq!(ids.len(), 84),
             v5::PeerRole::Agent | v5::PeerRole::Server => assert!(ids.is_empty()),
             v5::PeerRole::LocalClient => assert!(!ids.is_empty()),
         }
@@ -272,4 +272,90 @@ fn local_family_reads_preserve_ids_shapes_errors_and_remote_authority() {
         ycoding_protocol::CONTRACT_DIGEST,
         "03ed82fc9cc1926cab3a2a448f0d45c96fb514cf0fd00880e846f2fea19b6054"
     );
+}
+
+#[test]
+fn relay_only_mcp_request_carries_bounded_typed_http_exchange() {
+    let operation = OPERATIONS
+        .iter()
+        .find(|item| item.operation_id == 5044)
+        .unwrap();
+    assert_eq!(operation.diagnostic_name, "mcp.request");
+    assert_eq!(operation.roles, [v5::PeerRole::Relay as i32]);
+    assert_eq!(operation.scope, v5::ScopeKind::Machine as i32);
+    assert_eq!(operation.mutation, v5::MutationClass::Mutation as i32);
+    assert_eq!(operation.streaming, v5::Streaming::TypedBulk as i32);
+    assert_eq!(operation.sensitivity, v5::Sensitivity::Secret as i32);
+    assert_eq!(operation.request_type, "ycoding.v5.mcp_request_Request");
+    assert_eq!(operation.result_type, "ycoding.v5.mcp_request_Result");
+    assert_eq!(operation.error_types, ["ycoding.v5.Connector_Error"]);
+    let text = |value: &str| encode_lossless(&value.encode_utf16().collect::<Vec<_>>());
+    let request = |headers: usize, body: &str, epoch: &str| {
+        v5::ConnectorMcpRequest {
+            body: text(body),
+            headers: (0..headers)
+                .map(|_| v5::ConnectorMcpHeader {
+                    name: "accept".into(),
+                    value: text("application/json"),
+                })
+                .collect(),
+            principal: v5::ConnectorMcpPrincipal {
+                owner_id: "owner".into(),
+                device_id: "device".into(),
+                client_id: text("https://client.example/metadata"),
+            },
+            epoch: epoch.into(),
+        }
+        .encode_to_vec()
+    };
+    let validate =
+        |bytes: &[u8]| ycoding_protocol::validate_binary("ycoding.v5.Connector_McpRequest", bytes);
+    assert!(validate(&request(5, "{}", "epoch")).is_ok());
+    assert!(validate(&request(6, "{}", "epoch")).is_err());
+    assert!(validate(&request(1, "", "epoch")).is_err());
+    assert!(validate(&request(1, &"x".repeat(32_769), "epoch")).is_err());
+    assert!(validate(&request(1, "{}", &"e".repeat(65))).is_err());
+    let response = |status: u32, body: &str| {
+        v5::ConnectorMcpResponse {
+            status,
+            content_type: "application/json".into(),
+            body: text(body),
+        }
+        .encode_to_vec()
+    };
+    let validate =
+        |bytes: &[u8]| ycoding_protocol::validate_binary("ycoding.v5.Connector_McpResponse", bytes);
+    assert!(validate(&response(202, "")).is_ok());
+    assert!(validate(&response(199, "{}")).is_err());
+    assert!(validate(&response(600, "{}")).is_err());
+    assert!(validate(&response(200, &"x".repeat(2_097_153))).is_err());
+}
+
+#[test]
+fn quota_pace_text_is_nonempty_trim_stable_control_free_and_bounded() {
+    let quota = |provider: &str| {
+        v5::QuotaPace {
+            provider_id: encode_lossless(&provider.encode_utf16().collect::<Vec<_>>()),
+            window_id: encode_lossless(&"weekly".encode_utf16().collect::<Vec<_>>()),
+            milestone: v5::QuotaPaceMilestone::AlmostOut as i32,
+            reset_at: 1,
+        }
+        .encode_to_vec()
+    };
+    let validate = |bytes: &[u8]| ycoding_protocol::validate_binary("ycoding.v5.QuotaPace", bytes);
+    assert!(validate(&quota("openai")).is_ok());
+    assert!(validate(&quota(&"\u{1F600}".repeat(64))).is_ok());
+    for invalid in [
+        "",
+        " openai",
+        "a".repeat(65).as_str(),
+        "a\u{0}b",
+        "a\u{202e}b",
+    ] {
+        assert_eq!(
+            validate(&quota(invalid)).err(),
+            Some(WireError("title constraint")),
+            "{invalid:?}"
+        );
+    }
 }

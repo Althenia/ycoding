@@ -8,7 +8,7 @@ import { create, ControlSchema } from "../../../packages/protocol/src/v5"
 import { frameReservation } from "../../../packages/remote/src/index"
 import type { Frame } from "../../../packages/protocol/src/v5"
 
-const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true }
+const allOn = { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true }
 
 async function receiverFor(
   endpoint: string,
@@ -118,6 +118,7 @@ test("each subscription receives only the categories its device turned on as Sys
     "agent-completed": false,
     "approval-requested": true,
     "machine-offline": true,
+    "quota-pace": true,
   })
   const requests: Request[] = []
   const deliver = (event: Parameters<typeof sendPushToOwner>[0]["event"]) =>

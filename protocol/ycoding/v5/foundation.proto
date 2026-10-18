@@ -66,6 +66,8 @@ enum CodePointLimit {
   ALERT_DETAIL_TITLE_MAX_CODEPOINTS = 120;
   BLOCKED_TITLE_MAX_CODEPOINTS = 120;
   COMPLETION_TITLE_MAX_CODEPOINTS = 120;
+  QUOTA_PACE_PROVIDER_ID_MAX_CODEPOINTS = 64;
+  QUOTA_PACE_WINDOW_ID_MAX_CODEPOINTS = 64;
 }
 enum TextPredicate { NONEMPTY = 1; TRIM_STABLE = 2; NO_CONTROLS_OR_BIDI = 4; }
 enum FieldTextPolicy {
@@ -74,6 +76,8 @@ enum FieldTextPolicy {
   ALERT_DETAIL_TITLE_TEXT_POLICY = 7;
   BLOCKED_TITLE_TEXT_POLICY = 7;
   COMPLETION_TITLE_TEXT_POLICY = 7;
+  QUOTA_PACE_PROVIDER_ID_TEXT_POLICY = 7;
+  QUOTA_PACE_WINDOW_ID_TEXT_POLICY = 7;
 }
 message LosslessString {
   oneof encoding {
@@ -128,6 +132,10 @@ enum SenderMask {
   BULK_START_SENDERS = 31;
   BULK_PIECE_SENDERS = 31;
   BULK_END_SENDERS = 31;
+  MCP_STATE_SENDERS = 8;
+  MCP_STATE_ACK_SENDERS = 4;
+  QUOTA_PACE_SENDERS = 8;
+  QUOTA_PACE_RESULT_SENDERS = 4;
 }
 enum ScopeKind { MACHINE = 1; LOCATION = 2; SESSION = 3; FORM = 4; WORKSPACE = 5; GLOBAL = 6; GLOBAL_FORM = 7; }
 message GlobalFormScope { required LosslessString directory = 1; optional LosslessString workspace_id = 2; }
@@ -260,7 +268,23 @@ message NoticeRecord {
 message AlertDetail { optional LosslessString title = 1; optional AttentionNeed need = 2; optional bool repeat = 3; }
 message NoticePresentation { required NoticeRecord notice = 1; optional AlertDetail detail = 2; }
 message Offline { required int64 at_ms = 1; }
-message Presentation { oneof kind { NoticePresentation notice = 1; Offline offline = 2; } }
+enum QuotaPaceMilestone {
+  QUOTA_PACE_MILESTONE_ALMOST_OUT = 1;
+  QUOTA_PACE_MILESTONE_CUTTING_IT_CLOSE = 2;
+  QUOTA_PACE_MILESTONE_WILL_RUN_OUT = 3;
+}
+enum QuotaPaceStatus { QUOTA_PACE_STATUS_SETTLED = 1; QUOTA_PACE_STATUS_PENDING = 2; }
+message QuotaPace {
+  required LosslessString provider_id = 1;
+  required LosslessString window_id = 2;
+  required QuotaPaceMilestone milestone = 3;
+  required uint64 reset_at = 4;
+}
+message QuotaPaceResult { required QuotaPace quota = 1; required QuotaPaceStatus status = 2; }
+message QuotaPaceNotice { required QuotaPace quota = 1; required uint64 at = 2; }
+message McpState { required string id = 1; required bool enabled = 2; required string epoch = 3; }
+message McpStateAck { required string id = 1; required bool enabled = 2; required string epoch = 3; }
+message Presentation { oneof kind { NoticePresentation notice = 1; Offline offline = 2; QuotaPace quota_pace = 3; } }
 message NoticesAdded { repeated NoticeRecord notices = 1; required uint64 total = 2; }
 message NoticesRemoved { repeated string ids = 1; required uint64 total = 2; }
 message NoticesPresent { repeated Presentation items = 1; }
@@ -268,6 +292,7 @@ message Notice {
   oneof kind {
     NoticesAdded added = 1; NoticesRemoved removed = 2; Empty cleared = 3;
     Empty unavailable = 4; Offline offline = 5; NoticesPresent present = 6;
+    QuotaPaceNotice quota_pace = 7;
   }
 }
 message ResyncRequired { required Scope scope = 1; required string source_epoch = 2; optional string message_id = 3; }
@@ -280,6 +305,8 @@ message Control {
     InventoryInvalidated inventory_invalidated = 7; Status status = 8;
     Completions completions = 9; Blocked blocked = 10; Notice notice = 11;
     ResyncRequired resync_required = 12; ProtocolFailure failure = 13;
+    McpState mcp_state = 14; McpStateAck mcp_state_ack = 15;
+    QuotaPace quota_pace = 16; QuotaPaceResult quota_pace_result = 17;
   }
 }
 enum ContentKind { TYPED_MESSAGE = 1; ASSET = 2; }

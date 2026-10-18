@@ -13,8 +13,8 @@ use ycoding_schema::{
     session_error, session_event, session_id, session_message, session_message_id,
     session_orchestration, session_pending, session_revert, session_review, session_skill_status,
     session_status_event, session_todo, session_work_completion, shell, skill, snapshot,
-    source_epoch, stringify_json, telemetry, token_usage, tui_event, vcs, vcs_event, workspace,
-    workspace_event, workspace_id, worktree_event,
+    source_epoch, stringify_json, telemetry, token_usage, tui_event, usage_forecast, vcs,
+    vcs_event, workspace, workspace_event, workspace_id, worktree_event,
 };
 
 #[derive(Deserialize)]
@@ -604,6 +604,10 @@ fn effect_domain_goldens() {
             "ProviderUsage.Unit" => round_trip::<provider_usage::Unit>(&input),
             "ProviderUsage.Snapshot" => round_trip::<provider_usage::Snapshot>(&input),
             "ProviderUsage.Observation" => round_trip::<provider_usage::Observation>(&input),
+            "ProviderUsage.PaceMilestone" => round_trip::<provider_usage::PaceMilestone>(&input),
+            "ProviderUsage.QuotaPaceAlert" => round_trip::<provider_usage::QuotaPaceAlert>(&input),
+            "UsageForecast.Pace" => round_trip::<usage_forecast::Pace>(&input),
+            "UsageForecast.Quota" => round_trip::<usage_forecast::Quota>(&input),
             "Config.Diagnostic" => round_trip::<config::Diagnostic>(&input),
             "Config.DiagnosticReason" => round_trip::<config::DiagnosticReason>(&input),
             "LLM.ToolContent" => round_trip::<llm::ToolContent>(&input),

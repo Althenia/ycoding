@@ -351,30 +351,69 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     return routeError() === undefined && (deviceID === undefined || deviceID === state().activeDeviceID)
   }
   let readAlert: string | undefined
+  let reread: string | undefined
+  const usageDevice = () =>
+    view() === "/remote/usage" && typeof search().device_id === "string" ? (search().device_id as string) : undefined
+  const [usageLanded, setUsageLanded] = createSignal<string>()
+  const [activation, setActivation] = createSignal(0)
+  const ownsUsageRoute = () => usageDevice() === undefined || usageDevice() === usageLanded()
+  const landOnMachine = (
+    deviceID: string,
+    landing: string,
+    copy: { readonly unavailable: string; readonly offline: string },
+  ) => {
+    const device = state().devices.find((item) => item.id === deviceID)
+    if ((device?.status !== "active" || !device.online) && deviceID !== state().activeDeviceID && reread !== landing) {
+      reread = landing
+      untrack(() => {
+        void remote.store.load()
+      })
+      return false
+    }
+    if (device === undefined || device.status !== "active") {
+      setRouteError(copy.unavailable)
+      return false
+    }
+    if (!device.online) {
+      setRouteError(copy.offline)
+      return false
+    }
+    if (deviceID !== state().activeDeviceID) {
+      untrack(() => remote.store.connect(deviceID))
+      return false
+    }
+    return true
+  }
   createEffect(() => {
     const target = requested()
+    const usage = usageDevice()
+    const attempt = activation()
     setRouteError(undefined)
+    if (usage !== undefined) {
+      if (state().owner === undefined || usage === usageLanded()) return
+      const copy = {
+        unavailable: "The machine for this Usage link is unavailable to this account.",
+        offline: "The machine for this Usage link is offline. Reconnect that machine to open its Usage.",
+      }
+      if (!isAlertDeviceID(usage)) setRouteError(copy.unavailable)
+      else if (landOnMachine(usage, JSON.stringify([usage, attempt]), copy)) setUsageLanded(usage)
+      return
+    }
+    setUsageLanded(undefined)
     if (target === undefined) {
       if (view() === "/remote/session" && search().session_id !== undefined)
         setRouteError("The Session link is invalid. Select a Session from Sessions.")
       return
     }
     if (state().owner === undefined) return
-    if (target.deviceID !== undefined) {
-      const device = state().devices.find((item) => item.id === target.deviceID)
-      if (device === undefined || device.status !== "active") {
-        setRouteError("The machine for this Session is unavailable to this account.")
-        return
-      }
-      if (!device.online) {
-        setRouteError("The machine for this Session is offline. Reconnect that machine to open its Session.")
-        return
-      }
-      if (target.deviceID !== state().activeDeviceID) {
-        untrack(() => remote.store.connect(target.deviceID!))
-        return
-      }
-    }
+    if (
+      target.deviceID !== undefined &&
+      !landOnMachine(target.deviceID, JSON.stringify([target.deviceID, target.sessionID, target.noticeID, attempt]), {
+        unavailable: "The machine for this Session is unavailable to this account.",
+        offline: "The machine for this Session is offline. Reconnect that machine to open its Session.",
+      })
+    )
+      return
     if (state().transport.kind !== "open" || state().connection.kind !== "connected") return
     if (
       target.noticeID !== undefined &&
@@ -440,6 +479,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
     const deviceID = Reflect.get(Object(value), "deviceID")
     const noticeID = Reflect.get(Object(value), "noticeID")
     if (typeof sessionID !== "string" || !isSessionID(sessionID)) return
+    setActivation((count) => count + 1)
     navigate({
       to: "/remote/session",
       search: sessionSearch(
@@ -449,9 +489,18 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
       ),
     })
   }
+  const openUsage = (deviceID: string) => {
+    setActivation((count) => count + 1)
+    navigate({ to: "/remote/usage", search: { device_id: deviceID } })
+  }
   const alertEvent = (event: Event) => openFromAlert(event instanceof CustomEvent ? event.detail : undefined)
   const workerMessage = (event: MessageEvent) => {
-    if (Reflect.get(Object(event.data), "type") === "ycoding:open-session") openFromAlert(event.data)
+    const type = Reflect.get(Object(event.data), "type")
+    if (type === "ycoding:open-session") openFromAlert(event.data)
+    if (type === "ycoding:open-usage") {
+      const deviceID = Reflect.get(Object(event.data), "deviceID")
+      if (isAlertDeviceID(deviceID)) openUsage(deviceID)
+    }
   }
   window.addEventListener("ycoding:open-session", alertEvent)
   navigator.serviceWorker?.addEventListener("message", workerMessage)
@@ -602,6 +651,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
           navExpanded={navOpen() && !navClosing()}
           onOpenNav={openSessionsNavigation}
           onOpenSession={openSession}
+          onOpenUsage={openUsage}
           palette={{
             canCreateSession: canCreateSession(),
             sessionSelected: paletteSessionSelected(),
@@ -741,7 +791,12 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                         onSelectSession={openSession}
                       />
                     </RoutePanel>
-                    <RoutePanel active={view() === "/remote/usage"}>
+                    <RoutePanel active={view() === "/remote/usage" && routeError() !== undefined}>
+                      <p class="notice-strip" role="alert">
+                        {routeError()}
+                      </p>
+                    </RoutePanel>
+                    <RoutePanel active={view() === "/remote/usage" && routeError() === undefined && ownsUsageRoute()}>
                       <UsagePage />
                     </RoutePanel>
                     <RoutePanel active={view() === "/remote/settings"}>
@@ -1088,6 +1143,7 @@ function RemoteHeader(props: {
   readonly navExpanded: boolean
   readonly onOpenNav: (trigger: HTMLButtonElement) => void
   readonly onOpenSession: (sessionID: string) => void
+  readonly onOpenUsage: (deviceID: string) => void
   readonly palette: {
     readonly canCreateSession: boolean
     readonly sessionSelected: boolean
@@ -1165,7 +1221,7 @@ function RemoteHeader(props: {
               </button>
             )}
           </Show>
-          <NotificationCenter onOpenSession={props.onOpenSession} />
+          <NotificationCenter onOpenSession={props.onOpenSession} onOpenUsage={props.onOpenUsage} />
           <span class="remote-header__theme">
             <ThemeToggle />
           </span>
@@ -1443,7 +1499,7 @@ function SessionPanel(props: {
             />
           </Show>
           <Show when={advertised()}>{(note) => <p class="panel__note">{note()}</p>}</Show>
-          <Show when={state().sessionPageLoading}>
+          <Show when={state().sessionPaginationLoading}>
             <LoadingPlaceholder kind="session" label="Loading more sessions…" />
           </Show>
         </Show>
@@ -2147,7 +2203,7 @@ function SessionsPage(props: {
                 </div>
               </div>
             </Show>
-            <Show when={remote.state().sessionPageLoading}>
+            <Show when={remote.state().sessionPaginationLoading}>
               <LoadingPlaceholder kind="session" label="Loading more sessions…" />
             </Show>
           </section>

@@ -3,6 +3,7 @@ import {
   WireLimit,
   type RemoteNotice,
   type RemoteAlertDetail,
+  type RemoteQuota,
   type ParseResult,
 } from "@ycoding-ai/remote"
 import type { LatencySample } from "./latency"
@@ -224,6 +225,11 @@ export type UsageForecastQuotaView = {
   readonly ratePerHour?: number
   readonly exhaustionAt?: number
   readonly projectedUsedAtReset?: number
+  readonly pace?: {
+    readonly verdict: "ahead" | "cutting-it-close" | "will-run-out"
+    readonly projectedUsedAtReset: number
+    readonly exhaustionAt?: number
+  }
 }
 export type UsageForecastView = {
   readonly asOf: number
@@ -417,6 +423,7 @@ export type AuthStatusView = {
 export type NoticePresentationView =
   | { readonly kind: "notice"; readonly notice: RemoteNotice; readonly detail?: RemoteAlertDetail }
   | { readonly kind: "offline"; readonly at: number }
+  | (RemoteQuota & { readonly kind: "quota" })
 export type NoticePageView = {
   readonly notices: readonly RemoteNotice[]
   readonly total: number
@@ -429,6 +436,7 @@ export type NoticeFrame =
   | { readonly type: "notice.cleared" }
   | { readonly type: "notice.unavailable" }
   | { readonly type: "notice.offline"; readonly at: number }
+  | (RemoteQuota & { readonly type: "notice.quota"; readonly at: number })
   | { readonly type: "notice.present"; readonly items: readonly NoticePresentationView[] }
 
 export function validReviewItemID(value: unknown): value is string {

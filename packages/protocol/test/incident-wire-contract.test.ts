@@ -27,7 +27,7 @@ const operation = (name: string) => operations.find((candidate) => candidate.dia
 const enumValues = (proto: string, name: string) => {
   const body = proto.match(new RegExp(`^enum ${name} \\{\\n([\\s\\S]*?)^\\}`, "m"))?.[1]
   expect(body, `enum ${name}`).toBeDefined()
-  return Object.fromEntries([...body!.matchAll(/^\s+(\w+) = (\d+);/gm)].map((match) => [match[1], Number(match[2])]))
+  return Object.fromEntries([...body!.matchAll(/^\s+(\w+) = (\d+)(?: \[[^\]]*\])?;/gm)].map((match) => [match[1], Number(match[2])]))
 }
 const errors = (name: string) => [...operation(name).errorTypes].sort()
 const standardErrors = ["InvalidRequestError", "UnauthorizedError"].map((error) => `ycoding.v5.${error}`)

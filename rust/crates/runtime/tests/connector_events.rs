@@ -171,14 +171,14 @@ async fn snapshots_share_one_observer_order_bounded_events_and_release_only_the_
     assert_eq!(error.type_name, "ycoding.v5.InvalidRequestError");
     let error = decode_strict::<v5::InvalidRequestError>(&error.payload).unwrap();
     assert_eq!(support::units(error.kind.as_ref().unwrap()), "not_found");
-    assert_eq!(feed.subscribers(), 1);
+    assert_eq!(feed.subscribers(), 2);
     snapshot(&opening, "unknown", &[]).await;
     snapshot(&opening, "first", &["ses_connector_events"]).await;
     let first = subscribe(&mut relay, &opening, "ses_connector_events").await;
     snapshot(&opening, "second", &["ses_connector_events"]).await;
     let second = subscribe(&mut relay, &opening, "ses_connector_events").await;
     assert_eq!(first, second);
-    assert_eq!(feed.subscribers(), 2);
+    assert_eq!(feed.subscribers(), 3);
     for index in 0..8 {
         emit(&feed, "ses_connector_events", index, 4000);
     }
@@ -220,7 +220,7 @@ async fn snapshots_share_one_observer_order_bounded_events_and_release_only_the_
     assert_eq!(received, (0..8).collect::<Vec<_>>());
     snapshot(&opening, "first", &[]).await;
     fence(&mut relay, &opening, "ses_connector_events").await;
-    assert_eq!(feed.subscribers(), 2);
+    assert_eq!(feed.subscribers(), 3);
     emit(&feed, "ses_connector_events", 8, 0);
     let frame = relay
         .matching(opening.generation, |frame| {
@@ -234,7 +234,7 @@ async fn snapshots_share_one_observer_order_bounded_events_and_release_only_the_
         .unwrap();
     snapshot(&opening, "second", &[]).await;
     fence(&mut relay, &opening, "ses_connector_events").await;
-    assert_eq!(feed.subscribers(), 1);
+    assert_eq!(feed.subscribers(), 2);
     assert_eq!(control.status().state, State::On);
     connector.shutdown().await.unwrap();
     assert_eq!(feed.subscribers(), 0);

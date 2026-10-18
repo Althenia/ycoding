@@ -1,5 +1,5 @@
 import { InputRenderable } from "@opentui/core"
-import { onMount } from "solid-js"
+import { onCleanup, onMount } from "solid-js"
 import { DialogHeader, DialogSearchRow, DialogTitle, type DialogContext, useDialog } from "../ui/dialog"
 import { useClient } from "../context/client"
 import { useToast } from "../ui/toast"
@@ -36,7 +36,10 @@ export function DialogSessionRename(props: { sessionID: string; currentTitle?: s
 
   onMount(() => {
     dialog.setSize("medium")
-    setTimeout(() => input?.focus(), 1)
+    const focusTimer = setTimeout(() => {
+      if (input && !input.isDestroyed) input.focus()
+    }, 1)
+    onCleanup(() => clearTimeout(focusTimer))
   })
 
   return (

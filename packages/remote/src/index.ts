@@ -11,6 +11,19 @@ export {
   handoffBinary,
 } from "./binary"
 export { isProviderAuthorizationURL } from "./provider-auth"
+export { RemoteAppPreview } from "./app-preview"
+export {
+  McpLimits,
+  mcpScope,
+  mcpHeaderNames,
+  mcpResource,
+  isMcpIdentifier,
+  encodeMcpRequest,
+  decodeMcpResponse,
+} from "./mcp"
+export type { McpForward, McpHeaders, McpPrincipal, McpResponse } from "./mcp"
+export { quotaKey, quotaFromWire, quotaToWire } from "./quota"
+export type { RemoteQuota, RemoteQuotaMilestone } from "./quota"
 export { takeAsset } from "./asset"
 export { httpBulkQuery, readHttpBulk } from "./http"
 export * from "./payloads"
@@ -95,22 +108,24 @@ export const RemoteCloseCode = {
   agentConflict: 4409,
 } as const
 
-export type RemoteErrorCode =
-  | "invalid_message"
-  | "message_too_large"
-  | "unknown_operation"
-  | "session_required"
-  | "session_not_allowed"
-  | "subagent_read_only"
-  | "not_found"
-  | "not_subscribed"
-  | "rate_limited"
-  | "agent_unavailable"
-  | "outcome_unknown"
-  | "forbidden"
-  | "telemetry_disabled"
-  | "unauthorized"
-  | "internal_error"
+export const remoteErrorCodes = [
+  "invalid_message",
+  "message_too_large",
+  "unknown_operation",
+  "session_required",
+  "session_not_allowed",
+  "subagent_read_only",
+  "not_found",
+  "not_subscribed",
+  "rate_limited",
+  "agent_unavailable",
+  "outcome_unknown",
+  "forbidden",
+  "telemetry_disabled",
+  "unauthorized",
+  "internal_error",
+] as const
+export type RemoteErrorCode = (typeof remoteErrorCodes)[number]
 export type RemoteError = { readonly code: RemoteErrorCode; readonly message: string }
 export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -192,7 +207,7 @@ export type DeviceTokenResponse = {
   readonly refreshExpiresAt: number
 }
 export type ApiErrorResponse = { readonly error: RemoteError }
-export const pushCategories = ["agent-completed", "approval-requested", "machine-offline"] as const
+export const pushCategories = ["agent-completed", "approval-requested", "machine-offline", "quota-pace"] as const
 export type PushCategory = (typeof pushCategories)[number]
 export type PushCategories = { readonly [Category in PushCategory]: boolean }
 export type PushKeys = { readonly p256dh: string; readonly auth: string }
@@ -240,6 +255,7 @@ export function parsePushSubscription(value: unknown): ParseResult<PushSubscript
         "agent-completed": categories["agent-completed"] === true,
         "approval-requested": categories["approval-requested"] === true,
         "machine-offline": categories["machine-offline"] === true,
+        "quota-pace": categories["quota-pace"] === true,
       },
     },
   }

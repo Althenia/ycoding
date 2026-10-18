@@ -21,7 +21,7 @@ pub(crate) async fn answer_options(
         return Err(Reason::FreeText);
     }
     if questions.len() > 32 {
-        return Err(Reason::Error);
+        return Err(Reason::InvalidRequest);
     }
     let redacted_questions = questions
         .iter()
@@ -35,7 +35,8 @@ pub(crate) async fn answer_options(
         .field("questions", &JsonValue::Array(redacted_questions.clone()))
         .finish();
     // Validation rejects distinct original options that collapse to one redacted value.
-    crate::resources::decision::judgment::Request::decode(&request).map_err(|_| Reason::Error)?;
+    let judgment = crate::resources::decision::judgment::Request::decode(&request)
+        .map_err(|error| error.review_reason())?;
     let input = ObjectEncoder::new()
         .field("provider", "agent")
         .field("request", &request)
@@ -43,7 +44,7 @@ pub(crate) async fn answer_options(
     if ycoding_schema::stringify_json(&input).len()
         > crate::resources::decision::judgment::BYTE_LIMIT
     {
-        return Err(Reason::Error);
+        return Err(Reason::InputTooLarge);
     }
     let response = tokio::select! {
         biased;
@@ -53,75 +54,76 @@ pub(crate) async fn answer_options(
             input_id: None,
             cancellation,
             attribution: crate::session::usage_attribution::Attribution::Unset,
-        })) => result.map_err(|_| Reason::Timeout)?.map_err(|_| Reason::Error)?,
+        })) => result.map_err(|_| Reason::Timeout)?.map_err(|error| error.review_reason())?,
     };
     let JsonValue::Object(response) = response else {
-        return Err(Reason::Error);
+        return Err(Reason::InvalidOutput);
     };
     let Some(JsonValue::Object(response)) = response.get(&"response".into()) else {
-        return Err(Reason::Error);
+        return Err(Reason::InvalidOutput);
     };
     let Some(JsonValue::Array(answers)) = response.get(&"answers".into()) else {
-        return Err(Reason::Error);
+        return Err(Reason::InvalidOutput);
     };
-    if answers.len() != questions.len() {
-        return Err(Reason::Error);
-    }
+    let answers = judgment
+        .parse(&ycoding_schema::stringify_json(
+            &ObjectEncoder::new()
+                .field(
+                    "decisions",
+                    &ObjectEncoder::new()
+                        .field("version", &1.0)
+                        .field("answers", answers)
+                        .finish(),
+                )
+                .finish(),
+        ))
+        .map_err(|error| error.review_reason())?;
     let mut result = JsonObject::new();
-    for (question, redacted_question) in questions.into_iter().zip(redacted_questions) {
+    for ((question, redacted_question), answer) in
+        questions.into_iter().zip(redacted_questions).zip(answers)
+    {
         let (JsonValue::Object(question), JsonValue::Object(redacted_question)) =
             (question, redacted_question)
         else {
-            return Err(Reason::Error);
+            return Err(Reason::InvalidRequest);
         };
         let Some(JsonValue::String(name)) = question.get(&"name".into()) else {
-            return Err(Reason::Error);
+            return Err(Reason::InvalidRequest);
         };
-        let Some(JsonValue::String(redacted_name)) = redacted_question.get(&"name".into()) else {
-            return Err(Reason::Error);
+        let JsonValue::Object(answer) = answer else {
+            return Err(Reason::InvalidOutput);
         };
-        let matching = answers
-            .iter()
-            .filter_map(|answer| match answer {
-                JsonValue::Object(answer)
-                    if answer.get(&"name".into())
-                        == Some(&JsonValue::String(redacted_name.clone())) =>
-                {
-                    Some(answer)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if matching.len() != 1 {
-            return Err(Reason::Error);
-        }
-        let answer = matching[0];
         if answer.get(&"type".into()) == Some(&JsonValue::String("refusal".into())) {
             return Err(Reason::Refused);
         }
-        if !matches!(answer.get(&"confidence".into()), Some(JsonValue::Number(value)) if value.is_finite() && *value >= 0.8 && *value <= 1.0)
-        {
+        let Some(JsonValue::Number(confidence)) = answer.get(&"confidence".into()) else {
+            return Err(Reason::InvalidOutput);
+        };
+        if *confidence < 0.8 {
             return Err(Reason::LowConfidence);
         }
         let Some(choice) = answer.get(&"choice".into()) else {
-            return Err(Reason::Error);
+            return Err(Reason::InvalidOutput);
         };
         if answer.get(&"type".into()) != Some(&JsonValue::String("choice".into())) {
-            return Err(Reason::Error);
+            return Err(Reason::InvalidOutput);
         }
         let (Some(JsonValue::Array(choices)), Some(JsonValue::Array(redacted_choices))) = (
             question.get(&"choices".into()),
             redacted_question.get(&"choices".into()),
         ) else {
-            return Err(Reason::Error);
+            return Err(Reason::InvalidRequest);
         };
-        let Some(index) = redacted_choices.iter().position(|entry| matches!(entry, JsonValue::Object(entry) if entry.get(&"value".into()) == Some(choice))) else { return Err(Reason::Error) };
+        let Some(index) = redacted_choices.iter().position(|entry| matches!(entry, JsonValue::Object(entry) if entry.get(&"value".into()) == Some(choice))) else { return Err(Reason::InvalidOutput) };
         let Some(JsonValue::Object(original)) = choices.get(index) else {
-            return Err(Reason::Error);
+            return Err(Reason::InvalidRequest);
         };
         result.insert(
             name.clone(),
-            original.get(&"value".into()).ok_or(Reason::Error)?.clone(),
+            original
+                .get(&"value".into())
+                .ok_or(Reason::InvalidRequest)?
+                .clone(),
         );
     }
     Ok(result)

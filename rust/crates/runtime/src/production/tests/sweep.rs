@@ -1,4 +1,48 @@
 use super::*;
+
+#[test]
+fn empty_retention_preserves_analytics_but_deletions_and_pending_purges_require_it() {
+    let store = Store::disposable(
+        Options::core(),
+        ycoding_core::ycoding_store::import::catalog(
+            ycoding_core::ycoding_store::import::DatabaseKind::Core,
+        ),
+        Metadata::new([31; 16], 1),
+    )
+    .unwrap();
+    let client = store.client();
+    assert!(matches!(
+        client.analytics(),
+        Err(ycoding_core::ycoding_store::analytics::Error::Unavailable)
+    ));
+    assert!(reconcile_retention_analytics(&client, 0).is_ok());
+    assert!(matches!(
+        reconcile_retention_analytics(&client, 1),
+        Err(ycoding_core::ycoding_store::analytics::Error::Unavailable)
+    ));
+    for all in [false, true] {
+        store
+            .submit(move |tx| {
+                ycoding_core::ycoding_store::analytics::privacy_changed(tx, vec![1], true)?;
+                if all {
+                    let mut state = tx
+                        .get::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&[])?
+                        .unwrap();
+                    state.purges.clear();
+                    state.purge_all = true;
+                    tx.put::<ycoding_core::ycoding_store::analytics::DeliveryTable>(&state)?;
+                }
+                Ok(())
+            })
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(matches!(
+            reconcile_retention_analytics(&client, 0),
+            Err(ycoding_core::ycoding_store::analytics::Error::Unavailable)
+        ));
+    }
+}
 use ycoding_core::ycoding_schema::{ObjectEncoder, stringify_json};
 use ycoding_core::ycoding_store::{
     KeyPart,

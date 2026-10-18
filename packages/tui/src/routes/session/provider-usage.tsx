@@ -78,6 +78,7 @@ export function ProviderUsageScreen() {
   const client = useClient()
   const guard = createProviderUsageGenerationGuard()
   const backendUsageGuard = createProviderUsageGenerationGuard()
+  const forecastGuard = createProviderUsageGenerationGuard()
   const [snapshots, setSnapshots] = createSignal<ProviderUsageSnapshot[]>([])
   const [refreshing, setRefreshing] = createSignal(true)
   const [failed, setFailed] = createSignal(false)
@@ -114,23 +115,29 @@ export function ProviderUsageScreen() {
         if (guard.current(token)) setFailed(true)
       })
       .finally(() => {
-        if (guard.current(token)) {
-          setRefreshing(false)
-          setForecastFailed(false)
-          void client.api.providerUsage.forecast({ localScope: "backend" }).then(
-            (result) => {
-              if (guard.current(token)) setForecast(result.data)
-            },
-            () => {
-              if (guard.current(token)) setForecastFailed(true)
-            },
-          )
-        }
+        if (!guard.current(token)) return
+        setRefreshing(false)
+        readForecast()
       })
+    readForecast()
+  }
+  const readForecast = () => {
+    const token = forecastGuard.next()
+    void client.api.providerUsage.forecast({ localScope: "backend" }).then(
+      (result) => {
+        if (!forecastGuard.current(token)) return
+        setForecastFailed(false)
+        setForecast(result.data)
+      },
+      () => {
+        if (forecastGuard.current(token)) setForecastFailed(true)
+      },
+    )
   }
   onMount(refresh)
   onCleanup(() => {
     guard.invalidate()
+    forecastGuard.invalidate()
     backendUsageGuard.invalidate()
   })
 

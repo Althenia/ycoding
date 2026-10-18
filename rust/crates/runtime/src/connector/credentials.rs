@@ -64,6 +64,8 @@ impl Credential {
         Ok(Peer {
             live: Arc::new(AtomicBool::new(true)),
             expires_at: self.expires_at,
+            origin: enrolled.origin.clone(),
+            device: enrolled.device.clone(),
         })
     }
 }
@@ -111,6 +113,8 @@ fn failure(error: remote::Error) -> Error {
 pub struct Peer {
     live: Arc<AtomicBool>,
     expires_at: i64,
+    origin: String,
+    device: String,
 }
 
 impl Peer {
@@ -120,6 +124,14 @@ impl Peer {
         now: i64,
     ) -> Result<Self, Error> {
         credential.authenticate(enrolled, now)
+    }
+
+    pub(crate) fn device(&self) -> &str {
+        &self.device
+    }
+
+    pub(crate) fn mcp_resource(&self) -> String {
+        format!("{}/api/mcp/devices/{}", self.origin, self.device)
     }
 
     pub fn authorized(&self) -> bool {

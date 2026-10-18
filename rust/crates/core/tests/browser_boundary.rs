@@ -7,7 +7,7 @@ use ycoding_core::platform::{
     browser::{
         admission::Admission,
         boundary::{self, Mode, Operation, Services},
-        bridge::{Bridge, Transport},
+        bridge::{Bridge, Error, Transport},
         protocol,
     },
     computer::{
@@ -394,4 +394,125 @@ async fn a_corrected_post_open_permission_closes_the_unapproved_tab() {
     );
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[1]["type"], "close");
+}
+
+fn bridge_with_outbox() -> (Arc<Bridge>, tokio::sync::mpsc::UnboundedReceiver<JsonValue>) {
+    let (outbox, inbox) = tokio::sync::mpsc::unbounded_channel();
+    let bridge = Bridge::new(
+        DomainDecode::decode(&JsonValue::Number(1.)).unwrap(),
+        SessionId::new("ses_a").unwrap(),
+        Arc::new(Extension {
+            outbox,
+            calls: Arc::new(Mutex::new(Vec::new())),
+        }),
+        Arc::new(Admission::default()),
+        Arc::new(|_| true),
+        Duration::from_secs(1),
+    );
+    (bridge, inbox)
+}
+
+fn open_input(call: &str) -> ycoding_schema::browser::OpenInput {
+    DomainDecode::decode(
+        &parse_json(
+            &json!({"sessionID":"ses_a","generation":1,"url":"https://example.test/","callID":call})
+                .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+async fn next_frame(
+    inbox: &mut tokio::sync::mpsc::UnboundedReceiver<JsonValue>,
+) -> serde_json::Value {
+    let frame = tokio::time::timeout(Duration::from_secs(3), inbox.recv())
+        .await
+        .expect("extension command was not dispatched")
+        .unwrap();
+    serde_json::from_str(&ycoding_schema::stringify_json(&frame)).unwrap()
+}
+
+#[tokio::test]
+async fn a_revoked_pending_owned_open_is_invalid_and_cannot_be_revived_by_late_frames() {
+    let (bridge, mut inbox) = bridge_with_outbox();
+    let session = SessionId::new("ses_a").unwrap();
+    let open = tokio::spawn({
+        let bridge = bridge.clone();
+        async move { bridge.open(open_input("open-revoked")).await }
+    });
+    let sent = next_frame(&mut inbox).await;
+    assert_eq!(sent["type"], "open");
+    receive(&bridge, json!({"type":"revoked","tabID":sent["tabID"]}));
+    assert!(matches!(
+        open.await.unwrap().err(),
+        Some(Error::InvalidFrame(_))
+    ));
+    assert!(bridge.list(&session).unwrap().is_empty());
+
+    receive(
+        &bridge,
+        json!({"type":"opened","callID":"open-revoked","tabID":sent["tabID"],"generation":1,"documentGeneration":1,"title":"Late","url":"https://example.test/","active":false}),
+    );
+    receive(
+        &bridge,
+        json!({"type":"error","callID":"open-revoked","tabID":sent["tabID"],"generation":1,"dispatched":true,"message":"Late failure"}),
+    );
+    assert!(bridge.list(&session).unwrap().is_empty());
+
+    let next = tokio::spawn({
+        let bridge = bridge.clone();
+        async move { bridge.open(open_input("open-after")).await }
+    });
+    let sent = next_frame(&mut inbox).await;
+    assert_eq!(sent["type"], "open");
+    assert_eq!(sent["callID"], "open-after");
+    receive(
+        &bridge,
+        json!({"type":"opened","callID":"open-after","tabID":sent["tabID"],"generation":1,"documentGeneration":1,"title":"Owned","url":"https://example.test/","active":false}),
+    );
+    let tab = next.await.unwrap().unwrap();
+    assert!(tab.session_id == session);
+    assert_eq!(tab.mode, Some(ycoding_schema::browser::Mode::Owned));
+    let listed = bridge.list(&session).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].session_id == session);
+    assert_eq!(listed[0].mode, Some(ycoding_schema::browser::Mode::Owned));
+}
+
+#[tokio::test]
+async fn a_disconnect_during_an_owned_open_stays_unavailable() {
+    let (bridge, mut inbox) = bridge_with_outbox();
+    let open = tokio::spawn({
+        let bridge = bridge.clone();
+        async move { bridge.open(open_input("open-disconnected")).await }
+    });
+    assert_eq!(next_frame(&mut inbox).await["type"], "open");
+    bridge.detach();
+    assert!(matches!(
+        open.await.unwrap().err(),
+        Some(Error::Unavailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_revoked_pending_profile_observation_stays_unavailable() {
+    let (bridge, mut inbox) = bridge_with_outbox();
+    receive(&bridge, json!({"type":"profile_access","enabled":true}));
+    receive(
+        &bridge,
+        json!({"type":"shared","mode":"profile","tabID":"btab_test","title":"Fixture","url":"https://example.test/form","documentGeneration":1,"active":false}),
+    );
+    let observe = tokio::spawn({
+        let bridge = bridge.clone();
+        async move {
+            bridge.observe(DomainDecode::decode(&parse_json(&json!({"sessionID":"ses_a","callID":"observe","tabID":"btab_test","generation":1}).to_string()).unwrap()).unwrap()).await
+        }
+    });
+    assert_eq!(next_frame(&mut inbox).await["type"], "observe");
+    receive(&bridge, json!({"type":"revoked","tabID":"btab_test"}));
+    assert!(matches!(
+        observe.await.unwrap().err(),
+        Some(Error::Unavailable(_))
+    ));
 }

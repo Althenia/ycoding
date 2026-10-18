@@ -140,6 +140,13 @@ export type ForecastPresentation = {
   readonly ratePerHour?: number
   readonly exhaustionAt?: number
   readonly projectedUsedAtReset?: number
+  readonly pace?: { readonly verdict: "ahead" | "cutting-it-close" | "will-run-out"; readonly projectedUsedAtReset: number; readonly exhaustionAt?: number }
+}
+
+export function paceSummary(pace: NonNullable<ForecastPresentation["pace"]>, now: number, asOf = now) {
+  if (pace.verdict === "ahead") return { text: "Ahead", tone: "subdued" as const }
+  if (pace.verdict === "cutting-it-close") return { text: "Cutting it close", tone: "warning" as const }
+  return { text: `Will run out${pace.exhaustionAt === undefined ? "" : ` ${exhaustionText(pace.exhaustionAt, now, asOf)}`}`, tone: "error" as const }
 }
 
 function forecastAmount(forecast: ForecastPresentation, value: number) {

@@ -104,9 +104,10 @@ impl Server {
                             if let Some(gate) = gate {tokio::select! {_ = gate.notified() => {}, _ = stream.read(&mut buffer) => return}}
                             let reply = shared.1.lock().unwrap().clone();
                             let quote = |text: &str| ycoding_schema::stringify_json(&JsonValue::String(text.into()));
-                            let terminal = |usage: bool| format!("data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]{} }}\n\ndata: [DONE]\n\n", if usage {",\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7,\"completion_tokens_details\":{\"reasoning_tokens\":2},\"prompt_tokens_details\":{\"cached_tokens\":4}}"} else {""});
-                            let text = |text: &str| format!("data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n", quote(text));
-                            let tool = |name: &str| format!("data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"call_done\",\"type\":\"function\",\"function\":{{\"name\":{},\"arguments\":\"{{}}\"}}}}]}},\"finish_reason\":null}}]}}\n\ndata: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n", quote(name));
+                            let responses = matches!(&request,JsonValue::Object(request) if request.get(&"input".into()).is_some());
+                            let terminal = |usage: bool| if responses {let mut response=serde_json::json!({"id":"reply","output":[]});if usage{response["usage"]=serde_json::json!({"input_tokens":12,"output_tokens":7,"output_tokens_details":{"reasoning_tokens":2},"input_tokens_details":{"cached_tokens":4}});}format!("data: {}\n\n",serde_json::json!({"type":"response.completed","response":response}))} else {format!("data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]{} }}\n\ndata: [DONE]\n\n", if usage {",\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7,\"completion_tokens_details\":{\"reasoning_tokens\":2},\"prompt_tokens_details\":{\"cached_tokens\":4}}"} else {""})};
+                            let text = |text: &str| if responses {format!("data: {}\n\n",serde_json::json!({"type":"response.output_text.delta","item_id":"msg_reply","delta":text}))} else {format!("data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":{}}},\"finish_reason\":null}}]}}\n\n", quote(text))};
+                            let tool = |name: &str| if responses {let item=serde_json::json!({"id":"item_done","type":"function_call","call_id":"call_done","name":name,"arguments":"{}"});format!("data: {}\n\ndata: {}\n\n{}",serde_json::json!({"type":"response.output_item.added","item":item.clone()}),serde_json::json!({"type":"response.output_item.done","item":item}),terminal(false))} else {format!("data: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"call_done\",\"type\":\"function\",\"function\":{{\"name\":{},\"arguments\":\"{{}}\"}}}}]}},\"finish_reason\":null}}]}}\n\ndata: {{\"id\":\"reply\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: [DONE]\n\n", quote(name))};
                             let (status, mime, body) = match reply {
                                 Reply::Text(value) => (200, "text/event-stream", format!("{}{}", text(&value), terminal(true))),
                                 Reply::NoUsage(value) => (200, "text/event-stream", format!("{}{}", text(&value), terminal(false))),
@@ -245,6 +246,9 @@ impl Harness {
         let mut catalog = Catalog::new(models_dev::normalize(&source).unwrap());
         catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"fixture","baseURL":"{}"}}}}}}}}"#, server.url)).unwrap()]).unwrap();
         let resolver = Arc::new(model::Resolver::new(catalog));
+        let mut decision_catalog = Catalog::new(models_dev::normalize(&source).unwrap());
+        decision_catalog.configure(&[parse_json(&format!(r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai","settings":{{"apiKey":"fixture","baseURL":"{}"}}}}}}}}"#, server.url)).unwrap()]).unwrap();
+        let decision_resolver = Arc::new(model::Resolver::new(decision_catalog));
         let credentials = credential::Service::new(fixture.authority.store.client());
         let store = store::Service::new(fixture.authority.store.client());
         let directory = fixture.root.to_string_lossy().into_owned();
@@ -381,7 +385,15 @@ impl Harness {
             decisions: Arc::new(decision::Service {
                 store: store.clone(),
                 agents: agents.clone(),
-                models: models.clone(),
+                models: Arc::new(Models {
+                    models: decision_resolver,
+                    credentials: models.credentials.clone(),
+                    auth: Default::default(),
+                    cursor: None,
+                    claude: None,
+                    store: store.clone(),
+                    settings: models.settings.clone(),
+                }),
                 executor: executor.clone(),
             }),
             publish: fixture.authority.publisher(),
@@ -555,7 +567,10 @@ fn request() -> &'static str {
     r#"{"provider":"agent","request":{"state":{"action":"read"},"questions":[{"type":"choice","name":"route","instructions":"Choose based on evidence","choices":[{"value":"keep-current"},{"value":"review"}]}]}}"#
 }
 fn answer() -> &'static str {
-    "decisions:\n  version: 1\n  answers[1]{name,type,answer,choice,score,confidence}:\n    route,choice,null,review,null,0.8"
+    r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":"review","score":null,"confidence":0.8}]}}"#
+}
+fn refusal_answer() -> &'static str {
+    r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"refusal","answer":null,"choice":null,"score":null,"confidence":0}]}}"#
 }
 
 #[tokio::test]
@@ -1498,6 +1513,14 @@ async fn decision_real_model_returns_typed_confidence_no_tools_and_accounts_usag
         let serialized = ycoding_schema::stringify_json(&seen[0]);
         assert!(serialized.contains("uncalibrated"));
         assert!(serialized.contains("alternatives"));
+        assert_eq!(
+            get(get(get(&seen[0], "text"), "format"), "type"),
+            &JsonValue::String("json_schema".into())
+        );
+        assert_eq!(
+            get(get(get(&seen[0], "text"), "format"), "strict"),
+            &JsonValue::Bool(true)
+        );
         assert!(!serialized.contains("\"tools\":[{"));
     }
     assert!(
@@ -1511,9 +1534,7 @@ async fn decision_real_model_returns_typed_confidence_no_tools_and_accounts_usag
 #[tokio::test]
 async fn decision_refusal_remains_uncertainty_and_missing_usage_is_not_reported_as_zero() {
     let h = Harness::new(TitleMode::Local, "{}").await;
-    h.server.set(Reply::NoUsage(
-        answer().replace("choice,null,review,null,0.8", "refusal,null,null,null,0"),
-    ));
+    h.server.set(Reply::NoUsage(refusal_answer().into()));
     let result = h.call("decision", request()).await;
     let response = get(output(&result), "response");
     let JsonValue::Object(response) = response else {
@@ -1527,7 +1548,8 @@ async fn decision_refusal_remains_uncertainty_and_missing_usage_is_not_reported_
 }
 
 #[tokio::test]
-async fn decision_invalid_output_provider_failure_unsettled_and_tool_injection_fail_closed_once() {
+async fn decision_invalid_output_provider_failure_unsettled_and_tool_injection_fail_closed_with_bounded_recovery()
+ {
     for reply in [
         Reply::Text(r#"{"probability":1}"#.into()),
         Reply::Rejected,
@@ -1535,10 +1557,19 @@ async fn decision_invalid_output_provider_failure_unsettled_and_tool_injection_f
         Reply::Tool("shell".into()),
     ] {
         let h = Harness::new(TitleMode::Local, "{}").await;
+        let attempts = if matches!(reply, Reply::Rejected) {
+            1
+        } else {
+            2
+        };
         h.server.set(reply);
         assert!(h.call("decision", request()).await.output.is_none());
-        assert_eq!(h.server.seen.lock().unwrap().len(), 1);
-        assert_eq!(h.ledger().len(), 1);
+        {
+            let seen = h.server.seen.lock().unwrap();
+            assert_eq!(seen.len(), attempts);
+            assert!(seen.windows(2).all(|pair| pair[0] == pair[1]));
+        }
+        assert_eq!(h.ledger().len(), attempts);
         h.close().await;
     }
 }
@@ -1595,61 +1626,65 @@ async fn decision_invalid_request_errors_are_corrective_and_never_echo_evidence(
 }
 
 #[test]
-fn judgment_request_bounds_typed_choices_and_strict_toon_answers_match_ts() {
+fn judgment_request_bounds_typed_choices_and_strict_json_answers() {
     let request = Request::decode(&parse_json(r#"{"state":{"task":"Unicode 日本語"},"questions":[{"type":"predicate","name":"safe","instructions":"Safe?"},{"type":"choice","name":"方式","instructions":"Choose","choices":[{"value":false},{"value":"false"},{"value":"0"}]},{"type":"score","name":"effort","instructions":"Grade","levels":[{"label":"low"},{"label":"high"}]},{"type":"predicate","name":"unknown","instructions":"Unknown?"}]}"#).unwrap()).unwrap();
-    let wire = "decisions:\n  version: 1\n  answers[4]{name,type,answer,choice,score,confidence}:\n    safe,predicate,false,null,null,0.9\n    方式,choice,null,false,null,1\n    effort,score,null,null,0,0\n    unknown,refusal,null,null,null,0";
+    let wire = r#"{"decisions":{"version":1,"answers":[{"name":"safe","type":"predicate","answer":false,"choice":null,"score":null,"confidence":0.9},{"name":"方式","type":"choice","answer":null,"choice":false,"score":null,"confidence":1},{"name":"effort","type":"score","answer":null,"choice":null,"score":0,"confidence":0},{"name":"unknown","type":"refusal","answer":null,"choice":null,"score":null,"confidence":0}]}}"#;
     assert_eq!(request.parse(wire).unwrap().len(), 4);
     assert!(request.parse(&request.template()).is_ok());
-    let reversed = wire
-        .lines()
-        .take(3)
-        .chain(wire.lines().skip(3).collect::<Vec<_>>().into_iter().rev())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let document: serde_json::Value = serde_json::from_str(wire).unwrap();
+    let mut reversed = document.clone();
+    reversed["decisions"]["answers"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
     assert_eq!(
-        request.parse(&reversed).unwrap(),
+        request.parse(&reversed.to_string()).unwrap(),
         request.parse(wire).unwrap()
     );
+    let changed = |index: usize, key: &str, value: serde_json::Value| {
+        let mut changed = document.clone();
+        changed["decisions"]["answers"][index][key] = value;
+        changed.to_string()
+    };
+    let mut wrong_version = document.clone();
+    wrong_version["decisions"]["version"] = serde_json::json!(2);
+    let mut missing = document.clone();
+    missing["decisions"]["answers"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
     for invalid in [
-        wire.replace("safe,predicate,false", "safe,predicate,null"),
-        wire.replace("effort,score,null,null,0", "effort,score,null,null,2"),
-        wire.replace("effort,score,null,null,0", "effort,score,null,null,0.5"),
-        wire.replace("方式,choice,null,false", "方式,choice,null,true"),
-        wire.replace(
-            "unknown,refusal,null,null,null,0",
-            "unknown,refusal,null,null,null,0.1",
-        ),
-        wire.replace(
-            "safe,predicate,false,null,null,0.9",
-            "safe,predicate,false,other,null,0.9",
-        ),
-        wire.replace("unknown,refusal", "safe,refusal"),
-        wire.replace("version: 1", "version: 2"),
+        changed(0, "answer", serde_json::Value::Null),
+        changed(2, "score", serde_json::json!(2)),
+        changed(2, "score", serde_json::json!(0.5)),
+        changed(1, "choice", serde_json::json!(true)),
+        changed(3, "confidence", serde_json::json!(0.1)),
+        changed(0, "choice", serde_json::json!("other")),
+        changed(3, "name", serde_json::json!("safe")),
+        wrong_version.to_string(),
         format!("```toon\n{wire}\n```"),
+        format!("```json\n{wire}\n```"),
         format!("Here is my decision:\n{wire}"),
         format!("{wire}\nTrailing prose"),
         format!("{wire}\n{wire}"),
-        wire.lines().take(6).collect::<Vec<_>>().join("\n"),
+        missing.to_string(),
     ] {
         assert_eq!(request.parse(&invalid), Err(decision::Error::InvalidOutput));
     }
     for choice in ["false", "0"] {
         assert!(
             request
-                .parse(&wire.replace(
-                    "方式,choice,null,false",
-                    &format!("方式,choice,null,\"{choice}\"")
-                ))
+                .parse(&changed(1, "choice", serde_json::json!(choice)))
                 .is_ok()
         );
     }
     for delimiter in [',', '|', '\t'] {
-        let alternate = wire
+        let alternate = "decisions:\n  version: 1\n  answers[4]{name,type,answer,choice,score,confidence}:\n    safe,predicate,false,null,null,0.9\n    方式,choice,null,false,null,1\n    effort,score,null,null,0,0\n    unknown,refusal,null,null,null,0"
             .replace("answers[4]", &format!("answers[4{delimiter}]"))
             .replace(',', &delimiter.to_string());
         assert_eq!(
-            request.parse(&alternate).unwrap(),
-            request.parse(wire).unwrap()
+            request.parse(&alternate),
+            Err(decision::Error::InvalidOutput)
         );
     }
     let oversized = "é".repeat(524289);
@@ -2215,7 +2250,7 @@ fn judgment_accepts_exact_question_and_choice_bounds_and_rejects_excess() {
 async fn decision_backend_score_and_boolean_predicate_support_explicit_refusal_and_zero_confidence()
 {
     let h = Harness::new(TitleMode::Local, "{}").await;
-    h.server.set(Reply::Text("decisions:\n  version: 1\n  answers[3]{name,type,answer,choice,score,confidence}:\n    safe,predicate,false,null,null,0\n    effort,score,null,null,0,0.84\n    unknown,refusal,null,null,null,0".into()));
+    h.server.set(Reply::Text(r#"{"decisions":{"version":1,"answers":[{"name":"safe","type":"predicate","answer":false,"choice":null,"score":null,"confidence":0},{"name":"effort","type":"score","answer":null,"choice":null,"score":0,"confidence":0.84},{"name":"unknown","type":"refusal","answer":null,"choice":null,"score":null,"confidence":0}]}}"#.into()));
     let result = h.call("decision", r#"{"provider":"agent","request":{"state":{},"questions":[{"type":"predicate","name":"safe","instructions":"Safe?"},{"type":"score","name":"effort","instructions":"Grade","levels":[{"label":"low"},{"label":"high"}]},{"type":"choice","name":"unknown","instructions":"Choose","choices":[{"value":false}]}]}}"#).await;
     let JsonValue::Array(answers) = get(get(output(&result), "response"), "answers") else {
         panic!()
@@ -3382,7 +3417,7 @@ fn graded_route_request() -> &'static str {
 }
 
 fn graded_route_answer() -> String {
-    decision::toon::encode(&parse_json(r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":null,"score":null,"confidence":0,"grades":[{"choice":"keep-current","confidence":0.2,"evidence":"No mutation planned"},{"choice":"review","confidence":0.8,"evidence":"Read only"}]}]}}"#).unwrap())
+    r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":null,"score":null,"confidence":0,"grades":[{"choice":"keep-current","confidence":0.2,"evidence":"No mutation planned"},{"choice":"review","confidence":0.8,"evidence":"Read only"}]}]}}"#.into()
 }
 
 #[tokio::test]
@@ -3405,7 +3440,17 @@ async fn decision_graded_choice_returns_grades_without_a_pick_from_one_helper_ca
         let seen = h.server.seen.lock().unwrap();
         assert_eq!(seen.len(), 1);
         let serialized = ycoding_schema::stringify_json(&seen[0]);
-        assert!(serialized.contains("grade: true"), "{serialized}");
+        let wire: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+        let prompt = wire["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(prompt.contains(r#""grade":true"#), "{serialized}");
         assert!(
             serialized.contains("do not select a winner"),
             "{serialized}"
@@ -3417,17 +3462,21 @@ async fn decision_graded_choice_returns_grades_without_a_pick_from_one_helper_ca
 }
 
 #[tokio::test]
-async fn decision_graded_choice_with_a_pick_or_missing_grades_fails_closed_after_one_provider_call()
-{
+async fn decision_graded_choice_with_a_pick_or_missing_grades_fails_closed_after_bounded_provider_attempts()
+ {
     for reply in [
         answer().to_string(),
-        decision::toon::encode(&parse_json(r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":null,"score":null,"confidence":0,"grades":[{"choice":"review","confidence":0.8,"evidence":"Read only"}]}]}}"#).unwrap()),
+        r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":null,"score":null,"confidence":0,"grades":[{"choice":"review","confidence":0.8,"evidence":"Read only"}]}]}}"#.into(),
     ] {
         let h = Harness::new(TitleMode::Local, "{}").await;
         h.server.set(Reply::Text(reply));
         assert!(h.call("decision", graded_route_request()).await.output.is_none());
-        assert_eq!(h.server.seen.lock().unwrap().len(), 1);
-        assert_eq!(h.ledger().len(), 1);
+        {
+            let seen=h.server.seen.lock().unwrap();
+            assert_eq!(seen.len(), 2);
+            assert_eq!(seen[0],seen[1]);
+        }
+        assert_eq!(h.ledger().len(), 2);
         h.close().await;
     }
 }
@@ -3435,9 +3484,7 @@ async fn decision_graded_choice_with_a_pick_or_missing_grades_fails_closed_after
 #[tokio::test]
 async fn decision_graded_refusal_remains_uncertainty() {
     let h = Harness::new(TitleMode::Local, "{}").await;
-    h.server.set(Reply::Text(
-        answer().replace("choice,null,review,null,0.8", "refusal,null,null,null,0"),
-    ));
+    h.server.set(Reply::Text(refusal_answer().into()));
     let result = h.call("decision", graded_route_request()).await;
     assert!(result.output.as_ref().unwrap().content.iter().any(|content| matches!(content, ycoding_schema::llm::ToolContent::Text(text) if text.text.to_utf8().unwrap().contains("Treat refusal as uncertainty"))));
     assert_eq!(h.server.seen.lock().unwrap().len(), 1);

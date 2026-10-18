@@ -726,23 +726,26 @@ pub fn normalize_headers(
     now: i64,
 ) -> Result<Observation, Error> {
     let mut windows = Vec::new();
-    for (id, label, prefix, reset) in [
+    for (id, label, prefix, reset, period) in [
         (
             "five-hour",
             "5-hour",
             "anthropic-ratelimit-unified-5h",
             Some("anthropic-ratelimit-unified-5h-reset"),
+            Some(18_000),
         ),
         (
             "seven-day",
             "Weekly",
             "anthropic-ratelimit-unified-7d",
             Some("anthropic-ratelimit-unified-7d-reset"),
+            Some(604_800),
         ),
         (
             "overage",
             "Extra usage",
             "anthropic-ratelimit-unified-overage",
+            None,
             None,
         ),
     ] {
@@ -823,7 +826,7 @@ pub fn normalize_headers(
             remaining: None,
             unlimited: None,
             reset_at,
-            period_seconds: None,
+            period_seconds: period.and_then(|seconds| NonNegativeInt::new(seconds).ok()),
         });
     }
     let label = match subscription

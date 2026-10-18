@@ -1,5 +1,8 @@
-use super::Error;
-use crate::{dispatch::Boxed, ids};
+use super::{
+    Error,
+    mcp_state::{Mcp, McpFile, McpPreference, McpStatus, read_private, write_private},
+};
+use crate::dispatch::Boxed;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -41,17 +44,9 @@ impl Preference for PreferenceFile {
     fn load(&self) -> Boxed<Result<bool, Error>> {
         let path = self.0.clone();
         Box::pin(async move {
-            let metadata = match tokio::fs::symlink_metadata(&path).await {
-                Ok(value) => value,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(_) => return Err(Error::Preference),
+            let Some(text) = read_private(&path).await? else {
+                return Ok(false);
             };
-            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 1024 {
-                return Err(Error::Preference);
-            }
-            let text = tokio::fs::read_to_string(path)
-                .await
-                .map_err(|_| Error::Preference)?;
             let parsed = parse_json(&text).map_err(|_| Error::Preference)?;
             Ok(
                 matches!(parsed, JsonValue::Object(object) if object.get(&"enabled".into()) == Some(&JsonValue::Bool(true))),
@@ -60,47 +55,12 @@ impl Preference for PreferenceFile {
     }
 
     fn save(&self, enabled: bool) -> Boxed<Result<(), Error>> {
-        let path = self.0.clone();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                if std::fs::symlink_metadata(&path)
-                    .is_ok_and(|info| info.file_type().is_symlink() || !info.is_file())
-                {
-                    return Err(Error::Preference);
-                }
-                let parent = path.parent().ok_or(Error::Preference)?;
-                std::fs::create_dir_all(parent).map_err(|_| Error::Preference)?;
-                let temp = parent.join(convert_id()?);
-                let mut options = std::fs::OpenOptions::new();
-                options.write(true).create_new(true);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::OpenOptionsExt;
-                    options.mode(0o600);
-                }
-                let mut file = options.open(&temp).map_err(|_| Error::Preference)?;
-                let result = (|| {
-                    use std::io::Write;
-                    write!(file, "{{\"enabled\":{enabled}}}").map_err(|_| Error::Preference)?;
-                    file.sync_all().map_err(|_| Error::Preference)?;
-                    std::fs::rename(&temp, &path).map_err(|_| Error::Preference)
-                })();
-                if result.is_err() {
-                    let _ = std::fs::remove_file(temp);
-                }
-                result
-            })
-            .await
-            .map_err(|_| Error::Preference)?
-        })
+        Box::pin(write_private(
+            self.0.clone(),
+            format!("{{\"enabled\":{enabled}}}"),
+            "remote-preference-",
+        ))
     }
-}
-
-fn convert_id() -> Result<String, Error> {
-    ids::prefixed("remote-preference-")
-        .map_err(|_| Error::Preference)?
-        .to_utf8()
-        .map_err(|_| Error::Preference)
 }
 
 struct Inner {
@@ -109,6 +69,7 @@ struct Inner {
     intent: watch::Sender<Intent>,
     status: watch::Sender<(Intent, Status)>,
     transition: tokio::sync::Mutex<()>,
+    mcp: Mcp,
 }
 
 #[derive(Clone)]
@@ -123,7 +84,30 @@ impl Control {
         .await)
     }
 
+    pub async fn open_with_home(state: &Path, home: &Path) -> Result<Self, Error> {
+        Ok(Self::load_with_mcp(
+            Arc::new(PreferenceFile(state.join("remote.json"))),
+            Arc::new(McpFile(state.join("remote-mcp.json"))),
+            Device::new(state).map_err(|_| Error::Setup)?,
+            home.to_path_buf(),
+        )
+        .await)
+    }
+
     pub async fn load(preference: Arc<dyn Preference>, device: Device) -> Self {
+        Self::build(preference, device, Mcp::unsupported()).await
+    }
+
+    pub async fn load_with_mcp(
+        preference: Arc<dyn Preference>,
+        mcp: Arc<dyn McpPreference>,
+        device: Device,
+        home: PathBuf,
+    ) -> Self {
+        Self::build(preference, device, Mcp::load(mcp, home).await).await
+    }
+
+    async fn build(preference: Arc<dyn Preference>, device: Device, mcp: Mcp) -> Self {
         let loaded = preference.load().await;
         let enabled = loaded.as_ref().copied().unwrap_or(false);
         let (intent, _) = watch::channel(Intent {
@@ -154,6 +138,7 @@ impl Control {
             intent,
             status,
             transition: tokio::sync::Mutex::new(()),
+            mcp,
         }))
     }
 
@@ -169,8 +154,29 @@ impl Control {
         self.0.status.subscribe()
     }
 
+    pub fn mcp_status(&self) -> McpStatus {
+        self.0.mcp.status()
+    }
+
+    pub fn mcp_observe(&self) -> watch::Receiver<McpStatus> {
+        self.0.mcp.observe()
+    }
+
+    pub async fn set_mcp(&self, enabled: bool) -> Result<McpStatus, Error> {
+        let _transition = self.0.transition.lock().await;
+        let remote = self.0.status.borrow().0.enabled;
+        self.0.mcp.set(enabled, remote).await
+    }
+
+    pub(crate) fn mcp(&self) -> &Mcp {
+        &self.0.mcp
+    }
+
     pub async fn set(&self, enabled: bool) -> Result<Status, Error> {
         let _transition = self.0.transition.lock().await;
+        if !enabled {
+            self.0.mcp.force_off().await;
+        }
         self.0.preference.save(enabled).await?;
         let previous = self.0.status.borrow().clone();
         if previous.0.enabled == enabled && (!enabled || previous.1.state != State::Error) {
@@ -215,6 +221,7 @@ impl Control {
     }
 
     pub(crate) fn stop(&self) {
+        self.0.mcp.close();
         let next = Intent {
             enabled: false,
             generation: self.0.status.borrow().0.generation.saturating_add(1),

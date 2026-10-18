@@ -21,6 +21,9 @@ impl OpenAIChat {
     }
 }
 impl Protocol for OpenAIChat {
+    fn response_formats(&self) -> &'static [&'static str] {
+        &["json"]
+    }
     fn id(&self) -> &'static str {
         "openai-chat"
     }
@@ -406,6 +409,23 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
             JsonValue::Array(stop.iter().cloned().map(s).collect()),
         );
     }
+    if let Some(schema) = crate::structured_output::request_schema(request) {
+        json::set(
+            &mut body,
+            "response_format",
+            json::object([
+                ("type", s("json_schema")),
+                (
+                    "json_schema",
+                    json::object([
+                        ("name", s("response")),
+                        ("schema", schema),
+                        ("strict", JsonValue::Bool(true)),
+                    ]),
+                ),
+            ]),
+        );
+    }
     Ok(pick(
         &json::merge(&body, &openai_options::lower(request, false)),
         &[
@@ -428,6 +448,7 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
             "presence_penalty",
             "seed",
             "stop",
+            "response_format",
         ],
     ))
 }

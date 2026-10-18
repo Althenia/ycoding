@@ -10,7 +10,7 @@ test("push HTTP reads the VAPID key and writes a bounded subscription through sa
   }, { preconnect: () => undefined }), baseURL: "https://relay.test" })
   expect(await http.key()).toEqual({ ok: true, value: { publicKey: "public" } })
   const input = { endpoint: "https://fcm.googleapis.com/send/a", keys: { p256dh: "public", auth: "secret" },
-    categories: { "agent-completed": true, "approval-requested": false, "machine-offline": true } }
+    categories: { "agent-completed": true, "approval-requested": false, "machine-offline": true, "quota-pace": true } }
   expect(await http.subscribe(input)).toEqual({ ok: true, value: undefined })
   expect(await http.remove(input.endpoint)).toEqual({ ok: true, value: undefined })
   expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([

@@ -6,9 +6,9 @@ use crate::resources::catalog::{
     field,
     models_dev::{date_millis, text},
 };
-use crate::resources::credential::Info;
+use crate::{event_feed::Data, resources::credential::Info};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -52,6 +52,8 @@ pub struct Service {
     auxiliary_errors: Arc<Mutex<BTreeMap<&'static str, Error>>>,
     preparation: crate::resources::auth::Preparation,
     claude: Option<crate::resources::auth::claude::Store>,
+    events: Option<crate::event_feed::Feed>,
+    alerts: super::pace_alerts::Evaluator,
 }
 type Observations = BTreeMap<(provider::Id, Option<LosslessString>), Snapshot>;
 impl Service {
@@ -77,6 +79,8 @@ impl Service {
             auxiliary_errors: Arc::new(Mutex::new(BTreeMap::new())),
             preparation: Default::default(),
             claude: None,
+            events: None,
+            alerts: super::pace_alerts::Evaluator::new(),
         })
     }
     pub fn with_version(mut self, version: &str) -> Self {
@@ -94,6 +98,10 @@ impl Service {
     }
     pub fn with_store(mut self, store: ycoding_store::Client) -> Self {
         self.store = Some(store);
+        self
+    }
+    pub fn with_events(mut self, events: crate::event_feed::Feed) -> Self {
+        self.events = Some(events);
         self
     }
     pub fn with_configuration(
@@ -152,7 +160,9 @@ impl Service {
         refresh: bool,
         now: i64,
     ) -> Snapshot {
-        self.bound(provider, credential_id, refresh, now).await.0
+        self.bound(provider, credential_id, refresh, now, false)
+            .await
+            .0
     }
     async fn bound(
         &self,
@@ -160,8 +170,10 @@ impl Service {
         credential_id: Option<&LosslessString>,
         refresh: bool,
         now: i64,
+        cached_only: bool,
     ) -> (Snapshot, Option<LosslessString>) {
         let label = label(&provider);
+        let alert_at = (!cached_only).then_some(now);
         let saved = match self.credentials.list(&provider.0) {
             Ok(saved) => saved,
             Err(_) => {
@@ -231,7 +243,7 @@ impl Service {
                 if saved.len() > 1 {
                     observed.profile = selected.map(|c| c.label().clone());
                 }
-                return self.bound_to(observed, profile_source);
+                return self.bound_to(observed, profile_source, alert_at);
             }
             let mut snapshot = ycoding_ai::muse::unreported(now);
             if saved.len() > 1 {
@@ -269,7 +281,7 @@ impl Service {
                 if saved.len() > 1 {
                     observed.profile = Some(current.label().clone());
                 }
-                return self.bound_to(observed, profile_source.clone());
+                return self.bound_to(observed, profile_source.clone(), alert_at);
             }
             return (observed.clone(), None);
         }
@@ -315,24 +327,29 @@ impl Service {
             selected.generation()
         );
         let selected = selected.clone();
-        let input = selected.clone();
-        let service = self.clone();
-        let provider_copy = provider.clone();
-        let label_copy = label.clone();
-        let result = self
-            .cache
-            .get(
-                key,
-                now,
-                if provider.0 == "anthropic".into() {
-                    300_000
-                } else {
-                    60_000
-                },
-                refresh,
-                move || async move { service.load(provider_copy, &label_copy, input, now).await },
-            )
-            .await;
+        let result = if cached_only {
+            self.cache
+                .peek(&key)
+                .and_then(|cached| cached.ok_or(Error::Request(None)))
+        } else {
+            let input = selected.clone();
+            let service = self.clone();
+            let provider_copy = provider.clone();
+            let label_copy = label.clone();
+            self.cache
+                .get(
+                    key,
+                    now,
+                    if provider.0 == "anthropic".into() {
+                        300_000
+                    } else {
+                        60_000
+                    },
+                    refresh,
+                    move || async move { service.load(provider_copy, &label_copy, input, now).await },
+                )
+                .await
+        };
         let mut snapshot = match result {
             Ok(snapshot) => snapshot,
             Err(
@@ -400,6 +417,9 @@ impl Service {
         }
         let account = super::super::account_identity(credential);
         self.record(&snapshot, &account);
+        if let Some(now) = alert_at {
+            self.alert(&snapshot, &account, now);
+        }
         if (profile_source.is_some() || credential_id.is_none())
             && let Ok(observations) = self.observations.lock()
             && let Some(observed) = observations.get(&(provider, profile_source.clone()))
@@ -411,14 +431,14 @@ impl Service {
                 if current.len() > 1 {
                     observed.profile = Some(credential.label().clone());
                 }
-                return self.bound_to(observed, profile_source.clone());
+                return self.bound_to(observed, profile_source.clone(), alert_at);
             }
             return (observed.clone(), None);
         }
         (snapshot, Some(account))
     }
     pub async fn list(&self, providers: &[provider::Id], refresh: bool, now: i64) -> Vec<Snapshot> {
-        self.bound_list(providers, refresh, now, true)
+        self.bound_list(providers, refresh, now, true, false)
             .await
             .into_iter()
             .map(|(snapshot, _)| snapshot)
@@ -430,6 +450,7 @@ impl Service {
         refresh: bool,
         now: i64,
         local: bool,
+        cached_only: bool,
     ) -> Vec<(Snapshot, Option<LosslessString>)> {
         let available = providers.iter().cloned().collect::<BTreeSet<_>>();
         let mut targets = Vec::new();
@@ -473,7 +494,7 @@ impl Service {
                     (
                         index,
                         service
-                            .bound(provider, credential.as_ref(), refresh, now)
+                            .bound(provider, credential.as_ref(), refresh, now, cached_only)
                             .await,
                     )
                 });
@@ -520,7 +541,13 @@ impl Service {
                     .map(|(_, snapshot)| (snapshot.clone(), None)),
             );
         }
-        if let Some(command) = &self.app_server {
+        if cached_only && self.app_server.is_some() {
+            if let Ok(Some(snapshot)) = self.cache.peek("openai:codex-app-server")
+                && available.contains(&snapshot.provider_id)
+            {
+                snapshots.push((snapshot, None));
+            }
+        } else if let Some(command) = &self.app_server {
             let command = command.clone();
             let result = self
                 .cache
@@ -614,6 +641,7 @@ impl Service {
         }
         if let Some(account) = &profile_source {
             self.record(&snapshot, account);
+            self.alert(&snapshot, account, snapshot.updated_at.get());
         }
         Ok(())
     }
@@ -637,7 +665,7 @@ impl Service {
                 .and_then(Result::ok)
             }
         };
-        let snapshots = self.bound_list(providers, false, as_of, false).await;
+        let snapshots = self.bound_list(providers, false, as_of, false, true).await;
         let quotas = self.history.lock().ok().map(|history| {
             snapshots
                 .iter()
@@ -645,12 +673,25 @@ impl Service {
                 .flat_map(|(snapshot, account)| {
                     let history = &history;
                     snapshot.windows.iter().map(move |window| {
+                        let semantics = super::forecast::semantics(&snapshot.provider_id, window);
+                        let pace = (snapshot.status == "available".into()
+                            && snapshot.updated_at.get() <= as_of
+                            && as_of - snapshot.updated_at.get() <= super::forecast::FRESHNESS)
+                            .then(|| super::pace::pace(window, semantics, as_of))
+                            .flatten()
+                            .map(|pace| usage_forecast::Pace {
+                                verdict: usage_forecast::PaceVerdict(pace.verdict.as_str().into()),
+                                projected_used_at_reset: pace.projected_used_at_reset,
+                                exhaustion_at: pace
+                                    .exhaustion_at
+                                    .and_then(|at| NonNegativeInt::new(at).ok()),
+                            });
                         let estimate = history.quota(super::forecast::QuotaRequest {
                             account: account.as_ref(),
                             snapshot,
                             window,
                             now: as_of,
-                            semantics: super::forecast::semantics(&snapshot.provider_id, window),
+                            semantics,
                             whole_window_mean: snapshot.provider_id.0 == "cursor".into()
                                 && window.id == "included".into(),
                         });
@@ -675,6 +716,7 @@ impl Service {
                                 .exhaustion_at
                                 .and_then(|at| NonNegativeInt::new(at).ok()),
                             projected_used_at_reset: estimate.projected_used_at_reset,
+                            pace,
                         }
                     })
                 })
@@ -706,13 +748,53 @@ impl Service {
             }
         }
     }
+    fn alert(&self, snapshot: &Snapshot, account: &LosslessString, now: i64) {
+        for window in &snapshot.windows {
+            let mut queue = VecDeque::from(self.alerts.observe(super::pace_alerts::Observation {
+                account: account.clone(),
+                provider_id: snapshot.provider_id.clone(),
+                available: snapshot.status == "available".into(),
+                updated_at: snapshot.updated_at.get(),
+                window: window.clone(),
+                semantics: super::forecast::semantics(&snapshot.provider_id, window),
+                now,
+            }));
+            while let Some(delivery) = queue.pop_front() {
+                let sent = self.publish(delivery.alert());
+                queue.extend(delivery.settle(sent));
+            }
+        }
+    }
+    fn publish(&self, alert: &super::pace_alerts::Alert) -> bool {
+        let (Some(events), Ok(reset_at)) = (&self.events, NonNegativeInt::new(alert.reset_at))
+        else {
+            return false;
+        };
+        events
+            .emit(
+                Data::ProviderQuotaPace(Box::new(provider_usage::QuotaPaceAlert {
+                    provider_id: alert.provider_id.clone(),
+                    window_id: alert.window_id.clone(),
+                    milestone: provider_usage::PaceMilestone(alert.milestone.as_str().into()),
+                    reset_at,
+                    title: alert.milestone.title().into(),
+                    body: alert.milestone.body().into(),
+                })),
+                None,
+            )
+            .is_ok()
+    }
     fn bound_to(
         &self,
         snapshot: Snapshot,
         account: Option<LosslessString>,
+        alert_at: Option<i64>,
     ) -> (Snapshot, Option<LosslessString>) {
         if let Some(account) = &account {
             self.record(&snapshot, account);
+            if let Some(now) = alert_at {
+                self.alert(&snapshot, account, now);
+            }
         }
         (snapshot, account)
     }

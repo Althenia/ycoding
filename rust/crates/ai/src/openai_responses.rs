@@ -39,6 +39,9 @@ impl OpenAIResponses {
     }
 }
 impl Protocol for OpenAIResponses {
+    fn response_formats(&self) -> &'static [&'static str] {
+        &["json"]
+    }
     fn id(&self) -> &'static str {
         "openai-responses"
     }
@@ -727,6 +730,21 @@ pub fn lower(request: &Request) -> Result<JsonValue, Error> {
         if let Some(value) = value {
             json::set(&mut body, key, JsonValue::Number(value));
         }
+    }
+    if let Some(schema) = crate::structured_output::request_schema(request) {
+        json::set(
+            &mut body,
+            "text",
+            json::object([(
+                "format",
+                json::object([
+                    ("type", s("json_schema")),
+                    ("name", s("response")),
+                    ("schema", schema),
+                    ("strict", JsonValue::Bool(true)),
+                ]),
+            )]),
+        );
     }
     Ok(pick(
         &json::merge(&body, &openai_options::lower(request, true)),

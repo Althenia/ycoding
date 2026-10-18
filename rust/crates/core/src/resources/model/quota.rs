@@ -12,6 +12,8 @@ use ycoding_schema::{
     schema::NonNegativeInt,
 };
 pub mod forecast;
+pub mod pace;
+pub mod pace_alerts;
 mod service;
 pub use service::{Endpoints, Service};
 pub use ycoding_ai::muse::{normalize_usage, unreported};
@@ -196,6 +198,13 @@ impl Cache {
             }
             receiver.changed().await.map_err(|_| Error::Worker)?;
         }
+    }
+    pub fn peek(&self, key: &str) -> Result<Option<Snapshot>, Error> {
+        let state = self.0.lock().map_err(|_| Error::Worker)?;
+        if state.closed {
+            return Err(Error::Closed);
+        }
+        Ok(state.entries.get(key).and_then(|entry| entry.value.clone()))
     }
     pub fn put(&self, key: String, snapshot: Snapshot, now: i64, ttl: i64) -> Result<(), Error> {
         let mut state = self.0.lock().map_err(|_| Error::Worker)?;

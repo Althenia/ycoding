@@ -245,6 +245,551 @@ fn snapshot_report_staging_keeps_canonical_writes_free_and_rechecks_privacy() {
         ));
     });
 }
+
+#[test]
+fn snapshot_report_reuses_same_view_and_restages_after_unrecorded_write() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    let totals = |count: i64, sum: i64| vec![vec![vec![Value::BigInt(count), Value::BigInt(sum)]]];
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    let old = store.snapshot().unwrap();
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    let held = (0..7)
+        .map(|_| store.snapshot().unwrap())
+        .collect::<Vec<_>>();
+    assert!(matches!(store.snapshot(), Err(Error::SnapshotLimit)));
+    drop(held);
+    let order = delivery(&store).order;
+    store
+        .submit(|tx| {
+            tx.put::<Facts>(&Fact {
+                id: 3,
+                amount: 30,
+                scope: b"scope".to_vec(),
+            })
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(delivery(&store).order, order);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(3, 60)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 5);
+    assert_eq!(
+        engine
+            .report_snapshot(old, &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 7);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(3, 60)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 10);
+    put(&store, 4, 40);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(4, 100)
+    );
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn idle_mirror_reads_do_not_invalidate_staged_snapshot_report() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    assert_report(&engine, &[10, 20]);
+    let settled = delivery(&store);
+    assert!(settled.valid && !settled.rebuilding);
+    assert_eq!(settled.applied, settled.order);
+    assert_eq!(settled.intents, 0);
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    let totals = |count: i64, sum: i64| vec![vec![vec![Value::BigInt(count), Value::BigInt(sum)]]];
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    engine.notify().unwrap();
+    assert_report(&engine, &[10, 20]);
+    let idle = delivery(&store);
+    assert_eq!(idle.order, settled.order);
+    assert_eq!(idle.applied, settled.applied);
+    assert_eq!(idle.intents, 0);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    put(&store, 3, 30);
+    assert_report(&engine, &[10, 20, 30]);
+    let caught_up = delivery(&store);
+    assert_eq!(caught_up.applied, caught_up.order);
+    assert_eq!(caught_up.intents, 0);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(3, 60)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 5);
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn empty_and_read_only_transactions_keep_staged_snapshot_report() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    let totals = |count: i64, sum: i64| vec![vec![vec![Value::BigInt(count), Value::BigInt(sum)]]];
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    store.submit(|_| Ok(())).unwrap().wait().unwrap();
+    let read = store
+        .submit(|tx| Ok(tx.get::<Facts>(&1_u64.to_be_bytes())?.map(|row| row.amount)))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(read, Some(10));
+    let removed = store
+        .submit(|tx| tx.delete::<Facts>(&999_u64.to_be_bytes()))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert!(!removed);
+    let (_, snapshot) = store
+        .submit_with_snapshot(|_| Ok(()))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        engine
+            .report_snapshot(snapshot, &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    let removed = store
+        .submit(|tx| tx.delete::<Facts>(&2_u64.to_be_bytes()))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert!(removed);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(1, 10)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 3);
+    store
+        .submit(|tx| {
+            tx.put::<Facts>(&Fact {
+                id: 2,
+                amount: 20,
+                scope: b"scope".to_vec(),
+            })
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 5);
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn snapshot_report_changed_source_selection_restages() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let columns: &'static [Column] = Box::leak(Box::new([Column {
+        name: "amount",
+        kind: ColumnType::Integer,
+    }]));
+    let sources: &'static [Source] = Box::leak(Box::new([
+        Source {
+            name: "cache_source_a",
+            version: 1,
+            columns,
+            allowed,
+            load,
+            page,
+        },
+        Source {
+            name: "cache_source_b",
+            version: 1,
+            columns,
+            allowed,
+            load,
+            page,
+        },
+    ]));
+    let engine = Engine::start(store.client(), root.0.join("derived"), sources).unwrap();
+    engine.rebuild().unwrap();
+    let one = || {
+        vec![Query {
+            sql: "SELECT count(*) FROM report_cache_source_a",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    let both = || {
+        vec![Query {
+            sql: "SELECT (SELECT count(*) FROM report_cache_source_a)::BIGINT, (SELECT count(*) FROM report_cache_source_b)::BIGINT",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["cache_source_a"], one())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["cache_source_a"], one())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        engine
+            .report_snapshot(
+                store.snapshot().unwrap(),
+                &["cache_source_a", "cache_source_b"],
+                both()
+            )
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(2)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 6);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["cache_source_a"], one())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 8);
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn snapshot_report_cache_refuses_after_privacy_purge() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    let old = store.snapshot().unwrap();
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    store
+        .submit(|tx| {
+            tx.put::<Consent>(&false)?;
+            analytics::privacy_changed(tx, b"scope".to_vec(), true)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert!(matches!(
+        engine.report_snapshot(old, &["test_metrics"], query()),
+        Err(analytics::Error::Privacy)
+    ));
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    engine.purge().unwrap();
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(0), Value::BigInt(0)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    engine.shutdown().unwrap();
+}
+#[test]
+fn snapshot_report_reuses_staging_across_derived_metadata_and_unrelated_writes() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    let totals = |count: i64, sum: i64| vec![vec![vec![Value::BigInt(count), Value::BigInt(sum)]]];
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    let settled = delivery(&store);
+    store
+        .submit(move |tx| {
+            let mut current = tx.get::<DeliveryTable>(&[])?.unwrap();
+            current.generation += 1;
+            current.applied = current.order;
+            current.rebuilding = !current.rebuilding;
+            tx.put::<DeliveryTable>(&current)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let metadata_only = delivery(&store);
+    assert_eq!(metadata_only.identity, settled.identity);
+    assert_eq!(metadata_only.source_generation, settled.source_generation);
+    assert_eq!(metadata_only.privacy, settled.privacy);
+    assert_eq!(metadata_only.order, settled.order);
+    assert_ne!(metadata_only.generation, settled.generation);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    store
+        .submit(|tx| {
+            tx.put::<IntentTable>(&analytics::Intent {
+                source: "test_metrics".to_owned(),
+                identity: vec![9; 8],
+                order: u64::MAX,
+                generation: u64::MAX,
+                delete: false,
+            })
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn snapshot_report_restages_when_only_consent_changes() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    let totals = |count: i64, sum: i64| vec![vec![vec![Value::BigInt(count), Value::BigInt(sum)]]];
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    let settled = delivery(&store);
+    store
+        .submit(|tx| tx.put::<Consent>(&false))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let consent_only = delivery(&store);
+    assert_eq!(consent_only.privacy, settled.privacy);
+    assert_eq!(consent_only.order, settled.order);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(0, 0)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 4);
+    store
+        .submit(|tx| tx.put::<Consent>(&true))
+        .unwrap()
+        .wait()
+        .unwrap();
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        totals(2, 30)
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 6);
+    engine.shutdown().unwrap();
+}
+
+#[test]
+fn failed_snapshot_report_never_publishes_its_staging() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let engine = root.engine(&store);
+    engine.rebuild().unwrap();
+    let query = || {
+        vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }]
+    };
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert!(
+        engine
+            .report_snapshot(
+                store.snapshot().unwrap(),
+                &["test_metrics"],
+                vec![Query {
+                    sql: "SELECT missing FROM report_test_metrics",
+                    parameters: vec![],
+                    max_rows: 1,
+                }],
+            )
+            .is_err()
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 4);
+    assert_eq!(
+        engine
+            .report_snapshot(store.snapshot().unwrap(), &["test_metrics"], query())
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 4);
+    engine.shutdown().unwrap();
+}
 static SOURCES: &[Source] = &[Source {
     name: "test_metrics",
     version: 1,
@@ -1665,4 +2210,297 @@ fn selected_older_canonical_restore_can_restore_rows_and_consent_after_generatio
         .unwrap();
     assert_eq!(active.source_generation, 2);
     assert!(active.valid && !active.rebuilding);
+}
+
+fn delivery(store: &Store) -> analytics::Delivery {
+    store
+        .snapshot()
+        .unwrap()
+        .get::<DeliveryTable>(&[])
+        .unwrap()
+        .unwrap()
+}
+
+fn seed_facts(store: &Store, rows: u64) {
+    store
+        .submit(move |tx| {
+            for id in 0..rows {
+                tx.put::<Facts>(&Fact {
+                    id,
+                    amount: id as i64,
+                    scope: b"scope".to_vec(),
+                })?;
+            }
+            Ok(())
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+}
+
+fn mirror_totals(engine: &Engine) -> Vec<Value> {
+    engine
+        .report(vec![Query {
+            sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM test_metrics",
+            parameters: vec![],
+            max_rows: 1,
+        }])
+        .unwrap()[0][0]
+        .clone()
+}
+
+fn derived_files(root: &Root) -> Vec<PathBuf> {
+    std::fs::read_dir(root.0.join("derived"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "duckdb"))
+        .collect()
+}
+
+fn cancel_inline_rebuild(engine: &Engine) {
+    let (reached, started) = mpsc::channel();
+    let (release, barrier) = mpsc::channel();
+    *PAGE_BARRIER.lock().unwrap() = Some((reached, barrier));
+    let cancellation = analytics::Cancellation::default();
+    let signal = cancellation.clone();
+    let handle = engine.handle();
+    std::thread::scope(|scope| {
+        let running = scope.spawn(|| {
+            handle.report_cancellable(
+                vec![Query {
+                    sql: "SELECT count(*) FROM test_metrics",
+                    parameters: vec![],
+                    max_rows: 1,
+                }],
+                signal,
+            )
+        });
+        started.recv_timeout(Duration::from_secs(20)).unwrap();
+        cancellation.cancel();
+        release.send(()).unwrap();
+        assert!(matches!(
+            running.join().unwrap(),
+            Err(analytics::Error::Cancelled)
+        ));
+    });
+}
+
+#[test]
+fn cancelled_inline_rebuild_resumes_its_generation_instead_of_restarting() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let rows = analytics::BATCH_SIZE as u64 * 3 + 5;
+    seed_facts(&store, rows);
+    let engine = root.engine(&store);
+    cancel_inline_rebuild(&engine);
+    let interrupted = delivery(&store);
+    assert!(interrupted.valid && interrupted.rebuilding);
+    engine.rebuild().unwrap();
+    let rebuilt = delivery(&store);
+    assert!(rebuilt.valid && !rebuilt.rebuilding);
+    assert_eq!(rebuilt.generation, interrupted.generation);
+    assert_eq!(rebuilt.applied, rebuilt.order);
+    assert_eq!(
+        mirror_totals(&engine),
+        vec![
+            Value::BigInt(rows as i64),
+            Value::BigInt((0..rows as i64).sum())
+        ]
+    );
+    engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
+}
+
+#[test]
+fn interrupted_rebuild_restarts_after_invalidation_and_catches_up_new_changes() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let rows = analytics::BATCH_SIZE as u64 * 3 + 5;
+    seed_facts(&store, rows);
+    let engine = root.engine(&store);
+    cancel_inline_rebuild(&engine);
+    let interrupted = delivery(&store);
+    allow(&store);
+    delete(&store, 0);
+    put(&store, rows, 1_000);
+    engine.rebuild().unwrap();
+    let rebuilt = delivery(&store);
+    assert!(rebuilt.valid && !rebuilt.rebuilding);
+    assert!(rebuilt.generation > interrupted.generation);
+    assert_eq!(
+        mirror_totals(&engine),
+        vec![
+            Value::BigInt(rows as i64),
+            Value::BigInt((1..rows as i64).sum::<i64>() + 1_000)
+        ]
+    );
+    engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
+}
+
+#[test]
+fn purge_after_an_interrupted_rebuild_rebuilds_without_purged_scope() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let rows = analytics::BATCH_SIZE as u64 * 3 + 5;
+    seed_facts(&store, rows);
+    let engine = root.engine(&store);
+    cancel_inline_rebuild(&engine);
+    store
+        .submit(|tx| {
+            tx.put::<Consent>(&false)?;
+            analytics::privacy_changed(tx, b"scope".to_vec(), true)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    engine.purge().unwrap();
+    let purged = delivery(&store);
+    assert!(purged.valid && !purged.rebuilding && !purged.purge_all && purged.purges.is_empty());
+    assert_eq!(
+        mirror_totals(&engine),
+        vec![Value::BigInt(0), Value::BigInt(0)]
+    );
+    engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
+}
+
+#[test]
+fn shutdown_during_an_interrupted_rebuild_leaves_one_activated_generation_after_restart() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let rows = analytics::BATCH_SIZE as u64 * 3 + 5;
+    seed_facts(&store, rows);
+    let engine = root.engine(&store);
+    cancel_inline_rebuild(&engine);
+    engine.shutdown().unwrap();
+    assert!(delivery(&store).rebuilding);
+    let engine = root.engine(&store);
+    assert_eq!(
+        mirror_totals(&engine),
+        vec![
+            Value::BigInt(rows as i64),
+            Value::BigInt((0..rows as i64).sum())
+        ]
+    );
+    let active = delivery(&store);
+    assert!(active.valid && !active.rebuilding);
+    engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
+}
+
+fn slice_rows() -> u64 {
+    (analytics::BATCH_SIZE * analytics::REBUILD_SLICE_PAGES * 2 + 5) as u64
+}
+
+fn maintain_to_completion(engine: &Engine) -> usize {
+    let mut pending = 0;
+    loop {
+        match engine.maintain().unwrap() {
+            analytics::Maintenance::Pending => pending += 1,
+            analytics::Maintenance::Complete => return pending,
+        }
+        assert!(pending < 1_000, "maintenance never completed");
+    }
+}
+
+#[test]
+fn maintenance_rebuilds_in_bounded_slices_that_interleave_snapshot_reads() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    let rows = slice_rows();
+    seed_facts(&store, rows);
+    let engine = root.engine(&store);
+    assert_eq!(analytics::REBUILD_SLICE_PAGES, 64);
+    SOURCE_PAGE.store(0, Ordering::Relaxed);
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    assert!(matches!(
+        engine.maintain().unwrap(),
+        analytics::Maintenance::Pending
+    ));
+    let first = delivery(&store);
+    assert!(first.valid && first.rebuilding);
+    assert!(SOURCE_PAGE.load(Ordering::Relaxed) <= analytics::BATCH_SIZE as u64);
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 128 * 64);
+    assert_eq!(
+        engine
+            .report_snapshot(
+                store.snapshot().unwrap(),
+                &["test_metrics"],
+                vec![Query {
+                    sql: "SELECT count(*), sum(amount)::BIGINT FROM report_test_metrics",
+                    parameters: vec![],
+                    max_rows: 1,
+                }],
+            )
+            .unwrap(),
+        vec![vec![vec![
+            Value::BigInt(rows as i64),
+            Value::BigInt((0..rows as i64).sum())
+        ]]]
+    );
+    assert!(delivery(&store).rebuilding);
+    put(&store, rows, 7);
+    assert!(maintain_to_completion(&engine) >= 1);
+    let done = delivery(&store);
+    assert!(done.valid && !done.rebuilding);
+    assert_eq!(done.generation, first.generation);
+    assert_eq!(done.applied, done.order);
+    assert_eq!(
+        mirror_totals(&engine),
+        vec![
+            Value::BigInt(rows as i64 + 1),
+            Value::BigInt((0..rows as i64).sum::<i64>() + 7)
+        ]
+    );
+    assert!(matches!(
+        engine.maintain().unwrap(),
+        analytics::Maintenance::Complete
+    ));
+    assert_eq!(delivery(&store).generation, done.generation);
+    engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
+}
+
+#[test]
+fn maintenance_abandons_a_stale_slice_after_privacy_purge() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let root = Root::new();
+    let store = root.store();
+    allow(&store);
+    seed_facts(&store, slice_rows());
+    let engine = root.engine(&store);
+    assert!(matches!(
+        engine.maintain().unwrap(),
+        analytics::Maintenance::Pending
+    ));
+    let first = delivery(&store);
+    store
+        .submit(|tx| {
+            tx.put::<Consent>(&false)?;
+            analytics::privacy_changed(tx, b"scope".to_vec(), true)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    maintain_to_completion(&engine);
+    let done = delivery(&store);
+    assert!(done.valid && !done.rebuilding && !done.purge_all && done.purges.is_empty());
+    assert!(done.generation > first.generation);
+    assert_eq!(
+        mirror_totals(&engine),
+        vec![Value::BigInt(0), Value::BigInt(0)]
+    );
+    engine.shutdown().unwrap();
+    assert_eq!(derived_files(&root).len(), 1);
 }

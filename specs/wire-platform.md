@@ -113,3 +113,11 @@ Enrollment declares the closed error union `RemoteEnrollmentError`, `RemoteEnrol
 The one-use code is SECRET, explicitly marked `payload.code`; the operation is SECRET. Foundation request-byte/field limits and typed-result bulk/credit limits apply. A lost response or cancellation after dispatch can leave enrollment outcome unknown; clients never automatically replay enrollment or replace an existing identity. Explicit replacement does not promise revocation of the old relay device; owner revocation remains a relay/account action. No credential-removal operation is allocated: `commands/handlers/remote/disconnect.ts:19` uses `remote.set({ enabled: false })`, and the CLI remote command inventory has no removal command.
 
 Frontend-boundary TS/Rust round-trip tests and generated client tests cover these shapes, errors and local-only admission. They do not implement enrollment, persistence, key generation or relay authorization.
+
+## Relay MCP machine controls
+
+`remote.mcp.get` (3054, READ) and `remote.mcp.set` (3055, MUTATION) permit **LOCAL_CLIENT only**, with Machine scope, COMPLETED, UNPAGED, TYPED_BULK and PRIVATE sensitivity. REMOTE_CLIENT, RELAY, AGENT and SERVER cannot originate them. They are native frontend-boundary operations in the `frontend_remote` service; no HTTP endpoint exists. The get request is empty; the set request is `payload: { enabled }` with a required boolean.
+
+Both succeed with `data: RemoteMcpStatus`: required `state` (tag 1) reusing the `remote.get` state vocabulary off=1, connecting=2, on=3, error=4; optional `message` (tag 2); optional device resource `url` (tag 3). Absent `message` and `url` are unreported, not empty. Both declare `UnauthorizedError` and `InvalidRequestError`. Enabling requires a connected Remote; disabling revokes relay client grants. The generated local client exposes `remote.mcp.get()` and `remote.mcp.set({ enabled })`.
+
+Agent-to-relay synchronization uses foundation Control `mcp_state` (tag 14, AGENT only) with `McpState { id, enabled, epoch }`; the relay answers with `mcp_state_ack` (tag 15, RELAY only) carrying the same fields. `id` and `epoch` are 1–64 characters from `[A-Za-z0-9_-]`; the Protocol connection rejects other values as malformed in both directions.

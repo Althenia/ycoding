@@ -14,6 +14,8 @@ Annotate fields with `(ycoding.v5.constraints)`. `integer_min` and `integer_max`
 
 At wire-to-domain conversion, `ycoding-schema` must enforce every obligation before a handler runs. Schema-port lanes own those domain validators and real-Effect accept/reject goldens. Map conversion rejection to the same validation-error class as structural rejection. Neither table generation nor a successful structural decode proves domain obligations satisfied.
 
+Native source identities use `rust/crates/{schema,core,runtime}/src/<module>.rs#<symbol>`, including qualified Rust symbols separated by `::`. Keep module paths repository-relative with nonempty components; traversal, other crate roots and missing symbols are invalid. Both metadata readers retain the TypeScript source identities and accept native owners under these three roots.
+
 Check generation rejection with `bun test --cwd packages/protocol test/operation-generation.test.ts test/field-constraints.test.ts` and `cargo test -p ycoding-protocol` from `rust`. Use `--check-operations <fixture.proto>` on the TypeScript generator for read-only fixture validation; it writes only to a temporary directory. Adding canonical proto files changes the contract digest; regenerate digest-bearing foundation vectors through their owning generator, never by editing binary goldens.
 
 ## Sans-IO connection API

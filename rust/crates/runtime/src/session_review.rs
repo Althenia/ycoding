@@ -305,6 +305,14 @@ fn reason(reason: Reason) -> i32 {
         Reason::Timeout => 7,
         Reason::SleepEntry => 8,
         Reason::Restart => 9,
+        Reason::Unavailable => 10,
+        Reason::InvalidRequest => 11,
+        Reason::ProviderFailed => 12,
+        Reason::InputTooLarge => 13,
+        Reason::InvalidOutput => 14,
+        Reason::TruncatedOutput => 15,
+        Reason::UnsupportedOutput => 16,
+        Reason::ConflictingGrades => 17,
     }
 }
 

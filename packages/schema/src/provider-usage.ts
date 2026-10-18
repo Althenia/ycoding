@@ -1,6 +1,7 @@
 export * as ProviderUsage from "./provider-usage.js"
 
 import { Schema } from "effect"
+import { ephemeral, inventory } from "./event.js"
 import { Provider } from "./provider.js"
 import { NonNegativeInt, optional } from "./schema.js"
 
@@ -63,3 +64,24 @@ export class Observation extends Schema.Class<Observation>("ProviderUsage.Observ
   observedAt: NonNegativeInt,
   windows: Schema.Array(Window),
 }) {}
+
+export const PaceMilestone = Schema.Literals(["almost-out", "cutting-it-close", "will-run-out"]).annotate({
+  identifier: "ProviderUsage.PaceMilestone",
+})
+export type PaceMilestone = typeof PaceMilestone.Type
+
+const quotaPaceAlertFields = {
+  providerID: Provider.ID,
+  windowID: Schema.String.check(Schema.isNonEmpty()),
+  milestone: PaceMilestone,
+  resetAt: NonNegativeInt,
+  title: Schema.String.check(Schema.isNonEmpty()),
+  body: Schema.String.check(Schema.isNonEmpty()),
+}
+
+export class QuotaPaceAlert extends Schema.Class<QuotaPaceAlert>("ProviderUsage.QuotaPaceAlert")(
+  quotaPaceAlertFields,
+) {}
+
+const QuotaPace = ephemeral({ type: "provider.quota.pace", schema: quotaPaceAlertFields })
+export const Event = { QuotaPace, Definitions: inventory(QuotaPace) }

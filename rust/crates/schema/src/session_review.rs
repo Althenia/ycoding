@@ -9,7 +9,7 @@ use crate::{
 
 crate::schema::string_type!(Id, "rvw_");
 crate::schema::literal_enum_type!(Kind,{Question=>"question",SubagentQuestion=>"subagent_question",Guardrail=>"guardrail",Permission=>"permission",Recovery=>"recovery"});
-crate::schema::literal_enum_type!(Reason,{Disabled=>"disabled",FreeText=>"free_text",Refused=>"refused",LowConfidence=>"low_confidence",Escalated=>"escalated",Error=>"error",Timeout=>"timeout",SleepEntry=>"sleep_entry",Restart=>"restart"});
+crate::schema::literal_enum_type!(Reason,{Disabled=>"disabled",FreeText=>"free_text",Refused=>"refused",LowConfidence=>"low_confidence",Escalated=>"escalated",Error=>"error",Timeout=>"timeout",SleepEntry=>"sleep_entry",Restart=>"restart",Unavailable=>"unavailable",InvalidRequest=>"invalid-request",ProviderFailed=>"provider-failed",InputTooLarge=>"input-too-large",InvalidOutput=>"invalid-output",TruncatedOutput=>"truncated-output",UnsupportedOutput=>"unsupported-output",ConflictingGrades=>"conflicting_grades"});
 crate::schema::literal_enum_type!(RecoveryChoice,{Continue=>"continue",Stop=>"stop"});
 crate::schema::literal_enum_type!(Dismissable,{Question=>"question",SubagentQuestion=>"subagent_question"});
 

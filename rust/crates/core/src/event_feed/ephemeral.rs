@@ -1,8 +1,8 @@
 use ycoding_schema::{
     DomainDecode, DomainEncode, JsonPath, JsonValue, LosslessString, ObjectDecoder, ObjectEncoder,
     agent, catalog, command, config, filesystem, form, guardrail, installation_event, integration,
-    mcp_event, models_dev, permission, plugin, project_directories, pty, question, session,
-    session_cache_diagnostics, session_message, session_status_event, session_todo, shell,
+    mcp_event, models_dev, permission, plugin, project_directories, provider_usage, pty, question,
+    session, session_cache_diagnostics, session_message, session_status_event, session_todo, shell,
     tui_event, vcs_event,
 };
 
@@ -126,6 +126,7 @@ events! {
     FormTimedOut(form::TimedOutData) => "form.timed_out",
     FormDeferred(form::DeferredData) => "form.deferred",
     TodoUpdated(session_todo::UpdatedData) => "todo.updated",
+    ProviderQuotaPace(provider_usage::QuotaPaceAlert) => "provider.quota.pace",
     SessionStatus(session_status_event::StatusData) => "session.status",
     SessionIdle(session_status_event::IdleData) => "session.idle",
     TuiPromptAppend(tui_event::PromptAppendData) => "tui.prompt.append",

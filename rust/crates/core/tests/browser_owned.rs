@@ -42,6 +42,42 @@ fn setup() -> (Arc<Bridge>, tokio::sync::mpsc::UnboundedReceiver<Value>) {
 }
 
 #[tokio::test]
+async fn an_extension_rejected_open_is_invalid_without_exposing_page_content_or_replaying() {
+    let (bridge, mut frames) = setup();
+    let input: browser::OpenInput = decode(
+        json!({"sessionID":"ses_owner","generation":1,"url":"https://example.test/redirect","callID":"rejected-open"}),
+    );
+    let opening = tokio::spawn({
+        let bridge = bridge.clone();
+        let input = input.clone();
+        async move { bridge.open(input).await }
+    });
+    let request = frames.recv().await.unwrap();
+    receive(
+        &bridge,
+        json!({"type":"error","callID":request["callID"],"tabID":request["tabID"],"generation":request["generation"],"dispatched":false,"message":"synthetic-private-redirect-content"}),
+    );
+    let error = opening.await.unwrap().unwrap_err();
+    assert!(matches!(
+        error,
+        ycoding_core::platform::browser::bridge::Error::InvalidFrame(_)
+    ));
+    assert!(
+        !error
+            .to_string()
+            .contains("synthetic-private-redirect-content")
+    );
+    assert!(
+        bridge
+            .list(&SessionId::new("ses_owner").unwrap())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(bridge.open(input).await.is_err());
+    assert!(frames.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn fenced_open_and_close_are_session_owned_and_never_reuse_call_identity() {
     let (bridge, mut frames) = setup();
     let open: browser::OpenInput = decode(

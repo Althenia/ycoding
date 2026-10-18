@@ -2,6 +2,7 @@ import { render } from "solid-js/web"
 import { createRemoteHttp } from "../src/remote/http"
 import { RemoteProvider } from "../src/remote/context"
 import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "../src/remote/store"
+import { quotaCopy } from "../src/remote/alert"
 import type { RemoteNotificationView } from "../src/remote/notifications"
 import { NotificationCenter, ToastLayer } from "../src/remote/ui/notifications"
 import "../src/styles/tokens.css"
@@ -25,6 +26,7 @@ const syncState = (notifications: readonly RemoteNotificationView[]): RemoteStor
 base.container.setState((state) => ({ ...state, notifications: initial, noticeSync: syncState(initial) }))
 let serial = 0
 const opened: string[] = []
+const openedUsage: string[] = []
 const publish = (notifications: readonly RemoteNotificationView[]) => {
   base.container.setState((state) => ({ ...state, notifications, noticeSync: syncState(notifications) }))
 }
@@ -42,7 +44,12 @@ Object.assign(window, {
     publish([entry, ...base.state().notifications].slice(0, 50))
   },
   remoteResolveTitle: (sessionID: string, title: string) => publish(base.state().notifications.map((entry) => entry.sessionID === sessionID ? { ...entry, sessionTitle: title } : entry)),
+  remoteNotifyQuota: (milestone: "almost-out" | "cutting-it-close" | "will-run-out" = "almost-out", deviceID = "dev_studio") => {
+    const copy = quotaCopy(milestone)
+    publish([{ id: `quota_${deviceID}_${++serial}`, category: "quota-pace" as const, at: Date.now(), deviceID, synced: false, live: true, ...copy }, ...base.state().notifications].slice(0, 50))
+  },
   remoteOpened: () => opened.slice(),
+  remoteOpenedUsage: () => openedUsage.slice(),
 })
 const root = document.getElementById("app")
 if (!root) throw new Error("Missing notifications fixture root")
@@ -50,7 +57,7 @@ render(() => <RemoteProvider createStore={() => store}>
   <main style={{ "min-height": "100dvh", background: "var(--yc-bg)", color: "var(--yc-text)" }}>
     <header data-toast-clearance style={{ display: "flex", "align-items": "center", "justify-content": "space-between", height: "var(--yc-header-h)", padding: "0 var(--yc-gutter)", "border-bottom": "1px solid var(--yc-border)", background: "var(--yc-surface-raised)" }}>
       <strong>YCoding</strong>
-      <NotificationCenter onOpenSession={(id) => opened.push(id)} />
+      <NotificationCenter onOpenSession={(id) => opened.push(id)} onOpenUsage={(id) => openedUsage.push(id)} />
     </header>
     <p style={{ padding: "var(--yc-space-6) var(--yc-gutter)" }}>Conversation workspace</p>
     <ToastLayer sessionID={undefined} onOpenSession={(id) => opened.push(id)} />

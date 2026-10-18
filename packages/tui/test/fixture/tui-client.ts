@@ -250,6 +250,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
         },
       })
     if (url.pathname === "/api/remote") return json({ data: { state: "off" } })
+    if (url.pathname === "/api/remote/mcp") return json({ data: { state: "off" } })
     if (url.pathname === "/api/keep-awake") return json({ data: { state: "off" } })
     if (url.pathname === "/api/server/telemetry/consent")
       return json({ consent: { enabled: false, noticeVersion: 1, decidedAt: 0 }, noticeVersion: 1 })

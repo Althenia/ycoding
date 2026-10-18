@@ -896,15 +896,23 @@ async fn unqualified_tied_or_conflicting_grades_escalate_with_their_provenance()
             "qualifying approval conflicts with qualifying rejection",
             ordinary(),
             ordinary_grades(0.1, 0.85, 0.82, 0.1),
-            session_review::Reason::Escalated,
+            session_review::Reason::ConflictingGrades,
             guardrail::DecisionChoice::Approve,
             0.85,
+        ),
+        (
+            "highest explicit escalation also has conflicting qualifying grades",
+            ordinary(),
+            ordinary_grades(0.1, 0.85, 0.82, 0.9),
+            session_review::Reason::Escalated,
+            guardrail::DecisionChoice::Escalate,
+            0.9,
         ),
         (
             "qualifying approve_all conflicts with qualifying rejection",
             ordinary(),
             ordinary_grades(0.92, 0.1, 0.95, 0.1),
-            session_review::Reason::Escalated,
+            session_review::Reason::ConflictingGrades,
             guardrail::DecisionChoice::Reject,
             0.95,
         ),
@@ -940,19 +948,19 @@ async fn refusal_failure_invalid_grades_and_deadline_escalate_without_grades() {
             "provider failure",
             ordinary(),
             Reply::Failure(decision::Error::ProviderFailed),
-            session_review::Reason::Error,
+            session_review::Reason::ProviderFailed,
         ),
         (
             "invalid output",
             ordinary(),
             Reply::Failure(decision::Error::InvalidOutput),
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
         ),
         (
             "missing offered choice",
             ordinary(),
             hard_grades(0.99, 0.1, 0.1),
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
         ),
         (
             "duplicate choice",
@@ -963,13 +971,13 @@ async fn refusal_failure_invalid_grades_and_deadline_escalate_without_grades() {
                 ("approve", 0.99, "c"),
                 ("escalate", 0.1, "d"),
             ]),
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
         ),
         (
             "unoffered approve_all on a hard review",
             hard(),
             ordinary_grades(0.99, 0.1, 0.1, 0.1),
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
         ),
         (
             "blank evidence",
@@ -980,13 +988,13 @@ async fn refusal_failure_invalid_grades_and_deadline_escalate_without_grades() {
                 ("reject", 0.1, "c"),
                 ("escalate", 0.1, "d"),
             ]),
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
         ),
         (
             "out-of-range confidence",
             ordinary(),
             ordinary_grades(0.1, 1.5, 0.1, 0.1),
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
         ),
         (
             "single pick instead of grades",
@@ -994,7 +1002,7 @@ async fn refusal_failure_invalid_grades_and_deadline_escalate_without_grades() {
             Reply::Value(response(
                 r#"{"name":"guardrail","type":"choice","answer":null,"choice":"approve","score":null,"confidence":0.99}"#,
             )),
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
         ),
         (
             "deadline",
@@ -1015,12 +1023,10 @@ async fn refusal_failure_invalid_grades_and_deadline_escalate_without_grades() {
         let (actual, provenance) = escalated(&grading);
         assert_eq!(actual, reason, "{label}");
         assert_eq!(
-            provenance,
-            &guardrail::Escalation {
-                choice: None,
-                confidence: None,
-                grades: None,
-            },
+            provenance.encode(),
+            ycoding_schema::ObjectEncoder::new()
+                .field("reason", &reason)
+                .finish(),
             "{label}"
         );
         assert_eq!(fake.calls(), 1, "{label}");
@@ -1123,6 +1129,68 @@ async fn grading_sends_offered_choices_and_redacted_state_and_bounds_redacted_ev
         && seen.input_id == Some(session_message::Id::new("msg_input").unwrap())));
 }
 
+#[tokio::test]
+async fn decision_failure_causes_reach_reviews_and_provenance_without_invented_judgments() {
+    for (error, reason) in [
+        (decision::Error::Unavailable, "unavailable"),
+        (decision::Error::InvalidRequest, "invalid-request"),
+        (decision::Error::ProviderFailed, "provider-failed"),
+        (decision::Error::Timeout, "timeout"),
+        (decision::Error::InputTooLarge, "input-too-large"),
+        (decision::Error::InvalidOutput, "invalid-output"),
+        (decision::Error::Refused, "refused"),
+        (decision::Error::TruncatedOutput, "truncated-output"),
+        (decision::Error::UnsupportedOutput, "unsupported-output"),
+    ] {
+        let fake = Fake::with(vec![Reply::Failure(error)]);
+        let grading = grade(
+            &adapter(&fake, ENABLED),
+            &ordinary(),
+            false,
+            false,
+            &Cancellation::default(),
+        )
+        .await;
+        let (actual, provenance) = escalated(&grading);
+        assert_eq!(
+            actual.encode(),
+            JsonValue::String(reason.into()),
+            "{reason}"
+        );
+        assert_eq!(
+            provenance.encode(),
+            parse_json(&format!(r#"{{"reason":"{reason}"}}"#)).unwrap(),
+            "{reason}"
+        );
+        assert_eq!(fake.calls(), 1);
+    }
+}
+
+#[tokio::test]
+async fn conflicting_qualifying_grades_keep_their_diagnostic_and_reported_judgments() {
+    let fake = Fake::with(vec![ordinary_grades(0.1, 0.85, 0.82, 0.1)]);
+    let grading = grade(
+        &adapter(&fake, ENABLED),
+        &ordinary(),
+        false,
+        false,
+        &Cancellation::default(),
+    )
+    .await;
+    let (reason, provenance) = escalated(&grading);
+    assert_eq!(
+        reason.encode(),
+        JsonValue::String("conflicting_grades".into())
+    );
+    assert_eq!(
+        field(&provenance.encode(), &["reason"]),
+        &JsonValue::String("conflicting_grades".into())
+    );
+    assert_eq!(provenance.choice, Some(guardrail::DecisionChoice::Approve));
+    assert_eq!(provenance.confidence, Some(confidence(0.85)));
+    assert_eq!(provenance.grades.as_ref().unwrap().len(), 4);
+}
+
 #[test]
 fn the_released_decision_service_is_an_evaluator() {
     fn evaluator<T: Evaluator>() {}
@@ -1161,8 +1229,9 @@ async fn approve_all_is_offered_only_with_an_ordinary_always_approval() {
     assert_eq!(
         escalated(&unoffered),
         (
-            session_review::Reason::Error,
+            session_review::Reason::InvalidOutput,
             &guardrail::Escalation {
+                reason: Some(guardrail::EscalationReason::InvalidOutput),
                 choice: None,
                 confidence: None,
                 grades: None,

@@ -104,7 +104,7 @@ export async function openChromePush(input: { readonly home: string; readonly or
     const data = subscription.toJSON()
     if (!data.keys?.p256dh || !data.keys?.auth) return "missing_browser_keys"
     window.__ycodingPushSetupStage = "backend-registration"
-    const registered = await fetch("/api/push/subscriptions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint, keys: { p256dh: data.keys.p256dh, auth: data.keys.auth }, categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true } }) })
+    const registered = await fetch("/api/push/subscriptions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint, keys: { p256dh: data.keys.p256dh, auth: data.keys.auth }, categories: { "agent-completed": true, "approval-requested": true, "machine-offline": true, "quota-pace": true } }) })
     if (registered.ok) {
       const hash = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))))
         .map((byte) => byte.toString(16).padStart(2, "0")).join("")

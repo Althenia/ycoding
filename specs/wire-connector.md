@@ -1,8 +1,8 @@
 # Revision 5 connector and relay notice operations
 
-The revision-5 connector contract maps the closed 79-name source inventory to 75 canonical connector descriptors and four relay-owned notice descriptors. `protocol/ycoding/v5/connector.proto` owns derived operations, raw upload staging, catalog composition and notices in the explicit 5000–5099 range. Shared local operations retain their IDs and use the same typed request and result for remote peers. Service declarations are descriptor metadata, not gRPC servers or an implemented dispatcher.
+The revision-5 connector contract contains 83 canonical connector descriptors and four relay-owned notice descriptors. `protocol/ycoding/v5/connector.proto` owns derived operations, raw upload staging, catalog composition, fixed demos, local applications and notices in the explicit 5000–5099 range. Shared local operations retain their IDs and use the same typed request and result for remote peers. Service declarations are descriptor metadata, not gRPC servers or an implemented dispatcher.
 
-TypeScript exports `operationIDsByRole`; Rust exports `OPERATION_IDS_BY_ROLE`. REMOTE_CLIENT may originate 79 canonical operations, including the four relay-owned notices. RELAY may forward exactly 75 connector operations. LOCAL_CLIENT may also originate the canonical captured-change, team-economics and family-activity reads specified below. AGENT and SERVER send responses and permitted controls but no operation requests. Every unaffected local operation remains LOCAL_CLIENT-only. The existing `session.prediction` and `session.promptGenerate` remote roles are retained.
+TypeScript exports `operationIDsByRole`; Rust exports `OPERATION_IDS_BY_ROLE`. REMOTE_CLIENT may originate 87 canonical operations, including the four relay-owned notices. RELAY may forward exactly 83 connector operations plus the relay-only raw MCP request specified below. LOCAL_CLIENT may also originate the canonical captured-change, team-economics and family-activity reads specified below. AGENT and SERVER send responses and permitted controls but no operation requests. Every unaffected local operation remains LOCAL_CLIENT-only. The existing `session.prediction` and `session.promptGenerate` remote roles are retained.
 
 Request direction follows `packages/remote/src/index.ts:478–480,645–673`, `infra/cloudflare/src/relay/core.ts:554–613,754–827` and `packages/cli/src/remote-bridge.ts:305–328`. Claimed role never substitutes for authenticated ownership. The local, client and agent routes use the foundation PeerRole vocabulary. Generated allowlists do not authenticate an upgrade or authorize a Session.
 
@@ -14,7 +14,7 @@ On an authenticated agent socket, the relay registers a validated scoped canonic
 
 `session.family.activity` selects a root Session through its scope and accepts an explicitly present empty `sessionIDs` list for root-only activity. The backend prepends the root; listed IDs must be unique valid direct children and must exclude the root. Remote admission retains its maximum of 15 listed children. The member field retains its 1–128 UTF-16-unit text bounds and structural count maximum of 128; its canonical collection minimum is zero. The connector projection records that minimum independently from the per-item text minimum. Regenerate approved structural changes with `bun run packages/protocol/test/connector-materialize.ts --write`, followed by Protocol/client generation and foundation-vector generation; the default materializer remains read-only.
 
-Local enrollment is `remote.enroll` (3053) in `platform.proto`, specified in [wire-platform](./wire-platform.md#backend-owned-device-enrollment). It permits LOCAL_CLIENT only and does not enter the 79-operation REMOTE_CLIENT or 75-operation RELAY allowlists. The local backend owns key generation, private persistence, refresh/signing and enrollment; results and status expose only `RemoteDevice` metadata. Enrollment does not grant a browser Location selector or automatically enable the connector. No credential-removal operation is allocated; CLI disconnect uses the existing `remote.set` disable path.
+Local enrollment is `remote.enroll` (3053) in `platform.proto`, specified in [wire-platform](./wire-platform.md#backend-owned-device-enrollment). It permits LOCAL_CLIENT only and is absent from both remote-role allowlists. The local backend owns key generation, private persistence, refresh/signing and enrollment; results and status expose only `RemoteDevice` metadata. Enrollment does not grant a browser Location selector or automatically enable the connector. No credential-removal operation is allocated; CLI disconnect uses the existing `remote.set` disable path.
 
 The source membership is `packages/remote/src/index.ts:40–104,447` and `packages/remote/src/provider-auth.ts:1`. Mutation classes are exactly `remoteOperationAccess` at `packages/remote/src/index.ts:163–232`, including MUTATION for provider authentication status. Notice listing is READ; subscription, read and readAll mutate relay-owned state (`infra/cloudflare/src/relay/core.ts:806–826`). Notice requests share a connection lane regardless of descriptor mutation class (`infra/cloudflare/src/relay/core.ts:601–605`).
 
@@ -27,6 +27,12 @@ Roles: S = LOCAL_CLIENT + REMOTE_CLIENT + RELAY; C = REMOTE_CLIENT + RELAY; N = 
 | incident.report | incident.report | 2064 | A | S | READ |
 | incident.recent | incident.recent | 2065 | A | S | READ |
 | incident.guidance.get | incident.guidance.get | 2066 | B-reuse | S | READ |
+| local.app.register | local.app.register | 5047 | C | C | MUTATION |
+| local.app.list | local.app.list | 5048 | C | C | READ |
+| local.app.revoke | local.app.revoke | 5049 | C | C | MUTATION |
+| local.app.open | local.app.open | 5050 | C | C | MUTATION |
+| local.app.status | local.app.status | 5051 | C | C | READ |
+| local.app.http | local.app.http | 5052 | C | C | MUTATION |
 | provider.auth.list             | provider.auth.list              | 5000 | C          | C     | READ     |
 | provider.auth.key              | provider.auth.key               | 5001 | C          | C     | MUTATION |
 | provider.auth.begin            | provider.auth.begin             | 5002 | C          | C     | MUTATION |
@@ -103,6 +109,8 @@ Roles: S = LOCAL_CLIENT + REMOTE_CLIENT + RELAY; C = REMOTE_CLIENT + RELAY; N = 
 | machine.telemetry.consent.set  | telemetry.consent.set           | 3048 | A          | S     | MUTATION |
 | machine.latency.append         | telemetry.append                | 3046 | B-reuse    | S     | MUTATION |
 | machine.latency.list           | telemetry.list                  | 3049 | B-reuse    | S     | READ     |
+| artifact.demo.preview | artifact.demo.preview | 5045 | C | C | READ |
+| artifact.demo.export | artifact.demo.export | 5046 | C | C | READ |
 | notice.subscribe               | notice.subscribe                | 5039 | C          | N     | MUTATION |
 | notice.list                    | notice.list                     | 5040 | C          | N     | READ     |
 | notice.read                    | notice.read                     | 5041 | C          | N     | MUTATION |
@@ -218,10 +226,79 @@ Captured changes retain grouped parent/eligible-child projection and digest-boun
 
 Notice subscription/list pages use foundation `Notice.added` for the existing notice records and total, alongside opaque next cursor and unavailable state. Record categories, Session IDs and creation times use foundation `NoticeRecord`; no second Notice vocabulary is declared. Notice mutation logical results are no-content; their removed/cleared notifications use foundation Control Notice independently of settlement. Persistent notice totals and completion receipt watermark remain separate from Session completion acknowledgements (`packages/remote/src/index.ts:447–476,565–566,1012–1028,1097–1104`; `infra/cloudflare/src/relay/core.ts:790–826`; `foundation.proto:242–269`). Fresh notice authority, per-connection ordering, pagination and presentation remain relay obligations.
 
+## Connector-owned fixed demos
+
+`artifact.demo.preview` (5045) and `artifact.demo.export` (5046) permit
+REMOTE_CLIENT and RELAY with Machine scope, READ, COMPLETED, UNPAGED,
+TYPED_BULK and PRIVATE sensitivity. Requests are empty typed messages and accept
+no Session, Location, path, URI or content selector. Both declare
+`Connector_Error` and execute through the standard closed-operation dispatcher.
+Ordinary frames lack trusted MCP access and return `unknown_operation`.
+
+Preview returns `variants: ["list", "cards"]` and
+`hostVerification: "required"`. Export returns `id`, `filename`, `mime`, `size`,
+`sha256`, `expiresAt` and `delivery: "host-native-attachment-required"`. Expiry is
+a JavaScript-safe millisecond instant. The MCP presentation adds a resource link
+only to successful export settlement; it does not claim host-native attachment
+or app embedding has occurred.
+
+The connector owns one lazily initialized fixed HTML/PNG resource set across
+connection replacement and MCP enable epochs. Its PNG identity and fifteen-minute
+expiry never renew on calls, retries or reconnects. Binding replacement, disable,
+disconnect, cancellation and terminal close revoke old access; retained contexts
+cannot disclose protected bytes. Resource discovery/read accepts only registered
+identifiers and does not fetch arbitrary URLs. Expired export returns
+`invalid_message`; unavailable resource reads use MCP `-32602`.
+
+## Session-owned local applications
+
+`local.app.register` (5047), `local.app.list` (5048), `local.app.revoke` (5049),
+`local.app.open` (5050), `local.app.status` (5051) and `local.app.http` (5052)
+permit REMOTE_CLIENT and RELAY with Session scope, SECRET sensitivity,
+COMPLETED settlement, UNPAGED results and TYPED_BULK delivery. List and status
+are READ; the other four operations are MUTATION. Ordinary invocation without
+the connector's trusted MCP request context is denied. Descriptor admission
+does not supply the original request identity or an OAuth grant.
+
+Resolve placement from the scoped Session and resolve exact authorization from
+the trusted outer MCP request. Bind registrations to owner, device, client,
+grant, epoch and Session. Inputs cannot supply those principal fields or a
+Location. Register accepts only a literal loopback host, port, bounded entry
+path, explicit route/method allowlist and finite TTL. Responses expose safe
+registration metadata, not upstream addresses, ports or credentials.
+
+The six MCP tools retain `{ sessionID, input }` arguments; list accepts only
+`sessionID`. The typed operation payload contains the operation input, with
+Session identity carried by Scope. HTTP bodies use canonical base64. The Core
+boundary permits 256 KiB request and 2 MiB response bytes; the MCP presentation
+narrows those bounds to 64 KiB and 1 MiB. The enclosing raw MCP request retains
+its independent 32,768-UTF-16-unit limit.
+
+Open returns model-safe status in `data` and optional secret presentation
+`metadata`. Only the MCP result's top-level `_meta.localApp` receives preview
+access; text and `structuredContent` contain no capability URL. Without a
+trusted preview issuer, open reports `preview_unconfigured` and performs no
+issuance or upstream request. Explicit HTTP remains a separate operation.
+The fixed wrapper URI is `ui://ycoding/local-http-app/v1.html`; application HTML
+is not an MCP Apps resource. Each connector lease owns a fresh registry and
+facade; revocation invalidates access and cancels work before asynchronous drain.
+
+## Relay-only raw MCP forwarding
+
+`mcp.request` (5044) permits **RELAY only**; REMOTE_CLIENT, LOCAL_CLIENT, AGENT and SERVER cannot originate it, and it is outside the 87-operation REMOTE_CLIENT allowlist and the MCP tool target list. RELAY therefore forwards 84 operations: the 83 connector descriptors plus this request. It has Machine scope, MUTATION, COMPLETED, UNPAGED, TYPED_BULK and SECRET sensitivity, and its exact error union is `Connector_Error`.
+
+The request is `mcp_request_Request { payload: Connector_McpRequest }` with required `body` (tag 1, `LosslessString`, 1–32768 UTF-16 units), repeated `headers` (tag 2, at most five `Connector_McpHeader { name: string 1–64, value: LosslessString 0–1024 }`), required `principal` (tag 3, `Connector_McpPrincipal { ownerID: string 1–64, deviceID: string 1–64, clientID: LosslessString 1–2048 }`) and required `epoch` (tag 4, string 1–64). The result is `mcp_request_Result { data: Connector_McpResponse }` with required `status` (tag 1, uint32 200–599), `contentType` (tag 2, string 1–256) and `body` (tag 3, `LosslessString`, at most 2097152 units). The request and its headers fit one inline Request payload; responses up to the body bound use typed bulk delivery.
+
+Header names are unique members of `content-type`, `accept`, `mcp-protocol-version`, `mcp-method` and `mcp-name`; header values contain no CR, LF or NUL. Owner, device and epoch values match `[A-Za-z0-9_-]`. The request body is nonempty JSON and the response content type is JSON. These are relay and agent admission obligations; the structural decoder enforces only the declared bounds.
+
+## Quota pace delivery
+
+Foundation Control `quota_pace` (tag 16, AGENT only) carries `QuotaPace { provider_id, window_id, milestone, reset_at }`; the relay answers with `quota_pace_result` (tag 17, RELAY only) carrying the same quota and a status settled=1 or pending=2. Provider and window are nonempty, trim-stable `LosslessString` values of at most 64 code points without controls or bidirectional overrides. Milestones are almost-out=1, cutting-it-close=2 and will-run-out=3. `reset_at` is a positive JavaScript-safe millisecond instant. Notices carry the relay-delivered alert as `Notice.quota_pace` (tag 7, `QuotaPaceNotice { quota, at }`, `at` a positive safe instant) and presentations as `Presentation.quota_pace` (tag 3). Relay quota controls carry no title or body text. The Protocol connection rejects out-of-range instants as malformed.
+
 ## Ownership and verification
 
 `packages/protocol/test/connector-source.ts` owns explicit allocations and the source-to-target evidence table. `connector-contract.ts` projects derived workflows and upload pieces; shared operation owners declare remote roles without duplicate schemas. `connector-materialize.ts` checks exact canonical bytes. `generate:v5` reads canonical Protobuf declarations to generate bindings, descriptors and event membership. Conformance projections detect source drift without rewriting tags or IDs.
 
-Generate TypeScript descriptors and bindings with `bun run --cwd packages/protocol generate:v5`. Rust's protocol crate build owns its descriptors, bindings and role allowlists. Generate foundation vectors with `python3 protocol/ycoding/v5/testdata/generate.py`. The generated `manifest.tsv` stores tab-separated name, fully qualified type, `valid` or `invalid`, sender role number and exact lowercase hex bytes; empty bytes use an empty hex column. Tests decode the committed hex without invoking protoc or Python. The generator's case list is the only source for valid vectors. Repeated generation must be byte-identical. Digest-bearing negative vectors retain their individual rejection reasons.
+Every materialized and frontend-boundary enum value outside `foundation.proto` and `operations.proto` carries `(ycoding.v5.domain_label)` (EnumValueOptions 51000) with its exact Schema string literal. A oneof branch that represents a non-string Schema literal and is the only branch of its scalar type carries `(ycoding.v5.domain_literal)` (FieldOptions 51002) with the JSON lexical literal; numeric literal unions with several same-typed branches remain payload-selected. Client generation reads only these options and fails on an unlabeled domain enum value. Generate TypeScript descriptors and bindings with `bun run --cwd packages/protocol generate:v5`. Rust's protocol crate build owns its descriptors, bindings and role allowlists. Generate foundation vectors with `python3 protocol/ycoding/v5/testdata/generate.py`. The generated `manifest.tsv` stores tab-separated name, fully qualified type, `valid` or `invalid`, sender role number and exact lowercase hex bytes; empty bytes use an empty hex column. Tests decode the committed hex without invoking protoc or Python. The generator's case list is the only source for valid vectors. Repeated generation must be byte-identical. Digest-bearing negative vectors retain their individual rejection reasons.
 
 Protocol connector coverage compares frozen allocations, per-role closure, mutation classes, field associations and metadata without importing Remote. Remote connector conformance compares complete live membership, ordered-lane mutation classes and Session requirements against those allocations. Remote and Rust connector conformance checks cover distinct input/result representations and foundation Notice reuse. Structural metadata never claims to execute the named domain obligations or implement connector dispatch, authentication, placement or live relay behavior.

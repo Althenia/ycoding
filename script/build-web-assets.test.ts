@@ -17,6 +17,8 @@ async function makeFixture(options: { readonly label: string } = { label: "asset
   await fs.mkdir(path.join(fixture, "docs", "examples"), { recursive: true })
   await fs.mkdir(path.join(fixture, "assets", "brand", "fonts"), { recursive: true })
   await Bun.write(path.join(fixture, "assets", "brand", "fonts", "OFL.txt"), Bun.file(path.join(root, "assets", "brand", "fonts", "OFL.txt")))
+  await Bun.write(path.join(fixture, "assets", "brand", "fonts", "Geist.woff2"), new Uint8Array([0x77, 0x4f, 0x46, 0x32, 1, 2, 3]))
+  await Bun.write(path.join(fixture, "assets", "brand", "fonts", "GeistMono.woff2"), new Uint8Array([0x77, 0x4f, 0x46, 0x32, 4, 5, 6]))
   await Bun.write(path.join(fixture, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub"), Bun.file(path.join(root, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub")))
   await fs.mkdir(path.join(fixture, "apps", "web", "dist", "assets"), { recursive: true })
   await Bun.write(path.join(fixture, "script", "install.sh"), "#!/bin/sh\necho ycoding\n")
@@ -57,6 +59,10 @@ describe("web build asset publisher", () => {
       expect(await Bun.file(path.join(outdir, "fonts", "OFL.txt")).text()).toBe(
         await Bun.file(path.join(fixture, "assets", "brand", "fonts", "OFL.txt")).text(),
       )
+      for (const font of ["Geist.woff2", "GeistMono.woff2"])
+        expect(new Uint8Array(await Bun.file(path.join(outdir, "fonts", font)).arrayBuffer())).toEqual(
+          new Uint8Array(await Bun.file(path.join(fixture, "assets", "brand", "fonts", font)).arrayBuffer()),
+        )
       expect(await Bun.file(path.join(outdir, "licenses", "provider-logos.txt")).text()).toBe(
         await Bun.file(path.join(fixture, "apps", "web", "src", "assets", "providers", "LICENSE.lobehub")).text(),
       )
@@ -74,6 +80,8 @@ describe("web build asset publisher", () => {
       expect(await listFiles(outdir)).toEqual([
         "assets/app-abc123.js",
         "examples/ycoding.jsonc",
+        "fonts/Geist.woff2",
+        "fonts/GeistMono.woff2",
         "fonts/OFL.txt",
         "index.html",
         "install.sh",
@@ -149,6 +157,8 @@ describe("web build asset publisher", () => {
       expect(await Bun.file(path.join(outdir, "ycoding.schema.json")).exists()).toBe(true)
       expect(await Bun.file(path.join(outdir, "examples", "ycoding.jsonc")).exists()).toBe(true)
       expect(await Bun.file(path.join(outdir, "fonts", "OFL.txt")).exists()).toBe(true)
+      expect(await Bun.file(path.join(outdir, "fonts", "Geist.woff2")).exists()).toBe(true)
+      expect(await Bun.file(path.join(outdir, "fonts", "GeistMono.woff2")).exists()).toBe(true)
     } finally {
       await fs.rm(fixture, { recursive: true, force: true })
     }
@@ -179,6 +189,31 @@ describe("web build asset publisher", () => {
       expect(await Bun.file(path.join(outdir, "assets", "app-abc123.js")).text()).toBe("console.log('web')\n")
     } finally {
       await fs.rm(fixture, { recursive: true, force: true })
+    }
+  })
+
+  test("rejects a missing canonical font before adding public assets", async () => {
+    for (const font of ["Geist.woff2", "GeistMono.woff2"]) {
+      const { fixture, outdir } = await makeFixture({ label: "font-file" })
+      try {
+        await fs.rm(path.join(fixture, "assets", "brand", "fonts", font))
+        const error = await buildWebAssets({ root: fixture, outdir }).catch((error) => error)
+        expect(error).toBeInstanceOf(Error)
+        if (!(error instanceof Error)) throw error
+        expect(error.message).toContain(`Missing required font: assets/brand/fonts/${font}`)
+        expect(await Bun.file(path.join(outdir, "install.sh")).exists()).toBe(false)
+        expect(await Bun.file(path.join(outdir, "fonts", font)).exists()).toBe(false)
+      } finally {
+        await fs.rm(fixture, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test("the repository ships the canonical fonts under the stable names the publisher copies", async () => {
+    for (const font of ["Geist.woff2", "GeistMono.woff2"]) {
+      const file = Bun.file(path.join(root, "assets", "brand", "fonts", font))
+      expect(await file.exists()).toBe(true)
+      expect(new Uint8Array(await file.slice(0, 4).arrayBuffer())).toEqual(new Uint8Array([0x77, 0x4f, 0x46, 0x32]))
     }
   })
 })

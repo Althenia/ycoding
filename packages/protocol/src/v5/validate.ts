@@ -395,6 +395,8 @@ export class WireConnection {
       throw new Error("handshake byte limit")
     const node = validateBinary(FrameSchema.typeName, bytes)
     const { tag, body } = frameRules(node, bytes.length, sender)
+    const frame = fromBinary(FrameSchema, bytes)
+    if (!boundedControl(frame)) throw new Error("control bounds")
     if (
       (this.phase === "hello" && tag !== 10) ||
       (this.phase === "ready" && tag !== 11) ||
@@ -404,7 +406,6 @@ export class WireConnection {
     if (this.phase === "confirm" && (sender !== this.initiator || !(tag === 12 || (tag === 15 && body.fields.has(1)))))
       throw new Error("Ready confirmation")
     if (tag >= 12 && (!node.fields.has(2) || text(node, 2) !== this.epoch)) throw new Error("connection epoch")
-    const frame = fromBinary(FrameSchema, bytes)
     if (tag === 10) {
       this.phase = "ready"
       this.initiator = sender
@@ -421,4 +422,26 @@ export class WireConnection {
     }
     return frame
   }
+}
+
+export function boundedControl(frame: Frame) {
+  if (frame.body.case !== "control") return true
+  const kind = frame.body.value.kind
+  if (kind.case === "mcpState" || kind.case === "mcpStateAck")
+    return stableIdentifier(kind.value.id) && stableIdentifier(kind.value.epoch)
+  if (kind.case === "quotaPace") return safeInstant(kind.value.resetAt)
+  if (kind.case === "quotaPaceResult") return safeInstant(kind.value.quota?.resetAt)
+  if (kind.case !== "notice") return true
+  const notice = kind.value.kind
+  if (notice.case === "quotaPace") return safeInstant(notice.value.quota?.resetAt) && safeInstant(notice.value.at)
+  if (notice.case !== "present") return true
+  return notice.value.items.every((item) => item.kind.case !== "quotaPace" || safeInstant(item.kind.value.resetAt))
+}
+
+function stableIdentifier(value: string) {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(value)
+}
+
+function safeInstant(value: bigint | undefined) {
+  return value !== undefined && value >= 1n && value <= BigInt(Number.MAX_SAFE_INTEGER)
 }

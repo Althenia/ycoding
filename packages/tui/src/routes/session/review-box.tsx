@@ -1,4 +1,5 @@
 import type { FormAnswer, FormInfo, QuestionAnswer, SessionReviewDecision, SessionReviewItem } from "@ycoding-ai/client"
+import type { SessionReview } from "@ycoding-ai/schema/session-review"
 import type { BaseRenderable, BoxRenderable, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js"
@@ -10,8 +11,9 @@ import { escapeTerminalText } from "../../util/terminal-text"
 import { FormPrompt } from "./form"
 import { Prompt } from "./permission"
 import { guardrailGradeDetails } from "./guardrail-grades"
+import { GuardrailEscalation } from "../../guardrail-escalation"
 
-export function reviewReasonLabel(reason: SessionReviewItem["reason"]) {
+export function reviewReasonLabel(reason: SessionReview.Reason) {
   switch (reason) {
     case "disabled":
       return "automatic decisions are disabled"
@@ -27,6 +29,15 @@ export function reviewReasonLabel(reason: SessionReviewItem["reason"]) {
       return "decision model error"
     case "timeout":
       return "decision model timed out"
+    case "conflicting_grades":
+    case "unavailable":
+    case "invalid-request":
+    case "provider-failed":
+    case "input-too-large":
+    case "invalid-output":
+    case "truncated-output":
+    case "unsupported-output":
+      return GuardrailEscalation.text({ reason })
     case "sleep_entry":
       return "deferred when sleep started"
     case "restart":

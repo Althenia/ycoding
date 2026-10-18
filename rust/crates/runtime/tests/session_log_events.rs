@@ -140,6 +140,68 @@ fn ts_encoder_cases_cover_every_public_durable_variant_and_preserve_envelopes() 
 }
 
 #[test]
+fn diagnostic_reasons_survive_guardrail_and_review_history_projection() {
+    let id = session::Id::new(SESSION).unwrap();
+    let epoch = LosslessString::from("source-epoch-test");
+    for (kind, reasons) in [
+        (
+            "session.guardrail.escalated",
+            &[
+                ("unavailable", 1),
+                ("invalid-request", 2),
+                ("provider-failed", 3),
+                ("timeout", 4),
+                ("input-too-large", 5),
+                ("invalid-output", 6),
+                ("refused", 7),
+                ("truncated-output", 8),
+                ("unsupported-output", 9),
+                ("escalated", 10),
+                ("low_confidence", 11),
+                ("conflicting_grades", 12),
+            ][..],
+        ),
+        (
+            "session.review.deferred",
+            &[
+                ("unavailable", 10),
+                ("invalid-request", 11),
+                ("provider-failed", 12),
+                ("timeout", 7),
+                ("input-too-large", 13),
+                ("invalid-output", 14),
+                ("refused", 3),
+                ("truncated-output", 15),
+                ("unsupported-output", 16),
+                ("conflicting_grades", 17),
+            ][..],
+        ),
+    ] {
+        let mut entry = cases()
+            .into_iter()
+            .find(|(_, entry, _, _)| entry.event.0.event_type.as_str() == Some(kind))
+            .unwrap()
+            .1;
+        for (reason, ordinal) in reasons {
+            entry
+                .event
+                .0
+                .data
+                .0
+                .insert("reason".into(), JsonValue::String((*reason).into()));
+            let record = log::record(&entry, &id, &epoch)
+                .unwrap_or_else(|error| panic!("{kind}/{reason}: {error:?}"));
+            let actual = match record.item.kind.unwrap() {
+                v5::session_log_item::Kind::Value54(item) => item.data.reason,
+                v5::session_log_item::Kind::Value56(item) => Some(item.data.reason),
+                _ => panic!("unexpected projected event"),
+            };
+            assert_eq!(actual, Some(*ordinal), "{kind}/{reason}");
+        }
+    }
+}
+
+#[test]
 fn synced_empty_zero_and_safe_maximum_match_ts_encoder() {
     let fixtures = fixtures();
     for case in message::J(&fixtures)

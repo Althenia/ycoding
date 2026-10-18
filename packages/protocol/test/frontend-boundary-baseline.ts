@@ -4,7 +4,7 @@ export function frontendBoundaryBaseline(source: string) {
       .split("\nenum ConfigurationScope {")[0]
       .split("\nenum RemoteDeviceCredentialState {")[0]
       .split("\nmessage BackendPaths {")[0]
-      .replace("last: 3053", "last: 3052")
+      .replace("last: 3055", "last: 3052")
       .replace("  optional ConfigurationScope scope = 9;\n", "")
       .replace("  optional BackendPaths backendPaths = 4;\n", "")
       .replace("  optional RemoteDevice device = 3;\n", "")

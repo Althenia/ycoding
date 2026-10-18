@@ -1,5 +1,5 @@
 import { SchemaAST } from "effect"
-import { wireContract, isUtcDeclaration } from "./wire-contract.js"
+import { domainLabel, wireContract, isUtcDeclaration, withDomainLiteral } from "./wire-contract.js"
 import { enumNumbers, messageTags, reservedLine, wireAllocation, type WireAllocation } from "./wire-allocation.js"
 import { middlewareErrors } from "./resources-source.js"
 import { resourceContract, resourceFieldConstraints, resourceSourceIdentity } from "./resources-contract.js"
@@ -334,7 +334,7 @@ export function sessionProto(endpoints = sessionRpcEndpoints(), allocation: Wire
                 (value, index) =>
                   `  ${name.toUpperCase()}_${String(value)
                     .replace(/[^a-zA-Z0-9]/g, "_")
-                    .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]};`,
+                    .toUpperCase()} = ${enumNumbers(name, values, allocation)[index]}${domainLabel(value)};`,
               )
               .join("\n")}\n${reservedLine("enum", name, allocation)}}`,
         )
@@ -344,7 +344,7 @@ export function sessionProto(endpoints = sessionRpcEndpoints(), allocation: Wire
         .filter(([name]) => !shared.has(name))
         .map(
           ([name, message]) =>
-            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${fieldOption(field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
+            `message ${name} {\n${message.oneof ? "  oneof kind {\n" : ""}${message.fields.map((field, index) => `  ${message.oneof ? "  " : ""}${field.presence === "oneof" ? "" : field.presence + " "}${field.type} ${field.name} = ${messageTags(name, message.fields, allocation)[index]}${withDomainLiteral(fieldOption(field), message, field)};`).join("\n")}\n${message.oneof ? "  }\n" : ""}${reservedLine("message", name, allocation)}}`,
         )
         .join("\n\n") +
       "\n\n" +

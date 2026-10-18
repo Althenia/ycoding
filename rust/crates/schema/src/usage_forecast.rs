@@ -9,6 +9,7 @@ literal_type!(LocalScope["backend","location"]);
 literal_type!(QuotaState["estimated","insufficient","exhausted","unlimited"]);
 literal_type!(Method["quota-delta-ema","window-mean"]);
 literal_type!(Evidence["low","medium","insufficient"]);
+literal_type!(PaceVerdict["ahead","cutting-it-close","will-run-out"]);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalRate {
@@ -42,6 +43,14 @@ pub struct Quota {
     pub rate_per_hour: Option<f64>,
     pub exhaustion_at: Option<NonNegativeInt>,
     pub projected_used_at_reset: Option<f64>,
+    pub pace: Option<Pace>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pace {
+    pub verdict: PaceVerdict,
+    pub projected_used_at_reset: f64,
+    pub exhaustion_at: Option<NonNegativeInt>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +140,7 @@ impl DomainDecode for Quota {
             rate_per_hour: rate(&o, p, "ratePerHour")?,
             exhaustion_at: o.optional("exhaustionAt")?,
             projected_used_at_reset: rate(&o, p, "projectedUsedAtReset")?,
+            pace: o.optional("pace")?,
         })
     }
 }
@@ -154,6 +164,28 @@ impl DomainEncode for Quota {
             .optional("ratePerHour", &self.rate_per_hour)
             .optional("exhaustionAt", &self.exhaustion_at)
             .optional("projectedUsedAtReset", &self.projected_used_at_reset)
+            .optional("pace", &self.pace)
+            .finish()
+    }
+}
+
+impl DomainDecode for Pace {
+    fn decode_at(v: &JsonValue, p: &JsonPath) -> Result<Self, DecodeError> {
+        let o = ObjectDecoder::new(v, p)?;
+        Ok(Self {
+            verdict: o.field("verdict")?,
+            projected_used_at_reset: required_rate(&o, p, "projectedUsedAtReset")?,
+            exhaustion_at: o.optional("exhaustionAt")?,
+        })
+    }
+}
+
+impl DomainEncode for Pace {
+    fn encode(&self) -> JsonValue {
+        ObjectEncoder::new()
+            .field("verdict", &self.verdict)
+            .field("projectedUsedAtReset", &self.projected_used_at_reset)
+            .optional("exhaustionAt", &self.exhaustion_at)
             .finish()
     }
 }

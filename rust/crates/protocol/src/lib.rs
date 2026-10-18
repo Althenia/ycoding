@@ -9,6 +9,7 @@ include!(concat!(env!("OUT_DIR"), "/domain_obligations.rs"));
 include!(concat!(env!("OUT_DIR"), "/public_events.rs"));
 mod asset;
 pub mod connection;
+pub mod domain_json;
 pub use asset::{Asset, AssetMetadata};
 mod field_constraints;
 mod validate;

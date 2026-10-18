@@ -204,3 +204,37 @@ test("S2/M8/M10 existing reads expose optional backend-owned metadata through ty
     client.transport.close()
   }
 })
+
+test.each([
+  ["remote.mcp.get", (client: V5Client) => client.remote.mcp.get(), {}, { state: "connecting" }],
+  [
+    "remote.mcp.set",
+    (client: V5Client) => client.remote.mcp.set({ enabled: true }),
+    { payload: { enabled: true } },
+    { state: "on", url: "https://relay.example/api/mcp/devices/dev_1" },
+  ],
+  [
+    "remote.mcp.set",
+    (client: V5Client) => client.remote.mcp.set({ enabled: false }),
+    { payload: { enabled: false } },
+    { state: "error", message: "Remote is not connected" },
+  ],
+] as const)("relay MCP %s is a local machine-scoped control returning the MCP status", async (operation, call, request, output) => {
+  const peer = new ScriptedPeer()
+  peer.onRequest = (dispatch) => {
+    expect(dispatch.operation.diagnosticName).toBe(operation)
+    expect(dispatch.request.scope!.target.case).toBe("machine")
+    expect(decodeDomain(dispatch.operation.requestType, dispatch.request.payload)).toEqual(request)
+    peer.result(dispatch, {
+      typeName: dispatch.operation.resultType,
+      payload: encodeDomain(dispatch.operation.resultType, { data: output }),
+    })
+  }
+  const client = clientFor(peer)
+  try {
+    expect(await call(client)).toEqual(output)
+    expect(peer.requests).toHaveLength(1)
+  } finally {
+    client.transport.close()
+  }
+})

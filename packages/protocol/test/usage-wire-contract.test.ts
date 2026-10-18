@@ -25,7 +25,7 @@ const tags = (message: string) =>
 const operation = (name: string) => operations.find((candidate) => candidate.diagnosticName === name)!
 const enumValues = (proto: string, name: string) => {
   const body = proto.match(new RegExp(`^enum ${name} \\{\\n([\\s\\S]*?)^\\}`, "m"))![1]
-  return Object.fromEntries([...body.matchAll(/^\s+(\w+) = (\d+);/gm)].map((match) => [match[1], Number(match[2])]))
+  return Object.fromEntries([...body.matchAll(/^\s+(\w+) = (\d+)(?: \[[^\]]*\])?;/gm)].map((match) => [match[1], Number(match[2])]))
 }
 
 describe("operations", () => {
@@ -106,10 +106,10 @@ describe("operations", () => {
     }
   })
 
-  test("remote and relay allowlists grow by the four usage reads and three incident reads", () => {
+  test("remote and relay allowlists include usage, incident, fixed demo, local app and relay-only MCP operations", () => {
     const remote = operations.filter((descriptor) => descriptor.roles.includes(PeerRole.REMOTE_CLIENT)).length
     const relay = operations.filter((descriptor) => descriptor.roles.includes(PeerRole.RELAY)).length
-    expect([remote, relay]).toEqual([79, 75])
+    expect([remote, relay]).toEqual([87, 84])
   })
 
   test("each new request type wraps its declared parameters", () => {

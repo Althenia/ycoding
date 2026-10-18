@@ -12,7 +12,7 @@ use ycoding_store::{Client, IndexOrder, IndexQuery, KeyPart, resources, tuple_ke
 const MINUTE: i64 = 60_000;
 const HOUR: i64 = 60 * MINUTE;
 const HALF_LIFE: f64 = (15 * MINUTE) as f64;
-const FRESHNESS: i64 = 10 * MINUTE;
+pub(super) const FRESHNESS: i64 = 10 * MINUTE;
 const BIN_WIDTH: i64 = 5 * MINUTE;
 const BUCKET: i64 = 15_000;
 const PAGE: usize = 128;

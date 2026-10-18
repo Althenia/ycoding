@@ -647,7 +647,7 @@ impl ycoding_core::process::guardrails::decision::Evaluator for HeldFormDecision
             tokio::select! {
                 biased;
                 _ = invocation.cancellation.cancelled() => Err(ycoding_core::resources::decision::Error::Cancelled),
-                _ = self.finish.notified() => Ok(parse_json(r#"{"response":{"answers":[{"name":"f0","type":"choice","choice":true,"confidence":1}]}}"#).unwrap()),
+                _ = self.finish.notified() => Ok(parse_json(r#"{"response":{"answers":[{"name":"f0","type":"choice","answer":null,"choice":true,"score":null,"confidence":1}]}}"#).unwrap()),
             }
         })
     }
@@ -809,7 +809,9 @@ impl ycoding_core::process::guardrails::decision::Evaluator for FirstListedDecis
                     ycoding_schema::ObjectEncoder::new()
                         .field("name", question.get(&"name".into()).unwrap())
                         .field("type", "choice")
+                        .field("answer", &JsonValue::Null)
                         .field("choice", first.get(&"value".into()).unwrap())
+                        .field("score", &JsonValue::Null)
                         .field("confidence", &1.0)
                         .finish()
                 })
@@ -904,7 +906,7 @@ async fn redaction_collisions_defer_without_invoking_a_question_or_form_helper()
     assert!(
         items
             .iter()
-            .all(|item| item.deferral.reason == Reason::Error)
+            .all(|item| item.deferral.reason == Reason::InvalidRequest)
     );
 }
 
@@ -934,5 +936,8 @@ async fn oversized_sleeping_question_evidence_never_reaches_the_helper() {
         Err(questions::Error::Deferred { .. })
     ));
     assert!(evaluator.0.lock().unwrap().is_empty());
-    assert_eq!(harness.items(&root)[0].deferral.reason, Reason::Error);
+    assert_eq!(
+        harness.items(&root)[0].deferral.reason,
+        Reason::InputTooLarge
+    );
 }

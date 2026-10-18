@@ -69,6 +69,7 @@ export const NOTIFICATION_CATEGORIES = [
   { id: "agent-completed", label: "Work finished", detail: "Get notified when a Session and everything it started, including subagents, shells and goals, has finished. Useful for long-running work." },
   { id: "approval-requested", label: "Needs your attention", detail: "Get notified when a Session needs your decision, a guardrail blocks an action, or a run fails." },
   { id: "machine-offline", label: "Machine offline", detail: "Get notified when a paired machine stops reporting." },
+  { id: "quota-pace", label: "Quota pace", detail: "Get notified when a provider quota is almost out or on pace to run out before it resets." },
 ] as const
 
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number]["id"]
@@ -85,6 +86,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   "agent-completed": { "in-app": true, desktop: true },
   "approval-requested": { "in-app": true, desktop: true },
   "machine-offline": { "in-app": true, desktop: true },
+  "quota-pace": { "in-app": true, desktop: true },
 }
 
 /** Merges stored values over the defaults, ignoring anything that is not a boolean channel. */
@@ -142,6 +144,7 @@ export function pushCategoriesFor(preferences: NotificationPreferences): PushCat
     "agent-completed": preferences["agent-completed"].desktop,
     "approval-requested": preferences["approval-requested"].desktop,
     "machine-offline": preferences["machine-offline"].desktop,
+    "quota-pace": preferences["quota-pace"].desktop,
   }
 }
 

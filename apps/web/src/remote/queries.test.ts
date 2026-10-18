@@ -58,6 +58,45 @@ function incidents(answer: (operation: string, request: RemoteTransportRequest |
 
 const scope: QueryScope = { deviceID: "dev_1", generation: 1 }
 
+test("Usage refresh starts its cached forecast without waiting for provider quota refresh", async () => {
+  const providerGate = Promise.withResolvers<RemoteRequestOutcome>()
+  const forecastStarted = Promise.withResolvers<void>()
+  let providerReads = 0
+  let forecastReads = 0
+  const summary = { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+  const client = createRemoteQueryClient()
+  const queries = createRemoteQueries({
+    recoveries: () => 0,
+    recovered: async () => false,
+    request: async (_scope, operation) => {
+      if (operation === "providerUsage.list") {
+        providerReads++
+        if (providerReads > 1) return providerGate.promise
+        return { status: "ok", value: { data: [] } }
+      }
+      if (operation === "providerUsage.forecast") {
+        forecastReads++
+        if (forecastReads > 1) forecastStarted.resolve()
+        return { status: "ok", value: { data: { asOf: 1, localScope: "backend", localRates: [], quotas: [] } } }
+      }
+      return { status: "ok", value: { data: summary } }
+    },
+  }, client)
+  await Promise.all([client.fetchQuery(queries.usageProviders(scope, true)), client.fetchQuery(queries.usageSummary(scope, true)), client.fetchQuery(queries.usageForecast(scope, true))])
+  const refresh = queries.refreshUsage(scope)
+  const timeout = setTimeout(() => forecastStarted.reject(new Error("Forecast waited for the provider quota refresh")), 500)
+  try {
+    await forecastStarted.promise
+    expect(providerReads).toBe(2)
+    expect(forecastReads).toBe(2)
+  } finally {
+    clearTimeout(timeout)
+    providerGate.resolve({ status: "ok", value: { data: [] } })
+    await refresh
+    client.clear()
+  }
+})
+
 describe("incident queries", () => {
   test("report reads forward the exact bounded input without a Session and key on every field", async () => {
     const { calls, client, queries } = incidents()

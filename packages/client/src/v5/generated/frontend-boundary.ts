@@ -12,6 +12,8 @@ import type {
   RemoteEnrollOutput,
   FrontendBoundaryClient,
   RemoteStatusOutput,
+  RemoteMcpStatus,
+  RemoteMcpSetInput,
   BackendLocationOutput,
   BackendSkillListOutput,
 } from "../frontend-boundary.js"
@@ -181,6 +183,22 @@ export function bindFrontendBoundary(
           requestOptions,
         ),
       get: (requestOptions?: RequestOptions) => client.remote.get(requestOptions) as Promise<RemoteStatusOutput>,
+      mcp: {
+        get: (requestOptions?: RequestOptions) =>
+          transport.call<RemoteMcpStatus>(
+            { method: "remote.mcp.get", operationID: 3054, resultPath: ["data"], empty: false },
+            {},
+            undefined,
+            requestOptions,
+          ),
+        set: (input: RemoteMcpSetInput, requestOptions?: RequestOptions) =>
+          transport.call<RemoteMcpStatus>(
+            { method: "remote.mcp.set", operationID: 3055, resultPath: ["data"], empty: false },
+            { payload: { enabled: input.enabled } },
+            input,
+            requestOptions,
+          ),
+      },
     },
     location: {
       ...client.location,

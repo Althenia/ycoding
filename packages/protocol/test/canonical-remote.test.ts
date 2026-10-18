@@ -1,6 +1,15 @@
 import { expect, test } from "bun:test"
-import { operations, PeerRole, ScopeKind, Streaming } from "../src/generated/v5/index.js"
-import { connectorOperations, noticeOperations } from "./connector-source.js"
+import {
+  MutationClass,
+  operations,
+  Paging,
+  PeerRole,
+  ScopeKind,
+  Sensitivity,
+  Settlement,
+  Streaming,
+} from "../src/generated/v5/index.js"
+import { connectorOperations, noticeOperations, relayOperations } from "./connector-source.js"
 import { messages } from "../src/generated/v5/contract.js"
 
 test("REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs without remote split descriptors", () => {
@@ -29,14 +38,43 @@ test("REQ-WIRE-001/006 canonical replacements are shared and preserve local IDs 
     expect(operation.roles, name).toEqual([PeerRole.LOCAL_CLIENT, PeerRole.REMOTE_CLIENT, PeerRole.RELAY])
   }
   const canonical = new Set<string>(Object.values(connectorOperations).map(([, name]) => name))
-  expect(canonical.size).toBe(75)
-  expect(operations.filter((operation) => operation.roles.includes(PeerRole.RELAY))).toHaveLength(75)
-  expect(operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT))).toHaveLength(79)
+  expect(canonical.size).toBe(83)
+  expect(operations.filter((operation) => operation.roles.includes(PeerRole.RELAY))).toHaveLength(84)
+  expect(operations.filter((operation) => operation.roles.includes(PeerRole.REMOTE_CLIENT))).toHaveLength(87)
   expect(operations.find((operation) => operation.diagnosticName === "catalog.get")!.operationId).toBe(5043)
   for (const [, [id]] of Object.entries(noticeOperations))
     expect(operations.find((operation) => operation.operationId === id)!.roles).toEqual([PeerRole.REMOTE_CLIENT])
+  for (const [, [id, name]] of Object.entries(relayOperations))
+    expect(operations.find((operation) => operation.operationId === id)).toMatchObject({
+      diagnosticName: name,
+      roles: [PeerRole.RELAY],
+    })
+  const relayOnly = new Set<string>(Object.values(relayOperations).map(([, name]) => name))
   for (const operation of operations.filter((item) => item.roles.includes(PeerRole.RELAY)))
-    expect(canonical.has(operation.diagnosticName), operation.diagnosticName).toBe(true)
+    expect(canonical.has(operation.diagnosticName) !== relayOnly.has(operation.diagnosticName), operation.diagnosticName).toBe(true)
+})
+
+test.each([
+  ["local.app.register", 5047, MutationClass.MUTATION],
+  ["local.app.list", 5048, MutationClass.READ],
+  ["local.app.revoke", 5049, MutationClass.MUTATION],
+  ["local.app.open", 5050, MutationClass.MUTATION],
+  ["local.app.status", 5051, MutationClass.READ],
+  ["local.app.http", 5052, MutationClass.MUTATION],
+] as const)("%s remains a secret Session operation for remote and relay peers only", (name, id, mutation) => {
+  expect(operations.find((operation) => operation.operationId === id)).toMatchObject({
+    diagnosticName: name,
+    roles: [PeerRole.REMOTE_CLIENT, PeerRole.RELAY],
+    scope: ScopeKind.SESSION,
+    mutation,
+    settlement: Settlement.COMPLETED,
+    paging: Paging.UNPAGED,
+    streaming: Streaming.TYPED_BULK,
+    sensitivity: Sensitivity.SECRET,
+    errorTypes: ["ycoding.v5.Connector_Error"],
+    roleScopes: [],
+    eventTypes: [],
+  })
 })
 
 test("REQ-WIRE-006 remote scopes are backend-resolved and cannot carry arbitrary Locations or global event feeds", () => {

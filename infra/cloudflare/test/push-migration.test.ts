@@ -77,3 +77,17 @@ test("the browser-owner migration clears only push registrations, and the v0.7.1
     expect(db.prepare("SELECT COUNT(*) AS count FROM push_subscription").get()).toEqual({ count: 0 })
   } finally { db.close() }
 })
+
+test("the quota pace migration turns the System alert on for every existing subscription and rejects non-boolean choices", async () => {
+  const db = await migratedDatabase("0006_relay_mcp.sql")
+  try {
+    db.prepare('INSERT INTO "user" (id, created_at) VALUES (?, ?)').run("usr_1", 1)
+    db.prepare("INSERT INTO push_subscription (endpoint, account_id, browser_session_id, p256dh, auth, created_at, machine_offline) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run("https://fcm.googleapis.com/fcm/send/existing", "usr_1", "bs_1", "public", "secret", 2, 0)
+    await applyMigration(db, "0007_push_quota_pace.sql")
+    expect(db.prepare("SELECT endpoint, machine_offline, quota_pace FROM push_subscription").all()).toEqual([
+      { endpoint: "https://fcm.googleapis.com/fcm/send/existing", machine_offline: 0, quota_pace: 1 }])
+    expect(db.prepare("PRAGMA table_info('push_subscription')").all()).toContainEqual(expect.objectContaining({ name: "quota_pace", notnull: 1, dflt_value: "1" }))
+    expect(() => db.prepare("UPDATE push_subscription SET quota_pace = 2").run()).toThrow()
+  } finally { db.close() }
+})

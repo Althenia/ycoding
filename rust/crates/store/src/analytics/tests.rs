@@ -16,6 +16,7 @@ use std::time::Instant;
 struct Facts;
 struct Consent;
 static FAIL_SECOND: AtomicBool = AtomicBool::new(false);
+static SOURCE_ROWS: AtomicU64 = AtomicU64::new(0);
 static SERIAL: Mutex<()> = Mutex::new(());
 static PAGE_BARRIER: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> =
     Mutex::new(None);
@@ -95,7 +96,7 @@ static SOURCES: &[Source] = &[Source {
                 .recv_timeout(std::time::Duration::from_secs(20))
                 .unwrap();
         }
-        Ok(snapshot
+        let rows = snapshot
             .scan::<Facts>(
                 after.map_or(Bound::Unbounded, Bound::Excluded),
                 Bound::Unbounded,
@@ -103,7 +104,9 @@ static SOURCES: &[Source] = &[Source {
             )?
             .into_iter()
             .map(normalized)
-            .collect())
+            .collect::<Vec<_>>();
+        SOURCE_ROWS.fetch_add(rows.len() as u64, Ordering::Relaxed);
+        Ok(rows)
     },
 }];
 const CATALOG: Catalog = Catalog::new(
@@ -158,6 +161,9 @@ fn setup() -> (Root, Store, Worker) {
         sources: SOURCES,
         connection: None,
         generation: None,
+        progress: None,
+        staged: None,
+        rebuilt: false,
         before_release: None,
     };
     (root, store, worker)
@@ -313,10 +319,9 @@ fn analytics_queue_deadline_and_cancellation_bounds_leave_canonical_work_availab
     let (reply, first) = std::sync::mpsc::sync_channel(1);
     engine
         .send(crate::analytics::Command {
-            operation: Operation::Rebuild,
+            request: crate::analytics::Request::Operation(Operation::Rebuild, Some(reply)),
             cancellation: Cancellation::default(),
             deadline: Instant::now() + REPORT_DEADLINE,
-            reply: Some(reply),
         })
         .unwrap();
     reached
@@ -334,14 +339,13 @@ fn analytics_queue_deadline_and_cancellation_bounds_leave_canonical_work_availab
         }
         engine
             .send(crate::analytics::Command {
-                operation: Operation::Rebuild,
+                request: crate::analytics::Request::Operation(Operation::Rebuild, Some(reply)),
                 cancellation,
                 deadline: if expired {
                     Instant::now()
                 } else {
                     Instant::now() + REPORT_DEADLINE
                 },
-                reply: Some(reply),
             })
             .unwrap();
         receipts.push(receipt);
@@ -578,4 +582,180 @@ fn rows_totals_and_pagination_share_read_view_without_cross_request_snapshot_cla
             vec![vec![Value::BigInt(1), Value::BigInt(99)]]
         ]
     );
+}
+
+fn snapshot_queries() -> Vec<Query> {
+    vec![Query {
+        sql: "SELECT count(*), coalesce(sum(amount), 0)::BIGINT FROM report_test_metrics",
+        parameters: Vec::new(),
+        max_rows: 1,
+    }]
+}
+
+#[test]
+fn cancelled_snapshot_staging_is_not_cached_and_next_report_is_complete() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let (_root, store, mut worker) = setup();
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    let captured = worker.read_state().unwrap();
+    let (started, reached) = std::sync::mpsc::channel();
+    let (release, barrier) = std::sync::mpsc::channel();
+    *PAGE_BARRIER.lock().unwrap() = Some((started, barrier));
+    let cancellation = Cancellation::default();
+    let snapshot = store.snapshot().unwrap();
+    let canceller = {
+        let cancellation = cancellation.clone();
+        std::thread::spawn(move || {
+            reached
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap();
+            cancellation.cancel();
+            release.send(()).unwrap();
+        })
+    };
+    assert!(matches!(
+        worker.snapshot_report(
+            captured.clone(),
+            snapshot,
+            &["test_metrics"],
+            snapshot_queries(),
+            &cancellation,
+            Instant::now() + REPORT_DEADLINE,
+        ),
+        Err(Error::Cancelled)
+    ));
+    canceller.join().unwrap();
+    assert!(worker.staged.is_none());
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    let snapshot = store.snapshot().unwrap();
+    let captured = snapshot.get::<DeliveryTable>(&[]).unwrap().unwrap();
+    assert_eq!(
+        worker
+            .snapshot_report(
+                captured.clone(),
+                snapshot,
+                &["test_metrics"],
+                snapshot_queries(),
+                &Cancellation::default(),
+                Instant::now() + REPORT_DEADLINE,
+            )
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    assert!(worker.staged.is_some());
+    let snapshot = store.snapshot().unwrap();
+    assert_eq!(
+        worker
+            .snapshot_report(
+                captured.clone(),
+                snapshot,
+                &["test_metrics"],
+                snapshot_queries(),
+                &Cancellation::default(),
+                Instant::now() + REPORT_DEADLINE,
+            )
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    store
+        .submit(|tx| {
+            tx.put::<Consent>(&false)?;
+            privacy_changed(tx, Vec::new(), true)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let snapshot = store.snapshot().unwrap();
+    assert!(matches!(
+        worker.snapshot_report(
+            captured,
+            snapshot,
+            &["test_metrics"],
+            snapshot_queries(),
+            &Cancellation::default(),
+            Instant::now() + REPORT_DEADLINE,
+        ),
+        Err(Error::Privacy)
+    ));
+    assert!(worker.staged.is_none());
+}
+
+#[test]
+fn staged_snapshot_reads_exclude_admission_and_survive_delivery_only_writes() {
+    let _serial = SERIAL.lock().unwrap_or_else(|error| error.into_inner());
+    let (_root, store, mut worker) = setup();
+    put(&store, 1, 10);
+    put(&store, 2, 20);
+    SOURCE_ROWS.store(0, Ordering::Relaxed);
+    let snapshot = store.snapshot().unwrap();
+    let captured = snapshot.get::<DeliveryTable>(&[]).unwrap().unwrap();
+    assert_eq!(
+        worker
+            .snapshot_report(
+                captured.clone(),
+                snapshot,
+                &["test_metrics"],
+                snapshot_queries(),
+                &Cancellation::default(),
+                Instant::now() + REPORT_DEADLINE,
+            )
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        worker.staged.as_ref().unwrap().reads,
+        std::collections::BTreeSet::from(["test_consent", "test_facts"])
+    );
+    store
+        .submit(move |tx| {
+            let mut current = tx.get::<DeliveryTable>(&[])?.unwrap();
+            current.generation += 1;
+            current.applied = current.order;
+            current.rebuilding = !current.rebuilding;
+            tx.put::<DeliveryTable>(&current)
+        })
+        .unwrap()
+        .wait()
+        .unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let captured = snapshot.get::<DeliveryTable>(&[]).unwrap().unwrap();
+    assert_eq!(
+        worker
+            .snapshot_report(
+                captured.clone(),
+                snapshot,
+                &["test_metrics"],
+                snapshot_queries(),
+                &Cancellation::default(),
+                Instant::now() + REPORT_DEADLINE,
+            )
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(2), Value::BigInt(30)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 2);
+    store
+        .submit(|tx| tx.put::<Consent>(&false))
+        .unwrap()
+        .wait()
+        .unwrap();
+    let snapshot = store.snapshot().unwrap();
+    let captured = snapshot.get::<DeliveryTable>(&[]).unwrap().unwrap();
+    assert_eq!(
+        worker
+            .snapshot_report(
+                captured,
+                snapshot,
+                &["test_metrics"],
+                snapshot_queries(),
+                &Cancellation::default(),
+                Instant::now() + REPORT_DEADLINE,
+            )
+            .unwrap(),
+        vec![vec![vec![Value::BigInt(0), Value::BigInt(0)]]]
+    );
+    assert_eq!(SOURCE_ROWS.load(Ordering::Relaxed), 4);
 }

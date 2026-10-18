@@ -363,6 +363,7 @@ async fn test019_permission_rules_reply_ownership_and_child_ceiling_gate_real_sh
 }
 
 // Scripted local provider endpoint (F-RUN: replaces only the external provider).
+#[derive(Clone)]
 enum ProviderReply {
     Stream(String),
     Rejected(String),
@@ -445,7 +446,7 @@ fn sse_text(text: &str) -> String {
     format!("data: {first}\n\ndata: {second}\n\ndata: [DONE]\n\n")
 }
 
-fn runner_catalog(endpoint: &str) -> Catalog {
+fn runner_catalog(endpoint: &str, package: &str) -> Catalog {
     let mut catalog = Catalog::new(
         models_dev::normalize(
             &parse_json(include_str!(
@@ -457,7 +458,7 @@ fn runner_catalog(endpoint: &str) -> Catalog {
     );
     catalog
         .configure(&[parse_json(&format!(
-            r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"@ycoding-ai/ai/providers/openai-compatible","settings":{{"apiKey":"sentinel-credential","baseURL":"{endpoint}"}}}}}}}}"#
+            r#"{{"model":{{"providerID":"openai","model":"gpt-reasoning"}},"providers":{{"openai":{{"package":"{package}","settings":{{"apiKey":"sentinel-credential","baseURL":"{endpoint}"}}}}}}}}"#
         ))
         .unwrap()])
         .unwrap();
@@ -536,7 +537,10 @@ async fn test019_runner_permission_reply_gates_real_shell_effect() {
             &parse_json(&format!(r#"{{"directory":"{}"}}"#, repo.display())).unwrap(),
         )
         .unwrap(),
-        models: Arc::new(model::Resolver::new(runner_catalog(&endpoint))),
+        models: Arc::new(model::Resolver::new(runner_catalog(
+            &endpoint,
+            "@ycoding-ai/ai/providers/openai-compatible",
+        ))),
         agents: Arc::new(agent::Service::new(vec![agent::empty("build".into())])),
         credentials: credential::Service::new(fixture.client()),
         tools: registry.clone(),
@@ -617,7 +621,10 @@ async fn test019_runner_permission_reply_gates_real_shell_effect() {
             &parse_json(&format!(r#"{{"directory":"{}"}}"#, repo.display())).unwrap(),
         )
         .unwrap(),
-        models: Arc::new(model::Resolver::new(runner_catalog(&endpoint))),
+        models: Arc::new(model::Resolver::new(runner_catalog(
+            &endpoint,
+            "@ycoding-ai/ai/providers/openai-compatible",
+        ))),
         agents: Arc::new(agent::Service::new(vec![agent::empty("build".into())])),
         credentials: credential::Service::new(fixture.client()),
         tools: registry.clone(),
@@ -1821,7 +1828,32 @@ fn decision_input() -> JsonValue {
 }
 
 fn decision_answer() -> &'static str {
-    "decisions:\n  version: 1\n  answers[1]{name,type,answer,choice,score,confidence}:\n    route,choice,null,review,null,0.8"
+    r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"choice","answer":null,"choice":"review","score":null,"confidence":0.8}]}}"#
+}
+
+fn decision_terminal() -> String {
+    format!(
+        "data: {}\n\n",
+        serde_json::json!({"type":"response.completed","response":{"id":"reply","output":[],"usage":{"input_tokens":3,"output_tokens":2,"raw_payload":"sentinel-raw-payload","account_id":"sentinel-account-id","account_email":"sentinel-email@example.test"}}})
+    )
+}
+
+fn decision_text(text: &str) -> String {
+    format!(
+        "data: {}\n\n{}",
+        serde_json::json!({"type":"response.output_text.delta","item_id":"msg_reply","delta":text}),
+        decision_terminal()
+    )
+}
+
+fn decision_tool() -> String {
+    let item = serde_json::json!({"id":"item_runner","type":"function_call","call_id":"call_runner","name":"shell","arguments":"{\"command\":\"touch must-not-execute\"}"});
+    format!(
+        "data: {}\n\ndata: {}\n\n{}",
+        serde_json::json!({"type":"response.output_item.added","item":item.clone()}),
+        serde_json::json!({"type":"response.output_item.done","item":item}),
+        decision_terminal()
+    )
 }
 
 fn field<'a>(value: &'a JsonValue, key: &str) -> &'a JsonValue {
@@ -1863,13 +1895,19 @@ async fn test022_decision_real_model_usage_refusal_errors_cancel_and_privacy() {
         }
         let reply = match case {
             "provider_error" => ProviderReply::Rejected(serde_json::json!({"error":{"message":"sentinel-credential sentinel-account-id sentinel-email@example.test sentinel-private-header sentinel-raw-payload"}}).to_string()),
-            "refusal" => ProviderReply::Stream(sse_text(&decision_answer().replace("choice,null,review,null,0.8", "refusal,null,null,null,0"))),
-            "invalid_output" => ProviderReply::Stream(sse_text("sentinel-raw-payload")),
-            "tool_injection" => ProviderReply::Stream(sse_tool("touch must-not-execute")),
+            "refusal" => ProviderReply::Stream(decision_text(r#"{"decisions":{"version":1,"answers":[{"name":"route","type":"refusal","answer":null,"choice":null,"score":null,"confidence":0}]}}"#)),
+            "invalid_output" => ProviderReply::Stream(decision_text("sentinel-raw-payload")),
+            "tool_injection" => ProviderReply::Stream(decision_tool()),
             "cancel" => ProviderReply::Held,
-            _ => ProviderReply::Stream(sse_text(decision_answer())),
+            _ => ProviderReply::Stream(decision_text(decision_answer())),
         };
-        let (endpoint, mut requests, server) = provider_server(vec![reply]).await;
+        let recovery = matches!(case, "invalid_output" | "tool_injection");
+        let (endpoint, mut requests, server) = provider_server(if recovery {
+            vec![reply.clone(), reply]
+        } else {
+            vec![reply]
+        })
+        .await;
         let sessions = SessionStoreService::new(fixture.client());
         let mut agent = agent::empty("decision".into());
         agent.hidden = true;
@@ -1879,7 +1917,10 @@ async fn test022_decision_real_model_usage_refusal_errors_cancel_and_privacy() {
             store: sessions.clone(),
             agents,
             models: Arc::new(Models {
-                models: Arc::new(model::Resolver::new(runner_catalog(&endpoint))),
+                models: Arc::new(model::Resolver::new(runner_catalog(
+                    &endpoint,
+                    "@ycoding-ai/ai/providers/openai",
+                ))),
                 credentials: credential::Service::new(fixture.client()),
                 auth: Default::default(),
                 cursor: None,
@@ -1926,6 +1967,14 @@ async fn test022_decision_real_model_usage_refusal_errors_cancel_and_privacy() {
             None
         };
         let result = within(task).await.unwrap();
+        if recovery {
+            let second = within(requests.recv()).await.unwrap();
+            assert_eq!(
+                request.as_ref(),
+                Some(&second),
+                "{case}: recovery preserves the request"
+            );
+        }
         let ledger = fixture
             .store()
             .snapshot()
@@ -1934,8 +1983,12 @@ async fn test022_decision_real_model_usage_refusal_errors_cancel_and_privacy() {
             .unwrap();
         assert_eq!(
             ledger.len(),
-            usize::from(permitted),
-            "{case}: no implicit retry or forbidden helper execution"
+            if permitted {
+                if recovery { 2 } else { 1 }
+            } else {
+                0
+            },
+            "{case}: exact bounded attempts and no forbidden helper execution"
         );
         if matches!(case, "success" | "refusal") {
             let output = result.as_ref().unwrap();
@@ -2020,7 +2073,10 @@ async fn test022_decision_real_model_usage_refusal_errors_cancel_and_privacy() {
             server.abort();
             assert!(server.await.unwrap_err().is_cancelled());
         }
-        assert!(requests.try_recv().is_err(), "{case}: no automatic retry");
+        assert!(
+            requests.try_recv().is_err(),
+            "{case}: no attempts beyond bounded recovery"
+        );
         assert!(!fixture.temp.repo_a.join("must-not-execute").exists());
         assert_eq!(
             fixture.authority().session(&root, None).unwrap().configured,

@@ -3,7 +3,7 @@ import { useTheme } from "../../context/theme"
 import { useData } from "../../context/data"
 import { PromptFooterIdentity } from "../../component/prompt"
 import { ModeChips } from "../../component/prompt/mode-chips"
-import { KeepAwakeIndicator, useKeepAwake } from "../../keep-awake"
+import { useKeepAwake } from "../../keep-awake"
 import { Keymap } from "../../context/keymap"
 import { useRoute } from "../../context/route"
 import { groupSessionShells } from "../../util/session"
@@ -61,7 +61,6 @@ export function Footer(props: {
       paddingRight={3}
       backgroundColor={theme.background.chrome}
     >
-      <KeepAwakeIndicator />
       <box
         width="100%"
         height={props.subagent ? 1 : 3}
