@@ -451,6 +451,8 @@ Use 6/10/14/20px rounded steps and the 999px pill for compact controls and chips
 
 ## Components
 
+Session list refreshes retain the resident rows and scroll geometry. Show `Loading more sessions…` only for a pending cursor page, not a background refresh. The desktop `.workspace__rail-body` reserves the W7 scrollbar gutter before overflow appears (`verify/scrollbar.integration.test.ts`).
+
 The Machine keep-awake status and caveat each occupy a full flex line. `.machine-awake__status` reserves six `--yc-leading-xs` lines before the first read, uses that line height, wraps long words, and grows rather than clipping longer errors. Render lid `held` as held by another YCoding process, not as local lid control. Map danger and attention to `--yc-danger` and `--yc-yellow-strong`; retain the shared hint treatment otherwise. Verify initial-to-settled geometry at 320px, 390px, and 1440px in both themes.
 
 Keep Usage summary sparklines in normal flow below the reported totals and metadata; never layer a chart over a numeric value (`verify/usage-page.integration.test.ts`).

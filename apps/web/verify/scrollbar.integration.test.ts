@@ -24,6 +24,51 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
+test("a background Session refresh preserves the sidebar scroll range, rows, and focus", async () => {
+  const page = await browser!.openPage()
+  try {
+    for (const theme of ["light", "dark"]) for (const width of [768, 1440]) for (const reduced of [false, true]) {
+      await page.setViewport(width, 900)
+      await page.setReducedMotion(reduced)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&inventoryCount=4&sessionListGate=1&machineName=Personal&theme=${theme}`)
+      for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.remotePendingSessionLists?.() > 0`); attempt++) await Bun.sleep(25)
+      await page.evaluate(`window.remoteReleaseSessionList()`)
+      for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.providerAuthState().activeSessionID === 'ses_fixture' && window.providerAuthState().sessions.length === 3 && !window.providerAuthState().sessionPageLoading`); attempt++) await Bun.sleep(25)
+      await page.evaluate(`document.fonts.ready`)
+      await frames(page)
+      const height = await page.evaluate<number>(`(() => { const root = document.querySelector('.workspace__rail-body'); return innerHeight - root.clientHeight + root.firstElementChild.getBoundingClientRect().height + 20 })()`)
+      await page.setViewport(width, Math.ceil(height))
+      await frames(page)
+      await page.evaluate(`(() => {
+        window.sidebarRows = [...document.querySelectorAll('.workspace__rail .session-row')]
+        window.sidebarRows[1].focus({ preventScroll: true })
+        window.sidebarState = () => {
+          const root = document.querySelector('.workspace__rail-body')
+          const list = root.querySelector('.session-list')
+          const state = window.providerAuthState()
+          return { height: root.clientHeight, scrollHeight: root.scrollHeight, top: root.scrollTop, width: list.clientWidth,
+            listHeight: list.getBoundingClientRect().height, rows: state.sessions.map(row => row.id), workspace: state.selectedWorkspaceID,
+            heading: root.querySelector('.session-panel__workspace').textContent, footer: [...root.querySelectorAll('.panel__note')].map(note => note.textContent),
+            active: state.activeSessionID, focused: document.activeElement === window.sidebarRows[1], retained: window.sidebarRows.every(row => row.isConnected) }
+        }
+      })()`)
+      const before = await page.evaluate<{ height: number; scrollHeight: number; rows: string[]; focused: boolean }>(`window.sidebarState()`)
+      expect(before.rows).toHaveLength(3)
+      expect(before.scrollHeight).toBe(before.height)
+      expect(before.focused).toBe(true)
+      await page.evaluate(`window.remoteHoldSessionLists(); window.remoteInvalidateSessions()`)
+      for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.remotePendingSessionLists() > 0`); attempt++) await Bun.sleep(25)
+      expect(await page.evaluate<boolean>(`window.providerAuthState().sessionPageLoading`)).toBe(true)
+      const pending = await page.evaluate<(typeof before)[]>(`new Promise(resolve => { const samples = []; const sample = () => { samples.push(window.sidebarState()); if (samples.length === 16) resolve(samples); else requestAnimationFrame(sample) }; requestAnimationFrame(sample) })`)
+      await page.evaluate(`window.remoteReleaseSessionList()`)
+      for (let attempt = 0; attempt < 100 && await page.evaluate<boolean>(`window.providerAuthState().sessionPageLoading`); attempt++) await Bun.sleep(25)
+      await frames(page)
+      for (const sample of pending) expect(sample).toEqual(before)
+      expect(await page.evaluate<typeof before>(`window.sidebarState()`)).toEqual(before)
+    }
+  } finally { await page.close() }
+}, 40_000)
+
 test("remote scroll regions draw the owned thumb at rest, under the pointer, and while dragged in both themes", async () => {
   for (const theme of ["light", "dark"] as const) {
     const page = await remote("view=settings&noSelection=1", "System alerts", 1440, 900, theme)
@@ -54,6 +99,33 @@ test("remote scroll regions draw the owned thumb at rest, under the pointer, and
     } finally { await page.close() }
   }
 }, 60_000)
+
+test("cursor paging still shows loading feedback in the sidebar and Sessions table", async () => {
+  for (const view of ["chat", "sessions"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=${view}&inventoryCount=60&sessionListGate=1`)
+      for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.remotePendingSessionLists?.() > 0`); attempt++) await Bun.sleep(25)
+      const scope = view === "chat" ? ".workspace__rail-body" : ".workspace__scroll"
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('${scope} [role=status]')].some(item => item.textContent.includes('Loading sessions'))`)).toBe(true)
+      await page.evaluate(`window.remoteReleaseSessionList()`)
+      for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.providerAuthState().selectedSessionInfo?.id === 'ses_fixture' && window.providerAuthState().sessionHasNext && !window.providerAuthState().sessionPageLoading`); attempt++) await Bun.sleep(25)
+      await frames(page)
+      const resident = await page.evaluate<number>(`window.providerAuthState().sessions.length`)
+      expect(resident).toBeGreaterThanOrEqual(25)
+      await page.evaluate(`(() => { window.remoteHoldSessionLists(); const root = document.querySelector('${scope}'); root.scrollTop = root.scrollHeight; root.dispatchEvent(new WheelEvent('wheel', { deltaY: 250, bubbles: true })); })()`)
+      for (let attempt = 0; attempt < 100 && !await page.evaluate<boolean>(`window.remotePendingSessionLists() > 0`); attempt++) await Bun.sleep(25)
+      expect(await page.evaluate<boolean>(`window.providerAuthState().sessionPaginationLoading`)).toBe(true)
+      expect(await page.evaluate<number>(`window.providerAuthState().sessions.length`)).toBe(resident)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('${scope} [role=status]')].some(item => item.textContent.includes('Loading more sessions'))`)).toBe(true)
+      await page.evaluate(`window.remoteReleaseSessionList()`)
+      for (let attempt = 0; attempt < 100 && await page.evaluate<boolean>(`window.providerAuthState().sessionPageLoading`); attempt++) await Bun.sleep(25)
+      expect(await page.evaluate<number>(`window.providerAuthState().sessions.length`)).toBe(31)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('${scope} [role=status]')].some(item => item.textContent.includes('Loading more sessions'))`)).toBe(false)
+    } finally { await page.close() }
+  }
+}, 20_000)
 
 test("the public page and horizontal scroll regions use the same owned scrollbar", async () => {
   const page = await browser!.openPage()
@@ -89,11 +161,32 @@ test("primary scroll regions keep their content width when overflow appears", as
     try {
       const overflowing = await scrollerBox(page, ".app--settings .workspace__scroll")
       expect(overflowing.scrollable).toBe(true)
-      await page.evaluate(`document.head.insertAdjacentHTML('beforeend', '<style>.app--settings .settings > :not(:first-child), .app--settings .page-head { display: none; }</style>')`)
+      await page.evaluate(`document.head.insertAdjacentHTML('beforeend', '<style>.app--settings .settings > :not([aria-labelledby="app-settings"]), .app--settings .page-head { display: none; }</style>')`)
       await frames(page)
       const fitting = await scrollerBox(page, ".app--settings .workspace__scroll")
       expect(fitting.scrollable).toBe(false)
       expect(fitting.client).toBe(overflowing.client)
+    } finally { await page.close() }
+  }
+}, 30_000)
+
+test("the Sessions sidebar reserves its scrollbar gutter before its rows overflow", async () => {
+  for (const theme of ["light", "dark"] as const) for (const width of [768, 1440]) {
+    const page = await remote("view=chat&inventoryCount=4", "Inventory Session", width, 1100, theme)
+    try {
+      await page.evaluate(`document.fonts.ready`)
+      await frames(page)
+      const fitting = await scrollerBox(page, ".workspace__rail-body")
+      expect(fitting.scrollable).toBe(false)
+      await page.setViewport(width, 600)
+      await frames(page)
+      const overflowing = await scrollerBox(page, ".workspace__rail-body")
+      expect(overflowing.scrollable).toBe(true)
+      expect(overflowing.client).toBe(fitting.client)
+      expect(fitting.gutter).toBe("stable")
+      expect(overflowing.thickness).toBe(await scrollbarSize(page))
+      await page.setViewport(767, 900)
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.workspace__rail-body')).scrollbarGutter`)).toBe("auto")
     } finally { await page.close() }
   }
 }, 30_000)
