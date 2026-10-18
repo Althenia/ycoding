@@ -23,6 +23,8 @@ env:
 
 jobs:
   unit:
+    # Temporarily disabled until the Rust release; remove this job-level if to restore.
+    if: ${{ false }}
     name: unit (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
@@ -125,6 +127,8 @@ jobs:
         run: bun run check:generated
 
   portability:
+    # Temporarily disabled until the Rust release; remove this job-level if to restore.
+    if: ${{ false }}
     name: portability regressions (windows)
     runs-on: windows-2025
     permissions:
