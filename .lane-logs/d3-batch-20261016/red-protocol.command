@@ -1,1 +1,0 @@
-bun test --cwd packages/protocol test/usage-wire-contract.test.ts test/usage-accounting.test.ts test/session-usage-report.test.ts test/usage.test.ts test/connector-coverage.test.ts test/canonical-remote.test.ts test/local-family.test.ts test/session-coverage.test.ts

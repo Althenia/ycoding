@@ -30,6 +30,7 @@ a.out
 target
 .scripts
 .cache
+/.lane-logs/
 .direnv/
 
 # Local dev files
