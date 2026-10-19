@@ -14,7 +14,6 @@ import {
 } from "@ycoding-ai/schema/session-orchestration"
 import { Agent } from "../agent"
 import { Config } from "../config"
-import { ConfigQuestionTimeout } from "../config/question-timeout"
 import { Database } from "../database/database"
 import { Decision } from "../decision"
 import { DecisionChoice } from "../decision-choice"
@@ -23,11 +22,9 @@ import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { Permission } from "../permission"
-import { AppProcess } from "../process"
-import { ShellLedger } from "../shell/ledger"
 import { Hash } from "../util/hash"
 import { canonicalJSON } from "./context-manifest"
-import { Context, Duration, Effect, Fiber, Layer, Schema, Scope } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { Session } from "../session"
@@ -407,38 +404,7 @@ const layer = Layer.effect(
     const sessions = yield* Session.Service
     const autonomy = yield* SessionAutonomy.Service
     const locations = yield* LocationServiceMap.Service
-    const appProcess = yield* AppProcess.Service
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
-    const lifetime = yield* Scope.Scope
-    const timers = new Map<SessionSchema.ID, Fiber.Fiber<void>>()
-
-    const disarmQuestionTimer = Effect.fn("SessionOrchestration.disarmQuestionTimer")(function* (
-      childID: SessionSchema.ID,
-    ) {
-      const timer = timers.get(childID)
-      if (!timer) return
-      timers.delete(childID)
-      yield* Fiber.interrupt(timer)
-    })
-
-    const stopDeferredTimer = yield* events.listen((event) => {
-      if (event.type !== SessionEvent.Review.Deferred.type) return Effect.void
-      const data = Schema.decodeUnknownSync(SessionEvent.Review.Deferred.data)(event.data)
-      return data.kind === "subagent_question" ? disarmQuestionTimer(data.sessionID) : Effect.void
-    })
-    yield* Effect.addFinalizer(() => stopDeferredTimer)
-
-    const questionTimeoutSeconds = Effect.fn("SessionOrchestration.questionTimeoutSeconds")(function* (
-      childID: SessionSchema.ID,
-    ) {
-      const child = yield* sessions
-        .get(childID)
-        .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
-      if (!child) return 0
-      const config = yield* Config.Service.pipe(Effect.provide(locations.get(child.location)), Effect.exit)
-      if (config._tag === "Failure") return ConfigQuestionTimeout.seconds(undefined)
-      return ConfigQuestionTimeout.seconds(Config.latest(yield* config.value.entries(), "question_timeout_seconds"))
-    })
 
     type SleepAnswerOutcome =
       | { readonly type: "answer"; readonly text: string }
@@ -516,101 +482,6 @@ const layer = Layer.effect(
       const row = yield* task(childID)
       if (!row) return yield* Effect.die(new Error(`Projected task missing: ${childID}`))
       return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
-    })
-
-    const expireQuestion = Effect.fn("SessionOrchestration.expireQuestion")((
-      childID: SessionSchema.ID,
-      questionID: QuestionID,
-      seconds: number,
-    ) =>
-      locks.withLock(childID)(
-        Effect.gen(function* () {
-          timers.delete(childID)
-          const row = yield* task(childID)
-          if (!row || row.state !== "waiting" || row.question_id !== questionID) return
-          if (yield* SessionReviewFold.ownsQuestion(db, childID, questionID)) return
-          yield* sessions
-            .synthetic({
-              id: SessionOrchestrationIdentity.launch(
-                row.parent_id,
-                row.parent_assistant_message_id,
-                row.tool_call_id,
-              ).answer(questionID),
-              sessionID: childID,
-              text: `No parent answer arrived within ${seconds} seconds for question ${questionID}. The question is closed and can no longer be answered. Proceed using your own best judgment.`,
-              description: "Parent answer timed out",
-              metadata: {
-                source: "subagent_parent",
-                parentID: row.parent_id,
-                childID,
-                kind: "timeout",
-                questionID,
-              },
-              delivery: "steer",
-              resume: false,
-            })
-            .pipe(
-              Effect.mapError((error) =>
-                error._tag === "Session.NotFoundError"
-                  ? new TaskNotFoundError({ childID })
-                  : new ConflictError({ message: `Conflicting timeout for ${questionID}` }),
-              ),
-            )
-          yield* publish(childID, { type: "question_timed_out", questionID })
-          yield* execution.wake(childID)
-        }).pipe(Effect.uninterruptible),
-      ),
-    )
-
-    const armQuestionTimer = Effect.fn("SessionOrchestration.armQuestionTimer")(function* (
-      childID: SessionSchema.ID,
-      questionID: QuestionID,
-      elapsedMillis: number,
-    ) {
-      yield* disarmQuestionTimer(childID)
-      const seconds = yield* questionTimeoutSeconds(childID)
-      if (seconds === 0) return
-      const remaining = Math.max(0, seconds * 1000 - elapsedMillis)
-      const timer = yield* Effect.sleep(Duration.millis(remaining)).pipe(
-        Effect.andThen(expireQuestion(childID, questionID, seconds)),
-        Effect.catch((error) => Effect.logWarning("subagent question timeout failed", { childID, questionID, error })),
-        Effect.forkIn(lifetime),
-      )
-      timers.set(childID, timer)
-    })
-
-    const armWaitingQuestions = Effect.gen(function* () {
-      const waiting = yield* db
-        .select()
-        .from(SessionTaskTable)
-        .where(eq(SessionTaskTable.state, "waiting"))
-        .orderBy(asc(SessionTaskTable.time_created), asc(SessionTaskTable.session_id))
-        .all()
-        .pipe(Effect.orDie)
-      if (waiting.length === 0) return
-      const processes = yield* ShellLedger.processes(appProcess).pipe(Effect.option)
-      if (processes._tag === "None") {
-        yield* Effect.logWarning("could not list processes; subagent question timers were not re-armed")
-        return
-      }
-      yield* Effect.forEach(
-        waiting,
-        (row) =>
-          locks.withLock(row.session_id)(
-            Effect.gen(function* () {
-              const latest = yield* task(row.session_id)
-              if (!latest || latest.state !== "waiting" || latest.question_id === null) return
-              if (yield* SessionReviewFold.ownsQuestion(db, latest.session_id, latest.question_id)) return
-              if (latest.owner_pid !== process.pid && ShellLedger.alive(processes.value, latest.owner_pid, latest.owner_started)) return
-              yield* armQuestionTimer(
-                latest.session_id,
-                latest.question_id,
-                Date.now() - (latest.question_time ?? Date.now()),
-              )
-            }),
-          ),
-        { concurrency: 4, discard: true },
-      )
     })
 
     const result: Interface = {
@@ -862,7 +733,6 @@ const layer = Layer.effect(
                 return admitted === undefined || (admitted.type === "synthetic" && Hash.json({ data: admitted.data, delivery: admitted.delivery }) === Hash.json({ data, delivery: "steer" }))
               }) })
               if (committed.length === 0) return yield* new ConflictError({ message: `Question ${input.questionID} changed before answer delivery` })
-              yield* disarmQuestionTimer(input.childID)
               yield* execution.wake(input.childID)
               return yield* current(input.childID)
             }
@@ -876,7 +746,6 @@ const layer = Layer.effect(
                 ),
               )
             yield* publish(input.childID, change)
-            yield* disarmQuestionTimer(input.childID)
             yield* execution.wake(input.childID)
             return yield* current(input.childID)
           }),
@@ -889,7 +758,6 @@ const layer = Layer.effect(
             if (row.state === "cancelled") return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
             if (row.state !== "starting" && row.state !== "running" && row.state !== "waiting")
               return yield* new ConflictError({ message: `Cannot cancel task in ${row.state}` })
-            yield* disarmQuestionTimer(input.childID)
             if (row.question_id) {
               const folded = yield* SessionReviewFold.fold(db, [input.childID])
               yield* Effect.forEach(
@@ -1066,7 +934,6 @@ const layer = Layer.effect(
               return { question, autoAnswered: true }
             }
             yield* publish(childID, { type: "question_asked", question })
-            yield* armQuestionTimer(childID, question.id, 0)
             return { question, autoAnswered: false }
           }),
         ),
@@ -1250,12 +1117,6 @@ const layer = Layer.effect(
         ),
       ),
     }
-    // Started in the background because resolving each task's Location config builds Location
-    // layers, which may depend on this service.
-    yield* armWaitingQuestions.pipe(
-      Effect.catchCause((cause) => Effect.logWarning("failed to re-arm subagent question timers", { cause })),
-      Effect.forkIn(lifetime, { startImmediately: true }),
-    )
     return result
   }),
 )
@@ -1270,7 +1131,6 @@ export const node = makeGlobalNode({
     SessionExecution.node,
     Session.node,
     LocationServiceMap.node,
-    AppProcess.node,
   ],
 })
 

@@ -248,7 +248,6 @@ export const configurationPages: readonly DocPage[] = [
               ["`commands`", "record of command objects", "unset", "Named slash commands."],
               ["`instructions`", "string[]", "unset", "Accepted but not read by instruction discovery. Use `AGENTS.md` or skills."],
               ["`instruction_max_bytes`", "positive integer ≤ 1048576", "`51200`", "Per-file UTF-8 byte cap for ambient `AGENTS.md` instructions."],
-              ["`question_timeout_seconds`", "integer 0–86400", "`300`", "Seconds an unanswered question, Form, or subagent question stays open before it times out. `0` disables the timeout."],
               ["`references`", "record", "unset", "Named local directories or Git repositories used as context."],
               ["`plugins`", "array of string | `{ package, options? }`", "unset", "Ordered plugin additions and removals."],
               ["`providers`", "record of provider objects", "unset", "Provider and model metadata and request overlays."],
@@ -259,6 +258,10 @@ export const configurationPages: readonly DocPage[] = [
               ["`experimental.subagent_depth`", "integer ≥ 0", "`1`", "Maximum subagent nesting depth."],
               ["`experimental.policies`", "array", "unset", "Ordered configured-resource policies."],
             ],
+          },
+          {
+            kind: "paragraph",
+            text: "Required-answer questions and Forms have no elapsed-time expiry. They wait for an answer, explicit cancellation, or lifecycle invalidation. Ordinary pending Forms and questions are process-local and are not restored after a server restart; task-backed child questions retain their durable waiting state. Automatic answers require the Session's explicit /auto-answer setting, and permission and guardrail approvals keep their own safety gates.",
           },
           {
             kind: "table",

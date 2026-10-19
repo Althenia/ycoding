@@ -1,9 +1,8 @@
 export * as Form from "./form"
 
 import { Form } from "@ycoding-ai/schema/form"
-import { Cache, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Scope, Semaphore } from "effect"
+import { Cache, Context, Deferred, Duration, Effect, Exit, Layer, Option, Schema, Semaphore } from "effect"
 import { Config } from "./config"
-import { ConfigQuestionTimeout } from "./config/question-timeout"
 import { Database } from "./database/database"
 import { Decision } from "./decision"
 import { DecisionChoice } from "./decision-choice"
@@ -107,9 +106,7 @@ interface Entry {
   readonly form: Info
   readonly state: State
   readonly deferred: Deferred.Deferred<TerminalState>
-  readonly created: number
   readonly waiting: boolean
-  readonly timer?: Fiber.Fiber<void>
 }
 
 export const layer = Layer.effect(
@@ -120,7 +117,6 @@ export const layer = Layer.effect(
     const events = yield* EventRuntime.Service
     const autonomy = yield* SessionAutonomy.Service
     const decision = yield* Decision.Service
-    const lifetime = yield* Scope.Scope
     const settle = Semaphore.makeUnsafe(1)
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => settle.withPermit(Effect.uninterruptible(effect))
     const forms = yield* Cache.makeWith<ID, Entry>(
@@ -143,35 +139,19 @@ export const layer = Layer.effect(
       )
     })
 
-    const complete = Effect.fn("Form.complete")(function* (entry: Entry, state: TerminalState) {
+    const complete = Effect.fn("Form.complete")(function* (
+      entry: Entry,
+      state: Exclude<TerminalState, { readonly status: "timed_out" }>,
+    ) {
       const id = entry.form.id
       const sessionID = entry.form.sessionID
       yield* state.status === "answered"
         ? events.publish(Event.Replied, { id, sessionID, answer: state.answer })
         : state.status === "cancelled"
           ? events.publish(Event.Cancelled, { id, sessionID })
-          : state.status === "deferred"
-            ? events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID })
-            : events.publish(Event.TimedOut, { id, sessionID })
-      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, created: entry.created, waiting: entry.waiting, state })
+          : events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID })
+      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, waiting: entry.waiting, state })
       yield* Deferred.succeed(entry.deferred, state)
-      if (entry.timer && state.status !== "timed_out") yield* Fiber.interrupt(entry.timer)
-    })
-
-    const armTimeout = Effect.fn("Form.armTimeout")(function* (id: ID) {
-      const seconds = ConfigQuestionTimeout.seconds(Config.latest(yield* config.entries(), "question_timeout_seconds"))
-      if (seconds === 0) return
-      yield* exclusive(Effect.gen(function* () {
-        const entry = yield* find(id).pipe(Effect.orDie)
-        if (entry.state.status !== "pending" || entry.timer) return
-        const remaining = Math.max(0, seconds * 1000 - ((yield* Clock.currentTimeMillis) - entry.created))
-        const timer = yield* Effect.sleep(Duration.millis(remaining)).pipe(
-          Effect.andThen(expire(id, seconds)),
-          Effect.interruptible,
-          Effect.forkIn(lifetime),
-        )
-        yield* Cache.set(forms, id, { ...entry, timer })
-      }))
     })
 
     const createPending = Effect.fn("Form.createPending")((input: CreateInput, waiting = false) =>
@@ -193,7 +173,6 @@ export const layer = Layer.effect(
             form,
             state: { status: "pending" },
             deferred: yield* Deferred.make<TerminalState>(),
-            created: yield* Clock.currentTimeMillis,
             waiting,
           }
           yield* Cache.set(forms, id, entry)
@@ -249,13 +228,7 @@ export const layer = Layer.effect(
         })), { discard: true })
     })
 
-    const create = Effect.fn("Form.create")((input: CreateInput) =>
-      Effect.uninterruptible(Effect.gen(function* () {
-        const form = yield* createPending(input)
-        yield* armTimeout(form.id)
-        return form
-      })),
-    )
+    const create = Effect.fn("Form.create")((input: CreateInput) => createPending(input))
 
     const ask = Effect.fn("Form.ask")((input: CreateInput) =>
       Effect.uninterruptibleMask((restore) =>
@@ -316,7 +289,6 @@ export const layer = Layer.effect(
                   Effect.orDie,
                 )
               : false
-            if (!answer) yield* armTimeout(form.id)
             const result = yield* Deferred.await(entry.deferred)
             return automatic ? { ...result, automatic: true as const } : result
           })).pipe(
@@ -361,16 +333,6 @@ export const layer = Layer.effect(
           if (entry.state.status !== "pending") return yield* new AlreadySettledError({ id })
           yield* complete(entry, { status: "cancelled" })
         }),
-      ),
-    )
-
-    const expire = Effect.fn("Form.expire")((id: ID, seconds: number) =>
-      exclusive(
-        Effect.gen(function* () {
-          const entry = yield* find(id)
-          if (entry.state.status !== "pending") return
-          yield* complete(entry, { status: "timed_out", seconds })
-        }).pipe(Effect.orDie),
       ),
     )
 

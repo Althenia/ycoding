@@ -1,10 +1,9 @@
 import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
-import { Duration, Effect, Fiber, Layer, Logger, PubSub, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Logger, PubSub, Schema, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
-import { ConfigQuestionTimeout } from "@ycoding-ai/core/config/question-timeout"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { ConfigModel } from "@ycoding-ai/core/config/model"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
@@ -340,19 +339,14 @@ describe("Config", () => {
     }),
   )
 
-  it.effect("decodes and bounds question_timeout_seconds with a 5 minute default and 0 disabling", () =>
+  it.effect("does not advertise an elapsed-time question expiry setting", () =>
     Effect.sync(() => {
-      const decode = Schema.decodeUnknownSync(Config.Info)
-      expect(decode({}).question_timeout_seconds).toBeUndefined()
-      expect(decode({ question_timeout_seconds: 30 }).question_timeout_seconds).toBe(30)
-      expect(decode({ question_timeout_seconds: 0 }).question_timeout_seconds).toBe(0)
-      expect(decode({ question_timeout_seconds: 86_400 }).question_timeout_seconds).toBe(86_400)
-      for (const invalid of [-1, 86_401, 1.5, "300"]) expect(() => decode({ question_timeout_seconds: invalid })).toThrow()
-
-      expect(ConfigQuestionTimeout.seconds(undefined)).toBe(300)
-      expect(ConfigQuestionTimeout.duration(undefined)).toEqual(Duration.seconds(300))
-      expect(ConfigQuestionTimeout.duration(45)).toEqual(Duration.seconds(45))
-      expect(ConfigQuestionTimeout.duration(0)).toBeUndefined()
+      expect(Schema.toJsonSchemaDocument(Config.Info).definitions["Config.Info"]).toMatchObject({
+        properties: expect.not.objectContaining({ question_timeout_seconds: expect.anything() }),
+      })
+      const decode = Schema.decodeUnknownSync(Config.Info, { onExcessProperty: "error" })
+      expect(decode({})).toBeDefined()
+      for (const seconds of [0, 300]) expect(() => decode({ question_timeout_seconds: seconds })).toThrow()
     }),
   )
 
@@ -1180,7 +1174,8 @@ describe("Config", () => {
     ),
   )
 
-  it.live("drops retired decisions config with one ordinary warning and diagnostic", () => {
+  for (const [key, value] of [["decisions", {}], ["question_timeout_seconds", 0], ["question_timeout_seconds", 300]] as const) {
+  it.live(`drops retired ${key}=${JSON.stringify(value)} with one ordinary warning and diagnostic`, () => {
     const warnings: unknown[] = []
     const logger = Logger.map(Logger.formatStructured, (entry) => {
       if (Array.isArray(entry.message) && entry.message[0] === "recovered config item") warnings.push(entry.message[1])
@@ -1190,7 +1185,7 @@ describe("Config", () => {
       (tmp) => Effect.gen(function* () {
         const target = path.join(tmp.path, "ycoding.jsonc")
         yield* Effect.promise(() => fs.writeFile(target, JSON.stringify({
-          decisions: {}, shell: "/bin/zsh",
+          [key]: value, shell: "/bin/zsh",
           mcp: { servers: { good: { type: "local", command: ["server"] } } },
           guardrails: { enabled: false },
         })))
@@ -1198,12 +1193,12 @@ describe("Config", () => {
           const config = yield* Config.Service
           const entries = yield* config.entries()
           const document = entries.find((entry) => entry.type === "document")
-          expect(document?.info).not.toHaveProperty("decisions")
+          expect(document?.info).not.toHaveProperty(key)
           expect(Config.latest(entries, "shell")).toBe("/bin/zsh")
           expect(Config.latest(entries, "mcp")?.servers).toHaveProperty("good")
           expect(Config.latest(entries, "guardrails")?.enabled).toBe(false)
           expect(yield* config.diagnostics()).toEqual([{
-            path: target, jsonPath: "$.decisions", reason: "removed-keys", message: "Removed or unknown configuration key",
+            path: target, jsonPath: `$.${key}`, reason: "removed-keys", message: "Removed or unknown configuration key",
           }])
           expect<unknown>(warnings).toEqual(yield* config.diagnostics())
         }).pipe(Effect.provide(testLayer(tmp.path)))
@@ -1211,6 +1206,7 @@ describe("Config", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ).pipe(Effect.provide(Logger.layer([logger])))
   })
+  }
 
   it.live("warns once for each removed configuration key", () => {
     const warnings: { path: string; jsonPath: string; reason: string; message: string }[] = []

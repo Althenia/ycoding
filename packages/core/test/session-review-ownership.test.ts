@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -193,22 +193,24 @@ it.effect("a child decision and its human answer become visible atomically", () 
   expect((yield* sessions.pending(fixture.child.id)).some((input) => input.type === "synthetic" && input.data.text.includes("Human evidence"))).toBe(true)
 }))
 
-it.effect("sleep conversion disarms the existing child-question timer", () => Effect.gen(function* () {
+it.effect("sleep conversion keeps an old child question pending under human review ownership", () => Effect.gen(function* () {
   const fixture = yield* childQuestion
   const sessions = yield* Session.Service
   const orchestration = yield* SessionOrchestration.Service
-  const clock = yield* Clock.Clock
-  let interrupted = 0
-  yield* orchestration.question(fixture.child.id, "Need human evidence").pipe(Effect.provideService(Clock.Clock, {
-    ...clock, sleep: (duration) => clock.sleep(duration).pipe(Effect.onInterrupt(() => Effect.sync(() => { interrupted += 1 }))),
-  }))
-  yield* Effect.yieldNow
-  expect(interrupted).toBe(0)
+  const question = yield* orchestration.question(fixture.child.id, "Need human evidence")
   yield* sessions.autonomy.set({ sessionID: fixture.root.id, sleep: true })
-  expect(interrupted).toBe(1)
+  yield* TestClock.adjust("24 hours")
+  expect(yield* orchestration.get(fixture.root.id, fixture.child.id)).toMatchObject({
+    state: "waiting", question: { id: question.question.id, deferred: true },
+  })
+  expect(yield* orchestration.answer({ parentID: fixture.root.id, childID: fixture.child.id, questionID: question.question.id, text: "Parent answer" }).pipe(Effect.flip)).toBeInstanceOf(SessionOrchestration.ConflictError)
+  const reviews = yield* SessionReview.Service
+  const item = (yield* reviews.list(fixture.root.id))[0]
+  yield* reviews.decide({ sessionID: fixture.root.id, itemID: item.itemID, decision: { kind: "subagent_question", text: "Human evidence" } })
+  expect(yield* orchestration.get(fixture.root.id, fixture.child.id)).toMatchObject({ state: "running", question: undefined })
 }))
 
-it.effect("a human answer that cannot reach its closed child question reports a conflict", () => Effect.gen(function* () {
+it.effect("a human answer cannot overtake a historically closed child question", () => Effect.gen(function* () {
   const fixture = yield* childQuestion
   const sessions = yield* Session.Service
   const orchestration = yield* SessionOrchestration.Service

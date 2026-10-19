@@ -386,7 +386,6 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.    |
 | `capabilities`          | object                                | [Capability toggles](#capability-toggles) for instructions, skills, tools, MCP, plugins.    |
 | `instruction_max_bytes` | positive integer                      | Maximum bytes loaded from each ambient instruction file; default 51,200, maximum 1,048,576. |
-| `question_timeout_seconds` | integer 0–86400                    | Seconds an unanswered question, Form, or subagent question stays open; default 300, 0 disables. See [Question timeout](#question-timeout). |
 | `references`            | record                                | Named local or Git context sources.                                                         |
 | `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
 | `providers`             | record                                | Provider and model overrides.                                                               |
@@ -435,7 +434,6 @@ The field reference below expands the overview. `unset` means the field is optio
 | `guardrails`                                      | `Config.Guardrail`                                                             | unset           | Root-Session-family guardrail configuration; custom-source and reply rules are documented below. |
 | `skills`, `instructions`                          | string[]                                                                       | unset           | Extra skill sources; `instructions` has no current ambient-discovery consumer.                   |
 | `instruction_max_bytes`                           | positive integer `<= 1048576`                                                  | `51200`         | Per-ambient-instruction UTF-8 byte cap.                                                          |
-| `question_timeout_seconds`                        | integer `0`–`86400`                                                            | `300`           | Seconds before an unanswered question, Form, or subagent question times out; `0` disables the timeout. |
 | `commands`                                        | record of `Config.Command`                                                     | unset           | Inline slash commands.                                                                           |
 | `references`                                      | record of `Config.Reference.Entry`                                             | unset           | Named local or Git context sources.                                                              |
 | `plugins`                                         | (`string` \| `{ package: string, options?: Record<string, unknown> }`)[]       | unset           | Ordered runtime plugin directives.                                                               |
@@ -1597,19 +1595,11 @@ The URL must use HTTP or HTTPS without embedded credentials. Stop the paired Chr
 
 These keys are global-only and use the global configuration directory, `YCODING_CONFIG`, and `YCODING_CONFIG_CONTENT`; project configuration cannot change them. Each sweep reads current global values. Exactly the configured period remains retained; older facts are eligible for cleanup. Values must be integers greater than zero. Usage and incident cleanup run at startup and hourly in bounded, yielding batches; latency cleanup keeps its startup/read/write/hourly schedule. Provider quota observations remain bounded process-local history and are not persisted by either setting.
 
-## Question timeout
+## Question lifetime
 
-```json
-{
-  "question_timeout_seconds": 300
-}
-```
+Required-answer questions, Forms, and task-backed child questions have no elapsed-time expiry or configuration knob. They remain pending until answered, explicitly cancelled, or invalidated by their owning lifecycle. The Session's explicit `/auto-answer` setting governs automatic answers; time does not enable it or approve a permission or guardrail request.
 
-| Key                        | Type            | Default | Effect                                                                                                                  |
-| -------------------------- | --------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `question_timeout_seconds` | integer 0–86400 | `300`   | Seconds an agent question, Form, or subagent question to the parent waits for a human answer before it times out. `0` disables the timeout. |
-
-The value is in seconds, an integer from `0` through `86400` (24 hours); other values are rejected. It applies to the `question` tool, any other Form request such as an MCP elicitation, and a subagent's question to its parent, and is read from the Location that owns the request each time one is raised. Guardrail reviews and permission requests have no timeout. See [question and Form timeout](./runtime.md#question-and-form-timeout) for the timeout result and lifecycle.
+Ordinary Forms and Question-service requests are process-local and are not restored after a server restart. Task-backed child questions preserve their durable waiting state. See [question and Form lifetime](./runtime.md#question-and-form-lifetime) for lifecycle and restart constraints.
 
 ## Automatic SQLite space reclamation
 

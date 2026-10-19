@@ -3,7 +3,7 @@ export * as SessionMcpEvents from "./index"
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Cause, Clock, Context, Duration, Effect, Layer, Result, Schema, Semaphore } from "effect"
-import { and, asc, count, eq, gt, inArray, isNotNull, isNull, lt, lte, max, min, notExists, or, sql } from "drizzle-orm"
+import { and, asc, count, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, max, min, notExists, or, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -181,59 +181,65 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       cursorSeq = deps.secretBox.decodeCursor(identity.hash, subscription.cursor)
       if (cursorSeq === undefined) return yield* fail("invalid_params", "invalid_cursor")
     }
-    const existing = yield* db.select().from(McpEventSubscriptionTable).where(eq(McpEventSubscriptionTable.identity_hash, identity.hash)).get().pipe(Effect.orDie)
-
     yield* verifyCallback({ identity, principal, url: subscription.delivery.url, secretBytes: secretBytes.success })
     const confirmed = yield* deps.authorization.check(principal)
     const verifiedAt = yield* now
     if (confirmed.expiresAt <= verifiedAt || expiresAt <= verifiedAt) return yield* fail("unauthorized", "grant_expired")
     if (confirmed.signal?.aborted) return yield* fail("unavailable", "authorization_unavailable")
 
-    const fingerprint = deps.secretBox.fingerprint(secretBytes.success)
-    const rotated = existing !== undefined && existing.secret_fingerprint !== fingerprint
-    const values = {
-      id: identity.id,
-      identity_hash: identity.hash,
-      owner_id: principal.ownerID,
-      device_id: principal.deviceID,
-      client_id: principal.clientID,
-      grant_id: principal.grantID,
-      epoch: principal.epoch,
-      name: subscription.name,
-      session_id: args.session_id,
-      include_descendants: args.include_descendants ? 1 : 0,
-      callback_url: subscription.delivery.url,
-      secret_ciphertext: deps.secretBox.encrypt(secretBytes.success),
-      secret_fingerprint: fingerprint,
-      previous_secret_ciphertext: rotated ? existing.secret_ciphertext : (existing?.previous_secret_ciphertext ?? null),
-      previous_secret_until: rotated ? current + ROTATION_MS : (existing?.previous_secret_until ?? null),
-      expires_at: Math.min(expiresAt, confirmed.expiresAt),
-      disabled: 0,
-      time_created: existing?.time_created ?? current,
-      time_updated: current,
-    }
-    yield* db
-      .insert(McpEventSubscriptionTable)
-      .values(values)
-      .onConflictDoUpdate({ target: McpEventSubscriptionTable.identity_hash, set: values })
-      .run()
-      .pipe(Effect.orDie)
-    if (cursorSeq !== undefined) {
-      const rows = yield* db.select().from(McpEventOutboxTable).where(eq(McpEventOutboxTable.subscription_id, identity.id)).all().pipe(Effect.orDie)
-      for (const row of rows) {
-        if (row.seq <= cursorSeq || row.delivered_at === null || row.time_created < current - RETENTION_MS) continue
-        yield* db.update(McpEventOutboxTable).set({ delivered_at: null, dead: 0, next_attempt_at: current }).where(eq(McpEventOutboxTable.seq, row.seq)).run().pipe(Effect.orDie)
+    return yield* db.transaction((tx) => Effect.gen(function* () {
+      const existing = yield* tx.select().from(McpEventSubscriptionTable).where(eq(McpEventSubscriptionTable.identity_hash, identity.hash)).get().pipe(Effect.orDie)
+      if (existing?.disabled === 1) return yield* authorizationUnavailable()
+      const fingerprint = deps.secretBox.fingerprint(secretBytes.success)
+      const rotated = existing !== undefined && existing.secret_fingerprint !== fingerprint
+      const values = {
+        id: identity.id,
+        identity_hash: identity.hash,
+        owner_id: principal.ownerID,
+        device_id: principal.deviceID,
+        client_id: principal.clientID,
+        grant_id: principal.grantID,
+        epoch: principal.epoch,
+        name: subscription.name,
+        session_id: args.session_id,
+        include_descendants: args.include_descendants ? 1 : 0,
+        callback_url: subscription.delivery.url,
+        secret_ciphertext: deps.secretBox.encrypt(secretBytes.success),
+        secret_fingerprint: fingerprint,
+        previous_secret_ciphertext: rotated ? existing.secret_ciphertext : (existing?.previous_secret_ciphertext ?? null),
+        previous_secret_until: rotated ? current + ROTATION_MS : (existing?.previous_secret_until ?? null),
+        expires_at: Math.min(expiresAt, confirmed.expiresAt),
+        disabled: 0,
+        time_created: existing?.time_created ?? current,
+        time_updated: current,
       }
-    }
-    const mark = replayable ? yield* watermark(identity.id) : 0
-    const retained = yield* db.select({ prunedThrough: McpEventSubscriptionTable.pruned_through }).from(McpEventSubscriptionTable)
-      .where(eq(McpEventSubscriptionTable.id, identity.id)).get().pipe(Effect.orDie)
-    return {
-      id: identity.id,
-      refreshBefore: new Date(values.expires_at).toISOString(),
-      cursor: replayable ? deps.secretBox.encodeCursor(identity.hash, mark) : null,
-      truncated: cursorSeq !== undefined && cursorSeq < (retained?.prunedThrough ?? 0),
-    }
+      yield* tx
+        .insert(McpEventSubscriptionTable)
+        .values(values)
+        .onConflictDoUpdate({ target: McpEventSubscriptionTable.identity_hash, set: values })
+        .run()
+        .pipe(Effect.orDie)
+      if (cursorSeq !== undefined) {
+        yield* tx.update(McpEventOutboxTable).set({ delivered_at: null, dead: 0, next_attempt_at: current }).where(and(
+          eq(McpEventOutboxTable.subscription_id, identity.id),
+          gt(McpEventOutboxTable.seq, cursorSeq),
+          isNotNull(McpEventOutboxTable.delivered_at),
+          gte(McpEventOutboxTable.time_created, current - RETENTION_MS),
+        )).run().pipe(Effect.orDie)
+      }
+      const mark = replayable ? yield* watermark(identity.id) : 0
+      const retained = yield* tx.select({ prunedThrough: McpEventSubscriptionTable.pruned_through }).from(McpEventSubscriptionTable)
+        .where(eq(McpEventSubscriptionTable.id, identity.id)).get().pipe(Effect.orDie)
+      const result = {
+        id: identity.id,
+        refreshBefore: new Date(values.expires_at).toISOString(),
+        cursor: replayable ? deps.secretBox.encodeCursor(identity.hash, mark) : null,
+        truncated: cursorSeq !== undefined && cursorSeq < (retained?.prunedThrough ?? 0),
+      }
+      if (values.expires_at <= (yield* now)) return yield* fail("unauthorized", "grant_expired")
+      if (confirmed.signal?.aborted) return yield* authorizationUnavailable()
+      return result
+    }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
   })
 
   const unsubscribe: Interface["unsubscribe"] = Effect.fn("McpEvents.unsubscribe")(function* (input) {
@@ -367,6 +373,9 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
         } else {
           yield* db.update(McpEventSubscriptionTable).set({ disabled: 1, time_updated: current }).where(eq(McpEventSubscriptionTable.id, sub.id)).run().pipe(Effect.orDie)
           yield* db.update(McpEventOutboxTable).set({ dead: 1 }).where(eq(McpEventOutboxTable.seq, row.seq)).run().pipe(Effect.orDie)
+          yield* Effect.logWarning("MCP Events subscription disabled", {
+            subscriptionID: sub.id, eventID: row.id, category: checked.failure.category, reason: checked.failure.reason,
+          })
         }
         blocked.add(row.subscription_id)
         continue
@@ -374,6 +383,11 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       if (checked.success.signal?.aborted || checked.success.expiresAt <= current) {
         yield* db.update(McpEventSubscriptionTable).set({ disabled: 1, time_updated: current }).where(eq(McpEventSubscriptionTable.id, sub.id)).run().pipe(Effect.orDie)
         yield* db.update(McpEventOutboxTable).set({ dead: 1 }).where(eq(McpEventOutboxTable.seq, row.seq)).run().pipe(Effect.orDie)
+        yield* Effect.logWarning("MCP Events subscription disabled", {
+          subscriptionID: sub.id, eventID: row.id,
+          category: checked.success.expiresAt <= current ? "unauthorized" : "unavailable",
+          reason: checked.success.expiresAt <= current ? "grant_expired" : "authorization_unavailable",
+        })
         blocked.add(row.subscription_id)
         continue
       }
@@ -381,6 +395,9 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       if (secretBytes === undefined) {
         yield* db.update(McpEventSubscriptionTable).set({ disabled: 1, time_updated: current }).where(eq(McpEventSubscriptionTable.id, sub.id)).run().pipe(Effect.orDie)
         yield* db.update(McpEventOutboxTable).set({ dead: 1 }).where(eq(McpEventOutboxTable.seq, row.seq)).run().pipe(Effect.orDie)
+        yield* Effect.logWarning("MCP Events subscription disabled", {
+          subscriptionID: sub.id, eventID: row.id, category: "unavailable", reason: "secure_storage_unavailable",
+        })
         continue
       }
       const secrets = [secretBytes]
@@ -445,6 +462,10 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       blocked.add(row.subscription_id)
       const attempts = row.attempts + 1
       const nonRetryable = Result.isSuccess(sent) && (sent.success.status === 410 || sent.success.status === 413)
+      yield* Effect.logWarning("MCP Events webhook failed", {
+        subscriptionID: sub.id, eventID: row.id, attempt: attempts, terminal: nonRetryable || attempts >= MAX_ATTEMPTS,
+        ...(Result.isSuccess(sent) ? { httpStatus: sent.success.status } : { category: sent.failure.category, reason: sent.failure.reason }),
+      })
       if (nonRetryable || attempts >= MAX_ATTEMPTS) {
         yield* db.update(McpEventOutboxTable).set({ attempts, dead: 1 }).where(eq(McpEventOutboxTable.seq, row.seq)).run().pipe(Effect.orDie)
       } else {
@@ -509,7 +530,22 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
   return {
     status: () => deps.authorization.capabilities.pipe(Effect.map((available) => ({ available }))),
     list: () => Effect.succeed({ events: McpEvents.Definitions }),
-    subscribe: (input) => mutations.withPermit(subscribe(input)),
+    subscribe: (input) => {
+      const requestHash = typeof input.context?.requestID === "string" && input.context.requestID.length <= 256
+        ? deps.secretBox.fingerprint(Buffer.from(input.context.requestID)) : undefined
+      return mutations.withPermit(subscribe(input)).pipe(
+        Effect.tap((result) => Effect.logInfo("MCP Events subscription active", { requestHash, subscriptionID: result.id })),
+        Effect.tapCause((cause) => {
+          if (Cause.hasInterrupts(cause)) return Effect.void
+          const failure = Cause.findError(cause)
+          return Effect.logWarning("MCP Events subscription failed", {
+            requestHash,
+            category: Result.isSuccess(failure) ? failure.success.category : "unavailable",
+            reason: Result.isSuccess(failure) ? failure.success.reason : "service_unavailable",
+          })
+        }),
+      )
+    },
     unsubscribe: (input) => mutations.withPermit(unsubscribe(input)),
     capture,
     dispatchOnce,

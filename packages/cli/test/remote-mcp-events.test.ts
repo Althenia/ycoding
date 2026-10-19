@@ -19,7 +19,7 @@ const subscription = {
 const closers: Array<() => Promise<void>> = []
 afterEach(async () => { await Promise.all(closers.splice(0).map((close) => close())) })
 
-function fixture(options: { available?: boolean; failure?: McpEvents.Failure } = {}) {
+function fixture(options: { available?: boolean; failure?: unknown } = {}) {
   const calls: Array<{ method: string; args: readonly unknown[] }> = []
   const local = new Proxy({} as LocalServer, {
     get: (_target, method: string) => async (...args: unknown[]) => {
@@ -82,4 +82,14 @@ test.each([
   expect(result).toMatchObject({ error: { code, data: { reason } } })
   expect(JSON.stringify(result)).not.toContain(subscription.delivery.url)
   expect(JSON.stringify(result)).not.toContain(subscription.delivery.secret)
+})
+
+test("an unconfirmed backend result is surfaced once without retry or private diagnostics", async () => {
+  const app = fixture({ failure: new Error(`Unconfirmed response from ${subscription.delivery.url} with ${subscription.delivery.secret}`) })
+  const result = await app.post("events/subscribe", subscription)
+  expect(result).toMatchObject({ error: { code: -32603, data: { reason: "service_unavailable" } } })
+  expect(app.calls.filter((call) => call.method === "mcpEventsSubscribe")).toHaveLength(1)
+  expect(JSON.stringify(result)).not.toContain(subscription.delivery.url)
+  expect(JSON.stringify(result)).not.toContain(subscription.delivery.secret)
+  expect(JSON.stringify(result)).not.toContain("Unconfirmed response")
 })

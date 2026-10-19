@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.18",
+    date: "2026-10-19",
+    title: "Required answers and reliable subscription retries",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Required-answer questions, Forms, and task-backed child questions have no elapsed-time expiry. Explicit answers, cancellation, validation, auto-answer opt-ins, and permission/guardrail safety remain separate. Ordinary Forms and Question-service requests are not restored after a server restart; durable task-backed questions retain their exact waiting identity." },
+      { tag: "Changed", text: "Remove question_timeout_seconds after upgrading the owning backend. Retain a zero setting on older backends until their upgrade; omission there restores the earlier default, and changing the setting does not disarm already-published requests." },
+      { tag: "Fixed", text: "Settle one subscription RPC atomically across registration, signing-secret rotation, replay reset, and response metadata. Failures or interruption roll back local settlement. Exact enabled identities retry without multiplying rows; callback/auth scopes stay distinct, and disabled or revoked identities cannot be revived by refresh." },
+      { tag: "Fixed", text: "Report categorized subscription and webhook failures without exposing callback URLs, signing secrets, or raw errors. Hosted multi-RPC automation setup remains non-atomic: earlier successful RPCs and lost acknowledgements require exact-identity reconciliation. Candidate orphans need confirmed host ownership before cleanup; this release performs no live cleanup or backend restart." },
+    ],
+  },
+  {
     version: "0.10.17",
     date: "2026-10-18",
     title: "MCP apps, Events, and reliable decisions",
