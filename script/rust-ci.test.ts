@@ -8,12 +8,15 @@ const read = (file: string) => Bun.file(path.join(root, file)).text()
 const action = await read(".github/actions/setup-rust/action.yml")
 const release = await read(".github/workflows/release.yml")
 const testWorkflow = await read(".github/workflows/test.yml")
-const steps = (Bun.YAML.parse(action) as { runs: { steps: { name: string; if?: string; run?: string; uses?: string; env?: Record<string, string> }[] } }).runs.steps
+const parsedAction = Bun.YAML.parse(action) as {
+  inputs: Record<string, { default?: string }>
+  runs: { steps: { name: string; id?: string; if?: string; run?: string; uses?: string; env?: Record<string, string>; with?: Record<string, string> }[] }
+}
+const steps = parsedAction.runs.steps
 
 const protoc = [
   ["Linux-X64", "linux-x86_64", "121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278"],
   ["macOS-ARM64", "osx-aarch_64", "9cd98a532c5c5e0c4161314de0225de27e4c8a323917b6ea7b1b714d3ae23466"],
-  ["macOS-X64", "osx-x86_64", "228cc7add4616cc14ca5e80dee83209d44449a7aee95a914ae748fa374efb078"],
   ["Windows-X64", "win64", "f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3"],
 ] as const
 
@@ -65,8 +68,11 @@ test("setup-rust pins Rust 1.98.1 with rustfmt and clippy through the runner's r
   expect(toolchain.run).toContain("cargo clippy --version")
 })
 
-test("setup-rust uses no third-party action and installs no unpinned tool", () => {
-  expect(steps.every((item) => item.uses === undefined)).toBe(true)
+test("setup-rust uses only the pinned first-party cache actions and installs no unpinned tool", () => {
+  expect(steps.flatMap((item) => (item.uses ? [item.uses] : []))).toEqual([
+    "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+    "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+  ])
   expect(action).not.toContain("latest")
   expect(action).not.toContain("brew ")
   expect(action).not.toContain("apt-get")
@@ -92,11 +98,45 @@ test("setup-rust fails clearly when the runner has no rustup", async () => {
   expect(result.github).toBe("")
 })
 
-test("setup-rust rejects an unsupported runner platform before downloading", async () => {
-  const result = await run("Install protoc", { RUNNER_OS: "Linux", RUNNER_ARCH: "ARM64" }, "#!/bin/sh\nexit 99\n")
+test.each([
+  ["Linux", "ARM64"],
+  ["macOS", "X64"],
+])("setup-rust rejects the unsupported %s-%s runner before downloading", async (os, arch) => {
+  const result = await run("Install protoc", { RUNNER_OS: os, RUNNER_ARCH: arch }, "#!/bin/sh\nexit 99\n")
   expect(result.code).toBe(1)
-  expect(result.stderr).toContain("Unsupported runner for protoc 36.2: Linux-ARM64")
+  expect(result.stderr).toContain(`Unsupported runner for protoc 36.2: ${os}-${arch}`)
   expect(result.github).toBe("")
+})
+
+const registryPaths = "~/.cargo/registry/index\n~/.cargo/registry/cache\n~/.cargo/git/db\n"
+
+test("setup-rust restores the Cargo registry keyed by runner OS, architecture, and the root lockfile, never the target directory", () => {
+  const restore = steps.find((item) => item.name === "Restore Cargo registry")!
+  expect(restore.id).toBe("registry")
+  expect(restore.if).toBeUndefined()
+  expect(restore.with?.path).toBe(registryPaths)
+  expect(restore.with?.key).toBe("cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}")
+  expect(restore.with?.["restore-keys"]).toBe("cargo-registry-${{ runner.os }}-${{ runner.arch }}-\n")
+  expect(action).not.toContain("rust/target")
+  expect(action).not.toContain("registry/src")
+  expect(action).not.toContain("credentials")
+  const names = steps.map((item) => item.name)
+  expect(names.indexOf("Install Rust toolchain")).toBeLessThan(names.indexOf("Restore Cargo registry"))
+})
+
+test("only a requested writer fetches every locked crate and saves the registry, and only on an exact-key miss", () => {
+  expect(parsedAction.inputs["save-registry"]?.default).toBe("false")
+  const condition = "inputs.save-registry == 'true' && steps.registry.outputs.cache-hit != 'true'"
+  const fetch = steps.find((item) => item.name === "Fetch locked crates")!
+  const save = steps.find((item) => item.name === "Save Cargo registry")!
+  expect(fetch.if).toBe(condition)
+  expect(fetch.run).toBe("cargo fetch --locked --manifest-path rust/Cargo.toml")
+  expect(save.if).toBe(condition)
+  expect(save.with?.path).toBe(registryPaths)
+  expect(save.with?.key).toBe("${{ steps.registry.outputs.cache-primary-key }}")
+  const names = steps.map((item) => item.name)
+  expect(names.indexOf("Restore Cargo registry")).toBeLessThan(names.indexOf("Fetch locked crates"))
+  expect(names.indexOf("Fetch locked crates")).toBeLessThan(names.indexOf("Save Cargo registry"))
 })
 
 test("setup-rust rejects a protoc archive whose SHA-256 differs and never exports PROTOC", async () => {
@@ -122,12 +162,18 @@ const runtimeBuild =
 const ready =
   'bun run rust/crates/runtime/tests/support/ready-runtime.ts "$GITHUB_WORKSPACE/rust/target/debug/ycoding-runtime" bun run --cwd'
 
-test("release verification runs the Rust gates in a 20-minute Ubuntu leg", () => {
+const scopeSuites = JSON.parse(/\n {10}suites='(\[[\s\S]*?\])'\n/.exec(release)![1]!) as { suite: string; runner: string }[]
+
+test("release verification runs the Rust gates in 20-minute Ubuntu and Apple Silicon legs", () => {
   const verify = section(release, "\n  verify-source:", "\n  build:")
-  expect(verify).toContain(["          - suite: rust", "            runner: ubuntu-24.04"].join("\n"))
+  expect(scopeSuites.filter((item) => item.suite.startsWith("rust"))).toEqual([
+    { suite: "rust", runner: "ubuntu-24.04" },
+    { suite: "rust-macos", runner: "macos-26" },
+    { suite: "rust-windows", runner: "windows-2025" },
+  ])
   expect(verify).toContain("    timeout-minutes: 20\n")
   const check = step(verify, "Verify Rust workspace")
-  expect(check).toContain("        if: matrix.suite == 'rust'\n")
+  expect(check).toContain("        if: matrix.suite == 'rust' || matrix.suite == 'rust-macos'\n")
   const commands = [
     "python3 script/rust-workspace-check.py",
     "bun test --cwd packages/core ./test/rust-baseline/immutable.test.ts",
@@ -140,7 +186,7 @@ test("release verification runs the Rust gates in a 20-minute Ubuntu leg", () =>
     if (index > 0) expect(check.indexOf(commands[index - 1]!)).toBeLessThan(check.indexOf(command))
   })
   const interop = step(verify, "Verify Rust runtime client interoperability")
-  expect(interop).toContain("        if: matrix.suite == 'rust'\n")
+  expect(interop).toContain("        if: matrix.suite == 'rust' || matrix.suite == 'rust-macos'\n")
   expect(interop).toContain(`${ready} packages/client test:integration:rust`)
   expect(verify.indexOf("- name: Build debug runtime")).toBeLessThan(verify.indexOf("- name: Verify Rust workspace"))
   expect(verify.indexOf("- name: Verify Rust workspace")).toBeLessThan(
@@ -167,9 +213,9 @@ test("release Rust MCP fixtures use installed dependencies and the fetched main 
 
 test("legs that execute the native runtime install Rust and build the debug runtime before their suites", () => {
   const verify = section(release, "\n  verify-source:", "\n  build:")
-  const condition = "matrix.suite == 'rust' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser'"
+  const condition = "matrix.suite == 'rust' || matrix.suite == 'rust-macos' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser'"
   expect(step(verify, "Setup Rust")).toBe(
-    `        if: ${condition} || matrix.suite == 'rust-windows'\n        uses: ./.github/actions/setup-rust\n`,
+    `        if: ${condition} || matrix.suite == 'rust-windows'\n        uses: ./.github/actions/setup-rust\n        with:\n          save-registry: \${{ startsWith(matrix.suite, 'rust') }}\n`,
   )
   expect(step(verify, "Build debug runtime")).toBe(`        if: ${condition}\n        run: ${runtimeBuild}\n`)
   expect(verify.indexOf("- name: Setup Bun")).toBeLessThan(verify.indexOf("- name: Setup Rust"))
@@ -324,11 +370,12 @@ test("CLI tests are cached against the native runtime sources, and typecheck inp
 
 test("the Rust leg fetches every locked target's sources before the notice checks", async () => {
   const verify = section(release, "\n  verify-source:", "\n  build:")
+  const noticeLeg = "matrix.suite == 'rust' || (matrix.suite == 'rust-macos' && needs.scope.outputs.channel == 'beta')"
   const fetch = step(verify, "Fetch locked Rust sources")
-  expect(fetch).toBe("        if: matrix.suite == 'rust'\n        run: cargo fetch --locked --manifest-path rust/Cargo.toml\n")
+  expect(fetch).toBe(`        if: ${noticeLeg}\n        run: cargo fetch --locked --manifest-path rust/Cargo.toml\n`)
   expect(step(verify, "Verify Rust notices")).toBe(
     [
-      "        if: matrix.suite == 'rust'",
+      `        if: ${noticeLeg}`,
       "        run: |",
       "          set -euo pipefail",
       "          bun run check:rust-notices",
@@ -419,9 +466,37 @@ const releaseVerifySteps = (
   }
 ).jobs["verify-source"].steps
 
+const betaFilter = /suites="\$\(jq '(map\(select\([^']+\)\))' <<<"\$suites"\)"/.exec(release)![1]!
+
+test("beta verification runs one full Rust workspace leg, on Apple Silicon, with the notice checks", () => {
+  expect(betaFilter).toBe('map(select(.suite != "rust" and .suite != "rust-windows"))')
+  const beta = scopeSuites.filter((item) => item.suite !== "rust" && item.suite !== "rust-windows")
+  expect(beta.filter((item) => item.suite.startsWith("rust"))).toEqual([{ suite: "rust-macos", runner: "macos-26" }])
+  for (const suite of ["types", "web", "remote", "cli", "tui", "browser", "extension"]) expect(beta.map((item) => item.suite)).toContain(suite)
+})
+
+test("unpublished verification builds omit debug info and incremental state without touching release or panic settings", () => {
+  const verify = verifySource()
+  expect(verify).toContain(['      CARGO_INCREMENTAL: "0"', '      CARGO_PROFILE_DEV_DEBUG: "0"', '      CARGO_PROFILE_TEST_DEBUG: "0"'].join("\n"))
+  for (const name of ["scope", "build", "isolated-browser-acceptance", "package", "release-tui", "deploy-web"])
+    expect(release.split(`\n  ${name}:\n`)[1]!.split(/\n {2}[\w-]+:\n/)[0]!, name).not.toMatch(/CARGO_(INCREMENTAL|PROFILE)/)
+  expect(release).not.toMatch(/CARGO_PROFILE_[A-Z]+_(PANIC|LTO|CODEGEN_UNITS|OPT_LEVEL)/)
+  expect(action).not.toContain("CARGO_")
+})
+
+test("each runner OS has at most one Cargo registry writer in either channel", () => {
+  const writers = scopeSuites.filter((item) => item.suite.startsWith("rust"))
+  expect(new Set(writers.map((item) => item.runner)).size).toBe(writers.length)
+  expect(new Set(scopeSuites.map((item) => item.runner))).toEqual(new Set(writers.map((item) => item.runner)))
+  for (const name of ["build", "isolated-browser-acceptance", "package"])
+    expect(release.split(`\n  ${name}:\n`)[1]!.split(/\n {2}[\w-]+:\n/)[0]!.includes("save-registry"), name).toBe(false)
+  expect(release.match(/save-registry:/g)).toHaveLength(1)
+  expect(testWorkflow).not.toContain("save-registry")
+})
+
 test("release verification adds a native Windows leg that runs under bash without Bun", () => {
   const verify = verifySource()
-  expect(verify).toContain(["          - suite: rust-windows", "            runner: windows-2025"].join("\n"))
+  expect(scopeSuites).toContainEqual({ suite: "rust-windows", runner: "windows-2025" })
   expect(verify).toContain("    defaults:\n      run:\n        shell: bash\n")
   expect(verify).toContain("    timeout-minutes: 20\n")
   expect(releaseVerifySteps.find((item) => item.name === "Setup Bun")?.if).toBe("matrix.suite != 'rust-windows'")
@@ -445,7 +520,9 @@ test("the release Windows leg runs the same process gate as the test workflow, i
 test("the Windows leg gates web deployment without ignored failures and manual runs still publish nothing", () => {
   expect(release).not.toContain("continue-on-error")
   const deploy = section(release, "\n  deploy-web:", "\n    runs-on:")
-  expect(deploy).toContain("    needs: [verify-source, package, isolated-browser-acceptance]\n")
-  expect(deploy).toContain("    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}")
-  expect(section(release, "\n  release-tui:", "\n    runs-on:")).toContain("    needs: deploy-web")
+  expect(deploy).toContain("    needs: [scope, verify-source, package, isolated-browser-acceptance]\n")
+  expect(deploy).toContain("    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.scope.outputs.channel == 'latest' }}")
+  const publish = section(release, "\n  release-tui:", "\n    runs-on:")
+  expect(publish).toContain("    needs: [scope, verify-source, package, isolated-browser-acceptance, deploy-web]\n")
+  expect(publish).toContain("needs.verify-source.result == 'success'")
 })

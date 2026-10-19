@@ -533,6 +533,15 @@ exec /bin/mv "$@"
     expect(await Bun.file(path.join(unsupported.fixture, "curl-called")).exists()).toBe(false)
   })
 
+  test("rejects unsupported Intel Macs before downloading or changing installation files", async () => {
+    const fixture = await setup({ system: "Darwin", machine: "x86_64" })
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("Unsupported platform: darwin-x64")
+    expect(await Bun.file(path.join(fixture.fixture, "curl-called")).exists()).toBe(false)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
+  })
+
   test("rejects the removed --office flag instead of installing a desktop app", async () => {
     const fixture = await setup()
     const result = await runInstaller(fixture, {}, ["--office"])

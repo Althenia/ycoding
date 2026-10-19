@@ -60,11 +60,17 @@ const forbiddenOwners = new Set(
   ),
 )
 
-type Loader = { file: string; function: string; reason: string }
+type Loader = { file: string; function: string; reason: string; asset?: string }
 type SqliteReader = { file: string; module: string; reason: string }
 type Violation = { frontend: string; file: string; line: number; specifier: string; owner: string; kind: string }
 
 export const boundaryDeclarations: readonly (Loader | SqliteReader)[] = [
+  {
+    file: "packages/cli/src/runtime-executable.ts",
+    function: "runtimeExecutable",
+    asset: "YCODING_RUNTIME_ASSET",
+    reason: "Reads the compile-time native runtime file without evaluating its bytes as JavaScript",
+  },
   {
     file: "packages/tui/src/plugin/context.tsx",
     function: "loadPlugin",
@@ -277,7 +283,10 @@ export async function checkFrontendBoundary(
         const line = source.getLineAndCharacterOfPosition(edge.argument.getStart(source)).line + 1
         if (!ts.isStringLiteralLike(edge.argument)) {
           const declaration = declarations.find(
-            (entry) => entry.file === relative(file) && entry.function === enclosingFunction(edge.node),
+            (entry) =>
+              entry.file === relative(file) &&
+              entry.function === enclosingFunction(edge.node) &&
+              (!entry.asset || isFileAssetImport(edge.node, entry.asset)),
           )
           if (
             edge.dynamic &&
@@ -378,6 +387,32 @@ export async function checkFrontendBoundary(
   }
 }
 
+function isFileAssetImport(node: ts.Node, asset: string) {
+  if (!ts.isCallExpression(node) || node.expression.kind !== ts.SyntaxKind.ImportKeyword || node.arguments.length !== 2)
+    return false
+  const target = node.arguments[0]
+  if (!target || !ts.isIdentifier(target) || target.text !== asset) return false
+  const options = node.arguments[1]
+  if (!options || !ts.isObjectLiteralExpression(options) || options.properties.length !== 1) return false
+  const attributes = options.properties[0]
+  if (
+    !attributes ||
+    !ts.isPropertyAssignment(attributes) ||
+    attributes.name.getText() !== "with" ||
+    !ts.isObjectLiteralExpression(attributes.initializer) ||
+    attributes.initializer.properties.length !== 1
+  )
+    return false
+  const type = attributes.initializer.properties[0]
+  return (
+    type !== undefined &&
+    ts.isPropertyAssignment(type) &&
+    type.name.getText() === "type" &&
+    ts.isStringLiteralLike(type.initializer) &&
+    type.initializer.text === "file"
+  )
+}
+
 function testOnly(file: string) {
   return /(^|\/)(?:node_modules|dist|test|tests|test-integration|fixtures|__tests__|verify|script)(\/|$)|\.(?:test|spec)\.|(^|\/)build[-.]/.test(
     file,
@@ -396,9 +431,12 @@ function exportTargets(value: unknown, key: string): string[] {
   const wildcard = entries
     .filter(([name]) => name.includes("*"))
     .sort(([a], [b]) => b.length - a.length)
-    .find(([name]) => key.startsWith(name.split("*")[0]) && key.endsWith(name.split("*")[1]))
+    .find(([name]) => {
+      const [prefix = "", suffix = ""] = name.split("*")
+      return key.startsWith(prefix) && key.endsWith(suffix)
+    })
   if (!wildcard) return []
-  const [prefix, suffix] = wildcard[0].split("*")
+  const [prefix = "", suffix = ""] = wildcard[0].split("*")
   return exportTargets(wildcard[1], ".").map((target) =>
     target.replaceAll("*", key.slice(prefix.length, suffix ? -suffix.length : undefined)),
   )

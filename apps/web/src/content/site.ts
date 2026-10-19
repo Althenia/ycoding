@@ -27,7 +27,8 @@ export const SITE = {
   },
   installing: {
     command: "curl -fsSL https://ycoding.althenia.app/install.sh | sh",
-    betaCommand: "curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta",
+    betaCommand:
+      "curl -fsSL https://raw.githubusercontent.com/Althenia/ycoding/v0.11.0-beta.1/script/install.sh | sh -s -- --beta",
     scriptPath: "/install.sh",
     schemaPath: "/ycoding.schema.json",
     examplePath: "/examples/ycoding.jsonc",

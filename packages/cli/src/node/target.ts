@@ -3,7 +3,11 @@ const platforms = ["darwin", "linux", "win32"] as const
 export type NodeTarget = ReturnType<typeof nodeTarget>
 
 export function nodeTarget(platform: string, arch: string) {
-  if (!platforms.includes(platform as (typeof platforms)[number]) || (arch !== "arm64" && arch !== "x64")) {
+  if (
+    !platforms.includes(platform as (typeof platforms)[number]) ||
+    (arch !== "arm64" && arch !== "x64") ||
+    (platform === "darwin" && arch !== "arm64")
+  ) {
     throw new Error(`Unsupported Node executable target: ${platform}-${arch}`)
   }
 

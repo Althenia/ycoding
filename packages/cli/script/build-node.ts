@@ -10,7 +10,7 @@ import { Script } from "@ycoding-ai/script"
 import pkg from "../package.json"
 import { modelsData } from "./generate"
 import { collectNodeAssets, copyNodeAssets, hashNodeAssets, seaAssetMap } from "./node-assets"
-import { mainConfig } from "../vite.node.config"
+import { mainConfig, runtimeAssetKey } from "../vite.node.config"
 import { nodeExecArgv, nodeTarget, type NodeTarget } from "../src/node/target"
 import { NODE_BINARY, platformBinary } from "../src/binary"
 import {
@@ -51,11 +51,7 @@ const requestedTargets = requested
     : allTargets
 
 if (requestedTargets.length === 0) {
-  if (requested === "darwin-x64") throw new Error("Node 26.4 SEA does not support macOS x64")
   throw new Error(`Unknown Node target: ${requested}`)
-}
-if (!bundleOnly && requestedTargets.some((target) => target.platform === "darwin" && target.arch === "x64")) {
-  throw new Error("Node 26.4 SEA does not support macOS x64")
 }
 const unavailableTargets = bundleOnly
   ? []
@@ -80,20 +76,24 @@ const builder =
 
 for (const target of targets) {
   console.log(`building cli-node-${targetName(target)}`)
-  const assets = await collectNodeAssets(target)
-  await rm("dist-node", { recursive: true, force: true })
-  const assetHash = await hashNodeAssets(assets)
-  const runtimePayload = await buildRuntime({ os: target.platform, arch: target.arch })
-  const input = {
-    version: Script.version,
-    channel: Script.channel,
-    models: modelsData,
-    assetHash,
-    target,
-    runtimePayload,
+  const runtimeAsset = await buildRuntime({ os: target.platform, arch: target.arch })
+  try {
+    const assets = [...(await collectNodeAssets(target)), { key: runtimeAssetKey, source: runtimeAsset.path }]
+    await rm("dist-node", { recursive: true, force: true })
+    const assetHash = await hashNodeAssets(assets)
+    const input = {
+      version: Script.version,
+      channel: Script.channel,
+      models: modelsData,
+      assetHash,
+      target,
+      runtimeAsset,
+    }
+    await build(mainConfig(input))
+    await copyNodeAssets(assets)
+  } finally {
+    await runtimeAsset.dispose()
   }
-  await build(mainConfig(input))
-  await copyNodeAssets(assets)
 
   const host = target.platform === process.platform && target.arch === process.arch
   if (host) {

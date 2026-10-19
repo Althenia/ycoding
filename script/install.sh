@@ -262,7 +262,7 @@ esac
 
 target="$operating_system-$architecture"
 case "$target" in
-  darwin-arm64 | darwin-x64 | linux-x64) ;;
+  darwin-arm64 | linux-x64) ;;
   *) fail "Unsupported platform: $target" ;;
 esac
 

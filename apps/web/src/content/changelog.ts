@@ -23,17 +23,21 @@ export type ReleaseEntry = {
 export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.11.0-beta.1",
-    date: "2026-10-14",
-    title: "Rust-backend beta",
+    date: "2026-10-19",
+    title: "Rust-backend beta for Apple Silicon",
     tags: ["Added", "Changed"],
     changes: [
       {
         tag: "Added",
-        text: "Try the Rust-backend beta with curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta. Beta uses separate configuration, state, data, and cache directories under ycoding-beta; stable remains a separate channel.",
+        text: "Try the Rust-backend beta on Apple Silicon Macs with curl -fsSL https://raw.githubusercontent.com/Althenia/ycoding/v0.11.0-beta.1/script/install.sh | sh -s -- --beta; add YCODING_VERSION=0.11.0-beta.1 to pin the same version. The beta is built for macOS on Apple Silicon only: Intel Macs are unsupported, and Linux and Windows beta builds are not published for this release. Beta uses separate configuration, state, data, and cache directories under ycoding-beta; stable remains a separate channel. The hosted beta web client and relay are not part of this prerelease and are deployed separately; the local terminal UI and CLI are the published surface, and the matching web client and relay must be deployed before remote access is used.",
       },
       {
         tag: "Added",
         text: "On first beta start, import a private copy of stable Session data. When a Location first opens with Meeting enabled, import its stable Meeting history too, including transcripts, findings, summaries, plans, and proposals. Stable files remain unchanged; each import runs once, without merging later stable changes.",
+      },
+      {
+        tag: "Added",
+        text: "Use Relay MCP, quota pace alerts, the fixed MCP file and image demo, Session-owned local HTTP apps, and MCP Events from stable 0.10.15 through 0.10.17 in the beta. Relay MCP starts disabled; enable or disable it with ycoding remote mcp on|off|status.",
       },
       {
         tag: "Changed",
@@ -71,6 +75,58 @@ export const RELEASES: readonly ReleaseEntry[] = [
         tag: "Changed",
         text: "On a beta build, ycoding update selects the higher of the newest beta and newest stable release. Stable builds stay on stable automatically. Configure accounts and preferences in the beta directory, use the matching beta web client and backend, and switch back with the stable installer; histories remain separate.",
       },
+      {
+        tag: "Changed",
+        text: "Native and Node beta packages store the Rust runtime once as raw bytes, with verified offline extraction, and keep the installed updater's archive layout.",
+      },
+      {
+        tag: "Changed",
+        text: "Node beta packages connect to their standalone backend using built-in WebSocket masking instead of optional native addons.",
+      },
+      {
+        tag: "Changed",
+        text: "The macOS Apple Silicon beta runtime uses panic unwinding: storage writer panics fence writes and shutdown joins the writer.",
+      },
+    ],
+  },
+  {
+    version: "0.10.17",
+    date: "2026-10-18",
+    title: "MCP apps, Events, and reliable decisions",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Try a fixed file, image, and HTML feasibility demo over an enabled Relay MCP connection. `artifact_demo_preview` serves an authored List/Cards preview with an isolated-frame probe, and `artifact_demo_export` returns one original-byte PNG resource link with size, SHA-256, and a 15-minute expiry. The tools accept no Session, directory, file path, or generated HTML. Update the connected machine and refresh the client's tool catalog to see them. The demo does not provide general Session artifacts, PDF export, or complete proposal bundles; interactive rendering and native file delivery depend on the chat client and were not available in the tested client." },
+      { tag: "Added", text: "Register Session-owned local HTTP apps with `local_app_register`, bounded to one literal-loopback port and explicit routes and methods. Embedded presentation requires separately configured isolated HTTPS preview origins and a compatible chat host; registration does not publish a service. WebSocket, SSE, and upstream cookie login are unsupported." },
+      { tag: "Added", text: "Expose MCP Events for hosts that support Session webhook subscriptions, with signed webhook delivery, local durable subscriptions, bounded replay, and a fresh grant check before delivery. Protected signing-key storage is required and unavailable on Windows. Actual chat-host subscription and delivery still require host setup and verification." },
+      { tag: "Fixed", text: "Decision helpers use strict structured output on supported provider routes, recover bounded malformed responses, and report typed failures instead of inventing a judgment. TUI and web guardrail views distinguish unavailable or failed decisions from a model's explicit escalation." },
+      { tag: "Fixed", text: "Keep the web Sessions sidebar steady during background refreshes: unchanged rows no longer show a \"Loading more sessions\" placeholder or toggle the scrollbar, and fine pointers reserve the scrollbar gutter." },
+      { tag: "Fixed", text: "Opening and immediately closing the TUI Session rename dialog no longer focuses a destroyed input." },
+      { tag: "Fixed", text: "On Windows, directory, Session file, and attachment containment rejects paths on other drives or UNC shares; project inventory search and pagination use native directory paths; and Git checkout trust resolves short-name aliases strictly, granting no trust when resolution fails." },
+    ],
+  },
+  {
+    version: "0.10.16",
+    date: "2026-10-18",
+    title: "Reliable Relay MCP validation",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Relay MCP accepts complete message, permission, and guardrail request IDs in clients that validate schema patterns as full strings. Bare prefixes and malformed IDs are rejected; prompt retries retain their existing ownership and conflict checks." },
+      { tag: "Fixed", text: "Relay MCP prompt drafting and skill selection accept nonblank multi-character and multiline values in full-match schema validators. Update the connected machine and refresh the client's tool catalog to use the corrected schemas." },
+    ],
+  },
+  {
+    version: "0.10.15",
+    date: "2026-10-18",
+    title: "Relay MCP and quota pace alerts",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Connect approved MCP clients to an enrolled machine through relay-issued OAuth and explicit owner consent. Relay MCP provides Session controls, including creation in existing directories strictly below home, while retaining runtime permission and guardrail enforcement." },
+      { tag: "Added", text: "Enable or disable Relay MCP with `ycoding remote mcp on|off|status` or the TUI's Relay MCP control. Access starts disabled; disabling it revokes client grants." },
+      { tag: "Added", text: "Review whole-window quota pace beside recent-use forecasts in the TUI and web Usage views, with Ahead, Cutting it close, and Will run out verdicts when the provider reports suitable fixed-reset limits." },
+      { tag: "Added", text: "Receive quota warnings after worsening pace or less than 10% remaining, with a silent initial observation and independent web In app and System switches. Alerts require a reported future reset and open Usage on the originating machine. Matching alerts collapse across machines." },
+      { tag: "Changed", text: "Keep machine-awake status in the TUI command palette and Status dialog without a duplicate line beneath the composer." },
+      { tag: "Fixed", text: "Open Session and Usage alerts on the correct machine after its cached availability becomes stale, including repeated activation of the same alert. Unavailable machines remain explicit without opening another machine." },
+      { tag: "Fixed", text: "Keep Usage reports and cached forecasts responsive while provider quotas refresh, and reduce loading time across large retained usage histories." },
     ],
   },
   {

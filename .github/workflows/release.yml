@@ -22,33 +22,16 @@ env:
   YCODING_CHANNEL: latest
 
 jobs:
-  verify-source:
-    name: verify release source (${{ matrix.suite }})
+  scope:
+    name: resolve release scope
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - suite: types
-            runner: ubuntu-24.04
-          - suite: web
-            runner: ubuntu-24.04
-          - suite: remote
-            runner: ubuntu-24.04
-          - suite: cli
-            runner: ubuntu-24.04
-          - suite: tui
-            runner: ubuntu-24.04
-          - suite: browser
-            runner: macos-26
-          - suite: extension
-            runner: macos-26
-          - suite: rust
-            runner: ubuntu-24.04
-          - suite: rust-windows
-            runner: windows-2025
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.select.outputs.version }}
+      channel: ${{ steps.select.outputs.channel }}
+      suites: ${{ steps.select.outputs.suites }}
+      targets: ${{ steps.select.outputs.targets }}
     defaults:
       run:
         shell: bash
@@ -68,29 +51,82 @@ jobs:
           git fetch --no-tags origin "$branch:refs/remotes/origin/$branch"
           git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch"
 
-      - name: Resolve release version
+      - name: Select release scope
+        id: select
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
           else
             version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
           fi
           printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
             || { echo "Invalid release version: $version" >&2; exit 1; }
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-          echo "YCODING_VERSION=$version" >>"$GITHUB_ENV"
-          case "$version" in *-beta.*) echo "YCODING_CHANNEL=beta" >>"$GITHUB_ENV" ;; esac
-
-      - name: Verify release notes exist
-        run: |
-          set -euo pipefail
-          release_notes="docs/releases/v$RELEASE_VERSION.md"
+          release_notes="docs/releases/v$version.md"
           test -f "$release_notes" || { echo "Missing release notes: $release_notes" >&2; exit 1; }
           test -s "$release_notes" || { echo "Release notes are empty: $release_notes" >&2; exit 1; }
+          suites='[
+            {"suite":"types","runner":"ubuntu-24.04"},
+            {"suite":"web","runner":"ubuntu-24.04"},
+            {"suite":"remote","runner":"ubuntu-24.04"},
+            {"suite":"cli","runner":"ubuntu-24.04"},
+            {"suite":"tui","runner":"ubuntu-24.04"},
+            {"suite":"browser","runner":"macos-26"},
+            {"suite":"extension","runner":"macos-26"},
+            {"suite":"rust","runner":"ubuntu-24.04"},
+            {"suite":"rust-macos","runner":"macos-26"},
+            {"suite":"rust-windows","runner":"windows-2025"}
+          ]'
+          targets='[
+            {"target":"darwin-arm64","runner":"macos-26","platform":"darwin","arch":"arm64"},
+            {"target":"linux-x64","runner":"ubuntu-24.04","platform":"linux","arch":"x64"},
+            {"target":"windows-x64","runner":"windows-2025","platform":"win32","arch":"x64"}
+          ]'
+          channel=latest
+          case "$version" in
+            *-beta.*)
+              channel=beta
+              suites="$(jq 'map(select(.suite != "rust" and .suite != "rust-windows"))' <<<"$suites")"
+              targets="$(jq 'map(select(.target == "darwin-arm64"))' <<<"$targets")"
+              ;;
+          esac
+          {
+            echo "version=$version"
+            echo "channel=$channel"
+            echo "suites=$(jq -c . <<<"$suites")"
+            echo "targets=$(jq -c . <<<"$targets")"
+          } >>"$GITHUB_OUTPUT"
+
+  verify-source:
+    name: verify release source (${{ matrix.suite }})
+    needs: scope
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.scope.outputs.suites) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      RELEASE_VERSION: ${{ needs.scope.outputs.version }}
+      YCODING_VERSION: ${{ needs.scope.outputs.version }}
+      YCODING_CHANNEL: ${{ needs.scope.outputs.channel }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Bun
         if: matrix.suite != 'rust-windows'
@@ -99,11 +135,13 @@ jobs:
           install-flags: --frozen-lockfile
 
       - name: Setup Rust
-        if: matrix.suite == 'rust' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser' || matrix.suite == 'rust-windows'
+        if: matrix.suite == 'rust' || matrix.suite == 'rust-macos' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser' || matrix.suite == 'rust-windows'
         uses: ./.github/actions/setup-rust
+        with:
+          save-registry: ${{ startsWith(matrix.suite, 'rust') }}
 
       - name: Build debug runtime
-        if: matrix.suite == 'rust' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser'
+        if: matrix.suite == 'rust' || matrix.suite == 'rust-macos' || matrix.suite == 'remote' || matrix.suite == 'cli' || matrix.suite == 'browser'
         run: cargo build --locked --manifest-path rust/Cargo.toml -p ycoding-runtime --bin ycoding-runtime
 
       - name: Check workspace and types
@@ -196,7 +234,7 @@ jobs:
         run: bun run test:integration:extension
 
       - name: Verify Rust workspace
-        if: matrix.suite == 'rust'
+        if: matrix.suite == 'rust' || matrix.suite == 'rust-macos'
         env:
           YCODING_MCP_SERVER_ROOT: ${{ github.workspace }}/packages/core/node_modules/@modelcontextprotocol/server
           YCODING_MCP_FIXTURE_REF: refs/remotes/origin/main
@@ -209,7 +247,7 @@ jobs:
           cargo test --locked --manifest-path rust/Cargo.toml --workspace --no-fail-fast
 
       - name: Verify Rust runtime client interoperability
-        if: matrix.suite == 'rust'
+        if: matrix.suite == 'rust' || matrix.suite == 'rust-macos'
         run: bun run rust/crates/runtime/tests/support/ready-runtime.ts "$GITHUB_WORKSPACE/rust/target/debug/ycoding-runtime" bun run --cwd packages/client test:integration:rust
 
       - name: Verify Windows process lifecycle
@@ -222,11 +260,11 @@ jobs:
           grep -Fq "test $test_name ... ok" "$RUNNER_TEMP/windows-process-tests.log" || { echo "Windows process test did not run: $test_name" >&2; exit 1; }
 
       - name: Fetch locked Rust sources
-        if: matrix.suite == 'rust'
+        if: matrix.suite == 'rust' || (matrix.suite == 'rust-macos' && needs.scope.outputs.channel == 'beta')
         run: cargo fetch --locked --manifest-path rust/Cargo.toml
 
       - name: Verify Rust notices
-        if: matrix.suite == 'rust'
+        if: matrix.suite == 'rust' || (matrix.suite == 'rust-macos' && needs.scope.outputs.channel == 'beta')
         run: |
           set -euo pipefail
           bun run check:rust-notices
@@ -234,30 +272,18 @@ jobs:
 
   build:
     name: build ${{ matrix.target }}
+    needs: scope
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: darwin-arm64
-            runner: macos-26
-            platform: darwin
-            arch: arm64
-          - target: darwin-x64
-            runner: macos-15-intel
-            platform: darwin
-            arch: x64
-          - target: linux-x64
-            runner: ubuntu-24.04
-            platform: linux
-            arch: x64
-          - target: windows-x64
-            runner: windows-2025
-            platform: win32
-            arch: x64
+        include: ${{ fromJSON(needs.scope.outputs.targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
+      RELEASE_VERSION: ${{ needs.scope.outputs.version }}
+      YCODING_VERSION: ${{ needs.scope.outputs.version }}
+      YCODING_CHANNEL: ${{ needs.scope.outputs.channel }}
       YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing
       YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85
     defaults:
@@ -268,21 +294,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Resolve release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
-          else
-            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-          echo "YCODING_VERSION=$version" >>"$GITHUB_ENV"
-          case "$version" in *-beta.*) echo "YCODING_CHANNEL=beta" >>"$GITHUB_ENV" ;; esac
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -303,6 +314,15 @@ jobs:
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
+
+      - name: Verify release panic recovery
+        run: |
+          set -euo pipefail
+          models="$(bun -e 'console.log(require("node:path").resolve("packages/cli/script/models-dev.snapshot.json"))')"
+          test -f "$models"
+          export YCODING_BUNDLED_MODELS_PATH="$models"
+          cargo build --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime -p ycoding-store --bin ycoding-runtime --example release_recovery
+          "rust/target/release/examples/release_recovery${{ runner.os == 'Windows' && '.exe' || '' }}"
 
       - name: Import macOS signing identity
         if: runner.os == 'macOS'
@@ -380,6 +400,19 @@ jobs:
           fi
           if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
 
+      - name: Verify macOS CLI packaging, installer, and updater
+        if: runner.os == 'macOS'
+        working-directory: packages/cli
+        env:
+          YCODING_MACOS_SIGNING_IDENTITY: ""
+        run: |
+          set -euo pipefail
+          bun test --timeout 30000 test-integration/node-build.test.ts test/computer-use-packaging.test.ts test/update.test.ts test/install-local.test.ts 2>&1 | tee "$RUNNER_TEMP/macos-cli-tests.log"
+          if grep -Eq '^ *[1-9][0-9]* (skip|todo)$' "$RUNNER_TEMP/macos-cli-tests.log"; then
+            echo "macOS CLI gates must run every test" >&2
+            exit 1
+          fi
+
   isolated-browser-acceptance:
     name: isolated browser acceptance (darwin-arm64, Chrome 152+)
     needs: build
@@ -414,28 +447,17 @@ jobs:
 
   package:
     name: package TUI release assets
-    needs: build
+    needs: [scope, build]
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      RELEASE_VERSION: ${{ needs.scope.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Resolve release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
-          else
-            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
 
       - name: Download native executables
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -444,26 +466,17 @@ jobs:
           pattern: ycoding-*
 
       - name: Create release archives and checksums
+        env:
+          RELEASE_TARGETS: ${{ needs.scope.outputs.targets }}
         run: |
           set -euo pipefail
           version="$RELEASE_VERSION"
+          targets=()
+          while IFS= read -r target; do targets+=("$target"); done < <(jq -r '.[].target' <<<"$RELEASE_TARGETS")
+          test "${#targets[@]}" -gt 0
+          test "$(ls unpacked | LC_ALL=C sort)" = "$(printf 'ycoding-%s\n' "${targets[@]}" | LC_ALL=C sort)" \
+            || { echo "Downloaded executables do not match the release targets: ${targets[*]}" >&2; exit 1; }
           mkdir release
-          chmod +x unpacked/ycoding-darwin-arm64/ycoding "unpacked/ycoding-darwin-arm64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use" unpacked/ycoding-darwin-x64/ycoding "unpacked/ycoding-darwin-x64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use" unpacked/ycoding-linux-x64/ycoding
-          test -x unpacked/ycoding-darwin-arm64/ycoding
-          test -x unpacked/ycoding-darwin-x64/ycoding
-          for target in darwin-arm64 darwin-x64; do
-            app="unpacked/ycoding-$target/YCoding Computer Use.app"
-            test -d "$app" && test ! -L "$app"
-            test "$(find "$app" -mindepth 1 -printf '%P\n' | LC_ALL=C sort)" = "$(printf '%s\n' Contents Contents/Info.plist Contents/MacOS Contents/MacOS/ycoding-computer-use Contents/Resources Contents/Resources/YCoding.icns Contents/_CodeSignature Contents/_CodeSignature/CodeResources | LC_ALL=C sort)"
-            test -f "$app/Contents/Info.plist" && test ! -L "$app/Contents/Info.plist" && test -s "$app/Contents/Info.plist"
-            test -f "$app/Contents/_CodeSignature/CodeResources" && test ! -L "$app/Contents/_CodeSignature/CodeResources" && test -s "$app/Contents/_CodeSignature/CodeResources"
-            test -f "$app/Contents/MacOS/ycoding-computer-use" && test ! -L "$app/Contents/MacOS/ycoding-computer-use" && test -x "$app/Contents/MacOS/ycoding-computer-use"
-            test -f "$app/Contents/Resources/YCoding.icns" && test ! -L "$app/Contents/Resources/YCoding.icns" && test -s "$app/Contents/Resources/YCoding.icns"
-            grep -Fq '<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string>' "$app/Contents/Info.plist"
-            grep -Fq '<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>' "$app/Contents/Info.plist"
-            grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist"
-          done
-          test -x unpacked/ycoding-linux-x64/ycoding
           mac_entries=(ycoding ycoding-chrome-extension)
           version_core="${version%%+*}"
           prerelease=false
@@ -472,28 +485,52 @@ jobs:
             $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && ($3 > 1 || ($3 == 1 && prerelease == "false"))))) { found=1 }
             END { exit !found }
           '; then mac_entries+=("YCoding Computer Use.app"); fi
-          tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" "${mac_entries[@]}"
-          tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" "${mac_entries[@]}"
-          tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension
-          (cd unpacked/ycoding-windows-x64 && zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension)
-          tar -tzvf "release/ycoding-$version-darwin-arm64.tar.gz" | grep '^-rwx' >/dev/null
-          tar -tzvf "release/ycoding-$version-darwin-x64.tar.gz" | grep '^-rwx' >/dev/null
-          tar -tzvf "release/ycoding-$version-linux-x64.tar.gz" | grep '^-rwx' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
-          tar -tzf "release/ycoding-$version-linux-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
-          for target in darwin-arm64 darwin-x64 linux-x64; do
-            expected=(ycoding ycoding-chrome-extension)
-            if [ "${target%%-*}" = darwin ]; then expected=("${mac_entries[@]}"); fi
+          assets=()
+          for target in "${targets[@]}"; do
+            source="unpacked/ycoding-$target"
+            case "$target" in
+              darwin-arm64)
+                app="$source/YCoding Computer Use.app"
+                test -d "$app" && test ! -L "$app"
+                chmod +x "$source/ycoding" "$app/Contents/MacOS/ycoding-computer-use"
+                test "$(cd "$app" && find . -mindepth 1 | sed 's#^\./##' | LC_ALL=C sort)" = "$(printf '%s\n' Contents Contents/Info.plist Contents/MacOS Contents/MacOS/ycoding-computer-use Contents/Resources Contents/Resources/YCoding.icns Contents/_CodeSignature Contents/_CodeSignature/CodeResources | LC_ALL=C sort)"
+                test -f "$app/Contents/Info.plist" && test ! -L "$app/Contents/Info.plist" && test -s "$app/Contents/Info.plist"
+                test -f "$app/Contents/_CodeSignature/CodeResources" && test ! -L "$app/Contents/_CodeSignature/CodeResources" && test -s "$app/Contents/_CodeSignature/CodeResources"
+                test -f "$app/Contents/MacOS/ycoding-computer-use" && test ! -L "$app/Contents/MacOS/ycoding-computer-use" && test -x "$app/Contents/MacOS/ycoding-computer-use"
+                test -f "$app/Contents/Resources/YCoding.icns" && test ! -L "$app/Contents/Resources/YCoding.icns" && test -s "$app/Contents/Resources/YCoding.icns"
+                grep -Fq '<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string>' "$app/Contents/Info.plist"
+                grep -Fq '<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>' "$app/Contents/Info.plist"
+                grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist"
+                expected=("${mac_entries[@]}")
+                tar -C "$source" -czf "release/ycoding-$version-$target.tar.gz" "${expected[@]}"
+                tar -tzf "release/ycoding-$version-$target.tar.gz" | grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use' >/dev/null
+                ;;
+              linux-x64)
+                chmod +x "$source/ycoding"
+                expected=(ycoding ycoding-chrome-extension)
+                tar -C "$source" -czf "release/ycoding-$version-$target.tar.gz" ycoding ycoding-chrome-extension
+                ;;
+              windows-x64)
+                (cd "$source" && zip -r "../../release/ycoding-$version-$target.zip" ycoding.exe ycoding-chrome-extension)
+                test "$(unzip -Z1 "release/ycoding-$version-$target.zip" | cut -d/ -f1 | LC_ALL=C sort -u)" = "$(printf '%s\n' ycoding.exe ycoding-chrome-extension | LC_ALL=C sort)"
+                assets+=("ycoding-$version-$target.zip")
+                continue
+                ;;
+              *)
+                echo "Unsupported release target: $target" >&2
+                exit 1
+                ;;
+            esac
+            test -x "$source/ycoding"
+            tar -tzvf "release/ycoding-$version-$target.tar.gz" | grep '^-rwx' >/dev/null
+            tar -tzf "release/ycoding-$version-$target.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
             test "$(tar -tzf "release/ycoding-$version-$target.tar.gz" | cut -d/ -f1 | LC_ALL=C sort -u)" = "$(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)"
+            assets+=("ycoding-$version-$target.tar.gz")
           done
-          test "$(unzip -Z1 "release/ycoding-$version-windows-x64.zip" | cut -d/ -f1 | LC_ALL=C sort -u)" = "$(printf '%s\n' ycoding.exe ycoding-chrome-extension | LC_ALL=C sort)"
-          cp LICENSE NOTICE release/
+          cp LICENSE NOTICE "docs/releases/v$version.md" release/
           # One checksum file covers every released asset, so the installer
           # verifies each download with the same rule.
-          (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip LICENSE NOTICE > "ycoding-$version-checksums.txt")
+          (cd release && sha256sum "${assets[@]}" LICENSE NOTICE "v$version.md" > "ycoding-$version-checksums.txt")
 
       - name: Upload prepared release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -505,30 +542,45 @@ jobs:
 
   release-tui:
     name: publish TUI release
-    needs: deploy-web
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [scope, verify-source, package, isolated-browser-acceptance, deploy-web]
+    if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.verify-source.result == 'success' && needs.package.result == 'success' && needs.isolated-browser-acceptance.result == 'success' && (needs.deploy-web.result == 'success' || (needs.scope.outputs.channel == 'beta' && needs.deploy-web.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.scope.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - name: Resolve release version
-        run: |
-          set -euo pipefail
-          version="${{ github.ref_name }}"
-          version="${version#v}"
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-
       - name: Download prepared release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-assets-${{ env.RELEASE_VERSION }}
           path: release
+
+      - name: Verify prepared release assets
+        env:
+          RELEASE_TARGETS: ${{ needs.scope.outputs.targets }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          checksums="ycoding-$version-checksums.txt"
+          signed=(LICENSE NOTICE "v$version.md")
+          while IFS= read -r target; do
+            case "$target" in
+              windows-*) signed+=("ycoding-$version-$target.zip") ;;
+              *) signed+=("ycoding-$version-$target.tar.gz") ;;
+            esac
+          done < <(jq -r '.[].target' <<<"$RELEASE_TARGETS")
+          test "$(ls release | LC_ALL=C sort)" = "$(printf '%s\n' "$checksums" "${signed[@]}" | LC_ALL=C sort)" \
+            || { echo "Prepared release assets do not match the release targets" >&2; exit 1; }
+          test "$(awk '{ print $2 }' "release/$checksums" | LC_ALL=C sort)" = "$(printf '%s\n' "${signed[@]}" | LC_ALL=C sort)" \
+            || { echo "The checksum file does not cover exactly the release assets" >&2; exit 1; }
+          (cd release && sha256sum -c "$checksums")
 
       - name: Create GitHub release
         env:
@@ -562,12 +614,12 @@ jobs:
           } > release-notes.md
           release_flags=()
           case "$version" in *-beta.*) release_flags=(--prerelease --latest=false) ;; esac
-          gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md "${release_flags[@]}"
+          gh release create "v$version" release/* --verify-tag --target "$GITHUB_SHA" --title "YCoding $version" --notes-file release-notes.md "${release_flags[@]}"
 
   deploy-web:
     name: deploy web (cloudflare)
-    needs: [verify-source, package, isolated-browser-acceptance]
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [scope, verify-source, package, isolated-browser-acceptance]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.scope.outputs.channel == 'latest' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -590,7 +642,4 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
-          case "$GITHUB_REF_NAME" in
-            v*-beta.*) bun run deploy:cloudflare --env beta ;;
-            *) bun run deploy:cloudflare ;;
-          esac
+          bun run deploy:cloudflare

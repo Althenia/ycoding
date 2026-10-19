@@ -21,6 +21,8 @@ const outdir = path.resolve(
   process.argv.find((arg) => arg.startsWith("--outdir="))?.slice("--outdir=".length) ?? "dist",
 )
 if (outdir === dir) throw new Error("--outdir must not be the package directory")
+if (process.platform === "darwin" && process.arch !== "arm64")
+  throw new Error("macOS builds require Apple Silicon (arm64)")
 process.chdir(dir)
 
 await rm(outdir, { recursive: true, force: true })
@@ -42,8 +44,6 @@ const allTargets: {
   { os: "linux", arch: "x64", abi: "musl" },
   { os: "linux", arch: "x64", abi: "musl", avx2: false },
   { os: "darwin", arch: "arm64" },
-  { os: "darwin", arch: "x64" },
-  { os: "darwin", arch: "x64", avx2: false },
   { os: "win32", arch: "arm64" },
   { os: "win32", arch: "x64" },
   { os: "win32", arch: "x64", avx2: false },
@@ -80,7 +80,7 @@ for (const item of targets) {
     .join("-")
   const name = target.replace(binary, artifact)
   console.log(`building ${name}`)
-  const runtimePayload = await buildRuntime(item)
+  const runtimeAsset = await buildRuntime(item)
   const result = await Bun.build({
     entrypoints: [entrypoint],
     tsconfig: "./tsconfig.json",
@@ -102,7 +102,8 @@ for (const item of targets) {
       windows: {},
     },
     define: {
-      YCODING_RUNTIME_PAYLOAD: JSON.stringify(runtimePayload),
+      YCODING_RUNTIME_ASSET: JSON.stringify(runtimeAsset.path),
+      YCODING_RUNTIME_SHA256: JSON.stringify(runtimeAsset.sha256),
       YCODING_VERSION: `'${Script.version}'`,
       YCODING_CLI_NAME: `'${binary}'`,
       YCODING_MODELS_DEV: modelsData,
@@ -112,7 +113,7 @@ for (const item of targets) {
       FFF_LIBC: item.os === "linux" ? `'${item.abi ?? "gnu"}'` : "undefined",
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
     },
-  })
+  }).finally(runtimeAsset.dispose)
 
   if (!result.success) {
     for (const log of result.logs) console.error(log)

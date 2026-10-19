@@ -33,7 +33,7 @@ Latency and client-timing telemetry stays in local storage and is disabled until
 
 ## Quick start
 
-**macOS (Apple Silicon or Intel) and Linux (x64)** — requires `curl`, `tar`, and `shasum` or `sha256sum`:
+**macOS (Apple Silicon) and Linux (x64)** — requires `curl`, `tar`, and `shasum` or `sha256sum`:
 
 ```sh
 curl -fsSL https://ycoding.althenia.app/install.sh | sh
@@ -59,17 +59,17 @@ Keep up to date with `ycoding update`. See [installation](https://ycoding.althen
 
 ## Install the beta
 
-The Rust backend ships through a separate beta channel, starting at `0.11.0-beta.1`; stable releases stay separate. On macOS or Linux:
+The Rust backend ships through a separate beta channel, starting at `0.11.0-beta.1`; stable releases stay separate. The beta is built for macOS on Apple Silicon only. Intel Macs are unsupported, and Linux and Windows beta builds are not published for this release. On an Apple Silicon Mac:
 
 ```sh
-curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta
+curl -fsSL https://raw.githubusercontent.com/Althenia/ycoding/v0.11.0-beta.1/script/install.sh | sh -s -- --beta
 ```
 
-`--beta` or `YCODING_CHANNEL=beta` selects the newest published, non-draft beta prerelease. `YCODING_VERSION` still pins an exact version. The beta uses the `ycoding-beta` configuration, state, data, and cache namespace. On first start it imports a private copy of stable Session data; each Meeting Location imports its stable history when first opened with Meeting enabled. Stable files remain unchanged, and later stable changes are not merged into beta data. See [first-start import](./docs/configuration.md#global-directories) and [Meeting storage](./docs/configuration.md#meeting-capture).
+`--beta` or `YCODING_CHANNEL=beta` selects the newest published, non-draft beta prerelease. Add `YCODING_VERSION=0.11.0-beta.1` to pin this exact version. The installer URL is the script in the `v0.11.0-beta.1` release tag. The beta uses the `ycoding-beta` configuration, state, data, and cache namespace. On first start it imports a private copy of stable Session data; each Meeting Location imports its stable history when first opened with Meeting enabled. Stable files remain unchanged, and later stable changes are not merged into beta data. See [first-start import](./docs/configuration.md#global-directories) and [Meeting storage](./docs/configuration.md#meeting-capture).
 
 Configure providers and terminal preferences in the beta configuration directory. Runtime JavaScript/npm plugins are unsupported in beta; use explicit trusted process extensions or MCP servers, and keep TUI presentation plugins in `cli.json`. Beta and stable data remain separate when switching channels.
 
-On a beta build, `ycoding update` selects the higher of the newest beta and newest stable; a newer stable supersedes the beta. Stable builds never update to a beta automatically. Use the matching beta web client and enrolled backend together; revision 5 connections require matching contracts.
+On a beta build, `ycoding update` selects the higher of the newest beta and newest stable; a newer stable supersedes the beta. Stable builds never update to a beta automatically. The hosted beta web client and relay are not part of this macOS prerelease; the local TUI and CLI are the published surface. Deploy the matching web client and relay separately and use them with the enrolled backend; revision 5 connections require matching contracts.
 
 Switch back with the normal stable installer:
 

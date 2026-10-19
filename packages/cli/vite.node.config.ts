@@ -42,6 +42,24 @@ function runtimeRequirePlugin(): Plugin {
   }
 }
 
+export const runtimeAssetKey = "runtime/ycoding-runtime"
+
+const runtimeAssetId = "\0ycoding-runtime-asset.js"
+
+function runtimeAssetPlugin(runtimeAsset: RuntimeAsset): Plugin {
+  return {
+    name: "ycoding:runtime-asset",
+    enforce: "pre",
+    resolveId(source, _importer, options) {
+      return options.attributes?.type === "file" && source === runtimeAsset.path ? runtimeAssetId : undefined
+    },
+    load(id) {
+      if (id !== runtimeAssetId) return
+      return `import path from "node:path"\nexport default path.join(process.env.YCODING_NODE_ASSETS_DIR, ${JSON.stringify(runtimeAssetKey)})`
+    },
+  }
+}
+
 const resolve = {
   alias: [
     { find: /^solid-js\/store$/, replacement: "solid-js/store/dist/store.js" },
@@ -124,14 +142,17 @@ export type NodeBuildInput = {
   readonly models: string
   readonly assetHash: string
   readonly target: NodeTarget
-  readonly runtimePayload?: string
+  readonly runtimeAsset?: RuntimeAsset
 }
+
+export type RuntimeAsset = { readonly path: string; readonly sha256: string }
 
 export function mainConfig(input: NodeBuildInput): UserConfig {
   return defineConfig({
     root: dir,
     plugins: [
       rawTextPlugin(),
+      ...(input.runtimeAsset === undefined ? [] : [runtimeAssetPlugin(input.runtimeAsset)]),
       runtimeRequirePlugin(),
       solid({
         solid: {
@@ -143,7 +164,10 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     resolve,
     esbuild: { jsx: "automatic" },
     define: {
-      YCODING_RUNTIME_PAYLOAD: input.runtimePayload === undefined ? "undefined" : JSON.stringify(input.runtimePayload),
+      "process.env.WS_NO_BUFFER_UTIL": JSON.stringify("1"),
+      YCODING_RUNTIME_ASSET: input.runtimeAsset === undefined ? "undefined" : JSON.stringify(input.runtimeAsset.path),
+      YCODING_RUNTIME_SHA256:
+        input.runtimeAsset === undefined ? "undefined" : JSON.stringify(input.runtimeAsset.sha256),
       YCODING_VERSION: JSON.stringify(input.version),
       YCODING_CLI_NAME: JSON.stringify(NODE_BINARY),
       YCODING_MODELS_DEV: input.models,

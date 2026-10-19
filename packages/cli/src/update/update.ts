@@ -50,7 +50,7 @@ export function validVersion(version: string) {
 
 export function releaseTarget(platform: string, arch: string) {
   const target = `${platform}-${arch}`
-  if (["darwin-arm64", "darwin-x64", "linux-x64"].includes(target)) return target
+  if (["darwin-arm64", "linux-x64"].includes(target)) return target
   throw new Error(
     `Unsupported platform for self-update: ${target}; install manually from https://github.com/${repository}/releases`,
   )

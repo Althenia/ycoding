@@ -33,6 +33,7 @@ describe("release updater", () => {
     expect(validVersion("01.2.3")).toBe(false)
     expect(validVersion("../../1.2.3")).toBe(false)
     expect(releaseTarget("darwin", "arm64")).toBe("darwin-arm64")
+    expect(() => releaseTarget("darwin", "x64")).toThrow("Unsupported platform")
     expect(releaseTarget("linux", "x64")).toBe("linux-x64")
     expect(() => releaseTarget("linux", "arm64")).toThrow("Unsupported platform")
   })

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -35,7 +36,14 @@ const harness = `
   const { buildRuntime } = await import(process.env.RUNTIME_MODULE)
   try {
     const result = await buildRuntime(JSON.parse(process.env.TARGET))
-    console.log(JSON.stringify({ result, calls }))
+    const fs = await import("node:fs/promises")
+    const source = path.join(process.env.METADATA_TARGET, "release", process.platform === "win32" ? "ycoding-runtime.exe" : "ycoding-runtime")
+    if (process.env.SCENARIO === "replace") {
+      await fs.writeFile(source, "subsequent Cargo output")
+      console.log(JSON.stringify({ result, calls, contents: await fs.readFile(result.path, "utf8") }))
+    }
+    await result.dispose()
+    if (process.env.SCENARIO !== "replace") console.log(JSON.stringify({ result, calls, disposed: !(await fs.stat(result.path).then(() => true, () => false)), sourceRetained: await fs.readFile(source, "utf8") }))
   } catch (error) {
     console.log(JSON.stringify({ error: error.message, code: error.code, calls }))
   }
@@ -63,9 +71,12 @@ async function run(input: { targetDirectory?: string; cargoTargetDir?: string; s
       .split("\n")
       .find((line) => line.startsWith("{"))!,
   ) as {
-    result?: string
+    result?: { path: string; sha256: string }
     error?: string
     code?: string
+    contents?: string
+    disposed?: boolean
+    sourceRetained?: string
     calls: Array<{
       command: string
       args: string[]
@@ -85,7 +96,10 @@ test("buildRuntime uses Cargo metadata's configured target directory and preserv
     await writeFile(artifact, "synthetic authoritative runtime")
     for (const cargoTargetDir of [undefined, path.relative(root, targetDirectory)]) {
       const result = await run({ targetDirectory, cargoTargetDir })
-      expect(result.result).toBe(Buffer.from("synthetic authoritative runtime").toString("base64"))
+      expect(result.result?.path).not.toBe(artifact)
+      expect(result.result?.sha256).toBe(createHash("sha256").update("synthetic authoritative runtime").digest("hex"))
+      expect(result.disposed).toBe(true)
+      expect(result.sourceRetained).toBe("synthetic authoritative runtime")
       expect(result.calls).toHaveLength(2)
       expect(result.calls[0]).toMatchObject({
         command: "cargo",
@@ -121,6 +135,20 @@ test("buildRuntime uses Cargo metadata's configured target directory and preserv
       expect(result.calls[0].env.CARGO_TARGET_DIR).toBe(cargoTargetDir)
       expect(result.calls[1].env.CARGO_TARGET_DIR).toBe(cargoTargetDir)
     }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test("buildRuntime snapshots the selected bytes before a subsequent Cargo build replaces the source", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-runtime-snapshot-"))
+  const artifact = path.join(directory, "release", executableName)
+  try {
+    await mkdir(path.dirname(artifact), { recursive: true })
+    await writeFile(artifact, "synthetic authoritative runtime")
+    const result = await run({ targetDirectory: directory, scenario: "replace" })
+    expect(result.contents).toBe("synthetic authoritative runtime")
+    expect(result.result?.sha256).toBe(createHash("sha256").update(result.contents!).digest("hex"))
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

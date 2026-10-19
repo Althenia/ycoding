@@ -21,18 +21,19 @@ interface ComputerHelperBuild {
 
 export function computerHelperBuild(target: ComputerHelperTarget, binDirectory: string) {
   if (target.platform !== "darwin") return undefined
+  if (target.arch !== "arm64") throw new Error("macOS computer helper builds require Apple Silicon (arm64)")
   return {
     source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
     bridgingHeader: path.resolve(import.meta.dir, "../../core/computer-use/CGVirtualDisplay.h"),
     application: path.join(binDirectory, COMPUTER_HELPER_APPLICATION),
-    target: `${target.arch === "x64" ? "x86_64" : target.arch}-apple-macosx13.0`,
+    target: "arm64-apple-macosx13.0",
   }
 }
 
 export const computerHelperBuildAvailable = (
   target: ComputerHelperTarget,
   hostPlatform: NodeJS.Platform = process.platform,
-) => target.platform !== "darwin" || hostPlatform === "darwin"
+) => target.platform !== "darwin" || (hostPlatform === "darwin" && target.arch === "arm64")
 
 export function developmentComputerHelperBuild(
   arch: ComputerHelperTarget["arch"] = computerHelperHostArchitecture(),

@@ -12,7 +12,7 @@ import {
   verifyPackagedComputerHelper,
 } from "../script/computer-use"
 
-const macTest = process.platform === "darwin" ? test : test.skip
+const macTest = process.platform === "darwin" && process.arch === "arm64" ? test : test.skip
 
 describe("macOS computer helper packaging", () => {
   macTest(
@@ -20,7 +20,7 @@ describe("macOS computer helper packaging", () => {
     async () => {
       const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-brand-"))
       try {
-        await buildComputerHelper({ platform: "darwin", arch: process.arch === "x64" ? "x64" : "arm64" }, bin)
+        await buildComputerHelper({ platform: "darwin", arch: "arm64" }, bin)
         const application = path.join(bin, "YCoding Computer Use.app")
         expect(await readdir(bin)).toEqual(["YCoding Computer Use.app"])
         const plist = path.join(application, "Contents", "Info.plist")
@@ -74,7 +74,7 @@ describe("macOS computer helper packaging", () => {
     async () => {
       const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-placement-"))
       try {
-        await buildComputerHelper({ platform: "darwin", arch: process.arch === "x64" ? "x64" : "arm64" }, bin)
+        await buildComputerHelper({ platform: "darwin", arch: "arm64" }, bin)
         const listed = await listHelperWindows(path.join(bin, "YCoding Computer Use.app"))
         expect(listed).toMatchObject({ status: "ok", action: "desktop.list" })
         const windows = (listed.apps ?? []).flatMap((app) => app.windows)
@@ -94,7 +94,7 @@ describe("macOS computer helper packaging", () => {
     expect(computerHelperBuild({ platform: "win32", arch: "arm64" }, "/tmp/bin")).toBeUndefined()
   })
 
-  test("plans a sibling helper for each supported macOS architecture", () => {
+  test("plans an Apple Silicon helper and rejects unsupported Intel targets", () => {
     const arm64 = computerHelperBuild({ platform: "darwin", arch: "arm64" }, "/tmp/bin")
     expect(arm64).toEqual({
       source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
@@ -103,10 +103,7 @@ describe("macOS computer helper packaging", () => {
       target: "arm64-apple-macosx13.0",
     })
     expect(arm64?.application).toBe("/tmp/bin/YCoding Computer Use.app")
-    expect(computerHelperBuild({ platform: "darwin", arch: "x64" }, "/tmp/bin")).toMatchObject({
-      application: "/tmp/bin/YCoding Computer Use.app",
-      target: "x86_64-apple-macosx13.0",
-    })
+    expect(() => computerHelperBuild({ platform: "darwin", arch: "x64" }, "/tmp/bin")).toThrow("Apple Silicon")
   })
 
   test("signs with a configured stable identity and a secure timestamp, otherwise ad hoc", () => {
@@ -132,15 +129,15 @@ describe("macOS computer helper packaging", () => {
   test("keeps only complete artifacts when the host cannot compile the macOS helper", () => {
     expect(computerHelperBuildAvailable({ platform: "darwin", arch: "arm64" }, "linux")).toBe(false)
     expect(computerHelperBuildAvailable({ platform: "linux", arch: "x64" }, "linux")).toBe(true)
-    expect(computerHelperBuildAvailable({ platform: "darwin", arch: "x64" }, "darwin")).toBe(true)
+    expect(computerHelperBuildAvailable({ platform: "darwin", arch: "x64" }, "darwin")).toBe(false)
   })
 
   test("plans the explicit source-development helper in Core's ignored cache", () => {
-    expect(developmentComputerHelperBuild()).toEqual({
+    expect(developmentComputerHelperBuild("arm64")).toEqual({
       source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
       bridgingHeader: path.resolve(import.meta.dir, "../../core/computer-use/CGVirtualDisplay.h"),
       application: path.resolve(import.meta.dir, "../../core/.cache/computer-use/YCoding Computer Use.app"),
-      target: `${process.arch === "x64" ? "x86_64" : process.arch}-apple-macosx13.0`,
+      target: "arm64-apple-macosx13.0",
     })
   })
 

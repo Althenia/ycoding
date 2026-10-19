@@ -312,6 +312,38 @@ describe("frontend production boundary (audit §8)", () => {
     )
   })
 
+  test.each([
+    ['YCODING_RUNTIME_ASSET, { with: { type: "file" } }', true],
+    ["YCODING_RUNTIME_ASSET", false],
+    ['YCODING_RUNTIME_ASSET, { with: { type: "json" } }', false],
+    ["YCODING_RUNTIME_ASSET, { with: { type: selected } }", false],
+    ['YCODING_RUNTIME_ASSET, { with: { type: "file", ...attributes } }', false],
+    ['other, { with: { type: "file" } }', false],
+  ])("restricts declared binary assets to the exact raw-file import: %s", async (argumentsSource, allowed) => {
+    await workspace(
+      {
+        "packages/cli/package.json": JSON.stringify({ name: "@ycoding-ai/cli" }),
+        "packages/cli/src/runtime-executable.ts": `async function runtimeExecutable() { await import(${argumentsSource}); await import("@ycoding-ai/core") }`,
+      },
+      async (root) => {
+        const result = await checkFrontendBoundary(root, {
+          sqliteReaders: [],
+          loaders: [
+            {
+              file: "packages/cli/src/runtime-executable.ts",
+              function: "runtimeExecutable",
+              asset: "YCODING_RUNTIME_ASSET",
+              reason: "Raw native runtime file",
+            },
+          ],
+        })
+        expect(result.violations.filter((entry) => entry.kind === "nonliteral")).toHaveLength(allowed ? 0 : 1)
+        expect(result.violations.filter((entry) => entry.kind === "stale-loader")).toHaveLength(allowed ? 0 : 1)
+        expect(result.violations.filter((entry) => entry.owner === "@ycoding-ai/core")).toHaveLength(1)
+      },
+    )
+  })
+
   test("rejects undeclared nonliteral import/require and stale declarations", async () => {
     await workspace(
       {
@@ -387,32 +419,26 @@ describe("frontend production boundary (audit §8)", () => {
       module: "packages/tui/src/editor.ts",
       reason: "Reads the editor database, not the YCoding store",
     }
-    const graph = {
-      frontend: "tui",
-      outputs: [
-        {
-          file: "dist/tui",
-          modules: ["/repo/" + reader.module, "/repo/" + reader.file],
-          imports: ["bun:sqlite"],
-          edges: [{ file: "/repo/" + reader.file, specifier: "bun:sqlite" }],
-        },
-      ],
+    const output = {
+      file: "dist/tui",
+      modules: ["/repo/" + reader.module, "/repo/" + reader.file],
+      imports: ["bun:sqlite"],
+      edges: [{ file: "/repo/" + reader.file, specifier: "bun:sqlite" }],
     }
+    const graph = { frontend: "tui", outputs: [output] }
     expect(checkBundleGraph(graph, [reader])).toEqual([])
     expect(
       checkBundleGraph(
         {
           ...graph,
-          outputs: [
-            { ...graph.outputs[0], edges: [{ file: "/repo/packages/tui/src/other.ts", specifier: "bun:sqlite" }] },
-          ],
+          outputs: [{ ...output, edges: [{ file: "/repo/packages/tui/src/other.ts", specifier: "bun:sqlite" }] }],
         },
         [reader],
       )[0]?.owner,
     ).toBe("sqlite")
-    expect(
-      checkBundleGraph({ ...graph, outputs: [{ ...graph.outputs[0], imports: ["drizzle-orm"] }] }, [reader])[0]?.owner,
-    ).toBe("sqlite")
+    expect(checkBundleGraph({ ...graph, outputs: [{ ...output, imports: ["drizzle-orm"] }] }, [reader])[0]?.owner).toBe(
+      "sqlite",
+    )
     await workspace(
       {
         "packages/tui/package.json": frontendManifest,

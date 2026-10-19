@@ -6,6 +6,26 @@ import path from "node:path"
 
 const root = path.resolve(import.meta.dirname, "..")
 
+test("Nix packages and CI support Linux and Apple Silicon macOS only", async () => {
+  const flake = await Bun.file(path.join(root, "flake.nix")).text()
+  const nodeModules = await Bun.file(path.join(root, "nix/node_modules.nix")).text()
+  const evalWorkflow = await Bun.file(path.join(root, ".github/workflows/nix-eval.yml")).text()
+  const hashesWorkflow = await Bun.file(path.join(root, ".github/workflows/nix-hashes.yml")).text()
+  const supported = ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
+  const values = [
+    /systems\s*=\s*\[([\s\S]*?)\];/.exec(flake)?.[1],
+    /meta\.platforms\s*=\s*\[([\s\S]*?)\];/.exec(nodeModules)?.[1],
+    /SYSTEMS="([^"]+)"/.exec(evalWorkflow)?.[1],
+    [...hashesWorkflow.matchAll(/^\s*- system: (\S+)/gm)].map((match) => match[1]).join(" "),
+    /for SYSTEM in ([^;]+); do/.exec(hashesWorkflow)?.[1],
+  ]
+  expect(values.every((value) => value !== undefined)).toBe(true)
+  for (const value of values) {
+    const systems = value!.match(/(?:aarch64|x86_64)-(?:linux|darwin)/g) ?? []
+    expect(systems.toSorted()).toEqual(supported.toSorted())
+  }
+})
+
 test("the Nix dependency source resolves the unchanged frozen workspace graph", async () => {
   const source = await Bun.file(path.join(root, "nix/node_modules.nix")).text()
   const union = /lib\.fileset\.unions\s*\[([^\]]+)\]/.exec(source)?.[1]

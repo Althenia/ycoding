@@ -1,5 +1,10 @@
 name: "Setup Rust"
-description: "Select the pinned Rust toolchain with rustfmt and clippy and install a checksum-verified protoc"
+description: "Select the pinned Rust toolchain with rustfmt and clippy, restore the locked Cargo registry, and install a checksum-verified protoc"
+inputs:
+  save-registry:
+    description: "Fetch every locked crate and save the Cargo registry when its exact key misses"
+    required: false
+    default: "false"
 runs:
   using: "composite"
   steps:
@@ -18,6 +23,33 @@ runs:
         cargo fmt --version
         cargo clippy --version
 
+    - name: Restore Cargo registry
+      id: registry
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust/Cargo.lock') }}
+        restore-keys: |
+          cargo-registry-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Fetch locked crates
+      if: inputs.save-registry == 'true' && steps.registry.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo fetch --locked --manifest-path rust/Cargo.toml
+
+    - name: Save Cargo registry
+      if: inputs.save-registry == 'true' && steps.registry.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: ${{ steps.registry.outputs.cache-primary-key }}
+
     - name: Install protoc
       shell: bash
       env:
@@ -27,7 +59,6 @@ runs:
         case "$RUNNER_OS-$RUNNER_ARCH" in
           Linux-X64) asset=linux-x86_64; sha256=121f6c7afe1d4d0e3ea6aab9432038599250134cbf4474cb1167d2c7decd4278 ;;
           macOS-ARM64) asset=osx-aarch_64; sha256=9cd98a532c5c5e0c4161314de0225de27e4c8a323917b6ea7b1b714d3ae23466 ;;
-          macOS-X64) asset=osx-x86_64; sha256=228cc7add4616cc14ca5e80dee83209d44449a7aee95a914ae748fa374efb078 ;;
           Windows-X64) asset=win64; sha256=f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3 ;;
           *) echo "Unsupported runner for protoc $PROTOC_VERSION: $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
         esac

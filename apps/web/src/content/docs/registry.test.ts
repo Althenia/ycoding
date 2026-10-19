@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { DOC_GROUPS, DOC_INDEX, DOC_PAGES, PUBLIC_DOC_PATHS, docsByGroup, findDocPage, sectionId, slugifyHeading } from "./registry"
+import {
+  DOC_GROUPS,
+  DOC_INDEX,
+  DOC_PAGES,
+  PUBLIC_DOC_PATHS,
+  docsByGroup,
+  findDocPage,
+  sectionId,
+  slugifyHeading,
+} from "./registry"
 
 // Canonical public routes from the approved information architecture.
 const APPROVED_DOC_ROUTES = [
@@ -73,13 +82,40 @@ describe("public docs allowlist", () => {
   test("installation documents beta selection, isolated data and the stable return command", () => {
     const page = findDocPage("installation")!
     const text = JSON.stringify(page)
-    for (const required of ["curl -fsSL https://beta.ycoding.althenia.app/install.sh | sh -s -- --beta", "YCODING_CHANNEL=beta", "YCODING_VERSION", "own data directory", "imports a copy", "without changing stable data", "newer stable", "curl -fsSL https://ycoding.althenia.app/install.sh | sh"])
+    for (const required of [
+      "curl -fsSL https://raw.githubusercontent.com/Althenia/ycoding/v0.11.0-beta.1/script/install.sh | sh -s -- --beta",
+      "YCODING_CHANNEL=beta",
+      "YCODING_VERSION",
+      "own data directory",
+      "imports a copy",
+      "without changing stable data",
+      "newer stable",
+      "curl -fsSL https://ycoding.althenia.app/install.sh | sh",
+    ])
       expect(text).toContain(required)
   })
   test("documents Muse account and key setup with current authentication limits", () => {
-    const section = findDocPage("configuration/providers")?.sections.find((section) => section.heading === "Muse (Meta)")
-    const text = section?.blocks.flatMap((block) => block.kind === "paragraph" ? [block.text] : []).join(" ") ?? ""
-    for (const required of ["muse", "Meta Muse Code account", "Meta Model API key", "META_API_KEY", "minimal", "max", "metadata", "catalog", "hidden", "non-tool", "re-login", "unknown", "response stream observations", "Weekly", "Quota reads do not mint keys"])
+    const section = findDocPage("configuration/providers")?.sections.find(
+      (section) => section.heading === "Muse (Meta)",
+    )
+    const text = section?.blocks.flatMap((block) => (block.kind === "paragraph" ? [block.text] : [])).join(" ") ?? ""
+    for (const required of [
+      "muse",
+      "Meta Muse Code account",
+      "Meta Model API key",
+      "META_API_KEY",
+      "minimal",
+      "max",
+      "metadata",
+      "catalog",
+      "hidden",
+      "non-tool",
+      "re-login",
+      "unknown",
+      "response stream observations",
+      "Weekly",
+      "Quota reads do not mint keys",
+    ])
       expect(text).toContain(required)
   })
 
@@ -116,10 +152,12 @@ describe("documentation index", () => {
   })
 
   test("describes release installation without claiming a signature", () => {
-    const install = DOC_INDEX.sections.flatMap((section) =>
-      section.blocks.flatMap((block) => (block.kind === "steps" ? block.items : [])),
-    ).find((step) => step.title === "Install")
-    expect(install?.text).toBe("Install a checksum-verified release build, or run from a checkout with a current Bun release.")
+    const install = DOC_INDEX.sections
+      .flatMap((section) => section.blocks.flatMap((block) => (block.kind === "steps" ? block.items : [])))
+      .find((step) => step.title === "Install")
+    expect(install?.text).toBe(
+      "Install a checksum-verified release build, or run from a checkout with a current Bun release.",
+    )
   })
 
   test("describes every group and links the configuration domains", () => {
@@ -144,16 +182,18 @@ describe("remote workspace documentation", () => {
     expect(text).toContain("Resume session")
     expect(text).toContain("/remote/session?session_id=<id>&device_id=<id>")
     expect(text).toContain("with optional &notice_id=<id>")
-    expect(text).toContain("unknown, revoked, or offline device is reported unavailable, with no fallback to another machine")
+    expect(text).toContain(
+      "unknown, revoked, or offline device is reported unavailable, with no fallback to another machine",
+    )
     expect(text).not.toContain("four named icon destinations")
     expect(text).not.toContain("the Session opens in Conversation")
   })
 
   test("distinguishes the browser tool display cap from device truncation", () => {
     const remote = findDocPage("usage/remote")
-    const conversation = remote?.sections.flatMap((section) =>
-      section.blocks.flatMap((block) => (block.kind === "table" ? block.rows : [])),
-    ).find((row) => row[0] === "Session")
+    const conversation = remote?.sections
+      .flatMap((section) => section.blocks.flatMap((block) => (block.kind === "table" ? block.rows : [])))
+      .find((row) => row[0] === "Session")
     expect(conversation?.[1]).toContain("first 4,000 characters")
     expect(conversation?.[1]).toContain("device truncation")
   })
@@ -169,7 +209,8 @@ describe("structured decision documentation", () => {
     expect(text).not.toContain("min_confidence")
     expect(text).toContain("uncalibrated")
     expect(text).toContain("subscription")
-    const example = tools?.sections.flatMap((section) => section.blocks)
+    const example = tools?.sections
+      .flatMap((section) => section.blocks)
       .find((block) => block.kind === "code" && block.label === "Decision helper model")
     expect(example?.kind).toBe("code")
     if (example?.kind !== "code") throw new Error("Decision helper model example is missing")
@@ -197,18 +238,31 @@ describe("structured decision documentation", () => {
     expect(text).toContain("refusal")
     expect(text).toContain("authorized")
     expect(text).toContain("keep-current")
-    const example = tools?.sections.flatMap((section) => section.blocks)
+    const example = tools?.sections
+      .flatMap((section) => section.blocks)
       .find((block) => block.kind === "code" && block.label === "Explicit decision request")
     expect(example?.kind).toBe("code")
     if (example?.kind !== "code") throw new Error("Explicit decision request example is missing")
-    expect(Bun.JSONC.parse(example.code)).toMatchObject({ provider: "agent", request: {
-      state: expect.any(Object), questions: [
-        { type: "choice", name: "route", choices: [{ value: "keep-current", description: expect.any(String) }, { value: "change", description: expect.any(String) }] },
-        { type: "predicate", name: "ready", instructions: expect.any(String) },
-      ],
-    } })
+    expect(Bun.JSONC.parse(example.code)).toMatchObject({
+      provider: "agent",
+      request: {
+        state: expect.any(Object),
+        questions: [
+          {
+            type: "choice",
+            name: "route",
+            choices: [
+              { value: "keep-current", description: expect.any(String) },
+              { value: "change", description: expect.any(String) },
+            ],
+          },
+          { type: "predicate", name: "ready", instructions: expect.any(String) },
+        ],
+      },
+    })
     expect(JSON.stringify(findDocPage("configuration/goal")?.sections)).toContain("explicit goal")
-    const rejected = findDocPage("configuration")?.sections.flatMap((section) => section.blocks)
+    const rejected = findDocPage("configuration")
+      ?.sections.flatMap((section) => section.blocks)
       .find((block) => block.kind === "code" && block.label === "Rejected keys")
     expect(rejected?.kind === "code" ? rejected.code : "").toContain("decisions")
   })
@@ -222,7 +276,8 @@ describe("structured decision documentation", () => {
       "standard.review.force-push",
       "standard.review.database-destructive",
       "standard.review.outside-repo",
-    ]) expect(guardrails).toContain(rule)
+    ])
+      expect(guardrails).toContain(rule)
     expect(guardrails).not.toContain("standard.review.broad-deletion")
     expect(guardrails).not.toContain("standard.review.publish")
     expect(guardrails).toContain("case-sensitive")
@@ -243,23 +298,43 @@ describe("structured decision documentation", () => {
       ["Reject", "Ordinary and hard reviews", "`0.8`", "Reject the action."],
     ])
     const settings = blocks.find((block) => block.kind === "table" && block.head[0] === "Field")
-    const hard = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_hard_reviews`") : undefined
+    const hard =
+      settings?.kind === "table"
+        ? settings.rows.find((row) => row[0] === "`guardrails.decide_hard_reviews`")
+        : undefined
     expect(hard?.slice(0, 3)).toEqual(["`guardrails.decide_hard_reviews`", "boolean", "`true`"])
     expect(hard?.[3]).toContain("humans while awake")
     expect(hard?.[3]).toContain("review box while asleep")
-    const master = settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_reviews`") : undefined
+    const master =
+      settings?.kind === "table" ? settings.rows.find((row) => row[0] === "`guardrails.decide_reviews`") : undefined
     expect(master?.slice(0, 3)).toEqual(["`guardrails.decide_reviews`", "boolean", "`false`"])
     expect(master?.[3]).toContain("review box while asleep")
     const options = findDocPage("configuration")?.sections.flatMap((section) => section.blocks) ?? []
-    const answer = options.flatMap((block) => (block.kind === "table" ? block.rows : [])).find((row) => row[0] === "`auto_answer`")
+    const answer = options
+      .flatMap((block) => (block.kind === "table" ? block.rows : []))
+      .find((row) => row[0] === "`auto_answer`")
     expect(answer).toBeUndefined()
   })
 
   test("current usage docs name levels Ask first, Allow tools, and Tools + reviews and distinguish hard reviews from YOLO automation", () => {
     const remote = findDocPage("usage/remote")
-    const control = remote?.sections.flatMap((section) => section.blocks).find((block) => block.kind === "table" && block.head[0] === "Autonomy control")
-    expect(control?.kind === "table" ? control.rows.map((row) => row[0]) : undefined).toEqual(["Ask first", "Allow tools", "Tools + reviews", "Goal"])
-    for (const slug of ["usage/tui", "usage/cli", "usage/remote", "configuration/yolo", "configuration/guardrails", "configuration/tools"]) {
+    const control = remote?.sections
+      .flatMap((section) => section.blocks)
+      .find((block) => block.kind === "table" && block.head[0] === "Autonomy control")
+    expect(control?.kind === "table" ? control.rows.map((row) => row[0]) : undefined).toEqual([
+      "Ask first",
+      "Allow tools",
+      "Tools + reviews",
+      "Goal",
+    ])
+    for (const slug of [
+      "usage/tui",
+      "usage/cli",
+      "usage/remote",
+      "configuration/yolo",
+      "configuration/guardrails",
+      "configuration/tools",
+    ]) {
       const text = JSON.stringify(findDocPage(slug)?.sections)
       expect(text).not.toMatch(/hard reviews (?:always |still )?require a (?:fresh )?human/i)
       expect(text).not.toContain("unless /sleep delegates")
@@ -293,20 +368,28 @@ describe("remote recovery documentation", () => {
 
 describe("page structure", () => {
   test("the remote guide describes family-finished and attention categories", () => {
-    const section = findDocPage("usage/remote")?.sections.find((entry) => entry.heading === "Notifications and availability")
+    const section = findDocPage("usage/remote")?.sections.find(
+      (entry) => entry.heading === "Notifications and availability",
+    )
     const text = JSON.stringify(section?.blocks)
-    expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[0]) : [])).toEqual(["Work finished", "Needs your attention", "Machine offline"])
-    expect(section?.blocks.flatMap((block) => block.kind === "table" ? block.rows.map((row) => row[1]) : [])).toEqual([
-      "Get notified after the agent declares its requested work finished and verified, its final reply settles, and no input, subagent, shell or goal work remains pending. An ordinary reply or idle status alone does not trigger an alert. Reconnecting does not repeat an accepted completion.",
-      "Get notified when a Session needs your decision, a guardrail blocks an action, a run fails, or a background-work result is lost. Lost results are identified separately from requests for your input. Each Session keeps one unread stored attention notice. While it stays unread, the Session alerts again on that notice only when it needs something different or at least 10 minutes after its last alert. A later run clears failure attention.",
-      "Get notified when a paired machine stays disconnected from the relay for 40 seconds, so a routine reconnect raises no alert. An open workspace alerts for its selected machine, and Push to this device alerts a closed browser or app; each browser shows one System alert per outage. A browser-only relay disconnect does not establish that the machine is offline.",
-    ])
+    expect(section?.blocks.flatMap((block) => (block.kind === "table" ? block.rows.map((row) => row[0]) : []))).toEqual(
+      ["Work finished", "Needs your attention", "Machine offline"],
+    )
+    expect(section?.blocks.flatMap((block) => (block.kind === "table" ? block.rows.map((row) => row[1]) : []))).toEqual(
+      [
+        "Get notified after the agent declares its requested work finished and verified, its final reply settles, and no input, subagent, shell or goal work remains pending. An ordinary reply or idle status alone does not trigger an alert. Reconnecting does not repeat an accepted completion.",
+        "Get notified when a Session needs your decision, a guardrail blocks an action, a run fails, or a background-work result is lost. Lost results are identified separately from requests for your input. Each Session keeps one unread stored attention notice. While it stays unread, the Session alerts again on that notice only when it needs something different or at least 10 minutes after its last alert. A later run clears failure attention.",
+        "Get notified when a paired machine stays disconnected from the relay for 40 seconds, so a routine reconnect raises no alert. An open workspace alerts for its selected machine, and Push to this device alerts a closed browser or app; each browser shows one System alert per outage. A browser-only relay disconnect does not establish that the machine is offline.",
+      ],
+    )
     expect(text).toContain("System switch also decides whether Push to this device")
     expect(text).not.toContain("stops running")
   })
   test("configuration pages describe local attention without a removed remote notification tool", () => {
     expect(JSON.stringify(DOC_PAGES.filter((page) => page.group === "Configuration"))).not.toMatch(/ntfy/i)
-    expect(findDocPage("configuration/notifications")?.sections.some((section) => section.heading === "Terminal attention")).toBe(true)
+    expect(
+      findDocPage("configuration/notifications")?.sections.some((section) => section.heading === "Terminal attention"),
+    ).toBe(true)
   })
   test("gives every page a group, description, and content", () => {
     const slugs = new Set<string>()

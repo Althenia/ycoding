@@ -7,6 +7,145 @@ const workflow = await Bun.file(path.join(import.meta.dir, "../.github/workflows
 const testWorkflow = await Bun.file(path.join(import.meta.dir, "../.github/workflows/test.yml")).text()
 const checks = workflow.split("\n").filter((line) => line.trim().startsWith("tar -tz"))
 
+const jobs = (Bun.YAML.parse(workflow) as { jobs: Record<string, { steps: { name: string; run?: string }[] }> }).jobs
+const script = (job: string, name: string) => jobs[job]!.steps.find((step) => step.name === name)!.run!
+const job = (name: string) => workflow.split(`\n  ${name}:\n`)[1]?.split(/\n {2}[\w-]+:\n/)[0] ?? ""
+
+async function inTemporary<T>(prefix: string, use: (root: string) => Promise<T>) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  try {
+    return await use(root)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+}
+
+function bash(source: string, cwd: string, env: Record<string, string>) {
+  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", source], {
+    cwd,
+    env: { ...process.env, COPYFILE_DISABLE: "1", ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  return { code: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }
+}
+
+type Scope = {
+  version: string
+  channel: string
+  suites: { suite: string; runner: string }[]
+  targets: { target: string; runner: string; platform: string; arch: string }[]
+}
+
+function resolveScope(input: { version?: string; ref: string; notes: Record<string, string> }) {
+  return inTemporary("ycoding-release-scope-", async (root) => {
+    for (const [version, text] of Object.entries(input.notes))
+      await Bun.write(path.join(root, `docs/releases/v${version}.md`), text)
+    const output = path.join(root, "output")
+    await Bun.write(output, "")
+    const result = bash(script("scope", "Select release scope"), root, {
+      INPUT_VERSION: input.version ?? "",
+      GITHUB_REF: input.ref,
+      GITHUB_REF_NAME: input.ref.replace(/^refs\/(heads|tags)\//, ""),
+      GITHUB_OUTPUT: output,
+    })
+    const values = Object.fromEntries(
+      (await Bun.file(output).text())
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+    )
+    if (result.code !== 0) return { code: result.code, stderr: result.stderr, values }
+    return {
+      code: result.code,
+      stderr: result.stderr,
+      values,
+      scope: {
+        version: values.version,
+        channel: values.channel,
+        suites: JSON.parse(values.suites),
+        targets: JSON.parse(values.targets),
+      } as Scope,
+    }
+  })
+}
+
+const stableSuites = [
+  { suite: "types", runner: "ubuntu-24.04" },
+  { suite: "web", runner: "ubuntu-24.04" },
+  { suite: "remote", runner: "ubuntu-24.04" },
+  { suite: "cli", runner: "ubuntu-24.04" },
+  { suite: "tui", runner: "ubuntu-24.04" },
+  { suite: "browser", runner: "macos-26" },
+  { suite: "extension", runner: "macos-26" },
+  { suite: "rust", runner: "ubuntu-24.04" },
+  { suite: "rust-macos", runner: "macos-26" },
+  { suite: "rust-windows", runner: "windows-2025" },
+]
+const betaSuites = [
+  { suite: "types", runner: "ubuntu-24.04" },
+  { suite: "web", runner: "ubuntu-24.04" },
+  { suite: "remote", runner: "ubuntu-24.04" },
+  { suite: "cli", runner: "ubuntu-24.04" },
+  { suite: "tui", runner: "ubuntu-24.04" },
+  { suite: "browser", runner: "macos-26" },
+  { suite: "extension", runner: "macos-26" },
+  { suite: "rust-macos", runner: "macos-26" },
+]
+const appleSilicon = { target: "darwin-arm64", runner: "macos-26", platform: "darwin", arch: "arm64" }
+const stableTargets = [
+  appleSilicon,
+  { target: "linux-x64", runner: "ubuntu-24.04", platform: "linux", arch: "x64" },
+  { target: "windows-x64", runner: "windows-2025", platform: "win32", arch: "x64" },
+]
+const plist = [
+  "<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string>",
+  "<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>",
+  "<key>CFBundleIconFile</key><string>YCoding.icns</string>",
+].join("\n")
+
+async function nativeArtifact(root: string, target: string) {
+  const directory = path.join(root, "unpacked", `ycoding-${target}`)
+  await Bun.write(path.join(directory, "ycoding-chrome-extension/manifest.json"), "{}\n")
+  if (target.startsWith("windows")) return Bun.write(path.join(directory, "ycoding.exe"), "synthetic executable\n")
+  await Bun.write(path.join(directory, "ycoding"), "synthetic executable\n")
+  if (!target.startsWith("darwin")) return
+  const contents = path.join(directory, "YCoding Computer Use.app/Contents")
+  await Bun.write(path.join(contents, "Info.plist"), `${plist}\n`)
+  await Bun.write(path.join(contents, "MacOS/ycoding-computer-use"), "synthetic app\n")
+  await Bun.write(path.join(contents, "Resources/YCoding.icns"), "synthetic icon\n")
+  await Bun.write(path.join(contents, "_CodeSignature/CodeResources"), "synthetic resources\n")
+}
+
+function packageRelease(root: string, version: string, targets: { target: string }[]) {
+  return bash(script("package", "Create release archives and checksums"), root, {
+    RELEASE_VERSION: version,
+    RELEASE_TARGETS: JSON.stringify(targets),
+  })
+}
+
+function verifyPrepared(root: string, version: string, targets: { target: string }[]) {
+  return bash(script("release-tui", "Verify prepared release assets"), root, {
+    RELEASE_VERSION: version,
+    RELEASE_TARGETS: JSON.stringify(targets),
+  })
+}
+
+function preparedRelease<T>(
+  version: string,
+  targets: { target: string }[],
+  artifacts: string[],
+  use: (root: string, result: ReturnType<typeof bash>) => Promise<T>,
+) {
+  return inTemporary("ycoding-release-package-", async (root) => {
+    await Bun.write(path.join(root, "LICENSE"), "synthetic license\n")
+    await Bun.write(path.join(root, "NOTICE"), "synthetic notice\n")
+    await Bun.write(path.join(root, `docs/releases/v${version}.md`), "synthetic release notes\n")
+    for (const target of artifacts) await nativeArtifact(root, target)
+    return use(root, packageRelease(root, version, targets))
+  })
+}
+
 for (const valid of [true, false])
   test(
     valid ? "archive checks consume complete listings" : "archive checks reject a missing executable and app",
@@ -18,7 +157,10 @@ for (const valid of [true, false])
         await Bun.write(path.join(entries, "ycoding"), "synthetic executable\n")
         if (valid) {
           await fs.chmod(path.join(entries, "ycoding"), 0o755)
-          await Bun.write(path.join(entries, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), "synthetic app\n")
+          await Bun.write(
+            path.join(entries, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"),
+            "synthetic app\n",
+          )
           await fs.chmod(path.join(entries, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), 0o755)
           await Bun.write(path.join(entries, "ycoding-chrome-extension/manifest.json"), "{}\n")
         }
@@ -66,39 +208,338 @@ test("release workflow ships no Godot desktop client", () => {
   expect(workflow).not.toMatch(/\boffice\b/i)
 })
 
-test("release workflow packages and checksums every CLI archive", () => {
-  expect(workflow).toContain(
-    'tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" "${mac_entries[@]}"',
-  )
-  expect(workflow).toContain(
-    'tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" "${mac_entries[@]}"',
-  )
-  expect(workflow).toContain(
-    'tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding',
-  )
-  expect(workflow).toContain('zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension')
-  expect(workflow).toContain(
-    '(cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip LICENSE NOTICE > "ycoding-$version-checksums.txt")',
-  )
-  const packageJob = workflow.split("\n  package:")[1]?.split("\n  release-tui:")[0] ?? ""
-  expect(packageJob).toContain("    needs: build\n")
+test.each([
+  ["a stable tag", { ref: "refs/tags/v0.10.18", notes: { "0.10.18": "# YCoding v0.10.18\n" } }, "0.10.18", "latest"],
+  [
+    "a beta tag",
+    { ref: "refs/tags/v0.11.0-beta.1", notes: { "0.11.0-beta.1": "# YCoding v0.11.0-beta.1\n" } },
+    "0.11.0-beta.1",
+    "beta",
+  ],
+  [
+    "a manual beta-branch run without a version",
+    {
+      ref: "refs/heads/beta",
+      notes: { "0.10.17": "# YCoding v0.10.17\n", "0.11.0-beta.1": "# YCoding v0.11.0-beta.1\n" },
+    },
+    "0.11.0-beta.1",
+    "beta",
+  ],
+  [
+    "a manual run with an explicit stable version",
+    {
+      version: "0.10.17",
+      ref: "refs/heads/beta",
+      notes: { "0.10.17": "# YCoding v0.10.17\n", "0.11.0-beta.1": "# YCoding v0.11.0-beta.1\n" },
+    },
+    "0.10.17",
+    "latest",
+  ],
+  [
+    "a manual run on a branch whose name starts with v",
+    { ref: "refs/heads/v2", notes: { "0.10.17": "# YCoding v0.10.17\n" } },
+    "0.10.17",
+    "latest",
+  ],
+] as const)("the release scope resolves %s once", async (_, input, version, channel) => {
+  const result = await resolveScope(input)
+  expect(result.code, result.stderr).toBe(0)
+  expect(result.scope?.version).toBe(version)
+  expect(result.scope?.channel).toBe(channel)
+  expect(result.scope?.suites).toEqual(channel === "beta" ? betaSuites : stableSuites)
+  expect(result.scope?.targets).toEqual(channel === "beta" ? [appleSilicon] : stableTargets)
 })
+
+test.each([
+  [
+    "an invalid version",
+    { version: "1.2", ref: "refs/heads/beta", notes: { "1.2": "notes\n" } },
+    "Invalid release version: 1.2",
+  ],
+  [
+    "missing notes",
+    { ref: "refs/tags/v0.11.0-beta.2", notes: { "0.11.0-beta.1": "notes\n" } },
+    "Missing release notes: docs/releases/v0.11.0-beta.2.md",
+  ],
+  [
+    "empty notes",
+    { ref: "refs/tags/v0.11.0-beta.1", notes: { "0.11.0-beta.1": "" } },
+    "Release notes are empty: docs/releases/v0.11.0-beta.1.md",
+  ],
+] as const)("the release scope rejects %s before selecting any job", async (_, input, message) => {
+  const result = await resolveScope(input)
+  expect(result.code).not.toBe(0)
+  expect(result.stderr).toContain(message)
+  expect(result.values).toEqual({})
+})
+
+test("the release scope is resolved once, from the exact source, without credentials, and every matrix inherits it", () => {
+  const scope = job("scope")
+  expect(scope).toContain(
+    "    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}\n",
+  )
+  expect(scope).toContain("          fetch-depth: 0\n          persist-credentials: false\n")
+  expect(scope).toContain("          INPUT_VERSION: ${{ inputs.version }}\n")
+  expect(scope).not.toContain("secrets.")
+  expect(scope).not.toContain("permissions:")
+  expect(script("scope", "Select release scope")).not.toContain("${{")
+  expect(scope.indexOf("- name: Verify tag is reachable from release branch")).toBeLessThan(
+    scope.indexOf("- name: Select release scope"),
+  )
+  for (const name of ["verify-source", "build"]) {
+    expect(job(name)).toContain("    needs: scope\n")
+    expect(job(name)).toContain(
+      [
+        "    env:",
+        "      RELEASE_VERSION: ${{ needs.scope.outputs.version }}",
+        "      YCODING_VERSION: ${{ needs.scope.outputs.version }}",
+        "      YCODING_CHANNEL: ${{ needs.scope.outputs.channel }}",
+      ].join("\n"),
+    )
+  }
+  expect(job("verify-source")).toContain("        include: ${{ fromJSON(needs.scope.outputs.suites) }}\n")
+  expect(job("build")).toContain("        include: ${{ fromJSON(needs.scope.outputs.targets) }}\n")
+  for (const name of ["package", "release-tui"])
+    expect(job(name)).toContain("      RELEASE_VERSION: ${{ needs.scope.outputs.version }}\n")
+  expect(workflow.match(/- name: Select release scope/g)).toHaveLength(1)
+  expect(workflow.match(/- name: Verify tag is reachable from release branch/g)).toHaveLength(1)
+  expect(workflow).not.toContain("Resolve release version")
+  expect(workflow).not.toContain('"${{ inputs.version }}"')
+})
+
+test("release workflows and Rust setup build, package, and expect no Intel macOS target", async () => {
+  const action = await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-rust/action.yml")).text()
+  for (const content of [workflow, action])
+    for (const intel of ["darwin-x64", "macos-15-intel", "macos-13", "osx-x86_64", "macOS-X64", "x86_64-apple-darwin"])
+      expect(content).not.toContain(intel)
+})
+
+test.each([
+  [
+    "stable",
+    "9.9.9",
+    stableTargets,
+    ["ycoding-9.9.9-darwin-arm64.tar.gz", "ycoding-9.9.9-linux-x64.tar.gz", "ycoding-9.9.9-windows-x64.zip"],
+  ],
+  ["beta", "9.9.9-beta.1", [appleSilicon], ["ycoding-9.9.9-beta.1-darwin-arm64.tar.gz"]],
+] as const)(
+  "%s packaging archives exactly the scoped targets with the license texts and one checksum file",
+  (_, version, targets, archives) =>
+    preparedRelease(
+      version,
+      targets,
+      targets.map((target) => target.target),
+      async (root, result) => {
+        expect(result.code, result.stderr).toBe(0)
+        const assets = [...archives, "LICENSE", "NOTICE", `v${version}.md`]
+        expect((await fs.readdir(path.join(root, "release"))).sort()).toEqual(
+          [...assets, `ycoding-${version}-checksums.txt`].sort(),
+        )
+        const sums = (await Bun.file(path.join(root, `release/ycoding-${version}-checksums.txt`)).text())
+          .trim()
+          .split("\n")
+        expect(sums.map((line) => line.split(/\s+/)[1]).sort()).toEqual([...assets].sort())
+        const archive = path.join(root, `release/ycoding-${version}-darwin-arm64.tar.gz`)
+        const listing = Bun.spawnSync(["tar", "-tzf", archive]).stdout.toString().trim().split("\n")
+        expect([...new Set(listing.map((entry) => entry.split("/")[0]))].sort()).toEqual([
+          "YCoding Computer Use.app",
+          "ycoding",
+          "ycoding-chrome-extension",
+        ])
+        const verified = verifyPrepared(root, version, targets)
+        expect(verified.code, verified.stderr).toBe(0)
+      },
+    ),
+)
+
+test.each([
+  ["an unverified Linux executable beside a beta", "9.9.9-beta.1", [appleSilicon], ["darwin-arm64", "linux-x64"]],
+  ["a missing Windows executable from a stable release", "9.9.9", stableTargets, ["darwin-arm64", "linux-x64"]],
+] as const)("packaging rejects %s", (_, version, targets, artifacts) =>
+  preparedRelease(version, targets, [...artifacts], async (root, result) => {
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toContain("Downloaded executables do not match the release targets")
+    expect(await fs.readdir(root)).not.toContain("release")
+  }),
+)
+
+test("packaging rejects an incomplete signed app bundle", () =>
+  inTemporary("ycoding-release-app-", async (root) => {
+    await Bun.write(path.join(root, "LICENSE"), "synthetic license\n")
+    await Bun.write(path.join(root, "NOTICE"), "synthetic notice\n")
+    await nativeArtifact(root, "darwin-arm64")
+    await fs.rm(path.join(root, "unpacked/ycoding-darwin-arm64/YCoding Computer Use.app/Contents/_CodeSignature"), {
+      recursive: true,
+    })
+    expect(packageRelease(root, "9.9.9-beta.1", [appleSilicon]).code).not.toBe(0)
+    expect(await fs.readdir(path.join(root, "release"))).toEqual([])
+  }))
+
+test.each([
+  [
+    "an extra unverified archive",
+    async (root: string) => Bun.write(path.join(root, "release/ycoding-9.9.9-beta.1-linux-x64.tar.gz"), "unverified\n"),
+    "do not match the release targets",
+  ],
+  [
+    "a modified archive",
+    async (root: string) =>
+      Bun.write(path.join(root, "release/ycoding-9.9.9-beta.1-darwin-arm64.tar.gz"), "tampered\n"),
+    "FAILED",
+  ],
+  [
+    "modified release notes",
+    async (root: string) => Bun.write(path.join(root, "release/v9.9.9-beta.1.md"), "tampered\n"),
+    "FAILED",
+  ],
+  [
+    "a checksum file that omits an asset",
+    async (root: string) => {
+      const file = path.join(root, "release/ycoding-9.9.9-beta.1-checksums.txt")
+      await Bun.write(
+        file,
+        (await Bun.file(file).text())
+          .split("\n")
+          .filter((line) => !line.endsWith("NOTICE"))
+          .join("\n"),
+      )
+    },
+    "does not cover exactly the release assets",
+  ],
+] as const)("publication rejects %s before creating the release", (_, mutate, message) =>
+  preparedRelease("9.9.9-beta.1", [appleSilicon], ["darwin-arm64"], async (root, result) => {
+    expect(result.code, result.stderr).toBe(0)
+    await mutate(root)
+    const verified = verifyPrepared(root, "9.9.9-beta.1", [appleSilicon])
+    expect(verified.code).not.toBe(0)
+    expect(verified.stderr + verified.stdout).toContain(message)
+  }),
+)
+
+test("publication verifies the prepared assets before creating the release", () => {
+  const publish = job("release-tui")
+  expect(publish.indexOf("- name: Download prepared release assets")).toBeLessThan(
+    publish.indexOf("- name: Verify prepared release assets"),
+  )
+  expect(publish.indexOf("- name: Verify prepared release assets")).toBeLessThan(
+    publish.indexOf("- name: Create GitHub release"),
+  )
+  expect(publish).toContain("          RELEASE_TARGETS: ${{ needs.scope.outputs.targets }}\n")
+  expect(job("package")).toContain("          RELEASE_TARGETS: ${{ needs.scope.outputs.targets }}\n")
+})
+
+test("release builds prove the release profile recovers from panics before signing and building", async () => {
+  const build = job("build")
+  expect(build).toContain(
+    "          cargo build --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime -p ycoding-store --bin ycoding-runtime --example release_recovery\n" +
+      "          \"rust/target/release/examples/release_recovery${{ runner.os == 'Windows' && '.exe' || '' }}\"\n",
+  )
+  expect(build).not.toContain("cargo run")
+  expect(build.indexOf("- name: Setup Rust")).toBeLessThan(build.indexOf("- name: Verify release panic recovery"))
+  expect(build.indexOf("- name: Verify release panic recovery")).toBeLessThan(
+    build.indexOf("- name: Import macOS signing identity"),
+  )
+  expect(build.indexOf("- name: Verify release panic recovery")).toBeLessThan(
+    build.indexOf("- name: Build TUI artifact"),
+  )
+  const action = await Bun.file(path.join(import.meta.dir, "../.github/actions/setup-rust/action.yml")).text()
+  for (const content of [workflow, action]) {
+    expect(content).not.toContain("CARGO_PROFILE_RELEASE_PANIC")
+    expect(content).not.toContain("panic=abort")
+  }
+  expect(await Bun.file(path.join(import.meta.dir, "../rust/crates/store/examples/release_recovery.rs")).exists()).toBe(
+    true,
+  )
+})
+
+test.each([
+  ["the recovery example succeeds", 0, true],
+  ["the recovery example aborts", 134, false],
+] as const)(
+  "the release panic gate builds the runtime and example in one Cargo selection and fails unless %s",
+  (_, status, passes) =>
+    inTemporary("ycoding-release-panic-", async (root) => {
+      const models = path.join(root, "packages/cli/script/models-dev.snapshot.json")
+      await Bun.write(models, "{}\n")
+      const calls = path.join(root, "calls")
+      const source = script("build", "Verify release panic recovery").replace(
+        "${{ runner.os == 'Windows' && '.exe' || '' }}",
+        "",
+      )
+      const result = bash(
+        [
+          `cargo() { printf 'cargo %s\\nmodels %s\\n' "$*" "$YCODING_BUNDLED_MODELS_PATH" >> "$CALLS"; mkdir -p rust/target/release/examples; printf '#!/bin/sh\\necho example >> "$CALLS"\\nexit ${status}\\n' > rust/target/release/examples/release_recovery; chmod +x rust/target/release/examples/release_recovery; }`,
+          source,
+        ].join("\n"),
+        root,
+        { CALLS: calls },
+      )
+      expect(result.code === 0, result.stderr).toBe(passes)
+      expect(await Bun.file(calls).text()).toBe(
+        [
+          "cargo build --locked --manifest-path rust/Cargo.toml --release -p ycoding-runtime -p ycoding-store --bin ycoding-runtime --example release_recovery",
+          `models ${await fs.realpath(models)}`,
+          "example",
+          "",
+        ].join("\n"),
+      )
+    }),
+)
+
+const macGates =
+  "test-integration/node-build.test.ts test/computer-use-packaging.test.ts test/update.test.ts test/install-local.test.ts"
+
+test("the Apple Silicon build runs the macOS CLI packaging, installer, and updater gates against its warm release build", () => {
+  const build = job("build")
+  const step = build.split("      - name: Verify macOS CLI packaging, installer, and updater\n")[1] ?? ""
+  expect(step).toContain("        if: runner.os == 'macOS'\n        working-directory: packages/cli\n")
+  expect(step).toContain('        env:\n          YCODING_MACOS_SIGNING_IDENTITY: ""\n')
+  expect(step).toContain(`bun test --timeout 30000 ${macGates} 2>&1 | tee`)
+  expect(build.indexOf("- name: Build TUI artifact")).toBeLessThan(
+    build.indexOf("- name: Verify macOS CLI packaging, installer, and updater"),
+  )
+  expect(build.indexOf("- name: Remove macOS signing keychain")).toBeLessThan(
+    build.indexOf("- name: Verify macOS CLI packaging, installer, and updater"),
+  )
+})
+
+test.each([
+  ["every test passes", " 41 pass\n 0 fail\n", 0, true],
+  ["a test is skipped", " 40 pass\n 1 skip\n 0 fail\n", 0, false],
+  ["a test is marked todo", " 40 pass\n 2 todo\n 0 fail\n", 0, false],
+  ["the suite fails", " 40 pass\n 1 fail\n", 1, false],
+] as const)("the macOS CLI gate passes only when %s", (_, log, status, passes) =>
+  inTemporary("ycoding-macos-cli-gate-", async (root) => {
+    const result = bash(
+      `bun() { test "$*" = "test --timeout 30000 ${macGates}" || exit 97; printf '%s' "$LOG" >&2; return "$STATUS"; }\n${script("build", "Verify macOS CLI packaging, installer, and updater")}`,
+      root,
+      { RUNNER_TEMP: root, LOG: log, STATUS: String(status) },
+    )
+    expect(result.code === 0, result.stderr).toBe(passes)
+  }),
+)
 
 test("macOS release builds sign the app with the pinned release certificate and never fall back to ad hoc", () => {
   const build = workflow.split("\n  build:")[1]?.split("\n  isolated-browser-acceptance:")[0] ?? ""
-  const importStep = build.split("      - name: Import macOS signing identity")[1]?.split("      - name: Build TUI artifact")[0] ?? ""
-  const stage = build.split("      - name: Stage native executables")[1]?.split("      - name: Upload native executables")[0] ?? ""
+  const importStep =
+    build.split("      - name: Import macOS signing identity")[1]?.split("      - name: Build TUI artifact")[0] ?? ""
+  const stage =
+    build.split("      - name: Stage native executables")[1]?.split("      - name: Upload native executables")[0] ?? ""
   expect(build).toContain("      YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing")
   expect(build).toContain("      YCODING_MACOS_SIGNING_SHA1: 9dd524184b0db949ffac7f0ada0ae860ac7f5f85\n")
   expect(importStep).toContain("if: runner.os == 'macOS'")
   expect(importStep).toContain("YCODING_MACOS_SIGNING_P12: ${{ secrets.YCODING_MACOS_SIGNING_P12 }}")
   expect(importStep).toContain("YCODING_MACOS_SIGNING_PASSWORD: ${{ secrets.YCODING_MACOS_SIGNING_PASSWORD }}")
-  expect(importStep).toContain('test -n "$YCODING_MACOS_SIGNING_P12" || { echo "Missing YCODING_MACOS_SIGNING_P12 Actions secret" >&2; exit 1; }')
-  expect(importStep).toContain('test -n "$YCODING_MACOS_SIGNING_PASSWORD" || { echo "Missing YCODING_MACOS_SIGNING_PASSWORD Actions secret" >&2; exit 1; }')
+  expect(importStep).toContain(
+    'test -n "$YCODING_MACOS_SIGNING_P12" || { echo "Missing YCODING_MACOS_SIGNING_P12 Actions secret" >&2; exit 1; }',
+  )
+  expect(importStep).toContain(
+    'test -n "$YCODING_MACOS_SIGNING_PASSWORD" || { echo "Missing YCODING_MACOS_SIGNING_PASSWORD Actions secret" >&2; exit 1; }',
+  )
   for (const command of [
     'security create-keychain -p "$keychain_password" "$keychain"',
     'security unlock-keychain -p "$keychain_password" "$keychain"',
-    '-T /usr/bin/codesign',
+    "-T /usr/bin/codesign",
     'security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"',
     'security list-keychains -d user -s "$keychain" ${original[@]+"${original[@]}"}',
     'echo "::add-mask::$keychain_password"',
@@ -106,10 +547,16 @@ test("macOS release builds sign the app with the pinned release certificate and 
     expect(importStep).toContain(command)
   expect(importStep).not.toContain("|| true")
   expect(importStep).not.toContain("login.keychain")
-  expect(importStep).toContain('grep -F "$(printf \'%s\' "$YCODING_MACOS_SIGNING_SHA1" | tr a-f A-F) \\"$YCODING_MACOS_SIGNING_IDENTITY\\""')
-  expect(build.indexOf("- name: Import macOS signing identity")).toBeLessThan(build.indexOf("- name: Build TUI artifact"))
+  expect(importStep).toContain(
+    'grep -F "$(printf \'%s\' "$YCODING_MACOS_SIGNING_SHA1" | tr a-f A-F) \\"$YCODING_MACOS_SIGNING_IDENTITY\\""',
+  )
+  expect(build.indexOf("- name: Import macOS signing identity")).toBeLessThan(
+    build.indexOf("- name: Build TUI artifact"),
+  )
   expect(stage).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
-  expect(stage).toContain('codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -Ex "designated => identifier')
+  expect(stage).toContain(
+    'codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -Ex "designated => identifier',
+  )
   expect(build).toContain("if: ${{ always() && runner.os == 'macOS' }}")
   expect(build).toContain('security list-keychains -d user -s "${original[@]}"')
   expect(build).toContain('security delete-keychain "$keychain"')
@@ -124,8 +571,10 @@ test("isolated-browser acceptance accepts installed Chrome 152 or newer", async 
   const check = /\n(\s*major="\$\(printf[\s\S]*?\n\s*\})\n/.exec(browserHost)?.[1]
   expect(check).toBeDefined()
   const accepts = (version: string) =>
-    Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `version=${JSON.stringify(version)}\n${check}`], { stdout: "pipe", stderr: "pipe" })
-      .exitCode === 0
+    Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `version=${JSON.stringify(version)}\n${check}`], {
+      stdout: "pipe",
+      stderr: "pipe",
+    }).exitCode === 0
   expect(accepts("Google Chrome 151.0.7000.10")).toBe(false)
   expect(accepts("Google Chrome 152.0.7100.20")).toBe(true)
   expect(accepts("Google Chrome 153.0.8010.54")).toBe(true)
@@ -136,29 +585,30 @@ test("isolated-browser acceptance accepts installed Chrome 152 or newer", async 
 
 test("release archives include the Chrome extension beside the executable", () => {
   expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"')
-  expect(workflow).toContain('tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension')
-  expect(workflow).toContain('zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension')
-  for (const target of ["darwin-arm64", "darwin-x64", "linux-x64"])
-    expect(workflow).toContain(`tar -tzf "release/ycoding-$version-${target}.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null`)
+  expect(workflow).toContain(
+    'tar -C "$source" -czf "release/ycoding-$version-$target.tar.gz" ycoding ycoding-chrome-extension',
+  )
+  expect(workflow).toContain('zip -r "../../release/ycoding-$version-$target.zip" ycoding.exe ycoding-chrome-extension')
+  expect(workflow).toContain(
+    `tar -tzf "release/ycoding-$version-$target.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null`,
+  )
 })
 
 test("macOS release archives stage the signed app and preserve its bundle tree", () => {
   expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Computer Use.app" "$staging/"')
   expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
-  expect(workflow).toContain('"unpacked/ycoding-darwin-arm64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"')
-  expect(workflow).toContain('app="unpacked/ycoding-$target/YCoding Computer Use.app"')
+  expect(workflow).toContain('chmod +x "$source/ycoding" "$app/Contents/MacOS/ycoding-computer-use"')
+  expect(workflow).toContain('app="$source/YCoding Computer Use.app"')
   expect(workflow).toContain("mac_entries=(ycoding ycoding-chrome-extension)")
   expect(workflow).toContain(`grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use'`)
   expect(workflow).not.toContain("bin/ycoding-computer-use")
   expect(workflow).toContain('mac_entries+=("YCoding Computer Use.app")')
-  expect(workflow).toContain("Contents/Resources/YCoding.icns")
   expect(workflow).toContain(
     'test -f "$app/Contents/Resources/YCoding.icns" && test ! -L "$app/Contents/Resources/YCoding.icns" && test -s "$app/Contents/Resources/YCoding.icns"',
   )
   expect(workflow).toContain("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>")
-  const packageJob = workflow.split("\n  package:")[1]?.split("\n  release-tui:")[0]
-  expect(packageJob).toContain("runs-on: ubuntu-24.04")
-  expect(packageJob).toContain('find "$app" -mindepth 1 -printf')
+  expect(job("package")).toContain("runs-on: ubuntu-24.04")
+  expect(job("package")).toContain('test "$(cd "$app" && find . -mindepth 1 | sed')
 })
 
 const pin = "9dd524184b0db949ffac7f0ada0ae860ac7f5f85"
@@ -167,12 +617,21 @@ test.each([
   ["a self-signed root requirement", `identifier "app.ycoding.computer-use" and certificate root = H"${pin}"`, true],
   ["a self-signed leaf requirement", `identifier "app.ycoding.computer-use" and certificate leaf = H"${pin}"`, true],
   ["an ad-hoc cdhash requirement", 'cdhash H"1593f00c9269224608bcfc16986b4c7b1b09a2d5"', false],
-  ["a different certificate", `identifier "app.ycoding.computer-use" and certificate leaf = H"${"0".repeat(40)}"`, false],
+  [
+    "a different certificate",
+    `identifier "app.ycoding.computer-use" and certificate leaf = H"${"0".repeat(40)}"`,
+    false,
+  ],
   ["a different identifier", `identifier "app.ycoding.other" and certificate leaf = H"${pin}"`, false],
   ["an unanchored identifier only", 'identifier "app.ycoding.computer-use"', false],
 ])("the release signature check accepts only the pinned certificate: %s", (_, requirement, accepted) => {
-  const stage = workflow.split("      - name: Stage native executables")[1]?.split("      - name: Upload native executables")[0] ?? ""
-  const check = stage.split("\n").find((line) => line.includes("codesign -d -r-"))?.trim()
+  const stage =
+    workflow.split("      - name: Stage native executables")[1]?.split("      - name: Upload native executables")[0] ??
+    ""
+  const check = stage
+    .split("\n")
+    .find((line) => line.includes("codesign -d -r-"))
+    ?.trim()
   expect(check).toBeDefined()
   const command = check!.replace(/^codesign -d -r- "[^"]+" 2>&1/, 'printf "%s\\n" "designated => $REQUIREMENT"')
   const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command], {
@@ -186,57 +645,93 @@ test.each([
 test("release archives keep the layout installed updaters accept and ship the license texts as separate assets", () => {
   expect(workflow).not.toContain('cp LICENSE NOTICE "$staging/"')
   expect(workflow).not.toMatch(/ycoding-chrome-extension LICENSE/)
-  expect(workflow).toContain("cp LICENSE NOTICE release/\n")
-  const packageJob = workflow.split("\n  package:")[1]?.split("\n  release-tui:")[0] ?? ""
-  expect(packageJob.indexOf("cp LICENSE NOTICE release/")).toBeLessThan(packageJob.indexOf("sha256sum"))
-  expect(workflow.split("\n  release-tui:")[1]).toContain("gh release create \"v$version\" release/*")
+  expect(workflow).toContain('cp LICENSE NOTICE "docs/releases/v$version.md" release/\n')
+  const packageJob = job("package")
+  expect(packageJob.indexOf('cp LICENSE NOTICE "docs/releases/v$version.md" release/')).toBeLessThan(
+    packageJob.indexOf("sha256sum"),
+  )
+  expect(packageJob).toContain(
+    '(cd release && sha256sum "${assets[@]}" LICENSE NOTICE "v$version.md" > "ycoding-$version-checksums.txt")',
+  )
+  expect(job("release-tui")).toContain('gh release create "v$version" release/*')
+  expect(job("release-tui")).not.toContain('release/* "docs/releases/v$version.md"')
 })
+
+const tarGuard = workflow
+  .split("\n")
+  .find((line) => line.includes('test "$(tar -tzf') && line.includes("cut -d/ -f1 | LC_ALL=C sort -u"))!
+  .trim()
+const zipGuard = workflow
+  .split("\n")
+  .find((line) => line.includes('test "$(unzip -Z1') && line.includes("cut -d/ -f1 | LC_ALL=C sort -u"))!
+  .trim()
 
 for (const extra of [undefined, "LICENSE", "NOTICE", "extra"])
   test(
     extra
       ? `the archive layout guard rejects an extra ${extra} entry`
       : "the archive layout guard accepts exactly the entries installed updaters accept",
-    async () => {
-      const guard = /\n *for target in darwin-arm64 darwin-x64 linux-x64; do\n *expected=[\s\S]*?\n(?= *cp LICENSE NOTICE release\/)/.exec(workflow)?.[0]
-      expect(guard).toBeDefined()
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-release-layout-"))
-      try {
+    () =>
+      inTemporary("ycoding-release-layout-", async (root) => {
         const source = path.join(root, "source")
         await fs.mkdir(path.join(source, "YCoding Computer Use.app/Contents"), { recursive: true })
         await fs.mkdir(path.join(source, "ycoding-chrome-extension"))
-        for (const file of ["ycoding", "ycoding.exe", "ycoding-chrome-extension/manifest.json", "YCoding Computer Use.app/Contents/Info.plist", "LICENSE", "NOTICE", "extra"])
+        for (const file of [
+          "ycoding",
+          "ycoding.exe",
+          "ycoding-chrome-extension/manifest.json",
+          "YCoding Computer Use.app/Contents/Info.plist",
+          "LICENSE",
+          "NOTICE",
+          "extra",
+        ])
           await Bun.write(path.join(source, file), `${file}\n`)
         await fs.mkdir(path.join(root, "release"))
         const add = extra ? [extra] : []
-        const mac = ["ycoding", "ycoding-chrome-extension", "YCoding Computer Use.app", ...add]
-        for (const [name, entries] of [
-          ["darwin-arm64", mac],
-          ["darwin-x64", mac],
-          ["linux-x64", ["ycoding", "ycoding-chrome-extension", ...add]],
-        ] as const)
-          expect(Bun.spawnSync(["tar", "-C", source, "-czf", path.join(root, `release/ycoding-9.9.9-${name}.tar.gz`), ...entries], { env: { ...process.env, COPYFILE_DISABLE: "1" } }).exitCode).toBe(0)
+        const cases = [
+          ["darwin-arm64", ["ycoding", "ycoding-chrome-extension", "YCoding Computer Use.app"]],
+          ["linux-x64", ["ycoding", "ycoding-chrome-extension"]],
+        ] as const
+        for (const [target, entries] of cases) {
+          expect(
+            bash(
+              `tar -C ${JSON.stringify(source)} -czf "release/ycoding-9.9.9-${target}.tar.gz" ${[...entries, ...add].map((entry) => JSON.stringify(entry)).join(" ")}`,
+              root,
+              {},
+            ).code,
+          ).toBe(0)
+          const result = bash(
+            `version=9.9.9\ntarget=${target}\nexpected=(${entries.map((entry) => JSON.stringify(entry)).join(" ")})\n${tarGuard}`,
+            root,
+            {},
+          )
+          expect(result.code === 0, `${target}: ${result.stderr}`).toBe(extra === undefined)
+        }
         expect(
-          Bun.spawnSync(["zip", "-qr", path.join(root, "release/ycoding-9.9.9-windows-x64.zip"), "ycoding.exe", "ycoding-chrome-extension", ...add], { cwd: source }).exitCode,
+          Bun.spawnSync(
+            [
+              "zip",
+              "-qr",
+              path.join(root, "release/ycoding-9.9.9-windows-x64.zip"),
+              "ycoding.exe",
+              "ycoding-chrome-extension",
+              ...add,
+            ],
+            { cwd: source },
+          ).exitCode,
         ).toBe(0)
-        const result = Bun.spawnSync(
-          ["bash", "-euo", "pipefail", "-c", `version=9.9.9\nmac_entries=(ycoding ycoding-chrome-extension 'YCoding Computer Use.app')\n${guard}`],
-          { cwd: root, stdout: "pipe", stderr: "pipe" },
-        )
-        expect(result.exitCode === 0, result.stderr.toString()).toBe(extra === undefined)
-      } finally {
-        await fs.rm(root, { recursive: true, force: true })
-      }
-    },
+        const zip = bash(`version=9.9.9\ntarget=windows-x64\n${zipGuard}`, root, {})
+        expect(zip.code === 0, zip.stderr).toBe(extra === undefined)
+      }),
   )
 
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {
-  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0]
-  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
+  const verify = job("verify-source")
+  const tui = job("release-tui")
   expect(workflow).toContain("      - v*")
   expect(workflow).not.toContain("      - tui-v*")
   expect(workflow).not.toContain("      - web-v*")
-  expect(verify).toContain('release_notes="docs/releases/v$RELEASE_VERSION.md"')
+  expect(job("scope")).toContain('release_notes="docs/releases/v$version.md"')
   expect(verify).toContain("bun run test:web")
   expect(verify).toContain("bun run test:remote")
   expect(verify).toContain("bun run test:integration:web")
@@ -244,12 +739,13 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   expect(verify).toContain("bun run build:cloudflare")
   expect(tui).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(tui).toContain('gh release create "v$version"')
-  expect(tui?.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"'])
-  expect(tui).toContain('"docs/releases/v$version.md" --verify-tag')
+  expect(tui.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"'])
+  expect(tui).toContain('release/* --verify-tag --target "$GITHUB_SHA"')
   expect(tui).toContain('test("^v[0-9]")')
   expect(tui).toContain('test(\\"^v[0-9]\\")')
   expect(tui).toContain("contents: write")
   expect((workflow.match(/gh release create /g) ?? []).length).toBe(1)
+  expect((workflow.match(/contents: write/g) ?? []).length).toBe(1)
 })
 
 test("the first unified release has nonempty shared notes", async () => {
@@ -258,41 +754,46 @@ test("the first unified release has nonempty shared notes", async () => {
   expect((await notes.text()).trim()).toContain("# YCoding v0.6.5")
 })
 
-test("same v tag deploys web after the shared checks without GitHub write access", () => {
-  const deploy = workflow.split("\n  deploy-web:")[1]
-  expect(deploy).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
-  expect(deploy).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+const publishCondition =
+  "${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.verify-source.result == 'success' && needs.package.result == 'success' && needs.isolated-browser-acceptance.result == 'success' && (needs.deploy-web.result == 'success' || (needs.scope.outputs.channel == 'beta' && needs.deploy-web.result == 'skipped')) }}"
+
+test("stable v tags deploy web after the shared checks without GitHub write access, and beta tags never deploy", () => {
+  const deploy = job("deploy-web")
+  expect(deploy).toContain("needs: [scope, verify-source, package, isolated-browser-acceptance]")
+  expect(deploy).toContain(
+    "    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.scope.outputs.channel == 'latest' }}\n",
+  )
   expect(deploy).toContain("bun run build:web")
-  expect(deploy).toContain("bun run deploy:cloudflare")
-  expect(deploy?.indexOf("bun run build:web")).toBeLessThan(deploy?.indexOf("bun run deploy:cloudflare") ?? -1)
+  expect(deploy).toContain("          bun run deploy:cloudflare\n")
+  expect(deploy.indexOf("bun run build:web")).toBeLessThan(deploy.indexOf("bun run deploy:cloudflare"))
+  expect(workflow).not.toContain("--env beta")
   expect(deploy).not.toContain("gh release")
   expect(deploy).not.toContain("GH_TOKEN:")
   expect(deploy).not.toContain("contents: write")
   expect(workflow).not.toContain("verify-source-web:")
 })
 
-test("GitHub Release publication waits for successful web deployment", () => {
-  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
-  expect(tui).toContain("needs: deploy-web")
-  expect(tui).toContain("github.event_name == 'push'")
-  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
+test("GitHub Release publication waits for every gate and a stable deployment, and accepts only a skipped beta deployment", () => {
+  const tui = job("release-tui")
+  expect(tui).toContain("    needs: [scope, verify-source, package, isolated-browser-acceptance, deploy-web]\n")
+  expect(tui).toContain(`    if: ${publishCondition}\n`)
+  expect(tui).toContain('case "$version" in *-beta.*) release_flags=(--prerelease --latest=false) ;; esac')
 })
 
 test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
-  const deploy = workflow.split("\n  deploy-web:")[1]
+  const deploy = job("deploy-web")
   expect(deploy).toContain("CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}")
   expect(deploy).toContain('test -n "$CLOUDFLARE_API_TOKEN"')
-  expect(deploy?.indexOf('test -n "$CLOUDFLARE_API_TOKEN"')).toBeLessThan(
-    deploy?.indexOf("bun run deploy:cloudflare") ?? -1,
-  )
+  expect(deploy.indexOf('test -n "$CLOUDFLARE_API_TOKEN"')).toBeLessThan(deploy.indexOf("bun run deploy:cloudflare"))
 })
 
 test("manual release runs prepare assets without publishing or deploying", () => {
-  const prepare = workflow.split("\n  build:")[1]?.split("\n  release-tui:")[0]
-  expect(prepare).toContain("github.event_name == 'workflow_dispatch'")
   expect(workflow).toContain("workflow_dispatch:")
-  expect(workflow.split("\n  release-tui:")[1]).toContain("github.event_name == 'push'")
-  expect(workflow.split("\n  deploy-web:")[1]).toContain("github.event_name == 'push'")
+  expect(workflow).toContain('        required: false\n        default: ""\n')
+  for (const name of ["scope", "verify-source", "build", "isolated-browser-acceptance", "package"])
+    expect(job(name)).toContain("github.event_name == 'workflow_dispatch'")
+  expect(job("release-tui")).toContain("github.event_name == 'push'")
+  expect(job("deploy-web")).toContain("github.event_name == 'push'")
 })
 
 test("release workflow verifies the web application and relay before the Cloudflare build", () => {
@@ -368,26 +869,14 @@ test("release types verification checks cache invalidation before typechecking",
   expect(step.indexOf(check)).toBeLessThan(step.indexOf("bun run typecheck"))
 })
 
-test("source verification legs start in parallel with the native builds", () => {
-  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
-  const build = workflow.split("\n  build:")[1]?.split("\n  isolated-browser-acceptance:")[0] ?? ""
-  expect(verify).not.toContain("needs:")
-  expect(build).not.toContain("needs:")
+test("source verification legs start in parallel with the native builds once the scope is resolved", () => {
+  const verify = job("verify-source")
+  const build = job("build")
+  expect(verify).toContain("    needs: scope\n")
+  expect(build).toContain("    needs: scope\n")
   expect(verify).toContain("fail-fast: false")
   expect(verify).toContain("runs-on: ${{ matrix.runner }}")
-  expect([...verify.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual([
-    "types",
-    "web",
-    "remote",
-    "cli",
-    "tui",
-    "browser",
-    "extension",
-    "rust",
-    "rust-windows",
-  ])
-  expect(verify).toContain(["          - suite: browser", "            runner: macos-26"].join("\n"))
-  expect(verify).toContain(["          - suite: extension", "            runner: macos-26"].join("\n"))
+  expect(build).toContain("runs-on: ${{ matrix.runner }}")
   for (const [step, condition] of [
     ["Check workspace and types", "matrix.suite == 'types'"],
     ["Verify web application and relay", "matrix.suite == 'web'"],
@@ -406,8 +895,8 @@ test("source verification legs start in parallel with the native builds", () => 
     ["Verify Chrome extension integration suite", "matrix.suite == 'extension'"],
     ["Verify native isolated-browser runtime", "matrix.suite == 'browser'"],
     ["Verify Rust isolated-browser integration", "matrix.suite == 'browser'"],
-    ["Verify Rust workspace", "matrix.suite == 'rust'"],
-    ["Verify Rust runtime client interoperability", "matrix.suite == 'rust'"],
+    ["Verify Rust workspace", "matrix.suite == 'rust' || matrix.suite == 'rust-macos'"],
+    ["Verify Rust runtime client interoperability", "matrix.suite == 'rust' || matrix.suite == 'rust-macos'"],
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
   expect(verify).toContain("uses: ./.github/actions/verify-browser-host")
@@ -423,58 +912,91 @@ test("source verification legs start in parallel with the native builds", () => 
 })
 
 test("packaging overlaps packaged-browser acceptance without bypassing either deployment gate", () => {
-  const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
+  const sections = workflow
+    .split("\njobs:\n")[1]!
+    .split(/(?:^|\n) {2}([\w-]+):\n/)
+    .slice(1)
   const dependencies = [
-    ["verify-source", undefined],
-    ["build", undefined],
+    ["scope", undefined],
+    ["verify-source", "scope"],
+    ["build", "scope"],
     ["isolated-browser-acceptance", "build"],
-    ["package", "build"],
-    ["deploy-web", "[verify-source, package, isolated-browser-acceptance]"],
-    ["release-tui", "deploy-web"],
+    ["package", "[scope, build]"],
+    ["deploy-web", "[scope, verify-source, package, isolated-browser-acceptance]"],
+    ["release-tui", "[scope, verify-source, package, isolated-browser-acceptance, deploy-web]"],
   ] as const
-  expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
+  expect(sections.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
+  const prepare = "${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}"
   for (const [name, needs] of dependencies) {
-    const job = jobs[jobs.indexOf(name) + 1] ?? ""
-    expect(/^    needs: (.+)$/m.exec(job)?.[1]).toBe(needs)
-    expect(/^    if: (.+)$/m.exec(job)?.[1]).toBe(
-      name === "deploy-web" || name === "release-tui"
-        ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}"
-        : "${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}",
+    const section = sections[sections.indexOf(name) + 1] ?? ""
+    expect(/^ {4}needs: (.+)$/m.exec(section)?.[1]).toBe(needs)
+    expect(/^ {4}if: (.+)$/m.exec(section)?.[1]).toBe(
+      name === "release-tui"
+        ? publishCondition
+        : name === "deploy-web"
+          ? "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.scope.outputs.channel == 'latest' }}"
+          : prepare,
     )
   }
   expect(workflow).not.toContain("continue-on-error:")
   expect(workflow).toContain("permissions:\n  contents: read\n")
-  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
-  expect(verify).not.toContain("secrets.")
-  expect(verify).not.toContain("token:")
-  expect(verify).not.toContain("permissions:")
-  expect(verify).toContain("persist-credentials: false")
-  expect(verify).toContain('git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch"')
-  expect(verify).toContain("      - name: Verify tag is reachable from release branch\n        if: github.event_name == 'push'\n")
+  for (const name of ["scope", "verify-source"]) {
+    expect(job(name)).not.toContain("secrets.")
+    expect(job(name)).not.toContain("token:")
+    expect(job(name)).not.toContain("permissions:")
+    expect(job(name)).toContain("persist-credentials: false")
+  }
+  expect(job("scope")).toContain('git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch"')
+  expect(job("scope")).toContain(
+    "      - name: Verify tag is reachable from release branch\n        if: github.event_name == 'push'\n",
+  )
 })
 
 test.each(["0.10.6", "0.11.0-beta.1", "0.11.0-beta.10"])("release version validation accepts %s", (version) => {
-  const check = workflow.split("\n").find((line) => line.includes("grep -Eq '^(0|"))!.trim().replace(/ \\$/, "")
-  expect(Bun.spawnSync(["bash", "-o", "pipefail", "-c", check], { env: { ...process.env, version }, stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0)
+  const check = workflow
+    .split("\n")
+    .find((line) => line.includes("grep -Eq '^(0|"))!
+    .trim()
+    .replace(/ \\$/, "")
+  expect(
+    Bun.spawnSync(["bash", "-o", "pipefail", "-c", check], {
+      env: { ...process.env, version },
+      stdout: "pipe",
+      stderr: "pipe",
+    }).exitCode,
+  ).toBe(0)
 })
 
 test.each([
-  ["v0.10.6", "main", "bun run deploy:cloudflare", ""],
-  ["v0.11.0-beta.1", "beta", "bun run deploy:cloudflare --env beta", "--prerelease --latest=false"],
-])("%s selects the release branch, deploy environment and publication flags", (tag, branch, deploy, flags) => {
-  const sourceStep = workflow.split("      - name: Verify tag is reachable from release branch")[1]!.split("      - name:")[0]!.split("        run: |\n")[1]!
-  const deployStep = workflow.split("      - name: Deploy to Cloudflare")[1]!.split("        run: |\n")[1]!
+  ["v0.10.6", "main", ""],
+  ["v0.11.0-beta.1", "beta", "--prerelease --latest=false"],
+])("%s selects the release branch and publication flags", (tag, branch, flags) => {
+  const sourceStep = script("scope", "Verify tag is reachable from release branch")
   const publicationStart = workflow.indexOf("          release_flags=()")
   const publicationEnd = workflow.indexOf("\n          gh release create", publicationStart)
   const publication = workflow.slice(publicationStart, publicationEnd)
-  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `git() { printf 'git %s\\n' "$*"; }\nbun() { printf 'bun %s\\n' "$*"; }\n${sourceStep}\n${deployStep}\nversion="$RELEASE_VERSION"\n${publication}\nprintf 'flags %s\\n' "\${release_flags[*]}"`], {
-    env: { ...process.env, GITHUB_REF_NAME: tag, GITHUB_SHA: "synthetic-verified-sha", CLOUDFLARE_API_TOKEN: "synthetic-test-value", RELEASE_VERSION: tag.slice(1) },
-    stdout: "pipe", stderr: "pipe",
-  })
+  const result = Bun.spawnSync(
+    [
+      "bash",
+      "-euo",
+      "pipefail",
+      "-c",
+      `git() { printf 'git %s\\n' "$*"; }\n${sourceStep}\nversion="$RELEASE_VERSION"\n${publication}\nprintf 'flags %s\\n' "\${release_flags[*]}"`,
+    ],
+    {
+      env: {
+        ...process.env,
+        GITHUB_REF_NAME: tag,
+        GITHUB_SHA: "synthetic-verified-sha",
+        RELEASE_VERSION: tag.slice(1),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
   expect(result.exitCode, result.stderr.toString()).toBe(0)
   expect(result.stdout.toString()).toContain(`origin ${branch}:refs/remotes/origin/${branch}`)
-  expect(result.stdout.toString()).toContain(`origin/${branch}`)
-  expect(result.stdout.toString()).toContain(`${deploy}\n`)
+  expect(result.stdout.toString()).toContain(`git merge-base --is-ancestor synthetic-verified-sha origin/${branch}\n`)
   expect(result.stdout.toString()).toContain(`flags ${flags}\n`)
   expect(workflow).toContain('"${release_flags[@]}"')
 })
@@ -486,11 +1008,20 @@ test.each([
   const start = workflow.indexOf('          case "$version" in\n            *-beta.*)\n              release_query=')
   const end = workflow.indexOf("\n          range=", start)
   const selection = workflow.slice(start, end)
-  const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `gh() { printf '%s\n' "$*" >&3; if [ "$1" = api ]; then printf 'v0.10.6\n'; fi; }\nexec 3>&2\nversion="$RELEASE_VERSION"\nRELEASE_TAG="v$version"\nGH_REPO=Althenia/ycoding\n${selection}\nprintf '%s\n' "$prev"`], {
-    env: { ...process.env, RELEASE_VERSION: version },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  const result = Bun.spawnSync(
+    [
+      "bash",
+      "-euo",
+      "pipefail",
+      "-c",
+      `gh() { printf '%s\n' "$*" >&3; if [ "$1" = api ]; then printf 'v0.10.6\n'; fi; }\nexec 3>&2\nversion="$RELEASE_VERSION"\nRELEASE_TAG="v$version"\nGH_REPO=Althenia/ycoding\n${selection}\nprintf '%s\n' "$prev"`,
+    ],
+    {
+      env: { ...process.env, RELEASE_VERSION: version },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
   expect(result.exitCode, result.stderr.toString()).toBe(0)
   expect(result.stdout.toString()).toBe("v0.10.6\n")
   expect(result.stderr.toString()).toContain("--json tagName,isPrerelease")
