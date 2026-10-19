@@ -45,6 +45,13 @@ const INTERNAL_DOC_SLUGS = [
 ] as const
 
 describe("public docs allowlist", () => {
+  test("documents indefinite required answers without advertising a question expiry setting", () => {
+    const page = JSON.stringify(findDocPage("configuration"))
+    expect(page.includes("question_timeout_seconds")).toBe(false)
+    expect(page.includes("no elapsed-time expiry")).toBe(true)
+    expect(page.includes("not restored after a server restart")).toBe(true)
+  })
+
   test("usage guidance distinguishes measured rates, causal costs, retained coverage and quota warm-up", () => {
     const section = findDocPage("usage/sessions")?.sections.find((section) => section.heading === "Usage, prompt costs, and forecasts")
     const text = section?.blocks.flatMap((block) => block.kind === "paragraph" || block.kind === "callout" ? [block.text] : []).join(" ") ?? ""

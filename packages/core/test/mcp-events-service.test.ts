@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { createHmac } from "node:crypto"
-import { Cause, Deferred, Effect, Fiber } from "effect"
+import { Cause, Deferred, Effect, Fiber, Logger } from "effect"
+import { Statement } from "effect/unstable/sql"
 import { TestClock } from "effect/testing"
 import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { AbsolutePath } from "../src/schema"
@@ -15,6 +16,7 @@ import { SessionTable } from "../src/session/sql"
 import { SessionMcpEvents } from "../src/mcp-events/index"
 import { McpEventsHttp } from "../src/mcp-events/protected-http"
 import { makeSecretBox } from "../src/mcp-events/secret-box"
+import { McpEventOutboxTable, McpEventSubscriptionTable } from "../src/mcp-events/sql"
 import { testEffect } from "./lib/effect"
 
 const DAY = 86_400_000
@@ -32,21 +34,24 @@ let statuses: number[] = []
 let challengeEcho = true
 let verificationBody: string | undefined
 let transportFailure: McpEvents.Failure | undefined
+let transportDefect = false
+let cannotDecrypt = false
 let revokeDuringVerification = false
 let verificationGate: { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
-const grant = { expiresAt: 30 * DAY, revoked: false, available: true, signal: undefined as AbortSignal | undefined }
+const grant = { id: "grt_1", expiresAt: 30 * DAY, revoked: false, available: true, signal: undefined as AbortSignal | undefined }
 
 const authorization: SessionMcpEvents.AuthorizationInterface = {
   capabilities: Effect.sync(() => grant.available),
   resolve: () => grant.revoked
     ? Effect.fail(new McpEvents.Failure({ category: "unauthorized", reason: "grant_revoked" }))
-    : Effect.succeed({ grantID: "grt_1", expiresAt: grant.expiresAt }),
-  check: () => grant.revoked
+    : Effect.succeed({ grantID: grant.id, expiresAt: grant.expiresAt }),
+  check: (principal) => grant.revoked || principal.grantID !== grant.id
     ? Effect.fail(new McpEvents.Failure({ category: "unauthorized", reason: "grant_revoked" }))
     : Effect.succeed({ expiresAt: grant.expiresAt, ...(grant.signal === undefined ? {} : { signal: grant.signal }) }),
 }
 const transport: McpEventsHttp.Interface = {
   send: (request) => Effect.gen(function* () {
+    if (transportDefect) return yield* Effect.die(new Error(`private transport cause ${url} ${secret}`))
     if (transportFailure) return yield* transportFailure
     sent.push(request)
     const parsed = JSON.parse(request.body) as Record<string, unknown>
@@ -62,6 +67,8 @@ const transport: McpEventsHttp.Interface = {
   }),
 }
 const box = makeSecretBox(Buffer.alloc(32, 3))
+const diagnostics: unknown[] = []
+const diagnosticLogger = Logger.layer([Logger.make((entry) => { diagnostics.push(entry.message) })], { mergeWithExisting: false })
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, SessionStore.node]), []))
 
@@ -72,19 +79,23 @@ const make = Effect.gen(function* () {
     db: database.db,
     authorization,
     transport,
-    secretBox: box,
+    secretBox: { ...box, decrypt: (value) => cannotDecrypt ? undefined : box.decrypt(value) },
     session: (id) => store.get(id as never).pipe(Effect.map((info) => info === undefined ? undefined : { id: String(info.id), parentID: info.parentID === undefined ? undefined : String(info.parentID) })),
   })
 })
 
 const seed = (prefix: string) => Effect.gen(function* () {
   sent.length = 0
+  diagnostics.length = 0
   statuses = []
   challengeEcho = true
   verificationBody = undefined
   transportFailure = undefined
+  transportDefect = false
+  cannotDecrypt = false
   revokeDuringVerification = false
   verificationGate = undefined
+  grant.id = "grt_1"
   grant.expiresAt = 30 * DAY
   grant.revoked = false
   grant.available = true
@@ -109,6 +120,304 @@ const verifySignature = (item: Sent, keys = [secretBytes]) => {
   const expected = keys.map((key) => "v1," + createHmac("sha256", key).update(`${item.headers["webhook-id"]}.${item.headers["webhook-timestamp"]}.${item.body}`).digest("base64")).join(" ")
   expect(item.headers["webhook-signature"]).toBe(expected)
 }
+
+for (const name of ["session.permission.changed", "session.progress"] as const) {
+  it.effect(`subscription settlement rolls back a metadata failure for ${name} and retries once by identity`, () => Effect.gen(function* () {
+    const { parent } = yield* seed(`settlement_${name}`)
+    const svc = yield* make
+    const failure = new Error("Synthetic subscription metadata failure")
+    const result = yield* subscribe(svc, parent, name).pipe(
+      Effect.provideService(Statement.CurrentTransformer, (statement) =>
+        statement.compile()[0].startsWith('select "pruned_through" from "mcp_event_subscription"')
+          ? Effect.die(failure) : Effect.succeed(statement)),
+      Effect.exit,
+    )
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") expect(Cause.squash(result.cause)).toBe(failure)
+    expect(yield* svc.rows()).toMatchObject({ subscriptions: 0 })
+    const retried = yield* Effect.forEach([0, 1], () => subscribe(svc, parent, name), { concurrency: 2 })
+    expect(retried[1].id).toBe(retried[0].id)
+    expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 1 })
+  }))
+}
+
+it.effect("subscription settlement rolls back secret rotation and replay resets on metadata failure", () => Effect.gen(function* () {
+  const { parent } = yield* seed("settlement_replay")
+  const svc = yield* make
+  const initial = yield* subscribe(svc, parent, "session.progress")
+  yield* svc.capture({ type: "session.execution.started", id: "settlement_replay_event", data: { sessionID: parent } })
+  yield* svc.dispatchOnce()
+  const database = yield* Database.Service
+  const before = {
+    subscriptions: yield* database.db.select().from(McpEventSubscriptionTable).all().pipe(Effect.orDie),
+    outbox: yield* database.db.select().from(McpEventOutboxTable).all().pipe(Effect.orDie),
+  }
+  yield* TestClock.adjust("31 seconds")
+  const failure = new Error("Synthetic replay metadata failure")
+  const result = yield* subscribe(svc, parent, "session.progress", {
+    cursor: initial.cursor, delivery: { mode: "webhook", url, secret: rotatedSecret },
+  }).pipe(
+    Effect.provideService(Statement.CurrentTransformer, (statement) =>
+      statement.compile()[0].startsWith('select "pruned_through" from "mcp_event_subscription"')
+        ? Effect.die(failure) : Effect.succeed(statement)),
+    Effect.exit,
+  )
+  expect(result._tag).toBe("Failure")
+  if (result._tag === "Failure") expect(Cause.squash(result.cause)).toBe(failure)
+  expect({
+    subscriptions: yield* database.db.select().from(McpEventSubscriptionTable).all().pipe(Effect.orDie),
+    outbox: yield* database.db.select().from(McpEventOutboxTable).all().pipe(Effect.orDie),
+  }).toEqual(before)
+  expect((yield* subscribe(svc, parent, "session.progress", {
+    cursor: initial.cursor, delivery: { mode: "webhook", url, secret: rotatedSecret },
+  })).id).toBe(initial.id)
+  yield* svc.dispatchOnce()
+  expect(payloads()).toHaveLength(2)
+  expect(payloads()[1].eventId).toBe(payloads()[0].eventId)
+  verifySignature(deliveries()[1], [rotatedBytes, secretBytes])
+}))
+
+it.effect("subscription settlement interruption rolls back insertion and releases the mutation lane", () => Effect.gen(function* () {
+  const { parent } = yield* seed("settlement_interrupt")
+  const svc = yield* make
+  const entered = yield* Deferred.make<void>()
+  const release = yield* Deferred.make<void>()
+  const subscribing = yield* subscribe(svc, parent).pipe(
+    Effect.provideService(Statement.CurrentTransformer, (statement) =>
+      statement.compile()[0].startsWith('select "pruned_through" from "mcp_event_subscription"')
+        ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(statement))
+        : Effect.succeed(statement)),
+    Effect.forkChild,
+  )
+  yield* Deferred.await(entered)
+  yield* Fiber.interrupt(subscribing)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 0 })
+  yield* subscribe(svc, parent)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 1 })
+}))
+
+for (const reason of ["authorization_unavailable", "grant_expired"] as const) {
+  it.effect(`subscription settlement refuses ${reason} during metadata assembly`, () => Effect.gen(function* () {
+    const { parent } = yield* seed(`settlement_${reason}`)
+    const svc = yield* make
+    const controller = new AbortController()
+    grant.signal = controller.signal
+    grant.expiresAt = 60_000
+    const result = yield* subscribe(svc, parent).pipe(
+      Effect.provideService(Statement.CurrentTransformer, (statement) => Effect.gen(function* () {
+        if (statement.compile()[0].startsWith('select "pruned_through" from "mcp_event_subscription"')) {
+          if (reason === "authorization_unavailable") controller.abort()
+          if (reason === "grant_expired") yield* TestClock.adjust("60 seconds")
+        }
+        return statement
+      })),
+      Effect.result,
+    )
+    expect(result).toMatchObject({ _tag: "Failure", failure: {
+      category: reason === "grant_expired" ? "unauthorized" : "unavailable", reason,
+    } })
+    expect(yield* svc.rows()).toMatchObject({ subscriptions: 0 })
+    grant.signal = undefined
+    grant.expiresAt = 30 * DAY
+    yield* subscribe(svc, parent)
+    expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 1 })
+  }))
+}
+
+it.effect("subscription settlement preserves disabled rows and rejects revoked or unavailable refreshes", () => Effect.gen(function* () {
+  const { parent } = yield* seed("settlement_disabled")
+  const svc = yield* make
+  const active = yield* subscribe(svc, parent, "session.progress")
+  for (const scope of ["revoked", "unavailable", "aborted", "expired"] as const) {
+    grant.revoked = scope === "revoked"
+    grant.available = scope !== "unavailable"
+    grant.signal = scope === "aborted" ? AbortSignal.abort() : undefined
+    grant.expiresAt = scope === "expired" ? 0 : 30 * DAY
+    expect((yield* subscribe(svc, parent, "session.progress").pipe(Effect.exit))._tag).toBe("Failure")
+    expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 1 })
+  }
+  grant.revoked = false
+  grant.available = true
+  grant.signal = undefined
+  grant.expiresAt = 30 * DAY
+  expect((yield* subscribe(svc, parent, "session.progress")).id).toBe(active.id)
+  yield* svc.unsubscribe({ context, subscription: {
+    name: "session.progress", arguments: { session_id: parent, include_descendants: false }, delivery: { mode: "webhook", url },
+  } })
+  const database = yield* Database.Service
+  const before = yield* database.db.select().from(McpEventSubscriptionTable).all().pipe(Effect.orDie)
+  expect((yield* subscribe(svc, parent, "session.progress").pipe(Effect.exit))._tag).toBe("Failure")
+  expect(yield* database.db.select().from(McpEventSubscriptionTable).all().pipe(Effect.orDie)).toEqual(before)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 0 })
+  grant.id = "grt_replacement"
+  expect((yield* subscribe(svc, parent, "session.progress")).id).not.toBe(active.id)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 2, activeSubscriptions: 1 })
+}))
+
+it.effect("subscription settlement isolates callback URLs and every exact authorization dimension", () => Effect.gen(function* () {
+  const { parent } = yield* seed("settlement_scopes")
+  const svc = yield* make
+  const scopes = [
+    { context, url, grantID: "grt_1" },
+    { context, url: `${url}/distinct`, grantID: "grt_1" },
+    { context: { ...context, principal: { ...context.principal, ownerID: "own_distinct" } }, url, grantID: "grt_1" },
+    { context: { ...context, principal: { ...context.principal, deviceID: "dev_distinct" } }, url, grantID: "grt_1" },
+    { context: { ...context, principal: { ...context.principal, clientID: "cli_distinct" } }, url, grantID: "grt_1" },
+    { context: { ...context, epoch: "epoch_distinct" }, url, grantID: "grt_1" },
+    { context, url, grantID: "grt_distinct" },
+  ]
+  const subscriptions = yield* Effect.forEach(scopes, (scope) => Effect.gen(function* () {
+    grant.id = scope.grantID
+    const input = { context: scope.context, subscription: {
+      name: "session.progress" as const, arguments: { session_id: parent, include_descendants: false },
+      delivery: { mode: "webhook" as const, url: scope.url, secret },
+    } }
+    const first = yield* svc.subscribe(input)
+    expect((yield* svc.subscribe({ ...input, context: { ...input.context, requestID: "req_retry" } })).id).toBe(first.id)
+    return first
+  }))
+  expect(new Set(subscriptions.map((item) => item.id)).size).toBe(scopes.length)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: scopes.length, activeSubscriptions: scopes.length })
+}))
+
+it.effect("a partial fourteen-subscription attempt reconciles by identity and records safe outcomes", () => Effect.gen(function* () {
+  const { parent, child } = yield* seed("partial_batch")
+  const svc = yield* make
+  const requested = McpEvents.Names.flatMap((name) => [parent, child].map((sessionID) => ({ name, sessionID })))
+  const admitted = yield* Effect.forEach(requested.slice(0, 9), (item) => subscribe(svc, item.sessionID, item.name, {
+    arguments: { session_id: item.sessionID, include_descendants: true },
+  }))
+  yield* TestClock.adjust("5 minutes")
+  transportFailure = new McpEvents.Failure({ category: "callback_endpoint", reason: "timeout" })
+  const failed = yield* subscribe(svc, requested[9].sessionID, requested[9].name, {
+    arguments: { session_id: requested[9].sessionID, include_descendants: true },
+  }).pipe(Effect.result)
+  expect(failed).toMatchObject({ _tag: "Failure", failure: { category: "callback_endpoint", reason: "timeout" } })
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 9, activeSubscriptions: 9 })
+  transportFailure = undefined
+  const reconciled = yield* Effect.forEach(requested, (item) => subscribe(svc, item.sessionID, item.name, {
+    arguments: { include_descendants: true, session_id: item.sessionID },
+  }))
+  expect(reconciled.slice(0, 9).map((item) => item.id)).toEqual(admitted.map((item) => item.id))
+  expect(new Set(reconciled.map((item) => item.id)).size).toBe(14)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 14, activeSubscriptions: 14 })
+  for (const item of requested) {
+    yield* svc.unsubscribe({ context, subscription: {
+      name: item.name, arguments: { session_id: item.sessionID, include_descendants: true }, delivery: { mode: "webhook", url },
+    } })
+  }
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 14, activeSubscriptions: 0 })
+  const recorded = JSON.stringify(diagnostics)
+  expect(recorded).toContain("MCP Events subscription active")
+  expect(recorded).toContain(admitted[0].id)
+  expect(recorded).toContain("MCP Events subscription failed")
+  expect(recorded).toContain('"category":"callback_endpoint"')
+  expect(recorded).toContain('"reason":"timeout"')
+  expect(recorded).not.toContain(url)
+  expect(recorded).not.toContain(secret)
+}).pipe(Effect.provide(diagnosticLogger)))
+
+it.effect("a rejected exact grant disables delivery with a safe reason and no implicit reactivation", () => Effect.gen(function* () {
+  const { parent } = yield* seed("delivery_diagnostic")
+  const svc = yield* make
+  const subscription = yield* subscribe(svc, parent)
+  yield* svc.capture({ type: "permission.asked", id: "diagnostic_source", data: { id: "per_diagnostic", sessionID: parent, action: "shell" } })
+  grant.revoked = true
+  yield* svc.dispatchOnce()
+  grant.revoked = false
+  yield* svc.dispatchOnce()
+  expect(deliveries()).toEqual([])
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 0 })
+  const recorded = JSON.stringify(diagnostics)
+  expect(recorded).toContain("MCP Events subscription disabled")
+  expect(recorded).toContain(subscription.id)
+  expect(recorded).toContain('"reason":"grant_revoked"')
+  expect(recorded).not.toContain(url)
+  expect(recorded).not.toContain(secret)
+}).pipe(Effect.provide(diagnosticLogger)))
+
+it.effect("an unexpected subscribe failure preserves its cause but records only a safe diagnostic", () => Effect.gen(function* () {
+  const { parent } = yield* seed("unexpected_diagnostic")
+  const svc = yield* make
+  transportDefect = true
+  const result = yield* svc.subscribe({ context: { ...context, requestID: `${url}?secret=${secret}` }, subscription: {
+    name: "session.completed", arguments: { session_id: parent, include_descendants: true }, delivery: { mode: "webhook", url, secret },
+  } }).pipe(Effect.exit)
+  expect(result._tag).toBe("Failure")
+  if (result._tag === "Failure") expect(Cause.squash(result.cause)).toBeInstanceOf(Error)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 0 })
+  const recorded = JSON.stringify(diagnostics)
+  expect(recorded).toContain("MCP Events subscription failed")
+  expect(recorded).toContain('"reason":"service_unavailable"')
+  expect(recorded).not.toContain("private transport cause")
+  expect(recorded).not.toContain(url)
+  expect(recorded).not.toContain(secret)
+}).pipe(Effect.provide(diagnosticLogger)))
+
+it.effect("every authorization or storage disable path records a safe terminal reason", () => Effect.gen(function* () {
+  for (const reason of ["authorization_unavailable", "grant_expired", "secure_storage_unavailable"] as const) {
+    const { parent } = yield* seed(`disable_${reason}`)
+    const svc = yield* make
+    const subscription = yield* subscribe(svc, parent)
+    yield* svc.capture({ type: "permission.asked", id: `source_${reason}`, data: { id: `per_${reason}`, sessionID: parent, action: "shell" } })
+    if (reason === "authorization_unavailable") {
+      const controller = new AbortController()
+      controller.abort()
+      grant.signal = controller.signal
+    }
+    if (reason === "grant_expired") grant.expiresAt = 0
+    if (reason === "secure_storage_unavailable") cannotDecrypt = true
+    yield* svc.dispatchOnce()
+    expect(deliveries()).toEqual([])
+    expect(yield* svc.rows()).toMatchObject({ activeSubscriptions: 0 })
+    const recorded = JSON.stringify(diagnostics)
+    expect(recorded).toContain("MCP Events subscription disabled")
+    expect(recorded).toContain(subscription.id)
+    expect(recorded).toContain(`"reason":"${reason}"`)
+    expect(recorded).not.toContain(url)
+    expect(recorded).not.toContain(secret)
+  }
+}).pipe(Effect.provide(diagnosticLogger)))
+
+it.effect("webhook failures record safe HTTP or transport outcomes without claiming a host wake", () => Effect.gen(function* () {
+  const { parent } = yield* seed("http_diagnostic")
+  const svc = yield* make
+  const subscription = yield* subscribe(svc, parent)
+  yield* svc.capture({ type: "permission.asked", id: "source_http_diagnostic", data: { id: "per_http_diagnostic", sessionID: parent, action: "shell" } })
+  statuses = [503]
+  yield* svc.dispatchOnce()
+  expect(payloads()).toHaveLength(1)
+  const recorded = JSON.stringify(diagnostics)
+  expect(recorded).toContain("MCP Events webhook failed")
+  expect(recorded).toContain(subscription.id)
+  expect(recorded).toContain(payloads()[0].eventId)
+  expect(recorded).toContain('"httpStatus":503')
+  expect(recorded).toContain('"attempt":1')
+  expect(recorded).not.toContain(url)
+  expect(recorded).not.toContain(secret)
+  expect(recorded).not.toContain("host woke")
+}).pipe(Effect.provide(diagnosticLogger)))
+
+it.effect("question-tool Forms keep native form IDs and do not synthesize question notifications", () => Effect.gen(function* () {
+  const { parent } = yield* seed("question_form")
+  const svc = yield* make
+  yield* subscribe(svc, parent, "session.form.changed")
+  yield* subscribe(svc, parent, "session.question.changed")
+  yield* svc.capture({ type: "form.created", id: "form_source_created", data: {
+    form: { id: "frm_question_fixture", sessionID: parent, metadata: { kind: "question" }, title: "private question", fields: [] },
+  } })
+  yield* svc.capture({ type: "form.replied", id: "form_source_replied", data: {
+    id: "frm_question_fixture", sessionID: parent, answer: { q0: "private answer" },
+  } })
+  yield* svc.dispatchOnce()
+  yield* svc.dispatchOnce()
+  expect(payloads().map((item) => [item.name, item.data.state, item.data.request_id])).toEqual([
+    ["session.form.changed", "pending", "frm_question_fixture"],
+    ["session.form.changed", "resolved", "frm_question_fixture"],
+  ])
+  expect(JSON.stringify(payloads())).not.toContain("private question")
+  expect(JSON.stringify(payloads())).not.toContain("private answer")
+}))
 
 it.effect("malformed callback verification responses fail with a safe challenge error", () => Effect.gen(function* () {
   const { parent } = yield* seed("malformed_challenge")

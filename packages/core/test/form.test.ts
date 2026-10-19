@@ -9,6 +9,7 @@ import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { Database } from "@ycoding-ai/core/database/database"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
@@ -19,23 +20,14 @@ import { testEffect } from "./lib/effect"
 let decisionBehavior: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error> = () =>
   Effect.die("Forms must not request judgments unless asleep")
 
-let configuredTimeout: number | undefined
 const forms = AppNodeBuilder.build(
-  LayerNode.group([Database.node, EventRuntime.node, SessionAutonomy.node, Form.node]),
+  LayerNode.group([Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node, Form.node]),
   [
     [Decision.node, Layer.mock(Decision.Service, { evaluate: (input: Decision.Input) => decisionBehavior(input) })],
     [
       Config.node,
       Layer.mock(Config.Service, {
-        entries: () =>
-          Effect.sync(() =>
-            [
-                  new Config.Document({
-                    type: "document",
-                    info: new Config.Info({ ...(configuredTimeout === undefined ? {} : { question_timeout_seconds: configuredTimeout }) }),
-                  }),
-                ],
-          ),
+        entries: () => Effect.succeed([new Config.Document({ type: "document", info: new Config.Info({}) })]),
       }),
     ],
   ],
@@ -231,10 +223,8 @@ describe("Form", () => {
     }),
   )
 
-  for (const settlement of ["reply", "cancel", "timeout"] as const) {
+  for (const settlement of ["reply", "cancel"] as const) {
     it.effect(`an unsatisfied automatic form keeps the manual ${settlement} result`, () => Effect.gen(function* () {
-      configuredTimeout = 5
-      yield* Effect.addFinalizer(() => Effect.sync(() => { configuredTimeout = undefined }))
       decisionBehavior = () => Effect.die("Awake forms must not request judgments")
       yield* setupAutonomy("goal")
       const autonomy = yield* SessionAutonomy.Service
@@ -251,13 +241,15 @@ describe("Form", () => {
         fields: [{ key: "name", type: "string", required: true, pattern: "^release-[0-9]+$" }],
       }).pipe(Effect.forkScoped)
       const form = yield* Deferred.await(created)
+      yield* TestClock.adjust("25 hours")
+      expect(fiber.pollUnsafe()).toBeUndefined()
       expect(yield* service.state(form.id)).toEqual({ status: "pending" })
       yield* settlement === "reply"
         ? service.reply({ id: form.id, answer: { name: "release-42" } })
-        : settlement === "cancel" ? service.cancel(form.id) : TestClock.adjust("5 seconds")
+        : service.cancel(form.id)
       const expected = (settlement === "reply"
         ? { status: "answered", answer: { name: "release-42" } }
-        : settlement === "cancel" ? { status: "cancelled" } : { status: "timed_out", seconds: 5 }) satisfies Form.TerminalState
+        : { status: "cancelled" }) satisfies Form.TerminalState
       expect(yield* Fiber.join(fiber)).toEqual(expected)
       expect(yield* service.state(form.id)).toEqual(expected)
     }))
@@ -685,7 +677,6 @@ describe("Form", () => {
 
   it.effect("sleep inference creates no human-wait form state before the decision settles", () =>
     Effect.gen(function* () {
-      configuredTimeout = undefined
       yield* setupAutonomy("yolo")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: 0 })
@@ -757,7 +748,7 @@ describe("Form", () => {
     }),
   )
 
-  describe("timeout", () => {
+  describe("pending lifetime", () => {
     const start = Effect.fn("FormTest.start")(function* (service: Form.Interface, create: Form.CreateInput = input) {
       const events = yield* EventRuntime.Service
       const published: EventRuntime.Payload[] = []
@@ -774,98 +765,96 @@ describe("Form", () => {
       return { fiber, form: yield* Deferred.await(created), published }
     })
 
-    it.effect("created forms time out without an ask waiter", () => Effect.gen(function* () {
-      configuredTimeout = 5
+    it.effect("created forms remain pending after 25 hours and accept a valid late reply", () => Effect.gen(function* () {
       const service = yield* Form.Service
       const form = yield* service.create(input)
-      yield* TestClock.adjust("4 seconds")
+      yield* TestClock.adjust("25 hours")
       expect(yield* service.state(form.id)).toEqual({ status: "pending" })
-      yield* TestClock.adjust("1 second")
-      expect(yield* service.state(form.id)).toEqual({ status: "timed_out", seconds: 5 })
+      expect(yield* service.list()).toEqual([form])
+      yield* service.reply({ id: form.id, answer: { name: "Late" } })
+      expect(yield* service.state(form.id)).toEqual({ status: "answered", answer: { name: "Late" } })
       expect(yield* service.list()).toEqual([])
     }))
 
-    it.effect("closing the owner cancels created forms and their timers", () => Effect.gen(function* () {
-      configuredTimeout = 5
-      const scope = yield* Scope.make()
-      const context = yield* Layer.buildWithScope(forms.pipe(Layer.fresh), scope)
-      const service = Context.get(context, Form.Service)
-      const form = yield* service.create(input)
-      yield* Scope.close(scope, Exit.void)
-      yield* TestClock.adjust("10 seconds")
-      expect(yield* service.state(form.id)).toEqual({ status: "cancelled" })
+    it.effect("fresh service scopes on the same database do not restore ordinary pending forms", () => Effect.gen(function* () {
+      yield* setupAutonomy("yolo")
+      const database = yield* Database.Service
+      const context = yield* Effect.context<Config.Service | Database.Service | EventRuntime.Service | SessionAutonomy.Service | Decision.Service>()
+      const layer = Form.layer.pipe(Layer.provideMerge(Layer.succeedContext(context)))
+      const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
+      const first = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), firstScope), Form.Service)
+      const { fiber, form, published } = yield* start(first)
+      const created = yield* first.create({ ...input, id: Form.ID.create("frm_restart_created") })
+      expect(yield* first.list()).toEqual([form, created])
+      yield* Scope.close(firstScope, Exit.void)
+      expect(yield* Fiber.join(fiber)).toEqual({ status: "cancelled" })
+      expect(yield* first.state(created.id)).toEqual({ status: "cancelled" })
+      const secondScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(secondScope, Exit.void))
+      const restarted = yield* Layer.buildWithScope(Layer.fresh(layer), secondScope)
+      const second = Context.get(restarted, Form.Service)
+      expect(Context.get(restarted, Database.Service).db).toBe(database.db)
+      expect(yield* second.list()).toEqual([])
+      expect(yield* second.reply({ id: form.id, answer: { name: "Late" } }).pipe(Effect.flip)).toEqual(new Form.NotFoundError({ id: form.id }))
+      expect(yield* first.state(form.id)).toEqual({ status: "cancelled" })
+      expect(published.map((event) => event.type)).toEqual([Form.Event.Created.type, Form.Event.Created.type, Form.Event.Cancelled.type, Form.Event.Cancelled.type])
+    }))
+
+    it.effect("sleep entry defers an unanswered form after 25 hours without answering it", () => Effect.gen(function* () {
+      yield* setupAutonomy("yolo")
+      const service = yield* Form.Service
+      const { fiber, form, published } = yield* start(service)
+      yield* TestClock.adjust("25 hours")
+      yield* service.deferPending(input.sessionID)
+      const result = yield* Fiber.join(fiber)
+      expect(result.status).toBe("deferred")
+      const reviews = yield* SessionReviewFold.fold((yield* Database.Service).db, [input.sessionID])
+      expect(reviews).toHaveLength(1)
+      expect(reviews[0].payload).toMatchObject({ type: "form", title: form.title, fields: form.fields })
+      expect(reviews[0].decision).toBeUndefined()
       expect(yield* service.list()).toEqual([])
+      expect(published.map((event) => event.type)).toEqual([Form.Event.Created.type, Form.Event.Deferred.type])
     }))
 
     for (const settlement of ["reply", "cancel"] as const) {
-      it.effect(`a created form's ${settlement} cancels its entry-owned timer`, () => Effect.gen(function* () {
-        configuredTimeout = 5
+      it.effect(`a created form preserves its explicit ${settlement} result`, () => Effect.gen(function* () {
         const service = yield* Form.Service
         const form = yield* service.create(input)
         yield* settlement === "reply"
           ? service.reply({ id: form.id, answer: { name: "Ava" } })
           : service.cancel(form.id)
-        yield* TestClock.adjust("10 seconds")
+        yield* TestClock.adjust("5 minutes")
         expect(yield* service.state(form.id)).toEqual(settlement === "reply"
           ? { status: "answered", answer: { name: "Ava" } }
           : { status: "cancelled" })
       }))
     }
 
-    it.effect("times out at the default 5 minutes, closes the form, and rejects a late reply", () =>
+    it.effect("required answers remain pending after 25 hours without a synthetic result", () =>
       Effect.gen(function* () {
-        configuredTimeout = undefined
         const service = yield* Form.Service
         const { fiber, form, published } = yield* start(service)
 
-        yield* TestClock.adjust("299 seconds")
+        yield* TestClock.adjust("25 hours")
         expect(fiber.pollUnsafe()).toBeUndefined()
         expect(yield* service.list({ sessionID: input.sessionID })).toEqual([form])
-
-        yield* TestClock.adjust("1 second")
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "timed_out", seconds: 300 })
-        expect(yield* service.state(form.id)).toEqual({ status: "timed_out", seconds: 300 })
-        expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
-        expect(published.map((event) => [event.type, event.data])).toEqual([
-          [Form.Event.Created.type, { form }],
-          [Form.Event.TimedOut.type, { id: form.id, sessionID: input.sessionID }],
-        ])
-        expect(yield* service.reply({ id: form.id, answer: { name: "Late" } }).pipe(Effect.flip)).toEqual(
-          new Form.AlreadySettledError({ id: form.id }),
+        expect(yield* service.state(form.id)).toEqual({ status: "pending" })
+        expect(published.map((event) => event.type)).toEqual([Form.Event.Created.type])
+        expect(yield* service.reply({ id: form.id, answer: {} }).pipe(Effect.flip)).toEqual(
+          new Form.InvalidAnswerError({ id: form.id, message: "Missing required form field: name" }),
         )
+        expect(fiber.pollUnsafe()).toBeUndefined()
+        yield* service.reply({ id: form.id, answer: { name: "Late" } })
+        expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { name: "Late" } })
+        expect(published.map((event) => event.type)).toEqual([Form.Event.Created.type, Form.Event.Replied.type])
+        expect(yield* service.reply({ id: form.id, answer: { name: "Again" } }).pipe(Effect.flip)).toEqual(new Form.AlreadySettledError({ id: form.id }))
         expect(yield* service.cancel(form.id).pipe(Effect.flip)).toEqual(new Form.AlreadySettledError({ id: form.id }))
       }),
     )
 
-    it.effect("times out at the configured seconds", () =>
+    it.effect("a human answer remains settled as time advances", () =>
       Effect.gen(function* () {
-        configuredTimeout = 45
-        const service = yield* Form.Service
-        const { fiber } = yield* start(service)
-        yield* TestClock.adjust("44 seconds")
-        expect(fiber.pollUnsafe()).toBeUndefined()
-        yield* TestClock.adjust("1 second")
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "timed_out", seconds: 45 })
-      }),
-    )
-
-    it.effect("never times out when disabled with 0", () =>
-      Effect.gen(function* () {
-        configuredTimeout = 0
-        const service = yield* Form.Service
-        const { fiber, form, published } = yield* start(service)
-        yield* TestClock.adjust("24 hours")
-        expect(fiber.pollUnsafe()).toBeUndefined()
-        expect(yield* service.state(form.id)).toEqual({ status: "pending" })
-        expect(published.map((event) => event.type)).toEqual([Form.Event.Created.type])
-        yield* service.reply({ id: form.id, answer: { name: "Ava" } })
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { name: "Ava" } })
-      }),
-    )
-
-    it.effect("a human answer before the deadline wins and leaves no timer behind", () =>
-      Effect.gen(function* () {
-        configuredTimeout = 60
         const service = yield* Form.Service
         const { fiber, form, published } = yield* start(service)
         yield* TestClock.adjust("59 seconds")
@@ -877,9 +866,8 @@ describe("Form", () => {
       }),
     )
 
-    it.effect("a cancelled form is not timed out later", () =>
+    it.effect("a cancelled form emits no further settlement as time advances", () =>
       Effect.gen(function* () {
-        configuredTimeout = 60
         const service = yield* Form.Service
         const { fiber, form, published } = yield* start(service)
         yield* service.cancel(form.id)
@@ -889,9 +877,8 @@ describe("Form", () => {
       }),
     )
 
-    it.effect("interrupting the ask cancels the form and leaves no timeout behind", () =>
+    it.effect("interrupting the ask cancels the form without a later settlement", () =>
       Effect.gen(function* () {
-        configuredTimeout = 60
         const service = yield* Form.Service
         const { fiber, form, published } = yield* start(service)
         yield* Fiber.interrupt(fiber)
@@ -901,9 +888,8 @@ describe("Form", () => {
       }),
     )
 
-    it.effect("automatic answers never wait for the timeout", () =>
+    it.effect("explicit automatic answering remains available awake and asleep", () =>
       Effect.gen(function* () {
-        configuredTimeout = 60
         yield* setupAutonomy("yolo")
         const autonomy = yield* SessionAutonomy.Service
         const service = yield* Form.Service
@@ -917,7 +903,7 @@ describe("Form", () => {
         expect(
           yield* service.ask({
             ...input,
-            id: Form.ID.create("frm_timeout_sleep"),
+            id: Form.ID.create("frm_automatic_sleep"),
             fields: [{ key: "plan", type: "string", required: true, options: [{ value: "Fast", label: "Fast" }] }],
           }),
         ).toEqual({ status: "answered", answer: { plan: "Fast" }, automatic: true })

@@ -2186,16 +2186,12 @@ describe("SubagentTool", () => {
     ),
   )
 
-  describe("parent question timeout", () => {
-    const waitingChild = Effect.fn("SubagentTest.waitingChild")(function* (timeoutSeconds?: number) {
+  describe("parent question lifetime", () => {
+    const waitingChild = Effect.fn("SubagentTest.waitingChild")(function* () {
       const dir = yield* Effect.acquireRelease(
         Effect.promise(() => tmpdir()),
         (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
       )
-      if (timeoutSeconds !== undefined)
-        yield* Effect.promise(() =>
-          Bun.write(path.join(dir.path, "ycoding.json"), JSON.stringify({ question_timeout_seconds: timeoutSeconds })),
-        )
       const sessions = yield* Session.Service
       const parent = yield* sessions.create({
         location: Location.Ref.make({ directory: AbsolutePath.make(dir.path) }),
@@ -2231,60 +2227,33 @@ describe("SubagentTool", () => {
       return { parent, child, orchestration, questionID: asked.question.id, synthetic }
     })
 
-    it.effect("times out at the default 5 minutes, wakes the child with an explicit no-answer message, and rejects a late answer", () =>
+    it.effect("keeps an unanswered child question pending after a day and accepts the exact late answer", () =>
       Effect.gen(function* () {
         const { parent, child, orchestration, questionID, synthetic } = yield* waitingChild()
         const wakes = executionWakes.filter((id) => id === child.sessionID).length
 
-        yield* TestClock.adjust("299 seconds")
-        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting" })
+        yield* TestClock.adjust("24 hours")
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting", question: { id: questionID } })
         expect(yield* synthetic("timeout")).toEqual([])
-
-        yield* TestClock.adjust("1 second")
-        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running", question: undefined })
-        expect(yield* synthetic("timeout")).toEqual([
-          expect.objectContaining({
-            data: expect.objectContaining({
-              text: `No parent answer arrived within 300 seconds for question ${questionID}. The question is closed and can no longer be answered. Proceed using your own best judgment.`,
-              metadata: expect.objectContaining({ parentID: parent.id, childID: child.sessionID, kind: "timeout", questionID }),
-            }),
-          }),
-        ])
         expect(yield* synthetic("answer")).toEqual([])
+        expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(wakes)
+        yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID, text: "Focused tests" })
+        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running", question: undefined })
+        expect(yield* synthetic("answer")).toHaveLength(1)
         expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(wakes + 1)
         expect(
           yield* Effect.exit(orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID, text: "late" })),
         ).toMatchObject({ _tag: "Failure" })
-        expect(yield* synthetic("answer")).toEqual([])
+        expect(yield* synthetic("answer")).toHaveLength(1)
       }),
     )
 
-    it.effect("times out at the configured seconds", () =>
+    it.effect("an answered question cannot resume a second time as time advances", () =>
       Effect.gen(function* () {
-        const { parent, child, orchestration } = yield* waitingChild(20)
-        yield* TestClock.adjust("19 seconds")
-        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting" })
-        yield* TestClock.adjust("1 second")
-        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running" })
-      }),
-    )
-
-    it.effect("never times out when disabled with 0", () =>
-      Effect.gen(function* () {
-        const { parent, child, orchestration, synthetic } = yield* waitingChild(0)
-        yield* TestClock.adjust("24 hours")
-        expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting" })
-        expect(yield* synthetic("timeout")).toEqual([])
-      }),
-    )
-
-    it.effect("a parent answer before the deadline wins and leaves no timer behind", () =>
-      Effect.gen(function* () {
-        const { parent, child, orchestration, questionID, synthetic } = yield* waitingChild(60)
-        yield* TestClock.adjust("59 seconds")
+        const { parent, child, orchestration, questionID, synthetic } = yield* waitingChild()
         yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID, text: "Focused tests" })
         const wakes = executionWakes.filter((id) => id === child.sessionID).length
-        yield* TestClock.adjust("10 minutes")
+        yield* TestClock.adjust("24 hours")
         expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "running" })
         expect(yield* synthetic("timeout")).toEqual([])
         expect(yield* synthetic("answer")).toHaveLength(1)
@@ -2292,18 +2261,20 @@ describe("SubagentTool", () => {
       }),
     )
 
-    it.effect("cancelling the child clears the timer", () =>
+    it.effect("cancelling the child keeps it cancelled and rejects a late answer", () =>
       Effect.gen(function* () {
-        const { parent, child, orchestration, synthetic } = yield* waitingChild(60)
+        const { parent, child, orchestration, questionID, synthetic } = yield* waitingChild()
         yield* orchestration.cancel({ parentID: parent.id, childID: child.sessionID })
-        yield* TestClock.adjust("10 minutes")
+        const wakes = executionWakes.filter((id) => id === child.sessionID).length
+        yield* TestClock.adjust("24 hours")
         expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "cancelled" })
         expect(yield* synthetic("timeout")).toEqual([])
+        expect(yield* Effect.exit(orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID, text: "late" }))).toMatchObject({ _tag: "Failure" })
+        expect(executionWakes.filter((id) => id === child.sessionID)).toHaveLength(wakes)
       }),
     )
 
-    for (const settlement of ["timeout", "answer"] as const) {
-    it.effect(`a fresh layer recovers a dead owner's waiting question by ${settlement}`, () =>
+    it.effect("a fresh layer preserves an old dead-owner question until its exact parent answer", () =>
       Effect.gen(function* () {
         const dir = yield* Effect.acquireRelease(
           Effect.promise(() => tmpdir()),
@@ -2346,7 +2317,7 @@ describe("SubagentTool", () => {
           yield* db
             .update(SessionTaskTable)
             .set({
-              question_time: settlement === "timeout" ? Date.now() - 3_600_000 : Date.now(),
+              question_time: Date.now() - 86_400_000,
               owner_pid: owner.pid,
               owner_started: owner.started,
             })
@@ -2359,7 +2330,7 @@ describe("SubagentTool", () => {
         yield* Effect.gen(function* () {
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const initial = yield* orchestration.get(seeded.parentID, seeded.childID)
-          expect(initial.state).not.toBe("lost")
+          expect(initial).toMatchObject({ state: "waiting", question: { id: seeded.questionID } })
           const childWakes = executionWakes.filter((id) => id === seeded.childID).length
           const continueParent = Effect.gen(function* () {
             const before = executionWakes.filter((id) => id === seeded.parentID).length
@@ -2372,38 +2343,19 @@ describe("SubagentTool", () => {
             )).toHaveLength(1)
             expect(executionWakes.filter((id) => id === seeded.parentID).length).toBeGreaterThan(before)
           })
-          if (settlement === "answer") {
-            expect(initial.state).toBe("waiting")
-            yield* orchestration.answer({ parentID: seeded.parentID, childID: seeded.childID, questionID: seeded.questionID, text: "Focused tests" })
-            expect(yield* orchestration.get(seeded.parentID, seeded.childID)).toMatchObject({ state: "running", question: undefined })
-            expect(executionWakes.filter((id) => id === seeded.childID)).toHaveLength(childWakes + 1)
-            yield* TestClock.adjust("10 minutes")
-            const sessions = yield* Session.Service
-            expect((yield* sessions.pending(seeded.childID)).filter((item) => item.type === "synthetic" && item.data.metadata?.kind === "timeout")).toEqual([])
-            expect((yield* sessions.pending(seeded.childID)).filter((item) => item.type === "synthetic" && item.data.metadata?.kind === "answer")).toHaveLength(1)
-            yield* continueParent
-            return
-          }
-          yield* TestClock.adjust("1 second").pipe(
-            Effect.andThen(orchestration.get(seeded.parentID, seeded.childID)),
-            Effect.repeat({ until: (task) => task.state === "running" }),
-          )
-          expect(yield* orchestration.get(seeded.parentID, seeded.childID)).toMatchObject({
-            state: "running",
-            question: undefined,
-          })
+          yield* TestClock.adjust("24 hours")
+          expect(yield* orchestration.get(seeded.parentID, seeded.childID)).toMatchObject({ state: "waiting", question: { id: seeded.questionID } })
+          expect(executionWakes.filter((id) => id === seeded.childID)).toHaveLength(childWakes)
+          yield* orchestration.answer({ parentID: seeded.parentID, childID: seeded.childID, questionID: seeded.questionID, text: "Focused tests" })
+          expect(yield* orchestration.get(seeded.parentID, seeded.childID)).toMatchObject({ state: "running", question: undefined })
+          expect(executionWakes.filter((id) => id === seeded.childID)).toHaveLength(childWakes + 1)
           const sessions = yield* Session.Service
-          expect(
-            (yield* sessions.pending(seeded.childID)).filter(
-              (item) => item.type === "synthetic" && item.data.metadata?.kind === "timeout",
-            ),
-          ).toHaveLength(1)
-          expect(executionWakes.filter((id) => id === seeded.childID)).toHaveLength(2)
+          expect((yield* sessions.pending(seeded.childID)).filter((item) => item.type === "synthetic" && item.data.metadata?.kind === "timeout")).toEqual([])
+          expect((yield* sessions.pending(seeded.childID)).filter((item) => item.type === "synthetic" && item.data.metadata?.kind === "answer")).toHaveLength(1)
           yield* continueParent
         }).pipe(Effect.provide(subagentLayer(database()).pipe(Layer.fresh)), Effect.scoped)
       }),
     )
-    }
   })
 })
 

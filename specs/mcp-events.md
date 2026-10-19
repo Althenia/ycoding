@@ -22,7 +22,11 @@ The authenticated endpoint advertises `capabilities.events` only when its local 
 
 Arguments are `{ session_id, include_descendants? }`. The default includes only that Session. Descendant matching follows the backend's current parent chain and includes future descendants. Unknown fields are rejected.
 
-Subscription identity includes owner, device, OAuth client, exact grant, enable epoch, callback URL, event name, and canonical arguments. Repeating the same subscription refreshes it. Another client or a replacement grant cannot claim the prior identity. Unsubscribe is idempotent and affects only the authenticated identity.
+Subscription identity includes owner, device, OAuth client, exact grant, enable epoch, callback URL, event name, and canonical arguments. Repeating an enabled subscription under the same valid scope refreshes it. Another client, callback URL, or replacement grant cannot claim the prior identity. A disabled identity rejects refresh; a valid new scope has its own identity. Unsubscribe is idempotent and affects only the authenticated identity.
+
+One immediate local transaction covers subscription upsert, replay resets, response metadata, and result construction. A metadata error or interruption before commit rolls back that settlement. Authorization abort and granted expiry are rechecked before commit. Callback verification and remote authorization checks run before the transaction. A lost response after commit remains ambiguous and requires an exact-identity retry or reconciliation; it is not proof of rollback.
+
+Each RPC settles one subscription identity. Creating a host automation with several triggers is not an atomic subscription operation: successful earlier calls remain persisted if a later call fails. A lost response also does not establish rollback. Reconciliation uses the host's saved automation state, acknowledged identities, and explicitly authorized identical subscribe or unsubscribe calls; it never substitutes a new grant or reactivates disabled rows directly. `events/list` is the event catalog, not a list of persisted subscriptions.
 
 The default lifetime is 24 hours, the minimum is 60 seconds, and the maximum is seven days, capped by grant expiry. `ttlMs: null` receives a finite lifetime. `refreshBefore` is the granted expiry.
 
@@ -41,6 +45,8 @@ The default lifetime is 24 hours, the minimum is 60 seconds, and the maximum is 
 Each delivery contains `{ eventId, name, timestamp, data, cursor }`. `timestamp` is the occurrence time, not the attempt time. `data` contains `session_id`, `root_session_id`, a state, and optional request, review-item, or task IDs and bounded categories. It contains no prompt, command, resource path, answer, grade evidence, credential, or raw provider error. Consumers read current Session state before acting on a notification.
 
 Token deltas, tool progress text, and ordinary MCP reads do not create notifications. Completion means the explicit runtime receipt, not an idle transition. An event is a notification, never an instruction or approval.
+
+The model-facing `question` tool creates native Forms. Its pending and resolved notifications use `session.form.changed` with the `frm_` identifier; consumers read and answer them through `session.form.list` and `session.form.reply`. Native Question-service requests use `session.question.changed` with their own request IDs. These event kinds are not synthesized from each other. `session.review.list` reads durable deferred review-box items, not an aggregate of awake pending permissions, guardrails, and Forms; read the corresponding native pending-request lists.
 
 Permission and guardrail interruption do not publish a dedicated live cancellation event. Restart reconciliation cancels retained, unresolved ephemeral requests; durable deferred reviews remain governed by their actual settlement. Consumers must confirm a pending request still exists before replying.
 
@@ -71,9 +77,19 @@ Mutation payloads contain `{ context, subscription }`. The connector supplies `c
 
 The device-authenticated `POST /api/devices/:deviceID/mcp/events/authorize` supports capability discovery, resolution of a currently forwarded MCP request to its exact grant, and subsequent grant checks. It uses the already-minted device credential; it neither rotates credentials nor forwards a bearer to the callback or MCP client.
 
+Subscription outcome logs record a bounded request correlation hash and opaque subscription ID after activation, or a categorized failure without callback URLs, signing material, or raw exception text. Disabling a subscription after a definitive grant rejection, expired or aborted authorization, or unavailable stored signing material logs the subscription and event IDs with a bounded category and reason. Webhook failures log the event and subscription IDs, attempt number, terminal/retry state, and either the HTTP status or categorized transport failure. These outcomes do not establish that a host automation was saved or a dot was woken.
+
 ## Host requirements
 
 ChatGPT documents webhook Events for supported Work/Cloud chats and dots. The host must discover the extension, create a subscription, supply the callback and signing secret, verify the challenge, and receive delivery. Server tests do not establish that a particular chat supports or has activated this lifecycle. Live subscriptions and callbacks require explicit host setup and authorization.
+
+## Setup reconciliation
+
+1. Read the host's saved, enabled automation and exact trigger bindings through its supported controls. Compare those bindings with the owning backend's read-only subscription inventory, including subscription ID, event, Session arguments, callback fingerprint, authorization scope, expiry, and disabled state. Exclude signing material and raw credentials from reports.
+2. Classify unmatched records as candidates, not confirmed orphans. A disabled row, a quiet outbox, or an unsuccessful host batch does not prove that another active automation does not own the binding. `events/list` cannot perform this inventory because it returns the event catalog.
+3. Reconcile a lost acknowledgement only under the same valid authorization scope and callback identity. Repeating an enabled exact identity does not add a row. A different callback or grant is a separate identity, not a retry. Stop if the host cannot retain the original binding; repeated new host creations can create additional valid rows.
+4. Obtain explicit authorization for any cleanup and use the owning host lifecycle or the exact authenticated `events/unsubscribe` operation. Preserve active bindings and disabled scopes. Never edit subscription rows, substitute a grant, or reactivate disabled identities directly.
+5. Verify the saved host automation and each acknowledged trigger before treating multi-trigger setup as complete. HTTP delivery acceptance is separate from a correlated host run and from a successful reply to a currently pending native request.
 
 ## Verification
 

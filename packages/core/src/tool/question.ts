@@ -60,7 +60,7 @@ export const toModelOutput = (
   if (deferredItemID !== undefined)
     return `The user is asleep. These questions were added to the user's review box as item ${deferredItemID}; the answer will arrive later as a user message. Do not guess the answer or act as if it were given. Continue with work that does not depend on it; if nothing else remains, summarize what waits on the user and stop.`
   if (timedOutAfterSeconds !== undefined)
-    return `No answer arrived within ${timedOutAfterSeconds} seconds, so the questions were closed without a user answer. Proceed using your own best judgment.`
+    return "These questions closed without an answer. Obtain the required answer before continuing dependent work."
   const formatted = questions.map((question, index) =>
     `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
   ).join(", ")
@@ -100,9 +100,7 @@ export const Plugin = {
               return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), reviewFull: true as const })
             if (state.status === "deferred")
               return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), deferredItemID: state.itemID })
-            if (state.status === "cancelled") return Effect.die(new CancelledError())
-            if (state.status === "timed_out")
-              return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), timedOutAfterSeconds: state.seconds })
+            if (state.status === "cancelled" || state.status === "timed_out") return Effect.die(new CancelledError())
             return Effect.succeed({ answers: input.questions.map((_, index): Question.Answer => {
               const value = state.answer[`q${index}`]
               if (value === undefined) return []

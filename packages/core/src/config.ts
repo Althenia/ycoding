@@ -35,7 +35,6 @@ import { ConfigMemory } from "./config/memory"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigProviderUsage } from "./config/provider-usage"
-import { ConfigQuestionTimeout } from "./config/question-timeout"
 import { ConfigReference } from "./config/reference"
 import { ConfigSessionRetention } from "./config/session-retention"
 import { ConfigAnalyticsRetention } from "./config/analytics-retention"
@@ -124,10 +123,6 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   analytics_retention: ConfigAnalyticsRetention.Info.pipe(Schema.optional).annotate({
     description: "Global-only retention of usage facts by request date and latency samples by receipt date (default days: 30)",
-  }),
-  question_timeout_seconds: ConfigQuestionTimeout.Seconds.pipe(Schema.optional).annotate({
-    description:
-      "Seconds an unanswered question, form, or subagent question stays open before it times out (default: 300, 0 disables, max: 86400)",
   }),
   memory: ConfigMemory.Info.pipe(Schema.optional).annotate({
     description: "On-demand workspace knowledge and offline graph configuration",

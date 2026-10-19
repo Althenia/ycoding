@@ -138,13 +138,12 @@ describe("QuestionTool", () => {
     ] })
   }))
 
-  it.effect("returns an explicit no-answer result, not an error or a fabricated answer, when the form times out", () => Effect.gen(function* () {
+  it.effect("does not turn a closed unanswered Form into successful tool continuation", () => Effect.gen(function* () {
     timedOut = true
     const registry = yield* ToolRegistry.Service
-    const text = "No answer arrived within 300 seconds, so the questions were closed without a user answer. Proceed using your own best judgment."
-    expect(yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "call-question-timeout", name: "question", input: questionInput } }).pipe(Effect.ensuring(Effect.sync(() => { timedOut = false })))).toEqual({
-      result: { type: "text", value: text }, output: { structured: { answers: [[]], timedOutAfterSeconds: 300 }, content: [{ type: "text", text }] },
-    })
+    const exit = yield* executeTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "call-question-timeout", name: "question", input: questionInput } }).pipe(Effect.exit, Effect.ensuring(Effect.sync(() => { timedOut = false })))
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(QuestionTool.CancelledError)
   }))
 
   it.effect("does not invent tool ownership metadata without a durable registry source", () => Effect.gen(function* () {

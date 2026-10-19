@@ -23,7 +23,7 @@ import { FormLocationMiddleware } from "../src/middleware/form-location"
 const it = testEffect(AppNodeBuilder.build(Form.node, [
   [Database.node, Database.configured({ path: ":memory:" })],
   [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([
-    new Config.Document({ type: "document", info: new Config.Info({ question_timeout_seconds: 5 }) }),
+    new Config.Document({ type: "document", info: new Config.Info({}) }),
   ]) })],
   [SessionAutonomy.node, Layer.mock(SessionAutonomy.Service, {
     isAsleep: () => Effect.succeed(false), canAutoAnswer: () => Effect.succeed(false),
@@ -31,7 +31,7 @@ const it = testEffect(AppNodeBuilder.build(Form.node, [
   [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("Human forms do not use decisions") })],
 ]))
 
-it.effect("session.form.create expires through public state/list routes and rejects a late reply", () => Effect.gen(function* () {
+it.effect("session.form.create stays pending after a day and accepts a late validated reply", () => Effect.gen(function* () {
   const form = yield* Form.Service
   const provided = Context.make(Form.Service, form).pipe(Context.add(Location.Service,
     location({ directory: AbsolutePath.make("/tmp/ycoding-form-http") })))
@@ -58,14 +58,16 @@ it.effect("session.form.create expires through public state/list routes and reje
     id: "frm_http_timeout", title: "Public form", fields: [{ key: "name", type: "string", required: true }],
   })
   expect(created.status).toBe(200)
-  yield* TestClock.adjust("5 seconds")
+  yield* TestClock.adjust("24 hours")
   const state = yield* request(`${base}/frm_http_timeout/state`)
   expect(state.status).toBe(200)
   expect(state.body).toMatchObject({ _tag: "Uint8Array" })
   if (state.body._tag !== "Uint8Array") return yield* Effect.die("Expected a JSON state response")
-  expect(JSON.parse(new TextDecoder().decode(state.body.body))).toEqual({ data: { status: "timed_out", seconds: 5 } })
+  expect(JSON.parse(new TextDecoder().decode(state.body.body))).toEqual({ data: { status: "pending" } })
   const listed = yield* request(base)
   if (listed.body._tag !== "Uint8Array") return yield* Effect.die("Expected a JSON list response")
-  expect(JSON.parse(new TextDecoder().decode(listed.body.body))).toEqual({ data: [] })
-  expect((yield* request(`${base}/frm_http_timeout/reply`, "POST", { answer: { name: "Late" } })).status).toBe(409)
+  expect(JSON.parse(new TextDecoder().decode(listed.body.body))).toMatchObject({ data: [{ id: "frm_http_timeout" }] })
+  expect((yield* request(`${base}/frm_http_timeout/reply`, "POST", { answer: {} })).status).toBe(400)
+  expect((yield* request(`${base}/frm_http_timeout/reply`, "POST", { answer: { name: "Late" } })).status).toBe(204)
+  expect((yield* request(`${base}/frm_http_timeout/reply`, "POST", { answer: { name: "Again" } })).status).toBe(409)
 }))

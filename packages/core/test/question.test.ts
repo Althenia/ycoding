@@ -13,28 +13,20 @@ import { Question } from "@ycoding-ai/core/question"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 let decisionBehavior: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error> = () =>
   Effect.die("Questions must not request judgments unless asleep")
-let configuredTimeout: number | undefined
 const questions = AppNodeBuilder.build(
-  LayerNode.group([Database.node, EventRuntime.node, SessionAutonomy.node, Question.node]),
+  LayerNode.group([Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node, Question.node]),
   [
     [Decision.node, Layer.mock(Decision.Service, { evaluate: (input: Decision.Input) => decisionBehavior(input) })],
     [
       Config.node,
       Layer.mock(Config.Service, {
-        entries: () =>
-          Effect.sync(() =>
-            [
-                  new Config.Document({
-                    type: "document",
-                    info: new Config.Info({ ...(configuredTimeout === undefined ? {} : { question_timeout_seconds: configuredTimeout }) }),
-                  }),
-                ],
-          ),
+        entries: () => Effect.succeed([new Config.Document({ type: "document", info: new Config.Info({}) })]),
       }),
     ],
   ],
@@ -202,15 +194,24 @@ describe("Question", () => {
     }),
   )
 
-  it.effect("isolates pending requests by location-layer instance and rejects them on finalization", () =>
+  it.effect("fresh service scopes on the same database do not restore ordinary pending questions", () =>
     Effect.gen(function* () {
+      yield* setupAutonomy("yolo")
+      const database = yield* Database.Service
+      const layer = AppNodeBuilder.build(LayerNode.group([Database.node, Question.node]), [
+        [Config.node, Layer.succeed(Config.Service, yield* Config.Service)],
+        [Database.node, Layer.succeed(Database.Service, database)],
+        [EventRuntime.node, Layer.succeed(EventRuntime.Service, yield* EventRuntime.Service)],
+        [SessionAutonomy.node, Layer.succeed(SessionAutonomy.Service, yield* SessionAutonomy.Service)],
+        [Decision.node, Layer.succeed(Decision.Service, yield* Decision.Service)],
+      ])
       const firstScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
       const secondScope = yield* Scope.make()
-      const first = Context.get(yield* Layer.buildWithScope(Layer.fresh(questions), firstScope), Question.Service)
-      const second = Context.get(yield* Layer.buildWithScope(Layer.fresh(questions), secondScope), Question.Service)
-      const fiber = yield* first.ask({ sessionID, questions: [question] }).pipe(Effect.forkScoped)
-      yield* Effect.yieldNow
-      const request = (yield* first.list())[0]!
+      yield* Effect.addFinalizer(() => Scope.close(secondScope, Exit.void))
+      const first = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), firstScope), Question.Service)
+      const second = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), secondScope), Question.Service)
+      const { fiber, request } = yield* waitForAsk(first, { sessionID, questions: [question] })
 
       expect(yield* second.list()).toEqual([])
       expect(yield* second.reply({ requestID: request.id, answers: [["One"]] }).pipe(Effect.flip)).toEqual(
@@ -222,6 +223,15 @@ describe("Question", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("Question.RejectedError")
       yield* Scope.close(secondScope, Exit.void)
+      const restartedScope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(restartedScope, Exit.void))
+      const restarted = yield* Layer.buildWithScope(Layer.fresh(layer), restartedScope)
+      expect(Context.get(restarted, Database.Service).db).toBe(database.db)
+      const service = Context.get(restarted, Question.Service)
+      expect(yield* service.list()).toEqual([])
+      expect(yield* service.reply({ requestID: request.id, answers: [["Late"]] }).pipe(Effect.flip)).toEqual(
+        new Question.NotFoundError({ requestID: request.id }),
+      )
     }),
   )
 
@@ -302,7 +312,7 @@ describe("Question", () => {
     }),
   )
 
-  describe("timeout", () => {
+  describe("pending lifetime", () => {
     const observe = Effect.fn("QuestionTest.observe")(function* () {
       const events = yield* EventRuntime.Service
       const published: EventRuntime.Payload[] = []
@@ -315,23 +325,38 @@ describe("Question", () => {
       return published
     })
 
-    it.effect("times out at the default 5 minutes, closes the request, and rejects a late reply", () =>
+    it.effect("sleep entry defers an unanswered question after 25 hours without answering it", () => Effect.gen(function* () {
+      yield* setupAutonomy("yolo")
+      const service = yield* Question.Service
+      const published = yield* observe()
+      const { fiber } = yield* waitForAsk(service, { sessionID, questions: [question] })
+      yield* TestClock.adjust("25 hours")
+      yield* service.deferPending(sessionID)
+      expect((yield* Fiber.join(fiber)).status).toBe("deferred")
+      const reviews = yield* SessionReviewFold.fold((yield* Database.Service).db, [sessionID])
+      expect(reviews).toHaveLength(1)
+      expect(reviews[0].payload).toEqual({ type: "question", questions: [question] })
+      expect(reviews[0].decision).toBeUndefined()
+      expect(yield* service.list()).toEqual([])
+      expect(published.map((event) => event.type)).toEqual([Question.Event.Asked.type, Question.Event.Deferred.type])
+    }))
+
+    it.effect("required answers remain pending after 25 hours without a synthetic result", () =>
       Effect.gen(function* () {
-        configuredTimeout = undefined
         const service = yield* Question.Service
         const published = yield* observe()
-        const { fiber, request } = yield* waitForAsk(service, { sessionID, questions: [question] })
+        const { fiber, request } = yield* waitForAsk(service, { sessionID, questions: [{ question: "Provide a value", header: "Value", options: [] }] })
 
-        yield* TestClock.adjust("299 seconds")
+        yield* TestClock.adjust("25 hours")
         expect(fiber.pollUnsafe()).toBeUndefined()
         expect(yield* service.list()).toEqual([request])
-
-        yield* TestClock.adjust("1 second")
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "timed_out", seconds: 300 })
+        expect(published.map((event) => event.type)).toEqual([Question.Event.Asked.type])
+        yield* service.reply({ requestID: request.id, answers: [["Late"]] })
+        expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answers: [["Late"]] })
         expect(yield* service.list()).toEqual([])
         expect(published.map((event) => [event.type, event.data])).toEqual([
           [Question.Event.Asked.type, request],
-          [Question.Event.TimedOut.type, { sessionID, requestID: request.id }],
+          [Question.Event.Replied.type, { sessionID, requestID: request.id, answers: [["Late"]] }],
         ])
         expect(yield* service.reply({ requestID: request.id, answers: [["Late"]] }).pipe(Effect.flip)).toEqual(
           new Question.NotFoundError({ requestID: request.id }),
@@ -342,25 +367,12 @@ describe("Question", () => {
       }),
     )
 
-    it.effect("times out at the configured seconds", () =>
+    it.effect("choice questions accept a reply after 25 hours", () =>
       Effect.gen(function* () {
-        configuredTimeout = 30
-        const service = yield* Question.Service
-        const { fiber } = yield* waitForAsk(service, { sessionID, questions: [question] })
-        yield* TestClock.adjust("29 seconds")
-        expect(fiber.pollUnsafe()).toBeUndefined()
-        yield* TestClock.adjust("1 second")
-        expect(yield* Fiber.join(fiber)).toEqual({ status: "timed_out", seconds: 30 })
-      }),
-    )
-
-    it.effect("never times out when disabled with 0", () =>
-      Effect.gen(function* () {
-        configuredTimeout = 0
         const service = yield* Question.Service
         const published = yield* observe()
         const { fiber, request } = yield* waitForAsk(service, { sessionID, questions: [question] })
-        yield* TestClock.adjust("24 hours")
+        yield* TestClock.adjust("25 hours")
         expect(fiber.pollUnsafe()).toBeUndefined()
         expect(yield* service.list()).toEqual([request])
         expect(published.map((event) => event.type)).toEqual([Question.Event.Asked.type])
@@ -369,9 +381,8 @@ describe("Question", () => {
       }),
     )
 
-    it.effect("a human answer before the deadline wins and leaves no timer behind", () =>
+    it.effect("a human answer emits no further settlement as time advances", () =>
       Effect.gen(function* () {
-        configuredTimeout = 60
         const service = yield* Question.Service
         const published = yield* observe()
         const { fiber, request } = yield* waitForAsk(service, { sessionID, questions: [question] })
@@ -383,9 +394,8 @@ describe("Question", () => {
       }),
     )
 
-    it.effect("interrupting the ask clears the timer without publishing a timeout", () =>
+    it.effect("interrupting the ask removes the pending question without a later settlement", () =>
       Effect.gen(function* () {
-        configuredTimeout = 60
         const service = yield* Question.Service
         const published = yield* observe()
         const { fiber } = yield* waitForAsk(service, { sessionID, questions: [question] })
@@ -396,9 +406,8 @@ describe("Question", () => {
       }),
     )
 
-    it.effect("automatic answers never wait for the timeout", () =>
+    it.effect("explicit automatic answering remains available awake and asleep", () =>
       Effect.gen(function* () {
-        configuredTimeout = 60
         yield* setupAutonomy("yolo")
         const autonomy = yield* SessionAutonomy.Service
         yield* autonomy.setYolo({ sessionID, yolo: 2 })

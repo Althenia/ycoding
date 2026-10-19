@@ -3,7 +3,6 @@ export * as Question from "./question"
 import { makeLocationNode } from "./effect/app-node"
 import { Context, Deferred, Effect, Layer, Schema, Semaphore } from "effect"
 import { Config } from "./config"
-import { ConfigQuestionTimeout } from "./config/question-timeout"
 import { Database } from "./database/database"
 import { Question } from "@ycoding-ai/schema/question"
 import { Decision } from "./decision"
@@ -206,17 +205,8 @@ const layer = Layer.effect(
           const deferred = yield* Deferred.make<Outcome, RejectedError>()
           const request: Request = { id, ...input }
           pending.set(id, { request, deferred })
-          const configured = Config.latest(yield* config.entries(), "question_timeout_seconds")
-          const timeout = ConfigQuestionTimeout.duration(configured)
-          const wait = Deferred.await(deferred)
-          const expired = timeout
-            ? Effect.sleep(timeout).pipe(
-                Effect.andThen(expire(id, ConfigQuestionTimeout.seconds(configured))),
-                Effect.andThen(wait),
-              )
-            : undefined
           return yield* events.publish(Event.Asked, request).pipe(
-            Effect.andThen(restore(expired ? Effect.raceFirst(wait, expired) : wait)),
+            Effect.andThen(restore(Deferred.await(deferred))),
             Effect.ensuring(
               Effect.sync(() => {
                 pending.delete(id)
@@ -253,21 +243,6 @@ const layer = Layer.effect(
             requestID: existing.request.id,
           })
           yield* Deferred.fail(existing.deferred, new RejectedError())
-          pending.delete(requestID)
-        }),
-      ),
-    )
-
-    const expire = Effect.fn("Question.expire")((requestID: ID, seconds: number) =>
-      exclusive(
-        Effect.gen(function* () {
-          const existing = pending.get(requestID)
-          if (!existing) return
-          yield* events.publish(Event.TimedOut, {
-            sessionID: existing.request.sessionID,
-            requestID: existing.request.id,
-          })
-          yield* Deferred.succeed(existing.deferred, { status: "timed_out", seconds })
           pending.delete(requestID)
         }),
       ),
