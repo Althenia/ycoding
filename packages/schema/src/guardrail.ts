@@ -69,7 +69,8 @@ export function escalationText(input: Escalation) {
     return `${authority}Decision requires human review · confidence below the approval threshold${details.length ? ` · ${details.join(" · ")}` : ""} · Review this request manually.`
   if (input.reason === "conflicting_grades")
     return `${authority}Decision requires human review · conflicting approval and rejection grades${details.length ? ` · ${details.join(" · ")}` : ""} · Review this request manually.`
-  return `${authority}Decision model escalated this review${details.length ? ` · ${details.join(" · ")}` : ""} · Review this request manually.`
+  const outcome = input.choice === "escalate" ? "Decision model escalated this review" : "Decision requires human review"
+  return `${authority}${outcome}${details.length ? ` · ${details.join(" · ")}` : ""} · Review this request manually.`
 }
 
 export const RuleSource = Schema.Literals(["standard", "custom"]).annotate({

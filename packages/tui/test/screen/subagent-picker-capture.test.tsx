@@ -20,7 +20,6 @@ import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
 import { renderScreen } from "./harness"
-import { localAutonomyView } from "../../src/util/session-autonomy"
 
 const sessionID = "ses_0085fc701x"
 const directory = `${process.env.HOME}/Workspace/Personal/YCoding`
@@ -192,7 +191,7 @@ async function boot(viewport: { width: number; height: number }) {
                           />
                           <box flexGrow={1} />
                           <Composer sessionID={sessionID} open={true} defaultTab="subagents" />
-                          <Footer branch="main" sessionID={sessionID} autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
+                          <Footer branch="main" sessionID={sessionID} />
                         </box>
                       </DialogProvider></ToastProvider>
                     </Keymap.Provider>

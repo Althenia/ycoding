@@ -260,14 +260,20 @@ export const layer = Layer.effect(
               return { status: "deferred", itemID: item.itemID } as TerminalState
             }
             const outcome = yield* restore(decisionAnswer(decision, sessionID, form, { autoAnswer, yolo }))
-            if (outcome.type === "defer") {
-              const item = yield* openReview(form, sessionID, outcome)
-              return { status: "deferred", itemID: item.itemID } as TerminalState
-            }
-            const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot)
-            if (!unchanged) {
-              const item = yield* openReview(form, sessionID, { reason: "disabled" })
-              return { status: "deferred", itemID: item.itemID } as TerminalState
+            const unchanged = outcome.type === "answer" && (yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot))
+            if (outcome.type === "defer" || !unchanged) {
+              const asleepNow = yield* autonomy
+                .isAsleep(sessionID)
+                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+              if (asleepNow) {
+                const item = yield* openReview(form, sessionID, outcome.type === "defer" ? outcome : { reason: "disabled" })
+                return { status: "deferred", itemID: item.itemID } as TerminalState
+              }
+              const created = yield* createPending({ ...input, id: form.id }, true)
+              const entry = yield* find(created.id).pipe(Effect.orDie)
+              return yield* restore(Deferred.await(entry.deferred)).pipe(
+                Effect.onInterrupt(() => Effect.ignore(cancel(created.id))),
+              )
             }
             const created = yield* createPending({ ...input, id: form.id }, true)
             const entry = yield* find(created.id).pipe(Effect.orDie)

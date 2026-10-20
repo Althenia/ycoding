@@ -13,7 +13,6 @@ import { Footer } from "../src/routes/session/footer"
 import { createApi, createEventStream, createFetch, json } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
-import { localAutonomyView } from "../src/util/session-autonomy"
 
 const parentID = "ses_parent"
 
@@ -46,7 +45,7 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
   function Fixture() {
     data = useData()
     onMount(() => void data.session.subagent.sync(parentID))
-    return <Footer sessionID={parentID} autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
+    return <Footer sessionID={parentID} />
   }
 
   const config = createTuiResolvedConfig()

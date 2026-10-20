@@ -92,6 +92,7 @@ const helperPolicy = Layer.succeed(
       return { titleMode: "local" as const, models: {} }
     },
     localTitle,
+    resolveRef: () => Effect.die("Unexpected exact helper resolution"),
     resolveModel: () =>
       modelAvailable ? Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)) : Effect.succeed(undefined),
   }),

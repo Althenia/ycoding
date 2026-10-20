@@ -34,6 +34,18 @@ test("an empty historical escalation reports missing diagnostics rather than an 
   expect(description).not.toContain("confidence")
 })
 
+test("withheld verdicts and policy handoffs do not claim the model chose escalation", () => {
+  for (const value of [
+    { authority: "yolo", reason: "escalated" },
+    { authority: "yolo", reason: "escalated", choice: "allow", confidence: 0.99 },
+  ] as const) {
+    const description = Guardrail.escalationText(value)
+    expect(description).toContain("Decision requires human review")
+    expect(description).toContain("Review this request manually")
+    expect(description).not.toContain("model escalated")
+  }
+})
+
 test("unsupported strict decisions identify the failure and the available human action", () => {
   const text = Guardrail.escalationText({ reason: "unsupported-output" })
   expect(text).toContain("strict structured decisions")

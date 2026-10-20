@@ -264,14 +264,16 @@ test("replaces an active goal with the exact /goal text and never admits a promp
 test("clears the composer after an explicit /goal starts goal mode from normal", async () => {
   resetFixture({ mode: "normal", yolo: false })
   autonomyAfterSet = { mode: "normal", yolo: false, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({ width: 160, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)
     await screen.input.typeText("/goal finish product.")
     await submit(screen)
     await waitFor(() => autonomySets.length > 0, "goal activation request")
     await waitFor(() => !screen.lines().some((line) => line.includes("/goal finish product.")), "cleared composer")
-    await waitFor(() => screen.frame().includes("YOLO off · goal"), "live goal status")
+    await waitFor(() => goalChip(screen), "live GOAL section")
+    expect(screen.lines()[1]).toMatch(/\sready\s*$/)
+    expect(screen.lines()[1]).not.toContain("YOLO")
 
     expect(autonomySets).toEqual([{ goal: "finish product." }])
     expect(promptRequests).toEqual([])
@@ -564,7 +566,7 @@ test("agrees with the composer branch when the slash menu selects the goal comma
 
 test("the command palette exposes the goal action and applies it to the active Session", async () => {
   resetFixture(goalState("active", "Old objective"))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({ width: 160, height: 69, args: { sessionID }, route, settle: "Old objective" })
   try {
     screen.input.pressKey("p", { ctrl: true })
     await waitFor(() => screen.frame().includes("Commands"), "command palette")
@@ -583,10 +585,10 @@ test("the command palette exposes the goal action and applies it to the active S
 
 test("execution settlement refreshes a completed goal before the header reports readiness", async () => {
   resetFixture(goalState("active", "Ship the patch"))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "YOLO off · goal" })
+  const screen = await renderScreen({ width: 160, height: 69, args: { sessionID }, route, settle: (screen) => /GOAL\s+active/.test(screen.captureCharFrame()) })
   try {
     await screen.waitForEventStream()
-    expect(screen.frame()).toContain("YOLO off · goal")
+    expect(goalChip(screen)).toBe(true)
     autonomyState = goalState("completed", "Ship the patch")
     screen.events.emit({
       id: "evt_goal_settled",
@@ -597,9 +599,9 @@ test("execution settlement refreshes a completed goal before the header reports 
       data: { sessionID },
     } satisfies YCodingEvent)
     const deadline = Date.now() + 4_000
-    while (screen.frame().includes("YOLO off · goal") && Date.now() < deadline)
+    while (goalChip(screen) && Date.now() < deadline)
       await new Promise<void>((resolve) => setImmediate(resolve))
-    expect(screen.frame()).not.toContain("YOLO off · goal")
+    expect(goalChip(screen)).toBe(false)
     expect(screen.frame()).not.toContain("GOAL")
   } finally {
     await screen.dispose()
@@ -625,3 +627,7 @@ test("opens the explicit objective dialog when a bare /goal has no retained goal
     await screen.dispose()
   }
 }, 30_000)
+
+function goalChip(screen: { frame(): string }) {
+  return /GOAL\s+active/.test(screen.frame())
+}

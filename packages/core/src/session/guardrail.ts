@@ -497,19 +497,17 @@ export const layer = Layer.effect(
             const ruleID = matched.ruleIDs[0]
             if (matched.decision !== "ask" || !matched.standard || !ruleID?.startsWith("standard.review.") || input.skipReview) return current
             if (!current.evidence) return current
+            if (!reviewPolicy.decideReviews) return current
             if (matched.hardReview && (!reviewPolicy.decideHardReviews || current.evidence.confirmed)) return current
             if (!matched.hardReview) {
               const auto = yield* autonomy.canAutoGuardrail(matched.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
               const asleep = yield* autonomy.isAsleep(matched.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
               if (auto && !asleep) return current
             }
-            const yolo = yield* DecisionChoice.yoloEnabled(autonomy, matched.rootSessionID)
-            const baseline = reviewPolicy.decideReviews && (!matched.hardReview || reviewPolicy.decideHardReviews)
-            if (!baseline && !yolo) return current
             const judgment = yield* DecisionChoice.verifyMatch(decision, {
               sessionID: input.sessionID,
               purpose: "guardrail",
-              authority: baseline ? "baseline" : "yolo",
+              authority: "baseline",
               invocationKey: `guardrail-match:${Hash.sha256([ruleID, reviewFingerprint(input, matched), input.source?.messageID ?? "", input.source?.callID ?? ""].join("\0"))}`,
               state: {
                 matchedRule: { id: ruleID, reason: matched.reason ?? "Standard guardrail review" },
@@ -558,6 +556,9 @@ export const layer = Layer.effect(
             const asleep = yield* autonomy
               .isAsleep(result.rootSessionID)
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            const authorization = yield* autonomy
+              .snapshot(result.rootSessionID, { inherited: true })
+              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
             const yolo = (!result.hardReview || reviewPolicy.decideHardReviews) && (yield* DecisionChoice.yoloEnabled(autonomy, result.rootSessionID))
             const baseline = reviewPolicy.decideReviews && (!result.hardReview || reviewPolicy.decideHardReviews)
             const decisionEnabled = baseline || yolo
@@ -625,7 +626,7 @@ export const layer = Layer.effect(
                   ),
                 )
             return decisionEnabled || asleep
-              ? { type: "decision-review" as const, request, deferred, review, baseline, yolo }
+              ? { type: "decision-review" as const, request, deferred, review, baseline, yolo, authorization }
               : { type: "review" as const, request, deferred, review }
           }),
         ), (admission) => Effect.gen(function* () {
@@ -676,7 +677,8 @@ export const layer = Layer.effect(
               assessed !== undefined &&
               assessed.type !== "escalate" &&
               assessed.provenance.authority === "yolo" &&
-              !(yield* DecisionChoice.yoloEnabled(autonomy, result.rootSessionID))
+              !(admission.authorization !== undefined &&
+                (yield* DecisionChoice.autonomyUnchanged(autonomy, result.rootSessionID, admission.authorization)))
             const settled = stale ? undefined : assessed
             const escalated = settled === undefined || settled.type === "escalate"
             const provenance: Guardrail.Escalation = stale

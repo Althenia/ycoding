@@ -7,7 +7,7 @@ import { CatalogModel } from "@ycoding-ai/core/model"
 import { Project } from "@ycoding-ai/core/project"
 import { Provider } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { localTitle, make, selectHelperModel, settings } from "@ycoding-ai/core/session/helper-policy"
+import { localTitle, make, selectHelperCandidates, selectHelperModel, settings } from "@ycoding-ai/core/session/helper-policy"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { Money } from "@ycoding-ai/schema/money"
@@ -222,4 +222,71 @@ test("compaction model selection uses the owner Session scope before the hidden 
   )
 
   expect(selected).toEqual([main, subagent])
+})
+
+test("helper candidates keep explicit precedence, exact identity, and a trailing session or default selection", () => {
+  const yolo = ref("openai", "yolo-pin", "high", "Work")
+  const decision = ref("anthropic", "decision-pin")
+  const helper = ref("openai", "helper", "low")
+  const session = ref("openai", "session-model", "medium", "Personal")
+
+  expect(selectHelperCandidates({ agentModels: [yolo, decision], roleModel: helper, sessionModel: session })).toEqual([
+    yolo, decision, helper, session,
+  ])
+  expect(selectHelperCandidates({ agentModels: [undefined, decision], roleModel: "session", sessionModel: session })).toEqual([
+    decision, session,
+  ])
+  expect(selectHelperCandidates({ agentModels: [], roleModel: helper })).toEqual([helper, undefined])
+  expect(selectHelperCandidates({ agentModels: [undefined, undefined] })).toEqual([undefined])
+})
+
+test("helper candidates drop only exact duplicates and never merge distinct profiles or variants", () => {
+  const work = ref("openai", "gpt", "high", "Work")
+  const personal = ref("openai", "gpt", "high", "Personal")
+  const plain = ref("openai", "gpt", "high")
+  const lower = ref("openai", "gpt", "low", "Work")
+  expect(selectHelperCandidates({ agentModels: [work, work], roleModel: work, sessionModel: work })).toEqual([work])
+  expect(selectHelperCandidates({ agentModels: [work, personal], roleModel: plain, sessionModel: lower })).toEqual([
+    work, personal, plain, lower,
+  ])
+})
+
+test("resolving an exact candidate neither applies precedence nor substitutes another selection", async () => {
+  const seen: Array<CatalogModel.Ref | undefined> = []
+  const policy = make(
+    { titleMode: "local", models: { decision: ref("openai", "helper") } },
+    {
+      resolve: (session) => {
+        seen.push(session.model)
+        return session.model?.profile === "Missing"
+          ? Effect.fail(new SessionRunnerModel.ProfileUnavailableError({ providerID: Provider.ID.make("openai"), profile: "Missing" }))
+          : Effect.succeed(SessionRunnerModel.resolved(Model.make({ id: "x", provider: "openai", route: OpenAIChat.route })))
+      },
+    },
+  )
+  const session = { id: SessionSchema.ID.make("ses_candidate"), model: ref("openai", "session-model") } as SessionSchema.Info
+  const pinned = ref("openai", "yolo-pin", "high", "Work")
+  expect(await Effect.runPromise(policy.resolveRef(session, pinned))).toBeDefined()
+  expect(await Effect.runPromise(policy.resolveRef(session, undefined))).toBeDefined()
+  expect(await Effect.runPromise(policy.resolveRef(session, ref("openai", "yolo-pin", "high", "Missing")))).toBeUndefined()
+  expect(seen).toEqual([pinned, ref("openai", "session-model"), ref("openai", "yolo-pin", "high", "Missing")])
+})
+
+test("resolution options reach the model resolver only when supplied", async () => {
+  const seen: Array<unknown> = []
+  const policy = make(
+    { titleMode: "local", models: { decision: ref("openai", "helper") } },
+    {
+      resolve: (_session, options) => {
+        seen.push(options)
+        return Effect.succeed(SessionRunnerModel.resolved(Model.make({ id: "x", provider: "openai", route: OpenAIChat.route })))
+      },
+    },
+  )
+  const session = { id: SessionSchema.ID.make("ses_options"), model: ref("openai", "session-model") } as SessionSchema.Info
+  await Effect.runPromise(policy.resolveRef(session, ref("openai", "pin")))
+  await Effect.runPromise(policy.resolveRef(session, ref("openai", "pin"), { refresh: false }))
+  await Effect.runPromise(policy.resolveModel(session, "decision"))
+  await Effect.runPromise(policy.resolveModel(session, "decision", undefined, { refresh: false }))
+  expect(seen).toEqual([undefined, { refresh: false }, undefined, { refresh: false }])
 })

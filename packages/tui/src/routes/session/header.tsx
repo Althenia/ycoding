@@ -11,7 +11,6 @@ import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
 import { stringWidth } from "../../util/string-width"
-import { yoloLabel } from "../../util/session-autonomy"
 import { BrandMark } from "../../component/logo"
 import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
@@ -34,11 +33,7 @@ export type SessionHeaderState =
   | SessionHeaderOperationalState
   | {
       type: "autonomy"
-      yolo?: boolean
-      permissionsAuto?: boolean
-      guardrailsAuto?: boolean
-      goalActive: boolean
-      answersAuto?: boolean
+      elevated?: boolean
       asleep?: boolean
       machineAwake?: boolean
       review?: number
@@ -153,21 +148,10 @@ export function headerStatusLabel(
   now = Date.now(),
 ): string {
   if (state.type === "autonomy") {
-    const parts =
-      state.yolo === undefined
-        ? ["unknown"]
-        : [
-            yoloLabel(state.yolo),
-            ...(state.permissionsAuto ? ["permissions auto"] : []),
-            ...(state.guardrailsAuto ? ["guardrails auto"] : []),
-            ...(state.goalActive ? ["goal"] : []),
-            ...(state.asleep ? ["asleep"] : []),
-            ...(state.answersAuto ? ["answers auto"] : []),
-          ]
     const inner = headerStatusLabel(state.state, width, runningShells, now)
     return [
-      ...parts,
-      ...(state.asleep && state.machineAwake === false ? ["machine may sleep"] : []),
+      ...(state.asleep ? ["asleep"] : []),
+      ...(state.asleep && state.machineAwake === false && width >= 80 ? ["machine may sleep"] : []),
       ...(state.review ? [`review ${state.review}`] : []),
       state.review && inner === "ready" ? "waiting for your review" : inner,
     ].join(" · ")
@@ -321,14 +305,7 @@ export function Header(
   const statusColor = createMemo(() => {
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
-    if (current.type === "autonomy")
-      return current.yolo === undefined
-        ? theme.text.subdued
-        : current.yolo
-          ? theme.text.feedback.error.default
-          : current.permissionsAuto || current.guardrailsAuto
-          ? theme.text.feedback.error.default
-          : theme.text.feedback.success.default
+    if (current.type === "autonomy" && current.elevated) return theme.text.feedback.error.default
     if (active.type === "provider-error") return theme.text.feedback.error.default
     if (active.type === "retrying" || active.type === "retry-scheduled") return theme.text.feedback.warning.default
     if (active.type === "awaiting-input") return theme.text.feedback.warning.default

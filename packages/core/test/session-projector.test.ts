@@ -71,7 +71,8 @@ describe("SessionProjector", () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]?.id).toBe(SessionMessage.ID.fromEvent(event.id))
     expect(rows[0]?.type).toBe("system")
-    expect(JSON.stringify(rows[0]?.data)).toContain("Decision model escalated")
+    expect(JSON.stringify(rows[0]?.data)).toContain("Decision requires human review")
+    expect(JSON.stringify(rows[0]?.data)).not.toContain("model escalated")
     expect(JSON.stringify(rows[0]?.data)).toContain("0.7")
   }))
   it.effect("records each terminal step and run event time without changing list update time", () =>

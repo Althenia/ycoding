@@ -12,12 +12,16 @@ import {
   autoAnswerOn,
   autonomyDecisionKind,
   autonomyDecisionLabel,
-  autonomyModeLabel,
 } from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
 import { RailProvider, RailRow, RailSection } from "./rail-section"
 
-export function Sidebar(props: { sessionID: string; autonomy?: SessionAutonomyView; overlay?: boolean }) {
+export function Sidebar(props: {
+  sessionID: string
+  autonomy?: SessionAutonomyView
+  overlay?: boolean
+  onToggleYolo?: () => void
+}) {
   const pluginRuntime = usePluginRuntime()
   const data = useData()
   const { theme } = useTheme().contextual("elevated")
@@ -69,7 +73,11 @@ export function Sidebar(props: { sessionID: string; autonomy?: SessionAutonomyVi
                   <SessionRailIdentity title={session().title} />
                 </pluginRuntime.Slot>
               </SessionRailContent>
-              <AutonomyRailContent autonomy={props.autonomy} reviewCount={data.session.review.list(props.sessionID).length} />
+              <AutonomyRailContent
+                autonomy={props.autonomy}
+                reviewCount={data.session.review.list(props.sessionID).length}
+                onToggleYolo={props.onToggleYolo}
+              />
               <PluginSlot
                 name="sidebar.content"
                 input={{ sessionID: props.sessionID }}
@@ -130,7 +138,11 @@ function SessionRailIdentity(props: { title: string }) {
   )
 }
 
-export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; reviewCount?: number }) {
+export function AutonomyRailContent(props: {
+  autonomy?: SessionAutonomyView
+  reviewCount?: number
+  onToggleYolo?: () => void
+}) {
   const { theme } = useTheme().contextual("elevated")
   const yolo = createMemo(() => props.autonomy?.effective?.yolo)
 
@@ -153,11 +165,22 @@ export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; rev
         <RailSection
           section="autonomy"
           title="AUTONOMY"
-          summary={autonomyModeLabel(props.autonomy)}
           attention={
             yolo() === true || props.autonomy?.effective?.permissionsAuto === true || props.autonomy?.effective?.ordinaryReviewsAuto === true || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true || autoAnswerOn(props.autonomy)
           }
         >
+          <RailRow
+            label="YOLO"
+            value={yolo() === undefined ? "unknown" : yolo() ? "on" : "off"}
+            valueColor={
+              yolo() === undefined
+                ? theme.text.subdued
+                : yolo()
+                  ? theme.text.feedback.warning.default
+                  : theme.text.feedback.success.default
+            }
+            onSelect={props.onToggleYolo}
+          />
           <For each={[
             ["Permissions", "permissions"],
             ["Guardrails", "guardrails"],

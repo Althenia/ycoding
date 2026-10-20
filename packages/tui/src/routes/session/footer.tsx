@@ -1,24 +1,22 @@
 import { createMemo, Show } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../../context/theme"
 import { useData } from "../../context/data"
 import { PromptFooterIdentity } from "../../component/prompt"
-import { ModeChips } from "../../component/prompt/mode-chips"
-import { useKeepAwake } from "../../keep-awake"
 import { Keymap } from "../../context/keymap"
 import { useRoute } from "../../context/route"
 import { groupSessionShells } from "../../util/session"
-import type { SessionAutonomyView } from "@ycoding-ai/client"
 
 export function Footer(props: {
   branch?: string
   sessionID: string
-  autonomy?: SessionAutonomyView
   subagent?: boolean
 }) {
   const { theme } = useTheme()
-  const keepAwake = useKeepAwake()
   const data = useData()
   const route = useRoute()
+  const dimensions = useTerminalDimensions()
+  const compact = () => dimensions().width < 80 && !props.subagent
   const paletteShortcut = Keymap.useShortcut("command.palette.show")
   const usageShortcut = Keymap.useShortcut("session.provider-usage.open")
   const subagents = createMemo(() => data.session.subagent.summary(props.sessionID)?.active ?? 0)
@@ -65,17 +63,12 @@ export function Footer(props: {
         width="100%"
         height={props.subagent ? 1 : 3}
         flexShrink={0}
-        flexDirection="row"
-        justifyContent="space-between"
-        alignItems="center"
+        flexDirection={compact() ? "column" : "row"}
+        justifyContent={compact() ? "center" : "space-between"}
+        alignItems={compact() ? "stretch" : "center"}
       >
-        <box flexDirection="row" gap={3} flexGrow={1} minWidth={0}>
+        <box flexDirection="row" gap={3} flexGrow={compact() ? 0 : 1} minWidth={0} marginRight={compact() ? 0 : 3}>
           <PromptFooterIdentity branch={props.branch} />
-          <ModeChips
-            autonomy={props.autonomy}
-            machineAwake={keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on"}
-            review={data.session.review.list(props.sessionID).length}
-          />
           <text fg={theme.text.subdued} wrapMode="none" flexShrink={0}>
             subagents {subagents()}
           </text>
@@ -83,7 +76,7 @@ export function Footer(props: {
             shells {shells()}
           </text>
         </box>
-        <box flexDirection="row" gap={3} flexShrink={0}>
+        <box flexDirection="row" gap={3} flexShrink={0} justifyContent="flex-end">
           <text fg={theme.text.default} wrapMode="none" flexShrink={0} onMouseUp={openUsage}>
             <Show when={usageShortcut()}>{(shortcut) => `${shortcut().replaceAll("ctrl+", "⌃")} `}</Show>
             <span style={{ fg: theme.text.subdued }}>usage</span>
