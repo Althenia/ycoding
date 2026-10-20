@@ -130,7 +130,6 @@ import { findMessageBoundary, messageNavigationSlack } from "./message-navigatio
 import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
-  autoAnswerOn,
   autonomyModeLabel,
   autonomyToggleDescription,
   autonomyToggleLabel,
@@ -519,6 +518,24 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         }),
       )
   }
+  const runAutonomyToggle = (toggle: AutonomyToggle, slash: string, input?: string) => {
+    const parsed = parseToggleArg(input?.trim().split(/\s+/)[0])
+    if (parsed === null) {
+      toast.show({ message: `Use /${slash}, /${slash} on, or /${slash} off`, variant: "error", duration: 3000 })
+      return
+    }
+    if (parsed !== undefined) {
+      updateAutonomy({ [toggle]: parsed })
+      return
+    }
+    const current = autonomy()
+    if (!current || autonomyToggleOn(current, toggle) === undefined) {
+      refreshAutonomy(route.sessionID)
+      toast.show({ message: `${autonomyToggleLabel(toggle)} state unknown; reloading`, variant: "info", duration: 3000 })
+      return
+    }
+    updateAutonomy({ [toggle]: !autonomyToggleOn(current, toggle) })
+  }
   const refreshAutonomy = (sessionID: string) => {
     const request = autonomyRefresh.refresh()
     void client.api.session.autonomy
@@ -614,11 +631,10 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const current = autonomy()
     return {
       type: "autonomy",
-      yolo: current?.effective?.yolo,
-      permissionsAuto: current?.effective?.permissionsAuto ?? false,
-      guardrailsAuto: current?.effective?.ordinaryReviewsAuto ?? false,
-      goalActive: current?.goal?.status === "active",
-      answersAuto: autoAnswerOn(current),
+      elevated:
+        current?.effective?.yolo === true ||
+        current?.effective?.permissionsAuto === true ||
+        current?.effective?.ordinaryReviewsAuto === true,
       asleep: current?.effective?.asleep ?? false,
       machineAwake: keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on",
       review: reviewItems().length,
@@ -1349,24 +1365,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         id: `session.autonomy.${slash}.toggle`,
         group: "Session",
         slash: { name: slash },
-        run: (input?: string) => {
-          const parsed = parseToggleArg(input?.trim().split(/\s+/)[0])
-          if (parsed === null) {
-            toast.show({ message: `Use /${slash}, /${slash} on, or /${slash} off`, variant: "error", duration: 3000 })
-            return
-          }
-          if (parsed !== undefined) {
-            updateAutonomy({ [toggle]: parsed })
-            return
-          }
-          const current = autonomy()
-          if (!current || autonomyToggleOn(current, toggle) === undefined) {
-            refreshAutonomy(route.sessionID)
-            toast.show({ message: `${autonomyToggleLabel(toggle)} state unknown; reloading`, variant: "info", duration: 3000 })
-            return
-          }
-          updateAutonomy({ [toggle]: !autonomyToggleOn(current, toggle) })
-        },
+        run: (input?: string) => runAutonomyToggle(toggle, slash, input),
       }
     }),
     {
@@ -2134,7 +2133,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Show when={contextReady() && sidebarVisible()}>
           <Switch>
             <Match when={wide()}>
-              <Sidebar sessionID={route.sessionID} autonomy={autonomy()} />
+              <Sidebar sessionID={route.sessionID} autonomy={autonomy()} onToggleYolo={() => runAutonomyToggle("yolo", "yolo")} />
             </Match>
             <Match when={!wide()}>
               <box
@@ -2146,7 +2145,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 alignItems="flex-end"
                 backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
               >
-                <Sidebar sessionID={route.sessionID} autonomy={autonomy()} />
+                <Sidebar sessionID={route.sessionID} autonomy={autonomy()} onToggleYolo={() => runAutonomyToggle("yolo", "yolo")} />
               </box>
             </Match>
           </Switch>
@@ -2157,7 +2156,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           {(id) => <BtwFooter sessionID={route.sessionID} parentID={id()} />}
         </Match>
         <Match when={subagent()}><SubagentFooter reviewing={disabled()} /></Match>
-        <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} autonomy={autonomy()} /></Match>
+        <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} /></Match>
       </Switch>
     </context.Provider>
   )

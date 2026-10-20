@@ -420,7 +420,7 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     expect(initial.some((line) => line.includes("⌃x b sidebar"))).toBe(false)
 
     // The composer sits directly above the footer band with no hint row between them.
-    const footerRow = initial.findIndex((line) => line.includes("goal off"))
+    const footerRow = initial.findIndex((line) => /subagents \d/.test(line))
     expect(footerRow).toBeGreaterThan(promptRow)
     expect(footerRow - promptRow).toBeLessThanOrEqual(6)
 

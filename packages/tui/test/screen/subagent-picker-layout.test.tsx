@@ -50,7 +50,7 @@ function promptRow(lines: string[]) {
 function composerBand(lines: string[]) {
   const prompt = promptRow(lines)
   const rule = lines.findLastIndex((line, index) => index < prompt && line.includes("─"))
-  const footer = lines.findIndex((line) => line.includes("goal off"))
+  const footer = lines.findIndex((line) => /subagents \d/.test(line))
   expect(prompt).toBeGreaterThan(-1)
   expect(rule).toBeGreaterThan(-1)
   expect(footer).toBeGreaterThan(prompt)

@@ -450,13 +450,25 @@ const layer = Layer.effect(
             return
           }
           if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input)))) return
+          const authorization = yield* autonomy.snapshot(input.sessionID, { inherited: true }).pipe(
+            Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: input.sessionID })),
+          )
           const yolo = yield* DecisionChoice.yoloEnabled(autonomy, input.sessionID)
           const assessed = baselineEnabled || yolo ? yield* restore(assess(input, yolo)) : undefined
+          const current = assessed === undefined ? undefined : yield* evaluateInput(input)
+          if (current?.effect === "deny") {
+            return yield* new BlockedError({
+              rules: relevant(input, current.rules),
+              permission: input.action,
+              resources: input.resources,
+            })
+          }
+          if (current?.effect === "allow") return
           const stale =
             assessed !== undefined &&
             assessed.type !== "escalate" &&
             assessed.provenance.authority === "yolo" &&
-            !(yield* DecisionChoice.yoloEnabled(autonomy, input.sessionID))
+            !(yield* DecisionChoice.autonomyUnchanged(autonomy, input.sessionID, authorization))
           const settled = stale ? undefined : assessed
           const escalation: Guardrail.Escalation | undefined = stale
             ? { authority: "yolo", reason: "escalated" }

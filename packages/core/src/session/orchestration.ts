@@ -901,12 +901,12 @@ const layer = Layer.effect(
               : asleep
                 ? { type: "defer" as const, reason: "disabled" as const }
                 : undefined
-            const sleepOutcome: SleepAnswerOutcome | undefined = settled?.type === "answer" && !(yield* DecisionChoice
-              .autonomyUnchanged(autonomy, childID, snapshot))
-              ? { type: "defer" as const, reason: "disabled" as const }
-              : settled?.type === "defer" && !asleep
-                ? undefined
-                : settled
+            const applicable = settled?.type === "answer" && (yield* DecisionChoice.autonomyUnchanged(autonomy, childID, snapshot))
+            const sleepOutcome: SleepAnswerOutcome | undefined = applicable
+              ? settled
+              : (yield* autonomy.isAsleep(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID }))))
+                ? settled?.type === "defer" ? settled : { type: "defer", reason: "disabled" }
+                : undefined
             if (sleepOutcome?.type === "defer") {
               const limit = Config.latest(entries, "guardrails")?.max_pending_reviews ?? 16
               yield* SessionReviewFold.open(db, events, {

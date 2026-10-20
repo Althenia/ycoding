@@ -355,8 +355,8 @@ test("captures transcript blocks through the real session route", async () => {
     expect(text).toContain("14 pass · 0 fail")
     expect(text).toContain("bun typecheck")
     expect(text).toContain("2 errors")
-    expect(text).toContain("goal off")
-    expect(text).toContain("YOLO off")
+    expect(text).not.toContain("goal off")
+    expect(text).not.toContain("YOLO")
 
 
     await mkdir(renders, { recursive: true })

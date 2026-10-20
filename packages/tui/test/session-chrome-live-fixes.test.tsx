@@ -66,7 +66,7 @@ describe("session footer identity", () => {
                 <ClientProvider api={createApi(calls.fetch)}>
                   <DataProvider>
                     <RouteProvider initialRoute={{ type: "session", sessionID: "ses_0085fc701234567" }}>
-                      <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={localAutonomyView({ mode: "normal", yolo: false })} />
+                      <Footer branch="main" sessionID="ses_0085fc701234567" />
                     </RouteProvider>
                   </DataProvider>
                 </ClientProvider>
@@ -83,8 +83,8 @@ describe("session footer identity", () => {
       await app.waitForFrame((frame) => frame.includes("subagents"))
       const frame = app.captureCharFrame()
       expect(frame).toContain("main")
-      expect(frame).toContain("goal off")
-      expect(frame).toContain("YOLO off")
+      expect(frame).not.toContain("goal off")
+      expect(frame).not.toContain("YOLO")
       expect(frame).toContain("subagents 0")
       expect(frame).toContain("shells 0")
       expect(frame).not.toContain("ses_")

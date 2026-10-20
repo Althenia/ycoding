@@ -331,19 +331,22 @@ const layer = Layer.effect(
                   ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
                 } as const
               if (unchanged) return yield* Deferred.await(deferred)
-              if (asleep) {
-                yield* cancelPending
-                const item = yield* openReview(input, id, { reason: "disabled" })
-                return { status: "deferred", itemID: item.itemID } as const
-              }
             }
-            if (outcome.type === "unsettled" && asleep) {
-              yield* cancelPending
-              const item = yield* openReview(input, id, outcome)
+            if (pending.get(id) !== entry) return yield* restore(Deferred.await(deferred))
+            const asleepNow = yield* autonomy
+              .isAsleep(input.sessionID)
+              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            const claimed = asleepNow && (yield* exclusive(Effect.sync(() => {
+              if (pending.get(id) !== entry) return false
+              pending.delete(id)
+              return true
+            })))
+            if (claimed) {
+              const item = yield* openReview(input, id, outcome.type === "unsettled" ? outcome : { reason: "disabled" })
               return { status: "deferred", itemID: item.itemID } as const
             }
           }
-          return yield* events.publish(Event.Asked, request).pipe(
+          return yield* Effect.suspend(() => pending.get(id) === entry ? events.publish(Event.Asked, request) : Effect.void).pipe(
             Effect.andThen(restore(Deferred.await(deferred))),
             Effect.ensuring(cancelPending),
           )

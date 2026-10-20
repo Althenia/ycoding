@@ -159,6 +159,7 @@ function harness(input?: {
   const autonomy = input?.realAutonomy ? SessionAutonomy.layer.pipe(Layer.provide(storage)) : Layer.mock(SessionAutonomy.Service, {
     canAutoGuardrail: () => Effect.succeed(input?.autoGuardrail ?? false),
     canYolo: () => Effect.succeed(input?.yolo ?? false),
+    snapshot: () => Effect.succeed({ state: SessionAutonomy.defaultState, sequence: 0, digest: "mock" }),
     isAsleep: () => Effect.sync(() => input?.sleepStates?.shift() ?? input?.asleep ?? false),
   } as unknown as SessionAutonomy.Interface)
   const locationLayer = Layer.succeed(
@@ -2170,6 +2171,147 @@ for (const [hard, choice, confidence, reply] of [
     if (reply) expect(matrix.decisions[0]).toMatchObject({ reply, authority: "yolo", choice: strict, confidence, grades: expect.any(Array) })
   }))
 }
+
+const awaitRequest = Effect.fnUntraced(function* (service: SessionGuardrail.Interface) {
+  for (let attempt = 0; attempt < 100 && (yield* service.forSession(parentID)).length === 0; attempt++) yield* Effect.yieldNow
+  const requests = yield* service.forSession(parentID)
+  expect(requests).toHaveLength(1)
+  return requests[0]!
+})
+
+const switchYoloOffAndOn = Effect.gen(function* () {
+  const autonomy = yield* SessionAutonomy.Service
+  yield* autonomy.setYolo({ sessionID: parentID, yolo: false })
+  yield* autonomy.setYolo({ sessionID: parentID, yolo: true })
+})
+
+for (const [name, review, approve, ruleID] of [
+  ["ordinary", ordinaryReview, true, "standard.review.outside-repo"],
+  ["unconfirmed hard", hardFalsePositive, false, "standard.review.git-destructive"],
+] as const) {
+  const disabled = harness({
+    realAutonomy: true,
+    yolo: true,
+    defaults: true,
+    entries: decideReviewsConfig(false),
+    verify: () => Effect.succeed(verificationOutput(false, 0.99)),
+    decision: () => Effect.succeed(decisionOutput("approve", 0.99)),
+  })
+  disabled.it.effect(`disabled baseline verification keeps the ${name} match with YOLO on and leaves YOLO grading to apply its own policy`, () => Effect.gen(function* () {
+    yield* disabled.seed
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(review).pipe(Effect.forkScoped)
+    yield* TestClock.adjust("60 seconds")
+    expect(disabled.verifications).toEqual([])
+    expect(disabled.dismissals).toEqual([])
+    expect(disabled.choices).toHaveLength(1)
+    if (approve) {
+      yield* (yield* Fiber.join(running)).release
+      expect(disabled.decisions).toEqual([expect.objectContaining({ reply: "once", authority: "yolo", choice: "allow" })])
+      return
+    }
+    const pending = yield* awaitRequest(service)
+    expect(pending.ruleIDs).toEqual([ruleID])
+    expect(pending.escalation).toMatchObject({ authority: "yolo", reason: "escalated", choice: "allow" })
+    expect(disabled.replies).toEqual([])
+    yield* service.reply({ sessionID: parentID, requestID: pending.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+    expect((yield* service.status(parentID)).dismissals).toBeUndefined()
+  }))
+}
+
+const baselineVerifyEntered = Deferred.makeUnsafe<void>()
+const baselineVerifyGate = Deferred.makeUnsafe<void>()
+const baselineVerify = harness({
+  realAutonomy: true,
+  defaults: true,
+  verify: () => Deferred.succeed(baselineVerifyEntered, undefined).pipe(
+    Effect.andThen(Deferred.await(baselineVerifyGate)),
+    Effect.as(verificationOutput(false, 0.95)),
+  ),
+})
+baselineVerify.it.effect("a baseline-authority dismissal is not withheld by YOLO changes", () => Effect.gen(function* () {
+  yield* baselineVerify.seed
+  const service = yield* SessionGuardrail.Service
+  const running = yield* service.assert(ordinaryReview).pipe(Effect.forkScoped)
+  yield* Deferred.await(baselineVerifyEntered)
+  yield* switchYoloOffAndOn
+  yield* Deferred.succeed(baselineVerifyGate, undefined)
+  yield* (yield* Fiber.join(running)).release
+  expect(baselineVerify.dismissals).toEqual([expect.objectContaining({ ruleID: "standard.review.outside-repo" })])
+}))
+
+for (const [hard, review] of [[false, ordinaryReview], [true, hardReview]] as const) {
+  const gradeEntered = Deferred.makeUnsafe<void>()
+  const gradeGate = Deferred.makeUnsafe<void>()
+  const graded = harness({
+    realAutonomy: true,
+    yolo: true,
+    defaults: true,
+    entries: decideReviewsConfig(false),
+    decision: () => Deferred.succeed(gradeEntered, undefined).pipe(
+      Effect.andThen(Deferred.await(gradeGate)),
+      Effect.as(decisionOutput("approve", 0.99)),
+    ),
+  })
+  graded.it.effect(`a YOLO approval of an ${hard ? "hard" : "ordinary"} review is dropped to a human after YOLO is switched off and on again`, () => Effect.gen(function* () {
+    yield* graded.seed
+    const service = yield* SessionGuardrail.Service
+    const running = yield* service.assert(review).pipe(Effect.forkScoped)
+    yield* Deferred.await(gradeEntered)
+    yield* switchYoloOffAndOn
+    yield* Deferred.succeed(gradeGate, undefined)
+    const pending = yield* awaitRequest(service)
+    expect(pending.escalation).toMatchObject({ authority: "yolo", reason: "escalated" })
+    expect(graded.replies).toEqual([])
+    expect(graded.decisions).toEqual([])
+    yield* service.reply({ sessionID: parentID, requestID: pending.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+  }))
+}
+
+const unchangedGradeEntered = Deferred.makeUnsafe<void>()
+const unchangedGradeGate = Deferred.makeUnsafe<void>()
+const unchangedGrade = harness({
+  realAutonomy: true,
+  yolo: true,
+  defaults: true,
+  entries: decideReviewsConfig(false),
+  decision: () => Deferred.succeed(unchangedGradeEntered, undefined).pipe(
+    Effect.andThen(Deferred.await(unchangedGradeGate)),
+    Effect.as(decisionOutput("approve", 0.99)),
+  ),
+})
+unchangedGrade.it.effect("an unchanged YOLO authorization still approves an ordinary review once", () => Effect.gen(function* () {
+  yield* unchangedGrade.seed
+  const service = yield* SessionGuardrail.Service
+  const running = yield* service.assert(ordinaryReview).pipe(Effect.forkScoped)
+  yield* Deferred.await(unchangedGradeEntered)
+  yield* Deferred.succeed(unchangedGradeGate, undefined)
+  yield* (yield* Fiber.join(running)).release
+  expect(unchangedGrade.decisions).toEqual([expect.objectContaining({ reply: "once", authority: "yolo" })])
+}))
+
+const baselineGradeEntered = Deferred.makeUnsafe<void>()
+const baselineGradeGate = Deferred.makeUnsafe<void>()
+const baselineGrade = harness({
+  realAutonomy: true,
+  defaults: true,
+  decision: () => Deferred.succeed(baselineGradeEntered, undefined).pipe(
+    Effect.andThen(Deferred.await(baselineGradeGate)),
+    Effect.as(decisionOutput("approve", 0.99)),
+  ),
+})
+baselineGrade.it.effect("a baseline approval is not withheld by YOLO changes during grading", () => Effect.gen(function* () {
+  yield* baselineGrade.seed
+  const service = yield* SessionGuardrail.Service
+  const running = yield* service.assert(ordinaryReview).pipe(Effect.forkScoped)
+  yield* Deferred.await(baselineGradeEntered)
+  yield* switchYoloOffAndOn
+  yield* Deferred.succeed(baselineGradeGate, undefined)
+  yield* (yield* Fiber.join(running)).release
+  expect(baselineGrade.decisions).toEqual([expect.objectContaining({ reply: "once", authority: "baseline" })])
+}))
 
 const stages: Array<string> = []
 const unresolvedBaseline = harness({

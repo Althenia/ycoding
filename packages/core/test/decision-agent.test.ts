@@ -73,6 +73,11 @@ const client = Layer.mock(LLMClient.Service, {
     )))
   },
 })
+const selected = () => state.unavailable ? undefined : SessionRunnerModel.resolved(model, undefined, state.zeroCost ? [
+  { input: Money.USDPerMillionTokens.make(0), output: Money.USDPerMillionTokens.make(0),
+    cache: { read: Money.USDPerMillionTokens.make(0), write: Money.USDPerMillionTokens.make(0) },
+  },
+] : [])
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([
   Database.node, Decision.node, Agent.node, SessionProjector.node, SessionProviderRequest.node, EventRuntime.node,
   ToolRegistry.node, ToolRegistry.toolsNode, Permission.node,
@@ -84,12 +89,9 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([
     resolveModel: (_session, role, agent) => {
       expect(role).toBe("decision")
       expect(agent?.id).toBe(Agent.ID.make("decision"))
-      return Effect.succeed(state.unavailable ? undefined : SessionRunnerModel.resolved(model, undefined, state.zeroCost ? [
-        { input: Money.USDPerMillionTokens.make(0), output: Money.USDPerMillionTokens.make(0),
-          cache: { read: Money.USDPerMillionTokens.make(0), write: Money.USDPerMillionTokens.make(0) },
-        },
-      ] : []))
+      return Effect.succeed(selected())
     },
+    resolveRef: () => Effect.succeed(selected()),
   })],
   [Config.node, Layer.mock(Config.Service, { entries: () => Effect.succeed([]) })],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

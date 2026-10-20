@@ -3,6 +3,8 @@ import { LLMClient, Model } from "@ycoding-ai/ai"
 import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { Credential } from "@ycoding-ai/core/credential"
+import { Integration } from "@ycoding-ai/core/integration"
 import { Database } from "@ycoding-ai/core/database/database"
 import { Decision } from "@ycoding-ai/core/decision"
 import { DecisionJudgment } from "@ycoding-ai/core/decision-judgment"
@@ -55,7 +57,7 @@ const compatibleModelInfo = CatalogModel.Info.make({
 })
 const catalogRef = CatalogModel.Ref.make({ providerID: Provider.ID.openai, id: modelInfo.id, variant: CatalogModel.VariantID.make("medium") })
 const wire: Array<{ url: string; body: Record<string, unknown>; authorization: string | undefined }> = []
-const state = { fail: false, compatible: false, bridge: false }
+const state = { fail: false, compatible: false, bridge: false, codex: false, websocket: false }
 const json = DecisionJudgment.encode({ decisions: { version: 1, answers: [{
   name: "read_only", type: "predicate", answer: true, choice: null, score: null, confidence: 0.83,
 }] } })
@@ -77,8 +79,17 @@ const http = Layer.succeed(HttpClient.HttpClient, HttpClient.make((request) =>
 ))
 const executor = RequestExecutor.layer.pipe(Layer.provide(http))
 const client = LLMClient.configured({ observeAttempt: ProviderRequestObserver.observe }).pipe(Layer.provide(executor))
+const chatgptCredential = Credential.OAuth.make({
+  type: "oauth",
+  methodID: Integration.MethodID.make("chatgpt-browser"),
+  access: "fixture-chatgpt-access",
+  refresh: "fixture-chatgpt-refresh",
+  expires: Date.now() + 600_000,
+  metadata: { accountID: "fixture-account" },
+})
 const models = SessionRunnerModel.layerWith(() => SessionRunnerModel.withVariant(state.compatible ? compatibleModelInfo : modelInfo, catalogRef.variant).pipe(
-  Effect.flatMap((selected) => SessionRunnerModel.fromCatalogModel(selected).pipe(
+  Effect.map((selected) => state.websocket ? { ...selected, settings: { ...selected.settings, transport: "websocket" } } : selected),
+  Effect.flatMap((selected) => SessionRunnerModel.fromCatalogModel(selected, state.codex ? chatgptCredential : undefined).pipe(
     Effect.map((model) => SessionRunnerModel.resolved(
       state.bridge ? Model.update(model, { route: model.route.with({ id: "ai-sdk:@ai-sdk/openai" }) }) : model,
       catalogRef.variant,
@@ -108,6 +119,8 @@ const seed = (id: string) => Effect.gen(function* () {
   state.fail = false
   state.compatible = false
   state.bridge = false
+  state.codex = false
+  state.websocket = false
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({
     id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [],
@@ -216,4 +229,37 @@ it.effect("fails closed without any provider request on an AI SDK bridge route",
   expect(wire).toHaveLength(0)
   expect(yield* requests.list(sessionID)).toHaveLength(0)
   expect(audits).toEqual([expect.objectContaining({ outcome: "failed", reason: "unsupported-output", route: "ai-sdk:@ai-sdk/openai" })])
+}))
+
+const codexQuestion = { provider: "agent" as const, request: {
+  state: { operation: "read" },
+  questions: [{ type: "predicate" as const, name: "read_only", instructions: "Is this operation read-only?" }],
+} }
+
+it.effect("sends a strict structured judgment through the ChatGPT Codex HTTP route", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_decision_agent_codex")
+  state.codex = true
+  const decisions = yield* Decision.Service
+  const result = yield* decisions.evaluate(codexQuestion, { sessionID })
+  expect(wire).toHaveLength(1)
+  expect(wire[0].url).toBe("https://chatgpt.com/backend-api/codex/responses")
+  expect(wire[0].authorization).toBe("Bearer fixture-chatgpt-access")
+  expect(wire[0].body.model).toBe("gpt-6-luna-fast")
+  expect(wire[0].body).not.toHaveProperty("tools")
+  expect(wire[0].body.text).toMatchObject({ format: { type: "json_schema", name: "response", strict: true,
+    schema: { type: "object", additionalProperties: false, required: ["decisions"] } } })
+  expect(result).toMatchObject({ provider: "agent", response: { semantics: "model-estimate",
+    answers: [{ type: "predicate", name: "read_only", answer: true, confidence: 0.83 }] } })
+  expect(JSON.stringify(wire[0].body)).not.toContain("fixture-chatgpt-access")
+}))
+
+it.effect("keeps the Codex WebSocket route unsupported for strict decisions until its wire is proven", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_decision_agent_codex_websocket")
+  state.codex = true
+  state.websocket = true
+  const decisions = yield* Decision.Service
+  const exit = yield* decisions.evaluate(codexQuestion, { sessionID }).pipe(Effect.exit)
+  expect(exit._tag).toBe("Failure")
+  if (exit._tag === "Failure") expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "Decision.Error", reason: "unsupported-output" })
+  expect(wire).toHaveLength(0)
 }))

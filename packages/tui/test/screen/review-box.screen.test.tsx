@@ -347,8 +347,8 @@ test("waking with open review items expands the box and notifies once", async ()
     route: routeFor(state),
   })
   try {
-    await waitFor(() => screen.frame().includes("asleep") && !screen.frame().includes("Guardrail review"), "asleep autonomy with a collapsed review box")
-    expect(screen.frame()).toContain("asleep")
+    await waitFor(() => /Questions\s+review box/.test(screen.frame()) && !screen.frame().includes("Guardrail review"), "asleep autonomy with a collapsed review box")
+    expect(screen.frame()).toMatch(/Questions\s+review box/)
     expect(screen.frame()).not.toContain("Guardrail review")
     await screen.waitForEventStream()
     state.autonomy = localAutonomyView({ mode: "normal", yolo: false })

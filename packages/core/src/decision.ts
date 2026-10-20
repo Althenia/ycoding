@@ -2,7 +2,7 @@ export * as Decision from "./decision"
 
 import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
-import { Cause, Context, Deferred, Effect, Exit, Layer, Schema } from "effect"
+import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Layer, Option, Schema } from "effect"
 import { Agent } from "./agent"
 import { DecisionAgent } from "./decision-agent"
 import { DecisionJudgment } from "./decision-judgment"
@@ -57,60 +57,79 @@ export const layer = Layer.effect(Service, Effect.gen(function* () {
   const agent = yield* DecisionAgent.Service
   const settled = new Map<string, Output>()
   const inflight = new Map<string, Deferred.Deferred<Output | undefined, Error>>()
-  return Service.of({
-    evaluate: Effect.fn("Decision.evaluate")(function* (value, context) {
-      const decoded = yield* Schema.decodeUnknownEffect(Input)(value).pipe(Effect.mapError(() => new Error({ reason: "invalid-request" })))
-      if (Buffer.byteLength(JSON.stringify(decoded)) > 1_048_576) return yield* new Error({ reason: "input-too-large" })
-      if (invalidInvocation(context)) return yield* new Error({ reason: "invalid-request" })
-      const run = agent.evaluate(decoded.request, context).pipe(
-        Effect.map((response): Output => ({ provider: "agent", response })),
-        Effect.mapError((error) => new Error({ reason: error.reason })),
-      )
-      if (context.invocationKey === undefined) return yield* run
-      const model = yield* agent.modelKey(context)
-      const key = [
-        context.sessionID,
-        context.purpose ?? "advisory",
-        context.authority ?? "advisory",
-        DecisionAgent.agentFor(context),
-        model,
-        context.invocationKey,
-        Hash.json(decoded.request),
-      ].join("\0")
-      while (true) {
-        const claim = yield* Effect.uninterruptible(Effect.gen(function* () {
-          const done = settled.get(key)
-          if (done) return { type: "done" as const, output: done }
-          const waiting = inflight.get(key)
-          if (waiting) return { type: "wait" as const, deferred: waiting }
-          const deferred = yield* Deferred.make<Output | undefined, Error>()
-          inflight.set(key, deferred)
-          return { type: "lead" as const, deferred }
-        }))
-        if (claim.type === "done") return claim.output
-        if (claim.type === "wait") {
-          const joined = yield* Deferred.await(claim.deferred)
-          if (joined !== undefined) return joined
-          continue
-        }
-        return yield* run.pipe(
-          Effect.onExit((exit) => Effect.gen(function* () {
-            if (inflight.get(key) === claim.deferred) inflight.delete(key)
-            if (Exit.isSuccess(exit)) {
+  const evaluate = Effect.fn("Decision.evaluate")(function* (value: Input, context: Invocation) {
+    const decoded = yield* Schema.decodeUnknownEffect(Input)(value).pipe(Effect.mapError(() => new Error({ reason: "invalid-request" })))
+    if (Buffer.byteLength(JSON.stringify(decoded)) > 1_048_576) return yield* new Error({ reason: "input-too-large" })
+    if (invalidInvocation(context)) return yield* new Error({ reason: "invalid-request" })
+    const startedAt = yield* Clock.currentTimeMillis
+    const invocation = { ...context, startedAt }
+    const remaining = Clock.currentTimeMillis.pipe(
+      Effect.map((now) => Math.max(0, DecisionAgent.TOTAL_TIMEOUT_MS - (now - startedAt))),
+    )
+    const preflight = remaining.pipe(
+      Effect.flatMap((limit) => agent.modelKey(invocation).pipe(Effect.timeoutOption(Duration.millis(limit)))),
+    )
+    const run = agent.evaluate(decoded.request, invocation).pipe(
+      Effect.map((response): Output => ({ provider: "agent", response })),
+      Effect.mapError((error) => new Error({ reason: error.reason })),
+    )
+    if (context.invocationKey === undefined) return yield* run
+    const resolved = yield* preflight
+    if (Option.isNone(resolved)) return yield* new Error({ reason: "timeout" })
+    const model = resolved.value
+    const key = [
+      context.sessionID,
+      context.purpose ?? "advisory",
+      context.authority ?? "advisory",
+      DecisionAgent.agentFor(context),
+      model,
+      context.invocationKey,
+      Hash.json(decoded.request),
+    ].join("\0")
+    while (true) {
+      const claim = yield* Effect.uninterruptible(Effect.gen(function* () {
+        const done = settled.get(key)
+        if (done) return { type: "done" as const, output: done }
+        const waiting = inflight.get(key)
+        if (waiting) return { type: "wait" as const, deferred: waiting }
+        const deferred = yield* Deferred.make<Output | undefined, Error>()
+        inflight.set(key, deferred)
+        return { type: "lead" as const, deferred }
+      }))
+      if (claim.type === "done") return claim.output
+      if (claim.type === "wait") {
+        const joined = yield* Deferred.await(claim.deferred)
+        if (joined !== undefined) return joined
+        continue
+      }
+      return yield* run.pipe(
+        Effect.onExit((exit) => Effect.gen(function* () {
+          if (Exit.isSuccess(exit)) {
+            const current = yield* preflight
+            if (Option.isSome(current) && current.value === model) {
               settled.set(key, exit.value)
               while (settled.size > MAX_SETTLED) {
                 const oldest = settled.keys().next().value
                 if (oldest === undefined) break
                 settled.delete(oldest)
               }
-              return yield* Deferred.succeed(claim.deferred, exit.value)
             }
-            if (Cause.hasInterrupts(exit.cause)) return yield* Deferred.succeed(claim.deferred, undefined)
-            return yield* Deferred.failCause(claim.deferred, exit.cause)
-          })),
-        )
-      }
-    }),
+            return yield* Deferred.succeed(claim.deferred, exit.value)
+          }
+          if (Cause.hasInterrupts(exit.cause)) return yield* Deferred.succeed(claim.deferred, undefined)
+          return yield* Deferred.failCause(claim.deferred, exit.cause)
+        }).pipe(Effect.ensuring(Effect.sync(() => {
+          if (inflight.get(key) === claim.deferred) inflight.delete(key)
+        })))),
+      )
+    }
+  })
+  return Service.of({
+    evaluate: (value, context) =>
+      evaluate(value, context).pipe(
+        Effect.timeoutOption(Duration.millis(DecisionAgent.TOTAL_TIMEOUT_MS)),
+        Effect.flatMap((result) => (Option.isSome(result) ? Effect.succeed(result.value) : Effect.fail(new Error({ reason: "timeout" })))),
+      ),
   })
 }))
 

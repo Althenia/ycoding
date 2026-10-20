@@ -22,6 +22,23 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.20",
+    date: "2026-10-20",
+    title: "Reliable decisions and focused autonomy controls",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Waking during automatic-answer evaluation returns questions, forms, and subagent questions to ordinary human input. Reject stale automatic answers without creating a sleeping review for an awake Session; sleeping Sessions retain their review-box behavior." },
+      { tag: "Fixed", text: "Preserve human replies and sleep-entry conversions completed during the refreshed sleep lookup, avoiding duplicate reviews and pending-question notices for those settled requests." },
+      { tag: "Fixed", text: "Cancel a form waiting for human input after wake when its caller receives an interruption." },
+      { tag: "Fixed", text: "Honor purpose-specific YOLO helper model pins and use bounded recovery across explicitly configured helpers for unsupported routes and recoverable response failures. Support typed decisions through the Codex HTTP adapter without changing the configured helper or credentials." },
+      { tag: "Fixed", text: "Inherit the current Session model when no decision helper or role pin is configured, including subsequent model switches. Preserve exact profiles and variants; an unsupported inherited route retains human review rather than automatic approval." },
+      { tag: "Fixed", text: "Apply one deadline to decision preflight, resolution, attempts, joined waits, and cache rechecks. Avoid credential refresh for unused helper candidates and cache results only while their model and account identity remain unchanged." },
+      { tag: "Fixed", text: "Discard YOLO-authorized permission and guardrail results after authority revocation, including revocation followed by restoration. Recheck current permission denies and ceilings; genuine hard reviews still require human approval." },
+      { tag: "Fixed", text: "Respect disabled standard-match verification while retaining independent YOLO grading limits. Distinguish withheld verdicts and policy-required human review from a model-chosen escalation." },
+      { tag: "Fixed", text: "Keep autonomy controls in the sidebar without duplicate prompt badges, status summaries, or Autonomy header summaries. Waiting state, subagent counts, pending decisions, and keyboard controls remain available." },
+    ],
+  },
+  {
     version: "0.10.19",
     date: "2026-10-20",
     title: "Independent automation and agentic decisions",

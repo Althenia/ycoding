@@ -170,7 +170,10 @@ export interface Interface extends State.Transformable<Draft> {
   /** Returns all integrations with their methods and current connections. */
   readonly list: () => Effect.Effect<Info[]>
   readonly connection: {
-    readonly snapshot: (connection: IntegrationConnection.Info) => Effect.Effect<Snapshot, AuthorizationError>
+    readonly snapshot: (
+      connection: IntegrationConnection.Info,
+      options?: { readonly refresh?: boolean },
+    ) => Effect.Effect<Snapshot, AuthorizationError>
     /** Returns the active connection for one integration. */
     readonly active: (id: ID) => Effect.Effect<IntegrationConnection.Info | undefined>
     /** Resolves a connection into usable credential material. */
@@ -675,7 +678,10 @@ const layer = Layer.effect(
       return CommandAttempt.make({ attemptID, time })
     })
 
-    const snapshot = Effect.fn("Integration.connection.snapshot")(function* (connection: IntegrationConnection.Info) {
+    const snapshot = Effect.fn("Integration.connection.snapshot")(function* (
+      connection: IntegrationConnection.Info,
+      options?: { readonly refresh?: boolean },
+    ) {
       if (connection.type === "env") {
         const key = process.env[connection.name]
         return { connection, value: key ? Credential.Key.make({ type: "key", key }) : undefined }
@@ -688,7 +694,11 @@ const layer = Layer.effect(
         .integrations.get(credential.integrationID)
         ?.implementations.get(credential.value.methodID)
       const now = yield* Clock.currentTimeMillis
-      if (!implementation?.refresh || credential.value.expires > now + Duration.toMillis(Duration.minutes(5)))
+      if (
+        options?.refresh === false ||
+        !implementation?.refresh ||
+        credential.value.expires > now + Duration.toMillis(Duration.minutes(5))
+      )
         return { connection, credential, value: credential.value }
       const refreshed = yield* authorize(credentials.refresh(credential, implementation.refresh(credential.value)))
       if (!refreshed)

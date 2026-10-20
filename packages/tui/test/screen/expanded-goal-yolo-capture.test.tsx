@@ -230,7 +230,7 @@ test("captures the expanded goal session with populated rail fixtures", async ()
         expect(rail).not.toContain("3 / 5")
         // Explicitly expanded sections retain their active-state summaries.
         expect(rail).toMatch(/−\s+GOAL\s+active/)
-        expect(rail).toMatch(/−\s+AUTONOMY\s+YOLO off · goal/)
+        expect(rail).toMatch(/−\s+AUTONOMY[ \t]*(\n|$)/)
       }
       if (viewport.width === DESIGN_VIEWPORT.width) {
         expect(lines.join("\n")).toContain("YCODING")

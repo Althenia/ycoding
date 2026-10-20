@@ -20,6 +20,10 @@ export interface Settings {
   readonly compactionScopes?: Partial<Record<CompactionScope, ModelSelection>>
 }
 
+export interface ResolveOptions {
+  readonly refresh?: boolean
+}
+
 export interface SelectHelperModelInput {
   readonly agentModel?: CatalogModel.Ref
   readonly roleModel?: ModelSelection
@@ -52,6 +56,29 @@ export const localTitle = (input: string) => {
 
 export const selectHelperModel = (input: SelectHelperModelInput) =>
   input.agentModel ?? (input.roleModel === "session" ? input.sessionModel : input.roleModel) ?? input.sessionModel
+
+export interface SelectHelperCandidatesInput {
+  readonly agentModels: ReadonlyArray<CatalogModel.Ref | undefined>
+  readonly roleModel?: ModelSelection
+  readonly sessionModel?: CatalogModel.Ref
+}
+
+const sameRef = (left: CatalogModel.Ref, right: CatalogModel.Ref) =>
+  left.providerID === right.providerID &&
+  left.id === right.id &&
+  left.variant === right.variant &&
+  left.profile === right.profile
+
+export const selectHelperCandidates = (input: SelectHelperCandidatesInput): ReadonlyArray<CatalogModel.Ref | undefined> => {
+  const explicit = [
+    ...input.agentModels,
+    input.roleModel === "session" ? undefined : input.roleModel,
+  ].filter((value): value is CatalogModel.Ref => value !== undefined)
+  const unique = explicit.filter((value, index) => explicit.findIndex((other) => sameRef(other, value)) === index)
+  const sessionModel = input.sessionModel
+  if (sessionModel === undefined) return [...unique, undefined]
+  return unique.some((value) => sameRef(value, sessionModel)) ? unique : [...unique, sessionModel]
+}
 
 /**
  * Summmarizer model selection for role `compaction`, scoped by chat type.
@@ -119,29 +146,41 @@ export interface Interface {
     session: SessionSchema.Info,
     role: Role,
     agent?: Agent.Info,
+    options?: ResolveOptions,
+  ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
+  readonly resolveRef: (
+    session: SessionSchema.Info,
+    selected: CatalogModel.Ref | undefined,
+    options?: ResolveOptions,
   ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionHelperPolicy") {}
 
-export const make = (policy: Settings, models: SessionRunnerModel.Interface): Interface => ({
-  settings: policy,
-  localTitle,
-  resolveModel: (session, role, agent) => {
-    const selected =
-      role === "compaction"
-        ? selectCompactionModel(policy.compactionScopes ?? {}, session, agent)
-        : selectHelperModel({
-            agentModel: agent?.model,
-            roleModel: policy.models[role],
-            sessionModel: session.model,
-          })
-    return models.resolve(selected === undefined ? session : { ...session, model: selected }).pipe(
+export const make = (policy: Settings, models: SessionRunnerModel.Interface): Interface => {
+  const resolveRef: Interface["resolveRef"] = (session, selected, options) =>
+    models.resolve(selected === undefined ? session : { ...session, model: selected }, options).pipe(
       Effect.map((resolved): SessionRunnerModel.Resolved | undefined => resolved),
       Effect.catch(() => Effect.succeed(undefined)),
     )
-  },
-})
+  return {
+    settings: policy,
+    localTitle,
+    resolveRef,
+    resolveModel: (session, role, agent, options) =>
+      resolveRef(
+        session,
+        role === "compaction"
+          ? selectCompactionModel(policy.compactionScopes ?? {}, session, agent)
+          : selectHelperModel({
+              agentModel: agent?.model,
+              roleModel: policy.models[role],
+              sessionModel: session.model,
+            }),
+        options,
+      ),
+  }
+}
 
 export const layer = Layer.effect(
   Service,

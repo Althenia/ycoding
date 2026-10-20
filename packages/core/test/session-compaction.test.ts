@@ -110,6 +110,7 @@ const helpers = Layer.succeed(
   SessionHelperPolicy.Service.of({
     settings: { titleMode: "local", models: {}, compactionScopes: {} },
     localTitle,
+    resolveRef: () => Effect.die("Unexpected exact helper resolution"),
     resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model)),
   }),
 )
@@ -118,6 +119,7 @@ const unavailableHelpers = Layer.succeed(
   SessionHelperPolicy.Service.of({
     settings: { titleMode: "local", models: {}, compactionScopes: {} },
     localTitle,
+    resolveRef: () => Effect.die("Unexpected exact helper resolution"),
     resolveModel: () => Effect.succeed(undefined),
   }),
 )
@@ -126,6 +128,7 @@ const pricedHelpers = Layer.succeed(
   SessionHelperPolicy.Service.of({
     settings: { titleMode: "local", models: {}, compactionScopes: {} },
     localTitle,
+    resolveRef: () => Effect.die("Unexpected exact helper resolution"),
     resolveModel: () =>
       Effect.succeed(
         SessionRunnerModel.resolved(model, undefined, [

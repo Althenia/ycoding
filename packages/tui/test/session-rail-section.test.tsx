@@ -194,7 +194,7 @@ test("auto-guardrail without ordinary-review authority asks you for ordinary rev
     const frame = app.captureCharFrame().replace(/\s+/g, " ")
     expect(frame).toContain("Permissions auto")
     expect(frame).toContain("Guardrails you")
-    expect(frame).toContain("YOLO")
+    expect(frame).toContain("YOLO off")
   } finally {
     app.renderer.destroy()
   }
@@ -203,13 +203,13 @@ test("auto-guardrail without ordinary-review authority asks you for ordinary rev
 test("renders who decides each action for every auto flag and with an active goal", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const cases = [
-    { name: "off", flags: {}, goal: false, autoAnswer: false, values: ["you", "you", "you"], summary: "YOLO off" },
-    { name: "yolo", flags: { yolo: true }, goal: false, autoAnswer: false, values: ["you", "you", "you"], summary: "YOLO" },
-    { name: "permission", flags: { autoPermission: true }, goal: false, autoAnswer: false, values: ["auto", "you", "you"], summary: "YOLO off" },
-    { name: "guardrail", flags: { autoGuardrail: true }, goal: false, autoAnswer: false, values: ["you", "auto", "you"], summary: "YOLO off" },
-    { name: "goal", flags: {}, goal: true, autoAnswer: false, values: ["you", "you", "you"], summary: "YOLO off · goal" },
-    { name: "answer", flags: {}, goal: false, autoAnswer: true, values: ["you", "you", "auto"], summary: "YOLO off" },
-    { name: "all", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: true, values: ["auto", "auto", "auto"], summary: "YOLO" },
+    { name: "off", flags: {}, goal: false, autoAnswer: false, values: ["you", "you", "you"] },
+    { name: "yolo", flags: { yolo: true }, goal: false, autoAnswer: false, values: ["you", "you", "you"] },
+    { name: "permission", flags: { autoPermission: true }, goal: false, autoAnswer: false, values: ["auto", "you", "you"] },
+    { name: "guardrail", flags: { autoGuardrail: true }, goal: false, autoAnswer: false, values: ["you", "auto", "you"] },
+    { name: "goal", flags: {}, goal: true, autoAnswer: false, values: ["you", "you", "you"] },
+    { name: "answer", flags: {}, goal: false, autoAnswer: true, values: ["you", "you", "auto"] },
+    { name: "all", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: true, values: ["auto", "auto", "auto"] },
   ] as const
 
   for (const item of cases) {
@@ -250,9 +250,8 @@ test("renders who decides each action for every auto flag and with an active goa
             .trim(),
         ),
       ).toEqual([...item.values])
-      expect(rows.find((line) => line.includes("AUTONOMY"))).toContain(item.summary)
+      expect(rows.find((line) => line.includes("AUTONOMY"))?.trim()).toMatch(/^−\s+AUTONOMY$/)
       for (const removed of ["Auto-answer", "ordinary", "this Session"]) expect(frame).not.toContain(removed)
-      expect(rows.find((line) => line.includes("AUTONOMY"))?.includes("answers auto")).toBe(item.autoAnswer)
       const spanLines = app.captureSpans().lines
       expected.forEach((label, index) => {
         const value = item.values[index]!
@@ -295,7 +294,7 @@ for (const mode of ["dark", "light"] as const) {
           const heading = lines.find((line) => line.includes("AUTONOMY"))
           expect(heading).toBeDefined()
           expect(heading?.trimEnd().length).toBeLessThanOrEqual(width - 3)
-          expect(heading).toContain(width === 32 && asleep ? "YOLO" : `YOLO${asleep ? " · asleep" : ""}`)
+          expect(heading?.trim()).toMatch(/^−\s+AUTONOMY$/)
           for (const line of lines) expect(line.slice(width).trim()).toBe("")
           const guardrailLine = lines.findIndex((line) => line.includes("Guardrails"))
           const questionLine = lines.findIndex((line) => line.includes("Questions"))
@@ -448,9 +447,10 @@ test("renders compact operational rail summaries from live component state", asy
 
   try {
     const frame = app.captureCharFrame()
+    const autonomyHeader = frame.split("\n").find((line) => line.includes("AUTONOMY"))
+    expect(autonomyHeader?.trim()).toMatch(/^−\s+AUTONOMY$/)
     const expectations = [
       ["GOAL", "active"],
-      ["AUTONOMY", "YOLO"],
       ["TODO LIST", "1/2 open"],
       ["SUBAGENTS", "3/12 running · 2 waiting"],
     ]

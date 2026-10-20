@@ -1129,7 +1129,33 @@ Requests supply JSON state and 1–32 uniquely named `predicate`, `choice`, `sco
 
 ### Decision agent
 
-The hidden primary `decision` agent evaluates JSON state and bounded questions without tools and requests provider-enforced JSON output. Its ID is reserved for the decision tool, not foreground Session or command selection. Select its model with `agents.decision.model`, then `efficiency.helper_models.decision`; missing helper configuration or `"session"` uses the owner Session model, or the normal default resolver when no model is selected. Supported routes are OpenAI Responses over HTTP or WebSocket, OpenAI Chat, and Anthropic Messages. Other routes return `unsupported-output` before a provider request. A compatible protocol does not guarantee that every provider or model accepts the schema. The selected model's existing authentication, privacy, quotas, and pricing apply. This does not establish free usage or a zero-retention guarantee, and local Session history and tool results remain durable.
+The hidden primary `decision` agent evaluates JSON state and bounded questions without execution tools. Its ID is reserved for the decision tool, not foreground Session or command selection. Baseline and advisory judgments select `agents.decision.model`, then `efficiency.helper_models.decision`, then the owner Session/default model. A helper value of `"session"` selects the owner model unless an agent pin takes precedence.
+
+YOLO judgments first select the matching `agents.yolo-permission.model`, `agents.yolo-guardrail.model`, or `agents.yolo-answer.model`. Their bounded recovery chain then considers `agents.decision.model`, an explicit `efficiency.helper_models.decision`, and the owner Session/default model. Exact model references are deduplicated with their variants and profiles intact. An unavailable profile is never replaced with another account. The chain does not enumerate connected models or consume the Session-Step `model_fallbacks` setting. Explicit helper pins remain independent of main-model switches.
+
+Without an agent pin or explicit helper model, each evaluation reads the current owner Session model. Subsequent Session-model changes apply to subsequent evaluations. Before the Session selects a model, normal default-model resolution applies. Unsupported inherited routes retain a typed failure and human review; they do not imply approval or select an unrelated model.
+
+| Key | Selection |
+| --- | --- |
+| `efficiency.helper_models.decision` | Shared helper override, or `"session"` for inheritance; omission also inherits. |
+| `agents.decision.model` | Ordinary decision-agent pin, ahead of the shared helper override. |
+| `agents.yolo-permission.model` | Highest-priority pin for YOLO permission judgments. |
+| `agents.yolo-guardrail.model` | Highest-priority pin for YOLO guardrail judgments. |
+| `agents.yolo-answer.model` | Highest-priority pin for YOLO question and form judgments. |
+
+Select an explicit shared helper:
+
+```jsonc
+{
+  "efficiency": {
+    "helper_models": { "decision": "openai/gpt-6.1-sol" },
+  },
+}
+```
+
+Model selections also accept `{ "providerID": "openai", "model": "gpt-6.1-sol", "profile": "Work" }`. The short form `"Work#openai/gpt-6.1-sol"` selects the same named profile; append `#<variant>` to select an advertised variant. The named profile must exist for that provider.
+
+The implemented adapter requests schema-constrained generation and validates the complete typed result locally. Admitted native routes are OpenAI Responses HTTP/WebSocket, OpenAI Chat, Anthropic Messages, and ChatGPT Codex HTTP (`openai-codex-responses`). Codex WebSocket and unverified compatibility/AI SDK bridge routes remain unsupported. Adapter support establishes the encoded request shape, not support by every endpoint or model using that protocol. A provider rejection remains a typed failure. The selected model's existing authentication, privacy, quotas, and pricing apply; local Session history and results remain durable.
 
 Retain the owner Session model for the helper:
 
@@ -1141,7 +1167,9 @@ Retain the owner Session model for the helper:
 
 Confidence is self-reported and uncalibrated. Every question type can abstain for insufficient evidence: the helper returns `type: refusal`, null `answer`, `choice`, and `score`, and confidence `0`. Refusal is distinct from a real option or low-confidence pick. The tool preserves that structured result and adds a model-visible explanation to gather missing evidence or ask the user. Set the action threshold by the cost of being wrong; treat refusal, errors, low or close confidence, and disagreement with evidence as uncertainty. Judgments never grant permission, supply the user's answer, or prove completion.
 
-One evaluation makes at most two provider attempts, each limited to 25 seconds within a 60-second evaluation deadline. The initial output limit is 4,096 tokens; a truncation retry can raise it to 8,192 within the model's output limit. Malformed or truncated output and eligible transient transport/provider failures permit one retry. Refusal, authentication failure, unsupported output, and interruption do not. Input and output are each bounded to 1 MiB. Every dispatched attempt settles its usage ledger, including timeout and interruption; reported usage is aggregated across attempts.
+Baseline and advisory evaluations make at most two provider attempts on their selected route. YOLO evaluations make at most three provider attempts across the configured recovery chain, with at most two on one candidate. Both share a 60-second total deadline covering model-key preflight, resolution, attempts, joined waits, and cache rechecks, with a 25-second per-attempt limit; standard-match verification retains its 15-second outer deadline. Unavailable or unsupported candidates consume no provider attempt. Malformed or truncated output, timeouts, and eligible transient failures can recover within those bounds. Invalid-output repair adds a fixed schema reminder without replaying the malformed text. Refusal, authentication failure, invalid input, non-retryable provider failures, and interruption do not trigger route hopping. Exhaustion returns a typed failure for human handoff, not a fabricated answer.
+
+The initial output limit is 4,096 tokens; truncation can raise it to 8,192 within the model's output limit. Input and output are each bounded to 1 MiB. Every dispatched attempt settles its usage ledger; reported usage is aggregated across candidates. YOLO results are checked against current inherited autonomy before application, including revocation followed by restoration. Permission assessment also rechecks current denies and ceilings. Recovery changes neither automatic toggles nor mandatory human approval for genuine hard reviews.
 
 Schema-invalid calls return tool errors identifying the field path, expected shape/allowed values, and a minimal valid request without echoing evidence or secrets. Empty questions explicitly request one bounded question or skipping the tool. Settled errors distinguish unavailable models, invalid requests, oversized input, provider failure, timeout, invalid or truncated output, refusal, and unsupported structured output. Guardrail handoffs retain the reason without inventing a choice or confidence. A caller must not retry an unchanged failed judgment automatically. See the [decision contract](../specs/decisions.md#decision-agent-inputs).
 

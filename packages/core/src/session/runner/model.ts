@@ -127,7 +127,11 @@ export interface Resolved {
 export interface Interface {
   readonly resolve: (
     session: SessionSchema.Info,
-    options?: { readonly rebind?: boolean; readonly binding?: SessionEvent.ProfileBinding },
+    options?: {
+      readonly rebind?: boolean
+      readonly binding?: SessionEvent.ProfileBinding
+      readonly refresh?: boolean
+    },
   ) => Effect.Effect<Resolved, Error>
 }
 
@@ -565,7 +569,9 @@ const layer = Layer.effect(
                 label: profile,
                 active: matching[0]!.active,
               })
-        const snapshot = connection ? yield* integrations.connection.snapshot(connection) : undefined
+        const snapshot = connection
+          ? yield* integrations.connection.snapshot(connection, options?.refresh === false ? { refresh: false } : undefined)
+          : undefined
         const credential = snapshot?.value
         const credentialInfo = snapshot?.credential
         if (

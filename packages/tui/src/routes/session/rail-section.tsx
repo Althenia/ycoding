@@ -180,7 +180,7 @@ export function RailSubheading(props: ParentProps) {
   return <text fg={theme.text.label}>{text()}</text>
 }
 
-export function RailRow(props: { label: string; value: string; valueColor?: RGBA }) {
+export function RailRow(props: { label: string; value: string; valueColor?: RGBA; onSelect?: () => void }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const rail = useRail()
@@ -190,7 +190,13 @@ export function RailRow(props: { label: string; value: string; valueColor?: RGBA
   const stacked = () => stringWidth(value()) > stringWidth(label()) && stringWidth(label()) + stringWidth(value()) + 1 > width()
 
   return (
-    <box width="100%" flexDirection={stacked() ? "column" : "row"} justifyContent="space-between" gap={stacked() ? 0 : 1}>
+    <box
+      width="100%"
+      flexDirection={stacked() ? "column" : "row"}
+      justifyContent="space-between"
+      gap={stacked() ? 0 : 1}
+      onMouseUp={props.onSelect}
+    >
       <text fg={theme.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
         {label()}
       </text>

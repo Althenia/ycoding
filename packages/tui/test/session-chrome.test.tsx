@@ -152,8 +152,12 @@ describe("header status", () => {
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, 100, "provider error"],
-    [{ type: "autonomy", yolo: true, goalActive: false, state: { type: "ready" } }, 100, "YOLO · ready"],
-    [{ type: "autonomy", yolo: false, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "YOLO off · goal · cooking 4.1s"],
+    [{ type: "autonomy", elevated: true, state: { type: "ready" } }, 100, "ready"],
+    [{ type: "autonomy", state: { type: "working", elapsed: 4.14 } }, 120, "cooking 4.1s"],
+    [{ type: "autonomy", state: { type: "waiting", count: 1 }, review: 1 }, 100, "review 1 · waiting · 1 subagent"],
+    [{ type: "autonomy", state: { type: "ready" }, review: 2 }, 100, "review 2 · waiting for your review"],
+    [{ type: "autonomy", asleep: true, machineAwake: false, review: 2, state: { type: "waiting", count: 2 } }, 100, "asleep · machine may sleep · review 2 · waiting · 2 subagents"],
+    [{ type: "autonomy", asleep: true, machineAwake: true, state: { type: "ready" } }, 100, "asleep · ready"],
   ]
 
   for (const [state, width, expected] of cases) {
@@ -183,18 +187,18 @@ describe("header status", () => {
   test("keeps active autonomy and retry status visible together", () => {
     expect(
       headerStatusLabel(
-        { type: "autonomy", yolo: false, goalActive: true, state: { type: "retry-scheduled", attempt: 2, at: 15_000 } },
+        { type: "autonomy", state: { type: "retry-scheduled", attempt: 2, at: 15_000 } },
         100,
         undefined,
         10_000,
       ),
-    ).toBe("YOLO off · goal · 1 failed · retry 2 · in 5s")
+    ).toBe("1 failed · retry 2 · in 5s")
   })
 
   test("keeps active autonomy and retrying visible together", () => {
     expect(
-      headerStatusLabel({ type: "autonomy", yolo: false, goalActive: true, state: { type: "retrying", attempt: 2 } }, 100, undefined, 10_000),
-    ).toBe("YOLO off · goal · retrying · attempt 2")
+      headerStatusLabel({ type: "autonomy", state: { type: "retrying", attempt: 2 } }, 100, undefined, 10_000),
+    ).toBe("retrying · attempt 2")
   })
 })
 
@@ -525,8 +529,8 @@ describe("header rendering", () => {
       [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
       [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, "provider error", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: true, goalActive: false, state: { type: "ready" } }, "YOLO · ready", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: false, goalActive: true, state: { type: "ready" } }, "YOLO off · goal · ready", theme.text.feedback.success.default],
+      [{ type: "autonomy", elevated: true, state: { type: "ready" } }, "ready", theme.text.feedback.error.default],
+      [{ type: "autonomy", state: { type: "working", elapsed: 4.1 } }, "cooking 4.1s", theme.text.feedback.success.default],
       [{ type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
       [{ type: "retrying", attempt: 2 }, "retrying · attempt 2", theme.text.feedback.warning.default],
     ]
@@ -576,14 +580,16 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("renders active sleep beside YOLO at narrow and wide header widths", async () => {
-    for (const width of [80, 200]) {
+  test("renders operational sleep without approval-toggle summaries at narrow and wide widths", async () => {
+    for (const width of [60, 80, 200]) {
       for (const asleep of [false, true]) {
         const app = await renderHeader(width, {
-          type: "autonomy", yolo: true, goalActive: false, asleep, state: { type: "ready" },
+          type: "autonomy", elevated: true, asleep, state: { type: "ready" },
         })
         try {
-          expect(app.captureCharFrame()).toContain(`YOLO${asleep ? " · asleep" : ""} · ready`)
+          expect(app.captureCharFrame()).toContain("ready")
+          expect(app.captureCharFrame()).not.toMatch(/YOLO|goal/)
+          expect(app.captureCharFrame().includes("asleep")).toBe(asleep)
           expect(app.captureCharFrame()).not.toContain("machine may sleep")
         } finally {
           app.renderer.destroy()
@@ -593,12 +599,13 @@ describe("header rendering", () => {
   })
 
   test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {
-    const app = await renderHeader(100, { type: "autonomy", yolo: true, goalActive: false, state: { type: "ready" } })
+    const app = await renderHeader(100, { type: "autonomy", elevated: true, state: { type: "ready" } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const frame = app.captureCharFrame()
     // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
     // full-width destructive band under the header was an invention and read as a huge red bar.
-    expect(frame).toContain("YOLO · ready")
+    expect(frame).toContain("ready")
+    expect(frame).not.toContain("YOLO")
     expect(app.captureSpans().lines[3]?.spans ?? []).not.toHaveLength(0)
     expect(
       (app.captureSpans().lines[3]?.spans ?? []).some((span) =>
@@ -780,12 +787,12 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("uses the YOLO error token for the dot trail and adjacent working status", async () => {
-    const app = await renderHeader(160, { type: "autonomy", yolo: true, goalActive: false, state: { type: "working", elapsed: 4.1 } })
+  test("uses the destructive token for the dot trail and adjacent working status while elevated", async () => {
+    const app = await renderHeader(160, { type: "autonomy", elevated: true, state: { type: "working", elapsed: 4.1 } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))
-    const status = spans.find((span) => span.text.includes("YOLO · cooking 4.1s"))
+    const status = spans.find((span) => span.text.includes("cooking 4.1s"))
 
     expect(dotTrail?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
