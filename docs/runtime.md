@@ -1347,7 +1347,7 @@ The goal section (`GOAL`) appears while a goal is active. It shows the goal text
 
 ### Autonomy section
 
-The autonomy section (`AUTONOMY`) has a title and attention state without a summary. Its first row shows YOLO as `on`, `off`, or `unknown`; selecting it uses the same toggle handler as `/yolo`. The existing slash command and palette entry provide keyboard access. The remaining rows identify who decides permission asks, ordinary guardrail reviews, and questions, with a waiting-review count when present.
+The autonomy section (`AUTONOMY`) has a title and attention state without a summary. Its rows identify who decides permission asks, ordinary guardrail reviews, and questions, with a waiting-review count when present. Each row reads `auto` while its rule flag decides, otherwise `yolo` while effective YOLO is on; a rule flag outranks YOLO. The section has no YOLO row; `/yolo` and its palette entry toggle YOLO.
 
 The Session header retains operational state, including sleep, waiting, retries, active shells, and subagent counts, without repeating approval-toggle summaries. Below 80 columns it omits the secondary machine-sleep explanation. The Session footer contains branch identity, subagent and shell counts, usage, and commands without autonomy chips; below 80 columns its identity/counts and keyboard controls use separate rows within the existing height. The landing footer retains its draft autonomy controls.
 

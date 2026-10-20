@@ -2133,7 +2133,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Show when={contextReady() && sidebarVisible()}>
           <Switch>
             <Match when={wide()}>
-              <Sidebar sessionID={route.sessionID} autonomy={autonomy()} onToggleYolo={() => runAutonomyToggle("yolo", "yolo")} />
+              <Sidebar sessionID={route.sessionID} autonomy={autonomy()} />
             </Match>
             <Match when={!wide()}>
               <box
@@ -2145,7 +2145,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 alignItems="flex-end"
                 backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
               >
-                <Sidebar sessionID={route.sessionID} autonomy={autonomy()} onToggleYolo={() => runAutonomyToggle("yolo", "yolo")} />
+                <Sidebar sessionID={route.sessionID} autonomy={autonomy()} />
               </box>
             </Match>
           </Switch>

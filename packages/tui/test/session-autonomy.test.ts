@@ -86,7 +86,7 @@ test("each auto flag decides only its own row and yolo evaluates what the flags 
   expect(labels(autonomyView({ autoGuardrail: true }))).toEqual(["manual", "auto", "manual"])
   expect(labels(autonomyView({ autoAnswer: true }))).toEqual(["manual", "manual", "auto"])
   expect(labels(autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true }))).toEqual(["auto", "auto", "yolo"])
-  expect(labels(autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true, autoAnswer: true }))).toEqual(["auto", "auto", "auto, then yolo"])
+  expect(labels(autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true, autoAnswer: true }))).toEqual(["auto", "auto", "auto"])
   expect(labels(autonomyView({ permissionsAuto: true, ordinaryReviewsAuto: true }))).toEqual(["auto", "auto", "manual"])
   expect(labels(autonomyView({ yolo: false, effectiveYolo: true }))).toEqual(["yolo", "yolo", "yolo"])
 })
@@ -117,9 +117,9 @@ test("the local autonomy view defaults baseline permission model reviews on with
   expect(numeric.effective.permissionsAuto).toBe(false)
 })
 
-test("auto-answer is Session-local and yolo answers what it leaves", () => {
+test("auto-answer outranks yolo and yolo answers only while auto-answer is off", () => {
   expect(autonomyDecisionLabel(autonomyView({ autoAnswer: true }), "questions")).toBe("auto")
-  expect(autonomyDecisionLabel(autonomyView({ yolo: true, autoAnswer: true }), "questions")).toBe("auto, then yolo")
+  expect(autonomyDecisionLabel(autonomyView({ yolo: true, autoAnswer: true }), "questions")).toBe("auto")
   expect(autonomyDecisionLabel(autonomyView({ yolo: true, autoAnswer: false }), "questions")).toBe("yolo")
   expect(autonomyDecisionLabel(autonomyView({ autoAnswer: false }), "questions")).toBe("manual")
   const sleeping = autonomyView({ sleep: true, autoAnswer: true, goal: true })

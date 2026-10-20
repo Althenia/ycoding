@@ -194,7 +194,7 @@ test("auto-guardrail without ordinary-review authority leaves ordinary reviews m
     const frame = app.captureCharFrame().replace(/\s+/g, " ")
     expect(frame).toContain("Permissions auto")
     expect(frame).toContain("Guardrails manual")
-    expect(frame).toContain("YOLO off")
+    expect(frame).not.toContain("YOLO")
   } finally {
     app.renderer.destroy()
   }
@@ -210,7 +210,7 @@ test("renders who decides each action for every auto flag and with an active goa
     { name: "goal", flags: {}, goal: true, autoAnswer: false, values: ["manual", "manual", "manual"] },
     { name: "answer", flags: {}, goal: false, autoAnswer: true, values: ["manual", "manual", "auto"] },
     { name: "yolo with rule flags", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: false, values: ["auto", "auto", "yolo"] },
-    { name: "all", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: true, values: ["auto", "auto", "auto, then yolo"] },
+    { name: "all", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: true, values: ["auto", "auto", "auto"] },
   ] as const
 
   for (const item of cases) {
@@ -230,6 +230,7 @@ test("renders who decides each action for every auto flag and with an active goa
       const frame = app.captureCharFrame()
       expect(frame).not.toContain("Hard reviews")
       expect(frame).not.toContain("always you")
+      expect(frame).not.toContain("YOLO")
       const rows = frame.split("\n")
       const expected = ["Permissions", "Guardrails", "Questions"]
       expect(frame).not.toContain("Scope dispatch")

@@ -1258,7 +1258,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         blocks: [
           {
             kind: "paragraph",
-            text: "`/yolo` confirms the new on/off state. The rail's `AUTONOMY` section shows each flag's actual state (YOLO, auto-permission, auto-guardrail, and this Session's auto-answer) and the live guardrail review settings.",
+            text: "`/yolo` confirms the new on/off state. The rail's `AUTONOMY` section shows who decides permissions, guardrails, and questions: `auto` while that row's rule flag is on, otherwise `yolo` while YOLO is on, otherwise the model or manual path from the live guardrail review settings.",
           },
           { kind: "related", slugs: ["configuration/guardrails", "configuration/permissions", "configuration/goal"] },
         ],

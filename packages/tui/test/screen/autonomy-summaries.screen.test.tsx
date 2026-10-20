@@ -133,7 +133,7 @@ for (const width of [60, 110, 200]) {
   }, 30_000)
 }
 
-test("the docked AUTONOMY section keeps its rows, shows YOLO explicitly, and drops the header summary", async () => {
+test("the docked AUTONOMY section keeps its decider rows without a YOLO row and drops the header summary", async () => {
   const { route } = fixture()
   const screen = await renderScreen({
     width: 200,
@@ -147,36 +147,10 @@ test("the docked AUTONOMY section keeps its rows, shows YOLO explicitly, and dro
     await waitFor(screen, () => /AUTONOMY/.test(screen.frame()) && /Permissions\s+auto/.test(screen.frame()), "autonomy rows")
     const row = screen.lines().find((line) => line.includes("AUTONOMY"))!
     expect(row.slice(row.indexOf("AUTONOMY")).trimEnd()).toBe("AUTONOMY")
-    for (const pattern of [/YOLO\s+on/, /Permissions\s+auto/, /Guardrails\s+auto/, /Questions\s+auto, then yolo/, /Review\s+1 waiting/])
+    for (const pattern of [/Permissions\s+auto/, /Guardrails\s+auto/, /Questions\s+auto/, /Review\s+1 waiting/])
       expect(screen.frame()).toMatch(pattern)
-  } finally {
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("selecting the sidebar YOLO row toggles only YOLO through the existing handler", async () => {
-  const { state, route } = fixture()
-  const screen = await renderScreen({
-    width: 200,
-    height: 50,
-    args: { sessionID },
-    route,
-    settle: "waiting · 1 subagent",
-    config: { animations: false },
-  })
-  try {
-    await waitFor(screen, () => /YOLO\s+on/.test(screen.frame()), "YOLO row on")
-    const rowIndex = () => screen.lines().findIndex((line) => /YOLO\s+(on|off)/.test(line))
-    await screen.mouse.click(screen.lines()[rowIndex()]!.indexOf("YOLO") + 1, rowIndex())
-    await waitFor(screen, () => state.puts.length === 1, "autonomy write")
-    expect(state.puts).toEqual([{ yolo: false }])
-    await waitFor(screen, () => /YOLO\s+off/.test(screen.frame()), "YOLO row off")
-    expect(screen.frame()).toMatch(/Permissions\s+auto/)
-    await waitFor(screen, () => !screen.frame().includes("YOLO off for this Session"), "toast cleared")
-    await screen.mouse.click(screen.lines()[rowIndex()]!.indexOf("YOLO") + 2, rowIndex())
-    await waitFor(screen, () => state.puts.length === 2, "second autonomy write")
-    expect(state.puts).toEqual([{ yolo: false }, { yolo: true }])
-    await waitFor(screen, () => /YOLO\s+on/.test(screen.frame()), "YOLO row on again")
+    expect(screen.frame()).not.toMatch(/YOLO\s+(on|off|unknown)/)
+    expect(screen.frame()).not.toContain("then yolo")
   } finally {
     await screen.dispose()
   }
@@ -199,7 +173,6 @@ for (const width of [60, 200]) {
       await waitFor(screen, () => state.puts.length === 1, "autonomy write")
       expect(state.puts).toEqual([{ yolo: false }])
       await waitFor(screen, () => screen.frame().includes("YOLO off for this Session"), "settled toast")
-      if (width >= 120) await waitFor(screen, () => /YOLO\s+off/.test(screen.frame()), "YOLO row off")
     } finally {
       await screen.dispose()
     }
@@ -250,7 +223,8 @@ test("the sidebar toggle command opens the AUTONOMY rows below the docked width"
     const row = screen.lines().find((line) => line.includes("AUTONOMY"))!
     expect(row.slice(row.indexOf("AUTONOMY")).trimEnd()).toBe("AUTONOMY")
     expect(screen.frame()).toMatch(/Review\s+1 waiting/)
-    expect(screen.frame()).toMatch(/YOLO\s+on/)
+    expect(screen.frame()).toMatch(/Questions\s+auto/)
+    expect(screen.frame()).not.toMatch(/YOLO\s+(on|off|unknown)/)
   } finally {
     await screen.dispose()
   }

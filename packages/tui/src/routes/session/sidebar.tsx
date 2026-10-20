@@ -20,7 +20,6 @@ export function Sidebar(props: {
   sessionID: string
   autonomy?: SessionAutonomyView
   overlay?: boolean
-  onToggleYolo?: () => void
 }) {
   const pluginRuntime = usePluginRuntime()
   const data = useData()
@@ -76,7 +75,6 @@ export function Sidebar(props: {
               <AutonomyRailContent
                 autonomy={props.autonomy}
                 reviewCount={data.session.review.list(props.sessionID).length}
-                onToggleYolo={props.onToggleYolo}
               />
               <PluginSlot
                 name="sidebar.content"
@@ -141,10 +139,8 @@ function SessionRailIdentity(props: { title: string }) {
 export function AutonomyRailContent(props: {
   autonomy?: SessionAutonomyView
   reviewCount?: number
-  onToggleYolo?: () => void
 }) {
   const { theme } = useTheme().contextual("elevated")
-  const yolo = createMemo(() => props.autonomy?.effective?.yolo)
 
   return (
     <>
@@ -166,21 +162,9 @@ export function AutonomyRailContent(props: {
           section="autonomy"
           title="AUTONOMY"
           attention={
-            yolo() === true || props.autonomy?.effective?.permissionsAuto === true || props.autonomy?.effective?.ordinaryReviewsAuto === true || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true || autoAnswerOn(props.autonomy)
+            props.autonomy?.effective?.yolo === true || props.autonomy?.effective?.permissionsAuto === true || props.autonomy?.effective?.ordinaryReviewsAuto === true || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true || autoAnswerOn(props.autonomy)
           }
         >
-          <RailRow
-            label="YOLO"
-            value={yolo() === undefined ? "unknown" : yolo() ? "on" : "off"}
-            valueColor={
-              yolo() === undefined
-                ? theme.text.subdued
-                : yolo()
-                  ? theme.text.feedback.warning.default
-                  : theme.text.feedback.success.default
-            }
-            onSelect={props.onToggleYolo}
-          />
           <For each={[
             ["Permissions", "permissions"],
             ["Guardrails", "guardrails"],
