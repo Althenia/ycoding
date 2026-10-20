@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
+import { Decision } from "@ycoding-ai/core/decision"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -37,7 +38,10 @@ const it = testEffect(
       Agent.node,
       Permission.node,
     ]),
-    [[Location.node, current]],
+    [
+      [Location.node, current],
+      [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.fail(new Decision.Error({ reason: "unavailable" })) })],
+    ],
   ),
 )
 
@@ -123,24 +127,28 @@ describe("Permission", () => {
     }),
   )
 
-  it.effect("auto allows ask decisions in yolo mode without queuing a request", () =>
+  it.effect("auto allows ask decisions only with the autoPermission rule flag and records the rule fact", () =>
     Effect.gen(function* () {
       yield* setup()
       const autonomy = yield* SessionAutonomy.Service
       const service = yield* Permission.Service
-      for (const yolo of [0, 1, 2]) {
-        yield* autonomy.setYolo({ sessionID: Session.ID.make("ses_test"), yolo })
-        expect(yield* service.ask(assertion())).toEqual({
-          id: Permission.ID.create("per_test"),
-          effect: yolo === 0 ? "ask" : "allow",
-        })
-        if (yolo === 0) {
-          yield* service.reply({ requestID: Permission.ID.create("per_test"), reply: "once" })
-          continue
-        }
-        yield* service.assert(assertion())
-        expect(yield* service.list()).toEqual([])
-      }
+      const sessionID = Session.ID.make("ses_test")
+      yield* autonomy.setYolo({ sessionID, yolo: true })
+      expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "ask" })
+      yield* service.reply({ requestID: Permission.ID.create("per_test"), reply: "once" })
+      yield* autonomy.setYolo({ sessionID, yolo: false })
+      yield* autonomy.set({ sessionID, autoPermission: true })
+      expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "allow" })
+      yield* service.assert(assertion())
+      expect(yield* service.list()).toEqual([])
+      const events = yield* EventRuntime.Service
+      const assessed = (yield* events.log({ aggregateID: sessionID, follow: false }).pipe(Stream.runCollect)).filter(
+        (event) => event.type === "session.permission.assessed",
+      )
+      expect(assessed.flatMap((event) => "data" in event ? [event.data] : [])).toEqual([
+        expect.objectContaining({ sessionID, outcome: "allow", via: "auto-permission", reply: "once" }),
+        expect.objectContaining({ sessionID, outcome: "allow", via: "auto-permission", reply: "once" }),
+      ])
     }),
   )
 

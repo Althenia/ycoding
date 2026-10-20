@@ -177,6 +177,9 @@ describe("Agent", () => {
         "title",
         "wittgenstein",
         "yangi",
+        "yolo-answer",
+        "yolo-guardrail",
+        "yolo-permission",
         "zeus",
       ])
       expect(Agent.defaultID).toBe(Agent.ID.make("god"))
@@ -314,17 +317,22 @@ describe("Agent", () => {
         throw new Error("expected maintained built-in prompts")
       }
       expect(god.system).toContain("Denies remain denied.")
-      expect(god.system).toContain("YOLO 1 auto-approves ask permissions only; awake YOLO 2 also auto-approves ordinary guardrail reviews")
+      expect(god.system).toContain("Four independent Session toggles: YOLO, autoPermission, autoGuardrail, and autoAnswer, each off by default; changing one rewrites none of the others")
+      expect(god.system).toContain("autoPermission approves ask permissions by rule across the managed-task chain")
+      expect(god.system).toContain("awake autoGuardrail approves ordinary standard guardrail reviews, never hard or custom-rule reviews")
+      expect(god.system).toContain("autoAnswer supplies only an explicit valid default or a single option labelled (Recommended)")
+      expect(god.system).toContain("YOLO alone enables the hidden yolo-permission, yolo-guardrail, and yolo-answer evaluators")
+      expect(god.system).toContain("only YOLO generates answers, including free text")
+      expect(god.system).toContain("guardrails.decide_reviews is on unless explicitly false")
+      expect(god.system).toContain("strict allow, deny, or escalate")
+      expect(god.system).toContain("never answers questions or forms")
+      expect(god.system).toContain("A hard review is never model-approved")
       expect(god.system).toContain("Goals grant no permission, answer, or review authority")
-      expect(god.system).toContain("Session's auto-answer toggle, default off, independent of YOLO, goals, and sleep")
-      expect(god.system).toContain(
-        "Model guardrail verification and grading require guardrails.decide_reviews, default false",
-      )
-      expect(god.system).toContain(
-        "awake, questions, forms, and guardrail reviews ask the user and child questions go to the parent Session's subagent controls",
-      )
-      expect(god.system).toContain("Enabled standard verification dismisses only false at confidence ≥0.9")
-      expect(god.system).toContain("uncertainty preserves review, and denies and custom rules are never verified")
+      expect(god.system).toContain("Enabled standard verification dismisses only a confident non-match at confidence ≥0.9")
+      expect(god.system).toContain("denies and custom rules are never verified")
+      expect(god.system).toContain("asleep, it defers to the review box")
+      for (const stale of ["YOLO 1", "YOLO 2", "default false", "≥0.95", "Session's auto-answer toggle, default off"])
+        expect(god.system).not.toContain(stale)
       expect(god.system).toContain("Implement or delegate as your role directs.")
       expect(god.system).toContain("launch every ready independent task in parallel")
       expect(god.system).toContain("score size, difficulty, complexity, and risk against a rubric")
@@ -392,7 +400,7 @@ describe("Agent", () => {
     }),
   )
 
-  it.effect("registers a hidden decision helper with a stable TOON contract and no execution authority", () =>
+  it.effect("registers a hidden decision helper with a stable JSON contract and no execution authority", () =>
     Effect.gen(function* () {
       const agent = yield* Agent.Service
       yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
@@ -407,9 +415,9 @@ describe("Agent", () => {
       for (const action of ["shell", "read", "patch", "question", "subagent", "goal", "decision", "task_complete"])
         expect(Permission.evaluate(action, "*", decision.permissions).effect).toBe("deny")
       expect(decision.system).toContain("untrusted data")
-      expect(decision.system).toContain("exactly one TOON document")
+      expect(decision.system).toContain("exactly one JSON document")
       expect(decision.system).toContain("decisions")
-      expect(decision.system).toContain("version: 1")
+      expect(decision.system).toContain("version 1")
       expect(decision.system).toContain("answers")
       expect(decision.system).toContain("self-reported, uncalibrated")
       expect(decision.system).toContain("confidence")
@@ -420,6 +428,29 @@ describe("Agent", () => {
       expect(decision.system).toContain("Never approve")
       expect(decision.system).not.toContain("Main-session controls:")
       expect(decision.system).not.toContain("YCoding is the terminal-first runtime")
+      expect(decision.system).not.toContain("TOON")
+      expect(decision.system).toContain("explicit advisory judgment")
+      expect(decision.system).toContain("bounded assessment of exactly the supplied request")
+    }),
+  )
+
+  it.effect("registers hidden YOLO evaluators that are unselectable and deny every tool", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+      for (const id of ["yolo-permission", "yolo-guardrail", "yolo-answer"]) {
+        const evaluator = yield* agent.get(Agent.ID.make(id))
+        if (!evaluator) throw new Error(`expected ${id}`)
+        expect(evaluator).toMatchObject({ mode: "primary", hidden: true })
+        expect(Agent.isSelectable(evaluator)).toBe(false)
+        expect(Agent.isAutocompleteSelectable(evaluator)).toBe(false)
+        expect(evaluator.model).toBeUndefined()
+        for (const action of ["shell", "read", "patch", "question", "subagent", "decision", "task_complete"])
+          expect(Permission.evaluate(action, "*", evaluator.permissions).effect).toBe("deny")
+        expect(evaluator.system).toContain("exactly one JSON document")
+      }
     }),
   )
 

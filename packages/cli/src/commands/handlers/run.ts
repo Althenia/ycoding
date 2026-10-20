@@ -5,10 +5,21 @@ import { runCommand } from "./run-shared"
 
 export default Runtime.handler(RunCommand, (input) => {
   const separator = process.argv.indexOf("--", 2)
-  if (process.argv.slice(2, separator === -1 ? undefined : separator).includes("--yolo") && Option.isNone(input.yolo))
+  const missingToggle = (
+    [
+      ["--yolo", input.yolo],
+      ["--auto-permission", input.autoPermission],
+      ["--auto-guardrail", input.autoGuardrail],
+      ["--auto-answer", input.autoAnswer],
+    ] as const
+  ).find(
+    ([flag, value]) =>
+      process.argv.slice(2, separator === -1 ? undefined : separator).includes(flag) && Option.isNone(value),
+  )
+  if (missingToggle)
     return Effect.sync(() => {
       process.exitCode = 1
-      process.stderr.write("ycoding: --yolo requires one of 0, 1, or 2\n")
+      process.stderr.write(`ycoding: ${missingToggle[0]} requires true or false\n`)
     })
   return runCommand({
     server: Option.getOrUndefined(input.server),
@@ -26,5 +37,8 @@ export default Runtime.handler(RunCommand, (input) => {
     title: Option.getOrUndefined(input.title),
     thinking: input.thinking,
     yolo: Option.getOrUndefined(input.yolo),
+    autoPermission: Option.getOrUndefined(input.autoPermission),
+    autoGuardrail: Option.getOrUndefined(input.autoGuardrail),
+    autoAnswer: Option.getOrUndefined(input.autoAnswer),
   })
 })

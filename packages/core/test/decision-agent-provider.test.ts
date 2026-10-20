@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { LLMClient } from "@ycoding-ai/ai"
+import { LLMClient, Model } from "@ycoding-ai/ai"
 import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
@@ -55,7 +55,7 @@ const compatibleModelInfo = CatalogModel.Info.make({
 })
 const catalogRef = CatalogModel.Ref.make({ providerID: Provider.ID.openai, id: modelInfo.id, variant: CatalogModel.VariantID.make("medium") })
 const wire: Array<{ url: string; body: Record<string, unknown>; authorization: string | undefined }> = []
-const state = { fail: false, compatible: false }
+const state = { fail: false, compatible: false, bridge: false }
 const json = DecisionJudgment.encode({ decisions: { version: 1, answers: [{
   name: "read_only", type: "predicate", answer: true, choice: null, score: null, confidence: 0.83,
 }] } })
@@ -79,7 +79,11 @@ const executor = RequestExecutor.layer.pipe(Layer.provide(http))
 const client = LLMClient.configured({ observeAttempt: ProviderRequestObserver.observe }).pipe(Layer.provide(executor))
 const models = SessionRunnerModel.layerWith(() => SessionRunnerModel.withVariant(state.compatible ? compatibleModelInfo : modelInfo, catalogRef.variant).pipe(
   Effect.flatMap((selected) => SessionRunnerModel.fromCatalogModel(selected).pipe(
-    Effect.map((model) => SessionRunnerModel.resolved(model, catalogRef.variant, selected.cost)),
+    Effect.map((model) => SessionRunnerModel.resolved(
+      state.bridge ? Model.update(model, { route: model.route.with({ id: "ai-sdk:@ai-sdk/openai" }) }) : model,
+      catalogRef.variant,
+      selected.cost,
+    )),
   )),
 ))
 const helperPolicy = SessionHelperPolicy.layerWith({ titleMode: "local", models: { decision: catalogRef } }).pipe(Layer.provide(models))
@@ -103,6 +107,7 @@ const seed = (id: string) => Effect.gen(function* () {
   wire.length = 0
   state.fail = false
   state.compatible = false
+  state.bridge = false
   const database = yield* Database.Service
   yield* database.db.insert(ProjectTable).values({
     id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [],
@@ -190,4 +195,25 @@ it.effect("fails and settles the provider request when HTTP transport returns an
     { source: "decision", attempts: 1 },
     { source: "decision", attempts: 1 },
   ])
+}))
+
+it.effect("fails closed without any provider request on an AI SDK bridge route", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_decision_agent_bridge_route")
+  state.bridge = true
+  const audits: Array<Record<string, unknown>> = []
+  const unsubscribe = yield* (yield* EventRuntime.Service).listen((event) => Effect.sync(() => {
+    if (event.type === "session.decision.audited") audits.push(event.data as Record<string, unknown>)
+  }))
+  yield* Effect.addFinalizer(() => unsubscribe)
+  const decisions = yield* Decision.Service
+  const requests = yield* SessionProviderRequest.Service
+  const exit = yield* decisions.evaluate({ provider: "agent", request: {
+    state: { operation: "read" },
+    questions: [{ type: "predicate", name: "read_only", instructions: "Is this operation read-only?" }],
+  } }, { sessionID }).pipe(Effect.exit)
+  expect(exit._tag).toBe("Failure")
+  if (exit._tag === "Failure") expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "Decision.Error", reason: "unsupported-output" })
+  expect(wire).toHaveLength(0)
+  expect(yield* requests.list(sessionID)).toHaveLength(0)
+  expect(audits).toEqual([expect.objectContaining({ outcome: "failed", reason: "unsupported-output", route: "ai-sdk:@ai-sdk/openai" })])
 }))

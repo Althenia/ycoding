@@ -241,10 +241,12 @@ describe("session summary", () => {
   test("merges the selected session's autonomy, agent, and model", () => {
     const summary = summarizeSession(
       session({ agent: "god", modelLabel: "openai/gpt-6" }),
-      view({ autonomy: { mode: "goal", yolo: 0, goal: { text: "Ship it", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } } }),
+      view({ autonomy: { mode: "normal", yolo: false, goal: { text: "Ship it", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } } }),
     )
     expect(summary.status).toBe("idle")
-    expect(summary.autonomy).toBe("goal")
+    expect(summary.autonomy).toBe("normal")
+    expect(summary.goalActive).toBe(true)
+    expect(summary.yolo).toBe(false)
     expect(summary.autoAnswer).toBeUndefined()
     expect("guardrailsEnforced" in summary).toBe(false)
     expect(summary.agent).toBe("god")
@@ -252,10 +254,12 @@ describe("session summary", () => {
     expect(summary.updatedAt).toBe("2023-11-14T22:13:20.000Z")
   })
 
-  test("summary level and sleep come from effective values while auto-answer stays the Session's own", () => {
-    const summary = summarizeSession(session({}), view({ autonomy: { mode: "normal", yolo: 0, autoAnswer: true, effective: { yolo: 2, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } }))
-    expect(summary.yoloLevel).toBe(2)
+  test("summary YOLO and sleep come from effective values while the auto flags stay the Session's own", () => {
+    const summary = summarizeSession(session({}), view({ autonomy: { mode: "normal", yolo: false, autoPermission: true, autoGuardrail: true, autoAnswer: true, effective: { yolo: true, permissionsAuto: true, permissionModelReviews: false, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } }))
+    expect(summary.yolo).toBe(true)
     expect(summary.asleep).toBe(true)
+    expect(summary.autoPermission).toBe(true)
+    expect(summary.autoGuardrail).toBe(true)
     expect(summary.autoAnswer).toBe(true)
   })
 
@@ -292,8 +296,8 @@ describe("waiting for a decision", () => {
   test("badges the open family's root and the item's member Session with its review count", () => {
     const items = readReviewItems({ data: ["ses_a", "ses_child"].map((sessionID, index) => ({ itemID: `rvw_${index}`, sessionID, rootSessionID: "ses_a", sessionTitle: "T", created: 1, reason: "free_text",
       kind: "subagent_question", origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "?" } })) })!
-    const loaded = view({ review: { status: "ready", items }, autonomy: { mode: "normal", yolo: 0 } })
-    expect(sessionChips(session({}), loaded).map((chip) => chip.label)).toEqual(["review 2", "Ask first"])
+    const loaded = view({ review: { status: "ready", items }, autonomy: { mode: "normal", yolo: false } })
+    expect(sessionChips(session({}), loaded).map((chip) => chip.label)).toEqual(["review 2", "YOLO off"])
     expect(sessionChips(session({ id: "ses_child" }), loaded)[0]).toEqual({ label: "review 1", tone: "attention" })
     expect(sessionChips(session({ id: "ses_b" }), loaded).map((chip) => chip.label)).not.toContain("review 2")
     expect(sessionChips(session({}), { ...loaded, requests: [permission] })[0]?.label).toBe("Waiting for approval")
@@ -307,9 +311,9 @@ describe("waiting for a decision", () => {
   test("puts the pending approval first so compact session rows cannot hide it", () => {
     const chips = sessionChips(
       session({ running: true }),
-      view({ requests: [permission], autonomy: { mode: "normal", yolo: 2 } }),
+      view({ requests: [permission], autonomy: { mode: "normal", yolo: true } }),
     )
-    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "Tools + reviews"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "YOLO on"])
     expect(chips[0]?.tone).toBe("attention")
   })
 

@@ -33,7 +33,7 @@ export type When = Form.When
 export const State = Form.State
 export type State = typeof State.Type
 export type TerminalState = Exclude<State, { readonly status: "pending" }>
-export type AskResult = TerminalState & { readonly automatic?: true }
+export type AskResult = TerminalState & { readonly automatic?: true; readonly via?: "auto-answer" | "yolo"; readonly confidence?: number }
 
 export const Answer = Form.Answer
 export type Answer = typeof Answer.Type
@@ -234,16 +234,19 @@ export const layer = Layer.effect(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const sessionID = Schema.is(SessionSchema.ID)(input.sessionID) ? input.sessionID : undefined
-          const autoAnswer = sessionID
+          const snapshot = sessionID
             ? yield* autonomy
-                .canAutoAnswer(sessionID)
-                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-            : false
+                .snapshot(sessionID)
+                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+            : undefined
+          const autoAnswer = snapshot ? SessionAutonomy.canAutoAnswer(snapshot.state) : false
           const asleep = sessionID
             ? yield* autonomy
                 .isAsleep(sessionID)
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
             : false
+          const yolo = sessionID ? yield* DecisionChoice.yoloEnabled(autonomy, sessionID) : false
+          const auto = autoAnswer || yolo
           if (asleep && sessionID) {
             const form: Info = {
               id: input.id ?? ID.create(),
@@ -252,19 +255,17 @@ export const layer = Layer.effect(
               ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
               fields: input.fields,
             }
-            if (!autoAnswer) {
+            if (!auto || !snapshot) {
               const item = yield* openReview(form, sessionID, { reason: "disabled" })
               return { status: "deferred", itemID: item.itemID } as TerminalState
             }
-            const outcome = yield* restore(decisionAnswer(decision, sessionID, form))
+            const outcome = yield* restore(decisionAnswer(decision, sessionID, form, { autoAnswer, yolo }))
             if (outcome.type === "defer") {
               const item = yield* openReview(form, sessionID, outcome)
               return { status: "deferred", itemID: item.itemID } as TerminalState
             }
-            const stillEnabled = yield* autonomy
-              .canAutoAnswer(sessionID)
-              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-            if (!stillEnabled) {
+            const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot.sequence)
+            if (!unchanged) {
               const item = yield* openReview(form, sessionID, { reason: "disabled" })
               return { status: "deferred", itemID: item.itemID } as TerminalState
             }
@@ -276,21 +277,28 @@ export const layer = Layer.effect(
               Effect.orDie,
             )
             const result = yield* Deferred.await(entry.deferred)
-            return automatic ? { ...result, automatic: true as const } : result
+            return automatic ? { ...result, automatic: true as const, via: outcome.via, ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }) } : result
           }
           const form = yield* createPending(input, true)
           const entry = yield* find(form.id).pipe(Effect.orDie)
           return yield* restore(Effect.gen(function* () {
-            const answer = autoAnswer ? automaticAnswer(form) : undefined
-            const automatic = answer
-              ? yield* reply({ id: form.id, answer }).pipe(
+            const outcome = auto && sessionID && snapshot
+              ? yield* decisionAnswer(decision, sessionID, form, { autoAnswer, yolo })
+              : undefined
+            const unchanged = outcome?.type === "answer" && sessionID && snapshot
+              ? yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot.sequence)
+              : false
+            const automatic = outcome?.type === "answer" && unchanged
+              ? yield* reply({ id: form.id, answer: outcome.answer }).pipe(
                   Effect.as(true),
                   Effect.catchTag("Form.AlreadySettledError", () => Effect.succeed(false)),
                   Effect.orDie,
                 )
               : false
             const result = yield* Deferred.await(entry.deferred)
-            return automatic ? { ...result, automatic: true as const } : result
+            return automatic && outcome?.type === "answer"
+              ? { ...result, automatic: true as const, via: outcome.via, ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }) }
+              : result
           })).pipe(
             Effect.onInterrupt(() => Effect.ignore(cancel(form.id))),
           )
@@ -358,11 +366,16 @@ export const node = makeLocationNode({
   deps: [Config.node, Database.node, EventRuntime.node, SessionAutonomy.node, Decision.node],
 })
 
+interface AutoMode {
+  readonly autoAnswer: boolean
+  readonly yolo: boolean
+}
+
 type SleepOutcome =
-  | { readonly type: "answer"; readonly answer: Answer }
+  | { readonly type: "answer"; readonly answer: Answer; readonly via: "auto-answer" | "yolo"; readonly confidence?: number }
   | {
       readonly type: "defer"
-      readonly reason: "free_text" | "error" | DecisionChoice.UnsettledReason
+      readonly reason: "disabled" | "free_text" | "error" | DecisionChoice.UnsettledReason
       readonly choice?: string
       readonly confidence?: number
     }
@@ -371,57 +384,190 @@ function decisionAnswer(
   decision: Decision.Interface,
   sessionID: SessionSchema.ID,
   form: Info,
+  mode: AutoMode,
 ): Effect.Effect<SleepOutcome> {
   return Effect.gen(function* () {
+    let consultations = 0
+    const consulted: Decision.Interface = {
+      evaluate: (input, context) => {
+        consultations++
+        return decision.evaluate(input, context)
+      },
+    }
     const answer: Record<string, Form.Value> = {}
+    let confidence: number | undefined
     for (const field of form.fields) {
-      if (field.type === "external") {
-        answer[field.key] = true
-        continue
-      }
+      if (field.type === "external") return { type: "defer", reason: "error" } as SleepOutcome
       if (!isActive(field, answer)) continue
-      const outcome = yield* decisionValue(decision, sessionID, form, field)
+      const outcome = yield* decisionValue(consulted, sessionID, form, field, mode)
       if (outcome.type === "defer") return outcome
-      if (outcome.value === undefined) {
-        if (field.required) return { type: "defer", reason: "error" } as SleepOutcome
-        continue
-      }
+      if (outcome.confidence !== undefined) confidence = Math.min(confidence ?? 1, outcome.confidence)
+      if (outcome.value === undefined) continue
       answer[field.key] = outcome.value
     }
+    if (Object.keys(answer).length === 0)
+      return {
+        type: "defer",
+        reason: consultations > 0 ? "low_confidence" : form.fields.some(isTextField) ? "free_text" : "disabled",
+      } as SleepOutcome
     return validateAnswer(form, answer)
       ? ({ type: "defer", reason: "error" } as SleepOutcome)
-      : ({ type: "answer", answer } as SleepOutcome)
+      : ({
+          type: "answer",
+          answer,
+          via: consultations > 0 ? "yolo" : "auto-answer",
+          ...(confidence === undefined ? {} : { confidence }),
+        } as SleepOutcome)
   })
 }
 
+function isTextField(field: Form.Field) {
+  return field.type === "number" || field.type === "integer" || (field.type === "string" && (field.options?.length ?? 0) === 0)
+}
+
 type FieldOutcome =
-  | { readonly type: "value"; readonly value: Form.Value | undefined }
+  | { readonly type: "value"; readonly value: Form.Value | undefined; readonly confidence?: number }
   | Extract<SleepOutcome, { readonly type: "defer" }>
+
+const fieldInstructions =
+  "The user cannot answer this form right now. Answer only this field from the evidence given and the form's stated purpose. Refuse when the evidence does not support an answer; refusal asks the user instead. Never invent facts, names, addresses, or identifiers the evidence does not supply."
+
+const RECOMMENDED = / \(Recommended\)$/
+
+function mustAnswer(form: Info, field: InputField) {
+  return field.required === true || form.metadata?.kind === "question"
+}
+
+function fieldState(form: Info, field: InputField) {
+  return {
+    form: form.title,
+    field: field.key,
+    title: field.title ?? null,
+    description: field.description ?? null,
+    required: mustAnswer(form, field),
+  }
+}
+
+function modelDefer(outcome: {
+  readonly reason: DecisionChoice.UnsettledReason
+  readonly choice?: string
+  readonly confidence?: number
+}): FieldOutcome {
+  return {
+    type: "defer",
+    reason: outcome.reason,
+    ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
+    ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+  }
+}
 
 function decisionValue(
   decision: Decision.Interface,
   sessionID: SessionSchema.ID,
   form: Info,
   field: InputField,
+  mode: AutoMode,
 ): Effect.Effect<FieldOutcome> {
-  if (field.type !== "string" && field.type !== "multiselect")
-    return Effect.succeed<FieldOutcome>({ type: "value", value: automaticValue(field) })
-  const options = field.options
-  if (!options || options.length === 0) {
-    if (field.required)
-      return Effect.succeed<FieldOutcome>({ type: "defer", reason: "free_text" })
-    return Effect.succeed<FieldOutcome>({ type: "value", value: automaticValue(field) })
-  }
-  return DecisionChoice.chooseDetailed(decision, {
+  const required = mustAnswer(form, field)
+  const unanswered: FieldOutcome = required
+    ? { type: "defer", reason: isTextField(field) ? "free_text" : "disabled" }
+    : { type: "value", value: undefined }
+  const call = {
     sessionID,
     name: field.key,
-    instructions:
-      "The user is asleep and cannot answer this form. Choose the option that best serves the form's stated purpose with the evidence given. Refuse when the evidence does not support a choice; refusal defers the form to the user's review box.",
+    purpose: "answer" as const,
+    authority: "yolo" as const,
+    invocationKey: `${form.id}:${field.key}`,
+  }
+  if (mode.autoAnswer && field.default !== undefined && !validateField(field, field.default))
+    return Effect.succeed<FieldOutcome>({ type: "value", value: field.default })
+  if (field.type === "boolean") {
+    if (!mode.yolo) return Effect.succeed(unanswered)
+    return DecisionChoice.answerBoolean(decision, {
+      ...call,
+      instructions: `${fieldInstructions} Answer yes (true) or no (false) for this field; false is a real answer, distinct from refusing.`,
+      state: fieldState(form, field),
+    }).pipe(
+      Effect.map((outcome): FieldOutcome =>
+        outcome.type === "unsettled" ? modelDefer(outcome) : { type: "value", value: outcome.value, confidence: outcome.confidence },
+      ),
+    )
+  }
+  if (field.type === "number" || field.type === "integer") {
+    if (!required || !mode.yolo) return Effect.succeed(unanswered)
+    return DecisionChoice.answerText(decision, {
+      ...call,
+      instructions: `${fieldInstructions} Respond with only the numeric value for this ${field.type} field, with no units or words.`,
+      state: {
+        ...fieldState(form, field),
+        minimum: field.minimum ?? null,
+        maximum: field.maximum ?? null,
+      },
+      maxLength: 64,
+    }).pipe(
+      Effect.map((outcome): FieldOutcome => {
+        if (outcome.type === "unsettled") return modelDefer(outcome)
+        const value = Number(outcome.value.trim())
+        return !Number.isFinite(value) || (field.type === "integer" && !Number.isInteger(value)) || validateField(field, value)
+          ? { type: "defer", reason: "error", confidence: outcome.confidence }
+          : { type: "value", value, confidence: outcome.confidence }
+      }),
+    )
+  }
+  if (field.type === "multiselect") {
+    const marked = field.options.filter((option) => RECOMMENDED.test(option.label)).map((option) => option.value)
+    if (mode.autoAnswer && marked.length > 0 && !validateField(field, marked))
+      return Effect.succeed<FieldOutcome>({ type: "value", value: marked })
+    if (!mode.yolo || field.options.length === 0) return Effect.succeed(unanswered)
+    return DecisionChoice.grade(decision, {
+      ...call,
+      instructions: `${fieldInstructions} Grade every option independently for whether it should be selected.`,
+      state: {
+        ...fieldState(form, field),
+        options: field.options.map((option) => ({ value: option.value, label: option.label, description: option.description ?? null })),
+      },
+      choices: field.options.map((option) => ({ value: option.value, description: option.description ?? option.label })),
+    }).pipe(
+      Effect.map((outcome): FieldOutcome => {
+        if (outcome.type === "unsettled") return { type: "defer", reason: outcome.reason }
+        const selected = outcome.grades.filter(
+          (grade) => typeof grade.choice === "string" && grade.confidence >= DecisionChoice.ConfidenceThreshold,
+        )
+        if (selected.length === 0) return required || (field.minItems ?? 0) > 0 ? { type: "defer", reason: "low_confidence" } : { type: "value", value: undefined }
+        const value = selected.map((grade) => String(grade.choice))
+        return validateField(field, value)
+          ? { type: "defer", reason: "error" }
+          : { type: "value", value, confidence: Math.min(...selected.map((grade) => grade.confidence)) }
+      }),
+    )
+  }
+  const options = field.options
+  if (!options || options.length === 0) {
+    if (!required || !mode.yolo) return Effect.succeed(unanswered)
+    return DecisionChoice.answerText(decision, {
+      ...call,
+      instructions: fieldInstructions,
+      state: fieldState(form, field),
+      maxLength: Math.min(field.maxLength ?? 8192, 8192),
+    }).pipe(
+      Effect.map((outcome): FieldOutcome =>
+        outcome.type === "unsettled"
+          ? modelDefer(outcome)
+          : validateField(field, outcome.value)
+            ? { type: "defer", reason: "error", confidence: outcome.confidence }
+            : { type: "value", value: outcome.value, confidence: outcome.confidence },
+      ),
+    )
+  }
+  const marked = options.filter((option) => RECOMMENDED.test(option.label))
+  if (mode.autoAnswer && marked.length === 1 && marked[0] && !validateField(field, marked[0].value))
+    return Effect.succeed<FieldOutcome>({ type: "value", value: marked[0].value })
+  if (!mode.yolo) return Effect.succeed(unanswered)
+  return DecisionChoice.chooseDetailed(decision, {
+    ...call,
+    instructions: fieldInstructions,
     state: {
-      form: form.title,
-      field: field.key,
-      title: field.title ?? null,
-      description: field.description ?? null,
+      ...fieldState(form, field),
       options: options.map((option) => ({
         value: option.value,
         label: option.label,
@@ -433,77 +579,29 @@ function decisionValue(
       description: option.description ?? option.label,
     })),
   }).pipe(
-    Effect.map((outcome): FieldOutcome => {
-      if (outcome.type === "unsettled")
-        return {
-          type: "defer",
-          reason: outcome.reason,
-          ...(outcome.choice === undefined ? {} : { choice: outcome.choice }),
-          ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
-        }
-      const value: Form.Value = field.type === "multiselect" ? [outcome.value] : outcome.value
-      return validateField(field, value)
-        ? { type: "defer", reason: "error", choice: outcome.value, confidence: outcome.confidence }
-        : { type: "value", value }
+    Effect.flatMap((outcome): Effect.Effect<FieldOutcome> => {
+      if (outcome.type === "judgment")
+        return Effect.succeed<FieldOutcome>(
+          validateField(field, outcome.value)
+            ? { type: "defer", reason: "error", choice: outcome.value, confidence: outcome.confidence }
+            : { type: "value", value: outcome.value, confidence: outcome.confidence },
+        )
+      if (field.custom !== true) return Effect.succeed(modelDefer(outcome))
+      return DecisionChoice.answerText(decision, {
+        ...call,
+        invocationKey: `${call.invocationKey}:custom`,
+        instructions: `${fieldInstructions} No listed option was settled; give a custom answer only when the evidence clearly supports one.`,
+        state: fieldState(form, field),
+        maxLength: Math.min(field.maxLength ?? 8192, 8192),
+      }).pipe(
+        Effect.map((text): FieldOutcome =>
+          text.type === "text" && !validateField(field, text.value)
+            ? { type: "value", value: text.value, confidence: text.confidence }
+            : modelDefer(outcome),
+        ),
+      )
     }),
   )
-}
-
-function automaticAnswer(form: Info): Answer | undefined {
-  const answer: Record<string, Form.Value> = {}
-  for (const field of form.fields) {
-    if (field.type === "external") {
-      answer[field.key] = true
-      continue
-    }
-    if (!isActive(field, answer)) continue
-    const value = automaticValue(field)
-    if (value === undefined) {
-      if (field.required) return
-      continue
-    }
-    answer[field.key] = value
-  }
-  return validateAnswer(form, answer) ? undefined : answer
-}
-
-function automaticValue(field: InputField): Form.Value | undefined {
-  if (field.type === "boolean") return field.default ?? false
-  if (field.type === "number" || field.type === "integer") {
-    if (field.default !== undefined) return field.default
-    const bounded = field.minimum ?? (field.maximum !== undefined && field.maximum < 0 ? field.maximum : 0)
-    const value = field.type === "integer" ? Math.ceil(bounded) : bounded
-    return validateField(field, value) ? undefined : value
-  }
-  if (field.type === "multiselect") {
-    if (field.default !== undefined) return validateField(field, field.default) ? undefined : field.default
-    if (!field.required && (field.minItems ?? 0) === 0) return
-    const count = Math.max(field.minItems ?? 1, 1)
-    const value = field.options.slice(0, count).map((option) => option.value)
-    return validateField(field, value) ? undefined : value
-  }
-  if (field.default !== undefined) return validateField(field, field.default) ? undefined : field.default
-  const option = field.options?.[0]?.value
-  if (option !== undefined) return validateField(field, option) ? undefined : option
-  if (!field.required) return
-  const candidates = [
-    field.placeholder,
-    field.format === "email"
-      ? "user@example.com"
-      : field.format === "uri"
-        ? "https://example.com"
-        : field.format === "date"
-          ? "1970-01-01"
-          : field.format === "date-time"
-            ? "1970-01-01T00:00:00.000Z"
-            : "Continue",
-  ].filter((value): value is string => value !== undefined)
-  for (const candidate of candidates) {
-    const minimum = field.minLength ?? 0
-    const maximum = field.maxLength ?? Number.MAX_SAFE_INTEGER
-    const value = candidate.padEnd(minimum, "x").slice(0, maximum)
-    if (!validateField(field, value)) return value
-  }
 }
 
 export function validateAnswer(form: Pick<Info, "fields">, answer: Answer) {
@@ -618,6 +716,7 @@ function validateField(field: InputField, value: Form.Value): string | undefined
   }
   if (field.type === "multiselect") {
     if (!isStringArray(value)) return `Expected string array for form field: ${field.key}`
+    if (new Set(value).size !== value.length) return `Duplicate selections for form field: ${field.key}`
     if (field.required && value.length === 0) return `Missing required form field: ${field.key}`
     if (field.minItems !== undefined && value.length < field.minItems)
       return `Too few selections for form field: ${field.key}`

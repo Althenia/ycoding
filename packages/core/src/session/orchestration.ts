@@ -407,7 +407,7 @@ const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 
     type SleepAnswerOutcome =
-      | { readonly type: "answer"; readonly text: string }
+      | { readonly type: "answer"; readonly text: string; readonly confidence?: number }
       | {
           readonly type: "defer"
           readonly reason: "disabled" | "free_text" | "error" | DecisionChoice.UnsettledReason
@@ -419,24 +419,49 @@ const layer = Layer.effect(
       childID: SessionSchema.ID
       text: string
       data?: Schema.Json
+      autoAnswer: boolean
+      yolo: boolean
+      questionID: string
     }): Effect.fn.Return<SleepAnswerOutcome> {
       const options = questionOptions(input.data)
-      if (options.length === 0) return { type: "defer", reason: "free_text" }
+      const marked = options.filter((option) => /\s\(Recommended\)$/.test(option))
+      if (input.autoAnswer && marked.length === 1 && marked[0] !== undefined) return { type: "answer", text: marked[0] }
+      if (!input.yolo) return { type: "defer", reason: options.length === 0 ? "free_text" : "disabled" }
       const child = yield* sessions
         .get(input.childID)
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
       if (!child) return { type: "defer", reason: "error" }
       const decision = yield* Decision.Service.pipe(Effect.provide(locations.get(child.location)), Effect.exit)
       if (decision._tag === "Failure") return { type: "defer", reason: "error" }
-      const outcome = yield* DecisionChoice.chooseDetailed(decision.value, {
+      const call = {
         sessionID: input.childID,
         name: "subagent_question",
+        purpose: "answer" as const,
+        authority: "yolo" as const,
+        invocationKey: input.questionID,
+      }
+      if (options.length === 0) {
+        const outcome = yield* DecisionChoice.answerText(decision.value, {
+          ...call,
+          instructions:
+            "The user cannot answer this subagent's question right now. Give the bounded free-text answer that best serves the question with the evidence given. Refuse when the evidence does not support an answer; refusal defers the question to the user.",
+          state: { question: input.text },
+        })
+        if (outcome.type === "text") return { type: "answer", text: outcome.value, confidence: outcome.confidence }
+        return {
+          type: "defer",
+          reason: outcome.reason,
+          ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+        }
+      }
+      const outcome = yield* DecisionChoice.chooseDetailed(decision.value, {
+        ...call,
         instructions:
-          "The user is asleep and cannot answer this subagent's question. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal defers the question to the user's review box.",
+          "The user cannot answer this subagent's question right now. Choose the option that best serves the question with the evidence given. Refuse when the evidence does not support a choice; refusal defers the question to the user.",
         state: { question: input.text, options },
         choices: options.map((value) => ({ value })),
       })
-      if (outcome.type === "judgment") return { type: "answer", text: outcome.value }
+      if (outcome.type === "judgment") return { type: "answer", text: outcome.value, confidence: outcome.confidence }
       return {
         type: "defer",
         reason: outcome.reason,
@@ -869,14 +894,21 @@ const layer = Layer.effect(
               Effect.provide(locations.get(child.location)),
               Effect.flatMap((config) => config.entries()),
             )
-            const settled: SleepAnswerOutcome | undefined = !asleep ? undefined : autoAnswer
-              ? yield* sleepAnswer({ childID, text, data })
-              : { type: "defer" as const, reason: "disabled" as const }
-            const sleepOutcome: SleepAnswerOutcome | undefined = settled?.type === "answer" && !(yield* autonomy
-              .canAutoAnswer(childID)
-              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID }))))
+            const snapshot = yield* autonomy
+              .snapshot(childID)
+              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            const yolo = yield* DecisionChoice.yoloEnabled(autonomy, childID)
+            const settled: SleepAnswerOutcome | undefined = autoAnswer || yolo
+              ? yield* sleepAnswer({ childID, text, data, autoAnswer, yolo, questionID: question.id })
+              : asleep
+                ? { type: "defer" as const, reason: "disabled" as const }
+                : undefined
+            const sleepOutcome: SleepAnswerOutcome | undefined = settled?.type === "answer" && !(yield* DecisionChoice
+              .autonomyUnchanged(autonomy, childID, snapshot.sequence))
               ? { type: "defer" as const, reason: "disabled" as const }
-              : settled
+              : settled?.type === "defer" && !asleep
+                ? undefined
+                : settled
             if (sleepOutcome?.type === "defer") {
               const limit = Config.latest(entries, "guardrails")?.max_pending_reviews ?? 16
               yield* SessionReviewFold.open(db, events, {
@@ -897,8 +929,8 @@ const layer = Layer.effect(
               yield* publish(childID, { type: "question_asked", question: deferredQuestion })
               return { question: deferredQuestion, autoAnswered: false }
             }
-            if (autoAnswer) {
-              const answerText = sleepOutcome?.type === "answer" ? sleepOutcome.text : SessionAutonomy.AutomaticAnswer
+            if (sleepOutcome?.type === "answer") {
+              const answerText = sleepOutcome.text
               yield* sessions
                 .synthetic({
                   id: SessionOrchestrationIdentity.launch(
@@ -919,6 +951,9 @@ const layer = Layer.effect(
                     childID,
                     kind: "answer",
                     questionID: question.id,
+                    automatic: true,
+                    via: sleepOutcome.confidence === undefined ? "auto-answer" : "yolo",
+                    ...(sleepOutcome.confidence === undefined ? {} : { confidence: sleepOutcome.confidence }),
                   },
                   delivery: "steer",
                   resume: false,
@@ -1140,11 +1175,13 @@ function questionOptions(data: Schema.Json | undefined): string[] {
   if (!Array.isArray(options)) return []
   return options.flatMap((option) => {
     if (typeof option === "string") return [option]
+    if (typeof option === "boolean") return [String(option)]
     if (option && typeof option === "object" && !Array.isArray(option)) {
       const label = (option as Record<string, unknown>).label
       const value = (option as Record<string, unknown>).value
       if (typeof label === "string") return [label]
       if (typeof value === "string") return [value]
+      if (typeof value === "boolean") return [String(value)]
     }
     return []
   })

@@ -176,25 +176,7 @@ export const SessionAutonomyGoal = Schema.Struct({
   maxNoProgress: PositiveInt,
   lastProgressDigest: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyGoal" })
-export const SessionAutonomyYoloLevel = Schema.Union([
-  Schema.Literal(0),
-  Schema.Literal(1),
-  Schema.Literal(2),
-]).annotate({
-  identifier: "SessionAutonomyYoloLevel",
-})
-export const SessionAutonomyYolo = Schema.Union([SessionAutonomyYoloLevel, Schema.Boolean])
-  .pipe(
-    Schema.decodeTo(SessionAutonomyYoloLevel, {
-      decode: SchemaGetter.transform((value: unknown) => {
-        if (typeof value === "boolean") return value ? 2 : 0
-        if (value === 0 || value === 1 || value === 2) return value
-        throw new Error(`Invalid yolo level: ${String(value)}`)
-      }),
-      encode: SchemaGetter.transform((value: 0 | 1 | 2) => value),
-    }),
-  )
-  .annotate({ identifier: "SessionAutonomyYolo" })
+export const SessionAutonomyYolo = Schema.Boolean.annotate({ identifier: "SessionAutonomyYolo" })
 export const SessionAutonomySleep = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
   decode: SchemaGetter.transform(() => ({})),
   encode: SchemaGetter.transform(() => ({})),
@@ -202,12 +184,16 @@ export const SessionAutonomySleep = Schema.Struct({}).pipe(Schema.decodeTo(Schem
 export const SessionAutonomyState = Schema.Struct({
   mode: SessionAutonomyMode,
   yolo: SessionAutonomyYolo,
+  autoPermission: Schema.Boolean.pipe(Schema.optional),
+  autoGuardrail: Schema.Boolean.pipe(Schema.optional),
   autoAnswer: Schema.Boolean.pipe(Schema.optional),
   goal: SessionAutonomyGoal.pipe(Schema.optional),
   sleep: SessionAutonomySleep.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
 export const SessionAutonomyEffective = Schema.Struct({
-  yolo: SessionAutonomyYoloLevel,
+  yolo: SessionAutonomyYolo,
+  permissionsAuto: Schema.Boolean,
+  permissionModelReviews: Schema.Boolean,
   asleep: Schema.Boolean,
   guardrailsEnabled: Schema.Boolean,
   ordinaryReviewsAuto: Schema.Boolean,
@@ -218,29 +204,41 @@ export const SessionAutonomyView = Schema.Struct({
   ...SessionAutonomyState.fields,
   effective: SessionAutonomyEffective,
 }).annotate({ identifier: "SessionAutonomyView" })
+const AutonomyControlsAbsent = {
+  yolo: Schema.Never.pipe(Schema.optional),
+  autoPermission: Schema.Never.pipe(Schema.optional),
+  autoGuardrail: Schema.Never.pipe(Schema.optional),
+  autoAnswer: Schema.Never.pipe(Schema.optional),
+  sleep: Schema.Never.pipe(Schema.optional),
+  goal: Schema.Never.pipe(Schema.optional),
+  maxNoProgress: Schema.Never.pipe(Schema.optional),
+}
 export const SessionAutonomySet = Schema.Union([
   Schema.Struct({
+    ...AutonomyControlsAbsent,
     yolo: SessionAutonomyYolo.pipe(Schema.optional),
-    autoAnswer: Schema.Never.pipe(Schema.optional),
     goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Literal(true), Schema.Null]),
     maxNoProgress: PositiveInt.pipe(Schema.optional),
   }),
   Schema.Struct({
+    ...AutonomyControlsAbsent,
     yolo: SessionAutonomyYolo,
-    goal: Schema.Never.pipe(Schema.optional),
-    autoAnswer: Schema.Never.pipe(Schema.optional),
   }),
   Schema.Struct({
+    ...AutonomyControlsAbsent,
     sleep: Schema.Boolean,
-    goal: Schema.Never.pipe(Schema.optional),
-    yolo: Schema.Never.pipe(Schema.optional),
-    autoAnswer: Schema.Never.pipe(Schema.optional),
   }),
   Schema.Struct({
+    ...AutonomyControlsAbsent,
     autoAnswer: Schema.Boolean,
-    goal: Schema.Never.pipe(Schema.optional),
-    yolo: Schema.Never.pipe(Schema.optional),
-    sleep: Schema.Never.pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    ...AutonomyControlsAbsent,
+    autoPermission: Schema.Boolean,
+  }),
+  Schema.Struct({
+    ...AutonomyControlsAbsent,
+    autoGuardrail: Schema.Boolean,
   }),
 ]).annotate({ identifier: "SessionAutonomySet" })
 

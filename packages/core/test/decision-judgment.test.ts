@@ -431,9 +431,10 @@ test("responseSchema is a strict object schema discriminating predicate from ref
                     answer: { type: "boolean" },
                     choice: { type: "null" },
                     score: { type: "null" },
+                    text: { type: "null" },
                     confidence: { type: "number" },
                   },
-                  required: ["name", "type", "answer", "choice", "score", "confidence"],
+                  required: ["name", "type", "answer", "choice", "score", "text", "confidence"],
                   additionalProperties: false,
                 },
                 {
@@ -444,9 +445,10 @@ test("responseSchema is a strict object schema discriminating predicate from ref
                     answer: { type: "null" },
                     choice: { type: "null" },
                     score: { type: "null" },
+                    text: { type: "null" },
                     confidence: { type: "number", enum: [0] },
                   },
-                  required: ["name", "type", "answer", "choice", "score", "confidence"],
+                  required: ["name", "type", "answer", "choice", "score", "text", "confidence"],
                   additionalProperties: false,
                 },
               ],
@@ -492,7 +494,7 @@ test("responseSchema discriminates choice, graded choice, and score with exact t
   })
   const gradedBranch = branchOf(graded, "route", "choice")
   const gradedProperties = record(gradedBranch.properties)
-  expect(strings(gradedBranch.required)).toEqual(["name", "type", "answer", "choice", "score", "confidence", "grades"])
+  expect(strings(gradedBranch.required)).toEqual(["name", "type", "answer", "choice", "score", "text", "confidence", "grades"])
   expect(gradedProperties.answer).toEqual({ type: "null" })
   expect(gradedProperties.choice).toEqual({ type: "null" })
   expect(gradedProperties.score).toEqual({ type: "null" })
@@ -540,4 +542,51 @@ test("responseSchema carries no provider-unenforced bounds and requires every ob
   }
   visit(schema)
   expect(seen).toEqual([])
+})
+
+const textRequest = {
+  state: { task: "Name the release" },
+  questions: [{ type: "text", name: "release", instructions: "Give the release name", maxLength: 12 }],
+} satisfies typeof DecisionJudgment.Request.Type
+const textAnswer = (patch: Record<string, unknown>) =>
+  JSON.stringify({
+    decisions: {
+      version: 1,
+      answers: [{ name: "release", type: "text", answer: null, choice: null, score: null, text: "release-42", confidence: 0.9, ...patch }],
+    },
+  })
+
+test("text questions accept only bounded non-whitespace text answers", () => {
+  const ok = DecisionJudgment.parse(textAnswer({}), textRequest)
+  expect(Result.isSuccess(ok)).toBe(true)
+  if (Result.isSuccess(ok)) expect(ok.success.decisions.answers[0]?.text).toBe("release-42")
+  for (const patch of [{ text: "   " }, { text: "" }, { text: "x".repeat(13) }, { text: null }, { answer: false }, { choice: "x" }, { score: 0 }])
+    expect(Result.isFailure(DecisionJudgment.parse(textAnswer(patch), textRequest))).toBe(true)
+  const refusal = DecisionJudgment.parse(
+    JSON.stringify({ decisions: { version: 1, answers: [{ name: "release", type: "refusal", answer: null, choice: null, score: null, text: null, confidence: 0 }] } }),
+    textRequest,
+  )
+  expect(Result.isSuccess(refusal)).toBe(true)
+})
+
+test("text answers do not leak into other question types and old answers stay valid", () => {
+  const leaked = textAnswer({}).replace('"type":"text"', '"type":"predicate"').replace('"answer":null', '"answer":false')
+  const predicateRequest = { state: null, questions: [{ type: "predicate", name: "release", instructions: "Ready?" }] } satisfies typeof DecisionJudgment.Request.Type
+  expect(Result.isFailure(DecisionJudgment.parse(leaked, predicateRequest))).toBe(true)
+  expect(Result.isSuccess(DecisionJudgment.parse(wire, input))).toBe(true)
+})
+
+test("requests reject duplicate score labels and empty choice values", () => {
+  expect(Schema.is(DecisionJudgment.Request)({
+    state: null,
+    questions: [{ type: "score", name: "s", instructions: "Rate", levels: [{ label: "low" }, { label: "low" }] }],
+  })).toBe(false)
+  expect(Schema.is(DecisionJudgment.Request)({
+    state: null,
+    questions: [{ type: "choice", name: "c", instructions: "Pick", choices: [{ value: "" }, { value: "x" }] }],
+  })).toBe(false)
+  expect(Schema.is(DecisionJudgment.Request)({
+    state: null,
+    questions: [{ type: "choice", name: "c", instructions: "Pick", choices: [{ value: false }, { value: "false" }] }],
+  })).toBe(true)
 })

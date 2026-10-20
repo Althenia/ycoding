@@ -248,29 +248,29 @@ describe("sessionStateChips", () => {
     ...overrides,
   })
 
-  test("always reports the level name when autonomy is known and never invents a guardrail chip", () => {
+  test("always reports YOLO on or off when autonomy is known and never invents a guardrail chip", () => {
     const labels = sessionStateChips(session({})).map((chip) => chip.label)
-    expect(labels).toContain("Ask first")
+    expect(labels).toContain("YOLO off")
     expect(labels).not.toContain("goal")
     expect(labels.some((label) => label.startsWith("Guardrails"))).toBe(false)
   })
 
   test("uses the TUI autonomy vocabulary in heading order", () => {
-    expect(sessionStateChips(session({ autonomy: "goal", yoloLevel: 2, goalActive: true, asleep: true, autoAnswer: true })))
-      .toEqual([{ label: "Tools + reviews", tone: "attention" }, { label: "goal", tone: "neutral" }, { label: "asleep", tone: "success" }, { label: "auto-answer", tone: "neutral" }])
-    expect(sessionStateChips(session({ asleep: true })).map((chip) => chip.label)).toEqual(["Ask first", "asleep"])
+    expect(sessionStateChips(session({ yolo: true, goalActive: true, asleep: true, autoPermission: true, autoGuardrail: true, autoAnswer: true })))
+      .toEqual([{ label: "YOLO on", tone: "attention" }, { label: "goal", tone: "neutral" }, { label: "asleep", tone: "success" }, { label: "auto-permission", tone: "neutral" }, { label: "auto-guardrail", tone: "neutral" }, { label: "auto-answer", tone: "neutral" }])
+    expect(sessionStateChips(session({ asleep: true })).map((chip) => chip.label)).toEqual(["YOLO off", "asleep"])
     expect(sessionStateChips(session({ autonomy: undefined }))).toEqual([])
   })
 
   test("keeps session state chips separate from agent and model metadata", () => {
     const labels = sessionStateChips(
-      session({ autonomy: "yolo", yoloLevel: 1, agent: "god", model: "openai/gpt-5", status: "running" }),
+      session({ yolo: true, agent: "god", model: "openai/gpt-5", status: "running" }),
     ).map((chip) => chip.label)
-    expect(labels).toContain("Allow tools")
+    expect(labels).toContain("YOLO on")
     expect(labels).not.toContain("god")
     expect(labels).not.toContain("openai/gpt-5")
     expect(labels).toContain("Running")
-    expect(sessionStateChips(session({ autonomy: "goal" })).map((chip) => chip.label)).toContain("goal")
+    expect(sessionStateChips(session({ goalActive: true })).map((chip) => chip.label)).toContain("goal")
   })
 
   test("marks blocked sessions as attention without a guardrail chip", () => {
@@ -280,9 +280,9 @@ describe("sessionStateChips", () => {
   })
 
   test("leads a failed Session with a neutral Failed chip", () => {
-    const chips = sessionStateChips(session({ status: "failed", autonomy: "goal" }))
+    const chips = sessionStateChips(session({ status: "failed", goalActive: true }))
     expect(chips[0]).toEqual({ label: "Failed", tone: "neutral" })
-    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "Ask first", "goal"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "YOLO off", "goal"])
   })
 
   test("only attention roots outside the failed set make the Sessions navigation wait", () => {

@@ -624,7 +624,9 @@ function createFixtureStore(): Fixture {
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const inventoryInputs: Readonly<Record<string, unknown>>[] = []
   let transportsCreated = 0
-  let currentYolo = remoteScenarioData?.autonomy.yolo ?? 2
+  let currentYolo = remoteScenarioData?.autonomy.yolo === true
+  let currentAutoPermission = remoteScenarioData === undefined ? true : remoteScenarioData.autonomy.autoPermission === true
+  let currentAutoGuardrail = remoteScenarioData === undefined ? true : remoteScenarioData.autonomy.autoGuardrail === true
   let currentAutoAnswer = accountParams.get("autoAnswer") === "1"
   let sleep: Readonly<Record<string, never>> | undefined = accountParams.get("asleep") === "1" ? {} : undefined
   let keepAwakeManual = accountParams.get("keepAwake") === "on"
@@ -655,7 +657,8 @@ function createFixtureStore(): Fixture {
       payload: { type: "recovery", tools: [{ messageID: "msg_restart", callID: "call_<img src=x onerror=window.recoveryEscape=1>", name: "shell<b>" }, { messageID: "msg_restart", callID: "call_2", name: "edit" }] } },
   ] : []
   const autonomyExtras = () => sleep === undefined ? {} : { sleep }
-  const autonomyResponse = (data: Record<string, unknown>): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, autoAnswer: currentAutoAnswer, effective: { yolo: currentYolo, asleep: sleep !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off", ordinaryReviewsAuto: accountParams.has("ordinaryReviewsAuto") ? accountParams.get("ordinaryReviewsAuto") === "1" : currentYolo === 2 && sleep === undefined && accountParams.get("guardrails") !== "off", modelReviews: accountParams.get("modelReviews") === "1", hardModelReviews: accountParams.get("hardModelReviews") === "1" } } } })
+  const sessionFlags = () => ({ yolo: currentYolo, autoPermission: currentAutoPermission, autoGuardrail: currentAutoGuardrail, autoAnswer: currentAutoAnswer })
+  const autonomyResponse = (data: Record<string, unknown>, flags: ReturnType<typeof sessionFlags> = sessionFlags()): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, ...flags, effective: { yolo: flags.yolo, permissionsAuto: flags.autoPermission, permissionModelReviews: accountParams.get("permissionModelReviews") === "1", asleep: sleep !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off", ordinaryReviewsAuto: accountParams.has("ordinaryReviewsAuto") ? accountParams.get("ordinaryReviewsAuto") === "1" : flags.autoGuardrail && sleep === undefined && accountParams.get("guardrails") !== "off", modelReviews: accountParams.get("modelReviews") === "1", hardModelReviews: accountParams.get("hardModelReviews") === "1" } } } })
   const operationCounts = new Map<string, number>()
   const workspaces = [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
@@ -989,10 +992,9 @@ function createFixtureStore(): Fixture {
       }
     }
     if (operation === "session.autonomy.get") {
-      if (createdSessions.has(targetSessionID)) { const held = currentYolo; currentYolo = 0; const created = autonomyResponse({ mode: "normal", yolo: 0 }); currentYolo = held; return created }
+      if (createdSessions.has(targetSessionID)) return autonomyResponse({ mode: "normal" }, { yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
       return autonomyResponse(remoteScenarioData?.autonomy ?? {
             mode: "normal",
-            yolo: currentYolo,
             ...(accountParams.get("goal") === "none" ? {} : { goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 } }),
             ...autonomyExtras(),
           })
@@ -1049,11 +1051,13 @@ function createFixtureStore(): Fixture {
       : { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
     if (operation === "session.shell.output") return shellOutputPage(input)
     if (operation === "session.autonomy.set") {
-      if (typeof input?.yolo === "number") currentYolo = input.yolo
+      if (typeof input?.yolo === "boolean") currentYolo = input.yolo
+      if (typeof input?.autoPermission === "boolean") currentAutoPermission = input.autoPermission
+      if (typeof input?.autoGuardrail === "boolean") currentAutoGuardrail = input.autoGuardrail
       if (typeof input?.autoAnswer === "boolean") currentAutoAnswer = input.autoAnswer
       if (input?.sleep === true) sleep = {}
       if (input?.sleep === false) sleep = undefined
-      return autonomyResponse({ mode: "normal", yolo: currentYolo, ...autonomyExtras() })
+      return autonomyResponse({ mode: "normal", ...autonomyExtras() })
     }
     if (operation === "session.review.list") {
       if (accountParams.get("reviewList") === "error" && operationCounts.get(operation) === 1) return { status: "failed", error: { code: "internal_error", message: "Review list unavailable" } }
@@ -1074,7 +1078,7 @@ function createFixtureStore(): Fixture {
     }
     if (operation === "session.goal.set") {
       if (typeof input?.goal !== "string") return { status: "failed", error: { code: "invalid_message", message: "Goal text is required" } }
-      const active: RemoteRequestOutcome = autonomyResponse({ mode: "goal", yolo: currentYolo,
+      const active: RemoteRequestOutcome = autonomyResponse({ mode: "normal",
         goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } })
       if (!goalGate) return active
       return new Promise((resolve) => {
@@ -1083,7 +1087,7 @@ function createFixtureStore(): Fixture {
           : { status: "unknown", error: { code: "outcome_unknown", message: "Request timed out" } })
       })
     }
-    if (operation === "session.goal.stop") return autonomyResponse({ mode: "normal", yolo: currentYolo })
+    if (operation === "session.goal.stop") return autonomyResponse({ mode: "normal" })
     return { status: "ok", value: null }
   }
 
@@ -1114,7 +1118,7 @@ function createFixtureStore(): Fixture {
       { id: "msg_laptop_assistant", type: "assistant", agent: "god", model, content: [{ type: "text", text: "The laptop release build passed." }], time: { created: ago(18), completed: ago(17) } },
     ], watermark: { type: "log.synced", aggregateID: laptopSession.id, seq: 0 } } }
     if (operation === "session.subagent.list") return { status: "ok", value: { data: [], summary: { total: 0 }, cursor: {} } }
-    if (operation === "session.autonomy.get") return autonomyResponse({ mode: "normal", yolo: 0 })
+    if (operation === "session.autonomy.get") return autonomyResponse({ mode: "normal" }, { yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
     if (targetSessionID !== undefined && operation.endsWith(".list")) return { status: "ok", value: { data: [], cursor: {} } }
     return outcome(operation, input, targetSessionID)
   }

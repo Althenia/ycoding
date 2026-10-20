@@ -287,7 +287,7 @@ describe("opening a Session", () => {
     const test = await harness((request) => {
       if (request.operation === "session.subscribe") return { ok: false, code: "session_not_allowed", message: "refused" }
       if (request.operation === "session.snapshot") return snapshot(request.sessionID ?? "ses_a")
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "goal", yolo: 2, effective: { yolo: 2, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false } } } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: { mode: "normal", yolo: false, autoPermission: true, autoGuardrail: true, goal: { text: "Ship", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 }, effective: { yolo: false, permissionsAuto: true, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false } } } }
       return "default"
     })
     try {
@@ -296,7 +296,7 @@ describe("opening a Session", () => {
       await test.flush()
       expect(test.store.state().notice).toBe("This session is not available from the connected device.")
       expect(test.store.state().view?.messages).toEqual([])
-      expect(test.store.state().view?.autonomy?.mode).not.toBe("goal")
+      expect(test.store.state().view?.autonomy?.goal).toBeUndefined()
     } finally { await test.stop() }
   })
 

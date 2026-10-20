@@ -14,8 +14,8 @@ import { createSignal } from "solid-js"
 import type { PromptInfo } from "./history"
 import type { promptSkillMetadata } from "./skill"
 import { projectedPromptInput } from "./codec"
-import type { SessionSubmissionRetry, YoloLevel } from "../util/session-autonomy"
-import { createLandingSession, landingAutonomyPayloads, persistLandingAutonomy, persistLandingDaybreak } from "../util/landing-session"
+import type { SessionSubmissionRetry } from "../util/session-autonomy"
+import { createLandingSession, landingAutonomyPayloads, persistLandingAutonomy, persistLandingDaybreak, type LandingAutonomy } from "../util/landing-session"
 import { submitPrompt } from "../component/prompt/prompt-admission"
 import { errorMessage } from "../util/error"
 import { isConflictError, isInvalidRequestError } from "@ycoding-ai/client"
@@ -28,7 +28,7 @@ export type PromptSubmissionPayload = {
   mode: NonNullable<PromptInfo["mode"]>
   agentID: string
   daybreak?: ModelDaybreak
-  autonomy?: { yolo: YoloLevel; goal?: string; autoAnswer?: boolean }
+  autonomy?: LandingAutonomy
   model: ModelRef
   modelSelectionPending: boolean
   editor?: { key: string; text: string }
@@ -151,6 +151,14 @@ export function createPromptSubmissions(input: {
       submission.creationConfirmed = true
       entry.createdSession = session
     }
+    if (payload.daybreak && !entry.completed.has("daybreak")) {
+      update(entry, { phase: "Selecting Daybreak" })
+      const daybreak = payload.daybreak
+      await request(entry, "daybreak", (signal) =>
+        persistLandingDaybreak(input.api(), { sessionID, daybreak, signal }),
+      )
+      entry.completed.add("daybreak")
+    }
     const autonomyPayloads = landingAutonomyPayloads(payload.autonomy)
     if (autonomyPayloads.length > 0 && !entry.completed.has("autonomy")) {
       update(entry, { phase: "Setting autonomy" })
@@ -159,14 +167,6 @@ export function createPromptSubmissions(input: {
           await persistLandingAutonomy(input.api(), { sessionID, payload: autonomy, signal })
       })
       entry.completed.add("autonomy")
-    }
-    if (payload.daybreak && !entry.completed.has("daybreak")) {
-      update(entry, { phase: "Selecting Daybreak" })
-      const daybreak = payload.daybreak
-      await request(entry, "daybreak", (signal) =>
-        persistLandingDaybreak(input.api(), { sessionID, daybreak, signal }),
-      )
-      entry.completed.add("daybreak")
     }
     announceCreated(entry)
     if (entry.skillOnly) {

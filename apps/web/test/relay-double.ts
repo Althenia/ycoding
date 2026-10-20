@@ -131,7 +131,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
 
   const autonomyStates = new Map<string, Record<string, unknown>>()
   const baseAutonomy = (): Record<string, unknown> => typeof options.autonomy === "object" && options.autonomy !== null && !Array.isArray(options.autonomy)
-    ? { ...(options.autonomy as Record<string, unknown>) } : { mode: "normal", yolo: 0 }
+    ? { ...(options.autonomy as Record<string, unknown>) } : { mode: "normal", yolo: false }
   const autonomyFor = (sessionID: string | undefined) => {
     const key = sessionID ?? ""
     const current = autonomyStates.get(key) ?? baseAutonomy()
@@ -141,9 +141,9 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
   const setAutonomy = (sessionID: string | undefined, state: Record<string, unknown>) => autonomyStates.set(sessionID ?? "", state)
   const autonomyValue = (sessionID: string | undefined) => {
     const state = autonomyFor(sessionID)
-    const yolo = typeof state.yolo === "number" ? state.yolo : 0
+    const yolo = state.yolo === true
     const given = typeof state.effective === "object" && state.effective !== null ? state.effective as Record<string, unknown> : undefined
-    return { data: { ...state, effective: given ?? { yolo, asleep: state.sleep !== undefined, guardrailsEnabled: true, ordinaryReviewsAuto: yolo === 2 && state.sleep === undefined, modelReviews: false, hardModelReviews: false } } }
+    return { data: { ...state, effective: given ?? { yolo, permissionsAuto: state.autoPermission === true, permissionModelReviews: false, asleep: state.sleep !== undefined, guardrailsEnabled: true, ordinaryReviewsAuto: state.autoGuardrail === true && state.sleep === undefined, modelReviews: false, hardModelReviews: false } } }
   }
 
   const builtInHandler = (request: RemoteRequest): ConcreteResult => {
@@ -228,8 +228,10 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       if (request.operation === "session.goal.set" || request.operation === "session.goal.stop") {
         const text = typeof request.input?.goal === "string" ? request.input.goal : undefined
         const current = autonomyFor(request.sessionID)
-        setAutonomy(request.sessionID, { mode: "normal", yolo: typeof current.yolo === "number" ? current.yolo : 0,
+        setAutonomy(request.sessionID, { mode: "normal", yolo: current.yolo === true,
           ...(current.sleep === undefined ? {} : { sleep: current.sleep }),
+          ...(current.autoPermission === undefined ? {} : { autoPermission: current.autoPermission }),
+          ...(current.autoGuardrail === undefined ? {} : { autoGuardrail: current.autoGuardrail }),
           ...(current.autoAnswer === undefined ? {} : { autoAnswer: current.autoAnswer }),
           ...(text === undefined ? {} : { goal: { text, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }) })
         return { ok: true, value: autonomyValue(request.sessionID) }
@@ -237,7 +239,9 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       if (request.operation === "session.autonomy.set") {
         const input = request.input ?? {}
         let next: Record<string, unknown> = { ...autonomyFor(request.sessionID),
-          ...(typeof input.yolo === "number" || typeof input.yolo === "boolean" ? { yolo: input.yolo } : {}),
+          ...(typeof input.yolo === "boolean" ? { yolo: input.yolo } : {}),
+          ...(typeof input.autoPermission === "boolean" ? { autoPermission: input.autoPermission } : {}),
+          ...(typeof input.autoGuardrail === "boolean" ? { autoGuardrail: input.autoGuardrail } : {}),
           ...(typeof input.autoAnswer === "boolean" ? { autoAnswer: input.autoAnswer } : {}),
           ...(typeof input.goal === "string" ? { goal: { text: input.goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } : {}),
         }

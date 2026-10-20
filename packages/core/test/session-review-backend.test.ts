@@ -64,8 +64,9 @@ it.effect("sleep entry converts questions, forms and permission asks across Loca
   expect(yield* permission.forSession(child.id)).toEqual([])
   const items = yield* reviews.list(root.id)
   expect(items.map((item) => [item.kind, item.sessionID, item.reason])).toEqual([
-    ["question", root.id, "sleep_entry"], ["question", root.id, "sleep_entry"], ["permission", child.id, "sleep_entry"],
+    ["question", root.id, "sleep_entry"], ["question", root.id, "sleep_entry"], ["permission", child.id, "escalated"],
   ])
+  expect(items.find((item) => item.kind === "permission")).toMatchObject({ choice: "escalate", confidence: 0.7 })
   yield* TestClock.adjust("10 minutes")
   expect((yield* reviews.list(root.id)).map((item) => item.itemID)).toEqual(items.map((item) => item.itemID))
 }))

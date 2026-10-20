@@ -28,14 +28,15 @@ const session = {
 }
 
 const withEffective = (state: Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }): SessionAutonomyView => {
-  const level = state.yolo === true ? 2 : state.yolo === 1 || state.yolo === 2 ? state.yolo : 0
   const asleep = state.sleep !== undefined && state.sleep !== null
   return {
     ...state,
     effective: state.effective ?? {
-      yolo: level as 0 | 1 | 2,
+      yolo: state.yolo === true,
+      permissionsAuto: state.autoPermission === true,
+      permissionModelReviews: false,
       asleep,
-      ordinaryReviewsAuto: level === 2 && !asleep,
+      ordinaryReviewsAuto: state.autoGuardrail === true && !asleep,
       guardrailsEnabled: true,
       modelReviews: false,
       hardModelReviews: false,
@@ -48,11 +49,11 @@ const goalState = (
   text: string,
 ): SessionAutonomyView => withEffective({
   mode: "normal",
-  yolo: 0,
+  yolo: false,
   goal: { text, status, iteration: 2, noProgress: 1, maxNoProgress: 3 },
 })
 
-let autonomyState: SessionAutonomyView = withEffective({ mode: "normal", yolo: 0 })
+let autonomyState: SessionAutonomyView = withEffective({ mode: "normal", yolo: false })
 let autonomyAfterSet: (Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }) | undefined
 let releaseAutonomySet: (() => void) | undefined
 let autonomySets: Array<Record<string, unknown>> = []
@@ -261,8 +262,8 @@ test("replaces an active goal with the exact /goal text and never admits a promp
 }, 30_000)
 
 test("clears the composer after an explicit /goal starts goal mode from normal", async () => {
-  resetFixture({ mode: "normal", yolo: 0 })
-  autonomyAfterSet = { mode: "normal", yolo: 0, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
+  resetFixture({ mode: "normal", yolo: false })
+  autonomyAfterSet = { mode: "normal", yolo: false, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)
@@ -270,7 +271,7 @@ test("clears the composer after an explicit /goal starts goal mode from normal",
     await submit(screen)
     await waitFor(() => autonomySets.length > 0, "goal activation request")
     await waitFor(() => !screen.lines().some((line) => line.includes("/goal finish product.")), "cleared composer")
-    await waitFor(() => screen.frame().includes("Ask first · goal"), "live goal status")
+    await waitFor(() => screen.frame().includes("YOLO off · goal"), "live goal status")
 
     expect(autonomySets).toEqual([{ goal: "finish product." }])
     expect(promptRequests).toEqual([])
@@ -285,8 +286,8 @@ for (const { name, running, direct } of [
   { name: "running with slash menu open", running: true, direct: false },
   { name: "running with direct Enter", running: true, direct: true },
 ]) test(`clears a goal draft after ${name} and steer events before the autonomy response`, async () => {
-  resetFixture({ mode: "normal", yolo: 0 })
-  autonomyAfterSet = { mode: "normal", yolo: 0, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
+  resetFixture({ mode: "normal", yolo: false })
+  autonomyAfterSet = { mode: "normal", yolo: false, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
   releaseAutonomySet = () => {}
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
@@ -307,7 +308,7 @@ for (const { name, running, direct } of [
     screen.events.emit({
       id: "evt_goal_admitted", created: 10, type: "session.input.admitted",
       durable: { aggregateID: sessionID, seq: running ? 2 : 1, version: 1 }, location: { directory },
-      data: { sessionID, inputID: "msg_goal_123", input: { type: "synthetic", data: { text: "Goal steer", description: "Goal · steer", metadata: { autonomy: { yolo: 0, goal: true, iteration: 0 } } }, delivery: "steer" } },
+      data: { sessionID, inputID: "msg_goal_123", input: { type: "synthetic", data: { text: "Goal steer", description: "Goal · steer", metadata: { autonomy: { yolo: false, goal: true, iteration: 0 } } }, delivery: "steer" } },
     } satisfies YCodingEvent)
     await waitFor(() => screen.frame().includes("Goal · steer"), "projected goal steer")
     if (!running) screen.events.emit({
@@ -354,7 +355,7 @@ for (const { name, running, direct } of [
 }, 30_000)
 
 test("retains the goal draft after a failed PUT across a permission remount", async () => {
-  resetFixture({ mode: "normal", yolo: 0 })
+  resetFixture({ mode: "normal", yolo: false })
   releaseAutonomySet = () => {}
   failNextAutonomySet = true
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
@@ -385,7 +386,7 @@ test("retains the goal draft after a failed PUT across a permission remount", as
 }, 30_000)
 
 test("creates a landing session and sets its goal with the returned session ID", async () => {
-  resetFixture({ mode: "normal", yolo: 0 })
+  resetFixture({ mode: "normal", yolo: false })
   const screen = await renderScreen({ width: 100, height: 69, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)
@@ -582,10 +583,10 @@ test("the command palette exposes the goal action and applies it to the active S
 
 test("execution settlement refreshes a completed goal before the header reports readiness", async () => {
   resetFixture(goalState("active", "Ship the patch"))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Ask first · goal" })
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "YOLO off · goal" })
   try {
     await screen.waitForEventStream()
-    expect(screen.frame()).toContain("Ask first · goal")
+    expect(screen.frame()).toContain("YOLO off · goal")
     autonomyState = goalState("completed", "Ship the patch")
     screen.events.emit({
       id: "evt_goal_settled",
@@ -596,9 +597,9 @@ test("execution settlement refreshes a completed goal before the header reports 
       data: { sessionID },
     } satisfies YCodingEvent)
     const deadline = Date.now() + 4_000
-    while (screen.frame().includes("Ask first · goal") && Date.now() < deadline)
+    while (screen.frame().includes("YOLO off · goal") && Date.now() < deadline)
       await new Promise<void>((resolve) => setImmediate(resolve))
-    expect(screen.frame()).not.toContain("Ask first · goal")
+    expect(screen.frame()).not.toContain("YOLO off · goal")
     expect(screen.frame()).not.toContain("GOAL")
   } finally {
     await screen.dispose()
@@ -606,7 +607,7 @@ test("execution settlement refreshes a completed goal before the header reports 
 }, 30_000)
 
 test("opens the explicit objective dialog when a bare /goal has no retained goal", async () => {
-  resetFixture({ mode: "normal", yolo: 0 })
+  resetFixture({ mode: "normal", yolo: false })
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)

@@ -25,7 +25,7 @@ const initial: readonly RemoteMessageView[] = [
     { kind: "tool", callID: "call_2", name: "read", status: "failed", input: { path: "src/long-file.ts" }, content: [], error: "A very long JSON error ".repeat(3), started: 2_500, completed: 2_600 },
     { kind: "text", ordinal: 0, text: "# Final answer\n\n**Important** changes and ~~old plan~~:\n- First item with `inline code`\n- Nested:\n  - Sub item\n1. Ordered item\n2. Another item\n- [x] Verified task\n\n> A quoted detail\n\n---\n\n| Item | Result |\n| --- | --- |\n| Build | pass |\n\n```ts\nconst answer = 42\n```\n\n[Safe](https://example.com) [Unsafe](javascript:alert(1)) ![No image](https://example.com/image.png) <script>alert(1)</script>" },
   ], model: { providerID: "anthropic", id: "claude-opus-5-5", variant: "high" }, created: 2, completed: 5_000 },
-  { kind: "synthetic", id: "msg_state", text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"goal","yolo":2},"todos":[{}]}', source: "session-state", created: 5_100 },
+  { kind: "synthetic", id: "msg_state", text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false,"autoPermission":true,"goal":{"text":"Ship","status":"active","iteration":0,"noProgress":0,"maxNoProgress":3}},"todos":[{}]}', source: "session-state", created: 5_100 },
 ]
 const synthetic = new URLSearchParams(location.search).get("synthetic")
 const toolOutput = new URLSearchParams(location.search).has("tool-output")
@@ -105,7 +105,7 @@ const notificationMessages: readonly RemoteMessageView[] = [
 ]
 const visibilityMessages: readonly RemoteMessageView[] = [
   notificationMessages[0]!,
-  { kind: "system", id: "msg_internal_state", text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"todos":[]}', source: "session-state", created: 2 },
+  { kind: "system", id: "msg_internal_state", text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"todos":[]}', source: "session-state", created: 2 },
   { kind: "synthetic", id: "msg_internal_team", text: 'Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{"children":[{"state":"running"}]}', description: "TeamView update", source: "team-view", created: 3 },
   { kind: "synthetic", id: "msg_empty_synthetic", text: "Internal", description: " ", created: 4 },
   notificationMessages[1]!,

@@ -61,3 +61,22 @@ describe("MCP catalog pattern interoperability", () => {
     })
   }
 })
+
+describe("MCP autonomy schema", () => {
+  test("session_autonomy_set offers one boolean toggle per branch and no numeric yolo", () => {
+    const tool = RemoteMcpSchemas.tools.find((tool) => tool.name === "session_autonomy_set")
+    if (!tool) throw new Error("Missing tool session_autonomy_set")
+    const serialized = JSON.stringify(tool.inputSchema)
+    for (const field of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer", "sleep"])
+      expect(serialized).toContain(`"${field}":{"type":"boolean"}`)
+    expect(serialized).not.toContain('"maximum":2')
+    expect(tool.description).toContain("approves nothing by itself")
+    expect(tool.description).toContain("hard reviews still ask a human")
+  })
+
+  test("session_goal_set keeps its optional boolean yolo beside the goal", () => {
+    const tool = RemoteMcpSchemas.tools.find((tool) => tool.name === "session_goal_set")
+    if (!tool) throw new Error("Missing tool session_goal_set")
+    expect(JSON.stringify(tool.inputSchema)).toContain('"yolo":{"type":"boolean"}')
+  })
+})

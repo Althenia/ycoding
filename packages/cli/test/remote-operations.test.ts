@@ -1580,7 +1580,7 @@ describe("operation mapping", () => {
       ["session.prompt", { text: "Hello" }], ["session.command", { command: "test" }], ["session.skill", { skill: "review" }],
       ["session.compact", { id: "cmp_child" }],
       ["session.switchModel", { model: { providerID: "test", id: "model" } }], ["session.switchAgent", { agent: "general" }],
-      ["session.autonomy.set", { yolo: 2 }], ["session.autonomy.set", { sleep: true }],
+      ["session.autonomy.set", { yolo: true }], ["session.autonomy.set", { autoPermission: true }], ["session.autonomy.set", { sleep: true }],
       ["session.autonomy.set", { autoAnswer: true }],
       ["session.goal.set", { goal: "Write code" }], ["session.goal.stop", { goal: null }],
     ] as const) expect(errorOf(await send(operation, fields)).code).toBe("subagent_read_only")
@@ -1739,24 +1739,20 @@ describe("operation mapping", () => {
     })
     expect(calls.at(-1)).toEqual({ method: "formCancel", args: ["ses_1", { directory: "/work" }, "frm_2"] })
 
-    await executeRemoteOperation({
-      request: request("session.autonomy.set", { yolo: 2, maxNoProgress: 2 }),
-      sessions: registry,
-      subscriptions,
-      local,
-    })
-    expect(calls.at(-1)).toEqual({
-      method: "autonomySet",
-      args: ["ses_1", { directory: "/work" }, { yolo: 2, maxNoProgress: 2 }],
-    })
-
-    for (const payload of [{ sleep: true }, { sleep: false }, { autoAnswer: true }, { autoAnswer: false }]) {
+    for (const payload of [
+      { yolo: true }, { yolo: false },
+      { autoPermission: true }, { autoPermission: false },
+      { autoGuardrail: true }, { autoGuardrail: false },
+      { sleep: true }, { sleep: false }, { autoAnswer: true }, { autoAnswer: false },
+    ]) {
       await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })
       expect(calls.at(-1)).toEqual({ method: "autonomySet", args: ["ses_1", { directory: "/work" }, payload] })
     }
 
     for (const payload of [{ guardrailDecision: true }, { guardrailDecision: false, sleep: true },
-      { yolo: 3 }, { autoAnswer: "true" }, { autoAnswer: null }, { autoAnswer: true, yolo: 1 },
+      { yolo: 0 }, { yolo: 1 }, { yolo: 2 }, { yolo: 3 }, { autoPermission: 1 }, { autoGuardrail: "on" },
+      { autoAnswer: "true" }, { autoAnswer: null }, { autoAnswer: true, yolo: true },
+      { yolo: true, autoGuardrail: false }, { yolo: true, maxNoProgress: 2 },
       { autoAnswer: false, sleep: false }, { autoAnswer: true, maxNoProgress: 2 }]) {
       const before = calls.length
       expect(errorOf(await executeRemoteOperation({ request: request("session.autonomy.set", payload), sessions: registry, subscriptions, local })).code).toBe("invalid_message")
@@ -1772,6 +1768,17 @@ describe("operation mapping", () => {
     expect(calls.at(-1)).toEqual({
       method: "autonomySet",
       args: ["ses_1", { directory: "/work" }, { goal: "ship it" }],
+    })
+
+    await executeRemoteOperation({
+      request: request("session.goal.set", { goal: "ship it", yolo: true, maxNoProgress: 2 }),
+      sessions: registry,
+      subscriptions,
+      local,
+    })
+    expect(calls.at(-1)).toEqual({
+      method: "autonomySet",
+      args: ["ses_1", { directory: "/work" }, { goal: "ship it", yolo: true, maxNoProgress: 2 }],
     })
 
     await executeRemoteOperation({
@@ -2497,7 +2504,7 @@ describe("strict validation and error mapping", () => {
       [request("session.autonomy.set", { sleep: "yes" }), "invalid_message"],
       [request("session.autonomy.set", { guardrailDecision: 1 }), "invalid_message"],
       [request("session.autonomy.set", { guardrailDecision: true, sleep: null }), "invalid_message"],
-      [request("session.autonomy.set", { yolo: 1, sleep: true }), "invalid_message"],
+      [request("session.autonomy.set", { yolo: true, sleep: true }), "invalid_message"],
       [request("session.autonomy.set", { maxNoProgress: 2, guardrailDecision: true }), "invalid_message"],
       [request("session.autonomy.set", { sleep: true, goal: "x" }), "invalid_message"],
       [request("session.autonomy.set", { sleep: true, priorGuardrailDecision: false }), "invalid_message"],

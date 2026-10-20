@@ -83,9 +83,9 @@ const route: FetchHandler = async (url, request) => {
   }
   if (url.pathname === `/api/session/${sessionID}/autonomy` && request.method === "PUT") {
     mutations.push("goal")
-    return json({ data: { mode: "normal", yolo: 0, effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
+    return json({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
   }
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: 0, effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     return new Response(null, { status: 204 })
   }

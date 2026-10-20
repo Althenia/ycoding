@@ -24,7 +24,7 @@ const sessionID = Session.ID.make("ses_live_state")
 testEffect(Layer.empty).effect("goal reminders resolve routine choices without manufacturing human approval or waiting loops", () => Effect.sync(() => {
   const goal = SessionAutonomy.makeGoal({ text: "Verify the local changes" })
   for (const autoAnswer of [true, false]) {
-    const text = SessionLiveState.goalReminder({ mode: "normal", yolo: 0, goal, autoAnswer })
+    const text = SessionLiveState.goalReminder({ mode: "normal", yolo: false, goal, autoAnswer })
     expect(text).toContain("Complete the active goal")
     expect(text).toContain(autoAnswer ? "Automatic answering is enabled" : "Automatic answering is disabled")
     expect(text).toContain("Do not repeat an automatic waiting answer")
@@ -35,7 +35,7 @@ testEffect(Layer.empty).effect("goal reminders resolve routine choices without m
 
 testEffect(Layer.empty).effect("sleep state never claims lid control when only idle sleep is inhibited", () =>
   Effect.sync(() => {
-    const state = { mode: "normal", yolo: 0, sleep: {} } as const
+    const state = { mode: "normal", yolo: false, sleep: {} } as const
     expect(SessionLiveState.sleepReminder(state, true, false)).toContain(
       "lid-closed keep-awake is unavailable or unreported",
     )
@@ -106,7 +106,7 @@ it.effect("renders canonical protected state and returns every required content-
       content: [
         {
           type: "text",
-          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"permissionCeiling":[],"todos":[]}',
+          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}',
         },
       ],
     })

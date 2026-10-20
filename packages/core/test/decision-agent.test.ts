@@ -37,7 +37,7 @@ import { Money } from "@ycoding-ai/schema/money"
 
 const requests: LLMRequest[] = []
 let graded = false
-const state = { malformed: false, unsettled: false, unavailable: false, denied: false, toolCall: false, cacheRead: undefined as number | undefined, zeroCost: false, noUsage: false, score: false, refusal: false }
+const state = { malformed: false, unsettled: false, unavailable: false, denied: false, toolCall: false, cacheRead: undefined as number | undefined, zeroCost: false, noUsage: false, score: false, refusal: false, name: undefined as string | undefined, choice: undefined as string | undefined }
 const permissions: Permission.AssertInput[] = []
 let entered = Deferred.makeUnsafe<void>()
 let release = Deferred.makeUnsafe<void>()
@@ -61,7 +61,8 @@ const client = Layer.mock(LLMClient.Service, {
       grades: [{ choice: "allow", confidence: 0.8, evidence: "Read only" }, { choice: "review", confidence: 0.2, evidence: "No mutation" }],
     }) : state.malformed || step === "malformed" ? "{\"probability\":1}" : state.refusal
       ? judgment({ name: "decision", type: "refusal", answer: null, choice: null, score: null, confidence: 0 }) : state.score
-      ? judgment({ name: "decision", type: "score", answer: null, choice: null, score: 3, confidence: 0.84 }) : choiceAnswer })
+      ? judgment({ name: "decision", type: "score", answer: null, choice: null, score: 3, confidence: 0.84 }) : state.name !== undefined || state.choice !== undefined
+      ? judgment({ name: state.name ?? "decision", type: "choice", answer: null, choice: state.choice ?? "review", score: null, confidence: 0.8 }) : choiceAnswer })
     if (state.unsettled) return Stream.make(output)
     return Stream.fromEffect(Deferred.succeed(entered, undefined).pipe(Effect.andThen(hold ? Deferred.await(release) : Effect.void))).pipe(Stream.flatMap(() => Stream.make(output,
       ...(state.toolCall ? [LLMEvent.toolCall({ id: "injected", name: "shell", input: { command: "untrusted" } })] : []),
@@ -116,6 +117,8 @@ const seed = (id: string) => Effect.gen(function* () {
   state.noUsage = false
   state.score = false
   state.refusal = false
+  state.name = undefined
+  state.choice = undefined
   permissions.length = 0
   hold = false
   entered = Deferred.makeUnsafe<void>()
@@ -131,7 +134,23 @@ const seed = (id: string) => Effect.gen(function* () {
     agent.system = "Evaluate the supplied questions and output only validated decision JSON. Confidence is an uncalibrated estimate."
     agent.permissions.push({ action: "*", resource: "*", effect: "deny" })
   }))
+  yield* agents.transform((draft) => draft.update(Agent.ID.make("yolo-answer"), (agent) => {
+    agent.mode = "primary"
+    agent.hidden = true
+    agent.system = "Evaluate the supplied answer question as the YOLO answer evaluator."
+    agent.permissions.push({ action: "*", resource: "*", effect: "deny" })
+  }))
   return sessionID
+})
+
+const captureAudits = Effect.gen(function* () {
+  const events = yield* EventRuntime.Service
+  const audits: Array<Record<string, unknown>> = []
+  const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+    if (event.type === "session.decision.audited") audits.push(event.data as Record<string, unknown>)
+  }))
+  yield* Effect.addFinalizer(() => unsubscribe)
+  return audits
 })
 
 const adjustUntilDone = <A, E>(fiber: Fiber.Fiber<A, E>, limit = 80): Effect.Effect<void> =>
@@ -419,7 +438,7 @@ it.effect("invalid decision questions return corrective field errors without dis
   yield* registerToolPlugin(DecisionTool.Plugin)
   const registry = yield* ToolRegistry.Service
   for (const [questions, expected] of [
-    [[{ type: "classify", name: "route", instructions: "Pick the route" }], 'questions[0].type: expected "predicate", "choice", or "score"'],
+    [[{ type: "classify", name: "route", instructions: "Pick the route" }], 'questions[0].type: expected "predicate", "choice", "score", or "text"'],
     [[], "questions: expected at least one question"],
   ] as const) {
     const result = yield* executeTool(registry, { sessionID, ...toolIdentity, call: {
@@ -494,4 +513,86 @@ it.effect("insufficient evidence can abstain for every question type without cho
     expect(JSON.stringify(result.value)).toContain("missing bounded evidence")
   }
   expect(requests).toHaveLength(3)
+}))
+
+it.effect("a YOLO answer invocation runs the evaluator agent and audits canonical answers without raw output", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_yolo_audit")
+  const audits = yield* captureAudits
+  const decisions = yield* Decision.Service
+  yield* decisions.evaluate({ provider: "agent", request: { state: { action: "read" }, questions: [{
+    type: "choice", name: "decision", instructions: "Choose", choices: [{ value: "allow" }, { value: "review" }],
+  }] } }, { sessionID, purpose: "answer", authority: "yolo", invocationKey: "que_1:0" })
+  expect(JSON.stringify(requests[0].system)).toContain("YOLO answer evaluator")
+  expect(audits).toEqual([expect.objectContaining({
+    sessionID, purpose: "answer", authority: "yolo", agent: "yolo-answer", outcome: "succeeded", invocationKey: expect.stringMatching(/^sha256:[0-9a-f]{16}$/), attempts: 1,
+    model: { providerID: "test", id: "fixture-decision" },
+    answers: [{ name: expect.stringMatching(/^sha256:[0-9a-f]{16}$/), type: "choice", choice: expect.stringMatching(/^sha256:[0-9a-f]{16}$/), confidence: 0.8 }],
+  })])
+  expect(audits[0]?.fingerprint).toMatch(/^[0-9a-f]{64}$/)
+  expect(JSON.stringify(audits)).not.toContain("read")
+}))
+
+it.effect("a baseline invocation runs the decision agent and audits an unavailable helper as failed", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_baseline_audit")
+  state.unavailable = true
+  const audits = yield* captureAudits
+  const decisions = yield* Decision.Service
+  const exit = yield* evaluateChoice(decisions, { ...choice(sessionID), context: { sessionID, purpose: "permission", authority: "baseline" } }).pipe(Effect.exit)
+  expect(exit._tag).toBe("Failure")
+  expect(audits).toEqual([expect.objectContaining({
+    purpose: "permission", authority: "baseline", agent: "decision", outcome: "failed", reason: "unavailable", attempts: 0,
+  })])
+  expect(requests).toHaveLength(0)
+}))
+
+it.effect("an interrupted invocation audits one cancelled outcome with its attempts and no failure reason", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_cancel_audit")
+  hold = true
+  const audits = yield* captureAudits
+  const decisions = yield* Decision.Service
+  const fiber = yield* evaluateChoice(decisions, choice(sessionID)).pipe(Effect.forkChild)
+  yield* Deferred.await(entered)
+  yield* Fiber.interrupt(fiber)
+  expect(audits).toHaveLength(1)
+  expect(audits[0]).toMatchObject({ purpose: "advisory", outcome: "cancelled", attempts: 1 })
+  expect(audits[0]).not.toHaveProperty("reason")
+}))
+
+it.effect("audit retains no caller-controlled identifier that could embed personal data or a secret", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_audit_redaction")
+  const email = "ava.synthetic@example.test"
+  const token = "tok_Zq8XvB3nLm2RtY7uPw5KdH9"
+  state.name = `owner ${email}`
+  state.choice = token
+  const audits = yield* captureAudits
+  const decisions = yield* Decision.Service
+  const output = yield* decisions.evaluate({ provider: "agent", request: { state: { action: "read" }, questions: [{
+    type: "choice", name: `owner ${email}`, instructions: "Choose", choices: [{ value: token }, { value: "review" }],
+  }] } }, { sessionID, purpose: "answer", authority: "yolo", invocationKey: `frm_x:${email}:${token}` })
+  expect(output.response.answers[0]).toMatchObject({ name: `owner ${email}`, choice: token })
+  expect(audits).toHaveLength(1)
+  const durable = JSON.stringify(audits)
+  for (const secret of [email, token, "ava.synthetic", "Zq8XvB3nLm2RtY7uPw5KdH9"]) expect(durable).not.toContain(secret)
+  expect(audits[0]?.answers).toEqual([{ name: expect.stringMatching(/^sha256:[0-9a-f]{16}$/), type: "choice", choice: expect.stringMatching(/^sha256:[0-9a-f]{16}$/), confidence: 0.8 }])
+  expect(audits[0]?.invocationKey).toMatch(/^sha256:[0-9a-f]{16}$/)
+}))
+
+it.effect("audit hashes short names, URLs, and credentials without changing returned choices", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_short_audit_values")
+  const audits = yield* captureAudits
+  const decisions = yield* Decision.Service
+  for (const value of ["Ava Test", "http://intranet.test/a", "sk-test-key"]) {
+    state.name = "Owner name"
+    state.choice = value
+    const output = yield* decisions.evaluate({ provider: "agent", request: { state: {}, questions: [{
+      type: "choice", name: state.name, instructions: "Choose", choices: [{ value }, { value: "review" }],
+    }] } }, { sessionID, purpose: "answer", authority: "yolo" })
+    expect(output.response.answers[0]).toMatchObject({ name: state.name, choice: value })
+    expect(JSON.stringify(audits.at(-1))).not.toContain(value)
+    expect(JSON.stringify(audits.at(-1))).not.toContain(state.name)
+    expect(audits.at(-1)?.answers).toEqual([{
+      name: expect.stringMatching(/^sha256:[0-9a-f]{16}$/), type: "choice",
+      choice: expect.stringMatching(/^sha256:[0-9a-f]{16}$/), confidence: 0.8,
+    }])
+  }
 }))

@@ -6,7 +6,7 @@ import { Deferred, Effect } from "effect"
 import { sessionHttp } from "./session-http"
 
 const sessionID = Session.ID.make("ses_goal_http")
-const effective = { yolo: 2 as const, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false }
+const effective = { yolo: true, permissionsAuto: false, permissionModelReviews: true, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false }
 
 function fixture(set: Session.Interface["autonomy"]["set"]) {
   const http = sessionHttp({ autonomy: { get: () => Effect.succeed(SessionAutonomy.defaultState), set,
@@ -22,12 +22,12 @@ test("autonomy HTTP contract accepts sleep booleans without a review toggle", as
   const received: unknown[] = []
   await using f = fixture(input => Effect.sync(() => {
     received.push(input)
-    return { mode: "normal", yolo: 0, ...(input.sleep ? { sleep: {} } : {}) }
+    return { mode: "normal", yolo: false, ...(input.sleep ? { sleep: {} } : {}) }
   }))
   for (const sleep of [true, false]) {
     const response = await f.request({ sleep })
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { mode: "normal", yolo: 0, ...(sleep ? { sleep: {} } : {}), effective } })
+    expect(await response.json()).toEqual({ data: { mode: "normal", yolo: false, ...(sleep ? { sleep: {} } : {}), effective } })
     expect(received.at(-1)).toEqual({ sessionID, sleep })
   }
   expect((await f.request({ guardrailDecision: true })).status).toBe(400)
@@ -41,10 +41,10 @@ test("R7 goal route preserves explicit resume, replacement, and stop with YOLO",
     return SessionAutonomy.defaultState
   }))
   for (const goal of [true, "Ship the tested change\nPreserve existing data", null]) {
-    const response = await f.request({ goal, yolo: 1 })
+    const response = await f.request({ goal, yolo: true })
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, effective } })
-    expect(received.at(-1)).toEqual({ sessionID, goal, yolo: 1 })
+    expect(received.at(-1)).toEqual({ sessionID, goal, yolo: true })
   }
 })
 
@@ -92,11 +92,30 @@ test("R7 goal route maps bounded calculation and resume failures", async () => {
   }
 })
 
-test("autonomy reads expose effective policy without changing stored approval level", async () => {
+test("autonomy reads expose effective policy without changing stored controls", async () => {
   await using f = fixture(() => Effect.succeed(SessionAutonomy.defaultState))
   const response = await f.read()
   expect(response.status).toBe(200)
   expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, effective } })
+})
+
+test("autonomy HTTP preserves each toggle and rejects numeric or combined controls", async () => {
+  const received: unknown[] = []
+  await using f = fixture(input => Effect.sync(() => {
+    received.push(input)
+    return SessionAutonomy.defaultState
+  }))
+  for (const key of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer"]) {
+    for (const value of [false, true]) {
+      expect((await f.request({ [key]: value })).status).toBe(200)
+      expect(received.at(-1)).toEqual({ sessionID, [key]: value })
+    }
+    for (const value of [0, 1, 2, null, "true"])
+      expect((await f.request({ [key]: value })).status).toBe(400)
+  }
+  expect((await f.request({ yolo: true, autoPermission: true })).status).toBe(400)
+  expect((await f.request({})).status).toBe(400)
+  expect(received).toHaveLength(8)
 })
 
 test("auto-answer changes only the addressed Session setting and rejects level 3", async () => {

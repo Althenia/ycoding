@@ -12,16 +12,16 @@ test("goal text outlives the ordinary local request deadline without extending u
       if (goals === 2) started.resolve()
     }
     await release.promise
-    return Response.json({ data: { mode: "goal", yolo: 0, goal: { text: "Ship", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } })
+    return Response.json({ data: { mode: "goal", yolo: false, goal: { text: "Ship", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } })
   } })
   try {
     const local = createLocalServer({ url: `http://127.0.0.1:${server.port}` }, { timeoutMs: 30 })
     const setting = Promise.allSettled([
       local.autonomySet("ses_a", { directory: "/work" }, { goal: "Ship" }),
-      local.autonomySet("ses_a", { directory: "/work" }, { yolo: 1, goal: "Ship" }),
+      local.autonomySet("ses_a", { directory: "/work" }, { yolo: true, goal: "Ship" }),
     ])
     await started.promise
-    expect(await Promise.allSettled([local.autonomySet("ses_a", { directory: "/work" }, { yolo: 1 })])).toMatchObject([
+    expect(await Promise.allSettled([local.autonomySet("ses_a", { directory: "/work" }, { yolo: true })])).toMatchObject([
       { status: "rejected", reason: { kind: "transport" } },
     ])
     release.resolve()

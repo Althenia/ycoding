@@ -132,14 +132,14 @@ export const layer = Layer.effect(
       if (!advanced.applied || !advanced.state.goal || advanced.state.goal.status !== "active") return undefined
       return {
         goal: advanced.state.goal,
-        yolo: SessionAutonomy.yoloLevel(advanced.state),
+        yolo: advanced.state.yolo,
         steer: continuation.steer,
       }
     })
 
     const admitGoalContinuation = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
-      advanced: { readonly goal: SessionAutonomy.Goal; readonly yolo: number; readonly steer: string },
+      advanced: { readonly goal: SessionAutonomy.Goal; readonly yolo: boolean; readonly steer: string },
     ) {
       const id = SessionMessage.ID.make(
         `msg_goal_${Hash.sha256(`${sessionID}\0${advanced.goal.iteration}`).slice(0, 24)}`,

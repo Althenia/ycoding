@@ -1155,7 +1155,7 @@ describe("internal notifications TUI plugin", () => {
 
   test("ignores auto-resolved question", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: 1 })
+    harness.autonomy.set("session", { mode: "normal", yolo: false, autoAnswer: true })
     harness.emit({ id: "asked", created: 0, type: "question.asked", data: question("question-1") })
     harness.emit({
       id: "answered",
@@ -1167,9 +1167,9 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([])
   })
 
-  test("alerts for hard guardrail at level 2", async () => {
+  test("alerts for hard guardrail with auto-guardrail on", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: 2 })
+    harness.autonomy.set("session", { mode: "normal", yolo: false, autoGuardrail: true })
     harness.emit({
       id: "asked",
       created: 0,
@@ -1180,9 +1180,9 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([guardrailNotification])
   })
 
-  test("ignores an auto-approved ordinary guardrail at level 2", async () => {
+  test("ignores an auto-approved ordinary guardrail with auto-guardrail on", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: 2 })
+    harness.autonomy.set("session", { mode: "normal", yolo: false, autoGuardrail: true })
     harness.emit({ id: "asked", created: 0, type: "guardrail.asked", data: guardrail("ordinary-1") })
     harness.emit({
       id: "approved",

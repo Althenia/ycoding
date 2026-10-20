@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { escalationText, readGrades, readGuardrailProvenance, readGradedAnswers, readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
+import { escalationText, gradeLabel, humanReviewText, readGrades, readGuardrailProvenance, readGradedAnswers, readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 
 const grades = [
   { choice: "approve_all", confidence: 1, evidence: "Every target is verified." },
@@ -25,6 +25,30 @@ test("provenance retains a known escalation reason, drops an unknown one, and fo
   expect(failure).not.toHaveProperty("grades")
 })
 
+test("baseline allow and deny choices retain grades and labels", () => {
+  const baseline = [
+    { choice: "allow", confidence: 0.97, evidence: "The request matches the approved pattern." },
+    { choice: "deny", confidence: 0.02, evidence: "No denial evidence." },
+    { choice: "escalate", confidence: 0.05, evidence: "No uncertainty remains." },
+  ]
+  expect(readGuardrailProvenance({ reason: "escalated", choice: "allow", confidence: 0.97, grades: baseline })).toEqual({ reason: "escalated", choice: "allow", confidence: 0.97, grades: baseline })
+  expect(readGrades(baseline)).toEqual(baseline)
+  expect(gradeLabel("allow")).toBe("Allow")
+  expect(gradeLabel("deny")).toBe("Deny")
+})
+
+test("baseline and YOLO provenance remain distinct in visible human handoffs", () => {
+  for (const authority of ["baseline", "yolo"] as const) {
+    const value = { authority, reason: "unsupported-output" as const }
+    expect(readGuardrailProvenance(value)).toEqual(value)
+    expect(humanReviewText(value)).toContain(authority === "baseline" ? "Baseline assessment" : "YOLO assessment")
+    expect(humanReviewText(value)).toContain(escalationText(value))
+    expect(humanReviewText(value)).toContain("your decision is required")
+  }
+  expect(readGuardrailProvenance({ authority: "human-approved", reason: "unsupported-output" })).toBeUndefined()
+  expect(readGuardrailProvenance({ reason: "refused" })).not.toHaveProperty("authority")
+})
+
 test("escalation text distinguishes decision failures from an actual model escalation", () => {
   const failure = escalationText({ reason: "timeout" })
   expect(failure).toContain("Decision unavailable")
@@ -37,10 +61,30 @@ test("escalation text distinguishes decision failures from an actual model escal
   expect(escalated).toContain("Decision model escalated")
   expect(escalated).toContain("choice escalate")
   expect(escalated).toContain("confidence 0.9")
+  const unsupported = escalationText({ reason: "unsupported-output" })
+  expect(unsupported).toContain("the selected route does not support strict structured decisions")
+  expect(unsupported).toContain("Review this request manually")
+  expect(unsupported).toContain("configure a decision helper on a supported strict structured-output route")
+  for (const reason of ["refused", "invalid-output"] as const) {
+    const text = escalationText({ reason })
+    expect(text).toContain("Decision unavailable")
+    expect(text).toContain("Review this request manually")
+    expect(text).toContain("No automatic approval was granted.")
+  }
   const historical = escalationText({})
   expect(historical).toContain("diagnostic reason was not recorded")
   expect(historical).not.toContain("unreported")
   expect(historical).not.toContain("choice")
+})
+
+test("a pending model escalation names its reason and the human action for every unresolved outcome", () => {
+  for (const view of [{ reason: "unsupported-output" }, { reason: "refused" }, { reason: "invalid-output" }, { reason: "low_confidence" }, { reason: "conflicting_grades" }, { reason: "escalated", choice: "escalate", confidence: 0.9 }, { choice: "escalate", confidence: 0.7 }, {}] as const) {
+    const text = humanReviewText(view)
+    expect(text).toStartWith(escalationText(view).replace(/\.$/, ""))
+    expect(text).toEndWith(" — your decision is required.")
+    expect(text).toContain("Review this request manually")
+  }
+  expect(humanReviewText({ reason: "refused" })).not.toMatch(/choice|confidence/)
 })
 
 test("grade evidence stays literal at its 500-character boundary and malformed grades are unavailable", () => {

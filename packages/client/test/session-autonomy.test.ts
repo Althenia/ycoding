@@ -7,9 +7,9 @@ import { make } from "../src/effect/generated/client"
 
 const views = [false, true, false].map(autoAnswer => ({
   mode: "normal",
-  yolo: 0,
+  yolo: false,
   autoAnswer,
-  effective: { yolo: 2, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: false },
+  effective: { yolo: true, permissionsAuto: false, permissionModelReviews: true, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: false },
 }))
 
 test("Promise autonomy methods preserve effective policy and serialize Session-local answer switches", async () => {
@@ -33,6 +33,39 @@ test("Promise autonomy methods preserve effective policy and serialize Session-l
   ])
   expect(await requests[1]!.json()).toEqual({ autoAnswer: true })
   expect(await requests[2]!.json()).toEqual({ autoAnswer: false })
+})
+
+test("Promise and Effect clients serialize independent toggle values without coercion", async () => {
+  const payloads = [
+    { yolo: true }, { yolo: false },
+    { autoPermission: true }, { autoPermission: false },
+    { autoGuardrail: true }, { autoGuardrail: false },
+    { autoAnswer: true }, { autoAnswer: false },
+  ]
+  const promiseBodies: unknown[] = []
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      promiseBodies.push(await request.json())
+      return Response.json({ data: views[0] })
+    },
+  })
+  for (const payload of payloads)
+    await client.session.autonomy.set({ sessionID: "ses_switches", payload })
+  expect(promiseBodies).toEqual(payloads)
+
+  const effectBodies: unknown[] = []
+  const httpClient = HttpClient.make(request => {
+    effectBodies.push(request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined)
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: views[0] })))
+  })
+  await Effect.gen(function* () {
+    const client = yield* make({ baseUrl: "http://localhost:3000" })
+    for (const payload of payloads)
+      yield* client.session.autonomy.set({ sessionID: Session.ID.make("ses_switches"), payload })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+  expect(effectBodies).toEqual(payloads)
 })
 
 test("Effect autonomy methods decode effective policy and serialize the same answer switches", async () => {

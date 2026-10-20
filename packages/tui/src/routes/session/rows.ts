@@ -381,10 +381,11 @@ export function reduceSessionRows(
     ...(guardrails?.decisions ?? [])
       .filter((item) => item.sessionID === guardrails?.sessionID)
       .map((item) => {
+        const model = item.authority === "baseline" ? "baseline decision model" : item.authority === "yolo" ? "YOLO decision model" : "decision model"
         const decided =
-          item.choice === "approve" && item.reply === "reject"
-            ? `decision model approve · ${item.confidence?.toString() ?? "unreported"} · rejected`
-            : `decision model ${item.reply === "reject" ? "rejected" : item.reply === "always" ? "approved for this session" : "approved once"} · ${item.confidence?.toString() ?? "confidence unreported"}`
+          (item.choice === "approve" || item.choice === "approve_all" || item.choice === "allow") && item.reply === "reject"
+            ? `${model} ${item.choice.replaceAll("_", " ")} · ${item.confidence?.toString() ?? "unreported"} · rejected`
+            : `${model} ${item.reply === "reject" ? "rejected" : item.reply === "always" ? "approved for this session" : "approved once"} · ${item.confidence?.toString() ?? "confidence unreported"}`
         return {
           created: item.created,
           row: {

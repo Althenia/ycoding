@@ -64,12 +64,38 @@ export const RunCommand = Spec.make("run", {
     title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
     thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
     yolo: Flag.choiceWithValue("yolo", [
-      ["0", 0],
-      ["1", 1],
-      ["2", 2],
+      ["true", true],
+      ["false", false],
     ]).pipe(
       Flag.withDescription(
-        "Set durable Session YOLO level; omitted preserves it (0: ask first, 1: allow ask permissions, 2: also allow routine reviews while awake; denies and hard reviews still apply)",
+        "Set the durable Session YOLO evaluator; omitted preserves it (true/false; permissions, guardrails, and answers keep their separate settings; denies and hard reviews still apply)",
+      ),
+      Flag.optional,
+    ),
+    autoPermission: Flag.choiceWithValue("auto-permission", [
+      ["true", true],
+      ["false", false],
+    ]).pipe(
+      Flag.withDescription(
+        "Set durable Session auto-permission; omitted preserves it (true: ask-permission tools auto-approve; denies still apply)",
+      ),
+      Flag.optional,
+    ),
+    autoGuardrail: Flag.choiceWithValue("auto-guardrail", [
+      ["true", true],
+      ["false", false],
+    ]).pipe(
+      Flag.withDescription(
+        "Set durable Session auto-guardrail; omitted preserves it (true: ordinary guardrail reviews auto-approve while awake; hard reviews still ask)",
+      ),
+      Flag.optional,
+    ),
+    autoAnswer: Flag.choiceWithValue("auto-answer", [
+      ["true", true],
+      ["false", false],
+    ]).pipe(
+      Flag.withDescription(
+        "Set durable Session auto-answer; omitted preserves it (true: eligible questions answer automatically for this Session)",
       ),
       Flag.optional,
     ),

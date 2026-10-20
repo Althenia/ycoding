@@ -152,8 +152,8 @@ describe("header status", () => {
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, 100, "provider error"],
-    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "Tools + reviews · ready"],
-    [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "Ask first · goal · cooking 4.1s"],
+    [{ type: "autonomy", yolo: true, goalActive: false, state: { type: "ready" } }, 100, "YOLO · ready"],
+    [{ type: "autonomy", yolo: false, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "YOLO off · goal · cooking 4.1s"],
   ]
 
   for (const [state, width, expected] of cases) {
@@ -183,18 +183,18 @@ describe("header status", () => {
   test("keeps active autonomy and retry status visible together", () => {
     expect(
       headerStatusLabel(
-        { type: "autonomy", yolo: 0, goalActive: true, state: { type: "retry-scheduled", attempt: 2, at: 15_000 } },
+        { type: "autonomy", yolo: false, goalActive: true, state: { type: "retry-scheduled", attempt: 2, at: 15_000 } },
         100,
         undefined,
         10_000,
       ),
-    ).toBe("Ask first · goal · 1 failed · retry 2 · in 5s")
+    ).toBe("YOLO off · goal · 1 failed · retry 2 · in 5s")
   })
 
   test("keeps active autonomy and retrying visible together", () => {
     expect(
-      headerStatusLabel({ type: "autonomy", yolo: 0, goalActive: true, state: { type: "retrying", attempt: 2 } }, 100, undefined, 10_000),
-    ).toBe("Ask first · goal · retrying · attempt 2")
+      headerStatusLabel({ type: "autonomy", yolo: false, goalActive: true, state: { type: "retrying", attempt: 2 } }, 100, undefined, 10_000),
+    ).toBe("YOLO off · goal · retrying · attempt 2")
   })
 })
 
@@ -416,22 +416,22 @@ async function renderHeader(
 
 describe("autonomy mode chips", () => {
   test("shows both modes off for a normal session", () => {
-    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 0 }) })).toEqual([
+    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: false }) })).toEqual([
       { key: "goal", label: "goal off", tone: "off" },
-      { key: "yolo", label: "Ask first", tone: "off" },
+      { key: "yolo", label: "YOLO off", tone: "off" },
     ])
   })
 
   test("inverts the level chip because it auto-approves", () => {
-    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 2 }) })[1]).toEqual({
+    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true }) })[1]).toEqual({
       key: "yolo",
-      label: "Tools + reviews",
+      label: "YOLO",
       tone: "danger",
     })
   })
 
   test("shows only the goal label while goal mode is active", () => {
-    const autonomy = { mode: "normal", yolo: 0, goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
+    const autonomy = { mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
     } as const
     const chip = modeChips({ autonomy: localAutonomyView(autonomy) })[0]
     expect(chip).toEqual({ key: "goal", label: "goal", tone: "on" })
@@ -439,7 +439,7 @@ describe("autonomy mode chips", () => {
   })
 
   test("shows goal off after leaving goal mode with retained terminal state", () => {
-    const autonomy = { mode: "normal", yolo: 0, goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
+    const autonomy = { mode: "normal", yolo: false, goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
     } as const
     expect(modeChips({ autonomy: localAutonomyView(autonomy) })[0]).toEqual({ key: "goal", label: "goal off", tone: "off" })
   })
@@ -457,7 +457,7 @@ describe("autonomy mode chips", () => {
           <ConfigProvider config={config}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: 2 })} />
+                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: true })} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
@@ -466,11 +466,11 @@ describe("autonomy mode chips", () => {
       { width: 60, height: 4 },
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Tools + reviews"))
+    await app.waitForFrame((frame) => frame.includes("YOLO"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("goal off")
-    expect(frame).toContain("Tools + reviews")
-    expect(frame).not.toContain("Ask first")
+    expect(frame).toContain("YOLO")
+    expect(frame).not.toContain("YOLO off")
     app.renderer.destroy()
   })
 })
@@ -525,8 +525,8 @@ describe("header rendering", () => {
       [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
       [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, "provider error", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, "Tools + reviews · ready", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "ready" } }, "Ask first · goal · ready", theme.text.feedback.success.default],
+      [{ type: "autonomy", yolo: true, goalActive: false, state: { type: "ready" } }, "YOLO · ready", theme.text.feedback.error.default],
+      [{ type: "autonomy", yolo: false, goalActive: true, state: { type: "ready" } }, "YOLO off · goal · ready", theme.text.feedback.success.default],
       [{ type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
       [{ type: "retrying", attempt: 2 }, "retrying · attempt 2", theme.text.feedback.warning.default],
     ]
@@ -580,10 +580,10 @@ describe("header rendering", () => {
     for (const width of [80, 200]) {
       for (const asleep of [false, true]) {
         const app = await renderHeader(width, {
-          type: "autonomy", yolo: 1, goalActive: false, asleep, state: { type: "ready" },
+          type: "autonomy", yolo: true, goalActive: false, asleep, state: { type: "ready" },
         })
         try {
-          expect(app.captureCharFrame()).toContain(`Allow tools${asleep ? " · asleep" : ""} · ready`)
+          expect(app.captureCharFrame()).toContain(`YOLO${asleep ? " · asleep" : ""} · ready`)
           expect(app.captureCharFrame()).not.toContain("machine may sleep")
         } finally {
           app.renderer.destroy()
@@ -593,12 +593,12 @@ describe("header rendering", () => {
   })
 
   test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {
-    const app = await renderHeader(100, { type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } })
+    const app = await renderHeader(100, { type: "autonomy", yolo: true, goalActive: false, state: { type: "ready" } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const frame = app.captureCharFrame()
     // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
     // full-width destructive band under the header was an invention and read as a huge red bar.
-    expect(frame).toContain("Tools + reviews · ready")
+    expect(frame).toContain("YOLO · ready")
     expect(app.captureSpans().lines[3]?.spans ?? []).not.toHaveLength(0)
     expect(
       (app.captureSpans().lines[3]?.spans ?? []).some((span) =>
@@ -781,11 +781,11 @@ describe("header rendering", () => {
   })
 
   test("uses the YOLO error token for the dot trail and adjacent working status", async () => {
-    const app = await renderHeader(160, { type: "autonomy", yolo: 2, goalActive: false, state: { type: "working", elapsed: 4.1 } })
+    const app = await renderHeader(160, { type: "autonomy", yolo: true, goalActive: false, state: { type: "working", elapsed: 4.1 } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))
-    const status = spans.find((span) => span.text.includes("Tools + reviews · cooking 4.1s"))
+    const status = spans.find((span) => span.text.includes("YOLO · cooking 4.1s"))
 
     expect(dotTrail?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())

@@ -18,6 +18,7 @@ test("request-only permission rejection preserves ownership, feedback, and missi
     sessionID: Session.ID.make("ses_owner"),
     action: "bash",
     resources: ["git status"],
+    escalation: { reason: "unsupported-output" },
   }
   const calls: Permission.ReplyInput[] = []
   const service = Permission.Service.of({
@@ -64,6 +65,16 @@ test("request-only permission rejection preserves ownership, feedback, and missi
       }),
     )
   try {
+    const listed = await handler.handler(
+      new Request(`http://localhost/api/session/${request.sessionID}/permission`),
+      Context.make(PermissionSaved.Service, {
+        list: () => Effect.die("unused"),
+        add: () => Effect.die("unused"),
+        remove: () => Effect.die("unused"),
+      }),
+    )
+    expect(listed.status).toBe(200)
+    expect(await listed.json()).toEqual({ data: [request] })
     expect((await post(request.sessionID, request.id, "reject", {})).status).toBe(204)
     expect(
       (await post(request.sessionID, request.id, "reject", { message: "Use a read-only alternative" })).status,

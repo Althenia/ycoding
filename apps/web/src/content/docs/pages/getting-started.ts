@@ -26,7 +26,7 @@ export const gettingStartedPages: readonly DocPage[] = [
               ["Agent", "Configured behavior and model choice; subagents run as background child Sessions."],
               ["Permission", "An ordered rule that allows, denies, or asks about a tool action on a resource."],
               ["Guardrail", "A separate review of high-impact actions across the Session family."],
-              ["Autonomy", "The Session's explicit execution mode: normal, a YOLO level, or an active goal."],
+              ["Autonomy", "The Session's independent automation flags (YOLO evaluator, auto-permission, auto-guardrail, auto-answer), sleep state, and any active goal."],
             ],
           },
         ],

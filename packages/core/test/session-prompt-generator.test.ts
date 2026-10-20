@@ -113,7 +113,7 @@ const setup = (options: { child?: boolean; goal?: boolean; pending?: boolean; ru
   yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
   yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: options.directory ?? "/project", title: "Prompt", agent: "build",
     ...(options.child ? { parent_id: Session.ID.make("ses_parent") } : {}),
-    ...(options.goal ? { autonomy: { mode: "normal" as const, yolo: 0 as const, goal: { text: "Finish", status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } } } : {}),
+    ...(options.goal ? { autonomy: { mode: "normal" as const, yolo: false, goal: { text: "Finish", status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } } } : {}),
   }).run().pipe(Effect.orDie)
   if (options.user !== "") {
     const inputID = SessionMessage.ID.create()

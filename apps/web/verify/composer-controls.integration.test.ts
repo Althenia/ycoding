@@ -193,7 +193,7 @@ test("pending prompts, mutation toasts, and the active goal remain accessible on
       expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
       await page.evaluate(`window.composerSetGoalStatus(null); window.composerSetGoalPending(true)`)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__announce[role="status"]')?.textContent?.trim()`)).toBe("Setting goal…")
-      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-setting .transcript-dot-trail') !== null && document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector(${JSON.stringify(width === 390 ? ".session-status__goal-trigger .session-status__goal-progress .transcript-dot-trail" : ".session-status__goal-setting .transcript-dot-trail")}) !== null && document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
       await page.evaluate(`window.composerSetGoalPending(false)`)
       expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-setting') === null`)).toBe(true)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__announce[role="status"]')?.textContent ?? 'missing'`)).toBe("")
@@ -261,7 +261,7 @@ test("phone tool-running status text stays inside its pill and footer", async ()
 }, 30_000)
 
 test("phone status shows the Session state, never the autonomy level shown beside it", async () => {
-  for (const [status, expected] of [["tool-yolo", "tool running"], ["family-yolo", "Running"]] as const) {
+  for (const [status, expected] of [["tool-auto", "tool running"], ["family-auto", "Running"]] as const) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(390, 844)
@@ -271,7 +271,7 @@ test("phone status shows the Session state, never the autonomy level shown besid
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__mobile') !== null`)
       const shown = await page.evaluate<{ mobile: string; trigger: string }>(`(() => ({ mobile: document.querySelector('.mini-composer__mount .session-status__mobile')?.textContent ?? '', trigger: document.querySelector('.mini-composer__mount .session-status__yolo-trigger .session-status__yolo-full')?.textContent ?? '' }))()`)
-      expect(shown.trigger).toBe("Tools + reviews")
+      expect(shown.trigger).toBe("YOLO off")
       expect(shown.mobile).toBe(expected)
     } finally { await page.close() }
   }
@@ -336,7 +336,7 @@ test("status stays inside a fixed-height composer and pending picks survive unre
     await page.evaluate(`document.querySelector('button[aria-label="Close model picker"]')?.click()`)
     const idle = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
     expect(idle).toBeLessThanOrEqual(160)
-    for (const status of ["running", "waiting", "goal", "goal-yolo", "yolo", "idle"]) {
+    for (const status of ["running", "waiting", "goal", "goal-auto", "auto", "idle"]) {
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
       expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)).toBe(idle)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Agent"]')?.textContent`)).toContain("architect")
@@ -353,7 +353,7 @@ test("status stays inside a fixed-height composer and pending picks survive unre
   } finally { await page.close() }
 }, 30_000)
 
-test("Conversation status controls change this Session's YOLO level and goal at desktop and phone widths", async () => {
+test("Conversation status controls toggle this Session's four autonomy switches and goal at desktop and phone widths", async () => {
   for (const [width, height] of [[1440, 900], [390, 844]]) {
     const page = await browser!.openPage()
     try {
@@ -362,42 +362,70 @@ test("Conversation status controls change this Session's YOLO level and goal at 
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__yolo-trigger') !== null`)
       if (width === 390) expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.mini-composer__mount .session-status__yolo-trigger,.mini-composer__mount .session-status__goal-trigger')].every(button => { const rect=button.getBoundingClientRect(); return rect.width>=44 && rect.height>=44 })`)).toBe(true)
       await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.click()`)
-      await wait(page, `document.querySelector('.session-status__yolo-popover [role="radiogroup"]') !== null`)
+      await wait(page, `document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]').length === 4`)
       await page.evaluate(`Promise.all(document.querySelector('.session-status__yolo-popover').getAnimations().map(animation => animation.finished))`)
       await Bun.write(new URL(`../../../.cache/tmp/composer-autonomy-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].map(item => item.querySelector('strong')?.textContent)`)).toEqual(["Ask first", "Allow tools", "Tools + reviews"])
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].map(item => item.querySelector('span')?.textContent)`)).toEqual([
-        "Asks you for tool permissions and routine reviews.", "Auto-approves ask-level tool permissions. Routine reviews still ask.", "Also auto-approves routine reviews while awake.",
+      const popover = `document.querySelector('.session-status__yolo-popover')`
+      const switchState = `[...document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]')].map(input => input.checked)`
+      const deciders = `[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dt')?.textContent + '=' + row.querySelector('dd')?.textContent)`
+      const decider = (name: string) => `[...document.querySelectorAll('.session-status__decider')].find(row => row.querySelector('dt')?.textContent === ${JSON.stringify(name)})?.querySelector('dd')?.textContent`
+      const toggle = async (label: string) => page.evaluate(`[...document.querySelectorAll('.session-status__auto-answer')].find(row => row.querySelector('strong')?.textContent === ${JSON.stringify(label)})?.querySelector('input[type="checkbox"]')?.click()`)
+      const lastRequest = () => page.evaluate<unknown>(`window.composerRequests().at(-1)`)
+      expect(await page.evaluate<number>(`${popover}.querySelectorAll('[role="radio"], [role="radiogroup"]').length`)).toBe(0)
+      expect(await page.evaluate<string[]>(`[...${popover}.querySelectorAll('.session-status__auto-answer strong')].map(item => item.textContent)`)).toEqual(["YOLO", "Auto-permission", "Auto-guardrail", "Auto-answer"])
+      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, false, false, false])
+      expect(await page.evaluate<string[]>(deciders)).toEqual([
+        "YOLO=Off", "Auto-permission=Off", "Auto-guardrail=Off", "Tools=Ask you", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off",
       ])
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dt')?.textContent + '=' + row.querySelector('dd')?.textContent)`)).toEqual([
-        "Tools=Ask you", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off",
-      ])
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__yolo-popover')?.textContent`)).toContain("Hard reviews never follow YOLO.")
-      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.checked === false`)).toBe(true)
-      await page.evaluate(`document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.click()`)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
-      await wait(page, `document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.checked === true`)
+      expect(await page.evaluate<string>(`${popover}.textContent`)).toContain("Hard reviews always need your approval")
+      expect(await page.evaluate<string>(`${popover}.textContent`)).not.toMatch(/Ask first|Allow tools|Tools \+ reviews/)
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.getAttribute('aria-label')`)).toBe("Autonomy: YOLO off")
+      await page.evaluate(`window.autonomyInputs = [...document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]')]; void 0`)
+
+      await toggle("Auto-answer")
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
+      await wait(page, `document.querySelector('#session-status-auto-answer-detail') !== null && ${decider("Auto-answer")} === 'On · this Session'`)
       expect(await page.evaluate<string>(`document.querySelector('#session-status-auto-answer-detail')?.textContent ?? ''`)).toContain("Off while asleep sends requests to Review")
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dd')?.textContent)`)).toEqual(["Ask you", "Ask you", "Ask you", "On · this Session"])
-      if (width === 390) expect(await page.evaluate<boolean>(`(() => { const panel=document.querySelector('.session-status__yolo-popover').getBoundingClientRect(); return document.documentElement.scrollWidth <= innerWidth && panel.left >= 0 && panel.right <= innerWidth })()`)).toBe(true)
-      if (width === 390) expect(await page.evaluate<boolean>(`(() => { const panel=document.querySelector('.session-status__yolo-popover').getBoundingClientRect(), note=document.querySelector('.session-status__guardrail-note').getBoundingClientRect(); return note.bottom<=panel.bottom+1 })()`)).toBe(true)
-      await page.evaluate(`document.querySelector('.session-status__yolo-popover [role="radio"][aria-checked="true"]')?.focus()`)
-      await page.pressKey("ArrowRight", "ArrowRight", 39)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 1 } })
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('Tools + reviews'))?.click()`)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 2 } })
+      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, false, false, true])
+
+      await toggle("Auto-permission")
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { autoPermission: true } })
+      await wait(page, `${decider("Tools")} === 'Auto-approved'`)
+      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, true, false, true])
+      expect(await page.evaluate<string>(decider("Routine reviews"))).toBe("Ask you")
+
+      await toggle("Auto-guardrail")
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { autoGuardrail: true } })
+      await wait(page, `${decider("Routine reviews")} === 'Auto-approved'`)
+      expect(await page.evaluate<string>(decider("Hard reviews"))).toBe("Ask you")
+      expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount [data-mode="auto-permission"]') !== null && document.querySelector('.mini-composer__mount [data-mode="auto-guardrail"]') !== null && document.querySelector('.mini-composer__mount [data-mode="auto-answer"]') !== null`)).toBe(true)
+
+      await toggle("YOLO")
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
+      await wait(page, `${decider("YOLO")} === 'On · evaluates'`)
+      expect(await page.evaluate<boolean[]>(switchState)).toEqual([true, true, true, true])
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.getAttribute('aria-label')`)).toBe("Autonomy: YOLO on")
+      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.innerText`)).toBe(width === 390 ? "Y on" : "YOLO on")
+      expect(await page.evaluate<boolean>(`window.autonomyInputs.every(input => input.isConnected)`)).toBe(true)
+
+      await toggle("YOLO")
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { yolo: false } })
+      await wait(page, `${decider("YOLO")} === 'Off'`)
+      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, true, true, true])
+      expect(await page.evaluate<string[][]>(`window.composerRequests().slice(-5).map(item => Object.keys(item.input))`)).toEqual([["autoAnswer"], ["autoPermission"], ["autoGuardrail"], ["yolo"], ["yolo"]])
+
+      await page.evaluate(`window.composerSetHardReviewPolicy(false)`)
+      await page.evaluate(`window.composerSetEffective({ guardrailsEnabled: true, modelReviews: true, permissionModelReviews: true })`)
+      await wait(page, `${decider("Tools")} === 'Model assesses, then you'`)
+      expect(await page.evaluate<string>(decider("Routine reviews"))).toBe("Model assesses, then you")
+      expect(await page.evaluate<string>(decider("Hard reviews"))).toBe("Ask you")
       for (const modeled of [false, true]) {
         await page.evaluate(`window.composerSetHardReviewPolicy(${modeled})`)
-        await wait(page, `[...document.querySelectorAll('.session-status__decider')].find(row => row.querySelector('dt')?.textContent === 'Hard reviews')?.querySelector('dd')?.textContent === ${JSON.stringify(modeled ? "Model or you" : "Ask you")}`)
-        expect(await page.evaluate<string>(`[...document.querySelectorAll('.session-status__decider')].find(row => row.querySelector('dt')?.textContent === 'Routine reviews')?.querySelector('dd')?.textContent`)).toBe("Off")
+        await wait(page, `${decider("Hard reviews")} === ${JSON.stringify(modeled ? "Model assesses · you approve" : "Ask you")}`)
+        expect(await page.evaluate<string>(decider("Routine reviews"))).toBe("Off")
       }
-      await page.evaluate(`document.querySelector('.session-status__yolo-popover [role="radio"][aria-checked="true"]')?.focus()`)
-      await page.pressKey("Home", "Home", 36)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 0 } })
-      await page.pressKey("End", "End", 35)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: 2 } })
       await page.pressEscape()
-      expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Autonomy level")
+      expect((await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).startsWith("Autonomy: YOLO")).toBe(true)
       await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
       await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
       await Bun.write(new URL(`../../../.cache/tmp/composer-goal-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
@@ -493,11 +521,12 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       const composer = ".workspace__main .mini-composer__mount"
-      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger')?.textContent?.includes('Tools + reviews') === true`)
-      expect(await page.evaluate<number>(`document.querySelectorAll('${composer} .session-status__mode').length`)).toBe(0)
+      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger')?.textContent?.includes('YOLO off') === true`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length`)).toBe(0)
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => chip.dataset.mode)`)).toEqual(["auto-permission", "auto-guardrail"])
       await type(page, `${composer} textarea`, "/sle")
       await wait(page, `[...document.querySelectorAll('${composer} [role="option"]')].some(option => option.textContent.includes('/sleep'))`)
-      const modes = () => page.evaluate<{ label: string; tone: string }[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => ({ label: chip.title, tone: [...chip.classList].find(name => name.startsWith('session-status__mode--')) ?? '' }))`)
+      const modes = () => page.evaluate<{ label: string; tone: string }[]>(`[...document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]')].map(chip => ({ label: chip.title, tone: [...chip.classList].find(name => name.startsWith('session-status__mode--')) ?? '' }))`)
       const run = async (command: string, operation: string, input: Record<string, unknown>) => {
         const before = await page.evaluate<number>(`window.remoteMutationReport().length`)
         await type(page, `${composer} textarea`, command)
@@ -507,23 +536,30 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
         await wait(page, `document.querySelector('${composer} textarea')?.value === ''`)
       }
       await run("/sleep", "session.autonomy.set", { sleep: true })
-      await wait(page, `document.querySelectorAll('${composer} .session-status__mode').length === 1`)
+      await wait(page, `document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length === 1`)
       expect(await modes()).toEqual([{ label: "asleep", tone: "session-status__mode--on" }])
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('${composer} .session-status__mode')].every(chip => chip.getBoundingClientRect().right <= innerWidth)`)).toBe(true)
       expect(await page.evaluate<string[]>(`(() => { const status = document.querySelector('${composer} .session-status'); const boxes = (selector, inside) => [...document.querySelectorAll(selector)].filter(el => status.contains(el) === inside && el.getClientRects().length > 0).map(el => [el, el.getBoundingClientRect()]); const others = boxes('${composer} :is(button,textarea,[role="slider"])', false); return boxes('${composer} :is(.session-status__mode,.session-status__yolo-trigger,.session-status__goal-trigger)', true).flatMap(([chip, a]) => others.filter(([, b]) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1).map(([other]) => (chip.title || chip.className) + ' overlaps ' + (other.getAttribute('aria-label') || other.className))) })()`)).toEqual([])
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => getComputedStyle(chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"})).display === 'none' ? '' : chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}).textContent)`)).toEqual(width === 390 ? ["Zz"] : ["asleep"])
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => getComputedStyle(chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"})).display === 'none' ? '' : chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}).textContent)`)).toEqual(width === 390 ? ["AP", "AG", "Zz"] : ["auto-permission", "auto-guardrail", "asleep"])
       await Bun.write(new URL(`../../../.cache/tmp/composer-asleep-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await run("/auto-answer", "session.autonomy.set", { autoAnswer: true })
+      await wait(page, `document.querySelectorAll('${composer} .session-status__mode').length === 4`)
+      if (width === 390) {
+        const metadata = await page.evaluate<{ modes: string[]; readable: boolean; contained: boolean }>(`(() => { const root = document.querySelector('${composer}'), cluster = root.querySelector('.session-status__modes'), box = cluster.getBoundingClientRect(), goal = root.querySelector('.session-status__goal-trigger').getBoundingClientRect(), attach = root.querySelector('.composer__attach').getBoundingClientRect(), chips = [...cluster.querySelectorAll('.session-status__mode')]; return { modes: chips.map(chip => chip.dataset.mode), readable: chips.every(chip => { const range = document.createRange(); range.selectNodeContents(chip.querySelector('.session-status__mode-compact')); const text = range.getBoundingClientRect(), bounds = chip.getBoundingClientRect(); return text.width > 0 && text.left >= bounds.left - 0.5 && text.right <= bounds.right + 0.5 }), contained: box.left >= goal.right && box.right <= attach.left && box.height <= goal.height }; })()`)
+        expect(metadata).toEqual({ modes: ["auto-permission", "auto-guardrail", "auto-answer", "sleep"], readable: true, contained: true })
+      }
       await run("/keep-awake", "machine.keepAwake.set", { enabled: true })
       await run("/wake", "session.autonomy.set", { sleep: false })
-      await wait(page, `document.querySelectorAll('${composer} .session-status__mode').length === 0`)
+      await wait(page, `document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length === 0`)
       expect(await modes()).toEqual([])
       await type(page, `${composer} textarea`, "/sleep now")
       await page.evaluate(`document.querySelector('${composer} button[aria-label="Send prompt"]')?.click()`)
       await wait(page, `document.querySelector('${composer}')?.textContent?.includes('Use /sleep without arguments.') === true`)
       expect(await page.evaluate<boolean>(`window.remoteMutationReport().every(item => item.operation !== 'session.prompt')`)).toBe(true)
       await page.evaluate(`document.querySelector('${composer} .session-status__yolo-trigger')?.click()`)
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('Ask first'))?.click()`)
-      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger .session-status__yolo-full')?.textContent === 'Ask first'`)
+      await page.evaluate(`[...document.querySelectorAll('.session-status__auto-answer')].find(row => row.querySelector('strong')?.textContent === 'YOLO')?.querySelector('input[type="checkbox"]')?.click()`)
+      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger .session-status__yolo-full')?.textContent === 'YOLO on'`)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().filter(item => item.operation === 'session.autonomy.set').at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
     } finally { await page.close() }
   }
 
@@ -531,22 +567,22 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
   try {
     await held.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&asleep=1&sleepHold=failed`)
     const composer = ".workspace__main .mini-composer__mount"
-    await wait(held, `document.querySelector('${composer} .session-status__mode')?.title === 'asleep · machine may sleep'`)
-    expect(await held.evaluate<string>(`document.querySelector('${composer} .session-status__mode')?.className`)).toContain("session-status__mode--attention")
+    await wait(held, `document.querySelector('${composer} .session-status__mode[data-mode="sleep"]')?.title === 'asleep · machine may sleep'`)
+    expect(await held.evaluate<string>(`document.querySelector('${composer} .session-status__mode[data-mode="sleep"]')?.className`)).toContain("session-status__mode--attention")
     expect(await held.evaluate<number>(`window.remoteOperationReport().operations['machine.keepAwake.get'] ?? 0`)).toBeGreaterThanOrEqual(1)
   } finally { await held.close() }
 }, 120_000)
 
-test("a level 2 Session without root ordinary-review authority shows routine reviews asking", async () => {
+test("a Session with auto-guardrail on whose root lacks ordinary-review authority shows routine reviews asking", async () => {
   const page = await browser!.openPage()
   try {
     await page.setViewport(390, 844)
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&ordinaryReviewsAuto=0`)
-    await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger')?.textContent?.includes('Tools + reviews') === true`)
+    await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger')?.textContent?.includes('YOLO off') === true`)
     await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
     await wait(page, `document.querySelector('.session-status__decider') !== null`)
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dt')?.textContent + '=' + row.querySelector('dd')?.textContent)`))
-      .toEqual(["Tools=Auto-approved", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off"])
+      .toEqual(["YOLO=Off", "Auto-permission=On", "Auto-guardrail=On", "Tools=Auto-approved", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off"])
     expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
@@ -559,12 +595,15 @@ test("Conversation autonomy controls issue Session-scoped relay operations", asy
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
       await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger') !== null`)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(item => item.textContent.includes('Tools + reviews'))?.click()`)
+      const switchFor = (label: string) => `[...document.querySelectorAll('.session-status__auto-answer')].find(row => row.querySelector('strong')?.textContent === ${JSON.stringify(label)})?.querySelector('input[type="checkbox"]')`
+      await page.evaluate(`${switchFor("YOLO")}?.click()`)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set')`)
-      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.autonomy.set')`)).toMatchObject({ operation: "session.autonomy.set", input: { yolo: 2 } })
-      await page.evaluate(`document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.click()`)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.autonomy.set')`)).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
+      await wait(page, `${switchFor("YOLO")}?.checked === true`)
+      expect(await page.evaluate<boolean[]>(`[...document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]')].map(input => input.checked)`)).toEqual([true, true, true, false])
+      await page.evaluate(`${switchFor("Auto-answer")}?.click()`)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set' && item.input?.autoAnswer === true)`)
-      await wait(page, `document.querySelector('.session-status__auto-answer input[type="checkbox"]')?.checked === true`)
+      await wait(page, `${switchFor("Auto-answer")}?.checked === true`)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
       await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship a reliable Session")
@@ -1161,22 +1200,32 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
     await wait(page, `window.composerRequests().length >= 9`)
     expect((await operations())[8]).toMatchObject({ operation: "session.prompt", input: { text: "/Users/me/file.ts explain" } })
 
-    await type(page, input, "/yolo 2")
+    await type(page, input, "/yolo on")
     await send()
     await wait(page, `window.composerRequests().length >= 10`)
-    expect((await operations())[9]).toEqual({ operation: "session.autonomy.set", input: { yolo: 2 } })
+    expect((await operations())[9]).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
     await type(page, input, "/yolo")
     await send()
     await wait(page, `window.composerRequests().length >= 11`)
-    expect((await operations())[10]).toEqual({ operation: "session.autonomy.set", input: { yolo: 0 } })
-    await type(page, input, "/yolo 3")
-    await send()
-    await wait(page, `document.querySelector('.mini-composer__mount')?.textContent?.includes('Use /yolo with a level from 0 to 2.') === true`)
-    expect((await operations())).toHaveLength(11)
-    await type(page, input, "/auto-answer")
+    expect((await operations())[10]).toEqual({ operation: "session.autonomy.set", input: { yolo: false } })
+    for (const numeric of ["/yolo 2", "/yolo maybe"]) {
+      await type(page, input, numeric)
+      await send()
+      await wait(page, `document.querySelector('.mini-composer__mount')?.textContent?.includes('Use /yolo, /yolo on, or /yolo off.') === true`)
+      expect((await operations())).toHaveLength(11)
+    }
+    await type(page, input, "/auto-permission off")
     await send()
     await wait(page, `window.composerRequests().length >= 12`)
-    expect((await operations())[11]).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
+    expect((await operations())[11]).toEqual({ operation: "session.autonomy.set", input: { autoPermission: false } })
+    await type(page, input, "/auto-guardrail")
+    await send()
+    await wait(page, `window.composerRequests().length >= 13`)
+    expect((await operations())[12]).toEqual({ operation: "session.autonomy.set", input: { autoGuardrail: true } })
+    await type(page, input, "/auto-answer")
+    await send()
+    await wait(page, `window.composerRequests().length >= 14`)
+    expect((await operations())[13]).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
     expect((await operations()).filter((item) => item.operation === "session.prompt")).toHaveLength(6)
 
     await type(page, ".new-session-composer textarea", "/go")
@@ -1201,22 +1250,27 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       await wait(page, `document.querySelector('${mount} textarea') !== null && document.querySelector('${mount} .session-status__goal-trigger') !== null`)
       await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
       const geometry = () => page.evaluate<readonly (readonly number[] | null)[]>(`${JSON.stringify(stable)}.map(selector => { const element = document.querySelector('${mount} ' + selector); if (!element) return null; const box = element.getBoundingClientRect(); return [box.x, box.y, box.width, box.height].map(value => Math.round(value * 10) / 10) })`)
+      const chipSelector = width === 390 ? ".session-status__goal-trigger .session-status__goal-progress" : ".session-status__goal-setting"
+      const modeBoxes = `[...document.querySelectorAll('${mount} .session-status__mode')].map(chip => { const box = chip.getBoundingClientRect(), span = chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}), range = document.createRange(); range.selectNodeContents(span); const text = ${width === 390 ? "range.getBoundingClientRect()" : "span.getBoundingClientRect()"}; return { mode: chip.dataset.mode, readable: ${width === 390 ? "text.width > 0" : "box.width >= 20"} && text.left >= box.left - 0.5 && text.right <= box.right + 0.5 } })`
       const idle = await geometry()
       expect(idle.every((box) => box !== null)).toBe(true)
+      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "auto-permission", readable: true }, { mode: "auto-guardrail", readable: true }])
       const send = `document.querySelector('${mount} button[aria-label="Send prompt"]')?.click()`
       await type(page, `${mount} textarea`, "/goal ship it safely")
       await page.evaluate(send)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`)
       await wait(page, `document.querySelector('${mount} .session-status__goal-setting') !== null`)
 
-      const indicatorBounds = await page.evaluate<{ insideComposer: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${mount} .session-status__goal-setting'), composer = document.querySelector('${mount} .composer'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__yolo-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, overlaps: controls.filter(selector => { const box = document.querySelector('${mount} ' + selector).getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
-      expect(indicatorBounds).toEqual({ insideComposer: true, overlaps: [] })
+      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "auto-permission", readable: true }, { mode: "auto-guardrail", readable: true }])
+      const indicatorBounds = await page.evaluate<{ insideComposer: boolean; insideGoalTrigger: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${mount} ${chipSelector}'), composer = document.querySelector('${mount} .composer'), goal = document.querySelector('${mount} .session-status__goal-trigger'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), goalBox = goal.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__yolo-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, insideGoalTrigger: goal.contains(chip) && chipBox.left >= goalBox.left && chipBox.right <= goalBox.right && chipBox.top >= goalBox.top && chipBox.bottom <= goalBox.bottom, overlaps: controls.filter(selector => { const control = document.querySelector('${mount} ' + selector); if (control.contains(chip)) return false; const box = control.getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
+      expect(indicatorBounds).toEqual({ insideComposer: true, insideGoalTrigger: width === 390, overlaps: [] })
 
-      const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${mount} .session-status__goal-setting'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
-      expect(pending).toMatchObject({ enabled: true, draft: "", busy: "true", name: "Setting goal", chip: width === 390 ? "Setting…" : "Setting goal…", chipHidden: "true", dots: 1, announced: "Setting goal…" })
+      const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${mount} ${chipSelector}'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
+      expect(pending).toMatchObject({ enabled: true, draft: "", busy: "true", name: "Setting goal", chip: width === 390 ? "Goal…" : "Setting goal…", chipHidden: "true", dots: 1, announced: "Setting goal…" })
       expect(pending.dotAnimation === "none").toBe(reduced)
       expect(pending.chipAnimation === "none").toBe(reduced)
       expect(await geometry()).toEqual(idle)
+      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "auto-permission", readable: true }, { mode: "auto-guardrail", readable: true }])
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       if (!reduced) await Bun.sleep(300)
       if (!reduced) await Bun.write(new URL(`../../../.cache/tmp/composer-goal-setting-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))

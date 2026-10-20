@@ -92,7 +92,7 @@ for (const mode of ["dark", "light"] as const) {
           height: 36,
           args: { sessionID },
           route,
-          settle: "Ask first · ready",
+          settle: "YOLO off · ready",
           config: { animations: false, theme: { mode } },
           keepAwake: {
             get: () => initial.promise,
@@ -128,7 +128,7 @@ for (const mode of ["dark", "light"] as const) {
         height: 36,
         args: { sessionID },
         route,
-        settle: "Ask first · ready",
+        settle: "YOLO off · ready",
         config: { animations: false, theme: { mode } },
         keepAwake: {
           get: () => (++reads === 1 ? initial.promise : new Promise<KeepAwakeStatus>(() => {})),

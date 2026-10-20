@@ -275,6 +275,8 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.profile.bound": () => Effect.void,
       "session.guardrail.approved": () => Effect.void,
       "session.guardrail.decided": () => Effect.void,
+      "session.decision.audited": () => Effect.void,
+      "session.permission.assessed": () => Effect.void,
       "session.review.deferred": () => Effect.void,
       "session.review.decided": () => Effect.void,
       "session.review.withdrawn": (event) => adapter.appendMessage(SessionMessage.System.make({

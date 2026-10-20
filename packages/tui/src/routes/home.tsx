@@ -23,7 +23,7 @@ import { DialogChromeConnection } from "../component/dialog-session-browser"
 import { errorMessage } from "../util/error"
 import { modelDaybreak } from "../util/session-daybreak"
 import type { ModelDaybreak, SessionAutonomyView } from "@ycoding-ai/client"
-import { localAutonomyView, type YoloLevel } from "../util/session-autonomy"
+import { localAutonomyView } from "../util/session-autonomy"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
@@ -92,7 +92,7 @@ function LandingFooter(props: { autonomy?: SessionAutonomyView }) {
     >
       <box flexDirection="row" gap={3} flexShrink={0}>
         <text fg={theme.text.subdued}>main</text>
-        <ModeChips autonomy={props.autonomy} keys={["goal", "yolo", "answers"]} />
+        <ModeChips autonomy={props.autonomy} keys={["goal", "yolo", "permissions", "guardrails", "answers"]} />
         <text fg={theme.text.subdued}>subagents 0</text>
       </box>
       <box flexDirection="row" gap={3} flexShrink={0} alignSelf={dimensions().width < 120 ? "flex-end" : undefined}>
@@ -122,7 +122,9 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
   const client = useClient()
   const toast = useToast()
   const [promptOverlay, setPromptOverlay] = createSignal(false)
-  const [landingYolo, setLandingYolo] = createSignal<YoloLevel>(0)
+  const [landingYolo, setLandingYolo] = createSignal(false)
+  const [landingAutoPermission, setLandingAutoPermission] = createSignal(false)
+  const [landingAutoGuardrail, setLandingAutoGuardrail] = createSignal(false)
   const [landingAutoAnswer, setLandingAutoAnswer] = createSignal(false)
   const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
   const [landingDaybreak, setLandingDaybreak] = createSignal<ModelDaybreak>()
@@ -143,7 +145,7 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
       },
     }],
   }))
-  const landingAutonomy = createMemo(() => localAutonomyView({ mode: "normal", yolo: landingYolo(), autoAnswer: landingAutoAnswer(), goal: landingGoal() ? { text: landingGoal()!, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }))
+  const landingAutonomy = createMemo(() => localAutonomyView({ mode: "normal", yolo: landingYolo(), autoPermission: landingAutoPermission(), autoGuardrail: landingAutoGuardrail(), autoAnswer: landingAutoAnswer(), goal: landingGoal() ? { text: landingGoal()!, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }))
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
@@ -249,6 +251,8 @@ export function Home(props: { submitDisabled?: boolean } = {}) {
               landingDaybreak={landingDaybreak()}
               onLandingDaybreakChange={setLandingDaybreak}
               onLandingYoloToggle={(next) => setLandingYolo(next)}
+              onLandingAutoPermissionToggle={(next) => setLandingAutoPermission(next)}
+              onLandingAutoGuardrailToggle={(next) => setLandingAutoGuardrail(next)}
               onLandingAutoAnswerToggle={(next) => setLandingAutoAnswer(next)}
               onLandingGoalToggle={(next) => setLandingGoal(next ?? undefined)}
               onOverlayChange={setPromptOverlay}

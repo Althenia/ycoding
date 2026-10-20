@@ -28,6 +28,7 @@ const plan = {
   question: "Which rollout plan fits the user's request to avoid downtime?", header: "Plan",
   options: [{ label: "Fast", description: "Deploy everything at once" }, { label: "Careful", description: "Roll out gradually with health checks" }],
 }
+const recommendedPlan = { ...plan, options: [{ ...plan.options[0], label: "Fast (Recommended)" }, plan.options[1]] }
 const assertions: Permission.AssertInput[] = []
 let captured: Form.CreateInput | undefined
 let reject = false
@@ -48,9 +49,30 @@ const questionToolNode = makeLocationNode({
   name: "test/question-tool-plugin", layer: Layer.effectDiscard(registerToolPlugin(QuestionTool.Plugin)),
   deps: [ToolRegistry.toolsNode, Permission.node, Form.node],
 })
+let decisionBehavior: (input: Decision.Input) => Effect.Effect<Decision.Output, Decision.Error> = () =>
+  Effect.die("Questions must not request judgments")
+const decisionChoice = (value: string, confidence: number) => (input: Decision.Input) =>
+  Effect.succeed(
+    Schema.decodeUnknownSync(Decision.Output)({
+      provider: "agent",
+      response: {
+        model: { providerID: "test", id: "decision-model" },
+        semantics: "model-estimate",
+        version: 1,
+        answers: input.request.questions.map((item) => ({
+          name: item.name,
+          type: "choice",
+          answer: null,
+          choice: value,
+          score: null,
+          confidence,
+        })),
+      },
+    }),
+  )
 const overrides = [
   [Permission.node, permission],
-  [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("Questions must not request judgments") })],
+  [Decision.node, Layer.mock(Decision.Service, { evaluate: (input: Decision.Input) => decisionBehavior(input) })],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig], [Image.node, imagePassthrough],
 ] as const
 const configured = (info: unknown) =>
@@ -181,16 +203,24 @@ describe("QuestionTool", () => {
     expect(capturedInput()?.fields[0]).toMatchObject({ options: [{ label: "Fast (Recommended)" }, { label: "Careful" }] })
   }))
 
-  autonomous.effect("autoAnswer questions retain the first-option answer without helper suggestions", () => Effect.gen(function* () {
+  autonomous.effect("autoAnswer alone selects only the explicit recommendation and never calls the helper", () => Effect.gen(function* () {
     deny = false
+    decisionBehavior = () => Effect.die("autoAnswer alone must not request judgments")
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
     yield* autonomy.set({ sessionID, autoAnswer: true })
-    for (const yolo of [0, 2] as const) {
-      yield* autonomy.setYolo({ sessionID, yolo })
-      expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: `yolo-${yolo}`, name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Fast"]], automatic: true })
-    }
+    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "recommended", name: "question", input: { questions: [recommendedPlan] } } })).output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer" })
+  }))
+
+  autonomous.effect("YOLO alone answers through the evaluator and reports its model confidence", () => Effect.gen(function* () {
+    deny = false
+    yield* seedSession
+    const autonomy = yield* SessionAutonomy.Service
+    const registry = yield* ToolRegistry.Service
+    yield* autonomy.setYolo({ sessionID, yolo: true })
+    decisionBehavior = decisionChoice("Careful", 0.9)
+    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "yolo", name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Careful"]], automatic: true, via: "yolo", confidence: 0.9 })
   }))
 
   autonomous.effect("automatic answers in an active goal retain machine attribution", () => Effect.gen(function* () {
@@ -200,16 +230,18 @@ describe("QuestionTool", () => {
     const registry = yield* ToolRegistry.Service
     yield* autonomy.set({ sessionID, autoAnswer: true })
     yield* autonomy.setGoal({ sessionID, text: "Choose safely" })
-    const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [plan] } } })
-    const text = `Answers were selected automatically, not provided or approved by the user: "${plan.question}"="Fast". Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
+    decisionBehavior = () => Effect.die("autoAnswer alone must not request judgments")
+    const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [recommendedPlan] } } })
+    const text = `Answers were selected automatically, not provided or approved by the user: "${plan.question}"="Fast (Recommended)". Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
     expect(settled.result).toEqual({ type: "text", value: text })
-    expect(settled.output?.structured).toEqual({ answers: [["Fast"]], automatic: true })
+    expect(settled.output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer" })
     expect(settled.output?.content).toEqual([{ type: "text", text }])
     expect(settled.result.value).not.toContain("User has answered")
   }))
 
   autonomous.effect("a human reply winning automatic settlement keeps user attribution", () => Effect.gen(function* () {
     deny = false
+    decisionBehavior = () => Effect.die("Questions must not request judgments")
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
     yield* autonomy.set({ sessionID, autoAnswer: true })

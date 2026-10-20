@@ -17,15 +17,15 @@ function invalidInput(issue: SchemaIssue.Issue, value: unknown) {
   if (Array.isArray(questions) && questions.length === 0)
     return "questions: expected at least one question; received []. Add one bounded question, or skip the decision tool if no judgment is needed."
   const index = Array.isArray(questions) ? questions.findIndex((question) =>
-    question !== null && typeof question === "object" && "type" in question && !Schema.is(Schema.Literals(["predicate", "choice", "score"]))(question.type),
+    question !== null && typeof question === "object" && "type" in question && !Schema.is(Schema.Literals(["predicate", "choice", "score", "text"]))(question.type),
   ) : -1
   if (index >= 0)
-    return `questions[${index}].type: expected "predicate", "choice", or "score"; received an unsupported value (redacted). Minimal valid request: ${example}`
+    return `questions[${index}].type: expected "predicate", "choice", "score", or "text"; received an unsupported value (redacted). Minimal valid request: ${example}`
   const failures = inputIssues(issue)
   return failures.map((failure) => {
     const path = failure.path.map((key) => {
       if (typeof key === "number") return `[${key}]`
-      return ["provider", "request", "state", "questions", "type", "name", "instructions", "grade", "choices", "value", "description", "levels", "label"].includes(String(key)) ? `.${String(key)}` : ".<unknown-key>"
+      return ["provider", "request", "state", "questions", "type", "name", "instructions", "grade", "choices", "value", "description", "levels", "label", "text", "maxLength"].includes(String(key)) ? `.${String(key)}` : ".<unknown-key>"
     }).join("").replace(/^\./, "") || "input"
     return `${path}: ${failure.message}`
   }).join("; ") + `. Minimal valid request: ${example}`
@@ -54,7 +54,7 @@ export const Plugin = {
     const inputSchema = Schema.toJsonSchemaDocument(Input)
     const outputSchema = Schema.toJsonSchemaDocument(Output)
     yield* ctx.tool.transform((draft) => draft.add(name, Tool.make({
-      description: `Get bounded typed judgments from the configured hidden decision helper and selected model. Send provider: agent and request: { state, questions } with named predicate, choice, or score questions; choices use value/description and levels use label/description. Choice grade defaults to false for a single pick. Set grade: true to receive grades: [{ choice, confidence, evidence }] for every listed choice exactly once, with no pick; evidence is nonempty and at most 500 characters and confidence is in [0,1]. Example: ${example} Choose among verified candidates, classify risk, grade against a rubric, settle predicates tests cannot verify, or recommend an option before asking the user. Batch independent questions and reuse unchanged judgments. Confidence is self-reported and uncalibrated. Treat refusal, errors, low or close confidence, and disagreement with evidence as uncertainty. Judgments never grant permission or approval, replace the user's answer, prove completion, override owner choices or guardrails, or execute a tool. Send only evidence authorized for the helper model route.`,
+      description: `Get bounded typed judgments from the configured hidden decision helper and selected model. Send provider: agent and request: { state, questions } with named predicate, choice, score, or text questions; choices use value/description, levels use label/description, and text uses optional maxLength (1–8192) with the bounded answer returned only in the text field. Choice grade defaults to false for a single pick. Set grade: true to receive grades: [{ choice, confidence, evidence }] for every listed choice exactly once, with no pick; evidence is nonempty and at most 500 characters and confidence is in [0,1]. Example: ${example} Choose among verified candidates, classify risk, grade against a rubric, settle predicates tests cannot verify, or recommend an option before asking the user. Batch independent questions and reuse unchanged judgments. Confidence is self-reported and uncalibrated. Treat refusal, errors, low or close confidence, and disagreement with evidence as uncertainty. Judgments never grant permission or approval, replace the user's answer, prove completion, override owner choices or guardrails, or execute a tool. Send only evidence authorized for the helper model route.`,
       jsonSchema: { ...inputSchema.schema, $defs: inputSchema.definitions },
       outputSchema: { ...outputSchema.schema, $defs: outputSchema.definitions },
       execute: (value, context) => Schema.decodeUnknownEffect(Input)(value, { onExcessProperty: "error" }).pipe(
@@ -66,7 +66,7 @@ export const Plugin = {
         source: { type: "tool", messageID: context.messageID, callID: context.callID },
       }).pipe(
         Effect.mapError((error) => new ToolFailure({ message: "Decision request is not permitted", error })),
-        Effect.andThen(decisions.evaluate(input, { sessionID: context.sessionID, agent: context.agent }).pipe(
+        Effect.andThen(decisions.evaluate(input, { sessionID: context.sessionID, agent: context.agent, invocationKey: `tool:${context.messageID}:${context.callID}` }).pipe(
           Effect.mapError((error) => new ToolFailure({ message: error.message })),
           Effect.flatMap((output) => Schema.encodeEffect(Output)(output).pipe(
             Effect.mapError(() => new ToolFailure({ message: "Decision helper returned an invalid result envelope. Treat this as uncertainty; verify the requested schema or decide from evidence." })),

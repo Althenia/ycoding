@@ -3,53 +3,61 @@ import type { SessionAutonomyView } from "@ycoding-ai/client"
 import type { AutonomyState } from "../src/util/session-autonomy"
 import {
   activateGoal,
-  approvalLevelLabel,
   autonomyDecisionLabel,
-  autonomyLevelDescription,
   autonomyModeLabel,
   autonomyModeParts,
   autonomyProgressLabel,
   createSessionAutonomyRefreshGuard,
   goalToggleAction,
-  nextApprovalLevel,
-  parseApprovalLevel,
-  parseAutoAnswerArg,
+  localAutonomyView,
   parseGoalCommand,
-  yoloLevel,
+  parseToggleArg,
+  yoloLabel,
+  yoloOn,
 } from "../src/util/session-autonomy"
 
 function autonomyView(input: {
-  yolo?: number | boolean
-  effectiveYolo?: 0 | 1 | 2
+  yolo?: boolean
+  effectiveYolo?: boolean
   goal?: boolean
   sleep?: boolean
+  autoPermission?: boolean
+  autoGuardrail?: boolean
   autoAnswer?: boolean
+  permissionsAuto?: boolean
+  permissionModelReviews?: boolean
   guardrailsEnabled?: boolean
   ordinaryReviewsAuto?: boolean
   modelReviews?: boolean
   hardModelReviews?: boolean
 } = {}): SessionAutonomyView {
-  const yolo = input.yolo ?? 0
+  const yolo = input.yolo ?? false
   return {
     mode: "normal",
     yolo,
     ...(input.goal ? { goal: { text: "ship", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 } } : {}),
     ...(input.sleep ? { sleep: {} } : {}),
+    ...(input.autoPermission === undefined ? {} : { autoPermission: input.autoPermission }),
+    ...(input.autoGuardrail === undefined ? {} : { autoGuardrail: input.autoGuardrail }),
     ...(input.autoAnswer === undefined ? {} : { autoAnswer: input.autoAnswer }),
     effective: {
-      yolo: input.effectiveYolo ?? (yolo === 1 || yolo === 2 ? yolo : 0),
+      yolo: input.effectiveYolo ?? yolo,
+      permissionsAuto: input.permissionsAuto ?? (input.autoPermission ?? false),
+      permissionModelReviews: input.permissionModelReviews ?? false,
       asleep: input.sleep ?? false,
       guardrailsEnabled: input.guardrailsEnabled ?? true,
-      ordinaryReviewsAuto: input.ordinaryReviewsAuto ?? ((input.effectiveYolo ?? (yolo === 1 || yolo === 2 ? yolo : 0)) === 2 && !(input.sleep ?? false)),
+      ordinaryReviewsAuto: input.ordinaryReviewsAuto ?? ((input.autoGuardrail ?? false) && !(input.sleep ?? false)),
       modelReviews: input.modelReviews ?? false,
       hardModelReviews: input.hardModelReviews ?? false,
     },
   } as unknown as SessionAutonomyView
 }
 
-test("accepts only approval levels 0-2 and never clamps an unsupported value", () => {
-  expect([0, 1, 2, true, false].map((yolo) => yoloLevel({ yolo }))).toEqual([0, 1, 2, 2, 0])
-  expect([3, 1.5, 9, Number.NaN, -1, "2", undefined].map((yolo) => yoloLevel({ yolo }))).toEqual([
+test("accepts only a boolean yolo; numeric values fail closed as unknown", () => {
+  expect([true, false].map((yolo) => yoloOn({ yolo }))).toEqual([true, false])
+  expect([0, 1, 2, 3, 1.5, Number.NaN, "true", null, undefined].map((yolo) => yoloOn({ yolo }))).toEqual([
+    undefined,
+    undefined,
     undefined,
     undefined,
     undefined,
@@ -58,74 +66,83 @@ test("accepts only approval levels 0-2 and never clamps an unsupported value", (
     undefined,
     undefined,
   ])
-  expect(parseApprovalLevel("0")).toBe(0)
-  expect(parseApprovalLevel("2")).toBe(2)
-  expect(parseApprovalLevel("3")).toBeUndefined()
-  expect(([0, 1, 2] as const).map((level) => nextApprovalLevel(level))).toEqual([1, 2, 0])
+  expect(parseToggleArg(undefined)).toBeUndefined()
+  expect(parseToggleArg("on")).toBe(true)
+  expect(parseToggleArg("off")).toBe(false)
+  for (const token of ["0", "1", "2", "yes", "true"]) expect(parseToggleArg(token)).toBeNull()
+  expect(yoloLabel(true)).toBe("YOLO")
+  expect(yoloLabel(false)).toBe("YOLO off")
 })
 
-test("names approval levels and states their exact grants without promising answers", () => {
-  expect(([0, 1, 2] as const).map((level) => approvalLevelLabel(level))).toEqual(["Ask first", "Allow tools", "Tools + reviews"])
-  expect(autonomyLevelDescription(0)).toBe("ask before ask-permission tools and ordinary reviews")
-  expect(autonomyLevelDescription(1)).toBe("auto-approve ask-permission tools; ordinary reviews still ask")
-  expect(autonomyLevelDescription(2)).toBe(
-    "auto-approve ask-permission tools and ordinary reviews while awake; hard reviews never auto-approve by level",
-  )
-})
-
-test("maps decisions from the effective level; a goal grants nothing", () => {
+test("each auto flag decides only its own row; yolo and goal grant nothing", () => {
   const labels = (view: SessionAutonomyView) =>
     (["permissions", "guardrails", "questions"] as const).map((action) => autonomyDecisionLabel(view, action))
-  expect(labels(autonomyView({ yolo: 0 }))).toEqual(["you", "you", "you"])
-  expect(labels(autonomyView({ yolo: 1 }))).toEqual(["auto", "you", "you"])
-  expect(labels(autonomyView({ yolo: 2 }))).toEqual(["auto", "auto", "you"])
-  expect(labels(autonomyView({ yolo: 0, goal: true }))).toEqual(["you", "you", "you"])
-  expect(labels(autonomyView({ yolo: 0, effectiveYolo: 2 }))).toEqual(["auto", "auto", "you"])
+  expect(labels(autonomyView({}))).toEqual(["you", "you", "you"])
+  expect(labels(autonomyView({ yolo: true }))).toEqual(["you", "you", "you"])
+  expect(labels(autonomyView({ yolo: true, goal: true }))).toEqual(["you", "you", "you"])
+  expect(labels(autonomyView({ autoPermission: true }))).toEqual(["auto", "you", "you"])
+  expect(labels(autonomyView({ autoGuardrail: true }))).toEqual(["you", "auto", "you"])
+  expect(labels(autonomyView({ autoAnswer: true }))).toEqual(["you", "you", "auto"])
+  expect(labels(autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true, autoAnswer: true }))).toEqual(["auto", "auto", "auto"])
+  expect(labels(autonomyView({ permissionsAuto: true, ordinaryReviewsAuto: true }))).toEqual(["auto", "auto", "you"])
 })
 
-test("auto-answer is Session-local and independent of level, goal, and sleep", () => {
-  for (const yolo of [0, 1, 2] as const) {
+test("baseline permission model assessment decides before the human without any auto flag", () => {
+  const baseline = autonomyView({ permissionModelReviews: true })
+  expect(autonomyDecisionLabel(baseline, "permissions")).toBe("model, then you")
+  expect(autonomyDecisionLabel(autonomyView({ permissionModelReviews: true, sleep: true }), "permissions")).toBe("model, then review box")
+  expect(autonomyDecisionLabel(autonomyView({ permissionModelReviews: true, autoPermission: true }), "permissions")).toBe("auto")
+  expect(autonomyDecisionLabel(autonomyView({ permissionModelReviews: true, yolo: true }), "guardrails")).toBe("you")
+})
+
+test("the local autonomy view defaults baseline permission model reviews on without numeric fallback", () => {
+  const view = localAutonomyView({ mode: "normal", yolo: false })
+  expect(view.effective).toMatchObject({ yolo: false, permissionsAuto: false, permissionModelReviews: true, ordinaryReviewsAuto: false })
+  const numeric = localAutonomyView({ mode: "normal", yolo: 2 as never })
+  expect(numeric.effective.yolo).toBe(false)
+  expect(numeric.effective.permissionsAuto).toBe(false)
+})
+
+test("auto-answer is Session-local and independent of yolo, goal, and sleep", () => {
+  for (const yolo of [false, true] as const) {
     const on = autonomyView({ yolo, autoAnswer: true })
     expect(autonomyDecisionLabel(on, "questions")).toBe("auto")
     expect(autonomyDecisionLabel(autonomyView({ yolo, autoAnswer: false }), "questions")).toBe("you")
   }
-  const sleeping = autonomyView({ yolo: 0, sleep: true, autoAnswer: true, goal: true })
+  const sleeping = autonomyView({ sleep: true, autoAnswer: true, goal: true })
   expect(autonomyDecisionLabel(sleeping, "questions")).toBe("auto")
-  expect(parseAutoAnswerArg(undefined)).toBeUndefined()
-  expect(parseAutoAnswerArg("on")).toBe(true)
-  expect(parseAutoAnswerArg("off")).toBe(false)
-  expect(parseAutoAnswerArg("yes")).toBeNull()
 })
 
 test("sleep adds no grant: off automation defers to the review box", () => {
-  for (const yolo of [0, 1, 2] as const) {
+  for (const yolo of [false, true] as const) {
     const view = autonomyView({ yolo, sleep: true })
     expect(autonomyDecisionLabel(view, "guardrails")).toBe("review box")
     expect(autonomyDecisionLabel(view, "questions")).toBe("review box")
+    expect(autonomyDecisionLabel(view, "permissions")).toBe("review box")
   }
-  expect(autonomyDecisionLabel(autonomyView({ yolo: 0, sleep: true }), "permissions")).toBe("review box")
-  expect(autonomyDecisionLabel(autonomyView({ yolo: 1, sleep: true }), "permissions")).toBe("auto")
-  expect(autonomyDecisionLabel(autonomyView({ yolo: 2, sleep: true, modelReviews: true }), "guardrails")).toBe(
+  expect(autonomyDecisionLabel(autonomyView({ autoPermission: true, sleep: true }), "permissions")).toBe("auto")
+  expect(autonomyDecisionLabel(autonomyView({ autoGuardrail: true, sleep: true, modelReviews: true }), "guardrails")).toBe(
     "model, then review box",
   )
 })
 
 test("ordinary guardrail rows read the actual live model-review flags", () => {
-  expect(autonomyDecisionLabel(autonomyView({ yolo: 0, modelReviews: true }), "guardrails")).toBe("model, then you")
-  expect(autonomyDecisionLabel(autonomyView({ yolo: 2, modelReviews: true }), "guardrails")).toBe("auto")
-  expect(autonomyDecisionLabel(autonomyView({ yolo: 0, guardrailsEnabled: false }), "guardrails")).toBe("disabled")
-  expect(autonomyDecisionLabel(autonomyView({ yolo: 2, guardrailsEnabled: false, ordinaryReviewsAuto: true }), "guardrails")).toBe("disabled")
+  expect(autonomyDecisionLabel(autonomyView({ modelReviews: true }), "guardrails")).toBe("model, then you")
+  expect(autonomyDecisionLabel(autonomyView({ autoGuardrail: true, modelReviews: true }), "guardrails")).toBe("auto")
+  expect(autonomyDecisionLabel(autonomyView({ yolo: true, modelReviews: true }), "guardrails")).toBe("model, then you")
+  expect(autonomyDecisionLabel(autonomyView({ guardrailsEnabled: false }), "guardrails")).toBe("disabled")
+  expect(autonomyDecisionLabel(autonomyView({ guardrailsEnabled: false, ordinaryReviewsAuto: true }), "guardrails")).toBe("disabled")
 })
 
-test("effective level 2 without backend ordinary-review authority still asks for ordinary reviews", () => {
-  const view = autonomyView({ yolo: 2, ordinaryReviewsAuto: false })
+test("auto-guardrail without backend ordinary-review authority still asks for ordinary reviews", () => {
+  const view = autonomyView({ autoPermission: true, autoGuardrail: true, ordinaryReviewsAuto: false })
   expect(autonomyDecisionLabel(view, "permissions")).toBe("auto")
   expect(autonomyDecisionLabel(view, "guardrails")).toBe("you")
-  const modeled = autonomyView({ yolo: 2, ordinaryReviewsAuto: false, modelReviews: true })
+  const modeled = autonomyView({ autoGuardrail: true, ordinaryReviewsAuto: false, modelReviews: true })
   expect(autonomyDecisionLabel(modeled, "guardrails")).toBe("model, then you")
 })
 
-test("an unloaded read is unknown, never Ask first or Off", () => {
+test("an unloaded read is unknown, never an off state", () => {
   for (const action of ["permissions", "guardrails", "questions"] as const)
     expect(autonomyDecisionLabel(undefined, action)).toBe("unknown")
   expect(autonomyModeParts(undefined)).toEqual(["unknown"])
@@ -133,17 +150,18 @@ test("an unloaded read is unknown, never Ask first or Off", () => {
 })
 
 test("lists active modes in shared order", () => {
-  const view = autonomyView({ yolo: 2, sleep: true, goal: true, autoAnswer: true })
-  expect(autonomyModeParts(view)).toEqual(["Tools + reviews", "goal", "asleep", "answers auto"])
-  expect(autonomyModeParts(autonomyView({ yolo: 2, goal: true }))).toEqual(["Tools + reviews", "goal"])
-  expect(autonomyModeParts(autonomyView({ yolo: 0, effectiveYolo: 1 }))).toEqual(["Allow tools"])
+  const view = autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true, sleep: true, goal: true, autoAnswer: true })
+  expect(autonomyModeParts(view)).toEqual(["YOLO", "permissions auto", "goal", "asleep", "answers auto"])
+  expect(autonomyModeParts(autonomyView({ yolo: true, autoGuardrail: true, goal: true }))).toEqual(["YOLO", "guardrails auto", "goal"])
+  expect(autonomyModeParts(autonomyView({}))).toEqual(["YOLO off"])
+  expect(autonomyModeParts(autonomyView({ effectiveYolo: true }))).toEqual(["YOLO"])
 })
 
 test("represents explicit goal reports through the progress label", () => {
   expect(
     autonomyProgressLabel({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: {
         text: "Finish the migration",
         status: "active",
@@ -174,13 +192,12 @@ test("rejects an older refresh after a newer refresh starts", () => {
   expect(guard.accepts(current)).toBe(true)
 })
 
-test("labels approval levels and goal state", () => {
-  expect(autonomyModeLabel(autonomyView({ yolo: 0 }))).toBe("Ask first")
-  expect(autonomyModeLabel(autonomyView({ yolo: 1 }))).toBe("Allow tools")
-  expect(autonomyModeLabel(autonomyView({ yolo: 2 }))).toBe("Tools + reviews")
-  expect(autonomyModeLabel(autonomyView({ yolo: 0, goal: true }))).toBe("Ask first · goal")
-  expect(autonomyModeLabel(autonomyView({ yolo: 2, goal: true, autoAnswer: true }))).toBe(
-    "Tools + reviews · goal · answers auto",
+test("labels yolo, auto flags, and goal state", () => {
+  expect(autonomyModeLabel(autonomyView({}))).toBe("YOLO off")
+  expect(autonomyModeLabel(autonomyView({ yolo: true }))).toBe("YOLO")
+  expect(autonomyModeLabel(autonomyView({ goal: true }))).toBe("YOLO off · goal")
+  expect(autonomyModeLabel(autonomyView({ yolo: true, autoPermission: true, goal: true, autoAnswer: true }))).toBe(
+    "YOLO · permissions auto · goal · answers auto",
   )
 })
 
@@ -190,7 +207,7 @@ function terminal(
 ): AutonomyState {
   return {
     mode: "normal",
-    yolo: 0,
+    yolo: false,
     goal: {
       text: "Finish the migration",
       status,
@@ -205,7 +222,7 @@ test("formats goal progress", () => {
   expect(
     autonomyProgressLabel({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: {
         text: "Finish the migration",
         status: "active",
@@ -215,14 +232,14 @@ test("formats goal progress", () => {
       },
     }),
   ).toBe("2 · no progress 1/3")
-  expect(autonomyProgressLabel({ mode: "normal", yolo: 0 })).toBeUndefined()
+  expect(autonomyProgressLabel({ mode: "normal", yolo: false })).toBeUndefined()
 })
 
 test("renders goal iteration separately from no-progress", () => {
   expect(
     autonomyProgressLabel({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: {
         text: "Finish the migration",
         status: "active",
@@ -258,7 +275,7 @@ test("stops an active goal on a bare toggle", () => {
   expect(
     goalToggleAction({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: { text: "Finish the migration", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 },
     }),
   ).toEqual({ type: "stop" })
@@ -268,25 +285,25 @@ test("resumes a retained goal without inventing or recalculating its objective",
   expect(
     goalToggleAction({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: { text: "Finish the migration", status: "completed", iteration: 4, noProgress: 1, maxNoProgress: 3 },
     }),
   ).toEqual({ type: "resume", text: "Finish the migration" })
   expect(
     goalToggleAction({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: { text: "Finish the migration", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 3 },
     }),
   ).toEqual({ type: "resume", text: "Finish the migration" })
 })
 
 test("requests an explicit objective when no retained goal text exists", () => {
-  expect(goalToggleAction({ mode: "normal", yolo: 0 })).toEqual({ type: "request-objective" })
+  expect(goalToggleAction({ mode: "normal", yolo: false })).toEqual({ type: "request-objective" })
   expect(
     goalToggleAction({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: { text: "   ", status: "stopped", iteration: 0, noProgress: 0, maxNoProgress: 3 },
     }),
   ).toEqual({ type: "request-objective" })
@@ -299,7 +316,7 @@ test("does not reset an active goal when its original text is re-activated", asy
     goal: "Fix the migration failure",
     get: async () => ({
       mode: "normal" as const,
-      yolo: 0,
+      yolo: false,
       goal: {
         text: "Repair the migration and verify the suite passes.",
         rawText: "Fix the migration failure",
@@ -323,12 +340,12 @@ test("calculates and replaces the goal when new objective text is submitted", as
   const state = await activateGoal({
     sessionID: "ses_123",
     goal: "Replace migration",
-    get: async () => ({ mode: "normal" as const, yolo: 0 }),
+    get: async () => ({ mode: "normal" as const, yolo: false }),
     set: async (payload) => {
       calls.push(payload.goal)
       return {
         mode: "normal" as const,
-        yolo: 0,
+        yolo: false,
         goal: {
           text: "Repair the migration and verify the suite passes.",
           rawText: payload.goal,
@@ -350,7 +367,7 @@ test("surfaces a failed calculation so the dialog can preserve the draft", async
     activateGoal({
       sessionID: "ses_123",
       goal: "Replace migration",
-      get: async () => ({ mode: "normal" as const, yolo: 0 }),
+      get: async () => ({ mode: "normal" as const, yolo: false }),
       set: async () => {
         throw new Error("goal.calculation_failed")
       },
@@ -381,7 +398,7 @@ test("exposes autonomy only for the connected active session", async () => {
   expect(typeof currentSessionAutonomy).toBe("function")
   if (typeof currentSessionAutonomy !== "function") return
 
-  const goal = autonomyView({ yolo: 0, goal: true })
+  const goal = autonomyView({ yolo: false, goal: true })
   const response = { sessionID: "ses_old", state: goal }
 
   expect(currentSessionAutonomy("ses_new", true, response)).toBeUndefined()

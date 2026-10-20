@@ -8,7 +8,7 @@ import { PositiveInt } from "../schema"
 export class Info extends Schema.Class<Info>("Config.Guardrail")({
   enabled: Schema.Boolean.pipe(Schema.optional),
   decide_reviews: Schema.Boolean.pipe(Schema.optional).annotate({
-    description: "Allow model-based standard-match verification and review decisions (default: false)",
+    description: "Allow baseline model assessment of permission requests, guardrail reviews, and standard-match verification (default: true)",
   }),
   decide_hard_reviews: Schema.Boolean.pipe(Schema.optional),
   max_concurrent_shells: PositiveInt.pipe(Schema.optional),

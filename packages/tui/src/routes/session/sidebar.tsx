@@ -55,7 +55,7 @@ export function Sidebar(props: { sessionID: string; autonomy?: SessionAutonomyVi
           <box flexShrink={0}>
             <RailProvider
               goal={props.autonomy?.goal?.status === "active"}
-              autonomy={(props.autonomy?.effective?.yolo ?? 0) > 0 || props.autonomy?.goal?.status === "active"}
+              autonomy={props.autonomy?.effective?.yolo === true || props.autonomy?.effective?.permissionsAuto === true || props.autonomy?.effective?.ordinaryReviewsAuto === true || props.autonomy?.goal?.status === "active"}
               allExpanded={allExpanded()}
               leftRule
             >
@@ -132,7 +132,7 @@ function SessionRailIdentity(props: { title: string }) {
 
 export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; reviewCount?: number }) {
   const { theme } = useTheme().contextual("elevated")
-  const level = createMemo(() => props.autonomy?.effective?.yolo)
+  const yolo = createMemo(() => props.autonomy?.effective?.yolo)
 
   return (
     <>
@@ -155,7 +155,7 @@ export function AutonomyRailContent(props: { autonomy?: SessionAutonomyView; rev
           title="AUTONOMY"
           summary={autonomyModeLabel(props.autonomy)}
           attention={
-            (level() ?? 0) > 0 || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true || autoAnswerOn(props.autonomy)
+            yolo() === true || props.autonomy?.effective?.permissionsAuto === true || props.autonomy?.effective?.ordinaryReviewsAuto === true || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true || autoAnswerOn(props.autonomy)
           }
         >
           <For each={[

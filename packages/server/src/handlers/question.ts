@@ -2,7 +2,7 @@ import { Question } from "@ycoding-ai/core/question"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { QuestionNotFoundError } from "@ycoding-ai/protocol/errors"
+import { InvalidRequestError, QuestionNotFoundError } from "@ycoding-ai/protocol/errors"
 import { response } from "../location"
 
 function missingRequest(id: Question.ID) {
@@ -44,7 +44,10 @@ export const QuestionHandler = HttpApiBuilder.group(Api, "server.question", (han
           yield* withOwnedQuestion(ctx.params.sessionID, ctx.params.requestID, (question) =>
             question
               .reply({ requestID: ctx.params.requestID, answers: ctx.payload.answers })
-              .pipe(Effect.catchTag("Question.NotFoundError", () => missingRequest(ctx.params.requestID))),
+              .pipe(Effect.catchTags({
+                "Question.NotFoundError": () => missingRequest(ctx.params.requestID),
+                "Question.InvalidAnswerError": (error) => new InvalidRequestError({ field: "answers", message: error.message }),
+              })),
           )
           return HttpApiSchema.NoContent.make()
         }),
