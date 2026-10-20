@@ -2,6 +2,11 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-21: Report system sleep hold in keep-awake status
+
+- Add optional `system` to `KeepAwake.Status`: `off`, `on`, `held`, `setup`, `unsupported`, or `error`. It reports the root `pmset` system-sleep hold that accompanies effective keep-awake on macOS; `held` mirrors lid `held` for a non-owning process and `setup` means the one-time sudoers rule is absent.
+- Additive; a runtime that predates the field omits it and clients treat omission as unreported.
+
 ## 2026-10-17: Remove queued shell commands
 
 - Remove `queued` from `Shell.Status`, `Shell.Info.queuePosition`, `Shell.Time.queued`, and the queue-only ephemeral `shell.updated` event.

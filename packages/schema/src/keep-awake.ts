@@ -12,6 +12,7 @@ export const Status = Schema.Struct({
   state: State,
   manual: Schema.Boolean.pipe(optional),
   lid: Schema.Literals(["off", "on", "held", "unsupported", "error"]).pipe(optional),
+  system: Schema.Literals(["off", "on", "held", "setup", "unsupported", "error"]).pipe(optional),
   sleepHold: Schema.Boolean.pipe(optional),
   message: Schema.String.check(Schema.isMaxLength(maxMessageLength)).pipe(optional),
 }).annotate({ identifier: "KeepAwake.Status" })

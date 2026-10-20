@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.21",
+    date: "2026-10-21",
+    title: "Closed-lid keep-awake and clearer autonomy deciders",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Run `ycoding keep-awake setup` once to let Keep machine awake disable macOS system sleep, so a closed-lid Mac on battery stays awake until the battery runs out. Turning keep-awake off or stopping YCoding restores system sleep, and the next start restores it after a crash. While held, choosing Sleep and low-battery sleep do not sleep the machine." },
+      { tag: "Added", text: "Keep machine awake shows its system part in the TUI and web Settings → Machine: held, needs setup, held elsewhere, or error." },
+      { tag: "Changed", text: "Sidebar autonomy rows name who decides with manual, auto, and yolo; Questions read auto, then yolo when auto-answer and YOLO are both on." },
+      { tag: "Fixed", text: "Reassert lid-closed sleep control every second so macOS clearing it after a wake, power-source, or display change no longer leaves a long window in which closing the lid sleeps the machine." },
+    ],
+  },
+  {
     version: "0.10.20",
     date: "2026-10-20",
     title: "Reliable decisions and focused autonomy controls",

@@ -147,7 +147,7 @@ test("the docked AUTONOMY section keeps its rows, shows YOLO explicitly, and dro
     await waitFor(screen, () => /AUTONOMY/.test(screen.frame()) && /Permissions\s+auto/.test(screen.frame()), "autonomy rows")
     const row = screen.lines().find((line) => line.includes("AUTONOMY"))!
     expect(row.slice(row.indexOf("AUTONOMY")).trimEnd()).toBe("AUTONOMY")
-    for (const pattern of [/YOLO\s+on/, /Permissions\s+auto/, /Guardrails\s+auto/, /Questions\s+auto/, /Review\s+1 waiting/])
+    for (const pattern of [/YOLO\s+on/, /Permissions\s+auto/, /Guardrails\s+auto/, /Questions\s+auto, then yolo/, /Review\s+1 waiting/])
       expect(screen.frame()).toMatch(pattern)
   } finally {
     await screen.dispose()

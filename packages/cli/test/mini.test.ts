@@ -130,8 +130,8 @@ describe("mini command", () => {
     const result = await cli(["--help"])
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain("mini       Start the minimal interactive interface")
-    expect(result.stdout).toContain("run        Run YCoding with a message")
+    expect(result.stdout).toContain("mini          Start the minimal interactive interface")
+    expect(result.stdout).toContain("run           Run YCoding with a message")
   })
 
   test("exposes run without legacy attach or command modes", async () => {

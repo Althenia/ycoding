@@ -44,6 +44,9 @@ const handlers = Runtime.handlers(Commands, {
     },
     sessions: () => import("./commands/handlers/remote/sessions"),
   },
+  "keep-awake": {
+    setup: () => import("./commands/handlers/keep-awake/setup"),
+  },
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),

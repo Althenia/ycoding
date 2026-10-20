@@ -47,7 +47,7 @@ let decisionCalls = 0
 const keepAwake = Layer.effect(
   KeepAwake.Service,
   Effect.gen(function* () {
-    const awake = yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "linux", pid: process.pid, clamshell: { set: () => "unsupported" } })
+    const awake = yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "linux", pid: process.pid, clamshell: { set: () => "unsupported" }, systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") } })
     return KeepAwake.Service.of({
       ...awake,
       hold: (id) =>
@@ -476,6 +476,7 @@ describe("Session sleep", () => {
                 platform: "linux",
                 pid: process.pid,
                 clamshell: { set: () => "unsupported" },
+                systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") },
               })
               return KeepAwake.Service.of({
                 ...awake,
