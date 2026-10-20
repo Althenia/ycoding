@@ -504,3 +504,48 @@ function assistant(id: string, content: SessionMessageAssistant["content"]): Ses
 function pending() {
   return { status: "streaming" as const, input: "" }
 }
+
+test("baseline allow and deny choices render their outcome and graded provenance", () => {
+  const grades = [
+    { choice: "allow", confidence: 0.9, evidence: "Scoped to the repository" },
+    { choice: "deny", confidence: 0.05, evidence: "No destructive effect" },
+    { choice: "escalate", confidence: 0.05, evidence: "No ambiguity" },
+  ] as const
+  const rows = reduceSessionRows([], new Set(), true, {
+    sessionID: "root",
+    decisions: [
+      { sessionID: "root", created: 1, requestID: "baseline-allow", reply: "once", choice: "allow", confidence: 0.9, grades: [...grades] },
+      { sessionID: "root", created: 2, requestID: "baseline-deny", reply: "reject", choice: "deny", confidence: 0.8 },
+    ],
+    dismissals: [],
+    pending: [],
+  })
+  const allow = rows.find((item) => item.type === "guardrail" && item.requestID === "baseline-allow")
+  const deny = rows.find((item) => item.type === "guardrail" && item.requestID === "baseline-deny")
+  if (allow?.type !== "guardrail" || deny?.type !== "guardrail") throw new Error("expected baseline guardrail rows")
+  expect(allow.detail).toEqual([
+    { label: "outcome", value: "decision model approved once · 0.9" },
+    { label: "grade allow (selected)", value: "0.9 · Scoped to the repository" },
+    { label: "grade deny", value: "0.05 · No destructive effect" },
+    { label: "grade escalate", value: "0.05 · No ambiguity" },
+  ])
+  expect(deny.detail).toEqual([{ label: "outcome", value: "decision model rejected · 0.8" }])
+})
+
+test("guardrail decisions name their baseline or YOLO authority only when recorded", () => {
+  const rows = reduceSessionRows([], new Set(), true, {
+    sessionID: "root",
+    decisions: [
+      { sessionID: "root", created: 1, requestID: "baseline", reply: "once", authority: "baseline", choice: "allow", confidence: 0.9 },
+      { sessionID: "root", created: 2, requestID: "yolo", reply: "reject", authority: "yolo", choice: "approve", confidence: 0.8 },
+      { sessionID: "root", created: 3, requestID: "historical", reply: "once", confidence: 0.85 },
+    ],
+    dismissals: [],
+    pending: [],
+  })
+  expect(rows.flatMap((row) => (row.type === "guardrail" ? [row.decided] : []))).toEqual([
+    "baseline decision model approved once · 0.9",
+    "YOLO decision model approve · 0.8 · rejected",
+    "decision model approved once · 0.85",
+  ])
+})

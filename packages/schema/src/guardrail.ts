@@ -27,8 +27,11 @@ export const Source = Schema.Struct({
   callID: Schema.String,
 }).annotate({ identifier: "Guardrail.Source" })
 
-export const DecisionChoice = Schema.Literals(["approve_all", "approve", "reject", "escalate"]).annotate({ identifier: "Guardrail.DecisionChoice" })
+export const DecisionChoice = Schema.Literals(["allow", "deny", "escalate", "approve_all", "approve", "reject"]).annotate({ identifier: "Guardrail.DecisionChoice" })
 export type DecisionChoice = typeof DecisionChoice.Type
+
+export const Authority = Schema.Literals(["baseline", "yolo"]).annotate({ identifier: "Guardrail.Authority" })
+export type Authority = typeof Authority.Type
 
 export interface Grade extends Schema.Schema.Type<typeof Grade> {}
 export const Grade = Schema.Struct({
@@ -45,6 +48,7 @@ export const EscalationReason = Schema.Union([
 export type EscalationReason = typeof EscalationReason.Type
 
 export const Escalation = Schema.Struct({
+  authority: Authority.pipe(optional),
   reason: EscalationReason.pipe(optional),
   choice: DecisionChoice.pipe(optional),
   confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
@@ -52,19 +56,20 @@ export const Escalation = Schema.Struct({
 }).annotate({ identifier: "Guardrail.Escalation" })
 
 export function escalationText(input: Escalation) {
+  const authority = input.authority === "baseline" ? "Baseline assessment · " : input.authority === "yolo" ? "YOLO assessment · " : ""
   if (input.reason && Schema.is(DecisionFailure.Reason)(input.reason))
-    return `Decision unavailable · ${DecisionFailure.describe(input.reason)}`
+    return `${authority}Decision unavailable · ${DecisionFailure.describe(input.reason)} · Review this request manually${input.reason === "unsupported-output" ? ", or configure a decision helper on a supported strict structured-output route." : ". No automatic approval was granted."}`
   if (!input.reason && input.choice === undefined && input.confidence === undefined && !input.grades?.length)
-    return "Decision unavailable · diagnostic reason was not recorded"
+    return `${authority}Decision unavailable · diagnostic reason was not recorded · Review this request manually.`
   const details = [
     ...(input.choice === undefined ? [] : [`choice ${input.choice}`]),
     ...(input.confidence === undefined ? [] : [`confidence ${input.confidence}`]),
   ]
   if (input.reason === "low_confidence")
-    return `Decision requires human review · confidence below the approval threshold${details.length ? ` · ${details.join(" · ")}` : ""}`
+    return `${authority}Decision requires human review · confidence below the approval threshold${details.length ? ` · ${details.join(" · ")}` : ""} · Review this request manually.`
   if (input.reason === "conflicting_grades")
-    return `Decision requires human review · conflicting approval and rejection grades${details.length ? ` · ${details.join(" · ")}` : ""}`
-  return `Decision model escalated this guardrail review${details.length ? ` · ${details.join(" · ")}` : ""}`
+    return `${authority}Decision requires human review · conflicting approval and rejection grades${details.length ? ` · ${details.join(" · ")}` : ""} · Review this request manually.`
+  return `${authority}Decision model escalated this review${details.length ? ` · ${details.join(" · ")}` : ""} · Review this request manually.`
 }
 
 export const RuleSource = Schema.Literals(["standard", "custom"]).annotate({
@@ -151,6 +156,7 @@ export class Status extends Schema.Class<Status>("Guardrail.Status")({
       created: NonNegativeInt,
       requestID: Schema.String,
       reply: Reply,
+      authority: Authority.pipe(optional),
       choice: DecisionChoice.pipe(optional),
       confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
       grades: Schema.Array(Grade).pipe(optional),
@@ -173,6 +179,7 @@ const Replied = ephemeral({
     requestID: RequestID,
     reply: Reply,
     decidedBy: Schema.Literal("decision-model").pipe(optional),
+    authority: Authority.pipe(optional),
     choice: DecisionChoice.pipe(optional),
     confidence: Confidence.pipe(optional),
     grades: Schema.Array(Grade).pipe(optional),

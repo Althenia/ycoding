@@ -205,25 +205,25 @@ describe("remote shell layout", () => {
     }
   }, 20_000)
 
-  test("records goal inputs and keeps the selected YOLO level through goal set and stop", async () => {
+  test("records goal inputs and keeps the selected YOLO setting through goal set and stop", async () => {
     const page = await fixture("view=chat", 1440, "Stream remote output safely")
     try {
       await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
-      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover [role="radio"]')].find(button => button.textContent?.includes('Allow tools'))?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__yolo-trigger')?.textContent?.includes('Allow tools') === true`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`[...document.querySelectorAll('.session-status__yolo-popover .session-status__auto-answer')].find(row => row.querySelector('strong')?.textContent === 'YOLO')?.querySelector('input[type="checkbox"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__yolo-trigger')?.textContent?.includes('YOLO on') === true`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       await page.evaluate(`(() => { const input = document.querySelector('.session-status__goal-popover input[aria-label="Goal"]'); input.value = 'Ship a reliable Session'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.closest('form')?.requestSubmit(); })()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.set')`)).toEqual({ operation: "session.goal.set", input: { goal: "Ship a reliable Session" } })
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-count')?.textContent === '0'`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly goal: string; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-count')?.textContent ?? '', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "0", yolo: "Allow tools" })
+      expect(await page.evaluate<{ readonly goal: string; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-count')?.textContent ?? '', yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "0", yolo: "YOLO on" })
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent ?? ''`)).toContain("Ship a reliable Session")
       await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.remoteMutationReport().some(item => item.operation === 'session.goal.stop')`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.goal.stop')`)).toEqual({ operation: "session.goal.stop", input: { goal: null } })
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') === 'Goal off'`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly goal: string | null; readonly count: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, count: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "Goal off", count: false, yolo: "Allow tools" })
+      expect(await page.evaluate<{ readonly goal: string | null; readonly count: boolean; readonly yolo: string }>(`({ goal: document.querySelector('.session-status__goal-trigger')?.getAttribute('aria-label') ?? null, count: document.querySelector('.session-status__goal-count') !== null, yolo: document.querySelector('.session-status__yolo-full')?.textContent ?? '' })`)).toEqual({ goal: "Goal off", count: false, yolo: "YOLO on" })
       expect(await page.evaluate<number>(labelAsymmetry(".workspace__main .session-status__goal-trigger"))).toBeLessThanOrEqual(1)
     } finally { await page.close() }
   }, 15_000)

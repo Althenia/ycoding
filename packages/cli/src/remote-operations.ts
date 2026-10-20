@@ -1507,7 +1507,11 @@ function validate(request: RemoteRequest): Validated {
     case "session.goal.set":
       return {
         kind: "goal.set",
-        payload: { goal: requireString(fields.goal, "goal", 8_192), ...maxNoProgress(fields) },
+        payload: {
+          goal: requireString(fields.goal, "goal", 8_192),
+          ...(fields.yolo === undefined ? {} : { yolo: requireBoolean(fields.yolo, "yolo") }),
+          ...maxNoProgress(fields),
+        },
       }
     case "session.goal.stop":
       if (fields.goal !== undefined && fields.goal !== null)
@@ -2148,8 +2152,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.guardrail.reply": ["requestID", "reply"],
   "session.form.reply": ["formID", "answer"],
   "session.form.cancel": ["formID"],
-  "session.autonomy.set": ["yolo", "maxNoProgress", "sleep", "autoAnswer"],
-  "session.goal.set": ["goal", "maxNoProgress"],
+  "session.autonomy.set": ["yolo", "autoPermission", "autoGuardrail", "autoAnswer", "sleep"],
+  "session.goal.set": ["goal", "maxNoProgress", "yolo"],
   "session.goal.stop": ["goal"],
   "session.create": ["id", "workspace", "agent", "model"],
 }
@@ -2278,26 +2282,20 @@ function reviewDecision(value: unknown): ReviewDecision {
 }
 
 function autonomyPayload(fields: Readonly<Record<string, unknown>>): LocalAutonomy {
-  if (fields.autoAnswer !== undefined) {
-    if (fields.yolo !== undefined || fields.maxNoProgress !== undefined || fields.sleep !== undefined)
-      throw new OperationError("invalid_message", "Set auto-answer separately from other autonomy settings")
-    return { autoAnswer: requireBoolean(fields.autoAnswer, "autoAnswer") }
-  }
-  if (fields.yolo !== undefined || fields.maxNoProgress !== undefined) {
-    if (fields.sleep !== undefined)
-      throw new OperationError("invalid_message", "Set the YOLO level separately from sleep")
-    return yoloPayload(fields)
+  const toggles = (["yolo", "autoPermission", "autoGuardrail", "autoAnswer"] as const).filter(
+    (field) => fields[field] !== undefined,
+  )
+  const [field] = toggles
+  if (field !== undefined) {
+    if (toggles.length > 1 || fields.sleep !== undefined)
+      throw new OperationError("invalid_message", "Set one autonomy toggle per request")
+    return { [field]: requireBoolean(fields[field], field) } as LocalAutonomy
   }
   if (fields.sleep !== undefined) return { sleep: requireBoolean(fields.sleep, "sleep") }
-  throw new OperationError("invalid_message", "Autonomy changes require yolo, sleep, or autoAnswer")
-}
-
-function yoloPayload(fields: Readonly<Record<string, unknown>>): LocalAutonomy {
-  const yolo = fields.yolo
-  if (typeof yolo === "boolean") return { yolo, ...maxNoProgress(fields) }
-  if (yolo === 0 || yolo === 1 || yolo === 2)
-    return { yolo, ...maxNoProgress(fields) }
-  throw new OperationError("invalid_message", 'The "yolo" field must be 0-2 or a boolean')
+  throw new OperationError(
+    "invalid_message",
+    "Autonomy changes require one of yolo, autoPermission, autoGuardrail, autoAnswer, or sleep",
+  )
 }
 
 function maxNoProgress(fields: Readonly<Record<string, unknown>>) {

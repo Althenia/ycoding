@@ -11,7 +11,7 @@ import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
 import { stringWidth } from "../../util/string-width"
-import { approvalLevelLabel } from "../../util/session-autonomy"
+import { yoloLabel } from "../../util/session-autonomy"
 import { BrandMark } from "../../component/logo"
 import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
@@ -34,7 +34,9 @@ export type SessionHeaderState =
   | SessionHeaderOperationalState
   | {
       type: "autonomy"
-      yolo?: 0 | 1 | 2
+      yolo?: boolean
+      permissionsAuto?: boolean
+      guardrailsAuto?: boolean
       goalActive: boolean
       answersAuto?: boolean
       asleep?: boolean
@@ -155,7 +157,9 @@ export function headerStatusLabel(
       state.yolo === undefined
         ? ["unknown"]
         : [
-            approvalLevelLabel(state.yolo),
+            yoloLabel(state.yolo),
+            ...(state.permissionsAuto ? ["permissions auto"] : []),
+            ...(state.guardrailsAuto ? ["guardrails auto"] : []),
             ...(state.goalActive ? ["goal"] : []),
             ...(state.asleep ? ["asleep"] : []),
             ...(state.answersAuto ? ["answers auto"] : []),
@@ -320,7 +324,9 @@ export function Header(
     if (current.type === "autonomy")
       return current.yolo === undefined
         ? theme.text.subdued
-        : current.yolo > 0
+        : current.yolo
+          ? theme.text.feedback.error.default
+          : current.permissionsAuto || current.guardrailsAuto
           ? theme.text.feedback.error.default
           : theme.text.feedback.success.default
     if (active.type === "provider-error") return theme.text.feedback.error.default

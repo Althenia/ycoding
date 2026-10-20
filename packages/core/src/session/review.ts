@@ -10,6 +10,7 @@ import { KeyedMutex } from "../effect/keyed-mutex"
 import { ModelIncident } from "../model-incident/index"
 import { EventRuntime } from "../event"
 import { Form } from "../form"
+import { Question } from "../question"
 import { PermissionSaved } from "../permission/saved"
 import { Project } from "../project"
 import { SessionEvent } from "./event"
@@ -319,8 +320,7 @@ function validate(item: SessionReviewFold.Folded, decision: SessionReview.Decisi
   if (decision.kind === "question") {
     if (item.payload.type === "question") {
       if (!Array.isArray(decision.answers)) return "Question answers must be one list per question"
-      if (decision.answers.length !== item.payload.questions.length) return "Question answers do not cover every question"
-      return
+      return Question.validateAnswers(item.payload.questions, decision.answers)
     }
     if (item.payload.type === "form") {
       if (!Schema.is(Form.Answer)(decision.answers)) return "Form answers must be keyed by field"

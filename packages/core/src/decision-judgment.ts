@@ -4,7 +4,9 @@ import { Result, Schema } from "effect"
 
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(8192))
-const ChoiceValue = Schema.Union([Schema.String, Schema.Boolean])
+const ChoiceValue = Schema.Union([Schema.String.check(Schema.isPattern(/\S/)), Schema.Boolean])
+export const TextMaxLength = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 8192 }))
+export const DefaultTextMaxLength = 8192
 
 export const Request = Schema.Struct({
   state: Schema.Json,
@@ -29,7 +31,14 @@ export const Request = Schema.Struct({
         levels: Schema.Array(Schema.Struct({ label: Text, description: Schema.optional(Text) })).check(
           Schema.isMinLength(2),
           Schema.isMaxLength(10),
+          Schema.makeFilter((levels) => new Set(levels.map((level) => level.label)).size === levels.length, { expected: "unique score level labels" }),
         ),
+      }),
+      Schema.Struct({
+        type: Schema.Literal("text"),
+        name: Name,
+        instructions: Text,
+        maxLength: TextMaxLength.pipe(Schema.optional),
       }),
     ]),
   ).check(
@@ -45,10 +54,11 @@ export const Document = Schema.Struct({
     answers: Schema.Array(
       Schema.Struct({
         name: Name,
-        type: Schema.Literals(["predicate", "choice", "score", "refusal"]),
+        type: Schema.Literals(["predicate", "choice", "score", "text", "refusal"]),
         answer: Schema.NullOr(Schema.Boolean),
         choice: Schema.NullOr(ChoiceValue),
         score: Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+        text: Schema.NullOr(Schema.String).pipe(Schema.optional),
         confidence: Schema.Number.check(
           Schema.makeFilter(Number.isFinite),
           Schema.isBetween({ minimum: 0, maximum: 1 }),
@@ -111,6 +121,7 @@ export function encode(document: typeof Document.Type): string {
         answer: answer.answer,
         choice: answer.choice,
         score: answer.score,
+        ...(answer.text === undefined ? {} : { text: answer.text }),
         confidence: answer.confidence,
         ...(answer.grades === undefined ? {} : { grades: answer.grades }),
       })),
@@ -145,6 +156,17 @@ function answerBranch(question: Question): Record<string, unknown> {
       answer: { type: "boolean" },
       choice: { type: "null" },
       score: { type: "null" },
+      text: { type: "null" },
+      confidence: { type: "number" },
+    })
+  if (question.type === "text")
+    return objectSchema({
+      name: { type: "string", enum: [question.name] },
+      type: { type: "string", enum: ["text"] },
+      answer: { type: "null" },
+      choice: { type: "null" },
+      score: { type: "null" },
+      text: { type: "string" },
       confidence: { type: "number" },
     })
   if (question.type === "score")
@@ -154,6 +176,7 @@ function answerBranch(question: Question): Record<string, unknown> {
       answer: { type: "null" },
       choice: { type: "null" },
       score: { type: "integer" },
+      text: { type: "null" },
       confidence: { type: "number" },
     })
   if (question.grade === true)
@@ -163,6 +186,7 @@ function answerBranch(question: Question): Record<string, unknown> {
       answer: { type: "null" },
       choice: { type: "null" },
       score: { type: "null" },
+      text: { type: "null" },
       confidence: { type: "number", enum: [0] },
       grades: {
         type: "array",
@@ -180,6 +204,7 @@ function answerBranch(question: Question): Record<string, unknown> {
     answer: { type: "null" },
     choice: { enum: question.choices.map((choice) => choice.value) },
     score: { type: "null" },
+    text: { type: "null" },
     confidence: { type: "number" },
   })
 }
@@ -191,6 +216,7 @@ function refusalBranch(question: Question): Record<string, unknown> {
     answer: { type: "null" },
     choice: { type: "null" },
     score: { type: "null" },
+    text: { type: "null" },
     confidence: { type: "number", enum: [0] },
   })
 }
@@ -201,8 +227,12 @@ function matchesQuestion(
 ) {
   if (!answer) return false
   if (answer.type === "refusal")
-    return answer.answer === null && answer.choice === null && answer.score === null && answer.confidence === 0 && answer.grades === undefined
+    return answer.answer === null && answer.choice === null && answer.score === null && (answer.text === undefined || answer.text === null) && answer.confidence === 0 && answer.grades === undefined
   if (answer.type !== question.type) return false
+  if (question.type === "text")
+    return answer.answer === null && answer.choice === null && answer.score === null && answer.grades === undefined &&
+      typeof answer.text === "string" && answer.text.trim().length > 0 && answer.text.length <= (question.maxLength ?? DefaultTextMaxLength)
+  if (answer.text !== undefined && answer.text !== null) return false
   if (question.type === "choice" && question.grade === true)
     return answer.answer === null && answer.choice === null && answer.score === null && answer.confidence === 0 &&
       answer.grades !== undefined && answer.grades.length === question.choices.length &&

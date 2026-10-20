@@ -1,13 +1,15 @@
 export * as Decision from "./decision"
 
 import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { Cause, Context, Deferred, Effect, Exit, Layer, Schema } from "effect"
 import { Agent } from "./agent"
 import { DecisionAgent } from "./decision-agent"
 import { DecisionJudgment } from "./decision-judgment"
 import { makeLocationNode } from "./effect/app-node"
 import { SessionMessage } from "./session/message"
 import { SessionSchema } from "./session/schema"
+import { Hash } from "./util/hash"
 
 export const Input = Schema.Struct({ provider: Schema.Literal("agent"), request: DecisionJudgment.Request })
 export type Input = typeof Input.Type
@@ -21,7 +23,7 @@ export class Error extends Schema.TaggedErrorClass<Error>()("Decision.Error", {
   override get message() {
     if (this.reason === "unavailable") return "Decision helper unavailable. Verify agents.decision.model, efficiency.helper_models.decision, or the Session/default model and its authenticated route; decide from evidence or report the blocker without repeated probes."
     if (this.reason === "invalid-output") return "Decision helper returned invalid JSON or answers outside the requested schema. Treat this as uncertainty; clarify bounded evidence and criteria, or decide from evidence without retrying an unchanged judgment."
-    if (this.reason === "invalid-request") return "Invalid decision request. Supply provider: agent and request: { state, questions } with 1–32 uniquely named predicate, choice, or score questions."
+    if (this.reason === "invalid-request") return "Invalid decision request. Supply provider: agent and request: { state, questions } with 1–32 uniquely named predicate, choice, score, or text questions."
     if (this.reason === "input-too-large") return "Decision request exceeds 1 MiB. Reduce evidence to the bounded facts and criteria needed for the judgment."
     if (this.reason === "refused") return "The provider or model refused the decision request. Treat this as uncertainty; decide from evidence or report the blocker without repeated probes."
     if (this.reason === "truncated-output") return "Decision helper output was truncated or did not finish. Treat this as uncertainty; reduce the evidence or decide from evidence without retrying an unchanged judgment automatically."
@@ -31,30 +33,91 @@ export class Error extends Schema.TaggedErrorClass<Error>()("Decision.Error", {
   }
 }
 
+export type Purpose = "permission" | "guardrail" | "answer"
+export type Authority = Guardrail.Authority
+
 export interface Invocation {
   readonly sessionID: SessionSchema.ID
   readonly agent?: Agent.ID
   readonly inputID?: SessionMessage.ID
+  readonly purpose?: Purpose
+  readonly authority?: Authority
+  readonly invocationKey?: string
 }
 
 export interface Interface {
-  readonly evaluate: (input: Input, context: Invocation) => Effect.Effect<Output, Error>
+  readonly evaluate: (value: Input, context: Invocation) => Effect.Effect<Output, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Decision") {}
 
+const MAX_SETTLED = 128
+
 export const layer = Layer.effect(Service, Effect.gen(function* () {
   const agent = yield* DecisionAgent.Service
+  const settled = new Map<string, Output>()
+  const inflight = new Map<string, Deferred.Deferred<Output | undefined, Error>>()
   return Service.of({
     evaluate: Effect.fn("Decision.evaluate")(function* (value, context) {
       const decoded = yield* Schema.decodeUnknownEffect(Input)(value).pipe(Effect.mapError(() => new Error({ reason: "invalid-request" })))
       if (Buffer.byteLength(JSON.stringify(decoded)) > 1_048_576) return yield* new Error({ reason: "input-too-large" })
-      return yield* agent.evaluate(decoded.request, context).pipe(
+      if (invalidInvocation(context)) return yield* new Error({ reason: "invalid-request" })
+      const run = agent.evaluate(decoded.request, context).pipe(
         Effect.map((response): Output => ({ provider: "agent", response })),
         Effect.mapError((error) => new Error({ reason: error.reason })),
       )
+      if (context.invocationKey === undefined) return yield* run
+      const model = yield* agent.modelKey(context)
+      const key = [
+        context.sessionID,
+        context.purpose ?? "advisory",
+        context.authority ?? "advisory",
+        DecisionAgent.agentFor(context),
+        model,
+        context.invocationKey,
+        Hash.json(decoded.request),
+      ].join("\0")
+      while (true) {
+        const claim = yield* Effect.uninterruptible(Effect.gen(function* () {
+          const done = settled.get(key)
+          if (done) return { type: "done" as const, output: done }
+          const waiting = inflight.get(key)
+          if (waiting) return { type: "wait" as const, deferred: waiting }
+          const deferred = yield* Deferred.make<Output | undefined, Error>()
+          inflight.set(key, deferred)
+          return { type: "lead" as const, deferred }
+        }))
+        if (claim.type === "done") return claim.output
+        if (claim.type === "wait") {
+          const joined = yield* Deferred.await(claim.deferred)
+          if (joined !== undefined) return joined
+          continue
+        }
+        return yield* run.pipe(
+          Effect.onExit((exit) => Effect.gen(function* () {
+            if (inflight.get(key) === claim.deferred) inflight.delete(key)
+            if (Exit.isSuccess(exit)) {
+              settled.set(key, exit.value)
+              while (settled.size > MAX_SETTLED) {
+                const oldest = settled.keys().next().value
+                if (oldest === undefined) break
+                settled.delete(oldest)
+              }
+              return yield* Deferred.succeed(claim.deferred, exit.value)
+            }
+            if (Cause.hasInterrupts(exit.cause)) return yield* Deferred.succeed(claim.deferred, undefined)
+            return yield* Deferred.failCause(claim.deferred, exit.cause)
+          })),
+        )
+      }
     }),
   })
 }))
+
+function invalidInvocation(context: Invocation) {
+  if (context.invocationKey !== undefined && (context.invocationKey.length === 0 || context.invocationKey.length > 256)) return true
+  if ((context.purpose === undefined) !== (context.authority === undefined)) return true
+  return context.purpose === "answer" && context.authority === "baseline"
+}
 
 export const node = makeLocationNode({ service: Service, layer, deps: [DecisionAgent.node] })

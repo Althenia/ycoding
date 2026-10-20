@@ -130,8 +130,10 @@ const reviewDecision: Schema = {
 
 const autonomy: Schema = {
   oneOf: [
+    object({ yolo: boolean }, ["yolo"]),
+    object({ autoPermission: boolean }, ["autoPermission"]),
+    object({ autoGuardrail: boolean }, ["autoGuardrail"]),
     object({ autoAnswer: boolean }, ["autoAnswer"]),
-    object({ yolo: { anyOf: [integer(0, 2), boolean] }, maxNoProgress }, ["yolo"]),
     object({ sleep: boolean }, ["sleep"]),
   ],
 }
@@ -319,15 +321,15 @@ const specs = {
     description: "Read a page of a shell's output. Pass the returned cursor to continue.",
     input: object({ shellID, cursor: integer(0, maxSafeInteger), limit: integer(1, 65_536) }, ["shellID"]),
   },
-  "session.autonomy.get": { description: "Read a Session's autonomy settings (YOLO level, sleep, auto-answer, goal)." },
+  "session.autonomy.get": { description: "Read a Session's autonomy settings (YOLO evaluator, auto-permission, auto-guardrail, auto-answer, sleep, goal)." },
   "session.autonomy.set": {
     description:
-      "Change a Session's autonomy: yolo 0 asks first, 1 auto-approves tool permissions, 2 also auto-approves ordinary guardrail reviews; sleep and autoAnswer are separate settings. Grants standing authority; send only what the user authorized.",
+      "Change one Session autonomy toggle per request: yolo is a separate evaluator and approves nothing by itself; autoPermission auto-approves ask-permission tools, autoGuardrail auto-approves ordinary guardrail reviews while awake (hard reviews still ask a human), autoAnswer answers eligible questions; sleep is a separate setting. Grants standing authority; send only what the user authorized.",
     input: autonomy,
   },
   "session.goal.set": {
     description: "Set a Session's goal and optionally its no-progress budget. The Session then continues autonomously toward the goal.",
-    input: object({ goal: text(8_192), maxNoProgress }, ["goal"]),
+    input: object({ goal: text(8_192), maxNoProgress, yolo: boolean }, ["goal"]),
   },
   "session.goal.stop": {
     description: "Stop a Session's goal.",

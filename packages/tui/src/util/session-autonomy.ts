@@ -2,42 +2,41 @@ import type { SessionAutonomyView } from "@ycoding-ai/client"
 
 export type AutonomyState = Omit<SessionAutonomyView, "effective">
 
-export type YoloLevel = 0 | 1 | 2
-
-export function yoloLevel(state: { yolo?: unknown }): YoloLevel | undefined {
-  const raw = state.yolo
-  if (raw === true) return 2
-  if (raw === false) return 0
-  if (raw === 0 || raw === 1 || raw === 2) return raw
+export function yoloOn(state: { yolo?: unknown }): boolean | undefined {
+  if (state.yolo === true) return true
+  if (state.yolo === false) return false
   return undefined
 }
 
-export function parseApprovalLevel(token: string | undefined): YoloLevel | undefined {
-  if (token === "0") return 0
-  if (token === "1") return 1
-  if (token === "2") return 2
-  return undefined
+export function yoloLabel(on: boolean) {
+  return on ? "YOLO" : "YOLO off"
 }
 
-export function nextApprovalLevel(level: YoloLevel): YoloLevel {
-  if (level === 0) return 1
-  if (level === 1) return 2
-  return 0
-}
-
-export function approvalLevelLabel(level: YoloLevel) {
-  return ["Ask first", "Allow tools", "Tools + reviews"][level]
-}
-
-export function parseAutoAnswerArg(token: string | undefined): boolean | undefined | null {
+export function parseToggleArg(token: string | undefined): boolean | undefined | null {
   if (token === undefined || token === "") return undefined
   if (token === "on") return true
   if (token === "off") return false
   return null
 }
 
+export type AutonomyToggle = "yolo" | "autoPermission" | "autoGuardrail" | "autoAnswer"
+
+export function autoPermissionOn(state: { autoPermission?: unknown } | undefined): boolean {
+  return state?.autoPermission === true
+}
+
+export function autoGuardrailOn(state: { autoGuardrail?: unknown } | undefined): boolean {
+  return state?.autoGuardrail === true
+}
+
 export function autoAnswerOn(state: { autoAnswer?: unknown } | undefined): boolean {
   return state?.autoAnswer === true
+}
+
+export function autonomyToggleOn(state: AutonomyState | undefined, toggle: AutonomyToggle): boolean | undefined {
+  if (!state) return undefined
+  if (toggle === "yolo") return yoloOn(state)
+  return state[toggle] === true
 }
 
 export function isAsleep(state: { sleep?: unknown }): boolean {
@@ -48,9 +47,11 @@ export function localAutonomyView(state: AutonomyState): SessionAutonomyView {
   return {
     ...state,
     effective: {
-      yolo: yoloLevel(state) ?? 0,
+      yolo: yoloOn(state) ?? false,
+      permissionsAuto: autoPermissionOn(state),
+      permissionModelReviews: true,
       asleep: isAsleep(state),
-      ordinaryReviewsAuto: yoloLevel(state) === 2 && !isAsleep(state),
+      ordinaryReviewsAuto: autoGuardrailOn(state) && !isAsleep(state),
       guardrailsEnabled: false,
       modelReviews: false,
       hardModelReviews: false,
@@ -65,7 +66,7 @@ export function autonomyDecisionKind(view: SessionAutonomyView | undefined, acti
   if (!view?.effective) return "unknown"
   const effective = view.effective
   if (action === "permissions") {
-    if (effective.yolo >= 1) return "automated"
+    if (effective.permissionsAuto || effective.permissionModelReviews) return "automated"
     return effective.asleep ? "automated" : "you"
   }
   if (action === "guardrails") {
@@ -78,12 +79,18 @@ export function autonomyDecisionKind(view: SessionAutonomyView | undefined, acti
   return effective.asleep ? "automated" : "you"
 }
 
-export function autonomyLevelDescription(level: YoloLevel) {
-  return [
-    "ask before ask-permission tools and ordinary reviews",
-    "auto-approve ask-permission tools; ordinary reviews still ask",
-    "auto-approve ask-permission tools and ordinary reviews while awake; hard reviews never auto-approve by level",
-  ][level]
+export function autonomyToggleDescription(toggle: AutonomyToggle) {
+  if (toggle === "yolo") return "agentic evaluator, grants no approval"
+  if (toggle === "autoPermission") return "approves ask permissions"
+  if (toggle === "autoGuardrail") return "approves ordinary reviews while awake"
+  return "answers questions"
+}
+
+export function autonomyToggleLabel(toggle: AutonomyToggle) {
+  if (toggle === "yolo") return "YOLO"
+  if (toggle === "autoPermission") return "Auto-permission"
+  if (toggle === "autoGuardrail") return "Auto-guardrail"
+  return "Auto-answer"
 }
 
 export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, action: AutonomyAction) {
@@ -98,17 +105,20 @@ export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, act
   if (!view?.effective) return "unknown"
   const effective = view.effective
   if (action === "permissions") {
-    if (effective.yolo >= 1) return "auto"
+    if (effective.permissionsAuto) return "auto"
+    if (effective.permissionModelReviews) return effective.asleep ? "model, then review box" : "model, then you"
     return effective.asleep ? "review box" : "you"
   }
   if (autoAnswerOn(view)) return "auto"
   return effective.asleep ? "review box" : "you"
 }
 
-export function autonomyModeParts(view: SessionAutonomyView | undefined) {
+export function autonomyModeParts(view: SessionAutonomyView | undefined): readonly string[] {
   if (!view?.effective) return ["unknown"] as const
   return [
-    approvalLevelLabel(view.effective.yolo),
+    yoloLabel(view.effective.yolo === true),
+    ...(view.effective.permissionsAuto ? ["permissions auto"] : []),
+    ...(view.effective.ordinaryReviewsAuto ? ["guardrails auto"] : []),
     ...(view.goal?.status === "active" ? ["goal"] : []),
     ...(view.effective.asleep ? ["asleep"] : []),
     ...(autoAnswerOn(view) ? ["answers auto"] : []),

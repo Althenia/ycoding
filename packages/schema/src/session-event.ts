@@ -33,6 +33,7 @@ import { Integration } from "./integration.js"
 import { Provider } from "./provider.js"
 import { Guardrail } from "./guardrail.js"
 import { SessionReview } from "./session-review.js"
+import { DecisionFailure } from "./decision-failure.js"
 
 export { FileAttachment }
 
@@ -166,6 +167,7 @@ export const GuardrailDecided = Event.durable({
     reviewSessionID: SessionID,
     requestID: Schema.String,
     reply: Guardrail.Reply,
+    authority: Guardrail.Authority.pipe(optional),
     choice: Guardrail.DecisionChoice.pipe(optional),
     grades: Schema.Array(Guardrail.Grade).pipe(optional),
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
@@ -200,6 +202,51 @@ export const GuardrailDismissed = Event.durable({
   },
 })
 export type GuardrailDismissed = typeof GuardrailDismissed.Type
+
+export const DecisionAuditedAnswer = Schema.Struct({
+  name: Schema.String.check(Schema.isMaxLength(64)),
+  type: Schema.Literals(["predicate", "choice", "score", "text", "refusal"]),
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  answer: Schema.Boolean.pipe(optional),
+  choice: Schema.Union([Schema.String.check(Schema.isMaxLength(200)), Schema.Boolean]).pipe(optional),
+  score: NonNegativeInt.pipe(optional),
+  length: NonNegativeInt.pipe(optional),
+})
+
+export const DecisionAudited = Event.durable({
+  type: "session.decision.audited",
+  ...options,
+  schema: {
+    ...Base,
+    purpose: Schema.Literals(["permission", "guardrail", "answer", "advisory"]),
+    authority: Guardrail.Authority.pipe(optional),
+    agent: Agent.ID,
+    model: Model.Ref.pipe(optional),
+    route: Schema.String.check(Schema.isMaxLength(128)).pipe(optional),
+    outcome: Schema.Literals(["succeeded", "failed", "cancelled"]),
+    reason: DecisionFailure.Reason.pipe(optional),
+    fingerprint: Schema.String,
+    invocationKey: Schema.String.pipe(optional),
+    attempts: NonNegativeInt,
+    answers: Schema.Array(DecisionAuditedAnswer).check(Schema.isMaxLength(32)).pipe(optional),
+  },
+})
+export type DecisionAudited = typeof DecisionAudited.Type
+
+export const PermissionAssessed = Event.durable({
+  type: "session.permission.assessed",
+  ...options,
+  schema: {
+    ...Base,
+    requestID: Schema.String,
+    outcome: Schema.Literals(["allow", "deny", "escalate"]),
+    via: Schema.Literals(["auto-permission", "baseline", "yolo"]),
+    reply: Permission.Reply.pipe(optional),
+    ...Guardrail.Escalation.fields,
+    source: Guardrail.Source.pipe(optional),
+  },
+})
+export type PermissionAssessed = typeof PermissionAssessed.Type
 
 export const DaybreakSet = Event.durable({
   type: "session.daybreak.set",
@@ -939,6 +986,8 @@ export const Definitions = Event.inventory(
   GuardrailDismissed,
   GuardrailEscalated,
   GuardrailDecided,
+  DecisionAudited,
+  PermissionAssessed,
   Review.Deferred,
   Review.Decided,
   Review.Withdrawn,

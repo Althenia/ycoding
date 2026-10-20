@@ -35,6 +35,8 @@ export const Input = Schema.Struct({
 export const Output = Schema.Struct({
   answers: Schema.Array(Question.Answer),
   automatic: Schema.Literal(true).pipe(Schema.optional),
+  via: Schema.Literals(["auto-answer", "yolo"]).pipe(Schema.optional),
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(Schema.optional),
   timedOutAfterSeconds: Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.optional),
   deferredItemID: SessionReview.ID.pipe(Schema.optional),
   reviewFull: Schema.Literal(true).pipe(Schema.optional),
@@ -106,7 +108,7 @@ export const Plugin = {
               if (value === undefined) return []
               if (typeof value === "object") return Array.from(value)
               return [String(value)]
-            }), ...(state.automatic ? { automatic: true as const } : {}) })
+            }), ...(state.automatic ? { automatic: true as const } : {}), ...(state.automatic && state.via ? { via: state.via } : {}), ...(state.automatic && state.confidence !== undefined ? { confidence: state.confidence } : {}) })
           }),
         )),
       ),
@@ -119,7 +121,7 @@ function toField(question: Question.Prompt, index: number): Form.Field {
     key: `q${index}`, title: question.header, description: question.question,
     type: question.multiple === true ? "multiselect" : "string",
     options: question.options.map((option) => ({ value: option.label, label: option.label, description: option.description })),
-    custom: true,
+    custom: question.custom ?? true,
     ...(question.options.length === 0 ? { required: true } : {}),
   }
 }

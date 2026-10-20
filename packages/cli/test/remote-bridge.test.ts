@@ -784,7 +784,7 @@ describe("remote bridge", () => {
     let outstanding = ["ses_1"]
     const test = harness({ results: {
       outstandingSessions: () => ({ data: outstanding, running: [], failed: [], lost: [] }),
-      autonomySet: () => ({ mode: "normal", yolo: 0, goal: { text: "Finish", status: "stopped" } }),
+      autonomySet: () => ({ mode: "normal", yolo: false, goal: { text: "Finish", status: "stopped" } }),
       getSession: async (sessionID: string) => sessionInfo(sessionID, { title: "One" }),
     } })
     await test.bridge.connect()

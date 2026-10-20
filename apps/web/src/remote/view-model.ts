@@ -157,7 +157,6 @@ type RemoteDevice = {
   readonly lastSeen?: string
 }
 
-type RemoteAutonomyMode = "normal" | "yolo" | "goal"
 export type RemoteSessionStatus = "running" | "idle" | "blocked" | "archived" | "failed"
 
 export type RemoteSessionSummary = {
@@ -167,10 +166,12 @@ export type RemoteSessionSummary = {
   readonly pinned?: boolean
   readonly agent?: string
   readonly model?: string
-  readonly autonomy?: RemoteAutonomyMode
-  readonly yoloLevel?: 0 | 1 | 2
+  readonly autonomy?: "normal"
+  readonly yolo?: boolean
   readonly goalActive?: boolean
   readonly asleep?: boolean
+  readonly autoPermission?: boolean
+  readonly autoGuardrail?: boolean
   readonly autoAnswer?: boolean
   readonly updatedAt?: string
 }
@@ -382,9 +383,11 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
   if (session.pinned) chips.push({ label: "Pinned", tone: "neutral" })
 
   if (session.autonomy !== undefined) {
-    chips.push(session.yoloLevel === 1 ? { label: "Allow tools", tone: "attention" } : session.yoloLevel === 2 ? { label: "Tools + reviews", tone: "attention" } : { label: "Ask first", tone: "neutral" })
-    if (session.goalActive === true || session.autonomy === "goal") chips.push({ label: "goal", tone: "neutral" })
+    chips.push(session.yolo === true ? { label: "YOLO on", tone: "attention" } : { label: "YOLO off", tone: "neutral" })
+    if (session.goalActive === true) chips.push({ label: "goal", tone: "neutral" })
     if (session.asleep === true) chips.push({ label: "asleep", tone: "success" })
+    if (session.autoPermission === true) chips.push({ label: "auto-permission", tone: "neutral" })
+    if (session.autoGuardrail === true) chips.push({ label: "auto-guardrail", tone: "neutral" })
     if (session.autoAnswer === true) chips.push({ label: "auto-answer", tone: "neutral" })
   }
 

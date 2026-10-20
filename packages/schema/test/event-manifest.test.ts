@@ -252,6 +252,8 @@ describe("public event manifest", () => {
         "session.guardrail.approved.1",
         "session.guardrail.decided.1",
         "session.daybreak.set.1",
+        "session.decision.audited.1",
+        "session.permission.assessed.1",
         "session.project-artifacts-ended.1",
         "session.moved.1",
         "session.renamed.1",

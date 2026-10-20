@@ -5,7 +5,7 @@ import { readableForeground } from "../../theme/component"
 import { autoAnswerOn, autonomyModeParts } from "../../util/session-autonomy"
 
 export type ModeChip = {
-  key: "goal" | "yolo" | "sleep" | "review" | "answers"
+  key: "goal" | "yolo" | "permissions" | "guardrails" | "sleep" | "review" | "answers"
   label: string;
   tone: "off" | "on" | "warning" | "danger"
 }
@@ -18,7 +18,7 @@ export function modeChips(input: {
 }): ModeChip[] {
   const parts = autonomyModeParts(input.autonomy)
   const active = parts.includes("goal")
-  const level = input.autonomy?.effective?.yolo
+  const yolo = input.autonomy?.effective?.yolo
   const asleep = parts.includes("asleep")
   return [
     {
@@ -29,8 +29,14 @@ export function modeChips(input: {
     {
       key: "yolo",
       label: parts[0],
-      tone: level !== undefined && level > 0 ? "danger" : "off",
+      tone: yolo === true ? "danger" : "off",
     },
+    ...(input.autonomy?.effective?.permissionsAuto
+      ? [{ key: "permissions" as const, label: "permissions auto", tone: "warning" as const }]
+      : []),
+    ...(input.autonomy?.effective?.ordinaryReviewsAuto
+      ? [{ key: "guardrails" as const, label: "guardrails auto", tone: "warning" as const }]
+      : []),
     ...(asleep
       ? [
           {

@@ -1,5 +1,5 @@
 import { Option, Schema } from "effect"
-import { approvalLevelLabel, yoloLevel } from "../../util/session-autonomy"
+import { yoloLabel, yoloOn } from "../../util/session-autonomy"
 
 const sessionStatePrefix = "Authoritative current Session state (JSON):\n"
 const teamViewPrefix =
@@ -19,12 +19,14 @@ function sessionStateSummary(value: Record<string, unknown>) {
   const autonomy = record(value.autonomy)
   const todos = Array.isArray(value.todos) ? value.todos.length : 0
   if (!autonomy) return `Session state · autonomy unreported · ${todos} ${todos === 1 ? "task" : "tasks"}`
-  const level = yoloLevel(autonomy)
+  const yolo = yoloOn(autonomy)
   const parts =
-    level === undefined
+    yolo === undefined
       ? ["unknown"]
       : [
-          approvalLevelLabel(level),
+          yoloLabel(yolo),
+          ...(autonomy.autoPermission === true ? ["permissions auto"] : []),
+          ...(autonomy.autoGuardrail === true ? ["guardrails auto"] : []),
           ...(record(autonomy.goal)?.status === "active" ? ["goal"] : []),
           ...(autonomy.sleep !== undefined && autonomy.sleep !== null ? ["asleep"] : []),
           ...(autonomy.autoAnswer === true ? ["answers auto"] : []),

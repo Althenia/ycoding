@@ -29,73 +29,50 @@ export const Goal = Schema.Struct({
 })
 export type Goal = typeof Goal.Type
 
-export const YoloLevel = Schema.Literals([0, 1, 2])
-export type YoloLevel = typeof YoloLevel.Type
-
-export const YOLO_LEVEL_OFF = 0 as const
-export const YOLO_LEVEL_APPROVALS = 1 as const
-export const YOLO_LEVEL_GUARDRAILS = 2 as const
-
 export interface Effective {
-  readonly yolo: YoloLevel
+  readonly yolo: boolean
+  readonly permissionsAuto: boolean
+  readonly permissionModelReviews: boolean
   readonly asleep: boolean
-  readonly ordinaryReviewsAuto: boolean
   readonly guardrailsEnabled: boolean
+  readonly ordinaryReviewsAuto: boolean
   readonly modelReviews: boolean
   readonly hardModelReviews: boolean
 }
 
-export const Sleep = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
-  decode: SchemaGetter.transform(() => ({})),
-  encode: SchemaGetter.transform(() => ({})),
-}))
+export const Sleep = Schema.Struct({}).pipe(
+  Schema.decodeTo(Schema.Struct({}), {
+    decode: SchemaGetter.transform(() => ({})),
+    encode: SchemaGetter.transform(() => ({})),
+  }),
+)
 export type Sleep = typeof Sleep.Type
 
 export const State = Schema.Struct({
   mode: Mode,
-  yolo: YoloLevel,
+  yolo: Schema.Boolean,
+  autoPermission: Schema.Boolean.pipe(Schema.optional),
+  autoGuardrail: Schema.Boolean.pipe(Schema.optional),
   goal: Goal.pipe(Schema.optional),
   sleep: Sleep.pipe(Schema.optional),
   autoAnswer: Schema.Boolean.pipe(Schema.optional),
 })
 export type State = typeof State.Type
 
-export const defaultState: State = { mode: "normal", yolo: 0 }
+export const defaultState: State = { mode: "normal", yolo: false }
 const decode = Schema.decodeUnknownOption(State)
-// Legacy shape before toggle redesign: mode could be yolo/goal and yolo field absent or boolean
-const LegacyState = Schema.Struct({
-  mode: Schema.Literals(["normal", "yolo", "goal"]),
-  yolo: Schema.optional(Schema.Unknown),
-  goal: Goal.pipe(Schema.optional),
-  sleep: Sleep.pipe(Schema.optional),
-  autoAnswer: Schema.Boolean.pipe(Schema.optional),
-})
-const decodeLegacy = Schema.decodeUnknownOption(LegacyState)
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("SessionAutonomy.NotFound", {
   sessionID: SessionSchema.ID,
 }) {}
 
-export function normalizeYolo(input: unknown): number {
-  if (typeof input === "boolean") return input ? 2 : 0
-  if (typeof input === "number" && Number.isFinite(input)) {
-    const truncated = Math.trunc(input)
-    if (truncated >= 0 && truncated <= 2) return truncated
-  }
-  return 0
+function requireYolo(input: unknown): boolean {
+  if (typeof input !== "boolean") throw new TypeError(`Invalid yolo value: ${String(input)}`)
+  return input
 }
 
-function requireYoloLevel(input: number | boolean): YoloLevel {
-  if (typeof input === "boolean") return input ? 2 : 0
-  if (Number.isFinite(input)) {
-    const truncated = Math.trunc(input)
-    if (truncated >= 0 && truncated <= 2) return truncated as YoloLevel
-  }
-  throw new Error(`Invalid yolo level: ${String(input)}`)
-}
-
-export function yoloLevel(state: State): number {
-  return typeof state.yolo === "number" ? state.yolo : normalizeYolo(state.yolo)
+export function canYolo(state: State): boolean {
+  return state.yolo
 }
 
 export function canAutoAnswer(state: State): boolean {
@@ -103,11 +80,11 @@ export function canAutoAnswer(state: State): boolean {
 }
 
 export function canAutoPermission(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_APPROVALS
+  return state.autoPermission === true
 }
 
 export function canAutoGuardrail(state: State): boolean {
-  return yoloLevel(state) >= YOLO_LEVEL_GUARDRAILS
+  return state.autoGuardrail === true
 }
 
 export function isAsleep(state: State): boolean {
@@ -119,9 +96,7 @@ export interface Interface {
   readonly snapshot: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<{ readonly state: State; readonly sequence: number; readonly digest: string }, NotFoundError>
-  readonly isAutonomous: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
-  readonly yoloLevel: (sessionID: SessionSchema.ID) => Effect.Effect<number, NotFoundError>
-  readonly effectiveYoloLevel: (sessionID: SessionSchema.ID) => Effect.Effect<number, NotFoundError>
+  readonly canYolo: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoAnswer: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoPermission: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoGuardrail: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
@@ -130,10 +105,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     mode: "normal" | "yolo"
   }) => Effect.Effect<State, NotFoundError>
-  readonly setYolo: (input: {
-    sessionID: SessionSchema.ID
-    yolo: number | boolean
-  }) => Effect.Effect<State, NotFoundError>
+  readonly setYolo: (input: { sessionID: SessionSchema.ID; yolo: boolean }) => Effect.Effect<State, NotFoundError>
   readonly setGoal: (input: {
     sessionID: SessionSchema.ID
     text: string
@@ -143,7 +115,7 @@ export interface Interface {
   readonly setGoalIfCurrent: (input: {
     sessionID: SessionSchema.ID
     expectedSequence: number
-    yolo?: number | boolean
+    yolo?: boolean
     text: string
     rawText?: string
     maxNoProgress?: number
@@ -151,17 +123,19 @@ export interface Interface {
   readonly resumeGoalIfCurrent: (input: {
     sessionID: SessionSchema.ID
     expectedSequence: number
-    yolo?: number | boolean
+    yolo?: boolean
   }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
   readonly clearGoal: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly set: (input: {
     sessionID: SessionSchema.ID
-    yolo?: number | boolean
+    yolo?: boolean
     goal?: string | null | true
     rawText?: string
     maxNoProgress?: number
     sleep?: boolean
     autoAnswer?: boolean
+    autoPermission?: boolean
+    autoGuardrail?: boolean
   }) => Effect.Effect<State, NotFoundError>
   readonly stop: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly report: (input: { sessionID: SessionSchema.ID }) => Effect.Effect<State, NotFoundError>
@@ -181,47 +155,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Ses
 
 export const read = (value: unknown): State => {
   const parsed = decode(value)
-  if (parsed._tag === "Some") return parsed.value
-  const legacy = decodeLegacy(value)
-  if (legacy._tag === "Some") {
-    const v = legacy.value
-    const level = v.yolo === undefined ? 0 : normalizeYolo(v.yolo)
-    const extras = {
-      ...(v.sleep ? { sleep: v.sleep } : {}),
-      ...(v.autoAnswer === undefined ? {} : { autoAnswer: v.autoAnswer }),
-    }
-    if (v.mode === "yolo")
-      return { mode: "normal", yolo: 2 as YoloLevel, ...(v.goal ? { goal: v.goal } : {}), ...extras }
-    if (v.mode === "goal")
-      return { mode: "normal", yolo: level as YoloLevel, ...(v.goal ? { goal: v.goal } : {}), ...extras }
-    return { mode: "normal", yolo: level as YoloLevel, ...(v.goal ? { goal: v.goal } : {}), ...extras }
-  }
-  if (value && typeof value === "object" && "yolo" in (value as Record<string, unknown>)) {
-    const maybe = value as { yolo?: unknown; goal?: unknown; mode?: unknown; autoAnswer?: unknown }
-    const level = normalizeYolo(maybe.yolo)
-    const flag = typeof maybe.autoAnswer === "boolean" ? { autoAnswer: maybe.autoAnswer } : {}
-    if (maybe.goal && typeof (maybe.goal as Goal).text === "string") {
-      return {
-        mode: "normal",
-        yolo: level as YoloLevel,
-        goal: maybe.goal as Goal,
-        ...flag,
-      }
-    }
-    return {
-      mode: "normal",
-      yolo: level as YoloLevel,
-      ...(maybe.goal && typeof (maybe.goal as Goal).text === "string" ? { goal: maybe.goal as Goal } : {}),
-      ...flag,
-    }
-  }
-  if (value && typeof value === "object" && "mode" in (value as Record<string, unknown>)) {
-    const maybe = value as { mode?: unknown; goal?: unknown }
-    if (maybe.goal && typeof (maybe.goal as Goal).text === "string") {
-      return { mode: "normal", yolo: 0 as YoloLevel, goal: maybe.goal as Goal }
-    }
-  }
-  return defaultState
+  return parsed._tag === "Some" ? parsed.value : defaultState
 }
 
 export const AutomaticAnswer = "Continue with the safest reasonable default."
@@ -322,11 +256,14 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
 
   const walkEffective = (
     sessionID: SessionSchema.ID,
-  ): Effect.Effect<{ yolo: number; goalActive: boolean }, NotFoundError> =>
+  ): Effect.Effect<{ yolo: boolean; autoPermission: boolean; autoGuardrail: boolean }, NotFoundError> =>
     load(sessionID).pipe(
       Effect.flatMap((state) => {
-        const currentYolo = yoloLevel(state)
-        const currentGoal = state.goal?.status === "active"
+        const current = {
+          yolo: canYolo(state),
+          autoPermission: canAutoPermission(state),
+          autoGuardrail: canAutoGuardrail(state),
+        }
         return input.db
           .select({ parentID: SessionTaskTable.parent_id })
           .from(SessionTaskTable)
@@ -335,48 +272,38 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
           .pipe(
             Effect.orDie,
             Effect.flatMap((task) => {
-              if (!task) return Effect.succeed({ yolo: currentYolo, goalActive: currentGoal })
+              if (!task) return Effect.succeed(current)
               return walkEffective(task.parentID).pipe(
                 Effect.map((parent) => ({
-                  yolo: Math.max(currentYolo, parent.yolo),
-                  goalActive: currentGoal || parent.goalActive,
+                  yolo: current.yolo || parent.yolo,
+                  autoPermission: current.autoPermission || parent.autoPermission,
+                  autoGuardrail: current.autoGuardrail || parent.autoGuardrail,
                 })),
-                Effect.catchTag("SessionAutonomy.NotFound", () =>
-                  Effect.succeed({ yolo: currentYolo, goalActive: currentGoal }),
-                ),
+                Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(current)),
               )
             }),
           )
       }),
     )
 
-  const effectiveYoloLevel: Interface["effectiveYoloLevel"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo))
+  const canYoloEffect: Interface["canYolo"] = (sessionID) => walkEffective(sessionID).pipe(Effect.map((v) => v.yolo))
 
-  const yoloLevelEffect: Interface["yoloLevel"] = (sessionID) => effectiveYoloLevel(sessionID)
-
-  const canAutoAnswerEffect: Interface["canAutoAnswer"] = (sessionID) =>
-    load(sessionID).pipe(Effect.map(canAutoAnswer))
+  const canAutoAnswerEffect: Interface["canAutoAnswer"] = (sessionID) => load(sessionID).pipe(Effect.map(canAutoAnswer))
 
   const canAutoPermissionEffect: Interface["canAutoPermission"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_APPROVALS))
+    walkEffective(sessionID).pipe(Effect.map((v) => v.autoPermission))
 
   const canAutoGuardrailEffect: Interface["canAutoGuardrail"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.yolo >= YOLO_LEVEL_GUARDRAILS))
+    walkEffective(sessionID).pipe(Effect.map((v) => v.autoGuardrail))
 
   const isAsleepEffect: Interface["isAsleep"] = (sessionID) => familyState(sessionID).pipe(Effect.map(isAsleep))
 
-  const isAutonomous: Interface["isAutonomous"] = (sessionID) =>
-    walkEffective(sessionID).pipe(
-      Effect.flatMap((v) => (v.yolo > 0 || v.goalActive ? Effect.succeed(true) : isAsleepEffect(sessionID))),
-    )
-
   const setYolo: Interface["setYolo"] = ({ sessionID, yolo }) =>
     Effect.suspend(() => {
-      const level = requireYoloLevel(yolo)
+      const value = requireYolo(yolo)
       return apply(sessionID, (state) => {
-        if (state.yolo === level) return undefined
-        return { ...state, mode: "normal", yolo: level }
+        if (state.yolo === value) return undefined
+        return { ...state, mode: "normal", yolo: value }
       })
     })
 
@@ -404,7 +331,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       sessionID,
       (state) => ({
         ...goalState(state, text, rawText, maxNoProgress),
-        yolo: yolo === undefined ? state.yolo : requireYoloLevel(yolo),
+        yolo: yolo === undefined ? state.yolo : requireYolo(yolo),
       }),
       expectedSequence,
     )
@@ -417,7 +344,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         return {
           ...state,
           mode: "normal",
-          yolo: yolo === undefined ? state.yolo : requireYoloLevel(yolo),
+          yolo: yolo === undefined ? state.yolo : requireYolo(yolo),
           goal: { ...state.goal, status: "active" as const },
         }
       },
@@ -436,64 +363,83 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       }
     })
 
-  const set: Interface["set"] = ({ sessionID, yolo, goal, rawText, maxNoProgress, sleep, autoAnswer }) =>
-    apply(sessionID, (state) => {
-      let next: State = { ...state, mode: "normal" }
-      let changed = false
-      if (sleep !== undefined) {
-        if (sleep && !next.sleep) {
-          next = { ...next, sleep: {} }
-          changed = true
-        }
-        if (!sleep && next.sleep) {
-          next = { ...next, sleep: undefined }
-          changed = true
-        }
-      }
-      if (yolo !== undefined) {
-        const level = requireYoloLevel(yolo)
-        if (next.yolo !== level) {
-          next = { ...next, yolo: level }
-          changed = true
-        }
-      }
-      if (autoAnswer !== undefined && next.autoAnswer !== autoAnswer) {
-        next = { ...next, autoAnswer }
-        changed = true
-      }
-      if (goal !== undefined) {
-        if (goal === null) {
-          changed = true
-          if (next.goal && next.goal.status !== "stopped") {
-            next = { ...next, goal: { ...next.goal, status: "stopped" as const } }
-          }
-        } else if (goal === true) {
-          // Resume the retained goal without recalculating it; the user alone re-activates.
-          if (next.goal && next.goal.status !== "active") {
-            next = { ...next, goal: { ...next.goal, status: "active" as const } }
+  const set: Interface["set"] = ({
+    sessionID,
+    yolo,
+    goal,
+    rawText,
+    maxNoProgress,
+    sleep,
+    autoAnswer,
+    autoPermission,
+    autoGuardrail,
+  }) =>
+    Effect.suspend(() => {
+      if (yolo !== undefined) requireYolo(yolo)
+      return apply(sessionID, (state) => {
+        let next: State = { ...state, mode: "normal" }
+        let changed = false
+        if (sleep !== undefined) {
+          if (sleep && !next.sleep) {
+            next = { ...next, sleep: {} }
             changed = true
           }
-        } else {
-          const trimmed = goal.trim()
-          if (!trimmed) return next
-          const isSameActive = next.goal?.status === "active" && (next.goal.rawText ?? next.goal.text) === trimmed
-          if (isSameActive && yolo === undefined) return changed ? next : undefined
-          next = {
-            ...next,
-            goal: makeGoal({ text: trimmed, rawText, maxNoProgress }),
+          if (!sleep && next.sleep) {
+            next = { ...next, sleep: undefined }
+            changed = true
           }
+        }
+        if (yolo !== undefined) {
+          const level = requireYolo(yolo)
+          if (next.yolo !== level) {
+            next = { ...next, yolo: level }
+            changed = true
+          }
+        }
+        if (autoAnswer !== undefined && next.autoAnswer !== autoAnswer) {
+          next = { ...next, autoAnswer }
           changed = true
         }
-      }
-      return changed ? next : undefined
+        if (autoPermission !== undefined && next.autoPermission !== autoPermission) {
+          next = { ...next, autoPermission }
+          changed = true
+        }
+        if (autoGuardrail !== undefined && next.autoGuardrail !== autoGuardrail) {
+          next = { ...next, autoGuardrail }
+          changed = true
+        }
+        if (goal !== undefined) {
+          if (goal === null) {
+            changed = true
+            if (next.goal && next.goal.status !== "stopped") {
+              next = { ...next, goal: { ...next.goal, status: "stopped" as const } }
+            }
+          } else if (goal === true) {
+            // Resume the retained goal without recalculating it; the user alone re-activates.
+            if (next.goal && next.goal.status !== "active") {
+              next = { ...next, goal: { ...next.goal, status: "active" as const } }
+              changed = true
+            }
+          } else {
+            const trimmed = goal.trim()
+            if (!trimmed) return next
+            const isSameActive = next.goal?.status === "active" && (next.goal.rawText ?? next.goal.text) === trimmed
+            if (isSameActive && yolo === undefined) return changed ? next : undefined
+            next = {
+              ...next,
+              goal: makeGoal({ text: trimmed, rawText, maxNoProgress }),
+            }
+            changed = true
+          }
+        }
+        return changed ? next : undefined
+      })
     })
 
   return {
     get: familyState,
     snapshot,
-    isAutonomous,
-    yoloLevel: yoloLevelEffect,
-    effectiveYoloLevel,
+    canYolo: canYoloEffect,
     canAutoAnswer: canAutoAnswerEffect,
     canAutoPermission: canAutoPermissionEffect,
     canAutoGuardrail: canAutoGuardrailEffect,

@@ -43,6 +43,7 @@ const projects = Layer.succeed(
 const held: string[] = []
 const released: string[] = []
 let decisionConfidence = 0.9
+let decisionCalls = 0
 const keepAwake = Layer.effect(
   KeepAwake.Service,
   Effect.gen(function* () {
@@ -90,7 +91,7 @@ const build = (database?: Layer.Layer<never>, projectLayer = projects) =>
           Decision.Service,
           Decision.Service.of({
             evaluate: (input) =>
-              Effect.succeed(
+              Effect.sync(() => { decisionCalls++ }).pipe(Effect.andThen(Effect.succeed(
                 Schema.decodeUnknownSync(Decision.Output)({
                   provider: "agent",
                   response: {
@@ -112,7 +113,7 @@ const build = (database?: Layer.Layer<never>, projectLayer = projects) =>
                     ],
                   },
                 }),
-              ),
+              ))),
           }),
         ),
       ],
@@ -259,7 +260,7 @@ describe("Session sleep", () => {
       )
       yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
       yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
-      yield* sessions.autonomy.set({ sessionID: child.id, autoAnswer: true })
+      yield* sessions.autonomy.set({ sessionID: child.id, yolo: true })
       const orchestration = yield* SessionOrchestration.Service
       decisionConfidence = 0.9
       expect(
@@ -272,6 +273,47 @@ describe("Session sleep", () => {
       expect(deferred.question.deferred).toBe(true)
       expect((yield* pendingTexts(child.id)).join("\n")).not.toContain("Continue with the safest reasonable default")
       expect(yield* SessionReviewFold.openCount((yield* Database.Service).db, root.id)).toBe(1)
+    }),
+  )
+  it.effect("sleep applies only an explicit recommendation to a subagent question without YOLO and never calls the helper", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const root = yield* sessions.create({ location: yield* tmpLocation })
+      const child = yield* sessions.create({ parentID: root.id })
+      const events = yield* EventRuntime.Service
+      yield* events.publish(
+        SessionEvent.Task.Updated,
+        Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({
+          sessionID: child.id,
+          change: {
+            type: "launched",
+            parentID: root.id,
+            parentAssistantMessageID: "msg_sleep_parent_rec",
+            toolCallID: "call_sleep_child_rec",
+            inputID: "msg_sleep_input_rec",
+            description: "Sleep child",
+            agent: "build",
+            model: { providerID: "test", id: "decision-model" },
+            promptDigest: "digest",
+            background: true,
+            delivery: "steer",
+          },
+        }),
+      )
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+      yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
+      yield* sessions.autonomy.set({ sessionID: child.id, autoAnswer: true })
+      const orchestration = yield* SessionOrchestration.Service
+      decisionCalls = 0
+      expect(
+        (yield* orchestration.question(child.id, "Choose a plan", { options: ["Fast (Recommended)", "Careful"] })).autoAnswered,
+      ).toBe(true)
+      expect((yield* pendingTexts(child.id)).join("\n")).toContain("Fast (Recommended)")
+      const unmarked = yield* orchestration.question(child.id, "Choose another plan", { options: ["Fast", "Careful"] })
+      expect(unmarked.autoAnswered).toBe(false)
+      expect(unmarked.question.deferred).toBe(true)
+      expect((yield* SessionReviewFold.fold((yield* Database.Service).db, [child.id])).at(-1)?.reason).toBe("disabled")
+      expect(decisionCalls).toBe(0)
     }),
   )
   it.effect(
@@ -335,8 +377,8 @@ describe("Session sleep", () => {
       const session = yield* Session.Service
       const root = yield* session.create({ location: yield* tmpLocation })
       const child = yield* session.create({ parentID: root.id })
-      yield* session.autonomy.set({ sessionID: child.id, yolo: 2 })
-      expect((yield* session.autonomy.get(child.id)).yolo).toBe(2)
+      yield* session.autonomy.set({ sessionID: child.id, yolo: true })
+      expect((yield* session.autonomy.get(child.id)).yolo).toBe(true)
       yield* session.autonomy.set({ sessionID: child.id, sleep: true })
       expect(held).toEqual([root.id])
       expect((yield* session.autonomy.get(child.id)).sleep).toEqual({})

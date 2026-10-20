@@ -14,6 +14,7 @@ import { useConfig } from "../../config"
 import { Keymap } from "../../context/keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { SimulationSemantics } from "../../simulation/semantics"
+import { GuardrailEscalation } from "../../guardrail-escalation"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -214,6 +215,15 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               instance={props.request.id}
               body={
                 <box flexDirection="column">
+                  <Show when={props.request.escalation}>
+                    {(escalation) => (
+                      <box paddingLeft={3} paddingRight={3}>
+                        <text fg={theme.text.feedback.warning.default} wrapMode="word">
+                          {GuardrailEscalation.text(escalation())} — your decision is required.
+                        </text>
+                      </box>
+                    )}
+                  </Show>
                   <box paddingLeft={3} paddingRight={3}>
                     <text fg={theme.text.feedback.info.default}>
                       {props.request.action === "shell" ? "bash wants to run" : current.title}
@@ -426,7 +436,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
     props.footer ??
     (kind === "guardrail" ? (
       <text fg={theme.text.subdued}>
-        {props.hardReview ? "hard reviews need you while awake" : "ordinary reviews auto-approve at level 2 while awake"}
+        {props.hardReview ? "hard reviews: model checks, you approve" : "ordinary reviews auto-approve with auto-guardrail on while awake"}
       </text>
     ) : undefined)
   const compact = () => dimensions().height < 30

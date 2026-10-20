@@ -14,8 +14,18 @@ import { SessionReview } from "@ycoding-ai/core/session/review"
 import { reviewLayer, reviewLocation } from "./fixture/review"
 import { testEffect } from "./lib/effect"
 
+for (const hard of [false, true]) testEffect(reviewLayer()).effect(`effective hard assessment honors its gate with baseline off and YOLO on: ${hard}`, () => Effect.gen(function* () {
+  const location = yield* reviewLocation
+  yield* Effect.promise(() => Bun.write(`${location.directory}/ycoding.json`, JSON.stringify({ guardrails: { decide_reviews: false, decide_hard_reviews: hard } })))
+  const sessions = yield* Session.Service
+  const root = yield* sessions.create({ location })
+  const autonomy = yield* SessionAutonomy.Service
+  yield* autonomy.setYolo({ sessionID: root.id, yolo: true })
+  expect((yield* sessions.autonomy.effective(root.id)).hardModelReviews).toBe(hard)
+}))
+
 for (const flag of [false, true]) {
-  for (const mode of [0, 1, 2, "goal", "sleep"] as const) {
+  for (const mode of ["autoPermission", "autoGuardrail", "goal", "sleep"] as const) {
     for (const kind of ["question", "form", "subagent"] as const) {
       const calls: Decision.Input[] = []
       const it = testEffect(reviewLayer(undefined, true, (input) => {
@@ -38,7 +48,8 @@ for (const flag of [false, true]) {
         const autonomy = yield* SessionAutonomy.Service
         if (mode === "goal") yield* autonomy.setGoal({ sessionID: root.id, text: "Finish safely" })
         if (mode === "sleep") yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
-        if (typeof mode === "number") yield* autonomy.setYolo({ sessionID: root.id, yolo: mode })
+        if (mode === "autoPermission") yield* autonomy.set({ sessionID: root.id, autoPermission: true })
+        if (mode === "autoGuardrail") yield* autonomy.set({ sessionID: root.id, autoGuardrail: true })
         if (flag && kind !== "subagent") yield* autonomy.set({ sessionID: root.id, autoAnswer: true })
         const automatic = flag
         const reviews = yield* SessionReview.Service
@@ -54,7 +65,7 @@ for (const flag of [false, true]) {
           yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
           if (flag) yield* autonomy.set({ sessionID: child.id, autoAnswer: true })
           const orchestration = yield* SessionOrchestration.Service
-          const result = yield* orchestration.question(child.id, "Choose", { options: ["One"] })
+          const result = yield* orchestration.question(child.id, "Choose", { options: ["One (Recommended)"] })
           expect(result.autoAnswered).toBe(automatic)
           if (!automatic && mode !== "sleep") {
             expect((yield* orchestration.get(root.id, child.id)).state).toBe("waiting")
@@ -76,8 +87,8 @@ for (const flag of [false, true]) {
           })
           yield* Effect.addFinalizer(() => unsubscribe)
           const request = kind === "question"
-            ? questions.ask({ sessionID: root.id, questions: [{ header: "Choice", question: "Choose", options: [{ label: "One", description: "Synthetic option" }] }] })
-            : forms.ask({ sessionID: root.id, title: "Choose", fields: [{ key: "choice", type: "string", required: true, default: "One", custom: false, options: [{ label: "One", value: "One" }] }] })
+            ? questions.ask({ sessionID: root.id, questions: [{ header: "Choice", question: "Choose", options: [{ label: "One (Recommended)", description: "Synthetic option" }] }] })
+            : forms.ask({ sessionID: root.id, title: "Choose", fields: [{ key: "choice", type: "string", required: true, default: "One", custom: false, options: [{ label: "One (Recommended)", value: "One" }] }] })
           const fiber = yield* request.pipe(Effect.forkScoped)
           if (!automatic && mode !== "sleep") {
             const observed = yield* Effect.raceFirst(
@@ -93,7 +104,7 @@ for (const flag of [false, true]) {
           }
           expect((yield* Fiber.join(fiber)).status).toBe(mode === "sleep" && !automatic ? "deferred" : "answered")
         }
-        expect(calls).toHaveLength(mode === "sleep" && automatic ? 1 : 0)
+        expect(calls).toHaveLength(0)
         const items = yield* reviews.list(root.id)
         if (mode === "sleep" && !automatic) expect(items).toEqual([expect.objectContaining({ reason: "disabled" })])
         else expect(items).toEqual([])
@@ -111,7 +122,8 @@ located.effect("a subagent question reads autoAnswer from the child Session only
   const orchestration = yield* SessionOrchestration.Service
   const autonomy = yield* SessionAutonomy.Service
   const root = yield* sessions.create({ location })
-  yield* autonomy.setYolo({ sessionID: root.id, yolo: 2 })
+  yield* autonomy.set({ sessionID: root.id, autoPermission: true })
+  yield* autonomy.set({ sessionID: root.id, autoGuardrail: true })
   yield* autonomy.set({ sessionID: root.id, autoAnswer: true })
   const ask = (index: number, childFlag: boolean) => Effect.gen(function* () {
     const child = yield* sessions.create({ parentID: root.id })
@@ -123,22 +135,29 @@ located.effect("a subagent question reads autoAnswer from the child Session only
     }))
     yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
     if (childFlag) yield* autonomy.set({ sessionID: child.id, autoAnswer: true })
-    return (yield* orchestration.question(child.id, "Choose", { options: ["One"] })).autoAnswered
+    return (yield* orchestration.question(child.id, "Choose", { options: ["One (Recommended)"] })).autoAnswered
   })
   expect(yield* ask(0, false)).toBe(false)
   expect(yield* ask(1, true)).toBe(true)
 }))
 
-located.effect("effective autonomy resolves inherited YOLO, family sleep, and captured review policy", () => Effect.gen(function* () {
+located.effect("effective autonomy resolves inherited YOLO, rule flags, family sleep, and captured review policy", () => Effect.gen(function* () {
   const location = yield* reviewLocation
   const sessions = yield* Session.Service
   const events = yield* EventRuntime.Service
   const autonomy = yield* SessionAutonomy.Service
   const root = yield* sessions.create({ location })
-  yield* autonomy.setYolo({ sessionID: root.id, yolo: 1 })
   expect(yield* sessions.autonomy.effective(root.id)).toEqual({
-    yolo: 1, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: true, hardModelReviews: true,
+    yolo: false, permissionsAuto: false, permissionModelReviews: true, asleep: false, ordinaryReviewsAuto: false,
+    guardrailsEnabled: true, modelReviews: true, hardModelReviews: true,
   })
+  yield* autonomy.setYolo({ sessionID: root.id, yolo: true })
+  expect(yield* sessions.autonomy.effective(root.id)).toEqual({
+    yolo: true, permissionsAuto: false, permissionModelReviews: true, asleep: false, ordinaryReviewsAuto: false,
+    guardrailsEnabled: true, modelReviews: true, hardModelReviews: true,
+  })
+  yield* autonomy.setYolo({ sessionID: root.id, yolo: false })
+  yield* autonomy.set({ sessionID: root.id, autoPermission: true })
   const child = yield* sessions.create({ parentID: root.id })
   yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({
     sessionID: child.id, change: {
@@ -146,13 +165,16 @@ located.effect("effective autonomy resolves inherited YOLO, family sleep, and ca
       description: "Effective child", agent: "build", model: { providerID: "test", id: "model" }, promptDigest: "digest", background: true, delivery: "steer",
     },
   }))
-  expect((yield* sessions.autonomy.effective(child.id)).yolo).toBe(1)
-  yield* autonomy.setYolo({ sessionID: child.id, yolo: 2 })
-  const childTwoRootOne = yield* sessions.autonomy.effective(child.id)
-  expect(childTwoRootOne.yolo).toBe(2)
-  expect(childTwoRootOne.ordinaryReviewsAuto).toBe(false)
-  yield* autonomy.setYolo({ sessionID: root.id, yolo: 2 })
+  const inherited = yield* sessions.autonomy.effective(child.id)
+  expect(inherited.permissionsAuto).toBe(true)
+  expect(inherited.yolo).toBe(false)
+  expect(inherited.ordinaryReviewsAuto).toBe(false)
+  yield* autonomy.set({ sessionID: child.id, autoGuardrail: true })
+  expect((yield* sessions.autonomy.effective(child.id)).ordinaryReviewsAuto).toBe(false)
+  yield* autonomy.set({ sessionID: root.id, autoGuardrail: true })
   expect((yield* sessions.autonomy.effective(child.id)).ordinaryReviewsAuto).toBe(true)
+  yield* autonomy.setYolo({ sessionID: root.id, yolo: true })
+  expect((yield* sessions.autonomy.effective(child.id)).yolo).toBe(true)
   yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
   const asleepChild = yield* sessions.autonomy.effective(child.id)
   expect(asleepChild.asleep).toBe(true)
@@ -177,7 +199,7 @@ const gated = testEffect(reviewLayer(undefined, true, (input) => {
     : respond
 }))
 
-gated.effect("turning child autoAnswer off while a sleeping subagent answer is pending defers it", () => Effect.gen(function* () {
+gated.effect("turning child YOLO off while a sleeping subagent answer is pending defers it", () => Effect.gen(function* () {
   const location = yield* reviewLocation
   const sessions = yield* Session.Service
   const events = yield* EventRuntime.Service
@@ -194,13 +216,13 @@ gated.effect("turning child autoAnswer off while a sleeping subagent answer is p
   }))
   yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
   yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
-  yield* autonomy.set({ sessionID: child.id, autoAnswer: true })
+  yield* autonomy.setYolo({ sessionID: child.id, yolo: true })
   const entered = yield* Deferred.make<void>()
   const release = yield* Deferred.make<void>()
   sleepGate = { entered, release }
   const fiber = yield* orchestration.question(child.id, "Choose", { options: ["One"] }).pipe(Effect.forkScoped)
   yield* Deferred.await(entered)
-  yield* autonomy.set({ sessionID: child.id, autoAnswer: false })
+  yield* autonomy.setYolo({ sessionID: child.id, yolo: false })
   yield* Deferred.succeed(release, undefined)
   const result = yield* Fiber.join(fiber)
   sleepGate = undefined
@@ -213,8 +235,10 @@ for (const settings of [
   { model: true, hard: true, expected: true },
   { model: true, hard: false, expected: false },
   { model: false, hard: true, expected: false },
+  { model: undefined, hard: true, expected: true },
+  { model: undefined, hard: undefined, expected: true },
 ]) {
-  located.effect(`disabled ordinary guardrails preserve hard-review model gates ${settings.model}/${settings.hard}`, () => Effect.gen(function* () {
+  located.effect(`disabled ordinary guardrails preserve hard-review model gates ${String(settings.model)}/${String(settings.hard)}`, () => Effect.gen(function* () {
     const location = yield* reviewLocation
     yield* Effect.promise(() => Bun.write(`${location.directory}/ycoding.json`, JSON.stringify({ guardrails: {
       enabled: false, decide_reviews: settings.model, decide_hard_reviews: settings.hard,
@@ -222,7 +246,8 @@ for (const settings of [
     const sessions = yield* Session.Service
     const root = yield* sessions.create({ location })
     expect(yield* sessions.autonomy.effective(root.id)).toEqual({
-      yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: false, modelReviews: false, hardModelReviews: settings.expected,
+      yolo: false, permissionsAuto: false, permissionModelReviews: settings.model !== false, asleep: false, ordinaryReviewsAuto: false,
+      guardrailsEnabled: false, modelReviews: false, hardModelReviews: settings.expected,
     })
   }))
 }

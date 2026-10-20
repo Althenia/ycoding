@@ -54,7 +54,7 @@ test("captures the product chrome variants at canonical terminal dimensions", as
         "ready",
         "? awaiting input",
         "provider error",
-        "Tools + reviews",
+        "YOLO",
         "answers auto",
         "Enter approve",
       ]) expect(frame).toContain(text)

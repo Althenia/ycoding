@@ -271,7 +271,7 @@ export type ProviderRequestTiming = {
 
 export type SessionAutonomyMode = "normal"
 
-export type SessionAutonomyYoloLevel = 0 | 1 | 2
+export type SessionAutonomyYolo = boolean
 
 export type SessionAutonomyGoalStatus = "active" | "completed" | "stopped" | "exhausted"
 
@@ -335,6 +335,8 @@ export type SessionEventArtifactProvenance = {
 
 export type GuardrailSource = { messageID: string; callID: string }
 
+export type GuardrailAuthority = "baseline" | "yolo"
+
 export type DecisionFailureReason =
   | "unavailable"
   | "invalid-request"
@@ -346,9 +348,11 @@ export type DecisionFailureReason =
   | "truncated-output"
   | "unsupported-output"
 
-export type GuardrailDecisionChoice = "approve_all" | "approve" | "reject" | "escalate"
+export type GuardrailDecisionChoice = "allow" | "deny" | "escalate" | "approve_all" | "approve" | "reject"
 
 export type GuardrailReply = "once" | "always" | "reject"
+
+export type PermissionReply = "once" | "always" | "reject"
 
 export type SessionReviewKind = "question" | "subagent_question" | "guardrail" | "permission" | "recovery"
 
@@ -373,8 +377,6 @@ export type SessionReviewRecoveryTool = { messageID: string; callID: string; nam
 export type FormValue = string | number | boolean | Array<string>
 
 export type QuestionAnswer = Array<string>
-
-export type PermissionReply = "once" | "always" | "reject"
 
 export type SessionPendingSyntheticData1 = { text: string; description?: string; metadata?: { [x: string]: any } }
 
@@ -1755,7 +1757,9 @@ export type SessionCompactionEnded = {
 }
 
 export type SessionAutonomyEffective = {
-  yolo: SessionAutonomyYoloLevel
+  yolo: SessionAutonomyYolo
+  permissionsAuto: boolean
+  permissionModelReviews: boolean
   asleep: boolean
   guardrailsEnabled: boolean
   ordinaryReviewsAuto: boolean
@@ -1961,6 +1965,16 @@ export type SessionReviewReason =
 
 export type GuardrailGrade = { choice: GuardrailDecisionChoice; confidence: number; evidence: string }
 
+export type PermissionReplied = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "permission.replied"
+  location?: LocationRef
+  data: { sessionID: string; requestID: string; reply: PermissionReply }
+}
+
 export type FormNumberField = {
   key: string
   title?: string
@@ -2067,16 +2081,6 @@ export type QuestionReplied = {
   type: "question.replied"
   location?: LocationRef
   data: { sessionID: string; requestID: string; answers: Array<QuestionAnswer> }
-}
-
-export type PermissionReplied = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "permission.replied"
-  location?: LocationRef
-  data: { sessionID: string; requestID: string; reply: PermissionReply }
 }
 
 export type SessionPendingSyntheticMessage = {
@@ -2261,34 +2265,6 @@ export type Project = {
 export type ProjectInventoryResponse = { data: Array<ProjectInventoryEntry>; cursor: { next?: string | null } }
 
 export type ProjectDirectories = Array<ProjectDirectory>
-
-export type PermissionRequest = {
-  id: string
-  sessionID: string
-  action: string
-  resources: Array<string>
-  save?: Array<string>
-  metadata?: { [x: string]: JsonValue }
-  source?: PermissionSource
-}
-
-export type PermissionAsked = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "permission.asked"
-  location?: LocationRef
-  data: {
-    id: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    save?: Array<string>
-    metadata?: { [x: string]: any }
-    source?: PermissionSource
-  }
-}
 
 export type GuardrailDecided = {
   id: string
@@ -2575,6 +2551,38 @@ export type SessionModelSelected = {
   data: { sessionID: string; model: ModelRef }
 }
 
+export type SessionDecisionAudited = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.decision.audited"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    purpose: "permission" | "guardrail" | "answer" | "advisory"
+    authority?: GuardrailAuthority
+    agent: string
+    model?: ModelRef
+    route?: string
+    outcome: "succeeded" | "failed" | "cancelled"
+    reason?: DecisionFailureReason
+    fingerprint: string
+    invocationKey?: string
+    attempts: number
+    answers?: Array<{
+      name: string
+      type: "predicate" | "choice" | "score" | "text" | "refusal"
+      confidence: number
+      answer?: boolean
+      choice?: string | boolean
+      score?: number
+      length?: number
+    }>
+  }
+}
+
 export type SessionTaskUpdated = {
   id: string
   created: number
@@ -2817,7 +2825,9 @@ export type SessionCompactionHistory = {
 
 export type SessionAutonomyView = {
   mode: SessionAutonomyMode
-  yolo: SessionAutonomyYoloLevel | boolean
+  yolo: SessionAutonomyYolo
+  autoPermission?: boolean | null
+  autoGuardrail?: boolean | null
   autoAnswer?: boolean | null
   goal?: SessionAutonomyGoal | null
   sleep?: {} | null
@@ -2825,6 +2835,7 @@ export type SessionAutonomyView = {
 }
 
 export type GuardrailEscalation = {
+  authority?: GuardrailAuthority
   reason?: GuardrailEscalationReason
   choice?: GuardrailDecisionChoice
   confidence?: number
@@ -2842,6 +2853,7 @@ export type SessionGuardrailEscalated = {
   data: {
     sessionID: string
     requestID: string
+    authority?: GuardrailAuthority
     reason?: GuardrailEscalationReason
     choice?: GuardrailDecisionChoice
     confidence?: number
@@ -2864,10 +2876,34 @@ export type SessionGuardrailDecided = {
     reviewSessionID: string
     requestID: string
     reply: GuardrailReply
+    authority?: GuardrailAuthority
     choice?: GuardrailDecisionChoice
     grades?: Array<GuardrailGrade>
     confidence?: number
     ruleIDs?: Array<string>
+    source?: GuardrailSource
+  }
+}
+
+export type SessionPermissionAssessed = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.permission.assessed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    requestID: string
+    outcome: "allow" | "deny" | "escalate"
+    via: "auto-permission" | "baseline" | "yolo"
+    reply?: PermissionReply
+    authority?: GuardrailAuthority
+    reason?: GuardrailEscalationReason
+    choice?: GuardrailDecisionChoice
+    confidence?: number
+    grades?: Array<GuardrailGrade>
     source?: GuardrailSource
   }
 }
@@ -2885,6 +2921,7 @@ export type GuardrailReplied = {
     requestID: string
     reply: GuardrailReply
     decidedBy?: "decision-model"
+    authority?: GuardrailAuthority
     choice?: GuardrailDecisionChoice
     confidence?: GuardrailConfidence
     grades?: Array<GuardrailGrade>
@@ -3257,6 +3294,36 @@ export type SessionMessageAssistantTool = {
     | SessionMessageToolStateCompleted
     | SessionMessageToolStateError
   time: { created: number; ran?: number; completed?: number }
+}
+
+export type PermissionRequest = {
+  id: string
+  sessionID: string
+  action: string
+  resources: Array<string>
+  save?: Array<string>
+  metadata?: { [x: string]: JsonValue }
+  source?: PermissionSource
+  escalation?: GuardrailEscalation
+}
+
+export type PermissionAsked = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "permission.asked"
+  location?: LocationRef
+  data: {
+    id: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    save?: Array<string>
+    metadata?: { [x: string]: any }
+    source?: PermissionSource
+    escalation?: GuardrailEscalation
+  }
 }
 
 export type GuardrailAsked = {
@@ -3636,6 +3703,7 @@ export type SessionLogItem =
       data: {
         sessionID: string
         requestID: string
+        authority?: GuardrailAuthority
         reason?: GuardrailEscalationReason
         choice?: GuardrailDecisionChoice
         confidence?: number
@@ -3657,10 +3725,64 @@ export type SessionLogItem =
         reviewSessionID: string
         requestID: string
         reply: GuardrailReply
+        authority?: GuardrailAuthority
         choice?: GuardrailDecisionChoice
         grades?: Array<GuardrailGrade>
         confidence?: number
         ruleIDs?: Array<string>
+        source?: GuardrailSource
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.decision.audited"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        purpose: "permission" | "guardrail" | "answer" | "advisory"
+        authority?: GuardrailAuthority
+        agent: string
+        model?: ModelRef
+        route?: string
+        outcome: "succeeded" | "failed" | "cancelled"
+        reason?: DecisionFailureReason
+        fingerprint: string
+        invocationKey?: string
+        attempts: number
+        answers?: Array<{
+          name: string
+          type: "predicate" | "choice" | "score" | "text" | "refusal"
+          confidence: number
+          answer?: boolean
+          choice?: string | boolean
+          score?: number
+          length?: number
+        }>
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.permission.assessed"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        requestID: string
+        outcome: "allow" | "deny" | "escalate"
+        via: "auto-permission" | "baseline" | "yolo"
+        reply?: PermissionReply
+        authority?: GuardrailAuthority
+        reason?: GuardrailEscalationReason
+        choice?: GuardrailDecisionChoice
+        confidence?: number
+        grades?: Array<GuardrailGrade>
         source?: GuardrailSource
       }
     }
@@ -4333,6 +4455,8 @@ export type ServerEvent =
   | SessionGuardrailDismissed
   | SessionGuardrailEscalated
   | SessionGuardrailDecided
+  | SessionDecisionAudited
+  | SessionPermissionAssessed
   | SessionReviewDeferred
   | SessionReviewDecided
   | SessionReviewWithdrawn
@@ -5151,23 +5275,58 @@ export type SessionAutonomySetInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly payload:
     | {
-        readonly yolo?: (0 | 1 | 2) | boolean | null
+        readonly yolo?: boolean | null
+        readonly autoPermission?: never | null
+        readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly sleep?: never | null
         readonly goal: string | true | null
         readonly maxNoProgress?: number | null
       }
-    | { readonly yolo: (0 | 1 | 2) | boolean; readonly goal?: never | null; readonly autoAnswer?: never | null }
     | {
-        readonly sleep: boolean
-        readonly goal?: never | null
-        readonly yolo?: never | null
+        readonly yolo: boolean
+        readonly autoPermission?: never | null
+        readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly sleep?: never | null
+        readonly goal?: never | null
+        readonly maxNoProgress?: never | null
       }
     | {
-        readonly autoAnswer: boolean
-        readonly goal?: never | null
         readonly yolo?: never | null
+        readonly autoPermission?: never | null
+        readonly autoGuardrail?: never | null
+        readonly autoAnswer?: never | null
+        readonly sleep: boolean
+        readonly goal?: never | null
+        readonly maxNoProgress?: never | null
+      }
+    | {
+        readonly yolo?: never | null
+        readonly autoPermission?: never | null
+        readonly autoGuardrail?: never | null
+        readonly autoAnswer: boolean
         readonly sleep?: never | null
+        readonly goal?: never | null
+        readonly maxNoProgress?: never | null
+      }
+    | {
+        readonly yolo?: never | null
+        readonly autoPermission: boolean
+        readonly autoGuardrail?: never | null
+        readonly autoAnswer?: never | null
+        readonly sleep?: never | null
+        readonly goal?: never | null
+        readonly maxNoProgress?: never | null
+      }
+    | {
+        readonly yolo?: never | null
+        readonly autoPermission?: never | null
+        readonly autoGuardrail: boolean
+        readonly autoAnswer?: never | null
+        readonly sleep?: never | null
+        readonly goal?: never | null
+        readonly maxNoProgress?: never | null
       }
 }
 
@@ -6565,6 +6724,7 @@ export type GuardrailStatusOutput = {
       created: number
       requestID: string
       reply: GuardrailReply
+      authority?: GuardrailAuthority
       choice?: GuardrailDecisionChoice
       confidence?: number
       grades?: Array<GuardrailGrade>

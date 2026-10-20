@@ -59,8 +59,9 @@ const question: Question.Info = {
   header: "Option",
   options: [{ label: "One", description: "First option" }],
 }
+const recommended: Question.Info = { ...question, options: [{ label: "One (Recommended)", description: "First option" }] }
 
-const setupAutonomy = Effect.fn("QuestionTest.setupAutonomy")(function* (mode: "yolo" | "goal") {
+const setupAutonomy = Effect.fn("QuestionTest.setupAutonomy")(function* (mode: "normal" | "goal") {
   const { db } = yield* Database.Service
   const directory = AbsolutePath.make("/project")
   yield* db
@@ -103,9 +104,9 @@ const waitForAsk = Effect.fn("QuestionTest.waitForAsk")(function* (
 })
 
 describe("Question", () => {
-  for (const yolo of [0, 1, 2] as const) {
-    it.effect(`questions are automatic only with the Session autoAnswer toggle: level ${yolo}`, () => Effect.gen(function* () {
-      yield* setupAutonomy("yolo")
+  for (const yolo of [false] as const) {
+    it.effect(`questions use explicit recommendations automatically only with the Session autoAnswer toggle: yolo ${yolo}`, () => Effect.gen(function* () {
+      yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.setYolo({ sessionID, yolo })
       const service = yield* Question.Service
@@ -114,28 +115,47 @@ describe("Question", () => {
       yield* service.reply({ requestID: pending.request.id, answers: [["Manual"]] })
       expect(yield* Fiber.join(pending.fiber)).toEqual({ status: "answered", answers: [["Manual"]] })
       yield* autonomy.set({ sessionID, autoAnswer: true })
-      expect(yield* service.ask({ sessionID, questions: [question] })).toEqual({
+      expect(yield* service.ask({ sessionID, questions: [recommended] })).toEqual({
         status: "answered",
-        answers: [["One"]],
+        answers: [["One (Recommended)"]],
+        automatic: true,
+        via: "auto-answer",
       })
       expect(yield* service.list()).toEqual([])
     }))
   }
-  it.effect("auto answers questions with the toggle in yolo and goal mode without pending requests", () =>
+  it.effect("free-text questions wait for the user with auto-answer in normal and goal states", () =>
     Effect.gen(function* () {
       const service = yield* Question.Service
       const autonomy = yield* SessionAutonomy.Service
       const fallback: Question.Info = { question: "Continue?", header: "Continue", options: [] }
 
-      for (const mode of ["yolo", "goal"] as const) {
+      for (const mode of ["normal", "goal"] as const) {
         yield* setupAutonomy(mode)
         yield* autonomy.set({ sessionID, autoAnswer: true })
-        expect(yield* service.ask({ sessionID, questions: [question, fallback] })).toEqual({
+        decisionBehavior = () => Effect.die("autoAnswer alone must not request judgments")
+        const pending = yield* waitForAsk(service, { sessionID, questions: [question, fallback] })
+        yield* service.reply({ requestID: pending.request.id, answers: [["One"], ["Manual text"]] })
+        expect(yield* Fiber.join(pending.fiber)).toEqual({
           status: "answered",
-          answers: [["One"], ["Continue with the safest reasonable default."]],
+          answers: [["One"], ["Manual text"]],
         })
         expect(yield* service.list()).toEqual([])
       }
+    }),
+  )
+
+  it.effect("replies reject answers outside closed options and duplicate selections", () =>
+    Effect.gen(function* () {
+      const service = yield* Question.Service
+      const closed: Question.Info = { ...question, custom: false }
+      const pending = yield* waitForAsk(service, { sessionID, questions: [closed] })
+      const invalid = yield* service.reply({ requestID: pending.request.id, answers: [["Nope"]] }).pipe(Effect.flip)
+      expect(invalid).toBeInstanceOf(Question.InvalidAnswerError)
+      const duplicate = yield* service.reply({ requestID: pending.request.id, answers: [["One", "One"]] }).pipe(Effect.flip)
+      expect(duplicate).toBeInstanceOf(Question.InvalidAnswerError)
+      yield* service.reply({ requestID: pending.request.id, answers: [["One"]] })
+      expect(yield* Fiber.join(pending.fiber)).toEqual({ status: "answered", answers: [["One"]] })
     }),
   )
 
@@ -196,7 +216,7 @@ describe("Question", () => {
 
   it.effect("fresh service scopes on the same database do not restore ordinary pending questions", () =>
     Effect.gen(function* () {
-      yield* setupAutonomy("yolo")
+      yield* setupAutonomy("normal")
       const database = yield* Database.Service
       const layer = AppNodeBuilder.build(LayerNode.group([Database.node, Question.node]), [
         [Config.node, Layer.succeed(Config.Service, yield* Config.Service)],
@@ -237,10 +257,9 @@ describe("Question", () => {
 
   it.effect("sleep answers questions through the decision model", () =>
     Effect.gen(function* () {
-      yield* setupAutonomy("yolo")
+      yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID, yolo: 0 })
-      yield* autonomy.set({ sessionID, autoAnswer: true })
+      yield* autonomy.setYolo({ sessionID, yolo: true })
       yield* autonomy.set({ sessionID, sleep: true })
       decisionBehavior = decisionChoice("Two", 0.9)
       const service = yield* Question.Service
@@ -257,17 +276,16 @@ describe("Question", () => {
           },
         ],
       })
-      expect(answers).toEqual({ status: "answered", answers: [["Two"]] })
+      expect(answers).toEqual({ status: "answered", answers: [["Two"]], automatic: true, via: "yolo", confidence: 0.9 })
       expect(yield* service.list()).toEqual([])
     }),
   )
 
   it.effect("sleep defers to the review box when the decision model refuse or fails", () =>
     Effect.gen(function* () {
-      yield* setupAutonomy("yolo")
+      yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID, yolo: 0 })
-      yield* autonomy.set({ sessionID, autoAnswer: true })
+      yield* autonomy.setYolo({ sessionID, yolo: true })
       yield* autonomy.set({ sessionID, sleep: true })
       decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "timeout" }))
       const service = yield* Question.Service
@@ -289,12 +307,11 @@ describe("Question", () => {
     }),
   )
 
-  it.effect("turning autoAnswer off while a sleeping answer is pending defers instead of applying it", () =>
+  it.effect("turning YOLO off while a sleeping answer is pending defers instead of applying it", () =>
     Effect.gen(function* () {
-      yield* setupAutonomy("yolo")
+      yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID, yolo: 0 })
-      yield* autonomy.set({ sessionID, autoAnswer: true })
+      yield* autonomy.setYolo({ sessionID, yolo: true })
       yield* autonomy.set({ sessionID, sleep: true })
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
@@ -305,7 +322,7 @@ describe("Question", () => {
       const service = yield* Question.Service
       const fiber = yield* service.ask({ sessionID, questions: [question] }).pipe(Effect.forkScoped)
       yield* Deferred.await(entered)
-      yield* autonomy.set({ sessionID, autoAnswer: false })
+      yield* autonomy.setYolo({ sessionID, yolo: false })
       yield* Deferred.succeed(release, undefined)
       expect((yield* Fiber.join(fiber)).status).toBe("deferred")
       expect(yield* service.list()).toEqual([])
@@ -326,7 +343,7 @@ describe("Question", () => {
     })
 
     it.effect("sleep entry defers an unanswered question after 25 hours without answering it", () => Effect.gen(function* () {
-      yield* setupAutonomy("yolo")
+      yield* setupAutonomy("normal")
       const service = yield* Question.Service
       const published = yield* observe()
       const { fiber } = yield* waitForAsk(service, { sessionID, questions: [question] })
@@ -408,22 +425,32 @@ describe("Question", () => {
 
     it.effect("explicit automatic answering remains available awake and asleep", () =>
       Effect.gen(function* () {
-        yield* setupAutonomy("yolo")
+        yield* setupAutonomy("normal")
         const autonomy = yield* SessionAutonomy.Service
-        yield* autonomy.setYolo({ sessionID, yolo: 2 })
         yield* autonomy.set({ sessionID, autoAnswer: true })
         const service = yield* Question.Service
-        expect(yield* service.ask({ sessionID, questions: [question] })).toEqual({
-          status: "answered",
-          answers: [["One"]],
-        })
-        yield* autonomy.setYolo({ sessionID, yolo: 0 })
-        yield* autonomy.set({ sessionID, autoAnswer: true })
-      yield* autonomy.set({ sessionID, sleep: true })
+        decisionBehavior = () => Effect.die("autoAnswer alone must not request judgments")
+        const answered = { status: "answered", answers: [["One (Recommended)"]], automatic: true, via: "auto-answer" } as const
+        expect(yield* service.ask({ sessionID, questions: [recommended] })).toEqual(answered)
+        yield* autonomy.set({ sessionID, sleep: true })
+        expect(yield* service.ask({ sessionID, questions: [recommended] })).toEqual(answered)
+        expect((yield* service.ask({ sessionID, questions: [question] })).status).toBe("deferred")
+      }),
+    )
+
+    it.effect("YOLO evaluator answers a question awake and records model provenance", () =>
+      Effect.gen(function* () {
+        yield* setupAutonomy("normal")
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.setYolo({ sessionID, yolo: true })
+        const service = yield* Question.Service
         decisionBehavior = decisionChoice("One", 0.9)
         expect(yield* service.ask({ sessionID, questions: [question] })).toEqual({
           status: "answered",
           answers: [["One"]],
+          automatic: true,
+          via: "yolo",
+          confidence: 0.9,
         })
       }),
     )

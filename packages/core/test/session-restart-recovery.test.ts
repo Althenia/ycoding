@@ -362,7 +362,7 @@ it.effect("every executed tool left unsettled, including reads and provider tool
     expect(woken).toContain(ids.root.id)
 
     const session = yield* Session.Service
-    yield* session.autonomy.set({ sessionID: ids.root.id, yolo: 2 })
+    yield* session.autonomy.set({ sessionID: ids.root.id, yolo: true })
     yield* session.autonomy.set({ sessionID: ids.root.id, sleep: true })
     const answer = yield* orchestration
       .answer({ parentID: ids.root.id, childID: ids.child.id, questionID: QuestionID.make(waiting!.question_id!), text: "Continue" })

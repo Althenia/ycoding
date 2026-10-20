@@ -22,18 +22,18 @@ const review = { id: "grq_child", sessionID: "ses_child", rootSessionID: "ses_a"
 test("an escalated review identifies the human handoff and keeps its chronological transcript notice", async () => {
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a"],
     guardrailRequests: [{ ...review, sessionID: "ses_a", escalation: { choice: "reject", confidence: 0.7 } }],
-    messages: { ses_a: [{ id: "msg_escalation", type: "system", text: "Decision model escalated this guardrail review · choice reject · confidence 0.7", time: { created: 2 } }] },
+    messages: { ses_a: [{ id: "msg_escalation", type: "system", text: "Decision model escalated this review · choice reject · confidence 0.7 · Review this request manually.", time: { created: 2 } }] },
   })
   const page = await browser.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`)
     await wait(page, `document.querySelector('.request__note[role="status"]') !== null`)
-    expect(await page.evaluate<string>(`document.querySelector('.request').textContent`)).toContain("Decision model escalated this guardrail review · choice reject · confidence 0.7 — your decision is required.")
+    expect(await page.evaluate<string>(`document.querySelector('.request').textContent`)).toContain("Decision model escalated this review · choice reject · confidence 0.7 · Review this request manually. — your decision is required.")
     expect(await page.evaluate<string>(`document.body.textContent`)).toContain("choice reject · confidence 0.7")
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Reject"])
     await page.evaluate(`document.querySelector('.request__actions button').click()`)
     await wait(page, `document.querySelector('.request') === null`)
-    expect(await page.evaluate<string>(`document.body.textContent`)).toContain("Decision model escalated this guardrail review")
+    expect(await page.evaluate<string>(`document.body.textContent`)).toContain("Decision model escalated this review")
     expect(relay.requests.filter((request) => request.operation === "session.guardrail.reply")).toMatchObject([{ input: { reply: "once" } }])
   } finally { await page.close(); await relay.stop() }
 })
@@ -161,4 +161,29 @@ for (const width of [390, 1280]) test(`Session activity order and background-she
     expect(await page.evaluate<string>(`window.activityStore.state().view.status`)).toBe("idle")
     expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
   } finally { shellPage.resolve({ ok: true, value: { data: [] } }); await page.close(); await relay.stop() }
+})
+
+test("a permission ask the baseline assessment could not settle names its reason, manual action and grades", async () => {
+  const grades = [
+    { choice: "allow", confidence: 0.4, evidence: "The route could not grade this request." },
+    { choice: "deny", confidence: 0.1, evidence: "No blocking evidence was assessed." },
+    { choice: "escalate", confidence: 0.9, evidence: "Strict structured output is unsupported." },
+  ]
+  for (const [escalation, expected] of [
+    [{ reason: "unsupported-output", grades }, ["the selected route does not support strict structured decisions", "configure a decision helper on a supported strict structured-output route"]],
+    [{ reason: "refused" }, ["Decision unavailable", "No automatic approval was granted."]],
+    [{ reason: "invalid-output" }, ["Decision unavailable", "No automatic approval was granted."]],
+  ] as const) {
+    const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], permissions: [{ id: "per_escalated", action: "shell", resources: ["bun test"], escalation }] })
+    const page = await browser.openPage()
+    try {
+      await page.navigate(`http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`)
+      await wait(page, `document.querySelector('.request--permission .request__note[role="status"]') !== null`)
+      const card = await page.evaluate<string>(`document.querySelector('.request--permission').textContent`)
+      for (const text of [...expected, "Review this request manually", "your decision is required"]) expect(card).toContain(text)
+      expect(card).not.toContain("Decision model escalated")
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.request--permission .request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Always this session", "Deny"])
+      expect(await page.evaluate<number>(`document.querySelectorAll('.request--permission .decision-grades li').length`)).toBe("grades" in escalation ? 3 : 0)
+    } finally { await page.close(); await relay.stop() }
+  }
 })

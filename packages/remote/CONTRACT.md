@@ -717,7 +717,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.form.reply` | yes | `session.form.reply` | `POST /api/session/:sessionID/form/:formID/reply` | `formID`, `answer` |
 | `session.form.cancel` | yes | `session.form.cancel` | `POST /api/session/:sessionID/form/:formID/cancel` | `formID` |
 | `session.autonomy.get` | yes | `session.autonomy.get` | `GET /api/session/:sessionID/autonomy` | — |
-| `session.autonomy.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `yolo`, `maxNoProgress?` |
+| `session.autonomy.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | one control per call: `yolo` (boolean), `autoPermission`, `autoGuardrail`, `autoAnswer`, or `sleep` (each boolean); a numeric `yolo` is invalid |
 | `session.goal.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
 | `session.goal.stop` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
 | `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
@@ -979,9 +979,11 @@ interactions, and status instead of subscribing. Session-scoped tools take
 `{ sessionID, input }`, others `{ input }`, with `input` omitted when the operation has
 none. Each tool's JSON Schema is published by the server and each call is validated by
 the same validator and executed through the same adapter as the browser operation, so
-persistent approvals (`always` where the runtime offers it), autonomy (YOLO 0–2) and
-goal changes, hard-review restrictions, and every other runtime rule apply
-identically. The two `artifact_demo_*` tools accept only `{}` and dispatch through
+persistent approvals (`always` where the runtime offers it), autonomy (boolean
+YOLO evaluator and the independent `autoPermission`, `autoGuardrail`, and
+`autoAnswer` flags) and goal changes, hard-review restrictions (model grading
+can only reject or escalate; approval is human-only), and every other runtime
+rule apply identically. The two `artifact_demo_*` tools accept only `{}` and dispatch through
 the adapter's explicit connector-owned demo context. They select no Session,
 Location, workspace file or generated HTML. `resources/list`,
 `resources/templates/list` and `resources/read` retain per-request authority;

@@ -1,19 +1,28 @@
 import type { LocationRef, ModelDaybreak, ModelRef, YCodingClient } from "@ycoding-ai/client"
-import type { YoloLevel } from "./session-autonomy"
 
-export type LandingAutonomy = { yolo: YoloLevel; goal?: string; autoAnswer?: boolean }
-
-export function landingAutonomyPayload(autonomy: LandingAutonomy | undefined) {
-  if (!autonomy || (autonomy.yolo <= 0 && autonomy.goal === undefined)) return
-  if (autonomy.goal === undefined) return { yolo: autonomy.yolo }
-  return { yolo: autonomy.yolo, goal: autonomy.goal }
+export type LandingAutonomy = {
+  yolo: boolean
+  goal?: string
+  autoPermission?: boolean
+  autoGuardrail?: boolean
+  autoAnswer?: boolean
 }
 
-export function landingAutonomyPayloads(autonomy: LandingAutonomy | undefined) {
-  const primary = landingAutonomyPayload(autonomy)
+export type LandingAutonomyPayload =
+  | { yolo: boolean; goal?: string }
+  | { goal: string }
+  | { autoPermission: boolean }
+  | { autoGuardrail: boolean }
+  | { autoAnswer: boolean }
+
+export function landingAutonomyPayloads(autonomy: LandingAutonomy | undefined): LandingAutonomyPayload[] {
+  if (!autonomy) return []
   return [
-    ...(primary ? [primary] : []),
-    ...(autonomy?.autoAnswer ? [{ autoAnswer: true } as const] : []),
+    ...(autonomy.goal === undefined && autonomy.yolo ? [{ yolo: true } as const] : []),
+    ...(autonomy.autoPermission ? [{ autoPermission: true } as const] : []),
+    ...(autonomy.autoGuardrail ? [{ autoGuardrail: true } as const] : []),
+    ...(autonomy.autoAnswer ? [{ autoAnswer: true } as const] : []),
+    ...(autonomy.goal !== undefined ? [autonomy.yolo ? { yolo: true, goal: autonomy.goal } : { goal: autonomy.goal }] : []),
   ]
 }
 
@@ -34,7 +43,7 @@ export function createLandingSession(
 
 export function persistLandingAutonomy(
   api: YCodingClient,
-  input: { sessionID: string; payload: { yolo: YoloLevel; goal?: string } | { autoAnswer: boolean }; signal?: AbortSignal },
+  input: { sessionID: string; payload: LandingAutonomyPayload; signal?: AbortSignal },
 ) {
   return api.session.autonomy.set({ sessionID: input.sessionID, payload: input.payload }, requestOptions(input.signal))
 }
@@ -60,9 +69,9 @@ export async function establishLandingSession(input: {
   signal?: AbortSignal
 }) {
   const session = await createLandingSession(input.api, input)
-  for (const payload of landingAutonomyPayloads(input.autonomy))
-    await persistLandingAutonomy(input.api, { sessionID: session.id, payload, signal: input.signal })
   if (input.daybreak)
     await persistLandingDaybreak(input.api, { sessionID: session.id, daybreak: input.daybreak, signal: input.signal })
+  for (const payload of landingAutonomyPayloads(input.autonomy))
+    await persistLandingAutonomy(input.api, { sessionID: session.id, payload, signal: input.signal })
   return session
 }

@@ -661,7 +661,7 @@ test("Subagents Answer focuses an inline parent question and restores its ordina
     screen.input.pressKey("t", { ctrl: true })
     await frame(screen, (value) => value.includes("ACTIVE"))
     screen.input.pressKey("r")
-    await frame(screen, (value) => value.includes("Enter answer") && value.includes("Ask first"))
+    await frame(screen, (value) => value.includes("Enter answer") && value.includes("YOLO off"))
     expect(screen.frame()).toContain("Should I continue the check?")
     await screen.input.typeText("/goal is an answer, not a command")
     screen.input.pressKey("RETURN")

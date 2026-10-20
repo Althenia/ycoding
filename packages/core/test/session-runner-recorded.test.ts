@@ -254,7 +254,7 @@ describe("SessionRunnerLLM recorded", () => {
       const expected = JSON.parse(wire.recorded.body)
       expected.prompt_cache_key = expectedPromptCacheKey
       expected.messages[1].content +=
-        '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"permissionCeiling":[],"todos":[]}\n</system-update>'
+        '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}\n</system-update>'
       const incomingBody = JSON.parse(wire.incoming.body)
       expect(wire.incoming.headers).toEqual(wire.recorded.headers)
       expect(incomingBody.prompt_cache_key).toBe(expectedPromptCacheKey)
@@ -273,7 +273,7 @@ describe("SessionRunnerLLM recorded", () => {
       expect(messages[1]).toMatchObject({
         type: "system",
         metadata: { contextSource: "session-state" },
-        text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"permissionCeiling":[],"todos":[]}',
+        text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}',
       })
       expect(messages[2]).toMatchObject({ type: "assistant", agent: "build", finish: "stop" })
       expect(messages[2]?.type === "assistant" ? messages[2].content : []).toMatchObject([

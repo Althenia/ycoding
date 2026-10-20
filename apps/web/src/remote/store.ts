@@ -367,7 +367,9 @@ export type RemoteStore = {
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
-  readonly setYolo: (level: 0 | 1 | 2) => Promise<boolean>
+  readonly setYolo: (enabled: boolean) => Promise<boolean>
+  readonly setAutoPermission: (enabled: boolean) => Promise<boolean>
+  readonly setAutoGuardrail: (enabled: boolean) => Promise<boolean>
   readonly setAutoAnswer: (enabled: boolean) => Promise<boolean>
   readonly setSleep: (sleep: boolean) => Promise<boolean>
   readonly decideReview: (itemID: string, decision: ReviewDecision) => Promise<boolean>
@@ -3837,19 +3839,57 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const outcome = await request({ id: `form_cancel_${formID}_${now()}`, kind: "form", label: "Cancel form", state: "sending", sessionID, operation: "session.form.cancel", input: { formID } }, { sessionID })
       if (token === selectionToken && container.state.activeSessionID === sessionID) settleRequest(formID, outcome)
     },
-    setYolo: async (level) => {
+    setYolo: async (enabled) => {
       const sessionID = container.state.activeSessionID
       const token = selectionToken
       if (sessionID === undefined) return false
       const outcome = await request(
         {
-          id: `autonomy_${level}_${now()}`,
+          id: `autonomy_yolo_${now()}`,
           kind: "autonomy",
-          label: level === 0 ? "Ask first" : level === 1 ? "Allow tools" : "Tools + reviews",
+          label: enabled ? "YOLO on" : "YOLO off",
           state: "sending",
           sessionID,
           operation: "session.autonomy.set",
-          input: { yolo: level },
+          input: { yolo: enabled },
+        },
+        { sessionID },
+      )
+      applyAutonomyResponse(outcome, sessionID)
+      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
+    },
+    setAutoPermission: async (enabled) => {
+      const sessionID = container.state.activeSessionID
+      const token = selectionToken
+      if (sessionID === undefined) return false
+      const outcome = await request(
+        {
+          id: `autonomy_auto_permission_${now()}`,
+          kind: "autonomy",
+          label: enabled ? "Auto-permission on" : "Auto-permission off",
+          state: "sending",
+          sessionID,
+          operation: "session.autonomy.set",
+          input: { autoPermission: enabled },
+        },
+        { sessionID },
+      )
+      applyAutonomyResponse(outcome, sessionID)
+      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
+    },
+    setAutoGuardrail: async (enabled) => {
+      const sessionID = container.state.activeSessionID
+      const token = selectionToken
+      if (sessionID === undefined) return false
+      const outcome = await request(
+        {
+          id: `autonomy_auto_guardrail_${now()}`,
+          kind: "autonomy",
+          label: enabled ? "Auto-guardrail on" : "Auto-guardrail off",
+          state: "sending",
+          sessionID,
+          operation: "session.autonomy.set",
+          input: { autoGuardrail: enabled },
         },
         { sessionID },
       )

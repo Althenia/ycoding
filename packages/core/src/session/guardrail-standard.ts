@@ -7,7 +7,11 @@ export interface Match {
   readonly decision: "ask" | "deny"
   readonly reason: string
   readonly hardReview: boolean
-  readonly evidence?: { readonly matchedSegment: string; readonly resolvedTargets: ReadonlyArray<string> }
+  readonly evidence?: {
+    readonly matchedSegment: string
+    readonly resolvedTargets: ReadonlyArray<string>
+    readonly confirmed: boolean
+  }
 }
 
 export interface Paths {
@@ -62,6 +66,7 @@ export function match(action: string, resource: string, paths?: Paths, dismissed
         evidence: {
           matchedSegment: action === "shell" ? shellWorkdirs(resource, paths).find(({ segment, workdir }) => outsidePaths(action, segment.rawTokens.join(" "), { ...paths, workdir }).length > 0)?.segment.rawTokens.join(" ") ?? resource : resource,
           resolvedTargets: outsidePaths(action, resource, paths),
+          confirmed: false,
         } } : undefined
   if (action !== "shell") return outside
   const command = resource.replace(/\s+/g, " ").trim()
@@ -72,11 +77,29 @@ export function match(action: string, resource: string, paths?: Paths, dismissed
   if (deletion) return deletion
   const segments = shellSegments(resource).map((segment) => segment.rawTokens.join(" "))
   const review = segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment) => rule.pattern.test(segment)))
-  if (review)
-    return { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment: segments.find((segment) => review.pattern.test(segment)) ?? command, resolvedTargets: [] } }
+  if (review) {
+    const matchedSegment = segments.find((segment) => review.pattern.test(segment)) ?? command
+    return { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment, resolvedTargets: [], confirmed: !inertGitOperation(matchedSegment) } }
+  }
   const database = dismissed?.has(databaseReview.id) ? undefined : executableDatabaseMention(resource)
   if (database === undefined) return outside
-  return { ...databaseReview, decision: "ask", hardReview: true, evidence: { matchedSegment: database, resolvedTargets: [] } }
+  return { ...databaseReview, decision: "ask", hardReview: true, evidence: { matchedSegment: database.segment, resolvedTargets: [], confirmed: database.confirmed } }
+}
+
+const databaseClients = new Set([
+  "psql", "pgcli", "mysql", "mycli", "mariadb", "sqlite", "sqlite3", "litecli", "sqlcmd", "sqlplus", "isql", "usql",
+  "duckdb", "clickhouse-client", "mongosh", "cockroach",
+])
+const inertCarriers = new Set(["echo", "printf", "tee", "cat", "git"])
+
+function inertGitOperation(segment: string) {
+  const tokens = segment.split(" ")
+  if (tokens.some((token) => token === "--help" || token === "-h" || token === "--dry-run")) return true
+  return /(?:^|\s)git\s+clean\s/.test(segment) && tokens.some((token) => /^-[a-z]*n[a-z]*$/.test(token))
+}
+
+function tokenName(token: string) {
+  return token.replace(/^["']|["']$/g, "").split("/").at(-1) ?? token
 }
 
 const chainedSeparators = new Set(["; ", "\n ", " && ", " || "])
@@ -101,7 +124,13 @@ function executableDatabaseMention(resource: string) {
   )
   if (!mention) return undefined
   const segment = segments.find((item) => mention.index >= item.start && mention.index < item.end)
-  return segment ? segment.rawTokens.join(" ") : resource.replace(/\s+/g, " ").trim()
+  const group = pipelines.find((items) => segment !== undefined && items.includes(segment))
+  const client = group?.some((item) => item.rawTokens.some((token) => databaseClients.has(tokenName(token)))) === true
+  const carrier = segment !== undefined && inertCarriers.has(tokenName(segment.rawTokens[0] ?? ""))
+  return {
+    segment: segment ? segment.rawTokens.join(" ") : resource.replace(/\s+/g, " ").trim(),
+    confirmed: client || !carrier,
+  }
 }
 
 function deletionMatch(command: string, paths?: Paths, dismissed?: ReadonlySet<string>): Match | undefined {
@@ -109,7 +138,7 @@ function deletionMatch(command: string, paths?: Paths, dismissed?: ReadonlySet<s
     if (!operation.recursive) return []
     const operands = operation.targets.filter((target) => !isTemporary(target, operation.workdir, paths))
     const targets = operands.map((target) => classifyTarget(target, operation.workdir, paths))
-    const evidence = { matchedSegment: operation.matchedSegment, resolvedTargets: operands.map((target) => resolveTarget(wholeTarget(target), operation.workdir, paths)) }
+    const evidence = { matchedSegment: operation.matchedSegment, resolvedTargets: operands.map((target) => resolveTarget(wholeTarget(target), operation.workdir, paths)), confirmed: true }
     if (targets.includes("root"))
       return [
         {

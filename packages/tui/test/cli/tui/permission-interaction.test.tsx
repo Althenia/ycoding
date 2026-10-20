@@ -313,3 +313,95 @@ for (const kind of ["permission", "guardrail"] as const) {
     })
   }
 }
+
+test("shows the decision-failure escalation on a permission request without hiding its reply choices", async () => {
+  const transport = createFetch(async () => undefined)
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <DataProvider>
+                <LocationProvider>
+                  <Keymap.Provider>
+                    <PermissionPrompt
+                      request={{
+                        id: "per_failed",
+                        sessionID: "ses_root",
+                        action: "shell",
+                        resources: ["git status"],
+                        escalation: { reason: "unsupported-output" as const },
+                      }}
+                    />
+                  </Keymap.Provider>
+                </LocationProvider>
+              </DataProvider>
+            </ClientProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 120, height: 24, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Permission required"))
+    const frame = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(frame).toContain("Decision unavailable")
+    expect(frame).toContain("does not support strict structured decisions")
+    expect(frame).toContain("configure a decision helper")
+    expect(frame).toContain("your decision is required")
+    expect(frame).not.toContain("Decision model escalated")
+    expect(frame).toContain("Allow once")
+    expect(frame).toContain("Deny")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("names the baseline authority on a permission escalation only when the request records it", async () => {
+  const transport = createFetch(async () => undefined)
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <DataProvider>
+                <LocationProvider>
+                  <Keymap.Provider>
+                    <PermissionPrompt
+                      request={{
+                        id: "per_baseline",
+                        sessionID: "ses_root",
+                        action: "shell",
+                        resources: ["git status"],
+                        escalation: { reason: "unsupported-output" as const, authority: "baseline" as const },
+                      }}
+                    />
+                  </Keymap.Provider>
+                </LocationProvider>
+              </DataProvider>
+            </ClientProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 120, height: 24, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Permission required"))
+    const frame = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(frame).toContain("Baseline assessment · Decision unavailable")
+    expect(frame).toContain("does not support strict structured decisions")
+    expect(frame).toContain("configure a decision helper")
+    expect(frame).toContain("your decision is required")
+    expect(frame).not.toContain("Decision model escalated")
+    expect(frame).toContain("Allow once")
+    expect(frame).toContain("Deny")
+  } finally {
+    app.renderer.destroy()
+  }
+})

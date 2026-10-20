@@ -11,10 +11,10 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { localAutonomyView } from "../src/util/session-autonomy"
 
 test("sleep chips wait for the machine read", () => {
-  const autonomy = localAutonomyView({ mode: "normal", yolo: 0, sleep: {} })
+  const autonomy = localAutonomyView({ mode: "normal", yolo: false, sleep: {} })
   for (const machineAwake of [undefined, true, false]) {
     const chips = modeChips({ autonomy, machineAwake })
-    expect(chips.find((chip) => chip.key === "yolo")).toEqual({ key: "yolo", label: "Ask first", tone: "off" })
+    expect(chips.find((chip) => chip.key === "yolo")).toEqual({ key: "yolo", label: "YOLO off", tone: "off" })
     expect(chips.find((chip) => chip.key === "sleep")).toEqual({
       key: "sleep",
       label: machineAwake === false ? "asleep · machine may sleep" : "asleep",
@@ -32,7 +32,7 @@ for (const mode of ["dark", "light"] as const) {
           <ConfigProvider config={createTuiResolvedConfig()}>
             <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: 0, sleep: asleep() ? {} : undefined })} />
+                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: false, sleep: asleep() ? {} : undefined })} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
@@ -43,14 +43,14 @@ for (const mode of ["dark", "light"] as const) {
     app.renderer.start()
     try {
       await app.waitForFrame((frame) => frame.includes("asleep"))
-      expect(app.captureCharFrame()).toContain("Ask first")
+      expect(app.captureCharFrame()).toContain("YOLO off")
       expect(app.captureCharFrame()).not.toContain("machine may sleep")
       const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-      const manual = spans.find((span) => span.text.includes("Ask first"))
+      const manual = spans.find((span) => span.text.includes("YOLO off"))
       const sleep = spans.find((span) => span.text.includes("asleep"))
       expect(manual?.bg.toInts()).not.toEqual(sleep?.bg.toInts())
       setAsleep(false)
-      await app.waitForFrame((frame) => frame.includes("Ask first") && !frame.includes("asleep"))
+      await app.waitForFrame((frame) => frame.includes("YOLO off") && !frame.includes("asleep"))
     } finally {
       app.renderer.destroy()
     }
@@ -66,24 +66,24 @@ test("derives the goal chip from the active goal status and labels the approval 
   const completed = { text: "ship", status: "completed" as const, iteration: 3, noProgress: 0, maxNoProgress: 5 }
   expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: false, goal: completed }) })).toEqual([
     { key: "goal", label: "goal off", tone: "off" },
-    { key: "yolo", label: "Ask first", tone: "off" },
+    { key: "yolo", label: "YOLO off", tone: "off" },
   ])
 
   expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true, goal: retained }) })).toEqual([
     { key: "goal", label: "goal", tone: "on" },
-    { key: "yolo", label: "Tools + reviews", tone: "danger" },
+    { key: "yolo", label: "YOLO", tone: "danger" },
   ])
   expect(
     modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true, goal: retained }), guardrailPending: true })[0],
   ).toEqual({ key: "goal", label: "goal", tone: "on" })
-  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 1 }), guardrailPending: true })[0]).toEqual({
+  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true }), guardrailPending: true })[0]).toEqual({
     key: "goal",
     label: "goal off",
     tone: "off",
   })
-  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: 0 }) })).toEqual([
+  expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: false }) })).toEqual([
     { key: "goal", label: "goal off", tone: "off" },
-    { key: "yolo", label: "Ask first", tone: "off" },
+    { key: "yolo", label: "YOLO off", tone: "off" },
   ])
   expect(modeChips({})[1]).toEqual({ key: "yolo", label: "unknown", tone: "off" })
 })
@@ -133,11 +133,11 @@ test("renders the idle, goal, level, and answers-auto footer states at 80 column
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("goal off")
-    expect(frame).toContain("Ask first")
+    expect(frame).toContain("YOLO off")
     expect(frame).toContain("goal")
     expect(frame).not.toContain("goal 3/5")
     expect(frame).toContain("answers auto")
-    expect(frame).toContain("Tools + reviews")
+    expect(frame).toContain("YOLO")
     const answersChip = app
       .captureSpans()
       .lines.flatMap((line) => line.spans)
@@ -146,7 +146,7 @@ test("renders the idle, goal, level, and answers-auto footer states at 80 column
     expect(answersChip.fg.toInts()).toEqual(RGBA.fromHex("#0F1115").toInts())
     expect(answersChip.bg.toInts()).toEqual(RGBA.fromHex("#F0BE62").toInts())
     expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true }) })[1]).toMatchObject({
-      label: "Tools + reviews",
+      label: "YOLO",
       tone: "danger",
     })
   } finally {
@@ -253,7 +253,7 @@ test("turning auto-answer off removes only the answers chip", async () => {
     expect(frame).toContain("goal")
     expect(frame).not.toContain("goal off")
     expect(frame).not.toContain("answers auto")
-    expect(frame).toContain("Tools + reviews")
+    expect(frame).toContain("YOLO")
   } finally {
     app.renderer.destroy()
   }

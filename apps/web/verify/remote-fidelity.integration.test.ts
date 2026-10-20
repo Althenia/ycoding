@@ -450,10 +450,10 @@ describe("remote responsive state behavior", () => {
     for (const theme of ["light", "dark"] as const) {
       const page = await scenario("conversation-workspace", 390, "Token expiry refactor", theme)
       const status = await page.evaluate<{ readonly label: string; readonly visible: boolean }>(`(() => {
-        const control = document.querySelector('.composer button[aria-label="Autonomy level"]');
-        return { label: control?.textContent?.trim().startsWith('Ask first') ? 'Ask first' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
+        const control = document.querySelector('.composer .session-status__yolo-trigger');
+        return { label: control?.textContent?.trim().startsWith('YOLO off') ? 'YOLO off' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
       })()`)
-      expect(status).toEqual({ label: "Ask first", visible: true })
+      expect(status).toEqual({ label: "YOLO off", visible: true })
       expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null && document.querySelector('.conversation-breadcrumb').textContent.includes('Running') === false`)).toBe(true)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       await page.close()

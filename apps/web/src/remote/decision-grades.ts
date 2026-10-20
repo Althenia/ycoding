@@ -2,7 +2,7 @@ import { Guardrail } from "../../../../packages/schema/src/guardrail"
 
 export type GradeView = { readonly choice: string; readonly confidence: number; readonly evidence: string }
 export type EscalationReasonView = Guardrail.EscalationReason
-export type DecisionProvenanceView = { readonly reason?: EscalationReasonView; readonly choice?: string; readonly confidence?: number; readonly grades?: readonly GradeView[] }
+export type DecisionProvenanceView = { readonly authority?: Guardrail.Authority; readonly reason?: EscalationReasonView; readonly choice?: string; readonly confidence?: number; readonly grades?: readonly GradeView[] }
 export type GuardrailDecisionView = DecisionProvenanceView & {
   readonly sessionID: string
   readonly requestID: string
@@ -11,7 +11,7 @@ export type GuardrailDecisionView = DecisionProvenanceView & {
   readonly ruleIDs?: readonly string[]
 }
 
-const choices = ["approve_all", "approve", "reject", "escalate"]
+const choices = ["allow", "deny", "escalate", "approve_all", "approve", "reject"]
 const escalationReasons: readonly EscalationReasonView[] = [
   "unavailable", "invalid-request", "provider-failed", "timeout", "input-too-large",
   "invalid-output", "refused", "truncated-output", "unsupported-output",
@@ -24,12 +24,17 @@ export function readEscalationReason(value: unknown): EscalationReasonView | und
 
 export function escalationText(view: DecisionProvenanceView): string {
   return Guardrail.escalationText({
+    ...(view.authority === undefined ? {} : { authority: view.authority }),
     ...(view.reason === undefined ? {} : { reason: view.reason }),
     ...(view.choice !== undefined && choices.includes(view.choice) ? { choice: view.choice as Guardrail.DecisionChoice } : {}),
     ...(view.confidence === undefined ? {} : { confidence: view.confidence }),
     ...(view.grades !== undefined && view.grades.every((grade) => choices.includes(grade.choice))
       ? { grades: view.grades.map((grade) => ({ choice: grade.choice as Guardrail.DecisionChoice, confidence: grade.confidence, evidence: grade.evidence })) } : {}),
   })
+}
+
+export function humanReviewText(view: DecisionProvenanceView): string {
+  return `${escalationText(view)} — your decision is required.`
 }
 
 export function readGrades(value: unknown): readonly GradeView[] | undefined {
@@ -42,10 +47,12 @@ export function readGrades(value: unknown): readonly GradeView[] | undefined {
 
 export function readGuardrailProvenance(value: unknown): DecisionProvenanceView | undefined {
   if (!record(value)) return undefined
+  if (value.authority !== undefined && value.authority !== "baseline" && value.authority !== "yolo") return undefined
   if (value.choice !== undefined && (typeof value.choice !== "string" || !choices.includes(value.choice))) return undefined
   if (value.confidence !== undefined && !confidence(value.confidence)) return undefined
   const grades = readGrades(value.grades)
   return {
+    ...(value.authority === "baseline" || value.authority === "yolo" ? { authority: value.authority } : {}),
     ...(readEscalationReason(value.reason) === undefined ? {} : { reason: readEscalationReason(value.reason) }),
     ...(typeof value.choice === "string" ? { choice: value.choice } : {}),
     ...(confidence(value.confidence) ? { confidence: value.confidence } : {}),
@@ -79,7 +86,7 @@ export function mergeGuardrailDecisions(prior: readonly GuardrailDecisionView[],
 }
 
 export function gradeLabel(choice: string): string {
-  return ({ approve_all: "Approve all", approve: "Approve", reject: "Reject", escalate: "Escalate" } as Readonly<Record<string, string>>)[choice] ?? choice
+  return ({ allow: "Allow", deny: "Deny", approve_all: "Approve all", approve: "Approve", reject: "Reject", escalate: "Escalate" } as Readonly<Record<string, string>>)[choice] ?? choice
 }
 
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value) }

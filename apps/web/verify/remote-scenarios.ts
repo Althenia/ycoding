@@ -290,7 +290,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     permissions: [] as readonly WirePermission[],
     guardrails: [] as readonly WireGuardrail[],
     forms: [] as readonly WireForm[],
-    autonomy: { mode: "normal", yolo: 0 },
+    autonomy: { mode: "normal", yolo: false },
     expectedText: [] as readonly string[],
   }
 
@@ -344,9 +344,9 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     guardrails: viewport === 1440
       ? [
           guardrail("grq_context", "High Context Consumption", "Refactoring involves 48 modules in src/compiler/*.", false, ["src/compiler/*"]),
-          guardrail("grq_hard", "Destructive Database Alteration & Git Force Push", "A human decision is required at every YOLO level.", true, ["ALTER TABLE sessions DROP COLUMN status", "git push -f"]),
+          guardrail("grq_hard", "Destructive Database Alteration & Git Force Push", "A human decision is required regardless of Session flags.", true, ["ALTER TABLE sessions DROP COLUMN status", "git push -f"]),
         ]
-      : [guardrail("grq_hard", viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required at every YOLO level.", true,
+      : [guardrail("grq_hard", viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required regardless of Session flags.", true,
           [viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*"])],
     forms: permissionGuardrailHardReviewFormRequestsForms(viewport),
     expectedText: viewport === 390
@@ -397,8 +397,10 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     ...common,
     view: "settings",
     autonomy: {
-      mode: "goal",
-      yolo: viewport === 768 ? 1 : 2,
+      mode: "normal",
+      yolo: false,
+      autoPermission: true,
+      ...(viewport === 768 ? {} : { autoGuardrail: true }),
       goal: {
         text: viewport === 1440 ? "Refactor remote settings pane for responsive review board" : viewport === 768 ? "Refactor telemetry UI" : "Mobile refactor",
         status: "active",

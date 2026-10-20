@@ -17,17 +17,17 @@ describe("shipped TUI command surface", () => {
     expect(result.stdout).toContain(second)
   })
 
-  test("run help describes the command, exposes --model and the durable YOLO levels, and removes --auto", async () => {
+  test("run help describes the command and exposes --model plus the boolean autonomy toggles", async () => {
     const result = await spawnCli(["run", "--help"])
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain("Run YCoding with a message")
     expect(result.stdout).toContain("--model")
-    expect(result.stdout).toContain("--yolo")
-    expect(result.stdout).toContain("choices: 0, 1, 2")
-    expect(result.stdout).not.toContain("choices: 0, 1, 2, 3")
-    expect(result.stdout).toContain("Set durable Session YOLO level")
+    for (const flag of ["--yolo", "--auto-permission", "--auto-guardrail", "--auto-answer"])
+      expect(result.stdout).toContain(flag)
+    expect(result.stdout).toContain("choices: true, false")
+    expect(result.stdout).not.toContain("choices: 0, 1, 2")
+    expect(result.stdout).toContain("Set the durable Session YOLO evaluator")
     expect(result.stdout).toContain("omitted preserves it")
-    expect(result.stdout).not.toContain("--auto")
   })
 
   test("run help exposes the per-run config document and isolated data directory flags", async () => {
@@ -67,17 +67,20 @@ describe("shipped TUI command surface", () => {
     }
   })
 
-  test.each(["4", "-1", "true"])("run rejects invalid --yolo level %s", async (level) => {
-    const result = await spawnCli(["run", "hello", "--yolo", level])
+  test.each(["0", "1", "2", "3", "-1", "yes"])("run rejects non-boolean --yolo value %s", async (value) => {
+    const result = await spawnCli(["run", "hello", "--yolo", value])
     expect(result.exitCode).not.toBe(0)
     expect(result.stdout + result.stderr).not.toBe("")
   })
 
-  test("run requires an explicit --yolo value", async () => {
-    const result = await spawnCli(["run", "hello", "--yolo"])
-    expect(result.exitCode).not.toBe(0)
-    expect(result.stdout + result.stderr).toContain("--yolo")
-  })
+  test.each(["--yolo", "--auto-permission", "--auto-guardrail", "--auto-answer"])(
+    "run requires an explicit %s value",
+    async (flag) => {
+      const result = await spawnCli(["run", "hello", flag])
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stdout + result.stderr).toContain(flag)
+    },
+  )
 
   test("run rejects the removed --auto flag", async () => {
     const result = await spawnCli(["run", "hello", "--auto"])
@@ -85,24 +88,49 @@ describe("shipped TUI command surface", () => {
     expect(result.stdout + result.stderr).toContain("--auto")
   })
 
-  test("run rejects level 3 before contacting the server", async () => {
-    const result = await runTransport(["--yolo", "3"])
+  test("run rejects a numeric --yolo before contacting the server", async () => {
+    const result = await runTransport(["--yolo", "2"])
     expect(result.exitCode).not.toBe(0)
     expect(result.calls).toEqual([])
   })
 
-  test.each([0, 1, 2] as const)("run persists --yolo %d before prompt admission", async (level) => {
-    const result = await runTransport(["--yolo", String(level)])
+  test.each([
+    [["--yolo", "true"], { yolo: true }],
+    [["--yolo", "false"], { yolo: false }],
+    [["--auto-permission", "true"], { autoPermission: true }],
+    [["--auto-permission", "false"], { autoPermission: false }],
+    [["--auto-guardrail", "true"], { autoGuardrail: true }],
+    [["--auto-guardrail", "false"], { autoGuardrail: false }],
+    [["--auto-answer", "true"], { autoAnswer: true }],
+    [["--auto-answer", "false"], { autoAnswer: false }],
+  ] as const)("run persists %j as one toggle before prompt admission", async (args, body) => {
+    const result = await runTransport([...args])
     expect(result.exitCode).toBe(1)
     expect(result.calls.filter((call) => call.path.endsWith("/autonomy"))).toEqual([
-      expect.objectContaining({ method: "PUT", body: { yolo: level } }),
+      expect.objectContaining({ method: "PUT", body }),
     ])
     expect(result.calls.findIndex((call) => call.path.endsWith("/autonomy"))).toBeLessThan(
       result.calls.findIndex((call) => call.path.endsWith("/prompt")),
     )
   })
 
-  test("run without --yolo preserves adopted Session autonomy", async () => {
+  test("run sends combined autonomy flags as one toggle per request", async () => {
+    const result = await runTransport([
+      "--yolo", "true",
+      "--auto-permission", "false",
+      "--auto-guardrail", "true",
+      "--auto-answer", "false",
+    ])
+    expect(result.exitCode).toBe(1)
+    expect(result.calls.filter((call) => call.path.endsWith("/autonomy")).map((call) => call.body)).toEqual([
+      { yolo: true },
+      { autoPermission: false },
+      { autoGuardrail: true },
+      { autoAnswer: false },
+    ])
+  })
+
+  test("run without autonomy flags preserves adopted Session autonomy", async () => {
     const result = await runTransport([])
     expect(result.exitCode).toBe(1)
     expect(result.calls.some((call) => call.path.endsWith("/autonomy"))).toBe(false)
@@ -110,7 +138,7 @@ describe("shipped TUI command surface", () => {
   })
 
   test("run does not admit a prompt when the autonomy update fails", async () => {
-    const result = await runTransport(["--yolo", "2"], { autonomyStatus: 500 })
+    const result = await runTransport(["--yolo", "true"], { autonomyStatus: 500 })
     expect(result.exitCode).toBe(1)
     expect(result.calls.some((call) => call.path.endsWith("/autonomy"))).toBe(true)
     expect(result.calls.some((call) => call.path.endsWith("/prompt"))).toBe(false)
@@ -185,9 +213,11 @@ async function runTransport(args: string[], options: { autonomyStatus?: number }
       if (url.pathname === "/api/session/ses_yolo/autonomy") {
         if (options.autonomyStatus)
           return Response.json({ error: "autonomy update failed" }, { status: options.autonomyStatus })
-        const yolo = Reflect.get(body ?? {}, "yolo")
+        const yolo = Reflect.get(body ?? {}, "yolo") === true
+        const autoPermission = Reflect.get(body ?? {}, "autoPermission") === true
+        const autoGuardrail = Reflect.get(body ?? {}, "autoGuardrail") === true
         return Response.json({ data: { mode: "normal", yolo,
-          effective: { yolo, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: yolo === 2, modelReviews: false, hardModelReviews: false } } })
+          effective: { yolo, permissionsAuto: autoPermission, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: autoGuardrail, modelReviews: false, hardModelReviews: false } } })
       }
       if (url.pathname === "/api/event")
         return new Response(

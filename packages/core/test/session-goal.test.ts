@@ -612,7 +612,7 @@ setIt.effect("stores synthesized goals without changing the admitted user prompt
 
     expect(yield* session.autonomy.set({ sessionID: created.id, goal: rawText })).toMatchObject({
       mode: "normal",
-      yolo: 0,
+      yolo: false,
       goal: {
         text: "Repair the migration and verify the suite passes.",
         rawText,
@@ -653,7 +653,7 @@ setIt.effect("does not activate or admit a goal when user-proxy steer generation
     const failed = yield* session.autonomy.set({ sessionID: created.id, goal: "Fail steer" }).pipe(Effect.exit)
 
     expect(failed._tag).toBe("Failure")
-    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: 0 })
+    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: false })
     expect(yield* session.pending(created.id)).toEqual(before)
   }),
 )
@@ -667,7 +667,7 @@ setIt.effect("propagates goal synthesis interruption without storing a raw-text 
       .pipe(Effect.exit)
 
     expect(outcome._tag).toBe("Failure")
-    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: 0 })
+    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: false })
   }),
 )
 
@@ -767,14 +767,14 @@ setIt.effect(
         code: "goal.no_retained_goal",
       })
       expect(yield* session.pending(created.id)).toEqual([])
-      yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective", yolo: 1 })
-      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: 1, goal: { rawText: "Initial objective" } })
+      yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective", yolo: false })
+      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: false, goal: { rawText: "Initial objective" } })
       const before = yield* session.pending(created.id)
       expect(
-        (yield* session.autonomy.set({ sessionID: created.id, goal: "Use the fallback", yolo: 2 }).pipe(Effect.exit))
+        (yield* session.autonomy.set({ sessionID: created.id, goal: "Use the fallback", yolo: true }).pipe(Effect.exit))
           ._tag,
       ).toBe("Failure")
-      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: 1, goal: { rawText: "Initial objective" } })
+      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: false, goal: { rawText: "Initial objective" } })
       expect(yield* session.pending(created.id)).toEqual(before)
     }),
 )

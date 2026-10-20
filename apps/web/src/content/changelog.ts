@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.19",
+    date: "2026-10-20",
+    title: "Independent automation and agentic decisions",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Use independent auto-permission, auto-guardrail, and auto-answer controls alongside an on/off YOLO switch in the terminal, remote workspace, and CLI. YOLO enables separate hidden evaluators, with inspectable provenance and no execution tools." },
+      { tag: "Changed", text: "Assess permission asks and ordinary or hard guardrail matches through structured allow, deny, and escalate choices. Baseline assessment is enabled when guardrails.decide_reviews is omitted and disabled by explicit false. Safe false positives can be assessed without overriding explicit denials or genuine hard reviews." },
+      { tag: "Changed", text: "Autonomy API writes use Boolean YOLO and separate Boolean automation flags; update API callers with the backend upgrade. Stored numeric levels migrate to rule flags without enabling agentic YOLO, preserving goals, sleep, and answer settings." },
+      { tag: "Fixed", text: "Keep free text, prompted choices, and yes/no answers distinct from missing values and fabricated defaults. Failed validation, unsupported structured output, refusal, timeout, and uncertainty lead to an actionable human review, which queued work cannot replace." },
+      { tag: "Fixed", text: "Keep automation indicators clear of phone composer actions. Goal progress stays inside the Goal control without moving the editor or action buttons." },
+    ],
+  },
+  {
     version: "0.10.18",
     date: "2026-10-19",
     title: "Required answers and reliable subscription retries",

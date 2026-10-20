@@ -74,9 +74,11 @@ export function summarizeSession(session: SessionInfoView, view: SessionView | u
     agent: active?.agent ?? session.agent,
     model,
     autonomy: autonomy?.mode,
-    yoloLevel: autonomy?.effective?.yolo ?? autonomy?.yolo,
+    yolo: autonomy?.effective?.yolo ?? autonomy?.yolo,
     goalActive: autonomy?.goal?.status === "active",
     asleep: autonomy?.effective?.asleep ?? (autonomy === undefined ? undefined : autonomy.sleep !== undefined),
+    autoPermission: autonomy?.autoPermission,
+    autoGuardrail: autonomy?.autoGuardrail,
     autoAnswer: autonomy?.autoAnswer,
     updatedAt: session.updatedAt > 0 ? new Date(session.updatedAt).toISOString() : undefined,
   }

@@ -299,9 +299,9 @@ test("keeps the rail top below the header across autonomy modes and retained goa
   const modes: ReadonlyArray<[string, SessionAutonomyView]> = [
     ["normal", localAutonomyView({ mode: "normal", yolo: false })],
     ["active goal", localAutonomyView({ mode: "normal", yolo: false, goal: { text: "Finish audit", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
-    ["level 2", localAutonomyView({ mode: "normal", yolo: true })],
-    ["level 2 with completed goal", localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Finish audit", status: "completed", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
-    ["level 2 with stopped goal", localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Finish audit", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
+    ["yolo on", localAutonomyView({ mode: "normal", yolo: true })],
+    ["yolo on with completed goal", localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Finish audit", status: "completed", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
+    ["yolo on with stopped goal", localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Finish audit", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 5 } })],
   ]
   const tops: number[] = []
 

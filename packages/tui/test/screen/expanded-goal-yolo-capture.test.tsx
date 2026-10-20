@@ -51,8 +51,8 @@ const route: FetchHandler = (url) => {
   if (/^\/api\/session\/[^/]+\/(permission|form)$/.test(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/autonomy`)
     return json({
-      data: { mode: "normal", yolo: 0, goal: { text: "Fix provider cache accounting", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
-        effective: { yolo: 0, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false },
+      data: { mode: "normal", yolo: false, goal: { text: "Fix provider cache accounting", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
+        effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false },
       },
     })
   if (url.pathname === `/api/session/${sessionID}/todo`)
@@ -230,7 +230,7 @@ test("captures the expanded goal session with populated rail fixtures", async ()
         expect(rail).not.toContain("3 / 5")
         // Explicitly expanded sections retain their active-state summaries.
         expect(rail).toMatch(/−\s+GOAL\s+active/)
-        expect(rail).toMatch(/−\s+AUTONOMY\s+Ask first · goal/)
+        expect(rail).toMatch(/−\s+AUTONOMY\s+YOLO off · goal/)
       }
       if (viewport.width === DESIGN_VIEWPORT.width) {
         expect(lines.join("\n")).toContain("YCODING")

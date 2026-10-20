@@ -1704,7 +1704,7 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.live("auto handles child permissions at YOLO and child questions with the child toggle without notifications", () =>
+  it.live("child permissions follow YOLO while unsettled child questions stay manual with the child toggle", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -1750,19 +1750,20 @@ describe("SubagentTool", () => {
           const db = (yield* Database.Service).db
 
           const autonomy = yield* SessionAutonomy.Service.pipe(Effect.provide(locations.get(parent.location)))
-          for (const yolo of [0, 1, 2]) {
+          for (const yolo of [false, true]) {
             yield* autonomy.setYolo({ sessionID: parent.id, yolo })
-            expect(yield* autonomy.canAutoPermission(child.sessionID)).toBe(yolo >= 1)
-            expect(yield* autonomy.canAutoGuardrail(child.sessionID)).toBe(yolo >= 2)
+            expect(yield* autonomy.canAutoPermission(child.sessionID)).toBe(false)
+            expect(yield* autonomy.canAutoGuardrail(child.sessionID)).toBe(false)
             expect(yield* autonomy.canAutoAnswer(child.sessionID)).toBe(false)
             const question = yield* orchestration.question(child.sessionID, `Manual question at YOLO ${yolo}`)
             expect(question.autoAnswered).toBe(false)
             expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting", question: { id: question.question.id } })
             yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID: question.question.id, text: "Human answer" })
           }
+          yield* autonomy.setYolo({ sessionID: parent.id, yolo: false })
 
           yield* autonomy.set({ sessionID: child.sessionID, autoAnswer: true })
-          for (const mode of [2, "goal"] as const) {
+          for (const mode of ["permission", "goal"] as const) {
             yield* db
               .update(SessionTable)
               .set({
@@ -1770,7 +1771,7 @@ describe("SubagentTool", () => {
                   mode === "goal"
                     ? {
                         mode: "normal",
-                        yolo: 0,
+                        yolo: false,
                         goal: {
                           text: "Finish the parent goal",
                           status: "active",
@@ -1779,7 +1780,7 @@ describe("SubagentTool", () => {
                           maxNoProgress: 3,
                         },
                       }
-                    : { mode: "normal", yolo: mode },
+                    : { mode: "normal", yolo: false, autoPermission: true },
               })
               .where(eq(SessionTable.id, parent.id))
               .run()
@@ -1803,18 +1804,33 @@ describe("SubagentTool", () => {
                 resources: ["src/index.ts"],
               }),
             ).toMatchObject({ effect: "deny" })
-            expect(
-              yield* questions.ask({
-                sessionID: child.sessionID,
-                questions: [
-                  {
-                    question: "Which option?",
-                    header: "Option",
-                    options: [{ label: "Safest", description: "Use the safest option" }],
-                  },
-                ],
-              }),
-            ).toEqual({ status: "answered", answers: [["Safest"]] })
+            const events = yield* EventRuntime.Service
+            const asked = yield* Deferred.make<Question.Request>()
+            const unsubscribeAsked = yield* events.listen((event) =>
+              event.type === Question.Event.Asked.type
+                ? Deferred.succeed(asked, event.data as Question.Request).pipe(Effect.asVoid)
+                : Effect.void,
+            )
+            yield* Effect.addFinalizer(() => unsubscribeAsked)
+            const questionFiber = yield* questions.ask({
+              sessionID: child.sessionID,
+              questions: [
+                {
+                  question: "Which option?",
+                  header: "Option",
+                  options: [{ label: "Safest", description: "Use the safest option" }],
+                },
+              ],
+            }).pipe(Effect.forkScoped)
+            const pendingQuestion = yield* Deferred.await(asked)
+            yield* questions.reply({ requestID: pendingQuestion.id, answers: [["Safest"]] })
+            expect(yield* Fiber.join(questionFiber)).toEqual({ status: "answered", answers: [["Safest"]] })
+            const unsubscribeForms = yield* events.listen((event) =>
+              event.type === Form.Event.Created.type
+                ? forms.reply({ id: (event.data as { form: Form.Info }).form.id, answer: { choice: "safe" } }).pipe(Effect.ignore)
+                : Effect.void,
+            )
+            yield* Effect.addFinalizer(() => unsubscribeForms)
             expect(
               yield* forms.ask({
                 sessionID: child.sessionID,
@@ -1843,6 +1859,16 @@ describe("SubagentTool", () => {
                 },
               }),
             ).toMatchObject({ type: "text" })
+            const waiting = yield* orchestration.get(parent.id, child.sessionID)
+            expect(waiting).toMatchObject({ state: "waiting" })
+            const childQuestionID = waiting.question?.id
+            if (!childQuestionID) return yield* Effect.die(new Error("Child question was not recorded"))
+            yield* orchestration.answer({
+              parentID: parent.id,
+              childID: child.sessionID,
+              questionID: childQuestionID,
+              text: "Continue safely",
+            })
             expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({
               state: "running",
               question: undefined,
@@ -1860,7 +1886,7 @@ describe("SubagentTool", () => {
               .all()
               .pipe(Effect.orDie))
               .filter((item) => item.type === "question"),
-          ).toHaveLength(3)
+          ).toHaveLength(4)
         }),
       ),
     ),

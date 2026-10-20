@@ -188,13 +188,15 @@ type ForkInput = {
 
 type AutonomyInput = {
   sessionID: SessionSchema.ID
-  yolo?: number | boolean
+  yolo?: boolean
   /** A string calculates and replaces the objective; true resumes the retained one; null stops it. */
   goal?: string | null | true
   maxNoProgress?: number
   mode?: "normal" | "yolo" | "goal"
   sleep?: boolean
   autoAnswer?: boolean
+  autoPermission?: boolean
+  autoGuardrail?: boolean
 }
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
@@ -205,6 +207,8 @@ export class OperationUnavailableError extends Schema.TaggedErrorClass<Operation
 ) {}
 
 export { AttachmentReadError, HistoryPrunedError, InvalidCursorError, MessageDecodeError, NotFoundError }
+
+const decisionAgents: ReadonlySet<Agent.ID> = new Set(["decision", "yolo-permission", "yolo-guardrail", "yolo-answer"].map((id) => Agent.ID.make(id)))
 
 export const MaxAttachmentReadBytes = 10 * 1024 * 1024
 const CompactionHistoryLimit = 100
@@ -1735,7 +1739,7 @@ const layer = Layer.effect(
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
-        if (input.agent === Agent.ID.make("decision")) return yield* new AgentNotSelectableError({ agent: input.agent })
+        if (input.agent && decisionAgents.has(input.agent)) return yield* new AgentNotSelectableError({ agent: input.agent })
         const parent = input.parentID ? yield* store.get(input.parentID) : undefined
         if (input.parentID && parent === undefined) return yield* new NotFoundError({ sessionID: input.parentID })
         const location = parent?.location ?? input.location
@@ -2076,21 +2080,25 @@ const layer = Layer.effect(
                 Effect.fail(new NotFoundError({ sessionID: error.sessionID })),
               ),
             )
-          const yolo = yield* autonomy.effectiveYoloLevel(sessionID).pipe(notFound)
+          const yolo = yield* autonomy.canYolo(sessionID).pipe(notFound)
+          const permissionsAuto = yield* autonomy.canAutoPermission(sessionID).pipe(notFound)
           const asleep = yield* autonomy.isAsleep(sessionID).pipe(notFound)
           const rootID = yield* rootSessionID(sessionID)
+          const rootYolo = rootID === sessionID ? yolo : yield* autonomy.canYolo(rootID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
           const rootAutoGuardrail = yield* autonomy
             .canAutoGuardrail(rootID)
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
           const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location)))
           const policy = guardrail.reviewPolicy
           return {
-            yolo: yolo as SessionAutonomy.YoloLevel,
+            yolo,
+            permissionsAuto,
+            permissionModelReviews: policy.decideReviews,
             asleep,
             ordinaryReviewsAuto: rootAutoGuardrail && !asleep,
             guardrailsEnabled: policy.enabled,
             modelReviews: policy.enabled && policy.decideReviews,
-            hardModelReviews: policy.decideReviews && policy.decideHardReviews,
+            hardModelReviews: (policy.decideReviews || rootYolo) && policy.decideHardReviews,
           }
         }),
         set: Effect.fn("Session.autonomy.set")(function* (input) {
@@ -2161,6 +2169,8 @@ const layer = Layer.effect(
                   maxNoProgress: input.maxNoProgress,
                   sleep: input.sleep,
                   autoAnswer: input.autoAnswer,
+                  autoPermission: input.autoPermission,
+                  autoGuardrail: input.autoGuardrail,
                 })
                 .pipe(notFound)
               yield* applySleepTransition(targetID, before, after)
@@ -2529,7 +2539,7 @@ const layer = Layer.effect(
             })
           // TODO(v2 commands): decide whether command-level subtask/background execution belongs in v2 commands.
           const agent = command.agent ?? input.agent
-          if (agent === Agent.ID.make("decision"))
+          if (agent && decisionAgents.has(agent))
             return yield* new Command.EvaluationError({
               command: input.command,
               message: new AgentNotSelectableError({ agent }).message,
@@ -2715,7 +2725,7 @@ const layer = Layer.effect(
       }),
       switchAgent: Effect.fn("Session.switchAgent")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        if (input.agent === Agent.ID.make("decision")) return yield* new AgentNotSelectableError({ agent: input.agent })
+        if (input.agent && decisionAgents.has(input.agent)) return yield* new AgentNotSelectableError({ agent: input.agent })
         const source = yield* projectArtifactSource(session.location)
         const provenance = source ? yield* source.provenance("agent", input.agent) : undefined
         const activatedAt = ProjectArtifact.TimestampMillis.make(Date.now())

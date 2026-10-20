@@ -130,16 +130,16 @@ import { findMessageBoundary, messageNavigationSlack } from "./message-navigatio
 import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
-  approvalLevelLabel,
   autoAnswerOn,
-  autonomyLevelDescription,
   autonomyModeLabel,
+  autonomyToggleDescription,
+  autonomyToggleLabel,
+  autonomyToggleOn,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   goalToggleAction,
-  nextApprovalLevel,
-  parseApprovalLevel,
-  parseAutoAnswerArg,
+  parseToggleArg,
+  type AutonomyToggle,
   type SessionAutonomyResponse,
 } from "../../util/session-autonomy"
 import { useKeepAwake } from "../../keep-awake"
@@ -466,11 +466,30 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     setAutonomyResponse({ sessionID, state })
     return true
   }
-  const updateAutonomy = (input: { yolo?: 0 | 1 | 2; goal?: string | null; maxNoProgress?: number; autoAnswer?: boolean }) => {
+  const updateAutonomy = (input: {
+    yolo?: boolean
+    goal?: string | null
+    maxNoProgress?: number
+    autoPermission?: boolean
+    autoGuardrail?: boolean
+    autoAnswer?: boolean
+  }) => {
     const sessionID = route.sessionID
     autonomyRefresh.invalidate()
+    const toggled: AutonomyToggle | undefined =
+      input.autoAnswer !== undefined
+        ? "autoAnswer"
+        : input.autoPermission !== undefined
+          ? "autoPermission"
+          : input.autoGuardrail !== undefined
+            ? "autoGuardrail"
+            : input.yolo !== undefined && input.goal === undefined
+              ? "yolo"
+              : undefined
     const payload = (() => {
       if (input.autoAnswer !== undefined) return { autoAnswer: input.autoAnswer } as const
+      if (input.autoPermission !== undefined) return { autoPermission: input.autoPermission } as const
+      if (input.autoGuardrail !== undefined) return { autoGuardrail: input.autoGuardrail } as const
       if (input.yolo !== undefined && input.goal !== undefined)
         return { yolo: input.yolo, goal: input.goal, ...(input.maxNoProgress !== undefined ? { maxNoProgress: input.maxNoProgress } : {}) } as const
       if (input.yolo !== undefined) return { yolo: input.yolo } as const
@@ -484,8 +503,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         if (!acceptAutonomy(sessionID, state)) return
         toast.show({
           message:
-            input.autoAnswer !== undefined
-              ? `Auto-answer ${autoAnswerOn(state) ? "on" : "off"} for this Session`
+            toggled !== undefined
+              ? `${autonomyToggleLabel(toggled)} ${autonomyToggleOn(state, toggled) ? "on" : "off"} for this Session`
               : `${autonomyModeLabel(state)} mode activated`,
           variant: "success",
           duration: 3000,
@@ -596,6 +615,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     return {
       type: "autonomy",
       yolo: current?.effective?.yolo,
+      permissionsAuto: current?.effective?.permissionsAuto ?? false,
+      guardrailsAuto: current?.effective?.ordinaryReviewsAuto ?? false,
       goalActive: current?.goal?.status === "active",
       answersAuto: autoAnswerOn(current),
       asleep: current?.effective?.asleep ?? false,
@@ -1310,63 +1331,44 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         ))
       },
     },
-    {
-      title: (() => {
-        const lvl = autonomy()?.effective?.yolo
-        if (lvl === undefined) return "Approval level: unknown (/yolo 0|1|2)"
-        return `${approvalLevelLabel(lvl)} (${lvl}): ${autonomyLevelDescription(lvl)} (cycle 0→1→2, /yolo 0|1|2)`
-      })(),
-      id: "session.autonomy.yolo.toggle",
-      group: "Session",
-      slash: { name: "yolo" },
-      run: (input?: string) => {
-        const token = input?.trim().split(/\s+/)[0]
-        const explicit = parseApprovalLevel(token)
-        if (explicit !== undefined) {
-          updateAutonomy({ yolo: explicit })
-          return
-        }
-        if (token !== undefined && token !== "") {
-          toast.show({ message: "Use /yolo with a level from 0 to 2", variant: "error", duration: 3000 })
-          return
-        }
-        const lvl = autonomy()?.effective?.yolo
-        if (lvl === undefined) {
-          refreshAutonomy(route.sessionID)
-          toast.show({ message: "Approval level unknown; reloading", variant: "info", duration: 3000 })
-          return
-        }
-        updateAutonomy({ yolo: nextApprovalLevel(lvl) })
-      },
-    },
-    {
-      title: (() => {
-        const current = autonomy()
-        if (!current) return "Auto-answer: unknown (this Session)"
-        return `Auto-answer: ${autoAnswerOn(current) ? "on" : "off"} (this Session)`
-      })(),
-      id: "session.autonomy.auto-answer.toggle",
-      group: "Session",
-      slash: { name: "auto-answer" },
-      run: (input?: string) => {
-        const parsed = parseAutoAnswerArg(input?.trim().split(/\s+/)[0])
-        if (parsed === null) {
-          toast.show({ message: "Use /auto-answer, /auto-answer on, or /auto-answer off", variant: "error", duration: 3000 })
-          return
-        }
-        if (parsed !== undefined) {
-          updateAutonomy({ autoAnswer: parsed })
-          return
-        }
-        const current = autonomy()
-        if (!current) {
-          refreshAutonomy(route.sessionID)
-          toast.show({ message: "Auto-answer state unknown; reloading", variant: "info", duration: 3000 })
-          return
-        }
-        updateAutonomy({ autoAnswer: !autoAnswerOn(current) })
-      },
-    },
+    ...(["yolo", "autoPermission", "autoGuardrail", "autoAnswer"] as const).map((toggle) => {
+      const slash =
+        toggle === "yolo"
+          ? "yolo"
+          : toggle === "autoPermission"
+            ? "auto-permission"
+            : toggle === "autoGuardrail"
+              ? "auto-guardrail"
+              : "auto-answer"
+      return {
+        title: (() => {
+          const current = autonomy()
+          if (!current) return `${autonomyToggleLabel(toggle)}: unknown`
+          return `${autonomyToggleLabel(toggle)}: ${autonomyToggleOn(current, toggle) ? "on" : "off"} · ${autonomyToggleDescription(toggle)}`
+        })(),
+        id: `session.autonomy.${slash}.toggle`,
+        group: "Session",
+        slash: { name: slash },
+        run: (input?: string) => {
+          const parsed = parseToggleArg(input?.trim().split(/\s+/)[0])
+          if (parsed === null) {
+            toast.show({ message: `Use /${slash}, /${slash} on, or /${slash} off`, variant: "error", duration: 3000 })
+            return
+          }
+          if (parsed !== undefined) {
+            updateAutonomy({ [toggle]: parsed })
+            return
+          }
+          const current = autonomy()
+          if (!current || autonomyToggleOn(current, toggle) === undefined) {
+            refreshAutonomy(route.sessionID)
+            toast.show({ message: `${autonomyToggleLabel(toggle)} state unknown; reloading`, variant: "info", duration: 3000 })
+            return
+          }
+          updateAutonomy({ [toggle]: !autonomyToggleOn(current, toggle) })
+        },
+      }
+    }),
     {
       title: daybreakTitle(session()?.daybreak),
       id: "session.daybreak.toggle",

@@ -175,6 +175,7 @@ const catalog: CatalogView = {
     { id: "reviewer", name: "Reviewer", mode: "subagent", hidden: false },
     { id: "btw", name: "BTW", mode: "subagent", hidden: false },
     { id: "secret", name: "Secret", mode: "subagent", hidden: true },
+    { id: "yolo-evaluator", name: "YOLO evaluator", mode: "subagent", hidden: true },
   ], models: [], commands: [{ name: "plan", description: "Plan work" }],
   skills: [{ id: "research", name: "Research", slash: true }, { id: "audit", name: "Audit", slash: false }],
   references: [{ name: "guide", uri: "file:///guide" }], resources: [{ name: "docs", uri: "mcp://docs" }],
@@ -187,7 +188,7 @@ describe("composer input semantics", () => {
   test("returns the full ranked catalog for bare skill and command triggers", () => {
     const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
     expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
-    expect(optionsForTrigger("/", "", large, [])).toHaveLength(96)
+    expect(optionsForTrigger("/", "", large, [])).toHaveLength(98)
   })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })
@@ -198,11 +199,12 @@ describe("composer input semantics", () => {
 
   test("sources slash commands and skills, references/agents/resources/files, and name-filtered #", () => {
     expect(optionsForTrigger("/", "pla", catalog, []).map((item) => item.label)).toEqual(["/plan"])
-    expect(optionsForTrigger("/", "res", catalog, []).map((item) => item.label)).toEqual(["/research", "/suggest", "/auto-answer"])
+    expect(optionsForTrigger("/", "res", catalog, []).map((item) => item.label)).toEqual(["/research", "/suggest", "/auto-guardrail", "/yolo", "/auto-answer", "/auto-permission"])
     expect(optionsForTrigger("@", "", catalog, [{ path: "src/main.ts", uri: "file:///main", kind: "file" }]).map((item) => item.label)).toEqual(["@docs", "@guide", "@reviewer", "@src/main.ts"])
     expect(optionsForTrigger("$", "audit", catalog, []).map((item) => item.label)).toEqual(["$audit"])
     expect(optionsForTrigger("#", "review", catalog, []).map((item) => item.label)).toEqual(["Reviewer"])
     expect(optionsForTrigger("@", "secret", catalog, [])).toEqual([])
+    expect(optionsForTrigger("@", "yolo", catalog, [])).toEqual([])
   })
 
   test("tracks mention ranges across edits and drops edited mention text", () => {

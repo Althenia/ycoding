@@ -755,7 +755,7 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
     width: 200, height: 50, args: { sessionID }, settle: "asleep",
     keepAwake: { get: () => read.promise, set: async () => ({ state: "off" }) },
     route: async (url) => url.pathname === `/api/session/${sessionID}/autonomy`
-      ? Response.json({ data: localAutonomyView({ mode: "normal", yolo: 0, sleep: {} }) })
+      ? Response.json({ data: localAutonomyView({ mode: "normal", yolo: false, sleep: {} }) })
       : base(url),
   })
   try {
@@ -847,7 +847,7 @@ test("restart retains the escalation notice without restoring a pending review, 
 })
 
 test("family slash commands update autonomy, rehydrate indicators, and render durable decision provenance", async () => {
-  let autonomy: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: 0 })
+  let autonomy: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: false })
   const writes: unknown[] = []
   const awakeWrites: boolean[] = []
   const dismissals: Array<{

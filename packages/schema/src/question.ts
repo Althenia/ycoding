@@ -31,14 +31,12 @@ const base = {
   header: Schema.String.annotate({ description: "Very short label (max 30 chars)" }),
   options: Schema.Array(Option).annotate({ description: "Available choices" }),
   multiple: Schema.Boolean.pipe(optional).annotate({ description: "Allow selecting multiple choices" }),
-}
-
-export const Info = Schema.Struct({
-  ...base,
   custom: Schema.Boolean.pipe(optional).annotate({
     description: "Allow typing a custom answer (default: true)",
   }),
-}).annotate({ identifier: "Question.Info" })
+}
+
+export const Info = Schema.Struct(base).annotate({ identifier: "Question.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 
 export const Prompt = Schema.Struct(base).annotate({ identifier: "Question.Prompt" })

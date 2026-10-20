@@ -24,7 +24,10 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
-  yolo?: 0 | 1 | 2
+  yolo?: boolean
+  autoPermission?: boolean
+  autoGuardrail?: boolean
+  autoAnswer?: boolean
 }
 
 type FilePart = {
@@ -127,9 +130,13 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       title: input.title || prepared.message.slice(0, 50) + (prepared.message.length > 50 ? "..." : ""),
     })
   }
-  if (input.yolo !== undefined) {
-    await client.session.autonomy.set({ sessionID: target.session.id, payload: { yolo: input.yolo } })
-  }
+  for (const payload of [
+    ...(input.yolo !== undefined ? [{ yolo: input.yolo } as const] : []),
+    ...(input.autoPermission !== undefined ? [{ autoPermission: input.autoPermission } as const] : []),
+    ...(input.autoGuardrail !== undefined ? [{ autoGuardrail: input.autoGuardrail } as const] : []),
+    ...(input.autoAnswer !== undefined ? [{ autoAnswer: input.autoAnswer } as const] : []),
+  ])
+    await client.session.autonomy.set({ sessionID: target.session.id, payload })
 
   await runNonInteractivePrompt({
     client,
