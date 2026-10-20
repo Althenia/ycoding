@@ -10,6 +10,9 @@ const handlers = Runtime.handlers(TuiCommand, {
   run: () => import("./commands/handlers/run"),
   update: () => import("./commands/handlers/update"),
   meeting: () => import("./commands/handlers/meeting"),
+  "keep-awake": {
+    setup: () => import("./commands/handlers/keep-awake/setup"),
+  },
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),

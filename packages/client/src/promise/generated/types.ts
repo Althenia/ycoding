@@ -2439,6 +2439,7 @@ export type KeepAwakeStatus = {
   state: KeepAwakeState
   manual?: boolean
   lid?: "off" | "on" | "held" | "unsupported" | "error"
+  system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"
   sleepHold?: boolean
   message?: string
 }

@@ -13,9 +13,14 @@ process.env.YCODING_DB = ":memory:"
 delete process.env.CLAUDE_CODE_ENTRYPOINT
 
 const { mock } = await import("bun:test")
-const { Layer } = await import("effect")
+const { Effect, Layer } = await import("effect")
 const { ClamshellSleep } = await import("../src/util/clamshell-sleep")
 const lidLayer = Layer.succeed(ClamshellSleep.Service, ClamshellSleep.Service.of({ set: (enabled) => enabled ? "on" : "off" }))
 const lidNode = { ...ClamshellSleep.node, implementation: lidLayer }
 const lidModule = { Service: ClamshellSleep.Service, make: ClamshellSleep.make, layer: lidLayer, node: lidNode }
 await mock.module("../src/util/clamshell-sleep", () => ({ ...lidModule, ClamshellSleep: lidModule }))
+const { SystemSleep } = await import("../src/util/system-sleep")
+const systemLayer = Layer.succeed(SystemSleep.Service, SystemSleep.Service.of({ permitted: Effect.succeed(false), set: () => Effect.succeed("off") }))
+const systemNode = { ...SystemSleep.node, implementation: systemLayer }
+const systemModule = { Service: SystemSleep.Service, make: SystemSleep.make, layer: systemLayer, node: systemNode }
+await mock.module("../src/util/system-sleep", () => ({ ...systemModule, SystemSleep: systemModule }))

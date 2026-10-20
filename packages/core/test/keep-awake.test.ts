@@ -9,6 +9,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { AppProcess } from "@ycoding-ai/core/process"
 import { ProcessLock } from "@ycoding-ai/core/util/process-lock"
+import { SystemSleep } from "@ycoding-ai/core/util/system-sleep"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(LayerNode.compile(AppProcess.node))
@@ -22,6 +23,27 @@ const fakeClamshell = (fail = false) => {
       if (fail) return "error" as const
       return on ? ("on" as const) : ("off" as const)
     },
+  }
+}
+
+const fakeSystem = (initial: { permitted?: boolean; failApply?: boolean; failRestore?: boolean } = {}) => {
+  const behavior = { permitted: true, failApply: false, failRestore: false, ...initial }
+  const calls: boolean[] = []
+  const checks = { count: 0 }
+  return {
+    behavior,
+    calls,
+    checks,
+    permitted: Effect.sync(() => {
+      checks.count += 1
+      return behavior.permitted
+    }),
+    set: (disabled: boolean) =>
+      Effect.sync(() => {
+        calls.push(disabled)
+        if (disabled ? behavior.failApply : behavior.failRestore) return "error" as const
+        return disabled ? ("on" as const) : ("off" as const)
+      }),
   }
 }
 
@@ -83,22 +105,22 @@ describe("KeepAwake", () => {
     yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void))
     yield* Effect.addFinalizer(() => Scope.close(secondScope, Exit.void))
     const spawner = yield* AppProcess.Service
-    const first = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, clamshell: firstNative, lidFile, command: recordedChild(directory).command }).pipe(Effect.provideService(Scope.Scope, firstScope))
+    const first = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, systemSleep: fakeSystem(), clamshell: firstNative, lidFile, command: recordedChild(directory).command }).pipe(Effect.provideService(Scope.Scope, firstScope))
     expect(firstNative.calls).toEqual([])
     yield* first.set(true)
     expect(firstNative.calls).toEqual([true])
-    const second = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, clamshell: secondNative, lidFile, command: recordedChild(directory).command }).pipe(Effect.provideService(Scope.Scope, secondScope))
+    const second = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, systemSleep: fakeSystem(), clamshell: secondNative, lidFile, command: recordedChild(directory).command }).pipe(Effect.provideService(Scope.Scope, secondScope))
     expect(yield* second.set(true)).toMatchObject({ state: "on", lid: "held", message: "Lid control is held by another YCoding process." })
     yield* second.set(false)
     yield* Scope.close(secondScope, Exit.void)
     expect(secondNative.calls).toEqual([])
     expect(firstNative.calls).toEqual([true])
-    expect(JSON.parse(yield* Effect.promise(() => readFile(lidFile, "utf8")))).toEqual({ armed: true })
+    expect(JSON.parse(yield* Effect.promise(() => readFile(lidFile, "utf8")))).toEqual({ armed: true, system: true })
     yield* first.set(false)
     expect(firstNative.calls).toEqual([true, false])
   }))
 
-  it.effect("a sleeping non-owner takes lid ownership only at its next 30-second reapply", () => Effect.gen(function* () {
+  it.effect("a sleeping non-owner takes lid ownership at its next 1-second reapply", () => Effect.gen(function* () {
     const directory = yield* fixture
     const owner = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void))
@@ -112,7 +134,7 @@ describe("KeepAwake", () => {
     const awake = yield* KeepAwake.make({
       spawner: { ...spawner, spawn: (command) => spawner.spawn(command).pipe(Effect.tap(() => Deferred.succeed(spawned, undefined))) },
       platform: "darwin", pid: process.pid, lidFile, command: recordedChild(directory).command,
-      clamshell: { set: (on) => { if (on) Effect.runSync(Deferred.succeed(reapplied, undefined)); return native.set(on) } },
+      systemSleep: fakeSystem(), clamshell: { set: (on) => { if (on) Effect.runSync(Deferred.succeed(reapplied, undefined)); return native.set(on) } },
     })
     const holding = yield* awake.hold("sleeping").pipe(Effect.forkScoped)
     yield* Deferred.await(spawned)
@@ -120,9 +142,9 @@ describe("KeepAwake", () => {
     yield* Fiber.join(holding)
     expect((yield* awake.get).lid).toBe("held")
     yield* Scope.close(owner, Exit.void)
-    yield* TestClock.adjust("29 seconds")
+    yield* TestClock.adjust("999 millis")
     expect(native.calls).toEqual([])
-    yield* TestClock.adjust("1 second")
+    yield* TestClock.adjust("1 millis")
     yield* Deferred.await(reapplied)
     expect(native.calls).toEqual([true])
     expect((yield* awake.get).lid).toBe("on")
@@ -137,12 +159,12 @@ describe("KeepAwake", () => {
     yield* ProcessLock.acquire(lidFile).pipe(Effect.provideService(Scope.Scope, ownerScope))
     yield* Effect.promise(() => writeFile(lidFile, JSON.stringify({ armed: true })))
     const spawner = yield* AppProcess.Service
-    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, clamshell: native, lidFile })
+    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, systemSleep: fakeSystem(), clamshell: native, lidFile })
     expect(native.calls).toEqual([])
     yield* Scope.close(ownerScope, Exit.void)
-    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, clamshell: native, lidFile })
+    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, systemSleep: fakeSystem(), clamshell: native, lidFile })
     expect(native.calls).toEqual([false])
-    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, clamshell: native, lidFile })
+    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, systemSleep: fakeSystem(), clamshell: native, lidFile })
     expect(native.calls).toEqual([false])
   }))
   for (const reset of ["power-source change", "wake"] as const) {
@@ -162,7 +184,7 @@ describe("KeepAwake", () => {
           lidFile: path.join(directory, "lid.json"),
           command: child.command,
           reapplyInterval: "10 millis",
-          clamshell: {
+          systemSleep: fakeSystem(), clamshell: {
             set: (value) => {
               on = value
               if (value && resetOccurred) Effect.runSync(Deferred.succeed(reapplied, undefined))
@@ -199,12 +221,13 @@ describe("KeepAwake", () => {
         platform: "linux",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       })
       const unsupported = {
         state: "unsupported",
         lid: "unsupported",
+        system: "unsupported",
         sleepHold: false,
         message: "Keep machine awake is available on macOS only.",
       } as const
@@ -224,25 +247,25 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       })
-      expect(yield* awake.get).toEqual({ state: "off", lid: "off", sleepHold: false })
-      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(yield* awake.get).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
+      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
       const pid = yield* child.pid(0)
       expect(alive(pid)).toBe(true)
-      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
       expect(child.spawned).toHaveLength(1)
-      expect(yield* awake.get).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(yield* awake.get).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
 
-      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", sleepHold: false })
+      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
       expect(
         yield* eventually(
           () => alive(pid),
           (running) => !running,
         ),
       ).toBe(false)
-      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", sleepHold: false })
+      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
       expect(child.spawned).toHaveLength(1)
     }),
   )
@@ -256,22 +279,22 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       })
       const results = yield* Effect.all([awake.set(true), awake.set(true), awake.set(true)], {
         concurrency: "unbounded",
       })
       expect(results).toEqual([
-        { state: "on", lid: "on", sleepHold: false },
-        { state: "on", lid: "on", sleepHold: false },
-        { state: "on", lid: "on", sleepHold: false },
+        { state: "on", lid: "on", system: "on", sleepHold: false },
+        { state: "on", lid: "on", system: "on", sleepHold: false },
+        { state: "on", lid: "on", system: "on", sleepHold: false },
       ])
       expect(child.spawned).toHaveLength(1)
       const pid = yield* child.pid(0)
       const [off, on] = yield* Effect.all([awake.set(false), awake.set(true)], { concurrency: "unbounded" })
-      expect(off).toEqual({ state: "off", lid: "off", sleepHold: false })
-      expect(on).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(off).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
+      expect(on).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
       expect(child.spawned).toHaveLength(2)
       expect(
         yield* eventually(
@@ -293,7 +316,7 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: () =>
           broken ? ChildProcess.make(path.join(directory, "missing-inhibitor"), ["secret-argument"]) : child.command(),
       })
@@ -301,6 +324,7 @@ describe("KeepAwake", () => {
       expect(failed).toEqual({
         state: "error",
         lid: "off",
+        system: "off",
         sleepHold: false,
         message: "The sleep inhibitor could not be started.",
       })
@@ -309,8 +333,8 @@ describe("KeepAwake", () => {
       expect(JSON.stringify(failed)).not.toContain(directory)
 
       broken = false
-      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
-      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", sleepHold: false })
+      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
+      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
     }),
   )
 
@@ -322,22 +346,24 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: () => ChildProcess.make(process.execPath, ["-e", "process.exit(3)"]),
       })
       expect(yield* awake.set(true)).toEqual({
         state: "error",
         lid: "off",
+        system: "off",
         sleepHold: false,
         message: "The sleep inhibitor stopped unexpectedly (exit code 3).",
       })
       expect(yield* awake.get).toEqual({
         state: "error",
         lid: "off",
+        system: "off",
         sleepHold: false,
         message: "The sleep inhibitor stopped unexpectedly (exit code 3).",
       })
-      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", sleepHold: false })
+      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
     }),
   )
 
@@ -350,10 +376,10 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       })
-      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
       const pid = yield* child.pid(0)
       process.kill(pid, "SIGKILL")
       const status = yield* eventually(
@@ -363,7 +389,7 @@ describe("KeepAwake", () => {
       expect(status.state).toBe("error")
       expect(status.message).toContain("The sleep inhibitor stopped unexpectedly")
       expect(child.spawned).toHaveLength(1)
-      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
       expect(child.spawned).toHaveLength(2)
     }),
   )
@@ -379,10 +405,10 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       }).pipe(Effect.provideService(Scope.Scope, scope))
-      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
       const pid = yield* child.pid(0)
       expect(alive(pid)).toBe(true)
       yield* Scope.close(scope, Exit.void)
@@ -425,7 +451,7 @@ describe("KeepAwake", () => {
           platform: "darwin",
           pid: process.pid,
           lidFile: path.join(directory, "lid.json"),
-          clamshell: fakeClamshell(),
+          systemSleep: fakeSystem(), clamshell: fakeClamshell(),
           command: child.command,
         })
         const starting = yield* awake.set(true).pipe(Effect.forkScoped)
@@ -433,7 +459,7 @@ describe("KeepAwake", () => {
         const pid = yield* child.pid(0)
         expect(pid).toBeGreaterThan(0)
         expect(alive(pid)).toBe(true)
-        expect(yield* awake.get).toEqual({ state: "off", lid: "off", sleepHold: false })
+        expect(yield* awake.get).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
         yield* Fiber.interrupt(starting)
         expect(Exit.isFailure(yield* Fiber.await(starting))).toBe(true)
         expect(
@@ -442,8 +468,8 @@ describe("KeepAwake", () => {
             (running) => !running,
           ),
         ).toBe(false)
-        expect(yield* awake.get).toEqual({ state: "off", lid: "off", sleepHold: false })
-        expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", sleepHold: false })
+        expect(yield* awake.get).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
+        expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
         expect(child.spawned).toHaveLength(1)
       }),
     )
@@ -477,10 +503,10 @@ describe("KeepAwake", () => {
           platform: "darwin",
           pid: process.pid,
           lidFile: path.join(directory, "lid.json"),
-          clamshell: fakeClamshell(),
+          systemSleep: fakeSystem(), clamshell: fakeClamshell(),
           command: child.command,
         }).pipe(Effect.provideService(Scope.Scope, scope))
-        expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
+        expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
         const pid = yield* child.pid(0)
         expect(alive(pid)).toBe(true)
         const closing = yield* (action === "disable" ? awake.set(false) : Scope.close(scope, Exit.void)).pipe(
@@ -505,7 +531,7 @@ describe("KeepAwake", () => {
             (running) => !running,
           ),
         ).toBe(false)
-        expect(yield* awake.get).toEqual({ state: "off", lid: "off", sleepHold: false })
+        expect(yield* awake.get).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
         expect(child.spawned).toHaveLength(1)
       }),
     )
@@ -539,7 +565,7 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       }).pipe(Effect.provideService(Scope.Scope, scope))
       const starting = yield* awake.set(true).pipe(Effect.forkScoped)
@@ -559,7 +585,7 @@ describe("KeepAwake", () => {
           (running) => !running,
         ),
       ).toBe(false)
-      expect(yield* awake.get).toEqual({ state: "off", lid: "off", sleepHold: false })
+      expect(yield* awake.get).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
       expect(child.spawned).toHaveLength(1)
     }),
   )
@@ -574,16 +600,16 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: lid,
+        systemSleep: fakeSystem(), clamshell: lid,
         command: child.command,
       })
       expect(lid.calls).toEqual([])
-      expect(yield* awake.hold("ses_one")).toEqual({ state: "on", lid: "on", sleepHold: true, manual: false })
-      expect(yield* awake.hold("ses_two")).toEqual({ state: "on", lid: "on", sleepHold: true, manual: false })
+      expect(yield* awake.hold("ses_one")).toEqual({ state: "on", lid: "on", system: "on", sleepHold: true, manual: false })
+      expect(yield* awake.hold("ses_two")).toEqual({ state: "on", lid: "on", system: "on", sleepHold: true, manual: false })
       expect(child.spawned).toHaveLength(1)
-      expect(yield* awake.set(false)).toEqual({ state: "on", lid: "on", sleepHold: true, manual: false })
-      expect(yield* awake.release("ses_one")).toEqual({ state: "on", lid: "on", sleepHold: true, manual: false })
-      expect(yield* awake.release("ses_two")).toEqual({ state: "off", lid: "off", sleepHold: false })
+      expect(yield* awake.set(false)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: true, manual: false })
+      expect(yield* awake.release("ses_one")).toEqual({ state: "on", lid: "on", system: "on", sleepHold: true, manual: false })
+      expect(yield* awake.release("ses_two")).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
       expect(lid.calls).toEqual([true, false])
     }),
   )
@@ -592,11 +618,11 @@ describe("KeepAwake", () => {
     const directory = yield* fixture
     const lidFile = path.join(directory, "lid.json")
     const spawner = yield* AppProcess.Service
-    const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, clamshell: { set: () => "unsupported" }, command: recordedChild(directory).command })
+    const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, systemSleep: fakeSystem(), clamshell: { set: () => "unsupported" }, command: recordedChild(directory).command })
     expect(yield* awake.set(true)).toMatchObject({ state: "on", lid: "unsupported" })
     expect(JSON.parse(yield* Effect.promise(() => readFile(lidFile, "utf8")))).toEqual({ armed: false })
     const native = fakeClamshell()
-    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, clamshell: native })
+    yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, systemSleep: fakeSystem(), clamshell: native })
     expect(native.calls).toEqual([])
   }))
 
@@ -608,7 +634,7 @@ describe("KeepAwake", () => {
     const awake = yield* KeepAwake.make({
       spawner: yield* AppProcess.Service, platform: "darwin", pid: process.pid, lidFile,
       command: recordedChild(directory).command,
-      clamshell: { set: (on) => {
+      systemSleep: fakeSystem(), clamshell: { set: (on) => {
         calls.push(on)
         return !on && fail ? "error" : on ? "on" : "off"
       } },
@@ -626,7 +652,7 @@ describe("KeepAwake", () => {
     const directory = yield* fixture
     const lidFile = path.join(directory, "lid.json")
     yield* Effect.promise(() => writeFile(lidFile, JSON.stringify({ armed: true })))
-    const awake = yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "darwin", pid: process.pid, lidFile, clamshell: { set: () => "unsupported" } })
+    const awake = yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "darwin", pid: process.pid, lidFile, systemSleep: fakeSystem(), clamshell: { set: () => "unsupported" } })
     expect(yield* awake.get).toMatchObject({ lid: "unsupported" })
     expect(JSON.parse(yield* Effect.promise(() => readFile(lidFile, "utf8")))).toEqual({ armed: true })
   }))
@@ -641,14 +667,14 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: lid,
+        systemSleep: fakeSystem(), clamshell: lid,
         command: child.command,
       })
-      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", sleepHold: false })
-      expect(yield* awake.hold("ses_one")).toEqual({ state: "on", lid: "on", sleepHold: true, manual: true })
-      expect(yield* awake.release("ses_one")).toEqual({ state: "on", lid: "on", sleepHold: false })
+      expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
+      expect(yield* awake.hold("ses_one")).toEqual({ state: "on", lid: "on", system: "on", sleepHold: true, manual: true })
+      expect(yield* awake.release("ses_one")).toEqual({ state: "on", lid: "on", system: "on", sleepHold: false })
       expect(child.spawned).toHaveLength(1)
-      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", sleepHold: false })
+      expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
     }),
   )
 
@@ -661,12 +687,13 @@ describe("KeepAwake", () => {
         platform: "darwin",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(true),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(true),
         command: child.command,
       })
       expect(yield* awake.hold("ses_one")).toEqual({
         state: "on",
         lid: "error",
+        system: "on",
         sleepHold: true,
         manual: false,
         message: "Lid-closed keep-awake could not be armed; closing the lid may sleep this machine.",
@@ -684,16 +711,217 @@ describe("KeepAwake", () => {
         platform: "linux",
         pid: process.pid,
         lidFile: path.join(directory, "lid.json"),
-        clamshell: fakeClamshell(),
+        systemSleep: fakeSystem(), clamshell: fakeClamshell(),
         command: child.command,
       })
       expect(yield* awake.hold("ses_one")).toMatchObject({ state: "unsupported", lid: "unsupported", sleepHold: true })
       expect(yield* awake.release("ses_one")).toMatchObject({
         state: "unsupported",
         lid: "unsupported",
+        system: "unsupported",
         sleepHold: false,
       })
       expect(child.spawned).toEqual([])
     }),
   )
+
+  describe("system sleep", () => {
+    const setup = Effect.gen(function* () {
+      const directory = yield* fixture
+      return {
+        directory,
+        lidFile: path.join(directory, "lid.json"),
+        child: recordedChild(directory),
+        spawner: yield* AppProcess.Service,
+      }
+    })
+    const record = (lidFile: string) => Effect.promise(() => readFile(lidFile, "utf8").then((text) => JSON.parse(text)))
+    const setupMessage = "System sleep hold needs one-time setup: run `ycoding keep-awake setup`."
+    const applyMessage = "System sleep could not be disabled; a closed lid may still sleep during power changes."
+    const restoreMessage = "System sleep could not be restored; run `sudo pmset -a disablesleep 0`."
+
+    it.live("applies once on turn-on and not on reapply ticks, then restores on disable", () =>
+      Effect.gen(function* () {
+        const { lidFile, child, spawner } = yield* setup
+        const lid = fakeClamshell()
+        const system = fakeSystem()
+        const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: lid, systemSleep: system, reapplyInterval: "10 millis" })
+        expect(yield* awake.hold("ses_one")).toMatchObject({ state: "on", lid: "on", system: "on", sleepHold: true })
+        expect(yield* record(lidFile)).toEqual({ armed: true, system: true })
+        yield* eventually(() => lid.calls.length, (count) => count >= 4)
+        expect(system.calls).toEqual([true])
+        expect(system.checks.count).toBe(1)
+        expect(yield* awake.release("ses_one")).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
+        expect(system.calls).toEqual([true, false])
+        expect(yield* record(lidFile)).toEqual({ armed: false })
+      }),
+    )
+
+    it.live("restores when the owning scope closes", () =>
+      Effect.gen(function* () {
+        const { lidFile, child, spawner } = yield* setup
+        const system = fakeSystem()
+        const scope = yield* Scope.make()
+        const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: fakeClamshell(), systemSleep: system }).pipe(Effect.provideService(Scope.Scope, scope))
+        yield* awake.set(true)
+        expect(system.calls).toEqual([true])
+        yield* Scope.close(scope, Exit.void)
+        expect(system.calls).toEqual([true, false])
+        expect(yield* record(lidFile)).toEqual({ armed: false })
+      }),
+    )
+
+    it.live("reports setup without calling pmset when the sudoers rule is missing and keeps the unprivileged hold", () =>
+      Effect.gen(function* () {
+        const { lidFile, child, spawner } = yield* setup
+        const lid = fakeClamshell()
+        const system = fakeSystem({ permitted: false })
+        const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: lid, systemSleep: system, reapplyInterval: "10 millis" })
+        expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "setup", sleepHold: false, message: setupMessage })
+        yield* eventually(() => lid.calls.length, (count) => count >= 4)
+        expect(system.checks.count).toBe(1)
+        expect(system.calls).toEqual([])
+        expect(yield* record(lidFile)).toEqual({ armed: true })
+        expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
+        expect(system.calls).toEqual([])
+      }),
+    )
+
+    it.live("a non-owner reports held and never checks or changes system sleep", () =>
+      Effect.gen(function* () {
+        const { lidFile, child, spawner } = yield* setup
+        const owner = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void))
+        yield* ProcessLock.acquire(lidFile).pipe(Effect.provideService(Scope.Scope, owner))
+        yield* Effect.promise(() => writeFile(lidFile, JSON.stringify({ armed: true, system: true })))
+        const system = fakeSystem()
+        const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: fakeClamshell(), systemSleep: system })
+        expect(yield* awake.set(true)).toMatchObject({ state: "on", lid: "held", system: "held" })
+        expect(yield* awake.set(false)).toMatchObject({ system: "held" })
+        expect(system.calls).toEqual([])
+        expect(system.checks.count).toBe(0)
+        expect(yield* record(lidFile)).toEqual({ armed: true, system: true })
+      }),
+    )
+
+    it.live("an apply failure reports an error while idle and lid hold stay on and is not retried", () =>
+      Effect.gen(function* () {
+        const { lidFile, child, spawner } = yield* setup
+        const lid = fakeClamshell()
+        const system = fakeSystem({ failApply: true })
+        const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: lid, systemSleep: system, reapplyInterval: "10 millis" })
+        expect(yield* awake.set(true)).toEqual({ state: "on", lid: "on", system: "error", sleepHold: false, message: applyMessage })
+        yield* eventually(() => lid.calls.length, (count) => count >= 4)
+        expect(system.calls).toEqual([true])
+        expect(yield* awake.get).toMatchObject({ state: "on", system: "error" })
+        expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
+        expect(system.calls).toEqual([true])
+        expect(yield* record(lidFile)).toEqual({ armed: false })
+      }),
+    )
+
+    it.live("a restore failure keeps the record and an explicit disable retries", () =>
+      Effect.gen(function* () {
+        const { lidFile, child, spawner } = yield* setup
+        const system = fakeSystem({ failRestore: true })
+        const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: fakeClamshell(), systemSleep: system })
+        yield* awake.set(true)
+        expect(yield* awake.set(false)).toMatchObject({ state: "off", system: "error", message: restoreMessage })
+        expect(yield* record(lidFile)).toEqual({ armed: false, system: true })
+        expect(yield* awake.get).toMatchObject({ system: "error", message: restoreMessage })
+        system.behavior.failRestore = false
+        expect(yield* awake.set(false)).toEqual({ state: "off", lid: "off", system: "off", sleepHold: false })
+        expect(system.calls).toEqual([true, false, false])
+        expect(yield* record(lidFile)).toEqual({ armed: false })
+      }),
+    )
+
+    it.live("startup restores only a system record whose lock is free", () =>
+      Effect.gen(function* () {
+        const { lidFile, spawner } = yield* setup
+        const owner = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(owner, Exit.void))
+        yield* ProcessLock.acquire(lidFile).pipe(Effect.provideService(Scope.Scope, owner))
+        yield* Effect.promise(() => writeFile(lidFile, JSON.stringify({ armed: true, system: true })))
+        const system = fakeSystem()
+        const make = KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, clamshell: fakeClamshell(), systemSleep: system })
+        yield* make
+        expect(system.calls).toEqual([])
+        expect(yield* record(lidFile)).toEqual({ armed: true, system: true })
+        yield* Scope.close(owner, Exit.void)
+        yield* make
+        expect(system.calls).toEqual([false])
+        expect(yield* record(lidFile)).toEqual({ armed: false })
+        yield* make
+        expect(system.calls).toEqual([false])
+      }),
+    )
+
+    it.live("startup restores a system record whose lid was already disarmed", () =>
+      Effect.gen(function* () {
+        const { lidFile, spawner } = yield* setup
+        yield* Effect.promise(() => writeFile(lidFile, JSON.stringify({ armed: false, system: true })))
+        const system = fakeSystem()
+        yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, clamshell: fakeClamshell(), systemSleep: system })
+        expect(system.calls).toEqual([false])
+        expect(yield* record(lidFile)).toEqual({ armed: false })
+      }),
+    )
+
+    it.live("restores system sleep when the inhibitor stops unexpectedly", () =>
+      Effect.gen(function* () {
+        const { lidFile, child, spawner } = yield* setup
+        const system = fakeSystem()
+        const awake = yield* KeepAwake.make({ spawner, platform: "darwin", pid: process.pid, lidFile, command: child.command, clamshell: fakeClamshell(), systemSleep: system })
+        yield* awake.set(true)
+        process.kill(yield* child.pid(0), "SIGKILL")
+        const status = yield* eventually(() => Effect.runPromise(awake.get), (value) => value.state !== "on")
+        expect(status).toMatchObject({ state: "error", system: "off" })
+        expect(system.calls).toEqual([true, false])
+      }),
+    )
+
+    it.live("runs only the narrow non-interactive sudo pmset commands on macOS", () =>
+      Effect.gen(function* () {
+        const spawner = yield* AppProcess.Service
+        const commands: string[][] = []
+        let exitCode = 0
+        const system = SystemSleep.make("darwin", {
+          ...spawner,
+          run: (command) =>
+            Effect.sync(() => {
+              if (command._tag !== "StandardCommand") throw new Error("unexpected command")
+              commands.push([command.command, ...command.args])
+              return { command: "", exitCode, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), stdoutTruncated: false, stderrTruncated: false }
+            }),
+        })
+        expect(yield* system.permitted).toBe(true)
+        expect(yield* system.set(true)).toBe("on")
+        expect(yield* system.set(false)).toBe("off")
+        expect(commands).toEqual([
+          ["/usr/bin/sudo", "-n", "-l", "/usr/bin/pmset", "-a", "disablesleep", "1"],
+          ["/usr/bin/sudo", "-n", "/usr/bin/pmset", "-a", "disablesleep", "1"],
+          ["/usr/bin/sudo", "-n", "/usr/bin/pmset", "-a", "disablesleep", "0"],
+        ])
+        exitCode = 1
+        expect(yield* system.permitted).toBe(false)
+        expect(yield* system.set(true)).toBe("error")
+      }),
+    )
+
+    it.live("never spawns pmset or sudo on unsupported platforms", () =>
+      Effect.gen(function* () {
+        const spawner = yield* AppProcess.Service
+        const spawned: string[] = []
+        const system = SystemSleep.make("linux", {
+          ...spawner,
+          run: (command) => Effect.sync(() => { spawned.push(JSON.stringify(command)); throw new Error("spawned") }),
+          spawn: (command) => spawner.spawn(command).pipe(Effect.tap(() => Effect.sync(() => spawned.push("spawn")))),
+        })
+        expect(yield* system.permitted).toBe(false)
+        expect(yield* system.set(true)).toBe("error")
+        expect(spawned).toEqual([])
+      }),
+    )
+  })
 })

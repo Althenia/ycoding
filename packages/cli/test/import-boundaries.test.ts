@@ -119,6 +119,7 @@ describe("CLI frontend import boundaries", () => {
             file !== "packages/cli/src/commands/handlers/run-shared.ts" &&
             file !== "packages/cli/src/commands/handlers/update.ts" &&
             file !== "packages/cli/src/commands/handlers/meeting.ts" &&
+            file !== "packages/cli/src/commands/handlers/keep-awake/setup.ts" &&
             !/^packages\/cli\/src\/commands\/handlers\/service\/(?:start|restart|status|stop|get|set|unset)\.ts$/.test(
               file,
             ) &&

@@ -1,5 +1,6 @@
 import { Argument, Flag } from "effect/unstable/cli"
 import { Spec } from "../framework/spec"
+import { KeepAwakeCommand } from "./keep-awake"
 import { MeetingCommand } from "./meeting"
 import { RemoteCommand } from "./remote"
 import { RunCommand, ServerParams } from "./run"
@@ -175,6 +176,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
     UpdateCommand,
     RemoteCommand,
     ServiceCommand,
+    KeepAwakeCommand,
     MeetingCommand,
     Spec.make("pair", { description: "Show server pairing information" }),
     Spec.make("serve", {

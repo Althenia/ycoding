@@ -1,7 +1,7 @@
 import { describeOutcome } from "./outcome"
 import type { RemoteRequestOutcome } from "./transport"
 
-export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly lid?: "off" | "on" | "held" | "unsupported" | "error"; readonly sleepHold?: boolean; readonly manual?: boolean; readonly message?: string }
+export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly lid?: "off" | "on" | "held" | "unsupported" | "error"; readonly system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"; readonly sleepHold?: boolean; readonly manual?: boolean; readonly message?: string }
 
 type KeepAwakeChange = {
   readonly state: "sending" | "failed" | "unknown"
@@ -27,11 +27,13 @@ export function readKeepAwakeStatus(payload: unknown): KeepAwakeStatus | undefin
   if (state !== "off" && state !== "on" && state !== "unsupported" && state !== "error") return undefined
   if (message !== undefined && (typeof message !== "string" || message.length > maxMessageLength)) return undefined
   const lid = Reflect.get(data, "lid")
+  const system = Reflect.get(data, "system")
   const sleepHold = Reflect.get(data, "sleepHold")
   const manual = Reflect.get(data, "manual")
   return {
     state,
     ...(lid === "off" || lid === "on" || lid === "held" || lid === "unsupported" || lid === "error" ? { lid } : {}),
+    ...(system === "off" || system === "on" || system === "held" || system === "setup" || system === "unsupported" || system === "error" ? { system } : {}),
     ...(typeof sleepHold === "boolean" ? { sleepHold } : {}),
     ...(typeof manual === "boolean" ? { manual } : {}),
     ...(message === undefined ? {} : { message }),
@@ -63,10 +65,32 @@ export type KeepAwakeView = {
 }
 
 const caveat =
-  "Available on macOS. Controls idle sleep and lid-closed sleep when each part reports On; an unreported lid part is unconfirmed. Choosing Sleep still sleeps. On battery this drains the battery and a closed lid traps heat. The manual preference resets when YCoding stops or restarts; sleeping families rehydrate their holds. Verify lid behavior on this Mac."
+  "Available on macOS. Controls idle sleep and lid-closed sleep when each part reports On; an unreported lid part is unconfirmed. Choosing Sleep still sleeps unless system sleep is On; with system sleep On, a closed lid on battery stays awake until the battery dies and Sleep does not sleep. On battery this drains the battery and a closed lid traps heat. The manual preference resets when YCoding stops or restarts; sleeping families rehydrate their holds. Verify lid behavior on this Mac."
+const systemText = {
+  off: "System sleep control off.",
+  on: "System sleep disabled: a closed lid on battery stays awake until the battery dies, and Sleep does not sleep.",
+  held: "System sleep held by another YCoding process.",
+  setup: "System sleep control not installed; run ycoding keep-awake setup.",
+  unsupported: "System sleep control unsupported.",
+  error: "System sleep control could not be applied or restored.",
+} as const
 const updateAdvice = "Update YCoding on this machine to keep it awake from here."
 
 export function keepAwakeView(input: {
+  readonly keepAwake: KeepAwakeState
+  readonly reachable: boolean
+}): KeepAwakeView {
+  const result = baseView(input)
+  const system = input.reachable && input.keepAwake.read === "ready" ? input.keepAwake.status?.system : undefined
+  if (system === undefined || input.keepAwake.change !== undefined) return result
+  return {
+    ...result,
+    detail: `${result.detail} ${systemText[system]}`,
+    ...(system === "error" && result.tone !== "danger" ? { tone: "attention" as const, alert: true } : {}),
+  }
+}
+
+function baseView(input: {
   readonly keepAwake: KeepAwakeState
   readonly reachable: boolean
 }): KeepAwakeView {

@@ -6,7 +6,7 @@ import { CommandPaletteDialog } from "../src/component/command-palette"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider, useTheme } from "../src/context/theme"
-import { KeepAwakeProvider, useKeepAwake, type KeepAwakeStatus } from "../src/keep-awake"
+import { KeepAwakeProvider, keepAwakeStatusLabel, useKeepAwake, type KeepAwakeStatus } from "../src/keep-awake"
 import { DialogProvider, useDialog } from "../src/ui/dialog"
 import { ToastProvider, useToast } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
@@ -39,6 +39,22 @@ test("labels a foreign lid owner without claiming this process armed it", async 
   } finally {
     view.app.renderer.destroy()
   }
+})
+
+test("labels the system sleep part by state", () => {
+  const on = (system?: KeepAwakeStatus["system"]) => keepAwakeStatusLabel({ state: "on", lid: "on", system })
+  expect(on()).toBe("on · idle + lid")
+  expect(on("off")).toBe("on · idle + lid")
+  expect(on("unsupported")).toBe("on · idle + lid")
+  expect(on("on")).toBe("on · idle + lid + system")
+  expect(on("setup")).toBe("on · idle + lid + system needs setup")
+  expect(on("held")).toBe("on · idle + lid + system held elsewhere")
+  expect(on("error")).toBe("on · idle + lid + system error")
+  const off = (system?: KeepAwakeStatus["system"]) => keepAwakeStatusLabel({ state: "off", lid: "off", system })
+  expect(off()).toBe("off · lid off")
+  for (const value of ["off", "setup", "held", "unsupported"] as const) expect(off(value)).toBe("off · lid off")
+  expect(off("on")).toBe("off · lid off · system on")
+  expect(off("error")).toBe("off · lid off · system error")
 })
 
 async function awaitFrame(app: Awaited<ReturnType<typeof testRender>>, matches: (frame: string) => boolean) {

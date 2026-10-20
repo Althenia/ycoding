@@ -11,13 +11,24 @@ export type KeepAwakeStatus = KeepAwake.Status
 export function keepAwakeStatusLabel(status: KeepAwakeStatus | undefined): string {
   if (!status) return "Checking"
   if (status.state !== "on")
-    return `${status.state} · lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}${status.sleepHold ? " · sleep-held" : ""}`
+    return `${status.state} · lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}${status.sleepHold ? " · sleep-held" : ""}${status.system === "on" || status.system === "error" ? ` · system ${status.system}` : ""}`
   const parts = ["idle"]
   if (status.lid === "on") parts.push("lid")
   if (status.lid !== "on") parts.push(`lid ${status.lid === "held" ? "held elsewhere" : status.lid ?? "unreported"}`)
   if (status.sleepHold) parts.push("sleep-held")
+  const system = status.system === undefined ? undefined : systemParts[status.system]
+  if (system) parts.push(system)
   return `on · ${parts.join(" + ")}`
 }
+
+const systemParts = {
+  on: "system",
+  setup: "system needs setup",
+  held: "system held elsewhere",
+  error: "system error",
+  off: undefined,
+  unsupported: undefined,
+} satisfies Record<NonNullable<KeepAwakeStatus["system"]>, string | undefined>
 
 type KeepAwakeServer = {
   get: () => Promise<KeepAwakeStatus>
