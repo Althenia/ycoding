@@ -95,6 +95,7 @@ export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly snapshot: (
     sessionID: SessionSchema.ID,
+    options?: { readonly inherited: true },
   ) => Effect.Effect<{ readonly state: State; readonly sequence: number; readonly digest: string }, NotFoundError>
   readonly canYolo: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly canAutoAnswer: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
@@ -172,24 +173,33 @@ export function makeGoal(input: { text: string; rawText?: string; maxNoProgress?
 }
 
 export function make(input: { db: Database.Interface["db"] }): Interface {
-  const snapshot: Interface["snapshot"] = (sessionID) =>
-    input.db
-      .select({ autonomy: SessionTable.autonomy, sequence: SessionTable.autonomy_revision })
-      .from(SessionTable)
-      .where(eq(SessionTable.id, sessionID))
-      .get()
-      .pipe(
-        Effect.orDie,
-        Effect.flatMap((row) =>
-          row
-            ? Effect.succeed({
-                state: read(row.autonomy),
-                sequence: row.sequence,
-                digest: Hash.sha256(canonicalJSON(read(row.autonomy))),
-              })
-            : Effect.fail(new NotFoundError({ sessionID })),
-        ),
-      )
+  const snapshot: Interface["snapshot"] = (sessionID, options) =>
+    Effect.gen(function* () {
+      const row = yield* input.db
+        .select({ autonomy: SessionTable.autonomy, sequence: SessionTable.autonomy_revision })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new NotFoundError({ sessionID })
+      const state = read(row.autonomy)
+      if (!options?.inherited)
+        return { state, sequence: row.sequence, digest: Hash.sha256(canonicalJSON(state)) }
+      const task = yield* input.db
+        .select({ parentID: SessionTaskTable.parent_id })
+        .from(SessionTaskTable)
+        .where(eq(SessionTaskTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      const parent = task
+        ? yield* snapshot(task.parentID, options).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+        : undefined
+      return {
+        state,
+        sequence: row.sequence,
+        digest: Hash.sha256(canonicalJSON([sessionID, row.sequence, state, parent?.digest ?? null])),
+      }
+    })
 
   const load = (sessionID: SessionSchema.ID) => snapshot(sessionID).pipe(Effect.map((value) => value.state))
 

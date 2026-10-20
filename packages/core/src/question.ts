@@ -291,7 +291,7 @@ const layer = Layer.effect(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const snapshot = yield* autonomy
-            .snapshot(input.sessionID)
+            .snapshot(input.sessionID, { inherited: true })
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
           const autoAnswer = snapshot ? SessionAutonomy.canAutoAnswer(snapshot.state) : false
           const asleep = yield* autonomy
@@ -316,7 +316,7 @@ const layer = Layer.effect(
               Effect.onInterrupt(() => cancelPending),
             )
             if (outcome.type === "answered") {
-              const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, input.sessionID, snapshot.sequence)
+              const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, input.sessionID, snapshot)
               const claimed = unchanged && (yield* exclusive(Effect.sync(() => {
                 if (pending.get(id) !== entry) return false
                 pending.delete(id)

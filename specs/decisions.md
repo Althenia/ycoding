@@ -26,6 +26,8 @@ The helper returns typed judgments and self-reported, uncalibrated confidence, n
 
 ## Decision-agent inputs
 
+Runtime single-choice and graded-choice helpers MUST redact known credentials from choice values before dispatch, validate responses against those redacted choices, and map validated results back to their original local values. A redaction collision MUST settle as an invalid request without a helper call. Automatic Question, Form, and managed-child answers MUST fence the asking Session's autonomy revision and the ordered managed-ancestor revision chain before settlement. Any change on that chain, including revocation followed by restoration, MUST invalidate the result; unrelated sibling changes MUST NOT invalidate it.
+
 The tool accepts `{ "provider": "agent", "request": { "state": ..., "questions": [...] } }`. State is JSON. Questions are ordered, uniquely named, and bounded to 1–32 per call. Every question has a nonempty `name` of at most 64 characters and nonempty `instructions` of at most 8,192 characters:
 
 - `predicate` asks for a Boolean;

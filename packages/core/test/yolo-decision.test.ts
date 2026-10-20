@@ -295,6 +295,100 @@ describe("automatic form and question settlement provenance", () => {
     }),
   )
 
+  it.effect("multiselect grading redacts model-bound values and restores selected original values", () =>
+    Effect.gen(function* () {
+      yield* setup
+      asleep = true
+      autoAnswer = false
+      yolo = true
+      const secret = "synthetic-grading-credential-7319"
+      const original = process.env.YCODING_TEST_GRADING_SECRET
+      const previous = decisionBehavior
+      yield* Effect.addFinalizer(() => Effect.sync(() => {
+        if (original === undefined) delete process.env.YCODING_TEST_GRADING_SECRET
+        else process.env.YCODING_TEST_GRADING_SECRET = original
+        decisionBehavior = previous
+      }))
+      process.env.YCODING_TEST_GRADING_SECRET = secret
+      const requests: Decision.Input[] = []
+      decisionBehavior = (input) => Effect.sync(() => {
+        requests.push(input)
+        return output(input.request.questions.map((question) => ({
+          name: question.name, type: "choice", answer: null, choice: null, score: null, text: null, confidence: 0,
+          grades: question.type === "choice" ? question.choices.map((choice, index) => ({
+            choice: choice.value, confidence: index === 0 ? 0.95 : 0.1, evidence: "Synthetic option evidence.",
+          })) : [],
+        })))
+      })
+      const service = yield* Form.Service
+      const result = yield* service.ask({
+        sessionID, title: "Synthetic deployment targets",
+        fields: [{ key: "targets", type: "multiselect", required: true, options: [
+          { value: `environment:${secret}`, label: `Synthetic ${secret}`, description: `Value ${secret}` },
+          { value: "local", label: "Local" },
+        ] }],
+      })
+      expect(requests).toHaveLength(1)
+      expect(JSON.stringify(requests)).not.toContain(secret)
+      expect(requests[0]?.request.questions[0]).toMatchObject({ choices: [
+        { value: "environment:[redacted]", description: "Value [redacted]" },
+        { value: "local", description: "Local" },
+      ] })
+      expect(result).toEqual({ status: "answered", answer: { targets: [`environment:${secret}`] }, automatic: true, via: "yolo", confidence: 0.95 })
+    }),
+  )
+
+  it.effect("graded values retain their original mapping when an environment credential rotates during evaluation", () =>
+    Effect.gen(function* () {
+      const original = process.env.YCODING_TEST_GRADING_SECRET
+      yield* Effect.addFinalizer(() => Effect.sync(() => {
+        if (original === undefined) delete process.env.YCODING_TEST_GRADING_SECRET
+        else process.env.YCODING_TEST_GRADING_SECRET = original
+      }))
+      const secret = "synthetic-grading-before-rotation-7319"
+      process.env.YCODING_TEST_GRADING_SECRET = secret
+      const result = yield* DecisionChoice.grade({ evaluate: (input) => Effect.sync(() => {
+        process.env.YCODING_TEST_GRADING_SECRET = "synthetic-grading-after-rotation-7320"
+        return output(input.request.questions.map((question) => ({
+          name: question.name, type: "choice", answer: null, choice: null, score: null, text: null, confidence: 0,
+          grades: question.type === "choice" ? question.choices.map((choice) => ({
+            choice: choice.value, confidence: 0.95, evidence: "Synthetic evidence.",
+          })) : [],
+        })))
+      }) }, { sessionID, name: "target", instructions: "Grade", state: {}, choices: [{ value: `environment:${secret}` }] })
+      expect(result).toEqual({ type: "grades", grades: [{ choice: `environment:${secret}`, confidence: 0.95, evidence: "Synthetic evidence." }] })
+    }),
+  )
+
+  it.effect("multiselect redaction collisions defer without dispatching the helper", () =>
+    Effect.gen(function* () {
+      yield* setup
+      asleep = true
+      autoAnswer = false
+      yolo = true
+      const originals = [process.env.YCODING_TEST_GRADING_SECRET, process.env.YCODING_TEST_GRADING_TOKEN]
+      yield* Effect.addFinalizer(() => Effect.sync(() => {
+        for (const [index, key] of ["YCODING_TEST_GRADING_SECRET", "YCODING_TEST_GRADING_TOKEN"].entries()) {
+          const original = originals[index]
+          if (original === undefined) delete process.env[key]
+          else process.env[key] = original
+        }
+      }))
+      process.env.YCODING_TEST_GRADING_SECRET = "synthetic-grading-first-7319"
+      process.env.YCODING_TEST_GRADING_TOKEN = "synthetic-grading-second-7320"
+      const service = yield* Form.Service
+      const result = yield* service.ask({
+        sessionID, title: "Ambiguous synthetic targets",
+        fields: [{ key: "targets", type: "multiselect", required: true, options: [
+          { value: `environment:${process.env.YCODING_TEST_GRADING_SECRET}`, label: "First" },
+          { value: `environment:${process.env.YCODING_TEST_GRADING_TOKEN}`, label: "Second" },
+        ] }],
+      })
+      expect(result.status).toBe("deferred")
+      expect(seen).toEqual([])
+    }),
+  )
+
   it.effect("an optional multiselect the model grades entirely below the threshold yields no automatic submission", () =>
     Effect.gen(function* () {
       yield* setup

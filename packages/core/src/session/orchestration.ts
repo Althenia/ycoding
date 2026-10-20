@@ -881,11 +881,12 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
+            const snapshot = yield* autonomy
+              .snapshot(childID, { inherited: true })
+              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            const autoAnswer = SessionAutonomy.canAutoAnswer(snapshot.state)
             const asleep = yield* autonomy
               .isAsleep(childID)
-              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
-            const autoAnswer = yield* autonomy
-              .canAutoAnswer(childID)
               .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
             const child = yield* sessions.get(childID).pipe(
               Effect.mapError(() => new TaskNotFoundError({ childID })),
@@ -894,9 +895,6 @@ const layer = Layer.effect(
               Effect.provide(locations.get(child.location)),
               Effect.flatMap((config) => config.entries()),
             )
-            const snapshot = yield* autonomy
-              .snapshot(childID)
-              .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
             const yolo = yield* DecisionChoice.yoloEnabled(autonomy, childID)
             const settled: SleepAnswerOutcome | undefined = autoAnswer || yolo
               ? yield* sleepAnswer({ childID, text, data, autoAnswer, yolo, questionID: question.id })
@@ -904,7 +902,7 @@ const layer = Layer.effect(
                 ? { type: "defer" as const, reason: "disabled" as const }
                 : undefined
             const sleepOutcome: SleepAnswerOutcome | undefined = settled?.type === "answer" && !(yield* DecisionChoice
-              .autonomyUnchanged(autonomy, childID, snapshot.sequence))
+              .autonomyUnchanged(autonomy, childID, snapshot))
               ? { type: "defer" as const, reason: "disabled" as const }
               : settled?.type === "defer" && !asleep
                 ? undefined

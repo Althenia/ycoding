@@ -12,6 +12,8 @@ describe("release entries", () => {
     const text = release?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["on/off", "auto-permission", "auto-guardrail", "auto-answer", "independent", "hidden", "inspectable", "explicit denials", "hard reviews", "free text", "yes/no", "uncertainty", "phone composer"])
       expect(text).toContain(fragment)
+    for (const fragment of ["credential-bearing", "validated local selections", "managed-ancestor", "revoked and restored"])
+      expect(text).toContain(fragment)
     expect(RELEASES[1]?.version).toBe("0.10.18")
   })
 

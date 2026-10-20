@@ -36,10 +36,10 @@ export function yoloEnabled(
 export function autonomyUnchanged(
   autonomy: SessionAutonomy.Interface,
   sessionID: SessionSchema.ID,
-  sequence: number,
+  snapshot: { readonly sequence: number; readonly digest: string },
 ): Effect.Effect<boolean> {
-  return autonomy.snapshot(sessionID).pipe(
-    Effect.map((snapshot) => snapshot.sequence === sequence),
+  return autonomy.snapshot(sessionID, { inherited: true }).pipe(
+    Effect.map((current) => current.sequence === snapshot.sequence && current.digest === snapshot.digest),
     Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)),
   )
 }
@@ -208,11 +208,12 @@ export function grade(decision: Decision.Interface, input: {
 }): Effect.Effect<GradedOutcome> {
   if (input.choices.length === 0 || redactionCollision(input.choices))
     return Effect.succeed({ type: "unsettled", reason: "invalid-request" } as GradedOutcome)
+  const originals = new Map(input.choices.map((choice) => [redactText(choice.value), choice.value]))
   const request = {
     state: redactEvidence(input.state),
     questions: [{
       type: "choice" as const, name: input.name, instructions: redactText(input.instructions), grade: true,
-      choices: input.choices.map((choice) => ({ value: choice.value,
+      choices: input.choices.map((choice) => ({ value: redactText(choice.value),
         ...(choice.description === undefined ? {} : { description: redactText(choice.description) }),
       })),
     }],
@@ -234,7 +235,8 @@ export function grade(decision: Decision.Interface, input: {
       if (!answer || answer.type === "refusal") return { type: "unsettled", reason: "refused" }
       if (!answer.grades) return { type: "unsettled", reason: "invalid-output" }
       return { type: "grades", grades: answer.grades.map((grade) => ({
-        choice: grade.choice, confidence: grade.confidence, evidence: redactText(grade.evidence).slice(0, 500),
+        choice: originals.get(String(grade.choice))!,
+        confidence: grade.confidence, evidence: redactText(grade.evidence).slice(0, 500),
       })) }
     }),
   )

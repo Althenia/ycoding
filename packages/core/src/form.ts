@@ -236,7 +236,7 @@ export const layer = Layer.effect(
           const sessionID = Schema.is(SessionSchema.ID)(input.sessionID) ? input.sessionID : undefined
           const snapshot = sessionID
             ? yield* autonomy
-                .snapshot(sessionID)
+                .snapshot(sessionID, { inherited: true })
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
             : undefined
           const autoAnswer = snapshot ? SessionAutonomy.canAutoAnswer(snapshot.state) : false
@@ -264,7 +264,7 @@ export const layer = Layer.effect(
               const item = yield* openReview(form, sessionID, outcome)
               return { status: "deferred", itemID: item.itemID } as TerminalState
             }
-            const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot.sequence)
+            const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot)
             if (!unchanged) {
               const item = yield* openReview(form, sessionID, { reason: "disabled" })
               return { status: "deferred", itemID: item.itemID } as TerminalState
@@ -286,7 +286,7 @@ export const layer = Layer.effect(
               ? yield* decisionAnswer(decision, sessionID, form, { autoAnswer, yolo })
               : undefined
             const unchanged = outcome?.type === "answer" && sessionID && snapshot
-              ? yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot.sequence)
+              ? yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot)
               : false
             const automatic = outcome?.type === "answer" && unchanged
               ? yield* reply({ id: form.id, answer: outcome.answer }).pipe(
