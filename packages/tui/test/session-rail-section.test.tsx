@@ -153,7 +153,7 @@ test("renders the session title only inside the section body", async () => {
   }
 })
 
-test("awake YOLO-off rail names the human decider and the actual auto-answer state", async () => {
+test("awake YOLO-off rail names the manual decider and the actual auto-answer state", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy()} />, {
     width: 40,
@@ -161,7 +161,7 @@ test("awake YOLO-off rail names the human decider and the actual auto-answer sta
   })
   try {
     await app.waitForFrame((frame) => frame.includes("Guardrails"))
-    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Guardrails you")
+    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Guardrails manual")
     expect(app.captureCharFrame().replace(/\s+/g, " ")).not.toContain("Auto-answer")
     expect(app.captureCharFrame()).not.toContain("hard reviews")
   } finally {
@@ -183,7 +183,7 @@ test("an unloaded autonomy read renders unknown rows, never YOLO off or Off", as
   }
 })
 
-test("auto-guardrail without ordinary-review authority asks you for ordinary reviews in the rail", async () => {
+test("auto-guardrail without ordinary-review authority leaves ordinary reviews manual in the rail", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy({ autoPermission: true, autoGuardrail: true, ordinaryReviewsAuto: false })} />, {
     width: 60,
@@ -193,7 +193,7 @@ test("auto-guardrail without ordinary-review authority asks you for ordinary rev
     await app.waitForFrame((frame) => frame.includes("Guardrails"))
     const frame = app.captureCharFrame().replace(/\s+/g, " ")
     expect(frame).toContain("Permissions auto")
-    expect(frame).toContain("Guardrails you")
+    expect(frame).toContain("Guardrails manual")
     expect(frame).toContain("YOLO off")
   } finally {
     app.renderer.destroy()
@@ -203,13 +203,14 @@ test("auto-guardrail without ordinary-review authority asks you for ordinary rev
 test("renders who decides each action for every auto flag and with an active goal", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const cases = [
-    { name: "off", flags: {}, goal: false, autoAnswer: false, values: ["you", "you", "you"] },
-    { name: "yolo", flags: { yolo: true }, goal: false, autoAnswer: false, values: ["you", "you", "you"] },
-    { name: "permission", flags: { autoPermission: true }, goal: false, autoAnswer: false, values: ["auto", "you", "you"] },
-    { name: "guardrail", flags: { autoGuardrail: true }, goal: false, autoAnswer: false, values: ["you", "auto", "you"] },
-    { name: "goal", flags: {}, goal: true, autoAnswer: false, values: ["you", "you", "you"] },
-    { name: "answer", flags: {}, goal: false, autoAnswer: true, values: ["you", "you", "auto"] },
-    { name: "all", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: true, values: ["auto", "auto", "auto"] },
+    { name: "off", flags: {}, goal: false, autoAnswer: false, values: ["manual", "manual", "manual"] },
+    { name: "yolo", flags: { yolo: true }, goal: false, autoAnswer: false, values: ["yolo", "yolo", "yolo"] },
+    { name: "permission", flags: { autoPermission: true }, goal: false, autoAnswer: false, values: ["auto", "manual", "manual"] },
+    { name: "guardrail", flags: { autoGuardrail: true }, goal: false, autoAnswer: false, values: ["manual", "auto", "manual"] },
+    { name: "goal", flags: {}, goal: true, autoAnswer: false, values: ["manual", "manual", "manual"] },
+    { name: "answer", flags: {}, goal: false, autoAnswer: true, values: ["manual", "manual", "auto"] },
+    { name: "yolo with rule flags", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: false, values: ["auto", "auto", "yolo"] },
+    { name: "all", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: true, values: ["auto", "auto", "auto, then yolo"] },
   ] as const
 
   for (const item of cases) {
@@ -255,7 +256,7 @@ test("renders who decides each action for every auto flag and with an active goa
       const spanLines = app.captureSpans().lines
       expected.forEach((label, index) => {
         const value = item.values[index]!
-        const human = value === "you"
+        const human = value === "manual"
         const painted = block(index).flatMap((row) =>
           spanLines[row]!.spans.filter((span) => span.text.trim() !== "" && span.text.trim() !== label),
         )
@@ -281,7 +282,7 @@ for (const mode of ["dark", "light"] as const) {
           () => (
             <box width={width}>
               <RailProvider>
-                <AutonomyRailContent autonomy={railAutonomy({ yolo: true, sleep: asleep })} />
+                <AutonomyRailContent autonomy={railAutonomy({ autoPermission: true, sleep: asleep })} />
               </RailProvider>
             </box>
           ),
@@ -298,8 +299,8 @@ for (const mode of ["dark", "light"] as const) {
           for (const line of lines) expect(line.slice(width).trim()).toBe("")
           const guardrailLine = lines.findIndex((line) => line.includes("Guardrails"))
           const questionLine = lines.findIndex((line) => line.includes("Questions"))
-          const guardrailValue = asleep ? "review box" : "you"
-          const questionValue = asleep ? "review box" : "you"
+          const guardrailValue = asleep ? "review box" : "manual"
+          const questionValue = asleep ? "review box" : "manual"
           expect(lines.slice(guardrailLine, questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
             `Guardrails ${guardrailValue}`,
           )

@@ -60,23 +60,13 @@ export function localAutonomyView(state: AutonomyState): SessionAutonomyView {
 }
 
 export type AutonomyAction = "permissions" | "guardrails" | "questions"
-export type AutonomyDecisionKind = "you" | "automated" | "unknown"
+export type AutonomyDecisionKind = "manual" | "automated" | "unknown"
 
 export function autonomyDecisionKind(view: SessionAutonomyView | undefined, action: AutonomyAction): AutonomyDecisionKind {
-  if (!view?.effective) return "unknown"
-  const effective = view.effective
-  if (action === "permissions") {
-    if (effective.permissionsAuto || effective.permissionModelReviews) return "automated"
-    return effective.asleep ? "automated" : "you"
-  }
-  if (action === "guardrails") {
-    if (!effective.guardrailsEnabled) return "you"
-    if (effective.ordinaryReviewsAuto) return "automated"
-    if (effective.modelReviews || effective.asleep) return "automated"
-    return "you"
-  }
-  if (autoAnswerOn(view)) return "automated"
-  return effective.asleep ? "automated" : "you"
+  const label = autonomyDecisionLabel(view, action)
+  if (label === "unknown") return "unknown"
+  if (label === "manual" || label === "disabled") return "manual"
+  return "automated"
 }
 
 export function autonomyToggleDescription(toggle: AutonomyToggle) {
@@ -94,23 +84,25 @@ export function autonomyToggleLabel(toggle: AutonomyToggle) {
 }
 
 export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, action: AutonomyAction) {
-  if (action === "guardrails") {
-    if (!view?.effective) return "unknown"
-    const effective = view.effective
-    if (!effective.guardrailsEnabled) return "disabled"
-    if (effective.ordinaryReviewsAuto) return "auto"
-    if (effective.modelReviews) return effective.asleep ? "model, then review box" : "model, then you"
-    return effective.asleep ? "review box" : "you"
-  }
   if (!view?.effective) return "unknown"
   const effective = view.effective
+  const human = effective.asleep ? "review box" : "manual"
+  if (action === "guardrails") {
+    if (!effective.guardrailsEnabled) return "disabled"
+    if (effective.ordinaryReviewsAuto) return "auto"
+    if (effective.yolo) return "yolo"
+    if (effective.modelReviews) return `model, then ${human}`
+    return human
+  }
   if (action === "permissions") {
     if (effective.permissionsAuto) return "auto"
-    if (effective.permissionModelReviews) return effective.asleep ? "model, then review box" : "model, then you"
-    return effective.asleep ? "review box" : "you"
+    if (effective.yolo) return "yolo"
+    if (effective.permissionModelReviews) return `model, then ${human}`
+    return human
   }
-  if (autoAnswerOn(view)) return "auto"
-  return effective.asleep ? "review box" : "you"
+  if (autoAnswerOn(view)) return effective.yolo ? "auto, then yolo" : "auto"
+  if (effective.yolo) return "yolo"
+  return human
 }
 
 export function autonomyModeParts(view: SessionAutonomyView | undefined): readonly string[] {

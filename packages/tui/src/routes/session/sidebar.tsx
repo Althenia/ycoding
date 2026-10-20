@@ -193,7 +193,7 @@ export function AutonomyRailContent(props: {
                   label={label}
                   value={autonomyDecisionLabel(props.autonomy, action)}
                   valueColor={
-                    decision() === "you"
+                    decision() === "manual"
                       ? theme.text.feedback.success.default
                       : decision() === "unknown"
                         ? theme.text.subdued
