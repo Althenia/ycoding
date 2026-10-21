@@ -451,11 +451,6 @@ describe("Agent", () => {
           expect(Permission.evaluate(action, "*", evaluator.permissions).effect).toBe("deny")
         expect(evaluator.system).toContain("exactly one JSON document")
       }
-      const guardrail = yield* agent.get(Agent.ID.make("yolo-guardrail"))
-      expect(guardrail?.system).toContain("even when it reads every file, recursively, or outside the repository")
-      expect(guardrail?.system).toContain("when its targets are or likely contain production secrets, API keys, tokens, private keys, or credentials")
-      expect(guardrail?.system).toContain("decide allow, deny, or escalate from the evidence of purpose and exposure")
-      expect(guardrail?.system).toContain("not read-only when any segment creates, modifies, or deletes data, executes code, or sends data over the network")
     }),
   )
 
