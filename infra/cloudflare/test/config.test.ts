@@ -9,8 +9,9 @@ test("adopts the existing production Worker, only the requested Cloudflare resou
     preview_urls: false,
     routes: [{ pattern: "ycoding.althenia.app", custom_domain: true }],
     d1_databases: [{ binding: "DB", database_name: "ycoding-prod-db" }],
-    durable_objects: { bindings: [{ name: "DEVICE_RELAY", class_name: "DeviceRelay" }] },
-    exports: { DeviceRelay: { type: "durable-object", storage: "sqlite" } },
+    durable_objects: { bindings: [{ name: "DEVICE_RELAY", class_name: "DeviceRelay" }, { name: "PREVIEW_DIRECTORY", class_name: "PreviewDirectory" }] },
+    exports: { DeviceRelay: { type: "durable-object", storage: "sqlite" }, PreviewDirectory: { type: "durable-object", storage: "sqlite" } },
+    vars: { PREVIEW_ORIGINS: "" },
   })
   expect(config.migrations).toBeUndefined()
   expect(config.assets).toEqual({
@@ -37,4 +38,23 @@ test("adopts the existing production Worker, only the requested Cloudflare resou
   expect(JSON.stringify(config)).not.toContain("_redirects")
   expect(JSON.stringify(config)).not.toContain("api.ycoding.althenia.app")
   expect(JSON.stringify(config)).not.toContain("relay.ycoding.althenia.app")
+})
+
+test("the app preview Worker is disabled, has no route, logs nothing, and reaches only the relay's Durable Objects", async () => {
+  const config = await Bun.file(new URL("../wrangler.preview.jsonc", import.meta.url)).json()
+  expect(config).toEqual({
+    name: "ycoding-preview",
+    main: "src/preview/index.ts",
+    compatibility_date: "2026-09-20",
+    workers_dev: true,
+    preview_urls: false,
+    observability: { enabled: false },
+    vars: { PREVIEW_ORIGINS: "" },
+    durable_objects: {
+      bindings: [
+        { name: "DEVICE_RELAY", class_name: "DeviceRelay", script_name: "ycoding-cloud" },
+        { name: "PREVIEW_DIRECTORY", class_name: "PreviewDirectory", script_name: "ycoding-cloud" },
+      ],
+    },
+  })
 })

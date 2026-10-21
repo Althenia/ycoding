@@ -1,5 +1,5 @@
 export * as RemoteBridge from "./remote-bridge"
-import { parseMcpRequest, parseMcpStateAck, type McpRequest } from "@ycoding-ai/remote"
+import { parseMcpRequest, parseMcpStateAck, parsePreviewAllocateAck, parsePreviewLeaseAck, parsePreviewRequest, parsePreviewStateAck, type McpRequest, type PreviewAllocateAck, type PreviewLeaseAck, type PreviewRequest, type PreviewStateAck } from "@ycoding-ai/remote"
 import type { RemoteMcpHost, RemoteMcpPreference } from "./remote-mcp-host"
 
 import {
@@ -46,7 +46,7 @@ import { Schema } from "effect"
 import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
 import { RemoteMcpAuthorization } from "./remote-mcp-authorization"
-import type { RemoteMcpApps } from "./remote-mcp-apps"
+import type { RemoteAppPreviewHost } from "./remote-app-preview"
 
 // The local relay agent. It dials out to the relay over WSS and never listens,
 // never proxies a caller-supplied URL or method, and never follows a remote
@@ -77,7 +77,7 @@ export type ConnectionInput = {
 export type BridgeCredentials = { readonly accessToken: string; readonly accessExpiresAt: number }
 
 export type RemoteBridgeOptions = {
-  readonly mcp?: { readonly host: RemoteMcpHost; readonly resource: string; readonly deviceID: string; readonly home: string; readonly authorizationFetch?: RemoteMcpAuthorization.Fetcher; readonly appPreview?: RemoteMcpApps.Preview }
+  readonly mcp?: { readonly host: RemoteMcpHost; readonly resource: string; readonly deviceID: string; readonly home: string; readonly authorizationFetch?: RemoteMcpAuthorization.Fetcher; readonly appPreview?: RemoteAppPreviewHost.Config }
   /** Enrolled relay origin. Device credentials are only ever sent here. */
   readonly relayURL: string
   readonly local: LocalServer
@@ -124,6 +124,9 @@ export class RemoteAgent {
   private readonly mcpAcknowledgements = new Map<string, { state: RemoteMcpPreference; resolve: () => void; reject: () => void }>()
   private mcpServer?: Promise<ReturnType<typeof import("./remote-mcp")["createRemoteMcp"]>>
   private mcpCleanup = Promise.resolve()
+  private previewHost?: RemoteAppPreviewHost.Host
+  private previewEnabled = false
+  private readonly previewAcks = new Map<string, (ack: PreviewStateAck | PreviewAllocateAck | PreviewLeaseAck | undefined) => void>()
   private readonly registry: SessionRegistry
   private readonly subscriptions: SubscriptionRegistry
   private uploads = createAttachmentUploads()
@@ -250,6 +253,9 @@ export class RemoteAgent {
     this.connected = connected
     if (!connected) {
       this.credential = undefined
+      this.previewEnabled = false
+      for (const settle of this.previewAcks.values()) settle(undefined)
+      this.previewAcks.clear()
       this.clearMcpApps()
       this.options.mcp?.host.detach()
       for (const pending of this.mcpAcknowledgements.values()) pending.reject()
@@ -292,6 +298,7 @@ export class RemoteAgent {
       await connection?.disconnect(code, reason)
       await this.mcpCleanup
       await (await this.mcpServer)?.close()
+      this.previewHost?.close()
     }
   }
 
@@ -321,6 +328,7 @@ export class RemoteAgent {
         this.statusOwner = {}
         this.scheduler.reset()
         if (this.options.mcp) void this.options.mcp.host.attach(this.options.mcp.resource, (state) => this.sendMcpState(state))
+        void this.advertisePreview(connection)
         this.subscriptions.clear()
         this.uploads.clear()
         this.uploads = createAttachmentUploads()
@@ -371,6 +379,18 @@ export class RemoteAgent {
         this.mcpAcknowledgements.delete(acknowledgement.id)
         pending.resolve()
       }
+      return
+    }
+    const previewAck = parsePreviewStateAck(raw) ?? parsePreviewAllocateAck(raw) ?? parsePreviewLeaseAck(raw)
+    if (previewAck) {
+      this.previewAcks.get(previewAck.id)?.(previewAck)
+      return
+    }
+    const preview = parsePreviewRequest(raw)
+    if (preview) {
+      const controller = new AbortController()
+      this.inFlight.set(preview.id, controller)
+      void this.handlePreviewRequest(preview, controller)
       return
     }
     const mcp = parseMcpRequest(raw)
@@ -490,11 +510,32 @@ export class RemoteAgent {
         const { createRemoteMcp } = await import("./remote-mcp")
         const { RemoteLocalApp } = await import("./remote-local-app")
         const { RemoteMcpApps } = await import("./remote-mcp-apps")
+        const { RemoteAppPreviewHost } = await import("./remote-app-preview")
+        const authorize = async (scope: McpEvents.Principal, signal: AbortSignal) => this.mcpEvents.check(scope, signal)
+          .then((result) => !result.signal.aborted && result.expiresAt > this.now(), () => false)
         const registry = RemoteLocalApp.create({
           now: this.now,
           verifySession: async (sessionID) => await this.registry.renew(sessionID) !== undefined,
-          authorize: async (scope, signal) => this.mcpEvents.check(scope, signal)
-            .then((result) => !result.signal.aborted && result.expiresAt > this.now(), () => false),
+          authorize,
+        })
+        this.previewHost = mcp.appPreview === undefined ? undefined : RemoteAppPreviewHost.create({
+          config: mcp.appPreview,
+          registry,
+          now: this.now,
+          authorize,
+          relay: {
+            enabled: () => this.previewEnabled,
+            allocate: async (input) => {
+              const ack = await this.previewExchange({ type: "preview.allocate", ...input })
+              if (ack?.type !== "preview.allocate.ack") return { reason: "rejected" }
+              return "origin" in ack ? { origin: ack.origin } : { reason: ack.reason }
+            },
+            lease: async (lease) => {
+              const ack = await this.previewExchange({ type: "preview.lease", ...lease })
+              return ack?.type === "preview.lease.ack" && ack.ok
+            },
+            revoke: (target) => void this.send(JSON.stringify({ type: "preview.revoke", ...target })),
+          },
         })
         const apps = RemoteMcpApps.create({
           registry,
@@ -503,7 +544,7 @@ export class RemoteAgent {
             const grant = await this.mcpEvents.resolve(context, signal)
             return { ...context.principal, grantID: grant.grantID, epoch: context.epoch }
           },
-          ...(mcp.appPreview === undefined ? {} : { preview: mcp.appPreview }),
+          ...(this.previewHost === undefined ? {} : { preview: this.previewHost.preview }),
         })
         return createRemoteMcp({ local: this.options.local, sessions: this.registry, subscriptions: this.subscriptions,
           cache: this.cache, home: mcp.home, resource: mcp.resource, apps, allowed: (epoch) => mcp.host.allowed(epoch) })
@@ -538,6 +579,46 @@ export class RemoteAgent {
     } catch {
       if (!controller.signal.aborted && this.connection === owner)
         await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "outcome_unknown", message: "MCP request outcome is unknown; inspect the Session before retrying" } }), owner)
+    } finally {
+      if (this.inFlight.get(request.id) === controller) this.inFlight.delete(request.id)
+    }
+  }
+
+  private async advertisePreview(connection: RelayConnection) {
+    const origins = this.options.mcp?.appPreview?.origins
+    if (origins === undefined) return
+    const ack = await this.previewExchange({ type: "preview.state", origins }, connection)
+    if (this.connection === connection && this.connected) this.previewEnabled = ack?.type === "preview.state.ack" && ack.enabled
+  }
+
+  private previewExchange(frame: Record<string, unknown>, connection = this.connection) {
+    const id = crypto.randomUUID()
+    const result = Promise.withResolvers<PreviewStateAck | PreviewAllocateAck | PreviewLeaseAck | undefined>()
+    const timeout = setTimeout(() => result.resolve(undefined), 5_000)
+    this.previewAcks.set(id, result.resolve)
+    void this.send(JSON.stringify({ ...frame, id }), connection).then((sent) => { if (!sent) result.resolve(undefined) })
+    return result.promise.finally(() => {
+      clearTimeout(timeout)
+      this.previewAcks.delete(id)
+    })
+  }
+
+  private async handlePreviewRequest(request: PreviewRequest, controller: AbortController) {
+    const owner = this.connection
+    try {
+      const host = this.previewHost
+      if (host === undefined || !this.previewEnabled) {
+        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "agent_unavailable", message: "App preview is unavailable on this machine" } }), owner)
+        return
+      }
+      const result = await host.fetch(request.input, controller.signal)
+      for (const frame of successFrames(request.id, result)) {
+        if (controller.signal.aborted || this.connection !== owner) return
+        await this.send(serializeResponse(frame), owner)
+      }
+    } catch {
+      if (!controller.signal.aborted && this.connection === owner)
+        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "internal_error", message: "App preview request failed" } }), owner)
     } finally {
       if (this.inFlight.get(request.id) === controller) this.inFlight.delete(request.id)
     }

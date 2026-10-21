@@ -18,6 +18,7 @@ function harness(options: { preview?: boolean; issue?: RemoteMcpApps.Preview["is
   let resolutions = 0
   let issues = 0
   let contacts = 0
+  const previewCalls: string[] = []
   const registry = RemoteLocalApp.create({ now: () => now, verifySession: options.verifySession ?? (async () => true), authorize: async () => true, fetcher: async (url, init) => {
     contacts++
     return options.fetcher ? options.fetcher(url, init) : new Response(new Uint8Array([0, 255, 10]), { headers: { "content-type": "application/octet-stream" } })
@@ -25,10 +26,12 @@ function harness(options: { preview?: boolean; issue?: RemoteMcpApps.Preview["is
   const apps = RemoteMcpApps.create({ registry, now: () => now, html, resolve: async () => { resolutions++; return { ...current } }, ...(options.preview ? { preview: {
     origins: () => options.origins ?? [origin],
     issue: async (request) => { issues++; return options.issue ? options.issue(request) : { url: `${origin}/_ycoding/bootstrap?ticket=private-ticket`, origin, expiresAt: now + 100 } },
+    revoke: (input) => { previewCalls.push(`revoke:${input.id}:${input.generation}`) },
+    clear: () => { previewCalls.push("clear") },
   } } : {}) })
   const execute = (operation: RemoteMcpApps.Operation, args: unknown = { sessionID }, ctx = context, signal = new AbortController().signal) => apps.execute(operation, args, ctx, signal)
   const register = async () => (await execute("local.app.register", { sessionID, input })).value as RemoteLocalApp.Registration
-  return { registry, apps, execute, register, owner: { ...context.principal, sessionID }, scope: { ...principal, sessionID }, setNow: (value: number) => { now = value }, setPrincipal: (value: McpEvents.Principal) => { current = value }, resolutions: () => resolutions, issues: () => issues, contacts: () => contacts }
+  return { registry, apps, execute, register, owner: { ...context.principal, sessionID }, scope: { ...principal, sessionID }, setNow: (value: number) => { now = value }, setPrincipal: (value: McpEvents.Principal) => { current = value }, resolutions: () => resolutions, issues: () => issues, contacts: () => contacts, previewCalls }
 }
 
 async function reason(promise: Promise<unknown>) {
@@ -278,7 +281,11 @@ describe("generic local app MCP facade", () => {
     const h = harness({ preview: true })
     const app = await h.register()
     await h.execute("local.app.open", { sessionID, input: { id: app.id, generation: app.generation } })
+    const revoked = await h.register()
+    await h.execute("local.app.revoke", { sessionID, input: { id: revoked.id } })
+    expect(h.previewCalls).toEqual([`revoke:${revoked.id}:${revoked.generation}`])
     h.apps.clear()
+    expect(h.previewCalls.at(-1)).toBe("clear")
     expect((await h.execute("local.app.status", { sessionID, input: { id: app.id } })).value).toMatchObject({ status: "revoked" })
     expect(await reason(h.execute("local.app.http", { sessionID, input: { id: app.id, generation: app.generation, method: "GET", path: "/app" } }))).toBe("revoked")
     expect((await h.register()).id).not.toBe(app.id)

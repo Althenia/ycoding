@@ -41,16 +41,27 @@
   "triggers": {
     "crons": ["17 * * * *"]
   },
+  "vars": {
+    "PREVIEW_ORIGINS": ""
+  },
   "durable_objects": {
     "bindings": [
       {
         "name": "DEVICE_RELAY",
         "class_name": "DeviceRelay"
+      },
+      {
+        "name": "PREVIEW_DIRECTORY",
+        "class_name": "PreviewDirectory"
       }
     ]
   },
   "exports": {
     "DeviceRelay": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "PreviewDirectory": {
       "type": "durable-object",
       "storage": "sqlite"
     }

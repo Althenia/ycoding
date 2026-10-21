@@ -1,6 +1,6 @@
 # Remote relay deployment and operations
 
-Operator reference for the `ycoding-cloud` Worker in `infra/cloudflare`. It covers the deployment inputs, the logging surfaces and their privacy limits, and the backup, migration, and recovery procedures for the D1 metadata store.
+Operator reference for the `ycoding-cloud` relay Worker and the `ycoding-preview` app preview Worker in `infra/cloudflare`. It covers the deployment inputs, the logging surfaces and their privacy limits, and the backup, migration, and recovery procedures for the D1 metadata store.
 
 The relay wire contract is specified in [`packages/remote/CONTRACT.md`](../packages/remote/CONTRACT.md); local CLI usage and relay configuration are in [`configuration.md`](./configuration.md#remote-access).
 
@@ -13,6 +13,9 @@ The relay wire contract is specified in [`packages/remote/CONTRACT.md`](../packa
 | Worker         | `ycoding-cloud`                                                                                                                        |
 | Custom domain  | `ycoding.althenia.app`                                                                                                                 |
 | Durable Object | `DEVICE_RELAY`, class `DeviceRelay`, SQLite storage, one instance per `userId:deviceId`                                                |
+| Durable Object | `PREVIEW_DIRECTORY`, class `PreviewDirectory`, SQLite storage, one instance named `global` (app preview origin bindings, ticket and cookie digests) |
+| Variable       | `PREVIEW_ORIGINS`, empty in the checked-in file, which keeps app preview off                                                           |
+| `workers.dev`  | `workers_dev: true` (the relay's `workers.dev` alias is live); `preview_urls: false`                                                   |
 | D1 binding     | `DB` → database `ycoding-prod-db` (`database_id` `3384fc56-42d6-40a1-af04-5a75bd391132`)                                               |
 | Static assets  | `ASSETS` from `apps/web/dist`, `not_found_handling: single-page-application`                                                           |
 | Cron trigger   | `17 * * * *`, the bounded cleanup sweep                                                                                                |
@@ -84,6 +87,32 @@ The Worker also serves Relay MCP for each enrolled device: the resource `/api/mc
 4. Enroll and connect the device, then enable Relay MCP on that machine with `ycoding remote mcp on` or the TUI **Relay MCP** toggle. The device URL printed by `ycoding remote mcp status` is the MCP server URL for the client.
 
 Relay MCP needs no new binding, secret, token-signing key, extra D1 database, Cloudflare Tunnel, or third-party MCP configuration. Access tokens are opaque and stored only as digests, so there is no key to rotate. Turning Relay MCP off, revoking the device, or deleting the account deletes the device's grants. Relay MCP responses and OAuth pages are `Cache-Control: no-store`; the Worker does not log authorization queries, bodies, tokens, tool inputs, or results.
+
+### App preview Worker
+
+`infra/cloudflare/wrangler.preview.jsonc` defines `ycoding-preview`, the Worker that serves registered local HTTP apps to a browser; the routing and security contract is in [registered local HTTP apps](../specs/local-http-apps.md#preview-deployment) and [`CONTRACT.md` section 3.4b](../packages/remote/CONTRACT.md#34b-local-app-preview).
+
+| Input           | Value                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------- |
+| Worker          | `ycoding-preview`: no routes or custom domains in the checked-in file, `preview_urls: false`            |
+| Durable Objects | `DEVICE_RELAY` and `PREVIEW_DIRECTORY`, both bound from `script_name: "ycoding-cloud"`                  |
+| Variable        | `PREVIEW_ORIGINS`, empty in the checked-in file, which answers `404` to every request                   |
+| Logs            | `observability.enabled: false`; the Worker writes no custom logs                                         |
+| Secrets, D1     | None                                                                                                    |
+
+The relay Worker exports `PreviewDirectory` and binds it as `PREVIEW_DIRECTORY`; deploying the relay provisions that namespace without a D1 migration, and it stays empty while the relay's `PREVIEW_ORIGINS` is empty. Cloudflare rejects the preview Worker's cross-script bindings until `ycoding-cloud` exports both classes, so deploy the relay first. The release workflow deploys the preview Worker after the relay only when the `YCODING_APP_PREVIEW_DEPLOY` repository variable is `true`.
+
+Production app preview is not enabled, and its hosting is not approved. Each preview origin serves one registration ever and is never freed, so the origin list is the total number of previews the deployment can serve; a single `workers.dev` hostname serves at most one. Enable it only in this order:
+
+1. Obtain the owner's approval of an owned isolated domain that meets the [deployment prerequisites](../specs/local-http-apps.md#deployment-prerequisites), with one provisioned exact HTTPS host per future registration.
+2. Add a custom-domain route for each exact host to `infra/cloudflare/wrangler.preview.jsonc`, and set the same comma-separated host origins as `PREVIEW_ORIGINS` there and in `infra/cloudflare/wrangler.jsonc`. If any host is a `workers.dev` hostname of the relay's account, also set the relay's `"workers_dev": false`. Regenerate types with `bun run generate:cloudflare-types` and run `bun run check:cloudflare`.
+3. Deploy the relay through the release workflow, then the preview Worker with `bun run deploy:cloudflare-preview` or by setting `YCODING_APP_PREVIEW_DEPLOY` to `true` before the release tag.
+4. Update each connector machine to v0.10.22 or later with `ycoding update` and a service restart. Add `appPreview` to its `remote.json` with exactly the same origin list, the eligible loopback ports (for example `8767` only), and the embedding host's frame-ancestor origins. Turn Remote off and on to apply it. See [Remote access configuration](./configuration.md#relay-mcp).
+5. Verify without credentials that `curl -sS -o /dev/null -w '%{http_code}\n' https://<preview host>/` prints `404` (no lease prefix) and that the same request with `-X POST` prints `405`. Then, in the chat client, open a registered app and confirm bootstrap, navigation, assets, and API reads under `/_r/<lease tag>/`; `local_app_revoke` must turn later requests into `410`.
+
+Extending the origin list adds capacity; removing an origin from it stops serving that origin, and the directory still never binds it to a new registration. To turn app preview off, set the relay's `PREVIEW_ORIGINS` back to empty and deploy the relay. The relay then declines every capability and answers `503` for existing leases until they expire; removing `appPreview` from a connector stops that machine from advertising. Deleting the preview Worker is a separate operator action.
+
+Real-time logs of `ycoding-preview` contain bootstrap URLs with their one-use tickets and `cookie` headers. Treat any tail of that Worker as credential-bearing: view it only in a private operator terminal and never retain or share it.
 
 ## Stored metadata and retention
 
@@ -226,8 +255,8 @@ No other retention or backup guarantee exists. The Time Travel window and the Wo
 These are non-destructive and do not touch the deployed relay:
 
 ```sh
-bun run build:cloudflare      # wrangler deploy --dry-run; builds and validates the Worker without uploading
-bun run test:cloudflare       # router, authentication, and relay unit tests
+bun run build:cloudflare      # wrangler deploy --dry-run for the relay and preview Workers; builds and validates without uploading
+bun run test:cloudflare       # router, authentication, relay, and app preview unit tests
 bun run typecheck:cloudflare  # generated bindings are current plus a Worker typecheck
 bun run test:integration:remote  # local Worker/D1/Durable Object flow
 bun infra/cloudflare/test/smoke.ts <origin>  # read-only, credential-free auth-boundary checks

@@ -19,6 +19,7 @@ try {
 import { DurableObject } from "cloudflare:workers"
 import { createNoticeStore } from ${JSON.stringify(join(root, "infra/cloudflare/src/relay/notice-store.ts"))}
 import { createRelay } from ${JSON.stringify(join(root, "infra/cloudflare/src/relay/core.ts"))}
+export { PreviewDirectory } from ${JSON.stringify(join(root, "infra/cloudflare/src/preview/directory.ts"))}
 export class DeviceRelay extends DurableObject {
   frames = []
   pushes = []

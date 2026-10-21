@@ -1,7 +1,7 @@
 export * as RemoteConfig from "./remote-config"
 
 import { Global } from "@ycoding-ai/core/global"
-import { RemoteWebSocketPath } from "@ycoding-ai/remote"
+import { RemoteWebSocketPath, isPreviewOrigin, maxPreviewOrigins } from "@ycoding-ai/remote"
 import { Effect, FileSystem, Schema } from "effect"
 import path from "node:path"
 
@@ -17,9 +17,17 @@ export const AllowlistSession = Schema.Struct({
 })
 export type AllowlistSession = typeof AllowlistSession.Type
 
+export const AppPreview = Schema.Struct({
+  origins: Schema.optional(Schema.Array(Schema.String)),
+  ports: Schema.optional(Schema.Array(Schema.Number)),
+  frameAncestors: Schema.optional(Schema.Array(Schema.String)),
+})
+export type AppPreview = typeof AppPreview.Type
+
 export const Config = Schema.Struct({
   relayURL: Schema.optional(Schema.String),
   sessions: Schema.Array(AllowlistSession),
+  appPreview: Schema.optional(AppPreview),
 })
 export type Config = typeof Config.Type
 
@@ -43,6 +51,21 @@ export const read = Effect.fn("cli.remote-config.read")(function* () {
     Effect.mapError(() => new Error(`Malformed remote configuration at ${target}; fix or remove it`)),
   )
 })
+
+export function appPreview(config: Config) {
+  const preview = config.appPreview
+  if (preview === undefined) return undefined
+  const origins = preview.origins ?? []
+  if (origins.length > maxPreviewOrigins || !origins.every(isPreviewOrigin) || new Set(origins).size !== origins.length)
+    throw new Error(`appPreview.origins must list at most ${maxPreviewOrigins} distinct exact HTTPS origins`)
+  const ports = preview.ports ?? []
+  if (ports.length > 64 || !ports.every((port) => Number.isInteger(port) && port >= 1 && port <= 65535))
+    throw new Error("appPreview.ports must list at most 64 loopback ports from 1 through 65535")
+  const frameAncestors = preview.frameAncestors ?? []
+  if (frameAncestors.length > 16 || !frameAncestors.every(isPreviewOrigin)) throw new Error("appPreview.frameAncestors must list at most 16 exact HTTPS origins")
+  if (origins.length === 0 || ports.length === 0) return undefined
+  return { origins: [...origins], ports: [...new Set(ports)], frameAncestors: [...new Set(frameAncestors)] }
+}
 
 /**
  * Resolution order: explicit flag, environment, then stored configuration.

@@ -1,4 +1,4 @@
-import worker, { DeviceRelay } from "../../src/index"
+import worker, { DeviceRelay, PreviewDirectory } from "../../src/index"
 import { inspectPushRequest, inspectPushResponse } from "./push-diagnostic"
 
 declare const PUSH_STUB_PORT: number
@@ -28,5 +28,5 @@ globalThis.fetch = async (input, init) => {
   return outcome.response
 }
 
-export { DeviceRelay }
+export { DeviceRelay, PreviewDirectory }
 export default worker

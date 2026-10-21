@@ -26,7 +26,7 @@ function fixture(options: Partial<RemoteAppPreview.Options> = {}) {
     const lease = await issue()
     const response = await gateway.fetch(new Request(lease.url))
     const cookie = response.headers.get("set-cookie")?.split(";")[0] ?? ""
-    return { lease, response, cookie }
+    return { lease, response, cookie, base: `${origin}/_r/${lease.tag}` }
   }
   return { gateway, issue, redeem, calls, checks, expire: () => { time += 60_001 }, deny: () => { authorized = false } }
 }
@@ -34,10 +34,12 @@ function fixture(options: Partial<RemoteAppPreview.Options> = {}) {
 test("bootstrap creates one-use private credentials and a partitioned host cookie", async () => {
   const f = fixture()
   const { lease, response, cookie } = await f.redeem()
-  expect(Object.keys(lease).sort()).toEqual(["expiresAt", "origin", "url"])
+  expect(Object.keys(lease).sort()).toEqual(["expiresAt", "origin", "tag", "url"])
   expect(new URL(lease.url).searchParams.get("ticket")).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  expect(lease.tag).toMatch(/^[a-f0-9]{16}$/)
+  expect(lease.url).not.toContain(lease.tag)
   expect(response.status).toBe(303)
-  expect(response.headers.get("location")).toBe("/index.html?view=cards")
+  expect(response.headers.get("location")).toBe(`/_r/${lease.tag}/index.html?view=cards`)
   expect(response.headers.get("set-cookie")).toMatch(/^__Host-ycoding-preview=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=None; Partitioned; Max-Age=60$/)
   expect(response.headers.get("cache-control")).toBe("no-store, no-transform")
   expect(response.headers.get("referrer-policy")).toBe("no-referrer")
@@ -81,28 +83,57 @@ test("default disabled configuration, exact origins, leases and entry paths fail
   expect((await local.issue({ origin: "http://127.0.0.1:4100" })).origin).toBe("http://127.0.0.1:4100")
 })
 
-test("origin bindings survive revocation and cannot switch generation or any scope field", async () => {
+test("origin bindings survive revocation and expiry and cannot switch registration, generation or any scope field", async () => {
   const f = fixture()
-  await f.issue()
+  const first = await f.issue()
   f.gateway.revoke({ id, generation })
   for (const changed of [{ id: `app_${"c".repeat(32)}` }, { generation: `generation_${"d".repeat(32)}` }, ...Object.keys(scope).map((key) => ({ scope: { ...scope, [key]: "other" } }))]) {
     await expect(f.issue(changed)).rejects.toMatchObject({ category: "origin_bound" })
   }
+  f.expire()
+  await expect(f.issue({ id: `app_${"c".repeat(32)}` })).rejects.toMatchObject({ category: "origin_bound" })
   expect((await f.issue({ origin: secondOrigin })).origin).toBe(secondOrigin)
+  const reopened = await f.issue()
+  expect(reopened.tag).not.toBe(first.tag)
+  expect((await f.gateway.fetch(new Request(first.url))).status).toBe(401)
+})
+
+test("misrouting rejection: app requests carry the current lease path prefix, which is stripped before dispatch", async () => {
+  const f = fixture()
+  const { cookie, base, lease } = await f.redeem()
+  for (const url of [`${origin}/index.html`, `${origin}/_r/${"0".repeat(16)}/index.html`, `${origin}/_r/${lease.tag}`, `${origin}/_r/${lease.tag.toUpperCase()}/index.html`, `${base}/%2e%2e/x`, `${base}/a%2fb`])
+    expect((await f.gateway.fetch(new Request(url, { headers: { cookie } }))).status).not.toBe(200)
+  expect(f.calls).toHaveLength(0)
+  expect((await f.gateway.fetch(new Request(`${base}/sub/page.html?x=1`, { headers: { cookie, referer: `${base}/index.html` } }))).status).toBe(200)
+  expect(f.calls[0]!.path).toBe("/sub/page.html?x=1")
+  expect(f.calls[0]!.headers.referer).toBe(`${origin}/index.html`)
+  const relative = new URL("../index.html", `${base}/sub/page.html`)
+  expect((await f.gateway.fetch(new Request(relative.toString(), { headers: { cookie } }))).status).toBe(200)
+  expect(f.calls[1]!.path).toBe("/index.html")
+  const next = await f.issue()
+  expect((await f.gateway.fetch(new Request(`${base}/index.html`, { headers: { cookie } }))).status).toBe(410)
+  const bootstrap = await f.gateway.fetch(new Request(next.url))
+  const replaced = bootstrap.headers.get("set-cookie")!.split(";")[0]!
+  expect((await f.gateway.fetch(new Request(`${base}/index.html`, { headers: { cookie: replaced } }))).status).toBe(410)
+  expect((await f.gateway.fetch(new Request(`${origin}/_r/${next.tag}/index.html`, { headers: { cookie } }))).status).toBe(401)
+  expect((await f.gateway.fetch(new Request(`${origin}/_r/${next.tag}/index.html`, { headers: { cookie: replaced } }))).status).toBe(200)
+  expect(f.calls).toHaveLength(3)
+  expect(RemoteAppPreview.allowedPath("/index.html?view=cards")).toBe(true)
+  for (const path of ["/../x", "/%2e%2e/x", "/a%2fb", "/a%5cb", "//host/x", "/_ycoding/bootstrap", "http://127.0.0.1/"]) expect(RemoteAppPreview.allowedPath(path)).toBe(false)
 })
 
 test("cookies are origin-bound; no authentication or query fallback reaches dispatch", async () => {
   const f = fixture()
-  const { cookie, lease } = await f.redeem()
+  const { cookie, lease, base } = await f.redeem()
   for (const request of [
-    new Request(`${origin}/index.html`),
-    new Request(`${origin}/index.html?ticket=${new URL(lease.url).searchParams.get("ticket")}`),
-    new Request(`${secondOrigin}/index.html`, { headers: { cookie } }),
-    new Request(`${origin}/index.html`, { headers: { authorization: "Bearer private" } }),
-    new Request(`${origin}/index.html`, { headers: { cookie: `${cookie}; ${cookie}` } }),
+    new Request(`${base}/index.html`),
+    new Request(`${base}/index.html?ticket=${new URL(lease.url).searchParams.get("ticket")}`),
+    new Request(`${secondOrigin}/_r/${lease.tag}/index.html`, { headers: { cookie } }),
+    new Request(`${base}/index.html`, { headers: { authorization: "Bearer private" } }),
+    new Request(`${base}/index.html`, { headers: { cookie: `${cookie}; ${cookie}` } }),
   ]) expect((await f.gateway.fetch(request)).status).not.toBe(200)
   expect(f.calls).toHaveLength(0)
-  expect((await f.gateway.fetch(new Request(`${origin}/index.html`, { headers: { cookie } }))).status).toBe(200)
+  expect((await f.gateway.fetch(new Request(`${base}/index.html`, { headers: { cookie } }))).status).toBe(200)
   expect(f.checks).toEqual([scope, scope, scope])
 })
 
@@ -123,15 +154,15 @@ test("tickets cannot cross active origin registrations and issuance snapshots th
 
 test("unsafe methods require exact Origin; reserved endpoints and WebSocket upgrades never dispatch", async () => {
   const f = fixture()
-  const { cookie } = await f.redeem()
+  const { cookie, base } = await f.redeem()
   const blockedHeaders: Record<string, string>[] = [{ cookie }, { cookie, origin: secondOrigin }, { cookie, origin: "null" }]
   for (const headers of blockedHeaders) {
-    expect((await f.gateway.fetch(new Request(`${origin}/api`, { method: "POST", headers, body: "ok" }))).status).toBe(403)
+    expect((await f.gateway.fetch(new Request(`${base}/api`, { method: "POST", headers, body: "ok" }))).status).toBe(403)
   }
   expect((await f.gateway.fetch(new Request(`${origin}/_ycoding/private`, { headers: { cookie } }))).status).toBe(404)
-  expect((await f.gateway.fetch(new Request(`${origin}/socket`, { headers: { cookie, upgrade: "websocket" } }))).status).toBe(426)
+  expect((await f.gateway.fetch(new Request(`${base}/socket`, { headers: { cookie, upgrade: "websocket" } }))).status).toBe(426)
   expect(f.calls).toHaveLength(0)
-  expect((await f.gateway.fetch(new Request(`${origin}/api?offset=2`, { method: "POST", headers: { cookie, origin }, body: "ok" }))).status).toBe(200)
+  expect((await f.gateway.fetch(new Request(`${base}/api?offset=2`, { method: "POST", headers: { cookie, origin }, body: "ok" }))).status).toBe(200)
   expect(f.calls[0]!.path).toBe("/api?offset=2")
   expect(f.calls[0]!.scope).toEqual(scope)
 })
@@ -142,8 +173,8 @@ test("dispatch strips browser and server credentials, hop headers and decoded-bo
     input = value
     return { status: 206, headers: { "content-type": "application/octet-stream", "content-encoding": "gzip", "content-length": "999", "content-range": "bytes 0-2/3", "accept-ranges": "bytes", etag: '"fixture"', "last-modified": "Mon, 01 Jan 2024 00:00:00 GMT", "content-disposition": 'attachment; filename="fixture.bin"', "set-cookie": "private=secret", authorization: "Bearer server", "access-control-allow-origin": "*", connection: "x-private", "x-private": "secret" }, body: new Uint8Array([0, 127, 255]) }
   } })
-  const { cookie } = await f.redeem()
-  const response = await f.gateway.fetch(new Request(`${origin}/file`, { headers: { cookie, authorization: "Bearer browser", "proxy-authorization": "private", "x-api-key": "private", connection: "x-private", "x-private": "private", range: "bytes=0-2", "if-none-match": '"fixture"' } }))
+  const { cookie, base } = await f.redeem()
+  const response = await f.gateway.fetch(new Request(`${base}/file`, { headers: { cookie, authorization: "Bearer browser", "proxy-authorization": "private", "x-api-key": "private", connection: "x-private", "x-private": "private", range: "bytes=0-2", "if-none-match": '"fixture"' } }))
   expect(response.status).toBe(206)
   expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([0, 127, 255])
   expect(input?.headers).toEqual({ range: "bytes=0-2", "if-none-match": '"fixture"' })
@@ -156,16 +187,16 @@ test("dispatch strips browser and server credentials, hop headers and decoded-bo
 
 test("bounded request streams cancel before dispatch; binary response cap is decoded bytes", async () => {
   const f = fixture()
-  const { cookie } = await f.redeem()
+  const { cookie, base } = await f.redeem()
   let cancelled = false
   const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(65_537)) }, cancel() { cancelled = true } })
-  const request = new Request(`${origin}/api`, { method: "POST", headers: { cookie, origin }, body: stream, duplex: "half" })
+  const request = new Request(`${base}/api`, { method: "POST", headers: { cookie, origin }, body: stream, duplex: "half" })
   expect((await f.gateway.fetch(request)).status).toBe(413)
   expect(cancelled).toBe(true)
   expect(f.calls).toHaveLength(0)
   const big = fixture({ dispatch: async () => ({ status: 200, headers: { "content-encoding": "gzip" }, body: new Uint8Array(1_048_577) }) })
   const access = await big.redeem()
-  expect((await big.gateway.fetch(new Request(`${origin}/file`, { headers: { cookie: access.cookie } }))).status).toBe(502)
+  expect((await big.gateway.fetch(new Request(`${access.base}/file`, { headers: { cookie: access.cookie } }))).status).toBe(502)
 })
 
 test("exact byte limits remain usable and binary content survives by digest", async () => {
@@ -175,8 +206,8 @@ test("exact byte limits remain usable and binary content survives by digest", as
     received = input.body?.byteLength ?? 0
     return { status: 200, headers: { "content-type": "application/octet-stream" }, body: bytes }
   } })
-  const { cookie } = await f.redeem()
-  const response = await f.gateway.fetch(new Request(`${origin}/upload`, { method: "POST", headers: { cookie, origin }, body: new Uint8Array(65_536) }))
+  const { cookie, base } = await f.redeem()
+  const response = await f.gateway.fetch(new Request(`${base}/upload`, { method: "POST", headers: { cookie, origin }, body: new Uint8Array(65_536) }))
   expect(response.status).toBe(200)
   expect(received).toBe(65_536)
   expect(await crypto.subtle.digest("SHA-256", await response.arrayBuffer())).toEqual(await crypto.subtle.digest("SHA-256", bytes))
@@ -185,27 +216,27 @@ test("exact byte limits remain usable and binary content survives by digest", as
 test("gateway CSP intersects the app policy and never removes frame restrictions", async () => {
   let connection = ""
   const f = fixture({ dispatch: async () => ({ status: 200, headers: { "content-security-policy": "default-src 'none'; frame-ancestors 'none'", "x-frame-options": "DENY", connection }, body: new Uint8Array() }) })
-  const { cookie } = await f.redeem()
-  const response = await f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))
+  const { cookie, base } = await f.redeem()
+  const response = await f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))
   expect(response.headers.get("content-security-policy")).toContain("default-src 'none'; frame-ancestors 'none'")
   expect(response.headers.get("content-security-policy")).toContain("frame-ancestors https://chat.example.invalid")
   expect(response.headers.get("content-security-policy")).toContain("worker-src 'none'")
   expect(response.headers.get("x-frame-options")).toBe("DENY")
   for (const value of ["content-security-policy", "x-frame-options"]) {
     connection = value
-    expect((await f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))).status).toBe(502)
+    expect((await f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))).status).toBe(502)
   }
   const denied = fixture({ frameAncestors: [] })
   const access = await denied.redeem()
-  expect((await denied.gateway.fetch(new Request(`${origin}/`, { headers: { cookie: access.cookie } }))).headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
+  expect((await denied.gateway.fetch(new Request(`${access.base}/`, { headers: { cookie: access.cookie } }))).headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
 })
 
 test("redirects remain local and cannot reach bootstrap, credentials or external hosts", async () => {
   let location = "/next?view=cards"
   const f = fixture({ dispatch: async () => ({ status: 302, headers: { location }, body: new Uint8Array() }) })
-  const { cookie } = await f.redeem()
-  const request = () => f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))
-  expect((await request()).headers.get("location")).toBe(location)
+  const { cookie, base } = await f.redeem()
+  const request = () => f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))
+  expect((await request()).headers.get("location")).toBe(`${new URL(base).pathname}${location}`)
   for (const value of ["https://other.invalid/", "//other.invalid", "/_ycoding/bootstrap?ticket=x", "/next?ticket=x", "/%252e%252e/private", "/bad\\path"]) {
     location = value
     const result = await request()
@@ -217,12 +248,12 @@ test("redirects remain local and cannot reach bootstrap, credentials or external
 test("expiry, revocation and shutdown invalidate both ticket and cookie", async () => {
   for (const end of ["expire", "revoke", "close"] as const) {
     const f = fixture()
-    const { cookie, lease } = await f.redeem()
+    const { cookie, lease, base } = await f.redeem()
     if (end === "expire") f.expire()
     if (end === "revoke") f.gateway.revoke({ id, generation })
     if (end === "close") f.gateway.close()
     expect((await f.gateway.fetch(new Request(lease.url))).status).toBe(410)
-    expect((await f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))).status).toBe(410)
+    expect((await f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))).status).toBe(410)
     expect(f.calls).toHaveLength(0)
   }
 })
@@ -236,11 +267,11 @@ test("fresh authorization guards bootstrap and both dispatch boundaries", async 
   const before = fixture()
   const access = await before.redeem()
   before.deny()
-  expect((await before.gateway.fetch(new Request(`${origin}/`, { headers: { cookie: access.cookie } }))).status).toBe(403)
+  expect((await before.gateway.fetch(new Request(`${access.base}/`, { headers: { cookie: access.cookie } }))).status).toBe(403)
   expect(before.calls).toHaveLength(0)
   const f = fixture({ dispatch: async () => { f.deny(); return { status: 200, headers: {}, body: new TextEncoder().encode("private-response") } } })
-  const { cookie } = await f.redeem()
-  const response = await f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))
+  const { cookie, base } = await f.redeem()
+  const response = await f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))
   expect(response.status).toBe(403)
   expect(await response.text()).not.toContain("private-response")
   expect(f.checks).toHaveLength(3)
@@ -255,7 +286,7 @@ test("shutdown and expiry abort outstanding dependencies", async () => {
     const lease = await f.issue({ expiresAt: Date.now() + 250 })
     const bootstrap = await f.gateway.fetch(new Request(lease.url))
     const cookie = bootstrap.headers.get("set-cookie")?.split(";")[0] ?? ""
-    const pending = f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))
+    const pending = f.gateway.fetch(new Request(`${origin}/_r/${lease.tag}/`, { headers: { cookie } }))
     await entered
     if (end === "close") f.gateway.close()
     expect((await pending).status).toBe(410)
@@ -268,8 +299,8 @@ test("revocation aborts in-flight dispatch even when a dependency never resolves
   let signal: AbortSignal | undefined
   const entered = new Promise<void>((resolve) => { started = resolve })
   const f = fixture({ dispatch: (input) => { signal = input.signal; started(); return new Promise(() => {}) } })
-  const { cookie } = await f.redeem()
-  const pending = f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))
+  const { cookie, base } = await f.redeem()
+  const pending = f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))
   await entered
   f.gateway.revoke({ id, generation })
   expect((await pending).status).toBe(410)
@@ -292,14 +323,14 @@ test("revocation aborts pending bootstrap authorization without issuing a cookie
 test("HEAD preserves response metadata without a body and empty statuses remain valid", async () => {
   let resultStatus = 200
   const f = fixture({ dispatch: async () => ({ status: resultStatus, headers: { "content-type": "application/octet-stream", etag: '"fixture"' }, body: new Uint8Array([1, 2, 3]) }) })
-  const { cookie } = await f.redeem()
-  const head = await f.gateway.fetch(new Request(`${origin}/file`, { method: "HEAD", headers: { cookie } }))
+  const { cookie, base } = await f.redeem()
+  const head = await f.gateway.fetch(new Request(`${base}/file`, { method: "HEAD", headers: { cookie } }))
   expect(head.status).toBe(200)
   expect(head.headers.get("content-length")).toBe("3")
   expect((await head.arrayBuffer()).byteLength).toBe(0)
   for (const status of [204, 205, 304]) {
     resultStatus = status
-    const response = await f.gateway.fetch(new Request(`${origin}/file`, { headers: { cookie } }))
+    const response = await f.gateway.fetch(new Request(`${base}/file`, { headers: { cookie } }))
     expect(response.status).toBe(status)
     expect(response.headers.get("etag")).toBe('"fixture"')
     expect((await response.arrayBuffer()).byteLength).toBe(0)
@@ -308,8 +339,8 @@ test("HEAD preserves response metadata without a body and empty statuses remain 
 
 test("HEAD preserves the upstream representation length when dispatch has no body", async () => {
   const f = fixture({ dispatch: async () => ({ status: 200, headers: { "content-type": "text/plain", "content-length": "123" }, body: new Uint8Array() }) })
-  const { cookie } = await f.redeem()
-  const response = await f.gateway.fetch(new Request(`${origin}/file`, { method: "HEAD", headers: { cookie } }))
+  const { cookie, base } = await f.redeem()
+  const response = await f.gateway.fetch(new Request(`${base}/file`, { method: "HEAD", headers: { cookie } }))
   expect(response.headers.get("content-length")).toBe("123")
   expect((await response.arrayBuffer()).byteLength).toBe(0)
 })
@@ -317,8 +348,8 @@ test("HEAD preserves the upstream representation length when dispatch has no bod
 test("HEAD discards content length on no-content dispatcher responses", async () => {
   for (const status of [204, 205]) {
     const f = fixture({ dispatch: async () => ({ status, headers: { "content-length": "123" }, body: new Uint8Array() }) })
-    const { cookie } = await f.redeem()
-    const response = await f.gateway.fetch(new Request(`${origin}/file`, { method: "HEAD", headers: { cookie } }))
+    const { cookie, base } = await f.redeem()
+    const response = await f.gateway.fetch(new Request(`${base}/file`, { method: "HEAD", headers: { cookie } }))
     expect(response.headers.has("content-length")).toBe(false)
     expect((await response.arrayBuffer()).byteLength).toBe(0)
   }
@@ -326,12 +357,14 @@ test("HEAD discards content length on no-content dispatcher responses", async ()
 
 test("only same-origin request origin and referrer reach the registered app dispatcher", async () => {
   const f = fixture()
-  const { cookie } = await f.redeem()
-  await f.gateway.fetch(new Request(`${origin}/api`, { method: "POST", headers: { cookie, origin, referer: `${origin}/view` } }))
+  const { cookie, base } = await f.redeem()
+  await f.gateway.fetch(new Request(`${base}/api`, { method: "POST", headers: { cookie, origin, referer: `${base}/view` } }))
   expect(f.calls[0]!.headers).toMatchObject({ origin, referer: `${origin}/view` })
-  await f.gateway.fetch(new Request(`${origin}/api`, { headers: { cookie, origin: secondOrigin, referer: `${secondOrigin}/view` } }))
-  expect(f.calls[1]!.headers).not.toHaveProperty("origin")
+  await f.gateway.fetch(new Request(`${base}/api`, { method: "POST", headers: { cookie, origin, referer: `${origin}/view` } }))
   expect(f.calls[1]!.headers).not.toHaveProperty("referer")
+  await f.gateway.fetch(new Request(`${base}/api`, { headers: { cookie, origin: secondOrigin, referer: `${secondOrigin}/view` } }))
+  expect(f.calls[2]!.headers).not.toHaveProperty("origin")
+  expect(f.calls[2]!.headers).not.toHaveProperty("referer")
 })
 
 test("SSE, invalid upstream statuses and raw dependency failures are safe and never retried", async () => {
@@ -342,13 +375,13 @@ test("SSE, invalid upstream statuses and raw dependency failures are safe and ne
   for (const result of responses) {
     let calls = 0
     const f = fixture({ dispatch: async () => { calls++; return result } })
-    const { cookie } = await f.redeem()
-    expect((await f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))).status).toBe(502)
+    const { cookie, base } = await f.redeem()
+    expect((await f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))).status).toBe(502)
     expect(calls).toBe(1)
   }
   const f = fixture({ dispatch: async () => { throw new Error("private-upstream-url-and-cookie") } })
-  const { cookie } = await f.redeem()
-  const response = await f.gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))
+  const { cookie, base } = await f.redeem()
+  const response = await f.gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))
   expect(response.status).toBe(502)
   expect(await response.text()).not.toContain("private")
 })

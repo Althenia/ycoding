@@ -5,7 +5,7 @@ import { Effect } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { agentURL, assertEnrolledRelay, read, relayURL } from "../src/remote-config"
+import { agentURL, appPreview, assertEnrolledRelay, read, relayURL } from "../src/remote-config"
 
 async function withHome<A>(run: (root: string) => Promise<A>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-remote-config-"))
@@ -81,5 +81,38 @@ describe("legacy remote configuration", () => {
       await expect(provide(root)(read())).rejects.toThrow(/remote configuration/)
       expect(await fs.readFile(file, "utf8")).toBe("{ not json")
     })
+  })
+})
+
+describe("app preview configuration", () => {
+  const origins = ["https://preview-1.example.invalid", "https://preview-2.example.invalid"]
+
+  test("is disabled when absent, without origins, or without an allowlisted loopback port", async () => {
+    await withHome(async (root) => {
+      expect(appPreview(await provide(root)(read()))).toBeUndefined()
+      const file = path.join(root, "config", "remote.json")
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      await fs.writeFile(file, JSON.stringify({ sessions: [], appPreview: { origins } }))
+      expect(appPreview(await provide(root)(read()))).toBeUndefined()
+      await fs.writeFile(file, JSON.stringify({ sessions: [], appPreview: { origins: [], ports: [8767] } }))
+      expect(appPreview(await provide(root)(read()))).toBeUndefined()
+      await fs.writeFile(file, JSON.stringify({ sessions: [], appPreview: { origins, ports: [8767, 8767], frameAncestors: ["https://chat.example.invalid"] } }))
+      expect(appPreview(await provide(root)(read()))).toEqual({ origins, ports: [8767], frameAncestors: ["https://chat.example.invalid"] })
+    })
+  })
+
+  test("rejects inexact, wildcard or repeated origins, invalid ports and wildcard frame ancestors", () => {
+    for (const preview of [
+      { origins: ["http://preview.example.invalid"], ports: [8767] },
+      { origins: ["https://preview.example.invalid/"], ports: [8767] },
+      { origins: ["https://*.example.invalid"], ports: [8767] },
+      { origins: [origins[0]!, origins[0]!], ports: [8767] },
+      { origins: Array.from({ length: 65 }, (_, index) => `https://preview-${index}.example.invalid`), ports: [8767] },
+      { origins, ports: [0] },
+      { origins, ports: [65536] },
+      { origins, ports: [8767.5] },
+      { origins, ports: [8767], frameAncestors: ["https://*.chat.example.invalid"] },
+      { origins, ports: [8767], frameAncestors: ["http://chat.example.invalid"] },
+    ]) expect(() => appPreview({ sessions: [], appPreview: preview })).toThrow(/appPreview/)
   })
 })

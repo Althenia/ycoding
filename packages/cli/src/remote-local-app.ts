@@ -32,6 +32,7 @@ type App = {
   metadata: Registration
   owner: Owner
   origin: string
+  port: number
   scope?: Scope
   previewOrigin?: string
   controller: AbortController
@@ -97,7 +98,7 @@ export function create(options: Options) {
         allowedMethods: [...new Set(snapshot.routes.flatMap((route) => route.methods))],
         routes: snapshot.routes,
       }
-      const app: App = { metadata, owner: identity, origin: `http://${snapshot.host}:${snapshot.port}`, controller: new AbortController(), active: 0 }
+      const app: App = { metadata, owner: identity, origin: `http://${snapshot.host}:${snapshot.port}`, port: snapshot.port, controller: new AbortController(), active: 0 }
       apps.set(metadata.id, app)
       if (!options.now) {
         app.timer = setTimeout(() => remove(app), metadata.expiresAt - now())
@@ -126,6 +127,11 @@ export function create(options: Options) {
   function revoke(input: { id: string; owner: Owner }): void {
     if (!validIdentity(input.owner, ownerKeys)) fail("forbidden")
     remove(lookup(input.id, input.owner))
+  }
+
+  function port(input: { id: string; owner: Owner }): number {
+    if (!validIdentity(input.owner, ownerKeys)) fail("forbidden")
+    return lookup(input.id, input.owner).port
   }
 
   function revokeSession(sessionID: string): void {
@@ -192,7 +198,7 @@ export function create(options: Options) {
     } finally { active--; app.active-- }
   }
 
-  return { register, publish, revoke, list, dispatch, revokeSession, sweep, clear, close }
+  return { register, publish, revoke, port, list, dispatch, revokeSession, sweep, clear, close }
 }
 
 function keys(value: unknown, allowed: readonly string[]): value is Record<string, unknown> {
