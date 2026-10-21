@@ -61,7 +61,15 @@ test("registered app HTTP and private bootstrap metadata cross the existing MCP 
   const apps = RemoteMcpApps.create({
     registry, now: () => 1_800_000_000_000,
     resolve: async () => { if (!allowed) throw new Error("Unavailable"); return { ...context.principal, grantID: scope.grantID, epoch: scope.epoch } },
-    preview: { origins: () => [origin], issue: ({ registration, scope }) => gateway.issue({ id: registration.id, generation: registration.generation, scope, origin, entryPath: registration.entryPath, expiresAt: registration.expiresAt }) },
+    preview: {
+      origins: () => [origin],
+      issue: async ({ registration, scope }) => {
+        const lease = await gateway.issue({ id: registration.id, generation: registration.generation, scope, origin, entryPath: registration.entryPath, expiresAt: registration.expiresAt })
+        return { url: lease.url, origin: lease.origin, expiresAt: lease.expiresAt }
+      },
+      revoke: (input) => gateway.revoke(input),
+      clear: () => {},
+    },
   })
   mcp = createRemoteMcp({ local, sessions, subscriptions: createSubscriptions(), resource: "https://relay.example/api/mcp/devices/device_fixture", allowed: () => allowed, apps })
   try {
@@ -79,24 +87,26 @@ test("registered app HTTP and private bootstrap metadata cross the existing MCP 
     expect(opened._meta?.localApp?.origin).toBe(origin)
     const bootstrap = await gateway.fetch(new Request(opened._meta!.localApp!.url))
     expect(bootstrap.status).toBe(303)
-    expect(bootstrap.headers.get("location")).toBe("/")
+    const location = bootstrap.headers.get("location")!
+    expect(location).toMatch(/^\/_r\/[a-f0-9]{16}\/$/)
+    const base = `${origin}${location.slice(0, -1)}`
     const cookie = bootstrap.headers.get("set-cookie")!.split(";")[0]
     expect((await gateway.fetch(new Request(opened._meta!.localApp!.url))).status).toBe(401)
-    const html = await gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))
+    const html = await gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))
     expect(await html.text()).toContain('/assets/app.js')
-    const script = await gateway.fetch(new Request(`${origin}/assets/app.js`, { headers: { cookie } }))
+    const script = await gateway.fetch(new Request(`${base}/assets/app.js`, { headers: { cookie } }))
     expect(script.headers.get("content-type")).toBe("text/javascript")
     expect(await script.text()).toContain("dataset.ready")
-    const binary = new Uint8Array(await (await gateway.fetch(new Request(`${origin}/image.bin`, { headers: { cookie } }))).arrayBuffer())
+    const binary = new Uint8Array(await (await gateway.fetch(new Request(`${base}/image.bin`, { headers: { cookie } }))).arrayBuffer())
     expect(createHash("sha256").update(binary).digest("hex")).toBe(createHash("sha256").update(bytes).digest("hex"))
-    const api = await gateway.fetch(new Request(`${origin}/api/value`, { method: "POST", headers: { cookie, origin, "content-type": "application/json" }, body: '{"value":11}' }))
+    const api = await gateway.fetch(new Request(`${base}/api/value`, { method: "POST", headers: { cookie, origin, "content-type": "application/json" }, body: '{"value":11}' }))
     expect(api.status).toBe(201)
     expect(await api.json()).toEqual({ value: 11 })
     expect(requests.find((request) => request.method === "POST")?.headers.get("origin")).toBe("http://127.0.0.1:41234")
     expect(requests.every((request) => !request.headers.has("cookie") && !request.headers.has("authorization"))).toBe(true)
     const count = requests.length
     allowed = false
-    expect((await gateway.fetch(new Request(`${origin}/`, { headers: { cookie } }))).status).toBe(403)
+    expect((await gateway.fetch(new Request(`${base}/`, { headers: { cookie } }))).status).toBe(403)
     expect(requests).toHaveLength(count)
   } finally {
     await mcp.close()

@@ -1,7 +1,11 @@
+import type { PreviewDirectory } from "./preview/directory"
+
 /** Worker bindings plus the Google configuration the relay needs. */
 export type WorkerEnv = {
   readonly DB: D1Database
   readonly DEVICE_RELAY: DurableObjectNamespace
+  readonly PREVIEW_DIRECTORY: DurableObjectNamespace<PreviewDirectory>
+  readonly PREVIEW_ORIGINS?: string
   /** Static assets built by the web lane (landing, docs, changelog, remote SPA). */
   readonly ASSETS: Fetcher
   readonly GOOGLE_CLIENT_ID?: string

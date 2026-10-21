@@ -511,3 +511,12 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
           bun run deploy:cloudflare
+
+      - name: Deploy app preview Worker
+        if: vars.YCODING_APP_PREVIEW_DEPLOY == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
+          bun run deploy:cloudflare-preview

@@ -42,7 +42,7 @@ export type IssueInput = {
   readonly entryPath: string
   readonly expiresAt: number
 }
-export type Lease = { readonly url: string; readonly origin: string; readonly expiresAt: number }
+export type Lease = { readonly url: string; readonly origin: string; readonly expiresAt: number; readonly tag: string }
 export type Category = "disabled" | "invalid_configuration" | "invalid_lease" | "origin_bound" | "unauthorized" | "forbidden" | "not_found" | "gone" | "too_large" | "upgrade_unsupported" | "method_unsupported" | "upstream_unavailable"
 
 export class Failure extends globalThis.Error {
@@ -52,6 +52,7 @@ export class Failure extends globalThis.Error {
 
 type Registration = Omit<IssueInput, "scope"> & {
   readonly scope: Scope
+  readonly tag: string
   readonly controller: AbortController
   ticketHash?: Uint8Array
   cookieHash?: Uint8Array
@@ -60,12 +61,14 @@ type Registration = Omit<IssueInput, "scope"> & {
 
 const scopeKeys = ["ownerID", "deviceID", "sessionID", "clientID", "grantID", "epoch"] as const
 const methods: readonly string[] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-const inboundHeaders = ["accept", "accept-language", "content-type", "range", "if-range", "if-none-match", "if-modified-since", "origin", "referer"]
-const outboundHeaders = ["content-type", "content-disposition", "etag", "last-modified", "expires", "vary", "accept-ranges", "content-range", "content-language", "content-security-policy", "content-security-policy-report-only", "x-frame-options", "x-content-type-options", "permissions-policy", "location"]
-const cookieName = "__Host-ycoding-preview"
-const tokenPattern = /^[A-Za-z0-9_-]{43}$/
-const maxRequest = 65_536
-const maxResponse = 1_048_576
+export const requestHeaders: readonly string[] = ["accept", "accept-language", "content-type", "range", "if-range", "if-none-match", "if-modified-since", "origin", "referer"]
+export const responseHeaders: readonly string[] = ["content-type", "content-disposition", "etag", "last-modified", "expires", "vary", "accept-ranges", "content-range", "content-language", "content-security-policy", "content-security-policy-report-only", "x-frame-options", "x-content-type-options", "permissions-policy", "location"]
+export const cookieName = "__Host-ycoding-preview"
+export const bootstrapPath = "/_ycoding/bootstrap"
+export const leasePattern = /^\/_r\/([a-f0-9]{16})(\/.*)$/
+export const tokenPattern = /^[A-Za-z0-9_-]{43}$/
+export const maxRequestBytes = 65_536
+export const maxResponseBytes = 1_048_576
 
 export function create(options: Options) {
   if (!Array.isArray(options.origins) || !Array.isArray(options.frameAncestors) || typeof options.authorize !== "function" || typeof options.dispatch !== "function") fail("invalid_configuration")
@@ -115,14 +118,14 @@ export function create(options: Options) {
     bindings.set(input.origin, { id: input.id, generation: input.generation, scope })
     const previous = registrations.get(input.origin)
     if (previous) invalidate(previous)
-    const registration: Registration = { id: input.id, generation: input.generation, scope, origin: input.origin, entryPath: input.entryPath, expiresAt: input.expiresAt, controller: new AbortController() }
+    const registration: Registration = { id: input.id, generation: input.generation, scope, origin: input.origin, entryPath: input.entryPath, expiresAt: input.expiresAt, tag: leaseTag(), controller: new AbortController() }
     registrations.set(input.origin, registration)
     registration.timer = setTimeout(() => invalidate(registration), Math.max(0, registration.expiresAt - now()))
     try {
       const ticket = token()
       registration.ticketHash = await hash(ticket)
       current(registration)
-      return { url: `${registration.origin}/_ycoding/bootstrap?ticket=${ticket}`, origin: registration.origin, expiresAt: registration.expiresAt }
+      return { url: `${registration.origin}${bootstrapPath}?ticket=${ticket}`, origin: registration.origin, expiresAt: registration.expiresAt, tag: registration.tag }
     } catch (error) {
       invalidate(registration)
       throw error instanceof Failure ? error : new Failure("upstream_unavailable")
@@ -149,7 +152,7 @@ export function create(options: Options) {
       if (request.headers.has("upgrade") || connectionTokens(request.headers).has("upgrade")) fail("upgrade_unsupported")
       const connection = connectSignals(request.signal, registration.controller.signal)
       try {
-        if (url.pathname === "/_ycoding/bootstrap") {
+        if (url.pathname === bootstrapPath) {
           if (request.method !== "GET") fail("method_unsupported")
           const ticket = url.searchParams.get("ticket")
           if ([...url.searchParams.keys()].length !== 1 || ticket === null || !tokenPattern.test(ticket)) fail("unauthorized")
@@ -162,13 +165,16 @@ export function create(options: Options) {
           registration.cookieHash = await hash(credential)
           current(registration)
           return new Response(null, { status: 303, headers: {
-            location: registration.entryPath,
+            location: `/_r/${registration.tag}${registration.entryPath}`,
             "set-cookie": `${cookieName}=${credential}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned; Max-Age=${Math.max(0, Math.floor((registration.expiresAt - now()) / 1000))}`,
             "cache-control": "no-store, no-transform",
             "referrer-policy": "no-referrer",
           } })
         }
-        const path = validatePath(url.pathname + url.search, "not_found")
+        const prefixed = leasePattern.exec(url.pathname)
+        if (!prefixed) fail("not_found")
+        if (prefixed[1] !== registration.tag) fail("gone")
+        const path = validatePath(prefixed[2]! + url.search, "not_found")
         const credential = readCookie(request.headers)
         if (!credential || !sameHash(registration.cookieHash, await hash(credential))) fail("unauthorized")
         current(registration)
@@ -177,21 +183,23 @@ export function create(options: Options) {
         await permitted(registration, connection.signal)
         const body = await readBody(request, connection.signal)
         current(registration)
-        const requestHeaders = forwardHeaders(request.headers, inboundHeaders)
-        if (requestHeaders.origin !== registration.origin) delete requestHeaders.origin
-        if (!requestHeaders.referer?.startsWith(`${registration.origin}/`)) delete requestHeaders.referer
+        const forwarded = forwardHeaders(request.headers, requestHeaders)
+        if (forwarded.origin !== registration.origin) delete forwarded.origin
+        const scopeURL = `${registration.origin}/_r/${registration.tag}/`
+        if (forwarded.referer?.startsWith(scopeURL)) forwarded.referer = `${registration.origin}/${forwarded.referer.slice(scopeURL.length)}`
+        else delete forwarded.referer
         const result = await abortable(() => dispatch({
           id: registration.id,
           generation: registration.generation,
           scope: { ...registration.scope },
           method: request.method as Method,
           path,
-          headers: requestHeaders,
+          headers: forwarded,
           ...(body === undefined ? {} : { body }),
           signal: connection.signal,
         }), connection.signal)
         await permitted(registration, connection.signal)
-        if (!Number.isInteger(result.status) || result.status < 200 || result.status > 599 || !(result.body instanceof Uint8Array) || result.body.byteLength > maxResponse) fail("upstream_unavailable")
+        if (!Number.isInteger(result.status) || result.status < 200 || result.status > 599 || !(result.body instanceof Uint8Array) || result.body.byteLength > maxResponseBytes) fail("upstream_unavailable")
         const upstream = new Headers()
         for (const [key, value] of Object.entries(result.headers)) {
           if (typeof value === "string") upstream.append(key, value)
@@ -202,7 +210,8 @@ export function create(options: Options) {
         if (["content-security-policy", "content-security-policy-report-only", "x-frame-options"].some((name) => hopHeaders.has(name))) fail("upstream_unavailable")
         const location = upstream.get("location")
         if (location !== null) validatePath(location, "upstream_unavailable")
-        const headers = new Headers(forwardHeaders(upstream, outboundHeaders))
+        const headers = new Headers(forwardHeaders(upstream, responseHeaders))
+        if (location !== null) headers.set("location", `/_r/${registration.tag}${location}`)
         headers.append("content-security-policy", policy)
         headers.set("cache-control", "no-store, no-transform")
         headers.set("referrer-policy", "no-referrer")
@@ -224,6 +233,13 @@ export function create(options: Options) {
   }
 
   return { issue, fetch, revoke, close }
+}
+
+export function allowedPath(value: string): boolean {
+  try {
+    validatePath(value, "not_found")
+    return true
+  } catch { return false }
 }
 
 function fail(category: Category): never { throw new Failure(category) }
@@ -258,6 +274,10 @@ function validatePath(value: string, category: Category): string {
     } catch { return fail(category) }
   }
   return fail(category)
+}
+
+function leaseTag(): string {
+  return [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
 function token(): string {
@@ -323,12 +343,12 @@ async function readBody(request: Request, signal: AbortSignal): Promise<Uint8Arr
   const chunks: Uint8Array[] = []
   let bytes = 0
   try {
-    if (Number(request.headers.get("content-length")) > maxRequest) fail("too_large")
+    if (Number(request.headers.get("content-length")) > maxRequestBytes) fail("too_large")
     while (true) {
       const item = await abortable(() => reader.read(), signal)
       if (item.done) break
       bytes += item.value.byteLength
-      if (bytes > maxRequest) fail("too_large")
+      if (bytes > maxRequestBytes) fail("too_large")
       chunks.push(item.value)
     }
     const output = new Uint8Array(bytes)

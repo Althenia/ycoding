@@ -276,6 +276,16 @@ test("same v tag deploys web after the shared checks without GitHub write access
   expect(workflow).not.toContain("verify-source-web:")
 })
 
+test("app preview Worker deploys only after the relay and only when the repository variable opts in", () => {
+  const deploy = workflow.split("\n  deploy-web:")[1] ?? ""
+  const step = deploy.split("- name: Deploy app preview Worker")[1] ?? ""
+  expect(step).toContain("if: vars.YCODING_APP_PREVIEW_DEPLOY == 'true'")
+  expect(step).toContain('test -n "$CLOUDFLARE_API_TOKEN"')
+  expect(step).toContain("bun run deploy:cloudflare-preview")
+  expect(deploy.indexOf("bun run deploy:cloudflare\n")).toBeLessThan(deploy.indexOf("- name: Deploy app preview Worker"))
+  expect(workflow.split("\n  deploy-web:")[0]).not.toContain("deploy:cloudflare-preview")
+})
+
 test("GitHub Release publication waits for successful web deployment", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
   expect(tui).toContain("needs: deploy-web")

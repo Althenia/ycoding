@@ -19,6 +19,7 @@ import { createD1AuthStore } from "./auth/d1-store"
 import { createAuthService } from "./auth/service"
 import type { WorkerEnv } from "./env"
 import { DeviceRelay } from "./relay/durable-object"
+import { PreviewDirectory } from "./preview/directory"
 import { boundedCleanupInterval, createRouter } from "./router"
 import { createD1PushStore } from "./push/d1-store"
 import { createD1InviteStore } from "./invite/d1-store"
@@ -27,7 +28,7 @@ import { createRelayMcpRoutes } from "./mcp-entry"
 import { createD1McpStore } from "./auth/mcp/d1-store"
 import { cleanupLimit, expiredMetadataRetentionMs } from "./auth/service"
 
-export { DeviceRelay }
+export { DeviceRelay, PreviewDirectory }
 
 let router: ((request: Request) => Promise<Response>) | undefined
 

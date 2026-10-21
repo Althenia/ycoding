@@ -307,13 +307,34 @@ Operators deploy it with the existing relay configuration: apply D1 migration `0
 
 Relay MCP Events adds Session-scoped webhook subscriptions when the host supports the extension. Core stores subscriptions and the outbox in the local database and encrypts callback signing secrets with `mcp-events.key` in the global data directory. The key requires protected POSIX storage; Windows reports Events unavailable. The relay rechecks the exact OAuth grant and the connected device before delivery. Callback URLs and signing secrets are never browser-fetch credentials. See the [Events contract](../specs/mcp-events.md) for lifetimes, payloads, failures, and host setup requirements.
 
-Registered local HTTP apps require an explicit `local_app_register` call with a Session, literal-loopback port, and route/method allowlist. Registration grants no blanket localhost access and does not publish the service. `local_app_open` reports `preview_unconfigured` without a trusted preview issuer. The checked-in deployment supplies no isolated app-preview origins or public gateway route; live embedding requires separate DNS/TLS, origin isolation, scoped response policy, and host iframe verification. It is HTTP-only: WebSocket, SSE, and upstream cookie login are unsupported. See [registered local HTTP apps](../specs/local-http-apps.md).
+Registered local HTTP apps require an explicit `local_app_register` call with a Session, literal-loopback port, and route/method allowlist. Registration grants no blanket localhost access and does not publish the service. It is HTTP-only: WebSocket, SSE, and upstream cookie login are unsupported. See [registered local HTTP apps](../specs/local-http-apps.md).
+
+App preview is off by default and requires the deployment prerequisites in [registered local HTTP apps](../specs/local-http-apps.md#deployment-prerequisites). The `appPreview` entry of the global configuration `remote.json` enables it on this machine:
+
+```json
+{
+  "sessions": [],
+  "appPreview": {
+    "origins": ["https://<preview host 1>", "https://<preview host 2>"],
+    "ports": [8767],
+    "frameAncestors": ["https://<embedding host origin>"]
+  }
+}
+```
+
+| Field            | Value                                                                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `origins`        | The relay's exact `PREVIEW_ORIGINS` list: 1–64 distinct HTTPS origins without a path or wildcard. Missing or empty disables preview.          |
+| `ports`          | Loopback ports whose registrations may be previewed, 1–65535, at most 64. Missing or empty disables preview.                                  |
+| `frameAncestors` | Exact HTTPS origins allowed to embed the preview frame, at most 16, listing every ancestor of the frame. Empty sends `frame-ancestors 'none'`. |
+
+Each preview origin serves one registration ever: `local_app_open` receives an origin the relay has never bound, and re-opening the same registration keeps it. Once every listed origin is bound, `local_app_open` fails with `preview_exhausted`. An app must use relative URLs, because it is served under `/_r/<lease tag>/` on its origin; absolute-path links fail with `404`. An invalid `appPreview` fails the remote connection with a setup error; changes apply when the remote connection next starts. `local_app_open` reports `preview_unconfigured` until the relay acknowledges the same origin list on the current connection, and fails for a registration whose port is not listed. Revoking an app, turning Relay MCP or Remote off, and disconnecting end its preview access at the relay without freeing an origin.
 
 Local state lives outside any repository checkout:
 
 | File                    | Location                                                                            | Contents                                                                                                                     |
 | ----------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `remote.json`           | Global configuration directory: `$XDG_CONFIG_HOME/ycoding`, or `YCODING_CONFIG_DIR` | Optional relay origin. Existing Session entries are preserved but do not authorize or restrict remote access.                |
+| `remote.json`           | Global configuration directory: `$XDG_CONFIG_HOME/ycoding`, or `YCODING_CONFIG_DIR` | Optional relay origin and optional `appPreview` settings. Existing Session entries are preserved but do not authorize or restrict remote access. |
 | `remote-device.json`    | Global state directory: `$XDG_STATE_HOME/ycoding`                                   | The device identity: device ID, name, relay origin, P-256 public key, P-256 private key, and the rotated refresh credential. |
 | `remote.json`           | Global state directory: `$XDG_STATE_HOME/ycoding`                                   | The machine's remote connection on/off choice, written atomically by the local server.                                       |
 | `remote-connector.lock` | Global data directory: `$XDG_DATA_HOME/ycoding`                                     | The PID of the server process that holds this machine's remote connection.                                                   |

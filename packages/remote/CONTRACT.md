@@ -1038,6 +1038,81 @@ The connector rejects a result above 2 MiB with `message_too_large`, and the rel
 accepts at most 64 response chunks of 262,144 characters; overflow is an explicit
 error, never truncation. A disconnecting HTTP client cancels its pending request.
 
+### 3.4b Local app preview
+
+App preview is an additive, agent-bound extension of the v4 agent surface. It serves
+registered local HTTP apps (`specs/local-http-apps.md`) to a browser through a separate
+preview Worker. It is off unless the relay's `PREVIEW_ORIGINS` lists at least one exact
+HTTPS origin and the connector is configured with exactly the same list. Browser frames
+cannot carry any preview frame, and a relay never sends a preview frame to an agent that
+has not advertised the capability; agents that never send `preview.state` are unaffected.
+
+| `type` | Direction | Shape |
+| --- | --- | --- |
+| `preview.state` | agent → relay | `{ type:"preview.state", id, origins:[origin,...] }`, sent on every connection open by a configured connector |
+| `preview.state.ack` | relay → agent | `{ type:"preview.state.ack", id, enabled }` |
+| `preview.allocate` | agent → relay | `{ type:"preview.allocate", id, registration, expiresAt }` |
+| `preview.allocate.ack` | relay → agent | `{ type:"preview.allocate.ack", id, origin }` or `{ type:"preview.allocate.ack", id, reason:"exhausted"\|"rejected" }` |
+| `preview.lease` | agent → relay | `{ type:"preview.lease", id, origin, ticketHash, leaseTag, registration, expiresAt }` |
+| `preview.lease.ack` | relay → agent | `{ type:"preview.lease.ack", id, ok }` |
+| `preview.revoke` | agent → relay | `{ type:"preview.revoke" }` (every binding and lease of the device), `{ ..., registration }` (one registration), or `{ ..., ticketHash }` (one lease) |
+| `request` (`preview.http`) | relay → agent | `{ type:"request", id, operation:"preview.http", input:{ origin, method, path, headers } }` |
+| `response` | agent → relay | `value: { status, headers:[[name, value],...], body }`, chunked as in section 3.3 |
+
+- Each origin is an exact HTTPS origin with no path, credentials, or wildcard; `origins`
+  holds 1–64 distinct entries. `id` follows the correlation-ID pattern. `registration` is the
+  lowercase hex SHA-256 of the connector's app ID and generation, and `ticketHash` that of the
+  bootstrap ticket; neither the app ID nor the ticket crosses the relay. `leaseTag` is 16
+  random lowercase hex characters. `expiresAt` values are future safe-integer epoch
+  milliseconds; the relay caps a registration binding at one hour and a lease at 15 minutes
+  after it records them.
+- The relay enables the capability only when `preview.state.origins` equals its configured
+  `PREVIEW_ORIGINS` as a set. Enabling first ends every binding and deletes every lease of
+  the device, records the capability on the agent connection (it survives hibernation), and
+  answers `enabled: true`; otherwise it answers `enabled: false` and stores nothing. Every
+  allocation, lease, and revocation is recorded with the owner and device of the
+  authenticated agent connection, never from frame content.
+- Origins are single-use. `preview.allocate` binds the first configured origin that has never
+  been bound to the owner, device, and registration, permanently. Repeating it for the same
+  live registration returns the same origin; an ended or expired registration is `rejected`,
+  and when every configured origin is bound the answer is `exhausted`. Bindings are never
+  deleted, so expiry, revocation, disconnection, and restarts never free an origin.
+- `preview.lease` is accepted only on the origin bound to the same owner, device, and
+  registration while that binding is current, for a new ticket digest and lease tag, and
+  within 64 live leases per device.
+- Preview controls count against one per-agent window of 120 frames per 10 s; exceeding it
+  closes the agent with `1008`. A malformed preview control closes it with `1003`. Agent
+  close or replacement and device revocation end the device's bindings and delete its leases.
+- `preview.http` carries a configured origin, `GET` or `HEAD`, a path of at most 4,096 bytes
+  beginning with `/`, and only the gateway request headers `accept`, `accept-language`,
+  `content-type`, `range`, `if-range`, `if-none-match`, `if-modified-since`, `origin`, and
+  `referer`, plus a `cookie` that is exactly `__Host-ycoding-preview=<token>`. Each header
+  value is printable ASCII of at most 2,048 characters. The frame never carries a body, a URL,
+  a host, or another credential. The response status is 200–599, at most 64 header pairs, and
+  a base64 body of at most 1 MiB decoded.
+- The relay forwards at most 32 concurrent preview requests per device, rechecks the device
+  owner before each send, cancels with `cancel` on caller abort or after 30 seconds, and
+  answers `503` when no advertising agent is connected.
+
+The preview Worker (`ycoding-preview`) answers `404` on any origin outside its
+`PREVIEW_ORIGINS`, accepts only `GET` and `HEAD` (`405` otherwise), and rejects upgrades
+(`426`), request bodies (`413` above 64 KiB, `400` otherwise), oversized headers (`431`), and
+paths above 4,096 bytes (`414`). It routes by credential through the `PreviewDirectory`
+Durable Object. `GET /_ycoding/bootstrap?ticket=<token>` redeems the ticket digest once on its
+bound origin; the device's `303` must redirect into `/_r/<leaseTag>/`, and the digest of its
+single `__Host-ycoding-preview` cookie is bound to that lease. Every other request must be
+`/_r/<leaseTag>/<path>` with a path the gateway accepts (`404` otherwise) and exactly one
+preview cookie whose lease has that tag and origin. This lease binding rejects misrouted
+requests; it does not isolate apps, which only distinct origins do. A never-bound origin
+answers `404`; an ended or expired binding, an expired lease, or a dead lease tag `410`; an
+unknown, used, or revoked credential `401`; and a cookie of another live lease on that
+origin `409`, all without contacting a device. The Worker forwards accepted requests to the
+owner's device Durable Object through the internal `POST /_ycoding/preview` route with the
+trusted owner and device headers, forwards only the gateway response headers listed in
+`RemoteAppPreview.responseHeaders`, sets `cache-control: no-store, no-transform`,
+`referrer-policy: no-referrer`, and `x-content-type-options: nosniff`, drops every other
+`set-cookie`, and logs nothing.
+
 ### 3.5 Idempotency and indeterminate outcomes
 
 `session.create` uses its required Session ID to reconcile an exact retry at the
@@ -1140,6 +1215,16 @@ adds `mcp_device`, `mcp_client`, `mcp_authorization`, `mcp_grant`, `mcp_code`, a
 consent transactions, grants, and credential digests with their device enable epoch.
 They store no prompt, tool argument or result, Session ID, email, or Google token.
 
+The global `PreviewDirectory` Durable Object (one instance named `global`, SQLite storage)
+stores origin bindings and lease rows. A binding holds the origin, owner and device IDs,
+registration digest, bind time, expiry, and an ended flag; bindings are never deleted, so
+each configured origin serves at most one registration. A lease row holds the ticket digest,
+owner and device IDs, origin, lease tag, expiry, a redeemed flag, and the cookie digest after
+bootstrap. It stores no ticket, cookie, app ID, path, header, or body. Revocation, agent close
+or replacement, and device revocation end the affected bindings and delete their lease rows;
+an expired lease row is deleted when it is looked up, and lease rows expired for more than an
+hour are deleted when a later lease is registered.
+
 The device's Durable Object stores its last status frame and its notice log
 (section 3.2a); both are deleted when the device is revoked. It also stores at
 most one pending machine-offline check (section 3.2), deleted when an agent
@@ -1187,6 +1272,11 @@ Configuration:
 - Relay MCP reuses these Google settings and allowlist; the operator adds the exact
   callback `<origin>/api/mcp/oauth/google/callback` to the Google OAuth client. It
   needs no additional binding, secret, signing key, or dependency.
+- `PREVIEW_ORIGINS` — the exact single-use app-preview origins, separated by commas or
+  whitespace. The checked-in value is empty, and an empty list or any invalid entry declines
+  every `preview.state`, which disables app preview. `PREVIEW_DIRECTORY` binds
+  the `PreviewDirectory` Durable Object exported by this Worker; the preview Worker binds it
+  and `DEVICE_RELAY` from `ycoding-cloud` through `script_name`.
 - Cron trigger `17 * * * *` runs the retention sweep.
 - Static assets use the `ASSETS` binding and the routing rules in section 1.
   Regenerate worker types after any change to that block. The web build output
@@ -1244,7 +1334,9 @@ Verification limits, stated so they are not mistaken for covered behaviour:
   models, tools, or permissions logic.
 - No arbitrary proxy: the operation allowlist is closed, and the relay does not
   accept a URL, path, or method from a client. Relay MCP forwards only `mcp.request`
-  to a fixed local resource.
+  to a fixed local resource. App preview forwards only `GET` and `HEAD` paths on a
+  single-use origin to the connector-registered loopback app selected by a directory
+  credential.
 - No MCP tool for subscriptions, streaming, attachment upload, telemetry consent, or
   latency samples, and no export of third-party MCP servers.
 - No transcript, event, or delta persistence anywhere in D1.

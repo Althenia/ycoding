@@ -12,6 +12,8 @@ export type Result = { value: unknown; metadata?: { localApp: { url: string; ori
 export type Preview = {
   origins: () => readonly string[]
   issue: (input: { registration: RemoteLocalApp.Registration; scope: RemoteLocalApp.Scope; signal: AbortSignal }) => Promise<{ url: string; origin: string; expiresAt: number }>
+  revoke: (input: { id: string; generation: string }) => void
+  clear: () => void
 }
 export type Options = {
   registry: ReturnType<typeof RemoteLocalApp.create>
@@ -20,7 +22,7 @@ export type Options = {
   html?: string
   now?: () => number
 }
-export type FailureReason = Reason | "invalid_params" | "too_large" | "busy" | "unsupported_stream" | "upstream_unavailable" | "redirect_rejected"
+export type FailureReason = Reason | "invalid_params" | "too_large" | "busy" | "unsupported_stream" | "upstream_unavailable" | "redirect_rejected" | "preview_exhausted"
 export class Error extends globalThis.Error {
   override readonly name = "RemoteMcpAppsError"
   readonly reason: FailureReason
@@ -153,6 +155,7 @@ export function create(options: Options) {
       if (args.operation === "local.app.revoke") {
         const lease = remember(current.registration, scope)
         options.registry.revoke({ id: args.input.id, owner: owner(scope) })
+        options.preview?.revoke({ id: args.input.id, generation: current.registration.generation })
         lease.revoked = true
         return { value: view(args.input.id, scope.sessionID, lease.expiresAt ?? lease.registration.expiresAt, "revoked") }
       }
@@ -198,6 +201,7 @@ export function create(options: Options) {
     lifecycle.abort()
     lifecycle = new AbortController()
     options.registry.clear()
+    options.preview?.clear()
     for (const lease of leases.values()) lease.revoked = true
   }
   function close() {

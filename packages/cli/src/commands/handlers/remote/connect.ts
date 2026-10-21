@@ -38,6 +38,11 @@ export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (
     try: () => privateLocalServer(input.endpoint),
     catch: (error) => new RemoteSetupError(error instanceof Error ? error.message : "Invalid local remote backend"),
   })
+  const config = yield* RemoteConfig.read().pipe(Effect.mapError((error) => new RemoteSetupError(error.message)))
+  const appPreview = yield* Effect.try({
+    try: () => RemoteConfig.appPreview(config),
+    catch: (error) => new RemoteSetupError(error instanceof Error ? error.message : "Invalid app preview configuration"),
+  })
   const services = yield* Effect.context<FileSystem.FileSystem | Global.Service>()
   const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Global.Service>) =>
     Effect.runPromise(effect.pipe(Effect.provide(services)))
@@ -48,7 +53,8 @@ export const makeRemoteConnector = Effect.fn("cli.remote.connector")(function* (
     notice,
     onDiagnostic: input.onDiagnostic,
     makeBridge: (hooks) => new RemoteAgent({
-      ...(input.mcp === undefined ? {} : { mcp: { host: input.mcp, resource: mcpResource(relayURL, identity.deviceID), deviceID: identity.deviceID, home: global.home } }),
+      ...(input.mcp === undefined ? {} : { mcp: { host: input.mcp, resource: mcpResource(relayURL, identity.deviceID), deviceID: identity.deviceID, home: global.home,
+        ...(appPreview === undefined ? {} : { appPreview }) } }),
       relayURL,
       local,
       credentials: (signal) => run(Effect.gen(function* () {
