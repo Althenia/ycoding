@@ -1430,6 +1430,11 @@ for (const configured of [undefined, true, false]) for (const asleep of [false, 
     const question = baseline.choices[0]!.request.questions[0]!
     if (question.type !== "choice") throw new Error("Expected graded choice")
     expect(question.choices.map((choice) => choice.value)).toEqual(["allow", "deny", "escalate"])
+    for (const phrase of [
+      "even when it reads every file, recursively, or outside the repository",
+      "decide allow, deny, or escalate from the evidence of purpose and exposure",
+      "not read-only when any segment creates, modifies, or deletes data, executes code, or sends data over the network",
+    ]) expect(question.instructions).toContain(phrase)
     if (!hard) {
       yield* (yield* Fiber.join(fiber)).release
       expect(baseline.replies).toEqual([expect.objectContaining({ reply: "once", decidedBy: "decision-model", authority: "baseline", choice: "allow" })])
@@ -2160,6 +2165,11 @@ for (const [hard, choice, confidence, reply] of [
     const question = matrix.choices[0]!.request.questions[0]!
     if (question.type !== "choice") throw new Error("Expected graded choice")
     expect(question.choices.map((item) => item.value)).toEqual(["allow", "deny", "escalate"])
+    for (const phrase of [
+      "even when it reads every file, recursively, or outside the repository",
+      "decide allow, deny, or escalate from the evidence of purpose and exposure",
+      "not read-only when any segment creates, modifies, or deletes data, executes code, or sends data over the network",
+    ]) expect(question.instructions).toContain(phrase)
     if (!reply) {
       const pending = yield* service.forSession(parentID)
       expect(pending[0]?.escalation).toMatchObject({ authority: "yolo", choice: strict, confidence })

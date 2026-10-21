@@ -91,16 +91,14 @@ export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, act
     if (!effective.guardrailsEnabled) return "disabled"
     if (effective.ordinaryReviewsAuto) return "auto"
     if (effective.yolo) return "yolo"
-    if (effective.modelReviews) return `model, then ${human}`
     return human
   }
   if (action === "permissions") {
     if (effective.permissionsAuto) return "auto"
     if (effective.yolo) return "yolo"
-    if (effective.permissionModelReviews) return `model, then ${human}`
     return human
   }
-  if (autoAnswerOn(view)) return effective.yolo ? "auto, then yolo" : "auto"
+  if (autoAnswerOn(view)) return "auto"
   if (effective.yolo) return "yolo"
   return human
 }

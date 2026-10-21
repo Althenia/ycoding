@@ -86,7 +86,7 @@ test("each auto flag decides only its own row and yolo evaluates what the flags 
   expect(labels(autonomyView({ autoGuardrail: true }))).toEqual(["manual", "auto", "manual"])
   expect(labels(autonomyView({ autoAnswer: true }))).toEqual(["manual", "manual", "auto"])
   expect(labels(autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true }))).toEqual(["auto", "auto", "yolo"])
-  expect(labels(autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true, autoAnswer: true }))).toEqual(["auto", "auto", "auto, then yolo"])
+  expect(labels(autonomyView({ yolo: true, autoPermission: true, autoGuardrail: true, autoAnswer: true }))).toEqual(["auto", "auto", "auto"])
   expect(labels(autonomyView({ permissionsAuto: true, ordinaryReviewsAuto: true }))).toEqual(["auto", "auto", "manual"])
   expect(labels(autonomyView({ yolo: false, effectiveYolo: true }))).toEqual(["yolo", "yolo", "yolo"])
 })
@@ -101,10 +101,10 @@ test("decision kinds separate manual from automated rows", () => {
   expect(kinds(undefined)).toEqual(["unknown", "unknown", "unknown"])
 })
 
-test("baseline permission model assessment decides before the human without any auto flag", () => {
+test("baseline permission model assessment shows the human decider without any auto flag", () => {
   const baseline = autonomyView({ permissionModelReviews: true })
-  expect(autonomyDecisionLabel(baseline, "permissions")).toBe("model, then manual")
-  expect(autonomyDecisionLabel(autonomyView({ permissionModelReviews: true, sleep: true }), "permissions")).toBe("model, then review box")
+  expect(autonomyDecisionLabel(baseline, "permissions")).toBe("manual")
+  expect(autonomyDecisionLabel(autonomyView({ permissionModelReviews: true, sleep: true }), "permissions")).toBe("review box")
   expect(autonomyDecisionLabel(autonomyView({ permissionModelReviews: true, autoPermission: true }), "permissions")).toBe("auto")
   expect(autonomyDecisionLabel(autonomyView({ permissionModelReviews: true, yolo: true }), "permissions")).toBe("yolo")
 })
@@ -117,9 +117,9 @@ test("the local autonomy view defaults baseline permission model reviews on with
   expect(numeric.effective.permissionsAuto).toBe(false)
 })
 
-test("auto-answer is Session-local and yolo answers what it leaves", () => {
+test("auto-answer outranks yolo and yolo answers only while auto-answer is off", () => {
   expect(autonomyDecisionLabel(autonomyView({ autoAnswer: true }), "questions")).toBe("auto")
-  expect(autonomyDecisionLabel(autonomyView({ yolo: true, autoAnswer: true }), "questions")).toBe("auto, then yolo")
+  expect(autonomyDecisionLabel(autonomyView({ yolo: true, autoAnswer: true }), "questions")).toBe("auto")
   expect(autonomyDecisionLabel(autonomyView({ yolo: true, autoAnswer: false }), "questions")).toBe("yolo")
   expect(autonomyDecisionLabel(autonomyView({ autoAnswer: false }), "questions")).toBe("manual")
   const sleeping = autonomyView({ sleep: true, autoAnswer: true, goal: true })
@@ -135,12 +135,13 @@ test("sleep adds no grant: off automation defers to the review box", () => {
   for (const action of ["permissions", "guardrails", "questions"] as const) expect(autonomyDecisionLabel(yolo, action)).toBe("yolo")
   expect(autonomyDecisionLabel(autonomyView({ autoPermission: true, sleep: true }), "permissions")).toBe("auto")
   expect(autonomyDecisionLabel(autonomyView({ autoGuardrail: true, sleep: true, modelReviews: true }), "guardrails")).toBe(
-    "model, then review box",
+    "review box",
   )
 })
 
 test("ordinary guardrail rows read the actual live model-review flags", () => {
-  expect(autonomyDecisionLabel(autonomyView({ modelReviews: true }), "guardrails")).toBe("model, then manual")
+  expect(autonomyDecisionLabel(autonomyView({ modelReviews: true }), "guardrails")).toBe("manual")
+  expect(autonomyDecisionLabel(autonomyView({ modelReviews: true, sleep: true }), "guardrails")).toBe("review box")
   expect(autonomyDecisionLabel(autonomyView({ autoGuardrail: true, modelReviews: true }), "guardrails")).toBe("auto")
   expect(autonomyDecisionLabel(autonomyView({ yolo: true, modelReviews: true }), "guardrails")).toBe("yolo")
   expect(autonomyDecisionLabel(autonomyView({ guardrailsEnabled: false }), "guardrails")).toBe("disabled")
@@ -153,7 +154,7 @@ test("auto-guardrail without backend ordinary-review authority still asks for or
   expect(autonomyDecisionLabel(view, "permissions")).toBe("auto")
   expect(autonomyDecisionLabel(view, "guardrails")).toBe("manual")
   const modeled = autonomyView({ autoGuardrail: true, ordinaryReviewsAuto: false, modelReviews: true })
-  expect(autonomyDecisionLabel(modeled, "guardrails")).toBe("model, then manual")
+  expect(autonomyDecisionLabel(modeled, "guardrails")).toBe("manual")
 })
 
 test("an unloaded read is unknown, never an off state", () => {

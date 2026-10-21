@@ -1258,7 +1258,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
         blocks: [
           {
             kind: "paragraph",
-            text: "`/yolo` confirms the new on/off state. The rail's `AUTONOMY` section shows each flag's actual state (YOLO, auto-permission, auto-guardrail, and this Session's auto-answer) and the live guardrail review settings.",
+            text: "`/yolo` confirms the new on/off state. The rail's `AUTONOMY` section shows who decides permissions, guardrails, and questions: `auto` while that row's rule flag is on, otherwise `yolo` while YOLO is on, otherwise `manual`, or `review box` while asleep.",
           },
           { kind: "related", slugs: ["configuration/guardrails", "configuration/permissions", "configuration/goal"] },
         ],
@@ -1280,7 +1280,7 @@ ycoding mcp add docs --global -- bunx @example/docs-mcp`,
           },
           {
             kind: "paragraph",
-            text: "Guardrails classify actions deterministically. While awake, the root `autoGuardrail` flag auto-approves ordinary standard reviews first. Every remaining review uses one graded call to the decision model, awake and asleep, under baseline decide_reviews (on when omitted) or when the root YOLO evaluator is on; matched standard rules are first verified by the model only under decide_reviews, and each call allows, denies, or escalates with a reason. With no model path enabled, remaining reviews ask you while awake or wait in the review box while asleep. Asleep, deterministic auto-approval never applies. Uncertain reviews trigger a human handoff while awake or wait in the review box while asleep. With model review enabled, guardrails.decide_hard_reviews: false skips hard-review grading, so surviving hard matches go directly to humans while awake or the review box while asleep; standard-match verification still runs. Denies never reach the helper.",
+            text: "Guardrails classify actions deterministically. While awake, the root `autoGuardrail` flag auto-approves ordinary standard reviews first. Every remaining review uses one graded call to the decision model, awake and asleep, under baseline decide_reviews (on when omitted) or when the root YOLO evaluator is on; matched standard rules are first verified by the model only under decide_reviews, and each call allows, denies, or escalates with a reason. A review whose every command part only reads, lists, or searches is allowed regardless of how much or where it reads; when the read targets likely hold production secrets, API keys, or credentials, the model weighs purpose and exposure before deciding. With no model path enabled, remaining reviews ask you while awake or wait in the review box while asleep. Asleep, deterministic auto-approval never applies. Uncertain reviews trigger a human handoff while awake or wait in the review box while asleep. With model review enabled, guardrails.decide_hard_reviews: false skips hard-review grading, so surviving hard matches go directly to humans while awake or the review box while asleep; standard-match verification still runs. Denies never reach the helper.",
           },
           {
             kind: "table",
