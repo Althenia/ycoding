@@ -314,8 +314,9 @@ export const layer = Layer.effect(
     // active profile's tokens, reading the stored row on every use because other Locations and processes rotate
     // the same credential. The provider never opens a browser, so an auth-gated connect ends in
     // UnauthorizedError -> needs_auth rather than a redirect.
-    const connectAuth = Effect.fnUntraced(function* (entry: ServerEntry) {
+    const connectAuth = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
       if (entry.config.type !== "remote" || !entry.integrationID) return undefined
+      const connectionScope = entry.scope
       const remote = entry.config
       const oauth = remote.oauth || undefined
       const base = {
@@ -354,6 +355,14 @@ export const layer = Layer.effect(
             const stored = await latest()
             if (stored && !rejected.has(stored.refresh)) return
             await Effect.runPromise(credentials.remove(credentialID))
+            await Effect.runPromise(
+              Effect.gen(function* () {
+                if (entry.scope !== connectionScope || !entry.client) return
+                entry.status = { status: "needs_auth" }
+                yield* stopServer(name, entry)
+                yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
+              }),
+            )
           },
           store: {
             tokens: async (ctx) => {
@@ -589,7 +598,7 @@ export const layer = Layer.effect(
         yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
         const scope = yield* Scope.fork(root)
         entry.scope = scope
-        const auth = yield* connectAuth(entry)
+        const auth = yield* connectAuth(name, entry)
         // List tools as part of connect so a failure here marks the server failed rather than
         // leaving it connected with a silently empty tool list and no path to recover.
         const result = yield* MCPClient.connect(name, entry.config, location.directory, auth, elicitation).pipe(
@@ -770,13 +779,19 @@ export const layer = Layer.effect(
           return yield* new ToolCallError({
             server: target.name,
             tool: input.name,
-            message: "MCP server is not connected",
+            message: target.entry.status.status === "needs_auth"
+              ? new MCPClient.NeedsAuthError({ server: target.name }).message : "MCP server is not connected",
           })
         const result = yield* target.entry.client
           .callTool({ name: input.name, args: input.args })
           .pipe(
             Effect.mapError(
-              (error) => new ToolCallError({ server: target.name, tool: input.name, message: error.message }),
+              (error) => new ToolCallError({
+                server: target.name,
+                tool: input.name,
+                message: target.entry.status.status === "needs_auth"
+                  ? new MCPClient.NeedsAuthError({ server: target.name }).message : error.message,
+              }),
             ),
           )
         return new ToolResult({

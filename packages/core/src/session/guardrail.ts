@@ -3,7 +3,7 @@ export * as SessionGuardrail from "./guardrail"
 import path from "path"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Session } from "@ycoding-ai/schema/session"
-import { and, asc, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { Clock, Context, Deferred, Duration, Effect, Layer, Option, Schema } from "effect"
 import { Config } from "../config"
 import { ConfigGuardrail } from "../config/guardrail"
@@ -30,6 +30,7 @@ import { SessionGuardrailMatch } from "./guardrail-match"
 import { SessionGuardrailStandard } from "./guardrail-standard"
 import { SessionReviewFold } from "./review-fold"
 import { SessionAssessment } from "./assessment"
+import { SessionDecisionContext } from "./decision-context"
 import { ModelIncident } from "../model-incident/index"
 
 export const RequestID = Guardrail.RequestID
@@ -95,6 +96,7 @@ export class DeferredError extends Schema.TaggedErrorClass<DeferredError>()("Gua
 
 export function reviewMessage(error: unknown): string | undefined {
   if (error instanceof DeferredError || error instanceof DeclinedError) return error.message || undefined
+  if (error instanceof Permission.CorrectedError) return error.feedback
 }
 
 export class RequestNotFoundError extends Schema.TaggedErrorClass<RequestNotFoundError>()(
@@ -169,6 +171,12 @@ const choiceDescriptions: Partial<Record<Guardrail.DecisionChoice, string>> = {
 const noReservation: Reservation = { release: Effect.void }
 
 const decodeApproval = Schema.decodeUnknownOption(SessionEvent.GuardrailApproved.data)
+const decodePermissionAssessed = Schema.decodeUnknownOption(SessionEvent.PermissionAssessed.data)
+const decodePermissionReplied = Schema.decodeUnknownOption(Permission.Event.Replied.data)
+const permissionAssessedType = EventRuntime.versionedType(
+  SessionEvent.PermissionAssessed.type,
+  SessionEvent.PermissionAssessed.durable.version,
+)
 
 function classified(input: Evaluation & { readonly evidence?: SessionGuardrailStandard.Match["evidence"] }): Classification {
   const { evidence, ...evaluation } = input
@@ -261,6 +269,35 @@ export const layer = Layer.effect(
         { discard: true },
       ),
     )
+
+    const humanApprovals = new Map<string, ReadonlyArray<{
+      readonly action: string
+      readonly resources: ReadonlyArray<string>
+      readonly reply: "once" | "always"
+    }>>()
+    const callKey = (sessionID: string, source: { readonly messageID: string; readonly callID: string }) =>
+      `${sessionID}\0${source.messageID}\0${source.callID}`
+    const unlisten = yield* events.listen((event) => {
+      if (event.type !== Permission.Event.Replied.type) return Effect.void
+      const replied = decodePermissionReplied(event.data)
+      if (Option.isNone(replied) || replied.value.reply === "reject") return Effect.void
+      const reply = replied.value.reply
+      return permission.get(replied.value.requestID).pipe(
+        Effect.map((request) => {
+          if (!request?.source || request.sessionID !== replied.value.sessionID) return
+          const key = callKey(request.sessionID, request.source)
+          const recorded = humanApprovals.get(key) ?? []
+          humanApprovals.delete(key)
+          humanApprovals.set(key, [
+            ...recorded.slice(-7),
+            { action: request.action, resources: request.resources.slice(0, 20).map((resource) => resource.slice(0, 1000)), reply },
+          ])
+          const oldest = humanApprovals.keys().next()
+          if (humanApprovals.size > 256 && !oldest.done) humanApprovals.delete(oldest.value)
+        }),
+      )
+    })
+    yield* Effect.addFinalizer(() => unlisten)
 
     const approvedDirectories = (rootSessionID: Session.ID) =>
       database.db
@@ -443,6 +480,85 @@ export const layer = Layer.effect(
         metadata: input.metadata,
       })
 
+    const requestFingerprint = (request: Guardrail.Request) =>
+      reviewFingerprint(
+        { sessionID: request.sessionID, action: request.action, resources: request.resources, metadata: request.metadata },
+        {
+          rootSessionID: request.rootSessionID,
+          decision: "ask",
+          ruleIDs: request.ruleIDs,
+          standard: request.standard,
+          hardReview: request.hardReview ?? false,
+        },
+      )
+
+    const rejections = new Set<string>()
+    const recordHumanReply = (request: Guardrail.Request, reply: Guardrail.Reply) => {
+      const key = `${request.sessionID}\0${requestFingerprint(request)}`
+      rejections.delete(key)
+      if (reply !== "reject") return
+      rejections.add(key)
+      const oldest = rejections.values().next()
+      if (rejections.size > 512 && !oldest.done) rejections.delete(oldest.value)
+    }
+
+    const applicabilityOf = Effect.fnUntraced(function* (input: EvaluateInput, result: Evaluation) {
+      const fingerprint = reviewFingerprint(input, result)
+      const source = input.source
+      const settlements = source === undefined
+        ? []
+        : yield* database.db
+            .select({ data: EventTable.data })
+            .from(EventTable)
+            .where(
+              and(
+                eq(EventTable.aggregate_id, input.sessionID),
+                eq(EventTable.type, permissionAssessedType),
+                sql`json_extract(${EventTable.data}, '$.source.messageID') = ${source.messageID}`,
+                sql`json_extract(${EventTable.data}, '$.source.callID') = ${source.callID}`,
+              ),
+            )
+            .orderBy(asc(EventTable.seq))
+            .limit(8)
+            .all()
+            .pipe(Effect.orDie)
+      const reviews = (yield* SessionReviewFold.fold(database.db, [input.sessionID]))
+        .filter((item) => item.kind === "guardrail" && "fingerprint" in item.payload && item.payload.fingerprint === fingerprint)
+        .toSorted((left, right) => left.created - right.created)
+        .slice(-5)
+      const prior: Permission.Prior[] = [
+        ...(rejections.has(`${input.sessionID}\0${fingerprint}`) ? [{ source: "human" as const, status: "rejected" as const }] : []),
+        ...reviews.map((item) => ({ source: "review" as const, status: Permission.reviewStatus(item) })),
+      ]
+      return {
+        gate: "guardrail" as const,
+        sameCall: [
+          ...settlements.flatMap((row) =>
+            Option.match(decodePermissionAssessed(row.data), {
+              onNone: () => [],
+              onSome: (data) => [{
+                gate: "permission" as const,
+                source: "automated" as const,
+                outcome: data.outcome,
+                via: data.via,
+                choice: data.choice ?? null,
+                confidence: data.confidence ?? null,
+              }],
+            }),
+          ),
+          ...(source === undefined ? [] : humanApprovals.get(callKey(input.sessionID, source)) ?? []).map((approval) => ({
+            gate: "permission" as const,
+            source: "human" as const,
+            outcome: "allow" as const,
+            reply: approval.reply,
+            action: approval.action,
+            resources: [...approval.resources],
+          })),
+        ],
+        prior,
+      }
+    })
+
     const openReview = Effect.fnUntraced(function* (
       item: Pending,
       outcome: Omit<Guardrail.Escalation, "reason"> & { readonly reason: "disabled" | "escalated" | "sleep_entry" | "conflicting_grades" | DecisionChoice.UnsettledReason },
@@ -465,21 +581,7 @@ export const layer = Layer.effect(
           reason: item.request.reason,
           hardReview: item.request.hardReview ?? false,
           directories: [...item.directories],
-          fingerprint: reviewFingerprint(
-            {
-              sessionID: item.request.sessionID,
-              action: item.request.action,
-              resources: item.request.resources,
-              metadata: item.request.metadata,
-            },
-            {
-              rootSessionID: item.request.rootSessionID,
-              decision: "ask",
-              ruleIDs: item.request.ruleIDs,
-              standard: item.request.standard,
-              hardReview: item.request.hardReview ?? false,
-            },
-          ),
+          fingerprint: requestFingerprint(item.request),
           requestID: item.request.id,
         },
         limit: settings?.max_pending_reviews ?? 16,
@@ -489,8 +591,8 @@ export const layer = Layer.effect(
 
     const assert = Effect.fn("SessionGuardrail.assert")((input: EvaluateInput) =>
       Effect.gen(function* () {
+        const dismissedStandardRules = new Set<string>()
         const classification = yield* Effect.gen(function* () {
-          const dismissedStandardRules = new Set<string>()
           while (true) {
             const current = yield* classify(input, dismissedStandardRules)
             const matched = current.evaluation
@@ -632,10 +734,15 @@ export const layer = Layer.effect(
         ), (admission) => Effect.gen(function* () {
           if (admission.type === "allowed") return admission.reservation
           if (admission.type === "decision-review") {
+            const approvable = !result.hardReview && !result.ruleIDs.includes("configuration.invalid")
             const stages = [
-              ...(admission.baseline ? [SessionAssessment.policy("baseline", !result.hardReview)] : []),
-              ...(admission.yolo ? [SessionAssessment.policy("yolo", !result.hardReview)] : []),
+              ...(admission.baseline ? [SessionAssessment.policy("baseline", approvable)] : []),
+              ...(admission.yolo ? [SessionAssessment.policy("yolo", approvable)] : []),
             ]
+            const applicability = stages.length === 0 ? undefined : yield* applicabilityOf(input, result)
+            const authority = stages.length === 0
+              ? undefined
+              : SessionDecisionContext.authorityDigest(yield* SessionDecisionContext.read(database.db, input.sessionID))
             const evidence = {
               action: input.action,
               resources: [...input.resources],
@@ -654,6 +761,15 @@ export const layer = Layer.effect(
               sessionID: input.sessionID,
               rootSessionID: result.rootSessionID,
               workdir: typeof input.metadata?.workdir === "string" ? input.metadata.workdir : location.directory,
+              operation: typeof input.metadata?.operation === "string" ? input.metadata.operation : null,
+              classifier: classification.evidence
+                ? {
+                    matchedSegment: classification.evidence.matchedSegment,
+                    resolvedTargets: [...classification.evidence.resolvedTargets],
+                  }
+                : null,
+              directories: [...classification.directories],
+              applicability: applicability ?? null,
             }
             const assessed = yield* Effect.gen(function* () {
               let last: SessionAssessment.Result | undefined
@@ -673,22 +789,66 @@ export const layer = Layer.effect(
               }
               return last
             })
-            const stale =
-              assessed !== undefined &&
-              assessed.type !== "escalate" &&
-              assessed.provenance.authority === "yolo" &&
-              !(admission.authorization !== undefined &&
-                (yield* DecisionChoice.autonomyUnchanged(autonomy, result.rootSessionID, admission.authorization)))
-            const settled = stale ? undefined : assessed
-            const escalated = settled === undefined || settled.type === "escalate"
-            const provenance: Guardrail.Escalation = stale
-              ? { authority: "yolo", reason: "escalated" }
-              : settled?.provenance ?? {}
-            const reason = settled === undefined && !stale ? ("disabled" as const) : provenance.reason ?? ("escalated" as const)
-            const handedOff = escalated && (yield* withRootLock(result.rootSessionID, Effect.gen(function* () {
-              const asleep = yield* autonomy.isAsleep(result.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true)))
+            const outcome = yield* withRootLock(result.rootSessionID, Effect.gen(function* () {
               const item = pending.get(admission.request.id)
               if (!item) return yield* new DeclinedError({ requestID: admission.request.id })
+              const current = assessed === undefined ? undefined : (yield* classify(input, dismissedStandardRules)).evaluation
+              if (current?.decision === "deny") {
+                blocked.set(result.rootSessionID, (blocked.get(result.rootSessionID) ?? 0) + 1)
+                advanceUnlocked(result.rootSessionID)
+                yield* events.publish(Guardrail.Event.Decided, {
+                  rootSessionID: result.rootSessionID,
+                  sessionID: input.sessionID,
+                  action: input.action,
+                  ruleIDs: [...current.ruleIDs],
+                  decision: "deny",
+                })
+                return { type: "blocked" as const, evaluation: current }
+              }
+              if (current?.decision === "allow") {
+                removePendingUnlocked(item.request.id)
+                yield* events.publish(Guardrail.Event.Decided, {
+                  rootSessionID: result.rootSessionID,
+                  sessionID: input.sessionID,
+                  action: input.action,
+                  ruleIDs: [...current.ruleIDs],
+                  decision: "allow",
+                })
+                yield* Deferred.succeed(item.deferred, undefined)
+                return { type: "allowed" as const }
+              }
+              const stale =
+                assessed !== undefined &&
+                assessed.type !== "escalate" &&
+                ((assessed.provenance.authority === "yolo" &&
+                  !(admission.authorization !== undefined &&
+                    (yield* DecisionChoice.autonomyUnchanged(autonomy, result.rootSessionID, admission.authorization)))) ||
+                  current === undefined ||
+                  current.decision !== result.decision ||
+                  current.hardReview !== result.hardReview ||
+                  current.ruleIDs.join("\0") !== result.ruleIDs.join("\0") ||
+                  Hash.json(yield* applicabilityOf(input, result)) !== Hash.json(applicability) ||
+                  SessionDecisionContext.authorityDigest(yield* SessionDecisionContext.read(database.db, input.sessionID)) !== authority)
+              const held = !stale && assessed?.type === "approve" && applicability !== undefined && Permission.humanRejected(applicability.prior)
+              const settled = stale || held ? undefined : assessed
+              const provenance: Guardrail.Escalation =
+                assessed !== undefined && (stale || held)
+                  ? { ...(held ? assessed.provenance : { authority: assessed.provenance.authority }), reason: "escalated" }
+                  : settled?.provenance ?? {}
+              if (settled !== undefined && settled.type !== "escalate") {
+                yield* replyUnlocked(
+                  result.rootSessionID,
+                  {
+                    sessionID: result.rootSessionID,
+                    requestID: admission.request.id,
+                    reply: settled.type === "approve" ? settled.reply : "reject",
+                  },
+                  provenance,
+                ).pipe(Effect.mapError(() => new DeclinedError({ requestID: admission.request.id })))
+                return { type: "applied" as const }
+              }
+              const reason = assessed === undefined ? ("disabled" as const) : provenance.reason ?? ("escalated" as const)
+              const asleep = yield* autonomy.isAsleep(result.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(true)))
               if (asleep) {
                 const opened = yield* openReview(item, {
                   ...provenance,
@@ -702,7 +862,7 @@ export const layer = Layer.effect(
                     requestID: item.request.id,
                     message: "This action did not run. The user's review box is full, so this guardrail review was not recorded. Continue independent work and stop when only blocked work remains.",
                   }))
-                  return "settled" as const
+                  return { type: "handed-off" as const }
                 }
                 yield* events.publish(Guardrail.Event.Deferred, {
                   rootSessionID: result.rootSessionID,
@@ -711,13 +871,13 @@ export const layer = Layer.effect(
                   itemID: opened.itemID,
                 })
                 yield* Deferred.fail(item.deferred, new DeferredError({ requestID: item.request.id, itemID: opened.itemID, ruleIDs: [...result.ruleIDs] }))
-                return "settled" as const
+                return { type: "handed-off" as const }
               }
-              if (settled === undefined && !stale) {
+              if (assessed === undefined) {
                 pending.set(item.request.id, { ...item, decisionModel: false })
                 advanceUnlocked(result.rootSessionID)
                 yield* events.publish(Guardrail.Event.Asked, item.request)
-                return true
+                return { type: "handed-off" as const }
               }
               const time = yield* Clock.currentTimeMillis
               yield* events.publish(SessionEvent.GuardrailEscalated, {
@@ -736,19 +896,16 @@ export const layer = Layer.effect(
               pending.set(request.id, { ...item, request, decisionModel: false })
               advanceUnlocked(result.rootSessionID)
               yield* events.publish(Guardrail.Event.Asked, request)
-              return true
-            })).pipe(Effect.onError(() => Deferred.fail(admission.deferred, new DeclinedError({ requestID: admission.request.id })))))
-            if (!handedOff) yield* reply(
-              {
-                sessionID: result.rootSessionID,
-                requestID: admission.request.id,
-                reply: settled?.type === "approve" ? settled.reply : "reject",
-              },
-              provenance,
-            ).pipe(
-              Effect.onError(() => Deferred.fail(admission.deferred, new DeclinedError({ requestID: admission.request.id }))),
-              Effect.mapError(() => new DeclinedError({ requestID: admission.request.id })),
-            )
+              return { type: "handed-off" as const }
+            })).pipe(Effect.onError(() => Deferred.fail(admission.deferred, new DeclinedError({ requestID: admission.request.id }))))
+            if (outcome.type === "blocked")
+              return yield* new BlockedError({
+                rootSessionID: result.rootSessionID,
+                sessionID: input.sessionID,
+                action: input.action,
+                ruleIDs: [...outcome.evaluation.ruleIDs],
+                reason: outcome.evaluation.reason ?? "Session guardrail denied this action",
+              })
           }
           yield* Deferred.await(admission.deferred)
         }), (admission) => admission.type === "allowed" ? Effect.void : locks.withLock(result.rootSessionID)(
@@ -761,88 +918,89 @@ export const layer = Layer.effect(
       }),
     )
 
-    const reply = Effect.fn("SessionGuardrail.reply")(function* (
-      input: ReplyInput,
-      provenance?: Guardrail.Escalation,
-    ) {
+    const reply = Effect.fn("SessionGuardrail.reply")(function* (input: ReplyInput) {
       if (!pending.has(input.requestID)) return yield* new RequestNotFoundError({ requestID: input.requestID })
       const rootSessionID = yield* root(input.sessionID)
-      return yield* withRootLock(
-        rootSessionID,
-        Effect.gen(function* () {
-          const item = pending.get(input.requestID)
-          if (!item) return yield* new RequestNotFoundError({ requestID: input.requestID })
-          if (item.decisionModel && provenance === undefined)
-            return yield* new RequestNotFoundError({ requestID: input.requestID })
-          if (rootSessionID !== item.request.rootSessionID)
-            return yield* new RequestNotFoundError({ requestID: input.requestID })
-          removePendingUnlocked(input.requestID)
-          const reply = item.request.hardReview && input.reply === "always" ? "reject" : input.reply
-          yield* events
-            .publish(Guardrail.Event.Replied, {
-              rootSessionID: item.request.rootSessionID,
-              sessionID: item.request.sessionID,
-              requestID: item.request.id,
-              reply,
-              ...(provenance
-                ? { decidedBy: "decision-model" as const, ...provenance }
-                : {}),
-            })
-            .pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
-          const rejection = {
+      return yield* withRootLock(rootSessionID, replyUnlocked(rootSessionID, input))
+    })
+
+    const replyUnlocked = (rootSessionID: Session.ID, input: ReplyInput, provenance?: Guardrail.Escalation) =>
+      Effect.gen(function* () {
+        const item = pending.get(input.requestID)
+        if (!item) return yield* new RequestNotFoundError({ requestID: input.requestID })
+        if (item.decisionModel && provenance === undefined)
+          return yield* new RequestNotFoundError({ requestID: input.requestID })
+        if (rootSessionID !== item.request.rootSessionID)
+          return yield* new RequestNotFoundError({ requestID: input.requestID })
+        removePendingUnlocked(input.requestID)
+        if (!provenance) recordHumanReply(item.request, input.reply)
+        const reply = item.request.hardReview && input.reply === "always" ? "reject" : input.reply
+        yield* events
+          .publish(Guardrail.Event.Replied, {
+            rootSessionID: item.request.rootSessionID,
             sessionID: item.request.sessionID,
             requestID: item.request.id,
-            messageID: item.source?.messageID,
-            ruleIDs: item.request.ruleIDs,
-            hardReview: item.request.hardReview === true,
-          }
-          const time = yield* Clock.currentTimeMillis
-          if (provenance) {
-            yield* events
-              .publish(SessionEvent.GuardrailDecided, {
-                sessionID: item.request.rootSessionID,
-                reviewSessionID: item.request.sessionID,
-                requestID: item.request.id,
-                reply,
-                authority: provenance.authority,
-                choice: provenance.choice,
-                confidence: provenance.confidence,
-                grades: provenance.grades,
-                ruleIDs: [...item.request.ruleIDs],
-                ...(item.source ? { source: item.source } : {}),
-              }, {
-                commit: () => reply === "reject"
-                  ? ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "decision-model", time })
-                  : Effect.void,
-              })
-              .pipe(
-                Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))),
-              )
-          }
-          if (reply === "reject") {
-            if (!provenance)
-              yield* ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "human", time }).pipe(
-                Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))),
-              )
-            yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
-            return yield* Effect.void
-          }
-          if (reply === "always" && item.directories.length > 0) {
-            yield* events
-              .publish(SessionEvent.GuardrailApproved, {
-                sessionID: item.request.rootSessionID,
-                directories: [...item.directories],
-              })
-              .pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
-            advanceUnlocked(item.request.rootSessionID)
-          }
-          approvals.set(item.request.rootSessionID, (approvals.get(item.request.rootSessionID) ?? 0) + 1)
-          advanceUnlocked(item.request.rootSessionID)
-          yield* Deferred.succeed(item.deferred, undefined)
+            reply,
+            ...(provenance
+              ? { decidedBy: "decision-model" as const, ...provenance }
+              : {}),
+          })
+          .pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
+        const rejection = {
+          sessionID: item.request.sessionID,
+          requestID: item.request.id,
+          messageID: item.source?.messageID,
+          ruleIDs: item.request.ruleIDs,
+          hardReview: item.request.hardReview === true,
+        }
+        const time = yield* Clock.currentTimeMillis
+        if (provenance) {
+          yield* events
+            .publish(SessionEvent.GuardrailDecided, {
+              sessionID: item.request.rootSessionID,
+              reviewSessionID: item.request.sessionID,
+              requestID: item.request.id,
+              reply,
+              authority: provenance.authority,
+              choice: provenance.choice,
+              confidence: provenance.confidence,
+              grades: provenance.grades,
+              ruleIDs: [...item.request.ruleIDs],
+              ...(item.source ? { source: item.source } : {}),
+            }, {
+              commit: () => reply === "reject"
+                ? ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "decision-model", time })
+                : Effect.void,
+            })
+            .pipe(
+              Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))),
+            )
+        }
+        if (reply === "reject") {
+          if (!provenance)
+            yield* ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "human", time }).pipe(
+              Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))),
+            )
+          yield* Deferred.fail(item.deferred, new DeclinedError({
+            requestID: item.request.id,
+            ...(provenance ? { message: Permission.deniedFeedback("guardrail", provenance) } : {}),
+          }))
           return yield* Effect.void
-        }),
-      )
-    })
+        }
+        if (reply === "always" && item.directories.length > 0) {
+          yield* events
+            .publish(SessionEvent.GuardrailApproved, {
+              sessionID: item.request.rootSessionID,
+              directories: [...item.directories],
+            })
+            .pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
+          advanceUnlocked(item.request.rootSessionID)
+        }
+        approvals.set(item.request.rootSessionID, (approvals.get(item.request.rootSessionID) ?? 0) + 1)
+        advanceUnlocked(item.request.rootSessionID)
+        yield* Deferred.succeed(item.deferred, undefined)
+        return yield* Effect.void
+      })
 
     const forSession = Effect.fn("SessionGuardrail.forSession")(function* (sessionID: Session.ID) {
       const rootSessionID = yield* root(sessionID)

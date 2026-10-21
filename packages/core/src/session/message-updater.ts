@@ -281,7 +281,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.review.decided": () => Effect.void,
       "session.review.withdrawn": (event) => adapter.appendMessage(SessionMessage.System.make({
         id: SessionMessage.ID.fromEvent(event.id), type: "system",
-        text: `Review item ${event.data.itemID} withdrawn: ${event.data.reason === "reverted" ? "its originating message was reverted" : "its subagent task closed"}. Any unused approval from this item is invalid.`,
+        text: `Review item ${event.data.itemID} withdrawn: ${event.data.reason === "reverted" ? "its originating message was reverted" : "the request was superseded or its owning task closed"}. Any unused approval from this item is invalid.`,
         time: { created: event.created },
       })),
       "session.review.consumed": () => Effect.void,

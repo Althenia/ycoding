@@ -1734,6 +1734,39 @@ const layer = Layer.effect(
       )
     })
 
+    const staleQuestionReviews = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      const yolo = yield* autonomy
+        .canYolo(sessionID)
+        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+      if (!yolo) return undefined
+      const folded = yield* SessionReviewFold.fold(db, [sessionID])
+      return folded.filter((item) => SessionReviewFold.isOpen(item) && item.kind === "question").map((item) => item.itemID)
+    })
+
+    const supersedeQuestionWaits = Effect.fnUntraced(function* (
+      session: SessionSchema.Info,
+      sessionID: SessionSchema.ID,
+      stale: ReadonlyArray<SessionReviewFold.ID>,
+    ): Effect.fn.Return<void> {
+      const located = locations.get(session.location)
+      const forms = yield* Form.Service.pipe(Effect.provide(located))
+      yield* forms.cancelPending(sessionID)
+      const questions = yield* Question.Service.pipe(Effect.provide(located))
+      yield* questions.cancelPending(sessionID)
+      const rootID = yield* SessionReviewFold.rootOf(db, sessionID)
+      if (rootID === undefined || stale.length === 0) return
+      yield* SessionReviewFold.withFamilyLock(rootID)(
+        Effect.gen(function* () {
+          const open = (yield* SessionReviewFold.fold(db, [sessionID])).filter(
+            (item) => SessionReviewFold.isOpen(item) && stale.includes(item.itemID),
+          )
+          yield* Effect.forEach(open, (item) => SessionReviewFold.withdrawItem(events, sessionID, item.itemID, "task_closed"), {
+            discard: true,
+          })
+        }),
+      )
+    })
+
     const result = Service.of({
       create: Effect.fn("Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
@@ -2409,6 +2442,10 @@ const layer = Layer.effect(
                   : Effect.die(defect),
               ),
             )
+            let freshlyAdmitted = false
+            const supersedable =
+              prior === undefined && input.origin === undefined && input.delivery !== "queue" && input.resume !== false
+            const stale = supersedable ? yield* staleQuestionReviews(input.sessionID) : undefined
             const admitted =
               prior?.type === "user" && prior.sessionID === input.sessionID
                 ? prior
@@ -2438,46 +2475,52 @@ const layer = Layer.effect(
                     const shared = input.sharedContext
                       ? SessionSharedContext.compose(prompt.text, input.sharedContext)
                       : undefined
-                    const metadata = shared
-                      ? { ...input.metadata, sharedContext: shared.sharedContext }
-                      : input.metadata === undefined
-                        ? undefined
-                        : Object.fromEntries(Object.entries(input.metadata).filter(([key]) => key !== "sharedContext"))
-                    const admitted = yield* SessionPending.admit(db, events, {
-                      id: messageID,
-                      sessionID: input.sessionID,
-                      causedBy: input.causedBy,
-                      input: SessionPending.Message.make({
-                        type: "user",
-                        data: {
-                          ...prompt,
-                          ...(shared ? { text: shared.text } : {}),
-                          metadata: skillMentions.length
-                            ? {
-                                ...metadata,
-                                skills: [
-                                  ...(Array.isArray(input.metadata?.skills) ? input.metadata.skills : []),
-                                  ...skillMentions.filter(
-                                    (skill) => !SessionSkill.selected(input.metadata).includes(Skill.ID.make(skill.id)),
-                                  ),
-                                ],
-                              }
-                            : metadata,
-                        },
-                        delivery: input.delivery ?? "steer",
-                      }),
+                    const metadata = {
+                      ...(shared
+                        ? { ...input.metadata, sharedContext: shared.sharedContext }
+                        : Object.fromEntries(
+                            Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext"),
+                          )),
+                      inputOrigin: input.origin ?? "human",
+                    }
+                    const admitted = yield* Effect.gen(function* () {
+                      const existing = yield* SessionPending.lookup(db, input.sessionID, messageID)
+                      if (existing !== undefined) return existing
+                      const created = yield* SessionPending.admit(db, events, {
+                        id: messageID,
+                        sessionID: input.sessionID,
+                        causedBy: input.causedBy,
+                        input: SessionPending.Message.make({
+                          type: "user",
+                          data: {
+                            ...prompt,
+                            ...(shared ? { text: shared.text } : {}),
+                            metadata: skillMentions.length
+                              ? {
+                                  ...metadata,
+                                  skills: [
+                                    ...(Array.isArray(input.metadata?.skills) ? input.metadata.skills : []),
+                                    ...skillMentions.filter(
+                                      (skill) => !SessionSkill.selected(input.metadata).includes(Skill.ID.make(skill.id)),
+                                    ),
+                                  ],
+                                }
+                              : metadata,
+                          },
+                          delivery: input.delivery ?? "steer",
+                        }),
+                      })
+                      freshlyAdmitted = true
+                      // Waking under the inbox lock keeps the runner from promoting this input
+                      // while the family still sleeps; a reused ID never wakes.
+                      if (input.origin === undefined && created.type === "user" && created.sessionID === input.sessionID)
+                        yield* wakeIfAsleep(input.sessionID)
+                      return created
                     }).pipe(
                       Effect.catchDefect((defect) =>
                         defect instanceof SessionPending.LifecycleConflict
                           ? new PromptConflictError({ sessionID: input.sessionID, messageID })
                           : Effect.die(defect),
-                      ),
-                      // Waking under the inbox lock keeps the runner from promoting this input
-                      // while the family still sleeps; a reused ID never wakes.
-                      Effect.tap((admitted) =>
-                        input.origin === undefined && admitted.type === "user" && admitted.sessionID === input.sessionID
-                          ? wakeIfAsleep(input.sessionID)
-                          : Effect.void,
                       ),
                       SessionPending.withInboxLock(input.sessionID),
                     )
@@ -2485,18 +2528,25 @@ const layer = Layer.effect(
                       return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
                     return admitted
                   })
-            if (input.resume !== false) {
-              if (activeShells.has(admitted.sessionID)) {
-                // Admit-only during an active shell strands the prompt until
-                // the shell's ensuring wake fires; name it so "pending but
-                // idle" is diagnosable (TUI also shows a queued notice).
-                yield* Effect.logWarning("Session prompt queued during active shell; wake deferred", {
-                  inputID: admitted.id,
-                }).pipe(Effect.annotateLogs({ sessionID: admitted.sessionID }))
-                return admitted
-              }
-              yield* execution.wake(admitted.sessionID)
-            }
+            const wakeAdmitted = Effect.suspend(() =>
+              input.resume === false
+                ? Effect.void
+                : activeShells.has(admitted.sessionID)
+                  ? // Admit-only during an active shell strands the prompt until
+                    // the shell's ensuring wake fires; name it so "pending but
+                    // idle" is diagnosable (TUI also shows a queued notice).
+                    Effect.logWarning("Session prompt queued during active shell; wake deferred", {
+                      inputID: admitted.id,
+                    }).pipe(Effect.annotateLogs({ sessionID: admitted.sessionID }))
+                  : execution.wake(admitted.sessionID),
+            )
+            yield* (
+              freshlyAdmitted && stale !== undefined
+                ? supersedeQuestionWaits(session, admitted.sessionID, stale)
+                : Effect.void
+            ).pipe(
+              Effect.ensuring(wakeAdmitted),
+            )
             return admitted
           }),
         ),

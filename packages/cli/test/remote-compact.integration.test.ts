@@ -30,3 +30,30 @@ test("manual compaction forwards its stable ID and backend placement, outlives o
     expect(requests.map((request) => request.body)).toEqual([{ id: "cmp_success" }, { id: "cmp_failure" }])
   } finally { release.resolve(); await server.stop(true) }
 })
+
+test("a model switch, which may interrupt and compact, outlives ordinary reads and forwards its exact model and placement", async () => {
+  const requests: { path: string; directory: string | null; workspace: string | null; body: unknown }[] = []
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (request.method === "GET") {
+      await release.promise
+      return Response.json({ data: { state: "off" } })
+    }
+    requests.push({ path: new URL(request.url).pathname, directory: request.headers.get("x-ycoding-directory"), workspace: request.headers.get("x-ycoding-workspace"), body: await request.json() })
+    started.resolve()
+    await release.promise
+    return new Response(null, { status: 204 })
+  } })
+  try {
+    const local = createLocalServer({ url: `http://127.0.0.1:${server.port}` }, { timeoutMs: 30 })
+    const location = { directory: "/work/selected repository", workspaceID: "wsp_local" }
+    const model = { providerID: "test", id: "next", variant: "high", profile: "work" }
+    const switching = Promise.allSettled([local.switchModel("ses_a", location, model)])
+    await started.promise
+    expect(await Promise.allSettled([local.keepAwakeGet()])).toMatchObject([{ status: "rejected", reason: { kind: "transport" } }])
+    release.resolve()
+    expect(await switching).toMatchObject([{ status: "fulfilled" }])
+    expect(requests).toEqual([{ path: "/api/session/ses_a/model", directory: encodeURIComponent(location.directory), workspace: "wsp_local", body: { model } }])
+  } finally { release.resolve(); await server.stop(true) }
+})

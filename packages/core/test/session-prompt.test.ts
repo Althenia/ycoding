@@ -168,7 +168,7 @@ describe("Session.prompt", () => {
         },
       })
       expect(result.data.text).toBe(prefix + "Task text")
-      expect(result.data.metadata).toEqual({ requestTag: "ordinary-input" })
+      expect(result.data.metadata).toEqual({ requestTag: "ordinary-input", inputOrigin: "human" })
     }),
   )
 
@@ -195,6 +195,7 @@ describe("Session.prompt", () => {
       expect(result.data.text).toBe(prefix + input.text)
       expect(result.data.metadata).toMatchObject({
         requestTag: "shared-context-fixture",
+        inputOrigin: "subagent",
         sharedContext: {
           version: 1,
           messageIDs: input.sharedContext.messageIDs,
@@ -908,7 +909,7 @@ describe("Session.prompt", () => {
 
       expect(retried).toEqual(first)
       expect(reused).toEqual(first)
-      expect(first.data.metadata).toEqual({ source: "api" })
+      expect(first.data.metadata).toEqual({ source: "api", inputOrigin: "human" })
     }),
   )
 

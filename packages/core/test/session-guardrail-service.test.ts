@@ -2467,7 +2467,7 @@ const seedIncidentSource = (target: ReturnType<typeof harness>) =>
       .run(sql`
         INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
         VALUES (${incidentSource}, ${parentID}, 'assistant', 1, 0, 0,
-          ${JSON.stringify({ agent: "build", model: { providerID: "incident-provider", id: "incident-model", variant: "high" } })})
+          ${JSON.stringify({ agent: "build", model: { providerID: "incident-provider", id: "incident-model", variant: "high" }, content: [], time: { created: 0 } })})
       `)
       .pipe(Effect.orDie)
   })

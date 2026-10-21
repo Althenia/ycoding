@@ -50,7 +50,7 @@ afterEach(async () => {
   for (const close of closers.splice(0)) await close()
 })
 
-async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}, sessions = [sessionInfo("ses_1"), sessionInfo("ses_2")]) {
+async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}, sessions = [sessionInfo("ses_1"), sessionInfo("ses_2")], verification: { verifyWindowMs?: number } = {}) {
   results.listPage ??= async () => ({ data: sessions })
   results.getSession ??= async (sessionID: string) => sessions.find((info) => info.id === sessionID)
   results.outstandingSessions ??= { data: [], running: [], failed: [], lost: [] }
@@ -64,14 +64,25 @@ async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}
       return Promise.resolve(result)
     },
   })
-  const registry = createSessionRegistry({ local })
+  const registry = createSessionRegistry({ local, ...verification })
   await registry.refresh()
   calls.length = 0
   const state = { allowed: true, now: 1000 }
-  const mcp = createRemoteMcp({ local, sessions: registry, subscriptions: createSubscriptions(), resource, allowed: (epoch) => state.allowed && epoch === context.epoch, now: () => state.now })
-  closers.push(() => mcp.close())
+  const holds: boolean[] = []
+  const subscriptions = createSubscriptions()
+  const create = () => {
+    const created = createRemoteMcp({ local, sessions: registry, subscriptions, resource, allowed: (epoch) => state.allowed && epoch === context.epoch, now: () => state.now, onLaneHold: (held) => holds.push(held) })
+    closers.push(() => created.close())
+    return created
+  }
+  const mcp = create()
+  let current = mcp
+  const restart = async () => {
+    await current.close()
+    current = create()
+  }
   const request = (method: string, params: Record<string, unknown>, init: { name?: string; signal?: AbortSignal; body?: BodyInit; url?: string; verb?: string } = {}) =>
-    mcp.fetch(
+    current.fetch(
       new Request(init.url ?? resource, {
         method: init.verb ?? "POST",
         headers: {
@@ -93,7 +104,7 @@ async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}
     expect(response.status).toBe(200)
     return ((await response.json()) as { result: { isError?: boolean; structuredContent?: unknown; content: { text: string }[] } }).result
   }
-  return { mcp, calls, state, request, tool, run, results }
+  return { mcp, calls, state, request, tool, run, results, holds, restart }
 }
 
 describe("inventory and discovery", () => {
@@ -324,6 +335,41 @@ describe("result conversion", () => {
 })
 
 describe("mutation ordering", () => {
+  test("a missing baseline model does not prove that an uncertain explicit profile binding completed", async () => {
+    const target = { providerID: "synthetic", id: "model-next", profile: "synthetic-account" }
+    const selected: { model?: typeof target } = {}
+    const { run, calls, holds } = await fixture({
+      getSession: async (sessionID: string) => ({ ...sessionInfo(sessionID), model: selected.model }),
+      switchModel: async () => {
+        selected.model = target
+        throw new LocalFailure("transport", "The profile binding response was lost")
+      },
+      interrupt: async () => {},
+    })
+    expect((await run("session_switch_model", { sessionID: "ses_1", input: { model: target } })).isError).toBe(true)
+    expect((await run("session_interrupt", { sessionID: "ses_1" })).structuredContent).toMatchObject({ error: { code: "outcome_unknown" } })
+    expect(calls.filter((call) => call.method === "interrupt")).toEqual([])
+    expect(holds).toEqual([true])
+  })
+
+  test("a verification failure before dispatch does not hold a mutation lane", async () => {
+    const state = { unavailable: false }
+    const { run, calls, holds } = await fixture({
+      getSession: async (sessionID: string) => {
+        if (state.unavailable) throw new LocalFailure("transport", "The verification read failed")
+        return sessionInfo(sessionID)
+      },
+      interrupt: async () => {},
+    })
+    state.unavailable = true
+    expect((await run("session_interrupt", { sessionID: "ses_1" })).structuredContent).toMatchObject({ error: { code: "internal_error" } })
+    expect(calls.filter((call) => call.method === "interrupt")).toEqual([])
+    expect(holds).toEqual([])
+    state.unavailable = false
+    expect((await run("session_interrupt", { sessionID: "ses_1" })).isError).toBeUndefined()
+    expect(calls.filter((call) => call.method === "interrupt")).toHaveLength(1)
+  })
+
   test("an uncertain mutation blocks its lane while reads and other Sessions remain usable", async () => {
     const started = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
@@ -427,6 +473,235 @@ describe("mutation ordering", () => {
     await first
     expect((await third).status).toBe(200)
     expect(order).toEqual(["msg_a", "msg_c"])
+  })
+})
+
+describe("unknown outcome holds", () => {
+  type Result = Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["run"]>>
+  const target = { providerID: "test", id: "next", variant: "high" }
+  const unknown = () => {
+    throw new LocalFailure("transport", "Local deadline expired")
+  }
+  const sessionsWith = (model: Record<string, string>) => [{ ...sessionInfo("ses_1"), model } as unknown as SessionInfo, sessionInfo("ses_2")]
+  const select = (sessions: SessionInfo[], model: Record<string, string>) => {
+    sessions[0] = { ...sessions[0], model } as unknown as SessionInfo
+  }
+  const count = (calls: Call[], method: string) => calls.filter((call) => call.method === method).length
+  const codeOf = (result: Result) => (result.structuredContent as { error?: { code: string } } | null)?.error?.code
+  const switchTo = (model: Record<string, string>) => ({ sessionID: "ses_1", input: { model } })
+  const promptWith = (id: string) => ({ sessionID: "ses_1", input: { id, text: "Synthetic input" } })
+
+  test("a fresh read showing the requested model after a late switch settles the hold and later mutations dispatch", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const { run, calls, holds } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions)
+    expect(codeOf(await run("session_switch_model", switchTo(target)))).toBe("outcome_unknown")
+    expect(holds).toEqual([true])
+    select(sessions, target)
+    expect((await run("session_prompt", promptWith("msg_after"))).isError).toBeUndefined()
+    expect(count(calls, "prompt")).toBe(1)
+    expect(count(calls, "switchModel")).toBe(1)
+    expect(holds).toEqual([true, false])
+  })
+
+  test("repeating the held switch answers only from a fresh read and never dispatches it again", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const { run, calls, holds } = await fixture({ switchModel: unknown }, sessions)
+    await run("session_switch_model", switchTo(target))
+    const unconfirmed = await run("session_switch_model", switchTo(target))
+    expect(codeOf(unconfirmed)).toBe("outcome_unknown")
+    expect(unconfirmed.content[0]!.text).toContain("not executed")
+    select(sessions, target)
+    const confirmed = await run("session_switch_model", switchTo(target))
+    expect(confirmed.isError).toBeUndefined()
+    expect(confirmed.content[0]!.text).toBe("null")
+    expect(count(calls, "switchModel")).toBe(1)
+    expect(holds).toEqual([true, false])
+  })
+
+  test.each([
+    ["variant absent", { providerID: "test", id: "next", profile: "work" }],
+    ["variant differs", { providerID: "test", id: "next", variant: "low", profile: "work" }],
+    ["profile absent", { providerID: "test", id: "next", variant: "high" }],
+    ["profile differs", { providerID: "test", id: "next", variant: "high", profile: "home" }],
+    ["model differs", { providerID: "test", id: "other", variant: "high", profile: "work" }],
+    ["provider differs", { providerID: "other", id: "next", variant: "high", profile: "work" }],
+  ])("a selected model that is not exactly the target (%s) keeps the Session held", async (_name, selected) => {
+    const requested = { providerID: "test", id: "next", variant: "high", profile: "work" }
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const { run, calls, holds } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions)
+    await run("session_switch_model", switchTo(requested))
+    select(sessions, selected)
+    const refused = await run("session_prompt", promptWith("msg_after"))
+    expect(codeOf(refused)).toBe("outcome_unknown")
+    expect(refused.content[0]!.text).toContain("not executed")
+    expect(codeOf(await run("session_switch_model", switchTo(requested)))).toBe("outcome_unknown")
+    expect(count(calls, "prompt")).toBe(0)
+    expect(count(calls, "switchModel")).toBe(1)
+    expect(holds).toEqual([true])
+  })
+
+  test("an explicit profile already selected before the switch is a rebind that no later read confirms", async () => {
+    const requested = { providerID: "test", id: "next", profile: "work" }
+    const sessions = sessionsWith(requested)
+    const { run, calls, holds } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions)
+    expect(codeOf(await run("session_switch_model", switchTo(requested)))).toBe("outcome_unknown")
+    expect(codeOf(await run("session_switch_model", switchTo(requested)))).toBe("outcome_unknown")
+    expect(codeOf(await run("session_prompt", promptWith("msg_after")))).toBe("outcome_unknown")
+    expect(count(calls, "switchModel")).toBe(1)
+    expect(count(calls, "prompt")).toBe(0)
+    expect(holds).toEqual([true])
+  })
+
+  test("a switch whose Session cannot be read is refused before dispatch and does not hold the Session", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const gate = { unreadable: false }
+    const { run, calls, holds } = await fixture({
+      getSession: (sessionID: string) => {
+        if (gate.unreadable) {
+          gate.unreadable = false
+          throw new LocalFailure("transport", "Local server unreachable")
+        }
+        return sessions.find((info) => info.id === sessionID)
+      },
+      switchModel: undefined,
+      prompt: { id: "msg_after" },
+    }, sessions)
+    gate.unreadable = true
+    const refused = await run("session_switch_model", switchTo(target))
+    expect(refused.isError).toBe(true)
+    expect(codeOf(refused)).toBe("internal_error")
+    expect(count(calls, "switchModel")).toBe(0)
+    expect((await run("session_prompt", promptWith("msg_after"))).isError).toBeUndefined()
+    expect(holds).toEqual([])
+  })
+
+  test("only a retry with the held prompt's own ID passes the hold, and its admission settles the hold", async () => {
+    const attempts: string[] = []
+    const { run, calls, holds } = await fixture({
+      prompt: (_sessionID: string, _location: unknown, input: { id: string }) => {
+        attempts.push(input.id)
+        if (attempts.length === 1) throw new LocalFailure("transport", "Local deadline expired")
+        return { id: input.id }
+      },
+      interrupt: undefined,
+    })
+    expect(codeOf(await run("session_prompt", promptWith("msg_held")))).toBe("outcome_unknown")
+    const other = await run("session_prompt", promptWith("msg_other"))
+    expect(codeOf(other)).toBe("outcome_unknown")
+    expect(other.content[0]!.text).toContain("msg_held")
+    expect(codeOf(await run("session_interrupt", { sessionID: "ses_1" }))).toBe("outcome_unknown")
+    expect((await run("session_prompt", promptWith("msg_held"))).isError).toBeUndefined()
+    expect(attempts).toEqual(["msg_held", "msg_held"])
+    expect((await run("session_interrupt", { sessionID: "ses_1" })).isError).toBeUndefined()
+    expect(count(calls, "interrupt")).toBe(1)
+    expect(holds).toEqual([true, false])
+  })
+
+  test("a held prompt retry that fails or stays unknown keeps the Session held", async () => {
+    const failures = [new LocalFailure("transport", "Local deadline expired"), new LocalFailure("invalid", "Rejected"), new LocalFailure("transport", "Local deadline expired")]
+    const attempts: string[] = []
+    const { run, holds } = await fixture({
+      prompt: (_sessionID: string, _location: unknown, input: { id: string }) => {
+        attempts.push(input.id)
+        const failure = failures.shift()
+        if (failure !== undefined) throw failure
+        return { id: input.id }
+      },
+    })
+    expect(codeOf(await run("session_prompt", promptWith("msg_held")))).toBe("outcome_unknown")
+    expect(codeOf(await run("session_prompt", promptWith("msg_held")))).toBe("invalid_message")
+    expect(codeOf(await run("session_prompt", promptWith("msg_held")))).toBe("outcome_unknown")
+    expect(codeOf(await run("session_prompt", promptWith("msg_other")))).toBe("outcome_unknown")
+    expect(attempts).toEqual(["msg_held", "msg_held", "msg_held"])
+    expect(holds).toEqual([true])
+  })
+
+  test("an unknown interrupt holds every other mutation of its Session, including any prompt ID, while reads and other Sessions continue", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const { run, calls, holds } = await fixture({
+      interrupt: (sessionID: string) => {
+        if (sessionID === "ses_1") unknown()
+      },
+      prompt: { id: "msg_any" },
+      switchModel: undefined,
+    }, sessions)
+    expect(codeOf(await run("session_interrupt", { sessionID: "ses_1" }))).toBe("outcome_unknown")
+    select(sessions, target)
+    expect(codeOf(await run("session_interrupt", { sessionID: "ses_1" }))).toBe("outcome_unknown")
+    expect(codeOf(await run("session_prompt", promptWith("msg_any")))).toBe("outcome_unknown")
+    expect(codeOf(await run("session_switch_model", switchTo(target)))).toBe("outcome_unknown")
+    expect(count(calls, "interrupt")).toBe(1)
+    expect(count(calls, "prompt")).toBe(0)
+    expect(count(calls, "switchModel")).toBe(0)
+    expect((await run("session_get", { sessionID: "ses_1" })).isError).toBeUndefined()
+    expect((await run("session_interrupt", { sessionID: "ses_2" })).isError).toBeUndefined()
+    expect(holds).toEqual([true])
+  })
+
+  test("a mutation queued behind an unknown switch runs only after a fresh read confirms the requested model", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { tool, calls } = await fixture({
+      switchModel: async (_sessionID: string, _location: unknown, model: Record<string, string>) => {
+        started.resolve()
+        await release.promise
+        select(sessions, model)
+        unknown()
+      },
+      prompt: { id: "msg_queued" },
+    }, sessions)
+    const first = tool("session_switch_model", switchTo(target))
+    await started.promise
+    const queued = tool("session_prompt", promptWith("msg_queued"))
+    release.resolve()
+    expect(((await (await first).json()) as { result: Result }).result.structuredContent).toMatchObject({ error: { code: "outcome_unknown" } })
+    expect(((await (await queued).json()) as { result: Result }).result.isError).toBeUndefined()
+    expect(count(calls, "prompt")).toBe(1)
+  })
+
+  test("revoked authorization refuses a queued mutation of a held Session before any confirmation read", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { tool, calls, state } = await fixture({
+      switchModel: async (_sessionID: string, _location: unknown, model: Record<string, string>) => {
+        started.resolve()
+        await release.promise
+        select(sessions, model)
+        unknown()
+      },
+      prompt: { id: "msg_queued" },
+    }, sessions)
+    const first = tool("session_switch_model", switchTo(target))
+    await started.promise
+    const queued = tool("session_prompt", promptWith("msg_queued"))
+    state.allowed = false
+    const mark = calls.length
+    release.resolve()
+    await first
+    expect(((await (await queued).json()) as { result: Result }).result.structuredContent).toMatchObject({ error: { code: "agent_unavailable" } })
+    expect(calls.slice(mark).map((call) => call.method)).toEqual([])
+  })
+
+  test("the confirmation read bypasses the Session verification window", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const { run, holds } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions, { verifyWindowMs: 3_600_000 })
+    expect((await run("session_get", { sessionID: "ses_1" })).isError).toBeUndefined()
+    await run("session_switch_model", switchTo(target))
+    select(sessions, target)
+    expect((await run("session_prompt", promptWith("msg_after"))).isError).toBeUndefined()
+    expect(holds).toEqual([true, false])
+  })
+
+  test("a restarted endpoint starts without holds and never replays the earlier call", async () => {
+    const sessions = sessionsWith({ providerID: "test", id: "model" })
+    const { run, calls, holds, restart } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions)
+    await run("session_switch_model", switchTo(target))
+    await restart()
+    expect(holds).toEqual([true, false])
+    expect((await run("session_prompt", promptWith("msg_after"))).isError).toBeUndefined()
+    expect(count(calls, "switchModel")).toBe(1)
   })
 })
 

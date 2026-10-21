@@ -35,6 +35,8 @@ it.effect("review fold lists open items across the family with canonical child a
   ])
   yield* reviews.withdraw(child.id, "task_closed")
   expect((yield* reviews.list(root.id)).map((item) => item.itemID)).toEqual([first.itemID])
+  const notices = (yield* session.messages({ sessionID: child.id })).filter((message) => message.type === "system")
+  expect(notices).toContainEqual(expect.objectContaining({ text: expect.stringContaining("the request was superseded or its owning task closed") }))
   yield* session.remove(root.id)
   expect(yield* reviews.list(root.id).pipe(Effect.flip)).toBeInstanceOf(Session.NotFoundError)
 }))

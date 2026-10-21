@@ -18,6 +18,7 @@ import {
   type DialogContext,
 } from "./dialog"
 import { Locale } from "../util/locale"
+import { stringWidth } from "../util/string-width"
 import { getScrollAcceleration } from "../util/scroll"
 import { useConfig } from "../config"
 import { moveSelection, reconcileSelection } from "./select-controller"
@@ -224,16 +225,27 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     )
   })
 
+  const dimensions = useTerminalDimensions()
+  const rowWidth = createMemo(() => dialogPanelWidth(dimensions().width))
+  const optionRows = (option: DialogSelectOption<T>) =>
+    1 +
+    (option.details ?? []).reduce(
+      (acc, detail) => acc + (option.detailsWrap ? Math.max(1, Math.ceil(stringWidth(detail) / Math.max(1, rowWidth() - 10))) : 1),
+      0,
+    )
+
   const rows = createMemo(() => {
     // A category costs three rows: a leading blank row (the list inset for the first group), its label, and a trailing blank row.
     const headers = grouped().reduce((acc, [category]) => (category ? acc + 3 : acc), 0)
-    return flat().reduce((acc, option) => acc + 1 + (option.details?.length ?? 0), headers)
+    return flat().reduce((acc, option) => acc + optionRows(option), headers)
   })
 
-  const dimensions = useTerminalDimensions()
-  const height = createMemo(() => Math.min(rows(), Math.max(0, Math.floor(dimensions().height / 2) - 6)))
+  const height = createMemo(() => {
+    const budget = Math.max(0, Math.floor(dimensions().height / 2) - 6)
+    const tallest = flat().reduce((acc, option) => Math.max(acc, optionRows(option) + (option.category ? 3 : 0)), 0)
+    return Math.min(rows(), Math.max(budget, Math.min(tallest, dimensions().height - 14)))
+  })
   const paletteViewportHeight = createMemo(() => Math.min(26, Math.max(0, dimensions().height - 8)))
-  const rowWidth = createMemo(() => dialogPanelWidth(dimensions().width))
 
   const selected = createMemo(() => flat()[store.selected])
 

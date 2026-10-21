@@ -763,7 +763,7 @@ not idle. Omitted status
 includes all states. `order` accepts `"asc"`, `"desc"` (default), `"pinned"`, or `"active"`.
 Session list/get data carries the optional `time.active` of the latest terminal Step or execution event. The connector refreshes that Session's recorded activity on settlement and invalidates its list consumers when the activity timestamp changes, including when the Session is not subscribed for transcript events. Metadata-only `time.updated` changes do not trigger streaming list invalidations.
 `session.pending.list` returns admitted but unpromoted user and synthetic inputs in admission order at the verified backend Session Location. The connector refuses more than 200 pending inputs or a response beyond the relay's bounded chunk limit rather than truncating the list. The browser reads it beside the projected Session window to restore processing and queued rows after reload or dropped events.
-Goal text sent through `session.goal.set` or `session.autonomy.set` has a five-minute browser and connector-local deadline for synchronous synthesis and starting steer. The generic request deadline is 30 seconds, with narrower per-operation read and control overrides; goal stop and non-text autonomy updates do not use the extended deadline. The relay imposes no per-request lifetime.
+Goal text sent through `session.goal.set` or `session.autonomy.set` has a five-minute browser and connector-local deadline for synchronous synthesis and starting steer. `session.switchModel` uses the same five-minute allowance as compaction in the browser and connector-local adapter. The generic request deadline is 30 seconds, with narrower per-operation read and control overrides; goal stop and non-text autonomy updates do not use the extended deadline. The browser relay imposes no per-request lifetime.
 Pinned order lists pins by ascending pin time, then unpinned Sessions by descending
 update time and ID. Its opaque cursors include the pin sort key and support both
 directions. Active order places running root families first, then descending
@@ -968,11 +968,11 @@ before the gate opens. Requests recheck live authority and the epoch before forw
 and before local dispatch.
 
 The endpoint speaks MCP revision 2026-07-28 through the SDK's JSON response mode and
-rejects legacy transports. It exposes 75 tools: one per remote operation in section 3.4
+rejects legacy transports. It exposes 81 tools: one per closed remote operation in sections 3.4 and 3.4b
 except `session.subscribe`, `session.unsubscribe`, `session.message.stream`,
 `session.attachment.upload`, `machine.telemetry.consent.get`,
 `machine.telemetry.consent.set`, `machine.latency.append`, and `machine.latency.list`
-(74 operations), plus `session_create_in_directory`. Tool names are the operation
+(80 operations), plus `session_create_in_directory`. Tool names are the operation
 names in snake_case with dots and hyphens replaced by underscores (for example
 `session_permission_reply`, `machine_keep_awake_set`); clients poll snapshots, pending
 interactions, and status instead of subscribing. Session-scoped tools take
@@ -1029,11 +1029,23 @@ mutation lanes, and pending MCP requests never occupy browser read lanes. A
 Results: the complete connector value is returned as `structuredContent` and matching
 JSON text. A failure sets `isError` with the error code and message; `outcome_unknown`
 asks the client to inspect state before retrying, and the request is never replayed
-automatically. A mutation that ends with `outcome_unknown` quarantines its lane (the
-Session's, or the backend lane) for the rest of that connector instance: queued and
-later mutations in the lane are refused unexecuted with `outcome_unknown`, while reads
-and other Session lanes keep working. Only an explicit remote disconnect and connect
-releases it; an ordinary automatic reconnect does not. `unknown_operation` from an older connector asks for a machine update.
+automatically. A mutation that ends with `outcome_unknown` holds its Session or backend
+lane while reads and other Session lanes keep working. Before another mutation on a
+held model-selection lane, the connector performs a fresh authorized Session read at
+the backend-recorded Location. An exact provider, model ID, variant, and profile match
+releases that hold without repeating the earlier switch. An exact retry of that switch
+returns `null` as confirmation of the current selection, not proof that the original
+physical request executed. An explicit profile already selected before dispatch, or
+without an established baseline, cannot be confirmed as a profile rebind from this read.
+For an uncertain prompt, only an explicit retry with the same prompt ID passes the
+hold; Core's first admission wins, and a successful receipt releases it. Failed reads,
+mismatches, failed retries, and other uncertain mutations remain held. Refused mutations
+return `outcome_unknown` and explicitly state that this request was not executed.
+Holds survive socket reconnection and are in memory for that connector instance;
+shutdown discards them without restoring or replaying requests. While any lane remains
+held, Relay MCP retains its transport state and URL and reports
+`MCP lane read-only; recovery needed.` through its existing status message. This is
+not a device-wide write lock or an authorization change. `unknown_operation` from an older connector asks for a machine update.
 The connector rejects a result above 2 MiB with `message_too_large`, and the relay
 accepts at most 64 response chunks of 262,144 characters; overflow is an explicit
 error, never truncation. A disconnecting HTTP client cancels its pending request.

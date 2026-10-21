@@ -70,10 +70,23 @@ export function autonomyDecisionKind(view: SessionAutonomyView | undefined, acti
 }
 
 export function autonomyToggleDescription(toggle: AutonomyToggle) {
-  if (toggle === "yolo") return "agentic evaluator, grants no approval"
+  if (toggle === "yolo") return "evaluates unresolved requests"
   if (toggle === "autoPermission") return "approves ask permissions"
   if (toggle === "autoGuardrail") return "approves ordinary reviews while awake"
-  return "answers questions"
+  return "uses explicit defaults"
+}
+
+export function autonomyToggleTitle(state: SessionAutonomyView | undefined, toggle: AutonomyToggle) {
+  const on = autonomyToggleOn(state, toggle)
+  if (on === false && inheritedOn(state, toggle)) return `${autonomyToggleLabel(toggle)}: inherited on`
+  return `Toggle ${autonomyToggleLabel(toggle)}: ${on === undefined ? "unknown" : on ? "on" : "off"}`
+}
+
+function inheritedOn(state: SessionAutonomyView | undefined, toggle: AutonomyToggle) {
+  if (toggle === "yolo") return state?.effective?.yolo === true
+  if (toggle === "autoPermission") return state?.effective?.permissionsAuto === true
+  if (toggle === "autoGuardrail") return state?.effective?.ordinaryReviewsAuto === true
+  return false
 }
 
 export function autonomyToggleLabel(toggle: AutonomyToggle) {

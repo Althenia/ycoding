@@ -22,6 +22,37 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.23",
+    date: "2026-10-21",
+    title: "Context-aware automatic decisions",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "The decision model, including explicit decision tool calls, and automatic permission, guardrail, and question evaluators see the current goal, retained summary, recent human inputs, pending steers, step and tool progress, review identities, the permission ceiling, and the goals and inputs of up to two managed ancestors. Queued follow-up work does not count as current authority; explicit decisions remain advisory." },
+      { tag: "Changed", text: "Decision helpers resolve ordinary reversible choices from the goal and recent inputs. Indispensable facts, required approvals, and denials stay intact; assistant text, tool output, summaries, and earlier automatic decisions never count as human consent, and a newer explicit correction replaces earlier intent." },
+      { tag: "Changed", text: "A decision result is discarded when current instructions, goals, grants, reviews, or restrictions change while it is computed. Unrelated sibling-tool progress does not force a human handoff. A discarded result is never an approval or an answer." },
+      { tag: "Fixed", text: "The command palette shows one control per automation flag with its actual state and a precise description. Inherited automation is identified separately from local settings, and the descriptions remain readable at 80 columns." },
+      { tag: "Fixed", text: "A fresh human steer with YOLO enabled releases earlier unanswered questions, forms, and their still-open review items without inventing answers. A cancelled upload can resume local-only work; queued follow-ups, repeated prompt IDs, other Sessions, and permission or hard-review requests keep their own boundaries." },
+      { tag: "Fixed", text: "Permission and guardrail assessments receive applicable rules, matching prior decisions, resolved targets, and same-call permission evidence. Current policy is checked again before applying a model result; an invalid guardrail configuration and genuine hard approvals remain human decisions." },
+      { tag: "Fixed", text: "Remote MCP confirms uncertain model selections from fresh Session state without repeating the switch, and permits a retry with the same prompt ID through durable admission. Unresolved lanes report read-only recovery guidance while reads and other Sessions remain available; profile rebinding and other unconfirmed actions are not inferred or repeated." },
+      { tag: "Fixed", text: "Remote model switches use a five-minute allowance for interruption and compaction. The browser can confirm the exact selected model after a lost response, keeps genuinely unknown outcomes visible, and discards confirmations from an old Session or connection. TUI recovery guidance and the full device URL remain visible at 80 columns." },
+      { tag: "Fixed", text: "MCP connections report authentication required after the latest stored refresh token is rejected, withdraw stale tools, and do not retry the failed call through another stored profile. Relay MCP off guidance calls for enabling it and a fresh sign-in and consent in each client." },
+    ],
+  },
+  {
+    version: "0.10.22",
+    date: "2026-10-21",
+    title: "App preview and a simpler autonomy rail",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "Registered local HTTP apps can be previewed in a browser through a separate `ycoding-preview` Worker once preview origins are configured. Each registration receives its own single-use origin that is never reused after expiry, revocation, disconnection, or a restart; when every configured origin has been used, `local_app_open` fails with `preview_exhausted`. Preview stays disabled until its hosting is approved." },
+      { tag: "Added", text: "`local_app_open` returns a short-lived, single-use bootstrap URL. The app is served under `/_r/<lease tag>/` on its origin, so it must use relative URLs; only `GET` and `HEAD` requests pass through, and stale or unknown credentials are refused without contacting any machine." },
+      { tag: "Added", text: "`appPreview` in the global `remote.json` lists the preview origins, the loopback ports eligible for preview, and the origins allowed to embed the preview. Without it, or with an empty list, preview stays off; the connector must run v0.10.22 or later." },
+      { tag: "Changed", text: "Revoking a local app, turning Relay MCP or Remote off, and disconnecting end that machine's preview access at the relay." },
+      { tag: "Changed", text: "The sidebar AUTONOMY section no longer has a separate YOLO row; `/yolo` and its palette entry toggle it. Permissions, Guardrails, and Questions read `auto` while their rule switch decides, otherwise `yolo` while YOLO is on, otherwise `manual` (`review box` while asleep)." },
+      { tag: "Changed", text: "Guardrail model assessment allows an ordinary review whose every command part only reads, lists, or searches. When the reads likely target production secrets, API keys, or credentials, the model weighs purpose and exposure before allowing, denying, or escalating." },
+    ],
+  },
+  {
     version: "0.10.21",
     date: "2026-10-21",
     title: "Closed-lid keep-awake and clearer autonomy deciders",

@@ -40,7 +40,7 @@ export const Event = Question.Event
 
 export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("Question.RejectedError", {}) {
   override get message() {
-    return "The user dismissed this question"
+    return "This question was dismissed or superseded without an answer"
   }
 }
 
@@ -107,6 +107,7 @@ export interface Interface {
   readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | InvalidAnswerError>
   readonly reject: (requestID: ID) => Effect.Effect<void, NotFoundError>
+  readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
@@ -114,6 +115,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Que
 
 interface Pending {
   readonly request: Request
+  readonly epoch: number
   readonly deferred: Deferred.Deferred<Outcome, RejectedError>
 }
 
@@ -131,6 +133,21 @@ const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const decision = yield* Decision.Service
     const pending = new Map<ID, Pending>()
+    const asks = new Map<string, { epoch: number; count: number }>()
+    const enter = (sessionID: string) => {
+      const state = asks.get(sessionID) ?? { epoch: 0, count: 0 }
+      state.count++
+      asks.set(sessionID, state)
+      const epoch = state.epoch
+      return {
+        epoch,
+        superseded: () => state.epoch !== epoch,
+        release: () => {
+          state.count--
+          if (state.count === 0 && asks.get(sessionID) === state) asks.delete(sessionID)
+        },
+      }
+    }
     const settle = Semaphore.makeUnsafe(1)
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => settle.withPermit(Effect.uninterruptible(effect))
 
@@ -288,7 +305,9 @@ const layer = Layer.effect(
       })
 
     const ask = Effect.fn("Question.ask")((input: AskInput) =>
-      Effect.uninterruptibleMask((restore) =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => enter(input.sessionID)),
+        (ticket) => Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const snapshot = yield* autonomy
             .snapshot(input.sessionID, { inherited: true })
@@ -305,17 +324,20 @@ const layer = Layer.effect(
           }
           const id = ID.ascending()
           const deferred = yield* Deferred.make<Outcome, RejectedError>()
+          if (ticket.superseded()) return yield* new RejectedError()
           const request: Request = { id, ...input }
-          const entry: Pending = { request, deferred }
+          const entry: Pending = { request, epoch: ticket.epoch, deferred }
           pending.set(id, entry)
           const cancelPending = Effect.sync(() => {
             if (pending.get(id) === entry) pending.delete(id)
           })
           if (auto && snapshot) {
-            const outcome = yield* restore(evaluateAuto(input, id, { autoAnswer, yolo })).pipe(
-              Effect.onInterrupt(() => cancelPending),
-            )
-            if (outcome.type === "answered") {
+            const outcome = yield* restore(
+              evaluateAuto(input, id, { autoAnswer, yolo }).pipe(
+                Effect.raceFirst(Deferred.await(deferred).pipe(Effect.as(undefined))),
+              ),
+            ).pipe(Effect.onInterrupt(() => cancelPending))
+            if (outcome?.type === "answered") {
               const unchanged = yield* DecisionChoice.autonomyUnchanged(autonomy, input.sessionID, snapshot)
               const claimed = unchanged && (yield* exclusive(Effect.sync(() => {
                 if (pending.get(id) !== entry) return false
@@ -342,7 +364,7 @@ const layer = Layer.effect(
               return true
             })))
             if (claimed) {
-              const item = yield* openReview(input, id, outcome.type === "unsettled" ? outcome : { reason: "disabled" })
+              const item = yield* openReview(input, id, outcome?.type === "unsettled" ? outcome : { reason: "disabled" })
               return { status: "deferred", itemID: item.itemID } as const
             }
           }
@@ -351,6 +373,8 @@ const layer = Layer.effect(
             Effect.ensuring(cancelPending),
           )
         }),
+        ),
+        (ticket) => Effect.sync(ticket.release),
       ),
     )
 
@@ -387,11 +411,25 @@ const layer = Layer.effect(
       ),
     )
 
+    const cancelPending = Effect.fn("Question.cancelPending")(function* (sessionID: SessionSchema.ID) {
+      const state = asks.get(sessionID)
+      if (state === undefined) return
+      const advanced = ++state.epoch
+      const obsolete = Array.from(pending.values()).filter(
+        (item) => item.request.sessionID === sessionID && item.epoch < advanced,
+      )
+      yield* Effect.forEach(
+        obsolete,
+        (item) => reject(item.request.id).pipe(Effect.catchTag("Question.NotFoundError", () => Effect.void)),
+        { discard: true },
+      )
+    })
+
     const list = Effect.fn("Question.list")(function* () {
       return Array.from(pending.values(), (item) => item.request)
     })
 
-    return Service.of({ ask, deferPending, reply, reject, list })
+    return Service.of({ ask, deferPending, reply, reject, cancelPending, list })
   }),
 )
 

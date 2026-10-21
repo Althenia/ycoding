@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { Option, Schema } from "effect"
 import { RemoteMCPTransport } from "@ycoding-ai/core/remote-mcp/transport"
-import { localAppOperations, parseChunkedValue, type McpPrincipal, type RemoteErrorCode, type RemoteResponse } from "@ycoding-ai/remote"
+import { localAppOperations, parseChunkedValue, type McpPrincipal, type RemoteErrorCode, type RemoteRequest, type RemoteResponse } from "@ycoding-ai/remote"
 import type { LocalServer } from "./remote-local"
 import {
   createOperationCache,
@@ -36,10 +36,15 @@ export type Options = {
   readonly allowed: (epoch: string) => boolean
   readonly maxResultChars?: number
   readonly now?: () => number
+  readonly onLaneHold?: (held: boolean) => void
 }
 
 type Ticket = { readonly context: Context; readonly previous: Promise<void>; readonly release: () => void; readonly lane?: string; started: boolean; authorizationDenied?: true }
 type Admitted = { readonly response: Response } | { readonly body: string; readonly ticket: Ticket }
+type Hold =
+  | { readonly kind: "model"; readonly sessionID: string; readonly model: Readonly<Record<string, unknown>> }
+  | { readonly kind: "prompt"; readonly messageID: string }
+  | { readonly kind: "unknown" }
 
 const guidance: Partial<Record<RemoteErrorCode, string>> = {
   outcome_unknown: " Inspect the Session's current state before retrying; the request was not replayed.",
@@ -57,7 +62,7 @@ export function createRemoteMcp(options: Options) {
   const appPresentation = RemoteMcpApps.tools.find((tool) => tool.operation === "local.app.open")
   const byName = new Map(RemoteMcpSchemas.tools.map((tool) => [tool.name, tool]))
   const lanes = new Map<string, Promise<void>>()
-  const uncertain = new Set<string>()
+  const holds = new Map<string, Hold>()
   const inflight = new Set<AbortController>()
   let admission: Promise<unknown> = Promise.resolve()
   let closed = false
@@ -111,15 +116,29 @@ export function createRemoteMcp(options: Options) {
     const tool = byName.get(call.name)
     if (ticket === undefined || tool === undefined || ticket.started) return failure("internal_error", "The request has no admission")
     ticket.started = true
+    const denied = () => {
+      if (options.allowed(ticket.context.epoch)) return undefined
+      ticket.authorizationDenied = true
+      return failure("agent_unavailable", "Relay MCP is off or its authorization changed; the request was not executed")
+    }
     try {
-      if (!options.allowed(ticket.context.epoch)) {
-        ticket.authorizationDenied = true
-        return failure("agent_unavailable", "Relay MCP is off or its authorization changed; the request was not executed")
+      const refused = denied()
+      if (refused !== undefined) return refused
+      const lane = ticket.lane
+      const held = lane === undefined ? undefined : holds.get(lane)
+      if (lane !== undefined && held !== undefined) {
+        const settled = await reconcile(lane, held, tool, call.arguments, call.signal, ticket.context)
+        if (settled !== undefined) return settled
       }
-      if (ticket.lane !== undefined && uncertain.has(ticket.lane))
-        return failure("outcome_unknown", "An earlier mutation in this lane has an unknown outcome. Inspect the local Session, then disconnect and reconnect Remote before another MCP mutation. This request was not executed.")
+      const baseline = tool.operation === "session.switchModel" && typeof call.arguments.sessionID === "string"
+        ? await selectedModel(call.arguments.sessionID, call.signal, ticket.context)
+        : undefined
+      if (baseline?.failure !== undefined) return baseline.failure
+      const revoked = denied()
+      if (revoked !== undefined) return revoked
       const frames = await dispatch(tool, call.arguments, call.signal, ticket.context)
-      if (ticket.lane !== undefined && frames.some((frame) => !frame.ok && frame.error.code === "outcome_unknown")) uncertain.add(ticket.lane)
+      if (lane !== undefined && frames.some((frame) => !frame.ok && frame.error.code === "outcome_unknown")) hold(lane, holdOf(tool, call.arguments, baseline?.model))
+      else if (lane !== undefined && held?.kind === "prompt" && frames[0]?.ok === true) release(lane)
       const result = toolResult(frames, limit)
       if (!result.isError && (localAppOperations as readonly string[]).includes(tool.operation)) {
         const app = RemoteMcpSchemas.recordOf(result.structuredContent)
@@ -139,20 +158,58 @@ export function createRemoteMcp(options: Options) {
     }
   }
 
+  async function reconcile(lane: string, held: Hold, tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, signal: AbortSignal, context: Context) {
+    if (held.kind === "prompt")
+      return tool.operation === "session.prompt" && RemoteMcpSchemas.recordOf(args.input)?.id === held.messageID
+        ? undefined
+        : failure("outcome_unknown", `An earlier session_prompt in this Session has an unknown outcome. Retry session_prompt with input.id ${held.messageID}; the local server admits each prompt ID once. This request was not executed.`)
+    if (held.kind === "unknown")
+      return failure("outcome_unknown", "An earlier mutation in this lane has an unknown outcome. This lane remains read-only for this connector instance. Inspect the local Session before further changes. This request was not executed.")
+    const selected = await selectedModel(held.sessionID, signal, context)
+    if (!("model" in selected) || !sameModel(selected.model, held.model))
+      return failure("outcome_unknown", "An earlier session_switch_model in this Session has an unknown outcome, and its selected model could not be confirmed. Inspect the Session with session_get; the hold ends when a fresh read confirms that model. This request was not executed.")
+    release(lane)
+    if (tool.operation === "session.switchModel" && sameModel(RemoteMcpSchemas.recordOf(RemoteMcpSchemas.recordOf(args.input)?.model), held.model))
+      return success(JSON.stringify(null), null, limit)
+    return undefined
+  }
+
+  async function selectedModel(sessionID: string, signal: AbortSignal, context: Context) {
+    options.sessions.invalidate(sessionID)
+    const result = toolResult(await operate({ type: "request", id: `mcp_${randomUUID()}`, operation: "session.get", sessionID }, signal, context), limit)
+    if (result.isError) return { failure: result }
+    return { model: RemoteMcpSchemas.recordOf(RemoteMcpSchemas.recordOf(RemoteMcpSchemas.recordOf(result.structuredContent)?.data)?.model) }
+  }
+
+  function hold(lane: string, value: Hold) {
+    if (closed) return
+    const idle = holds.size === 0
+    holds.set(lane, value)
+    if (idle) options.onLaneHold?.(true)
+  }
+
+  function release(lane: string) {
+    if (holds.delete(lane) && holds.size === 0) options.onLaneHold?.(false)
+  }
+
   function dispatch(tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, signal: AbortSignal, context: Context) {
     const operation = tool.operation
     const input = RemoteMcpSchemas.recordOf(args.input)
     const id = `mcp_${randomUUID()}`
     if (operation === "session.createInDirectory")
       return executeRemoteDirectorySession({ id, home, input: input ?? {}, signal, local: options.local, sessions: options.sessions, subscriptions: options.subscriptions })
+    return operate({
+      type: "request",
+      id,
+      operation,
+      ...(typeof args.sessionID === "string" ? { sessionID: args.sessionID } : {}),
+      ...(input === undefined ? {} : { input }),
+    }, signal, context)
+  }
+
+  function operate(request: RemoteRequest, signal: AbortSignal, context: Context) {
     return executeRemoteOperation({
-      request: {
-        type: "request",
-        id,
-        operation,
-        ...(typeof args.sessionID === "string" ? { sessionID: args.sessionID } : {}),
-        ...(input === undefined ? {} : { input }),
-      },
+      request,
       signal,
       local: options.local,
       sessions: options.sessions,
@@ -230,6 +287,10 @@ export function createRemoteMcp(options: Options) {
     clearApps() { options.apps?.clear() },
     async close() {
       closed = true
+      if (holds.size > 0) {
+        holds.clear()
+        options.onLaneHold?.(false)
+      }
       options.apps?.close()
       for (const controller of inflight) controller.abort()
       await transport.close()
@@ -250,6 +311,20 @@ export function toolResult(frames: readonly RemoteResponse[], limit = maxResultC
   if (text.length > limit) return failure("message_too_large", `Result is ${text.length} characters, above the ${limit} character limit`)
   const parsed = parseChunkedValue(parts)
   return parsed.ok ? success(text, parsed.value, limit) : failure("internal_error", "The local agent returned an unreadable chunked response")
+}
+
+function holdOf(tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, baseline: Readonly<Record<string, unknown>> | undefined): Hold {
+  const input = RemoteMcpSchemas.recordOf(args.input)
+  if (tool.operation === "session.prompt" && typeof input?.id === "string") return { kind: "prompt", messageID: input.id }
+  const model = RemoteMcpSchemas.recordOf(input?.model)
+  if (tool.operation !== "session.switchModel" || typeof args.sessionID !== "string" || model === undefined) return { kind: "unknown" }
+  if (model.profile !== undefined && (baseline === undefined || sameModel(baseline, model))) return { kind: "unknown" }
+  return { kind: "model", sessionID: args.sessionID, model }
+}
+
+function sameModel(current: Readonly<Record<string, unknown>> | undefined, target: Readonly<Record<string, unknown>> | undefined) {
+  return current !== undefined && target !== undefined && current.providerID === target.providerID && current.id === target.id &&
+    current.variant === target.variant && current.profile === target.profile
 }
 
 function success(text: string, value: unknown, limit: number): TextResult {

@@ -72,7 +72,7 @@ test("the full TUI shows one server remote switch without a bottom remote line",
   }
 }, 30_000)
 
-test("Status shows the Relay MCP state, error guidance, and the full wrapped device URL", async () => {
+test("Status shows the Relay MCP state, error guidance, lane recovery guidance, and the full wrapped device URL", async () => {
   const directory = "/tmp/ycoding/remote-mcp-status"
   const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-mcp-screen-"))
   const url = "https://relay.example/api/mcp/devices/dev_0123456789abcdef0123456789abcdef"
@@ -113,6 +113,26 @@ test("Status shows the Relay MCP state, error guidance, and the full wrapped dev
     expect(error).toContain("Relay MCP")
     expect(error.replace(/\s+/g, " ")).toContain("ycoding remote connect")
     expect(error).toContain("error")
+    const closed = Date.now() + 5_000
+    while (Date.now() < closed && screen.frame().includes("   Status")) {
+      screen.input.pressEscape()
+      await Bun.sleep(50)
+    }
+    mcp = { state: "on", url, message: "MCP lane read-only; recovery needed." }
+    await status("recovery needed.")
+    const urlShown = Date.now() + 5_000
+    while (Date.now() < urlShown && !screen.frame().replace(/\s+/g, "").includes(url)) await Bun.sleep(10)
+    const held = screen.frame()
+    expect(held.replace(/\s+/g, " ")).toContain("MCP lane read-only; recovery needed.")
+    expect(held.replace(/\s+/g, "")).toContain(url)
+    expect(held).toContain("on")
+    expect(held).not.toContain("error")
+    screen.input.pressEscape()
+    mcp = { state: "off", message: "Enable Relay MCP, then authorize each client with a fresh sign-in and consent." }
+    const authorization = await status("fresh sign-in")
+    expect(authorization.replace(/\s+/g, " ")).toContain("fresh sign-in and consent.")
+    expect(authorization).toContain("off")
+    expect(authorization.replace(/\s+/g, "")).not.toContain(url)
   } finally {
     await screen.dispose()
     await rm(state, { recursive: true, force: true })

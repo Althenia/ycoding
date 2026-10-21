@@ -28,6 +28,11 @@ const patchToolNode = makeLocationNode({
 const sessionID = Session.ID.make("ses_patch_tool_test")
 const assertions: Permission.AssertInput[] = []
 let denyAction: string | undefined
+let correction: string | undefined
+const automatedDenial = Permission.deniedFeedback("permission", {
+  authority: "yolo",
+  grades: [{ choice: "deny", confidence: 0.92, evidence: "Patches a file outside the requested change" }],
+})
 let failRemoveTarget: string | undefined
 let readsBeforeEditApproval = 0
 let editApproved = false
@@ -52,16 +57,18 @@ const permission = Layer.succeed(
         if (input.action === "edit") editApproved = true
       }).pipe(
         Effect.andThen(input.action === "edit" ? Effect.suspend(afterEditApproval) : Effect.void),
-        Effect.andThen(
-          input.action === denyAction
-            ? Effect.fail(
-                new Permission.BlockedError({
-                  rules: [],
-                  permission: input.action,
-                  resources: input.resources,
-                }),
-              )
-            : Effect.void,
+        Effect.andThen((): Effect.Effect<void, Permission.Error> =>
+          input.action !== denyAction
+            ? Effect.void
+            : correction === undefined
+              ? Effect.fail(
+                  new Permission.BlockedError({
+                    rules: [],
+                    permission: input.action,
+                    resources: input.resources,
+                  }),
+                )
+              : Effect.fail(new Permission.CorrectedError({ feedback: correction })),
         ),
       ),
     ask: () => Effect.die("unused"),
@@ -75,6 +82,7 @@ const permission = Layer.succeed(
 const reset = () => {
   assertions.length = 0
   denyAction = undefined
+  correction = undefined
   failRemoveTarget = undefined
   readsBeforeEditApproval = 0
   editApproved = false
@@ -373,6 +381,21 @@ describe("PatchTool", () => {
           call("*** Begin Patch\n*** Update File: insert-only.txt\n@@\n alpha\n+beta\n omega\n*** End Patch"),
         )
         expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("alpha\nbeta\nomega\n")
+      }),
+    ),
+  )
+
+  it.live("returns permission correction guidance to the model instead of a generic failure", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        const target = path.join(directory, "kept.txt")
+        yield* Effect.promise(() => fs.writeFile(target, "alpha\n"))
+        denyAction = "edit"
+        correction = automatedDenial
+        expect(
+          yield* executeTool(registry, call("*** Begin Patch\n*** Update File: kept.txt\n@@\n-alpha\n+beta\n*** End Patch")),
+        ).toEqual({ type: "error", value: automatedDenial })
+        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("alpha\n")
       }),
     ),
   )

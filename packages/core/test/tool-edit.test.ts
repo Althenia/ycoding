@@ -40,6 +40,11 @@ const assertions: Permission.AssertInput[] = []
 const writes: string[] = []
 let reads = 0
 let denyAction: string | undefined
+let correction: string | undefined
+const automatedDenial = Permission.deniedFeedback("permission", {
+  authority: "yolo",
+  grades: [{ choice: "deny", confidence: 0.92, evidence: "Edits a file outside the requested change" }],
+})
 let afterRead = (_target: string, _content: Uint8Array): Effect.Effect<void> => Effect.void
 
 const guardrail = Layer.mock(SessionGuardrail.Service, {
@@ -57,16 +62,18 @@ const permission = Layer.succeed(
     evaluateEffective: () => Effect.die(new Error("unused Permission.evaluateEffective")),
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
-        Effect.andThen(
-          input.action === denyAction
-            ? Effect.fail(
-                new Permission.BlockedError({
-                  rules: [],
-                  permission: input.action,
-                  resources: input.resources,
-                }),
-              )
-            : Effect.void,
+        Effect.andThen((): Effect.Effect<void, Permission.Error> =>
+          input.action !== denyAction
+            ? Effect.void
+            : correction === undefined
+              ? Effect.fail(
+                  new Permission.BlockedError({
+                    rules: [],
+                    permission: input.action,
+                    resources: input.resources,
+                  }),
+                )
+              : Effect.fail(new Permission.CorrectedError({ feedback: correction })),
         ),
       ),
     ask: () => Effect.die("unused"),
@@ -82,6 +89,7 @@ const reset = () => {
   writes.length = 0
   reads = 0
   denyAction = undefined
+  correction = undefined
   afterRead = () => Effect.void
 }
 
@@ -287,6 +295,28 @@ describe("EditTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("returns permission correction guidance to the model instead of a generic failure", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          const target = path.join(tmp.path, "kept.txt")
+          yield* Effect.promise(() => fs.writeFile(target, "before"))
+          reset()
+          denyAction = "edit"
+          correction = automatedDenial
+          expect(
+            yield* withTool(tmp.path, (registry) =>
+              executeTool(registry, call({ path: target, oldString: "before", newString: "after" })),
+            ),
+          ).toEqual({ type: "error", value: automatedDenial })
+          expect(writes).toEqual([])
+          expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
 

@@ -30,10 +30,11 @@ import { SessionProviderRequest } from "../src/session/provider-request"
 import { SessionRunnerModel } from "../src/session/runner/model"
 import { SessionMessage } from "../src/session/message"
 import { SessionSchema } from "../src/session/schema"
-import { SessionTable } from "../src/session/sql"
+import { SessionMessageTable, SessionTable } from "../src/session/sql"
 import { testEffect } from "./lib/effect"
 import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { Money } from "@ycoding-ai/schema/money"
+import { eq } from "drizzle-orm"
 
 const requests: LLMRequest[] = []
 let graded = false
@@ -339,6 +340,39 @@ it.effect("the agent tool sends graded choices through real decision services an
   expect(requests).toHaveLength(1)
   expect(JSON.stringify(requests[0].messages)).toContain("grade")
   expect(requests[0].responseFormat).toMatchObject({ type: "json" })
+}))
+
+it.effect("the explicit decision tool sends recorded task context to the selected model while remaining advisory", () => Effect.gen(function* () {
+  const sessionID = yield* seed("ses_agent_tool_context")
+  const database = yield* Database.Service
+  yield* database.db.update(SessionTable).set({
+    autonomy: { mode: "normal", yolo: false, goal: {
+      text: "Validate the local candidate", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3,
+    } },
+    permission: [{ action: "shell", resource: "publish *", effect: "deny" }],
+  }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+  const data = { text: "Keep this candidate local; do not publish.", metadata: { inputOrigin: "human" }, files: [], agents: [], time: { created: 1 } }
+  yield* database.db.insert(SessionMessageTable).values({
+    id: SessionMessage.ID.make("msg_explicit_decision_context"), session_id: sessionID, type: "user", seq: 1, data,
+  }).run().pipe(Effect.orDie)
+  yield* registerToolPlugin(DecisionTool.Plugin)
+  const registry = yield* ToolRegistry.Service
+  const result = yield* executeTool(registry, { sessionID, ...toolIdentity, call: {
+    type: "tool-call", id: "context", name: "decision", input: { provider: "agent", request: {
+      state: { action: "inspect", resources: ["/project/candidate"], taskContext: "UNTRUSTED_SCOPE_CLAIM" },
+      questions: [{ type: "choice", name: "decision", instructions: "Choose the permitted next step", choices: [{ value: "allow" }, { value: "review" }] }],
+    } },
+  } })
+  expect(result.type).toBe("text")
+  const wire = JSON.stringify(requests[0].messages)
+  expect(wire).toContain("Validate the local candidate")
+  expect(wire).toContain("Keep this candidate local; do not publish")
+  expect(wire).toContain("session-ceiling")
+  expect(wire).toContain("publish *")
+  expect(wire).toContain("Human-origin instructions")
+  expect(requests[0].tools).toEqual([])
+  expect(permissions).toHaveLength(1)
+  expect(permissions[0]).toMatchObject({ action: "decision" })
 }))
 
 it.effect("Chat and Responses expose the named agent judgment request contract", () => Effect.gen(function* () {

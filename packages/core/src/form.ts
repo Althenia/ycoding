@@ -98,6 +98,7 @@ export interface Interface {
   readonly state: (id: ID) => Effect.Effect<State, NotFoundError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
   readonly cancel: (id: ID) => Effect.Effect<void, AlreadySettledError | NotFoundError>
+  readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Form") {}
@@ -106,7 +107,7 @@ interface Entry {
   readonly form: Info
   readonly state: State
   readonly deferred: Deferred.Deferred<TerminalState>
-  readonly waiting: boolean
+  readonly epoch: number | undefined
 }
 
 export const layer = Layer.effect(
@@ -118,6 +119,21 @@ export const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const decision = yield* Decision.Service
     const settle = Semaphore.makeUnsafe(1)
+    const asks = new Map<string, { epoch: number; count: number }>()
+    const enter = (sessionID: string) => {
+      const state = asks.get(sessionID) ?? { epoch: 0, count: 0 }
+      state.count++
+      asks.set(sessionID, state)
+      const epoch = state.epoch
+      return {
+        epoch,
+        superseded: () => state.epoch !== epoch,
+        release: () => {
+          state.count--
+          if (state.count === 0 && asks.get(sessionID) === state) asks.delete(sessionID)
+        },
+      }
+    }
     const exclusive = <A, E, R>(effect: Effect.Effect<A, E, R>) => settle.withPermit(Effect.uninterruptible(effect))
     const forms = yield* Cache.makeWith<ID, Entry>(
       () => Effect.die(new Error("Form cache must be used via set/getSuccess, never get")),
@@ -150,11 +166,11 @@ export const layer = Layer.effect(
         : state.status === "cancelled"
           ? events.publish(Event.Cancelled, { id, sessionID })
           : events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID })
-      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, waiting: entry.waiting, state })
+      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, epoch: entry.epoch, state })
       yield* Deferred.succeed(entry.deferred, state)
     })
 
-    const createPending = Effect.fn("Form.createPending")((input: CreateInput, waiting = false) =>
+    const createPending = Effect.fn("Form.createPending")((input: CreateInput, epoch?: number) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const id = input.id ?? ID.create()
@@ -173,7 +189,7 @@ export const layer = Layer.effect(
             form,
             state: { status: "pending" },
             deferred: yield* Deferred.make<TerminalState>(),
-            waiting,
+            epoch,
           }
           yield* Cache.set(forms, id, entry)
           yield* events.publish(Event.Created, { form }).pipe(Effect.onError(() => Cache.invalidate(forms, id)))
@@ -217,7 +233,7 @@ export const layer = Layer.effect(
 
     const deferPending = Effect.fn("Form.deferPending")(function* (sessionID: SessionSchema.ID) {
       const entries = Array.from(yield* Cache.values(forms)).filter(
-        (entry) => entry.state.status === "pending" && entry.waiting && entry.form.sessionID === sessionID,
+        (entry) => entry.state.status === "pending" && entry.epoch !== undefined && entry.form.sessionID === sessionID,
       )
       yield* Effect.forEach(entries, (entry) =>
         exclusive(Effect.gen(function* () {
@@ -228,11 +244,39 @@ export const layer = Layer.effect(
         })), { discard: true })
     })
 
+    const cancelPending = Effect.fn("Form.cancelPending")(function* (sessionID: SessionSchema.ID) {
+      const state = asks.get(sessionID)
+      if (state === undefined) return
+      const advanced = ++state.epoch
+      const obsolete = Array.from(yield* Cache.values(forms)).filter(
+        (entry) =>
+          entry.state.status === "pending" &&
+          entry.epoch !== undefined &&
+          entry.epoch < advanced &&
+          entry.form.sessionID === sessionID,
+      )
+      yield* Effect.forEach(obsolete, (entry) => cancelObsolete(entry.form.id), { discard: true })
+    })
+
+    const cancelObsolete = (id: ID) =>
+      cancel(id).pipe(
+        Effect.catchTags({
+          "Form.AlreadySettledError": () => Effect.void,
+          "Form.NotFoundError": () => Effect.void,
+        }),
+      )
+
     const create = Effect.fn("Form.create")((input: CreateInput) => createPending(input))
 
     const ask = Effect.fn("Form.ask")((input: CreateInput) =>
-      Effect.uninterruptibleMask((restore) =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => enter(input.sessionID)),
+        (ticket) => Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          const createWaiting = (waiting: CreateInput) =>
+            createPending(waiting, ticket.epoch).pipe(
+              Effect.tap((created) => (ticket.superseded() ? cancelObsolete(created.id) : Effect.void)),
+            )
           const sessionID = Schema.is(SessionSchema.ID)(input.sessionID) ? input.sessionID : undefined
           const snapshot = sessionID
             ? yield* autonomy
@@ -269,13 +313,14 @@ export const layer = Layer.effect(
                 const item = yield* openReview(form, sessionID, outcome.type === "defer" ? outcome : { reason: "disabled" })
                 return { status: "deferred", itemID: item.itemID } as TerminalState
               }
-              const created = yield* createPending({ ...input, id: form.id }, true)
+              if (ticket.superseded()) return { status: "cancelled" } as TerminalState
+              const created = yield* createWaiting({ ...input, id: form.id })
               const entry = yield* find(created.id).pipe(Effect.orDie)
               return yield* restore(Deferred.await(entry.deferred)).pipe(
                 Effect.onInterrupt(() => Effect.ignore(cancel(created.id))),
               )
             }
-            const created = yield* createPending({ ...input, id: form.id }, true)
+            const created = yield* createWaiting({ ...input, id: form.id })
             const entry = yield* find(created.id).pipe(Effect.orDie)
             const automatic = yield* reply({ id: created.id, answer: outcome.answer }).pipe(
               Effect.as(true),
@@ -285,11 +330,14 @@ export const layer = Layer.effect(
             const result = yield* Deferred.await(entry.deferred)
             return automatic ? { ...result, automatic: true as const, via: outcome.via, ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }) } : result
           }
-          const form = yield* createPending(input, true)
+          if (ticket.superseded()) return { status: "cancelled" } as TerminalState
+          const form = yield* createWaiting(input)
           const entry = yield* find(form.id).pipe(Effect.orDie)
           return yield* restore(Effect.gen(function* () {
             const outcome = auto && sessionID && snapshot
-              ? yield* decisionAnswer(decision, sessionID, form, { autoAnswer, yolo })
+              ? yield* decisionAnswer(decision, sessionID, form, { autoAnswer, yolo }).pipe(
+                  Effect.raceFirst(Deferred.await(entry.deferred).pipe(Effect.as(undefined))),
+                )
               : undefined
             const unchanged = outcome?.type === "answer" && sessionID && snapshot
               ? yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot)
@@ -309,6 +357,8 @@ export const layer = Layer.effect(
             Effect.onInterrupt(() => Effect.ignore(cancel(form.id))),
           )
         }),
+        ),
+        (ticket) => Effect.sync(ticket.release),
       ),
     )
 
@@ -362,7 +412,7 @@ export const layer = Layer.effect(
       ),
     )
 
-    return Service.of({ create, ask, deferPending, get, list, state, reply, cancel })
+    return Service.of({ create, ask, deferPending, get, list, state, reply, cancel, cancelPending })
   }),
 )
 

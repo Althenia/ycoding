@@ -21,7 +21,7 @@ export class Error extends Schema.TaggedErrorClass<Error>()("Decision.Error", {
   reason: DecisionFailure.Reason,
 }) {
   override get message() {
-    if (this.reason === "unavailable") return "Decision helper unavailable. Verify agents.decision.model, efficiency.helper_models.decision, or the Session/default model and its authenticated route; decide from evidence or report the blocker without repeated probes."
+    if (this.reason === "unavailable") return "Decision context or helper unavailable. Refresh current task evidence after an instruction or authorization change. If it remains unavailable, verify agents.decision.model, efficiency.helper_models.decision, or the Session/default model and its authenticated route; continue independent work or report the blocker without repeating unchanged probes."
     if (this.reason === "invalid-output") return "Decision helper returned invalid JSON or answers outside the requested schema. Treat this as uncertainty; clarify bounded evidence and criteria, or decide from evidence without retrying an unchanged judgment."
     if (this.reason === "invalid-request") return "Invalid decision request. Supply provider: agent and request: { state, questions } with 1–32 uniquely named predicate, choice, score, or text questions."
     if (this.reason === "input-too-large") return "Decision request exceeds 1 MiB. Reduce evidence to the bounded facts and criteria needed for the judgment."

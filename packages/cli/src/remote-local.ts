@@ -413,8 +413,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
         ),
       ),
     switchModel: (sessionID, location, model) => call(async () => {
-      await client.session.switchModel({ sessionID, model }, request(location, timeoutMs))
-    }),
+      await client.session.switchModel({ sessionID, model }, request(location, RemoteLimits.compactionTimeoutMs))
+    }, RemoteLimits.compactionTimeoutMs),
     switchAgent: (sessionID, location, agent) => call(async () => {
       await client.session.switchAgent({ sessionID, agent }, request(location, timeoutMs))
     }),

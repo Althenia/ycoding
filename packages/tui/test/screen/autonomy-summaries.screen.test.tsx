@@ -192,7 +192,7 @@ for (const width of [60, 200]) {
       screen.input.pressKey("p", { ctrl: true })
       await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
       await screen.input.typeText("YOLO")
-      await waitFor(screen, () => screen.frame().includes("Toggle YOLO (this Session)"), "YOLO palette row")
+      await waitFor(screen, () => screen.frame().includes("Toggle YOLO: on"), "YOLO palette row")
       screen.input.pressEnter()
       await waitFor(screen, () => state.puts.length === 1, "autonomy write")
       expect(state.puts).toEqual([{ yolo: false }])
@@ -268,6 +268,55 @@ test("an active goal shows in the docked GOAL section and nowhere in the header 
     const lines = screen.lines()
     expect(lines.find((line) => line.includes("waiting · 1 subagent"))).not.toMatch(/goal/)
     expect(lines.find((line) => line.includes("commands"))).not.toMatch(/goal/)
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+const toggleDescriptions = [
+  { filter: "YOLO", title: "Toggle YOLO", description: "evaluates unresolved requests" },
+  { filter: "auto-permission", title: "Toggle Auto-permission", description: "approves ask permissions" },
+  { filter: "auto-guardrail", title: "Toggle Auto-guardrail", description: "approves ordinary reviews while awake" },
+  { filter: "auto-answer", title: "Toggle Auto-answer", description: "uses explicit defaults" },
+]
+
+for (const toggle of toggleDescriptions) {
+  test(`the command palette row for ${toggle.filter} states its description in full at 80 columns`, async () => {
+    const { route } = fixture()
+    const screen = await renderScreen({
+      width: 80,
+      height: 50,
+      args: { sessionID },
+      route,
+      settle: "waiting · 1 subagent",
+      config: { animations: false },
+    })
+    try {
+      screen.input.pressKey("p", { ctrl: true })
+      await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
+      await screen.input.typeText(toggle.filter)
+      await waitFor(screen, () => screen.frame().includes(toggle.title), "toggle palette row")
+      const rows = screen.lines().filter((line) => line.includes(toggle.title))
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toContain(toggle.description)
+      expect(rows[0]).not.toContain("…")
+    } finally {
+      await screen.dispose()
+    }
+  }, 30_000)
+}
+
+test("an inherited guardrail setting remains fully explained in the narrow palette", async () => {
+  const { state, route } = fixture()
+  state.autonomy = { ...state.autonomy, autoGuardrail: false }
+  const screen = await renderScreen({ width: 80, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
+    await screen.input.typeText("auto-guardrail")
+    await waitFor(screen, () => screen.frame().includes("inherited on"), "inherited toggle")
+    expect(screen.frame()).toContain("approves ordinary reviews while awake")
+    expect(screen.lines().find((line) => line.includes("Auto-guardrail: inherited on"))).not.toContain("…")
   } finally {
     await screen.dispose()
   }

@@ -40,6 +40,7 @@ function oauthServer(input: {
         holdDiscoveries: 0,
         discoveries: 0,
         issued: 0,
+        toolCalls: 0,
       }
       const discovered = Promise.withResolvers<void>()
       const http = Bun.serve({
@@ -129,9 +130,10 @@ function oauthServer(input: {
               protocol.setRequestHandler("tools/list", () => ({
                 tools: [{ name: "echo", inputSchema: { type: "object" as const, properties: {} } }],
               }))
-              protocol.setRequestHandler("tools/call", () => ({
-                content: [{ type: "text" as const, text: `served with ${token}` }],
-              }))
+              protocol.setRequestHandler("tools/call", () => {
+                state.toolCalls += 1
+                return { content: [{ type: "text" as const, text: `served with ${token}` }] }
+              })
               return protocol
             },
             { legacy: "reject" },
@@ -482,6 +484,39 @@ describe("MCP OAuth token refresh", () => {
       expect(server.state.refreshRequests).toEqual(["revoked"])
       const credentials = yield* Credential.Service
       expect(yield* credentials.get(credential.id)).toBeUndefined()
+    }),
+  )
+
+  it.live("a revoked mid-session grant requires authentication without switching to another stored profile", () =>
+    Effect.gen(function* () {
+      const server = yield* oauthServer({
+        rotate: true,
+        access: ["access-primary", "access-secondary"],
+        refresh: ["refresh-primary", "refresh-secondary"],
+      })
+      const mcp = yield* locationMcp(server.url, import.meta.dir)
+      const integrationID = yield* integrationOf(mcp)
+      const secondary = yield* store(integrationID, { access: "access-secondary", refresh: "refresh-secondary", label: "fixture-secondary" })
+      const primary = yield* store(integrationID, { access: "access-primary", refresh: "refresh-primary", label: "fixture-primary" })
+      yield* mcp.connect(SERVER)
+      expect(yield* echo(mcp)).toEqual(["served with access-primary"])
+      expect(yield* status(mcp)).toEqual({ status: "connected" })
+
+      server.state.access.delete("access-primary")
+      server.state.refresh.delete("refresh-primary")
+      const rejected = yield* echo(mcp).pipe(Effect.flip)
+      expect(rejected.message).toContain("requires authentication")
+      expect(yield* status(mcp)).toEqual({ status: "needs_auth" })
+      expect(yield* mcp.tools()).toEqual([])
+      expect(yield* stored(primary.id)).toBeUndefined()
+      expect(yield* stored(secondary.id)).toMatchObject({ access: "access-secondary", refresh: "refresh-secondary" })
+      expect(server.state.refreshRequests).toEqual(["refresh-primary"])
+      expect(server.state.toolCalls).toBe(1)
+
+      const repeated = yield* echo(mcp).pipe(Effect.flip)
+      expect(repeated.message).toContain("requires authentication")
+      expect(server.state.refreshRequests).toEqual(["refresh-primary"])
+      expect(server.state.toolCalls).toBe(1)
     }),
   )
 

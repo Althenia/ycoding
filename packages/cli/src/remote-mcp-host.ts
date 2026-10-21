@@ -5,11 +5,15 @@ import type { Remote } from "@ycoding-ai/schema/remote"
 export type RemoteMcpPreference = { readonly enabled: boolean; readonly epoch: string }
 export type RemoteMcpHost = Awaited<ReturnType<typeof createRemoteMcpHost>>
 
+const laneHoldMessage = "MCP lane read-only; recovery needed."
+const off = (): Remote.McpStatus => ({ state: "off", message: "Enable Relay MCP, then authorize each client with a fresh sign-in and consent." })
+
 export async function createRemoteMcpHost(input: { file: string; remote: () => string }) {
   let preference: RemoteMcpPreference = { enabled: false, epoch: crypto.randomUUID() }
   let pendingRevocation = false
-  let current: Remote.McpStatus = { state: "off" }
+  let current: Remote.McpStatus = off()
   let transport: { url: string; send: (state: RemoteMcpPreference) => Promise<void> } | undefined
+  let laneHold = false
   let generation = 0
   let admitted = false
   let authorization = new AbortController()
@@ -31,7 +35,7 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
     pendingRevocation = "pendingRevocation" in stored && stored.pendingRevocation === true
     current = pendingRevocation
       ? { state: "error", message: "Relay MCP revocation is unconfirmed; run `ycoding remote connect` to synchronize the disabled state" }
-      : { state: preference.enabled ? "connecting" : "off" }
+      : preference.enabled ? { state: "connecting" } : off()
   } catch (error) {
     if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"))
       current = { state: "error", message: "Could not read relay MCP preference; run `ycoding remote mcp off` to reset it" }
@@ -66,7 +70,7 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
       if (preference.enabled && authorization.signal.aborted) authorization = new AbortController()
       if (!preference.enabled) authorization.abort()
       admitted = preference.enabled
-      current = preference.enabled ? { state: "on", url: connection.url } : { state: "off" }
+      current = preference.enabled ? { state: "on", url: connection.url } : off()
     } catch {
       if (cycle === generation) {
         revoke()
@@ -77,7 +81,8 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
   }
 
   return {
-    status: () => current,
+    status: (): Remote.McpStatus => current.state === "on" && laneHold ? { ...current, message: laneHoldMessage } : current,
+    setLaneHold: (held: boolean) => { laneHold = held },
     advertisement: () => preference,
     authorizationSignal: () => authorization.signal,
     allowed: (epoch: string) => admitted && preference.enabled && preference.epoch === epoch && transport !== undefined,
@@ -90,7 +95,7 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
       generation++
       transport = undefined
       revoke()
-      if (!pendingRevocation) current = { state: preference.enabled ? "connecting" : "off" }
+      if (!pendingRevocation) current = preference.enabled ? { state: "connecting" } : off()
     },
     set: (enabled: boolean): Promise<Remote.McpStatus> => {
       const cycle = ++generation
@@ -114,7 +119,7 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
         }
         if (cycle !== generation) return current
         if (!enabled && !wasEnabled && !pendingRevocation && !transport) {
-          current = { state: "off" }
+          current = off()
           return current
         }
         return synchronize(cycle)

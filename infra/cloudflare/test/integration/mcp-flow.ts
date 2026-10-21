@@ -64,7 +64,8 @@ const expectedTools = [
   "session_goal_stop", "session_create", "session_status", "session_catalog", "session_file_find", "session_switch_model",
   "session_switch_agent", "session_command", "session_skill", "usage_providers", "usage_summary", "usage_report", "session_usage_report",
   "session_prompt_costs", "session_task_costs", "usage_forecast", "incident_report", "incident_recent", "incident_guidance",
-  "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "artifact_demo_preview", "artifact_demo_export", "session_create_in_directory",
+  "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "artifact_demo_preview", "artifact_demo_export",
+  "local_app_register", "local_app_list", "local_app_revoke", "local_app_open", "local_app_status", "local_app_http", "session_create_in_directory",
 ]
 
 type McpClient = {
@@ -641,7 +642,7 @@ try {
   const call = toolOf(client)
   const listed = await client.listTools()
   expect(JSON.stringify(listed.tools.map((tool) => tool.name)) === JSON.stringify(expectedTools), `tool inventory differed: ${listed.tools.map((tool) => tool.name).join(",")}`)
-  expect(new Set(expectedTools).size === 75, "the expected inventory is not 75 distinct names")
+  expect(new Set(expectedTools).size === 81, "the expected inventory is not 81 distinct names")
   expect(mcpFrames > probesBeforeWire, "discovery and listing never reached the agent")
   const noMeta = await fetch(resource, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream",
     "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/list", authorization: `Bearer ${tokensA.access}` },
@@ -653,7 +654,7 @@ try {
   expect(oldVersion.status === 400, `an unsupported protocol version returned ${oldVersion.status}`)
   const schemaFailure = await call("session_get", { sessionID: "ses_mcp_seed", extra: true })
   expect(schemaFailure.isError, "an input with an unknown property was accepted")
-  checks.push("the real SDK client discovered and listed exactly the 75 tools; missing metadata, a mismatched method header, and an unsupported version returned 400; schema failures were tool errors")
+  checks.push("the real SDK client discovered and listed exactly the 81 tools; missing metadata, a mismatched method header, and an unsupported version returned 400; schema failures were tool errors")
 
   const workspaces = dataOf((await call("workspace_list")).value)
   const recorded = Array.isArray(workspaces) ? workspaces.find((item) => isRecord(item) && item.directory === workspace) : undefined

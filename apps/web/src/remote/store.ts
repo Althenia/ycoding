@@ -1493,15 +1493,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return { status: "unavailable", reason: "not-connected" }
     }
     const progress = sends.get(mutation.id)
+    const token = selectionToken
+    const operation = options.operation ?? mutation.operation
+    const input = options.input ?? mutation.input
+    const priorModel = container.state.view?.id === options.sessionID ? container.state.view?.model : undefined
     if (progress !== undefined) progress.mutation = mutation
     setState({ mutations: [...container.state.mutations.filter((entry) => entry.id !== mutation.id), mutation] })
     const jobID = mutation.kind === "compact" && typeof mutation.input.id === "string" ? mutation.input.id : undefined
     const jobSettled = jobID === undefined ? undefined : new Promise<RemoteRequestOutcome>((resolve) => compactionWaiters.set(jobID, resolve))
-    const answered = active.request(options.operation ?? mutation.operation, { sessionID: options.sessionID, input: options.input ?? mutation.input,
-      ...((mutation.operation === "session.goal.set" || mutation.operation === "session.autonomy.set" && typeof mutation.input.goal === "string")
-        ? { timeoutMs: RemoteLimits.goalSetTimeoutMs } : mutation.operation === "session.compact"
+    const answered = active.request(operation, { sessionID: options.sessionID, input,
+      ...((operation === "session.goal.set" || operation === "session.autonomy.set" && typeof input.goal === "string")
+        ? { timeoutMs: RemoteLimits.goalSetTimeoutMs } : operation === "session.compact" || operation === "session.switchModel"
           ? { timeoutMs: RemoteLimits.compactionTimeoutMs } : {}) })
-    const outcome = await (jobSettled === undefined ? answered : Promise.race([answered, jobSettled]))
+    const settled = await (jobSettled === undefined ? answered : Promise.race([answered, jobSettled]))
+    const uncertain: RemoteRequestOutcome = settled.status === "failed" && settled.error.code === "outcome_unknown"
+      ? { status: "unknown", error: settled.error } : settled
+    const outcome = operation === "session.switchModel"
+      ? await confirmModelSwitch(active, token, options.sessionID, readModelRef(input.model), priorModel, uncertain) : uncertain
     if (outcome.status === "ok") {
       if (jobID !== undefined) compactionWaiters.delete(jobID)
       setState({ ...(options.retain ? {} : { mutations: container.state.mutations.filter((entry) => entry.id !== mutation.id) }),
@@ -1520,7 +1528,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       finishMutation(
         mutation.id,
         "unknown",
-        `Outcome unknown: ${outcome.error.message}. Retry only if you want to send it again.`,
+        `Outcome unknown: ${outcome.error.message}. ${operation === "session.switchModel"
+          ? "Inspect the current Session before deciding whether another action is needed."
+          : "Retry only if you want to send it again."}`,
       )
       return outcome
     }
@@ -1530,6 +1540,31 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     finishMutation(mutation.id, "failed", "The relay connection is not open")
     return { status: "unavailable", reason: "not-connected" }
+  }
+
+  const confirmModelSwitch = async (
+    owner: RemoteTransport,
+    token: number,
+    sessionID: string | undefined,
+    model: ModelRefView | undefined,
+    prior: ModelRefView | undefined,
+    outcome: RemoteRequestOutcome,
+  ): Promise<RemoteRequestOutcome> => {
+    if (outcome.status !== "unknown" || model === undefined || sessionID === undefined || token !== selectionToken ||
+      !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return outcome
+    if (model.profile !== undefined && (prior === undefined || model.id === prior.id && model.providerID === prior.providerID &&
+      model.variant === prior.variant && model.profile === prior.profile)) return outcome
+    const read = await owner.request("session.get", { sessionID, timeoutMs: 5_000 })
+    if (token !== selectionToken || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return outcome
+    const confirmed = readSessionInfo(read.status === "ok" && typeof read.value === "object" && read.value !== null ? Reflect.get(read.value, "data") : undefined)
+    if (confirmed?.id !== sessionID || confirmed.model?.id !== model.id || confirmed.model.providerID !== model.providerID ||
+      confirmed.model.variant !== model.variant || confirmed.model.profile !== model.profile) return outcome
+    setState({
+      ...(container.state.view?.id === sessionID ? { view: { ...container.state.view, model: confirmed.model } } : {}),
+      ...(container.state.selectedSessionInfo?.id === sessionID
+        ? { selectedSessionInfo: { ...container.state.selectedSessionInfo, model: confirmed.model, modelLabel: modelLabel(confirmed.model) } } : {}),
+    })
+    return { status: "ok", value: null }
   }
 
   /**

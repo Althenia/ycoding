@@ -45,7 +45,7 @@ export type Output = typeof Output.Type
 
 export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("QuestionTool.CancelledError", {}) {
   override get message() {
-    return "The user dismissed this question"
+    return "This question was dismissed or superseded without an answer"
   }
 }
 

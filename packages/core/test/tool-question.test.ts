@@ -189,7 +189,7 @@ describe("QuestionTool", () => {
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) {
       expect(Cause.squash(exit.cause)).toBeInstanceOf(QuestionTool.CancelledError)
-      expect(Cause.squash(exit.cause)).toHaveProperty("message", "The user dismissed this question")
+      expect(Cause.squash(exit.cause)).toHaveProperty("message", "This question was dismissed or superseded without an answer")
     }
   }))
 

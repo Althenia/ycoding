@@ -26,6 +26,129 @@ async function harness(handler: RelayRequestHandler, now?: () => number, determi
 }
 
 describe("remote Session nonblocking sends", () => {
+  test("confirms a lost model-switch response from the exact selected model without sending it again", async () => {
+    const target = { id: "model-next", providerID: "synthetic", variant: "high", profile: "synthetic-account" }
+    let switched = false
+    const context = await harness((request) => {
+      if (request.operation === "session.switchModel") {
+        switched = true
+        return { ok: false, code: "outcome_unknown", message: "The model-switch response was lost" }
+      }
+      if (switched && request.operation === "session.get" && request.sessionID === "ses_a")
+        return { ok: true, value: { data: { id: "ses_a", title: "Alpha session", model: target } } }
+      return "default"
+    })
+    try {
+      expect(await context.store.switchModel(target)).toBe(true)
+      expect(context.store.state().view?.model).toEqual(target)
+      expect(context.store.state().mutations).toEqual([])
+      expect(context.store.state().mutationToasts ?? []).toEqual([])
+      expect(context.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+      expect(context.store.state().transport.kind).toBe("open")
+    } finally { await context.stop() }
+  })
+
+  for (const mismatch of ["id", "providerID", "variant", "profile", "missing"] as const)
+    test(`keeps a model-switch outcome unknown when the read differs in ${mismatch}`, async () => {
+      const target = { id: "model-next", providerID: "synthetic", variant: "high", profile: "synthetic-account" }
+      let switched = false
+      const context = await harness((request) => {
+        if (request.operation === "session.switchModel") {
+          switched = true
+          return { ok: false, code: "outcome_unknown", message: "The model-switch response was lost" }
+        }
+        if (switched && request.operation === "session.get" && request.sessionID === "ses_a")
+          return { ok: true, value: { data: { id: "ses_a", title: "Alpha session", ...(mismatch === "missing" ? {} : { model: { ...target, [mismatch]: "different" } }) } } }
+        return "default"
+      })
+      try {
+        expect(await context.store.switchModel(target)).toBe(false)
+        expect(context.store.state().mutations).toEqual([expect.objectContaining({ state: "unknown", operation: "session.switchModel" })])
+        expect(context.store.state().mutationToasts).toEqual([expect.objectContaining({ state: "unknown" })])
+        expect(context.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+        expect(context.store.state().transport.kind).toBe("open")
+      } finally { await context.stop() }
+    })
+
+  test("confirms a model prerequisite before sending its prompt, without repeating the switch", async () => {
+    const target = { id: "model-next", providerID: "synthetic" }
+    let switched = false
+    const context = await harness((request) => {
+      if (request.operation === "session.switchModel") {
+        switched = true
+        return { ok: false, code: "outcome_unknown", message: "The model-switch response was lost" }
+      }
+      if (switched && request.operation === "session.get" && request.sessionID === "ses_a")
+        return { ok: true, value: { data: { id: "ses_a", title: "Alpha session", model: target } } }
+      return "default"
+    })
+    try {
+      expect(await context.store.sendPrompt({ text: "Use the selected model", model: target, delivery: "steer" })).toBe(true)
+      await waitFor(() => context.relay.requests.some((request) => request.operation === "session.prompt"))
+      expect(context.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+      expect(context.relay.requests.filter((request) => request.operation === "session.prompt")).toHaveLength(1)
+    } finally { await context.stop() }
+  })
+
+  test("does not use a former Session's model confirmation after navigation", async () => {
+    const target = { id: "model-next", providerID: "synthetic" }
+    const reading = Promise.withResolvers<"reading">()
+    const confirmed = gate()
+    let switched = false
+    const context = await harness((request) => {
+      if (request.operation === "session.switchModel") {
+        switched = true
+        return { ok: false, code: "outcome_unknown", message: "The model-switch response was lost" }
+      }
+      if (switched && request.operation === "session.get" && request.sessionID === "ses_a") {
+        reading.resolve("reading")
+        return confirmed.promise
+      }
+      return "default"
+    })
+    try {
+      const outcome = context.store.switchModel(target)
+      expect(await Promise.race([reading.promise, outcome])).toBe("reading")
+      await context.store.selectSession("ses_b")
+      confirmed.resolve({ ok: true, value: { data: { id: "ses_a", title: "Alpha session", model: target } } })
+      expect(await outcome).toBe(false)
+      expect(context.store.state().view?.id).toBe("ses_b")
+      expect(context.store.state().view?.model).not.toEqual(target)
+      expect(context.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    } finally { confirmed.resolve("default"); await context.stop() }
+  })
+
+  test("keeps a rejected model selection failed rather than inferring success from a read", async () => {
+    const context = await harness((request) => request.operation === "session.switchModel"
+      ? { ok: false, code: "forbidden", message: "Model change is not allowed" } : "default")
+    try {
+      const before = context.relay.requests.filter((request) => request.operation === "session.get").length
+      expect(await context.store.switchModel({ id: "model-next", providerID: "synthetic" })).toBe(false)
+      expect(context.store.state().mutations).toEqual([expect.objectContaining({ state: "failed" })])
+      expect(context.relay.requests.filter((request) => request.operation === "session.get")).toHaveLength(before)
+      expect(context.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    } finally { await context.stop() }
+  })
+
+  for (const known of [true, false]) test(`does not treat ${known ? "an already-selected profile" : "a missing baseline"} as proof that an uncertain profile rebind completed`, async () => {
+    const target = { id: "model-next", providerID: "synthetic", profile: "synthetic-account" }
+    const context = await harness((request) => {
+      if (request.operation === "session.snapshot") return { ok: true, value: {
+        sourceEpoch: "epoch_1", session: { id: request.sessionID, title: "Alpha session", ...(known ? { model: target } : {}) }, messages: [],
+        watermark: { type: "log.synced", aggregateID: request.sessionID, seq: 0 },
+      } }
+      if (request.operation === "session.switchModel") return { ok: false, code: "outcome_unknown", message: "The profile rebind response was lost" }
+      if (request.operation === "session.get") return { ok: true, value: { data: { id: request.sessionID, model: target } } }
+      return "default"
+    })
+    try {
+      expect(context.store.state().view?.model).toEqual(known ? target : undefined)
+      expect(await context.store.switchModel(target)).toBe(false)
+      expect(context.store.state().mutations).toEqual([expect.objectContaining({ state: "unknown", operation: "session.switchModel" })])
+      expect(context.relay.requests.filter((request) => request.operation === "session.switchModel")).toHaveLength(1)
+    } finally { await context.stop() }
+  })
+
   for (const kind of ["prompt", "command"] as const) test(`keeps an acknowledged ${kind} visible when an earlier pending read settles empty`, async () => {
     const pending = gate()
     let hold = false

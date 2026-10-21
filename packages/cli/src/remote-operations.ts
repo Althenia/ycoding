@@ -922,7 +922,12 @@ async function run(input: OperationInput) {
   if (sessionID === undefined) throw new OperationError("session_required", "Operation requires a session")
   // Verify the Session at its bound Location on every execution, so a moved or
   // deleted Session fails closed instead of being served from stale metadata.
-  const verified = await input.sessions.verify(sessionID, input.signal)
+  const verified = await input.sessions.verify(sessionID, input.signal).catch((cause: unknown) => {
+    if (!(cause instanceof LocalFailure)) throw cause
+    const error = localError(cause, { ...request, operation: "session.get" })
+    throw new OperationError(error[0], isMutation(request)
+      ? `Session verification failed; the request was not executed. ${error[1]}` : error[1])
+  })
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [

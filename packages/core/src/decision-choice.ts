@@ -2,7 +2,7 @@ export * as DecisionChoice from "./decision-choice"
 
 import { Effect, Exit, Result } from "effect"
 import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
-import { Decision } from "./decision"
+import type { Decision } from "./decision"
 import { DecisionJudgment } from "./decision-judgment"
 import { SessionAutonomy } from "./session/autonomy"
 import { SessionSchema } from "./session/schema"

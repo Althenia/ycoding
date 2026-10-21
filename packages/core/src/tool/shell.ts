@@ -390,7 +390,7 @@ export const Plugin = {
                 Effect.mapError((error) =>
                   error instanceof ToolFailure
                     ? error
-                    : new ToolFailure({ message: `Unable to execute command: ${input.command}`, error }),
+                    : new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? `Unable to execute command: ${input.command}`, error }),
                 ),
               ),
           }),

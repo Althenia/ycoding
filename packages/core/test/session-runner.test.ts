@@ -2173,6 +2173,7 @@ describe("SessionRunnerLLM", () => {
         text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}',
         description: "Untrusted context",
         metadata: { contextSource: "session-state" },
+        resume: false,
       })
       yield* admit(session, "Continue")
       yield* session.resume(sessionID)

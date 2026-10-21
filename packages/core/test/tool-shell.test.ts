@@ -69,6 +69,11 @@ let onWake = (_id: string): Effect.Effect<void> => Effect.void
 const data = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-shell-worktree-data-"))
 let configEntries: Config.Entry[] = [configDocument()]
 let denyAction: string | undefined
+let correction: string | undefined
+const automatedDenial = Permission.deniedFeedback("permission", {
+  authority: "yolo",
+  grades: [{ choice: "deny", confidence: 0.92, evidence: "Runs a command the task does not need" }],
+})
 let afterPermission = (_input: Permission.AssertInput): Effect.Effect<void> => Effect.void
 let sandboxPrepare: ShellSandbox.Interface["prepare"] = () =>
   Effect.fail(new ShellSandbox.Unavailable({ message: "No enforceable shell sandbox backend" }))
@@ -147,16 +152,18 @@ const permission = Layer.succeed(
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(Effect.suspend(() => afterPermission(input))),
-        Effect.andThen(
-          input.action === denyAction
-            ? Effect.fail(
-                new Permission.BlockedError({
-                  rules: [],
-                  permission: input.action,
-                  resources: input.resources,
-                }),
-              )
-            : Effect.void,
+        Effect.andThen((): Effect.Effect<void, Permission.Error> =>
+          input.action !== denyAction
+            ? Effect.void
+            : correction === undefined
+              ? Effect.fail(
+                  new Permission.BlockedError({
+                    rules: [],
+                    permission: input.action,
+                    resources: input.resources,
+                  }),
+                )
+              : Effect.fail(new Permission.CorrectedError({ feedback: correction })),
         ),
       ),
     ask: () => Effect.die("unused"),
@@ -173,6 +180,7 @@ const reset = () => {
   memoryTrace.samples.length = 0
   assertions.length = 0
   denyAction = undefined
+  correction = undefined
   afterPermission = () => Effect.void
   onWake = () => Effect.void
   configEntries = [configDocument()]
@@ -1168,6 +1176,24 @@ describe("ShellTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("returns permission correction guidance to the model instead of a generic failure", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        denyAction = "shell"
+        correction = automatedDenial
+        return withSession(tmp.path, (registry) => executeTool(registry, call({ command: cwdCommand }))).pipe(
+          Effect.map((result) => {
+            expect(result).toEqual({ type: "error", value: automatedDenial })
+            expect(assertions.map((item) => item.action)).toEqual(["shell"])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
 

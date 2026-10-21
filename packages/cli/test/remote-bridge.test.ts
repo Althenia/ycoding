@@ -186,6 +186,7 @@ test("MCP event authority uses the current connector credential and cancels on d
   const requests: Array<{ action: string; authorization: string | null }> = []
   const host: RemoteMcpHost = {
     status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
+    setLaneHold: () => {},
     advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
     allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
     authorizationSignal: () => authority.signal,
@@ -228,6 +229,7 @@ test("connector reconnect discards registered apps without renewing old access",
   let authority = new AbortController()
   const host: RemoteMcpHost = {
     status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
+    setLaneHold: () => {},
     advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
     allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
     authorizationSignal: () => authority.signal,
@@ -267,6 +269,129 @@ test("connector reconnect discards registered apps without renewing old access",
   } finally {
     await fixture.bridge.close()
   }
+})
+
+describe("relay MCP mutation lanes", () => {
+  type ToolResult = { isError?: boolean; structuredContent: unknown }
+  function relay(results: Partial<Record<keyof LocalServer, unknown>>) {
+    let authority = new AbortController()
+    const laneHolds: boolean[] = []
+    const host: RemoteMcpHost = {
+      status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
+      setLaneHold: (held) => { laneHolds.push(held) },
+      advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
+      allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
+      authorizationSignal: () => authority.signal,
+      attach: async () => { authority = new AbortController() },
+      detach: () => authority.abort(),
+      set: async () => ({ state: "off" }),
+      settled: async () => {},
+    }
+    const fixture = harness({ results, mcp: { host, resource: "https://relay.example/api/mcp/devices/dev_test", deviceID: "dev_test", home: "/home/synthetic" } })
+    const deliver = (connection: ConnectionRecord, id: string, name: string, args: Record<string, unknown>) =>
+      connection.deliver({ type: "request", id, operation: "mcp.request", input: {
+        epoch: "epoch_test", principal: { ownerID: "owner_fixture", deviceID: "dev_test", clientID: "client_fixture" },
+        headers: { "content-type": "application/json", accept: "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": name },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args, _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "fixture", version: "1" },
+        } } }),
+      } })
+    const responses = (connection: ConnectionRecord, id: string) => connection.sent.map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "response" && frame.id === id)
+    const result = async (connection: ConnectionRecord, id: string) => {
+      const response = await waitFor(() => responses(connection, id)[0])
+      expect(response.ok).toBe(true)
+      return JSON.parse(response.value.body).result as ToolResult
+    }
+    return { fixture, laneHolds, deliver, responses, result }
+  }
+  const prompt = (id: string) => ({ sessionID: "ses_1", input: { id, text: "Synthetic input" } })
+  const prompted = (calls: readonly Call[]) => calls.filter((call) => call.method === "prompt").map((call) => (call.args[2] as { id: string }).id)
+
+  test("a repeated MCP frame ID while the first is in flight is not dispatched again", async () => {
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const value = relay({
+      prompt: async (_sessionID: string, _location: unknown, input: { id: string }) => {
+        if (input.id === "msg_once") {
+          started.resolve()
+          await release.promise
+        }
+        return { id: input.id }
+      },
+    })
+    await value.fixture.bridge.connect()
+    const connection = value.fixture.records[0]!
+    try {
+      value.deliver(connection, "mcp_repeated", "session_prompt", prompt("msg_once"))
+      await started.promise
+      value.deliver(connection, "mcp_repeated", "session_prompt", prompt("msg_once"))
+      release.resolve()
+      expect((await value.result(connection, "mcp_repeated")).isError).not.toBe(true)
+      value.deliver(connection, "mcp_after", "session_prompt", prompt("msg_after"))
+      expect((await value.result(connection, "mcp_after")).isError).not.toBe(true)
+      expect(prompted(value.fixture.calls)).toEqual(["msg_once", "msg_after"])
+      expect(value.responses(connection, "mcp_repeated")).toHaveLength(1)
+    } finally {
+      release.resolve()
+      await value.fixture.bridge.close()
+    }
+  })
+
+  test("a cancel after a repeated MCP frame ID still aborts the original request", async () => {
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const value = relay({
+      prompt: async (_sessionID: string, _location: unknown, input: { id: string }) => {
+        if (input.id === "msg_once") {
+          started.resolve()
+          await release.promise
+        }
+        return { id: input.id }
+      },
+    })
+    await value.fixture.bridge.connect()
+    const connection = value.fixture.records[0]!
+    try {
+      value.deliver(connection, "mcp_repeated", "session_prompt", prompt("msg_once"))
+      await started.promise
+      value.deliver(connection, "mcp_repeated", "session_prompt", prompt("msg_once"))
+      connection.deliver({ type: "cancel", id: "mcp_repeated" })
+      release.resolve()
+      value.deliver(connection, "mcp_after", "session_prompt", prompt("msg_after"))
+      expect((await value.result(connection, "mcp_after")).isError).not.toBe(true)
+      expect(value.responses(connection, "mcp_repeated")).toEqual([])
+      expect(prompted(value.fixture.calls)).toEqual(["msg_once", "msg_after"])
+    } finally {
+      release.resolve()
+      await value.fixture.bridge.close()
+    }
+  })
+
+  test("an unknown MCP mutation holds its Session across a relay reconnect without replay until the connector closes", async () => {
+    const value = relay({
+      prompt: (_sessionID: string, _location: unknown, input: { id: string }) => {
+        if (input.id === "msg_held") throw new LocalFailure("transport", "Local deadline expired")
+        return { id: input.id }
+      },
+    })
+    await value.fixture.bridge.connect()
+    const connection = value.fixture.records[0]!
+    try {
+      value.deliver(connection, "mcp_held", "session_prompt", prompt("msg_held"))
+      expect((await value.result(connection, "mcp_held")).structuredContent).toMatchObject({ error: { code: "outcome_unknown" } })
+      expect(value.laneHolds).toEqual([true])
+      connection.input.onClose(1006)
+      connection.input.onOpen()
+      value.deliver(connection, "mcp_other", "session_prompt", prompt("msg_other"))
+      expect((await value.result(connection, "mcp_other")).structuredContent).toMatchObject({ error: { code: "outcome_unknown" } })
+      expect(prompted(value.fixture.calls)).toEqual(["msg_held"])
+      expect(value.laneHolds).toEqual([true])
+    } finally {
+      await value.fixture.bridge.close()
+    }
+    expect(value.laneHolds).toEqual([true, false])
+    expect(prompted(value.fixture.calls)).toEqual(["msg_held"])
+  })
 })
 
 function sentFrames(record: ConnectionRecord) {
@@ -395,6 +520,7 @@ test("relay MCP state is acknowledged only for the current enable epoch", async 
   const attached = Promise.withResolvers<void>()
   const host: RemoteMcpHost = {
     status: () => ({ state: "off" }),
+    setLaneHold: () => {},
     advertisement: () => ({ enabled: false, epoch: "epoch_test" }),
     allowed: () => false,
     authorizationSignal: () => disabledSignal,

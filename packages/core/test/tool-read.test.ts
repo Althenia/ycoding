@@ -79,6 +79,11 @@ const reader = Layer.succeed(
   }),
 )
 let allow = true
+let correction: string | undefined
+const automatedDenial = Permission.deniedFeedback("permission", {
+  authority: "yolo",
+  grades: [{ choice: "deny", confidence: 0.92, evidence: "Reads a file the task does not need" }],
+})
 const permission = Layer.succeed(
   Permission.Service,
   Permission.Service.of({
@@ -89,16 +94,18 @@ const permission = Layer.succeed(
         expect(input.metadata?.operationDigest).toMatch(/^[a-f0-9]{64}$/)
         assertions.push(input)
       }).pipe(
-        Effect.andThen(
+        Effect.andThen((): Effect.Effect<void, Permission.Error> =>
           allow
             ? Effect.void
-            : Effect.fail(
-                new Permission.BlockedError({
-                  rules: [],
-                  permission: input.action,
-                  resources: input.resources,
-                }),
-              ),
+            : correction === undefined
+              ? Effect.fail(
+                  new Permission.BlockedError({
+                    rules: [],
+                    permission: input.action,
+                    resources: input.resources,
+                  }),
+                )
+              : Effect.fail(new Permission.CorrectedError({ feedback: correction })),
         ),
       ),
     ask: () => Effect.die("unused"),
@@ -193,6 +200,7 @@ describe("ReadTool", () => {
     readCalls.length = 0
     listCalls.length = 0
     allow = true
+    correction = undefined
     resolvedType = "file"
     resolveFailure = undefined
     readResult = {
@@ -603,6 +611,23 @@ describe("ReadTool", () => {
           call: { type: "tool-call", id: "call-read", name: "read", input: { path: "README.md" } },
         }),
       ).toEqual({ type: "error", value: "Unable to read README.md" })
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("returns permission correction guidance to the model instead of a generic failure", () =>
+    Effect.gen(function* () {
+      allow = false
+      correction = automatedDenial
+      const registry = yield* ToolRegistry.Service
+
+      expect(
+        yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-read", name: "read", input: { path: "README.md" } },
+        }),
+      ).toEqual({ type: "error", value: automatedDenial })
       expect(readCalls).toEqual([])
     }),
   )

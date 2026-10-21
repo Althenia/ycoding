@@ -8,6 +8,8 @@ import {
   autonomyModeLabel,
   autonomyModeParts,
   autonomyProgressLabel,
+  autonomyToggleDescription,
+  autonomyToggleTitle,
   createSessionAutonomyRefreshGuard,
   goalToggleAction,
   localAutonomyView,
@@ -420,4 +422,30 @@ test("exposes autonomy only for the connected active session", async () => {
   expect(currentSessionAutonomy("ses_old", false, response)).toBeUndefined()
   expect(currentSessionAutonomy("ses_old", true, undefined)).toBeUndefined()
   expect(currentSessionAutonomy("ses_old", true, response)).toEqual(goal)
+})
+
+test("toggle descriptions state each control's own grant", () => {
+  expect(autonomyToggleDescription("yolo")).toBe("evaluates unresolved requests")
+  expect(autonomyToggleDescription("autoPermission")).toBe("approves ask permissions")
+  expect(autonomyToggleDescription("autoGuardrail")).toBe("approves ordinary reviews while awake")
+  expect(autonomyToggleDescription("autoAnswer")).toBe("uses explicit defaults")
+})
+
+test("toggle titles show the loaded state and read unknown without one", () => {
+  const state = localAutonomyView({ mode: "normal", yolo: false, autoAnswer: true })
+  expect(autonomyToggleTitle(state, "yolo")).toBe("Toggle YOLO: off")
+  expect(autonomyToggleTitle(state, "autoAnswer")).toBe("Toggle Auto-answer: on")
+  expect(autonomyToggleTitle(undefined, "autoPermission")).toBe("Toggle Auto-permission: unknown")
+})
+
+test("toggle titles mark a local off that an inherited setting overrides", () => {
+  const inherited = autonomyView({ yolo: false, effectiveYolo: true, autoPermission: false, permissionsAuto: true, autoGuardrail: false, autoAnswer: false })
+  expect(autonomyToggleTitle(inherited, "yolo")).toBe("YOLO: inherited on")
+  expect(autonomyToggleTitle(inherited, "autoPermission")).toBe("Auto-permission: inherited on")
+  expect(autonomyToggleTitle(inherited, "autoGuardrail")).toBe("Toggle Auto-guardrail: off")
+  expect(autonomyToggleTitle(inherited, "autoAnswer")).toBe("Toggle Auto-answer: off")
+  const guardrail = { ...inherited, effective: { ...inherited.effective, ordinaryReviewsAuto: true } }
+  expect(autonomyToggleTitle(guardrail, "autoGuardrail")).toBe("Auto-guardrail: inherited on")
+  const local = autonomyView({ yolo: true, effectiveYolo: true })
+  expect(autonomyToggleTitle(local, "yolo")).toBe("Toggle YOLO: on")
 })

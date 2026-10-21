@@ -61,6 +61,7 @@ export function previewHarness(options: { appPreview?: RemoteAppPreviewHost.Conf
   const authority = new AbortController()
   const host: RemoteMcpHost = {
     status: () => ({ state: "on", url: resource }),
+    setLaneHold: () => {},
     advertisement: () => ({ enabled: true, epoch }),
     allowed: (value) => !authority.signal.aborted && value === epoch,
     authorizationSignal: () => authority.signal,

@@ -395,6 +395,10 @@ export class RemoteAgent {
     }
     const mcp = parseMcpRequest(raw)
     if (mcp && this.options.mcp) {
+      if (this.inFlight.has(mcp.id)) {
+        this.diagnostic("ignored a repeated MCP request ID while the first is in flight")
+        return
+      }
       const controller = new AbortController()
       this.inFlight.set(mcp.id, controller)
       void this.handleMcpRequest(mcp, controller)
@@ -547,7 +551,7 @@ export class RemoteAgent {
           ...(this.previewHost === undefined ? {} : { preview: this.previewHost.preview }),
         })
         return createRemoteMcp({ local: this.options.local, sessions: this.registry, subscriptions: this.subscriptions,
-          cache: this.cache, home: mcp.home, resource: mcp.resource, apps, allowed: (epoch) => mcp.host.allowed(epoch) })
+          cache: this.cache, home: mcp.home, resource: mcp.resource, apps, allowed: (epoch) => mcp.host.allowed(epoch), onLaneHold: (held) => mcp.host.setLaneHold(held) })
       })()
       const server = await this.mcpServer
       await this.mcpCleanup

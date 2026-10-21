@@ -131,13 +131,11 @@ import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
   autonomyModeLabel,
-  autonomyToggleDescription,
   autonomyToggleLabel,
   autonomyToggleOn,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   goalToggleAction,
-  parseToggleArg,
   type AutonomyToggle,
   type SessionAutonomyResponse,
 } from "../../util/session-autonomy"
@@ -517,24 +515,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           duration: 5000,
         }),
       )
-  }
-  const runAutonomyToggle = (toggle: AutonomyToggle, slash: string, input?: string) => {
-    const parsed = parseToggleArg(input?.trim().split(/\s+/)[0])
-    if (parsed === null) {
-      toast.show({ message: `Use /${slash}, /${slash} on, or /${slash} off`, variant: "error", duration: 3000 })
-      return
-    }
-    if (parsed !== undefined) {
-      updateAutonomy({ [toggle]: parsed })
-      return
-    }
-    const current = autonomy()
-    if (!current || autonomyToggleOn(current, toggle) === undefined) {
-      refreshAutonomy(route.sessionID)
-      toast.show({ message: `${autonomyToggleLabel(toggle)} state unknown; reloading`, variant: "info", duration: 3000 })
-      return
-    }
-    updateAutonomy({ [toggle]: !autonomyToggleOn(current, toggle) })
   }
   const refreshAutonomy = (sessionID: string) => {
     const request = autonomyRefresh.refresh()
@@ -1347,27 +1327,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         ))
       },
     },
-    ...(["yolo", "autoPermission", "autoGuardrail", "autoAnswer"] as const).map((toggle) => {
-      const slash =
-        toggle === "yolo"
-          ? "yolo"
-          : toggle === "autoPermission"
-            ? "auto-permission"
-            : toggle === "autoGuardrail"
-              ? "auto-guardrail"
-              : "auto-answer"
-      return {
-        title: (() => {
-          const current = autonomy()
-          if (!current) return `${autonomyToggleLabel(toggle)}: unknown`
-          return `${autonomyToggleLabel(toggle)}: ${autonomyToggleOn(current, toggle) ? "on" : "off"} · ${autonomyToggleDescription(toggle)}`
-        })(),
-        id: `session.autonomy.${slash}.toggle`,
-        group: "Session",
-        slash: { name: slash },
-        run: (input?: string) => runAutonomyToggle(toggle, slash, input),
-      }
-    }),
     {
       title: daybreakTitle(session()?.daybreak),
       id: "session.daybreak.toggle",

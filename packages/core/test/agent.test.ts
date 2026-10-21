@@ -450,7 +450,20 @@ describe("Agent", () => {
         for (const action of ["shell", "read", "patch", "question", "subagent", "decision", "task_complete"])
           expect(Permission.evaluate(action, "*", evaluator.permissions).effect).toBe("deny")
         expect(evaluator.system).toContain("exactly one JSON document")
+        expect(evaluator.system).toContain("latest explicit user instructions")
+        expect(evaluator.system).toContain("reversible implementation choices")
+        expect(evaluator.system).toContain("required human confirmation")
+        expect(evaluator.system).toContain("never human approval")
       }
+      const permission = yield* agent.get(Agent.ID.make("yolo-permission"))
+      const guardrail = yield* agent.get(Agent.ID.make("yolo-guardrail"))
+      const answer = yield* agent.get(Agent.ID.make("yolo-answer"))
+      expect(permission?.system).toContain("A write alone")
+      expect(guardrail?.system).toContain("actual side effects")
+      expect(answer?.system).toContain("no recommendation")
+      const goal = yield* agent.get(Agent.ID.make("goal"))
+      expect(goal?.system).toContain("Newer explicit user constraints")
+      expect(goal?.system).toContain("Do not revive a cancelled operation")
     }),
   )
 

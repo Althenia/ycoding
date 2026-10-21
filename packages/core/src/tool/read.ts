@@ -11,6 +11,7 @@ import { FSUtil } from "../fs-util"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { Permission } from "../permission"
+import { SessionGuardrail } from "../session/guardrail"
 import { SessionInstructions } from "../session/instructions"
 import { AbsolutePath } from "../schema"
 import { ReadToolFileSystem } from "./read-filesystem"
@@ -151,7 +152,7 @@ export const Plugin = {
                     error instanceof ReadToolFileSystem.BinaryFileError ||
                     error instanceof ReadToolFileSystem.MediaIngestLimitError
                       ? error.message
-                      : `Unable to read ${input.path}`
+                      : (SessionGuardrail.reviewMessage(error) ?? `Unable to read ${input.path}`)
                   return new ToolFailure({ message, error })
                 }),
               )
