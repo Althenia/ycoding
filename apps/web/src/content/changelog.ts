@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.24",
+    date: "2026-10-22",
+    title: "Reliable Relay MCP Events authorization",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Relay MCP Events subscriptions and deliveries stay available when several devices share one network address. Each enrolled device has its own budget of 300 Events authorization requests per minute, and only failed authentications are limited by address." },
+      { tag: "Fixed", text: "The local connector checks Events support at most once per relay connection and Relay MCP authorization. Grant resolution and grant checks still reach the relay on every subscription and delivery, so revocation, expiry, and disabling Relay MCP take effect as before." },
+      { tag: "Fixed", text: "A failed relay authorization request writes a connector diagnostic naming the action and cause, such as rate_limited or unauthorized, at most once per minute for each pair. A delivery postponed by temporarily unavailable authorization logs that it was deferred." },
+      { tag: "Fixed", text: "Registered local app tools report a relay authorization rate limit as rate_limited and a relay outage or timeout as agent_unavailable instead of forbidden. A rejected credential, a revoked or expired grant, and Relay MCP being turned off still report forbidden." },
+    ],
+  },
+  {
     version: "0.10.23",
     date: "2026-10-21",
     title: "Context-aware automatic decisions",

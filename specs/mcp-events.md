@@ -77,7 +77,11 @@ Mutation payloads contain `{ context, subscription }`. The connector supplies `c
 
 The device-authenticated `POST /api/devices/:deviceID/mcp/events/authorize` supports capability discovery, resolution of a currently forwarded MCP request to its exact grant, and subsequent grant checks. It uses the already-minted device credential; it neither rotates credentials nor forwards a bearer to the callback or MCP client.
 
-Subscription outcome logs record a bounded request correlation hash and opaque subscription ID after activation, or a categorized failure without callback URLs, signing material, or raw exception text. Disabling a subscription after a definitive grant rejection, expired or aborted authorization, or unavailable stored signing material logs the subscription and event IDs with a bounded category and reason. Webhook failures log the event and subscription IDs, attempt number, terminal/retry state, and either the HTTP status or categorized transport failure. These outcomes do not establish that a host automation was saved or a dot was woken.
+The relay budgets this route per authenticated device: each account and device pair may make 300 authorized requests per 60-second window, and request 301 receives `429 rate_limited` without being forwarded. Devices behind one network address have independent budgets. Before authentication, an address with 30 failed authentications (missing or invalid credential, or a credential for another device) in its current 60-second window receives `429` without a credential lookup; authenticated requests never consume that address budget. Windows are fixed, start at the first counted request, and are kept per relay isolate.
+
+The connector sends at most one capability-discovery request per relay connection and Relay MCP authorization generation, and reuses only a successful supported answer; a failed or unsupported answer is never reused. Grant resolution and grant checks are never cached: every subscription and every delivery reaches the relay.
+
+Subscription outcome logs record a bounded request correlation hash and opaque subscription ID after activation, or a categorized failure without callback URLs, signing material, or raw exception text. Disabling a subscription after a definitive grant rejection, expired or aborted authorization, or unavailable stored signing material logs the subscription and event IDs with a bounded category and reason. A delivery postponed because authorization is temporarily unavailable logs `MCP Events delivery deferred` with the subscription and event IDs and a bounded category and reason. Webhook failures log the event and subscription IDs, attempt number, terminal/retry state, and either the HTTP status or categorized transport failure. A failed relay authorization request writes a remote-connector diagnostic naming the action (`capabilities`, `resolve`, or `check`) and one cause: `rate_limited`, `unauthorized`, `forbidden`, `unsupported`, or `unavailable`; each action and cause pair logs at most once per minute, without tokens, bodies, URLs, or principal identifiers. These outcomes do not establish that a host automation was saved or a dot was woken.
 
 ## Host requirements
 
@@ -97,7 +101,8 @@ ChatGPT documents webhook Events for supported Work/Cloud chats and dots. The ho
 - `packages/core/test/mcp-events*.test.ts` checks storage, signing, containment, retry, ordering, authorization, and event capture.
 - `packages/core/test/remote-mcp-events-transport.test.ts` checks SDK wire behavior.
 - `packages/server/test/mcp-events*.test.ts` checks authenticated local dispatch and safe failures.
-- `packages/remote/test/mcp-events.test.ts` and `infra/cloudflare/test/mcp-events-authorize.test.ts` check device/grant boundaries.
+- `packages/remote/test/mcp-events.test.ts` and `infra/cloudflare/test/mcp-events-authorize.test.ts` check device/grant boundaries; `infra/cloudflare/test/router.test.ts` checks the per-device and failed-authentication budgets.
+- `packages/cli/test/remote-bridge.test.ts` checks capability-discovery reuse, uncached grant resolution and checks, and authorization failure diagnostics.
 - `packages/cli/test/remote-mcp-events.test.ts` checks connector composition.
 
 The protocol reference is the [OpenAI MCP Events guide](https://developers.openai.com/plugins/build/mcp-events).

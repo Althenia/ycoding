@@ -1,5 +1,5 @@
 export * as RemoteBridge from "./remote-bridge"
-import { parseMcpRequest, parseMcpStateAck, parsePreviewAllocateAck, parsePreviewLeaseAck, parsePreviewRequest, parsePreviewStateAck, type McpRequest, type PreviewAllocateAck, type PreviewLeaseAck, type PreviewRequest, type PreviewStateAck } from "@ycoding-ai/remote"
+import { parseMcpRequest, parseMcpStateAck, parsePreviewAllocateAck, parsePreviewLeaseAck, parsePreviewRequest, parsePreviewStateAck, type McpRequest, type PreviewAllocateAck, type PreviewLeaseAck, type PreviewRequest, type PreviewStateAck, type RemoteMcpEvents } from "@ycoding-ai/remote"
 import type { RemoteMcpHost, RemoteMcpPreference } from "./remote-mcp-host"
 
 import {
@@ -114,6 +114,7 @@ const terminalCloseCodes: readonly number[] = [RemoteCloseCode.unauthorized, Rem
 const maxPendingEvents = 4_096
 const maxPendingQuotas = 256
 const slowRequestMs = 1_000
+const authorizationLogIntervalMs = 60_000
 const agentFrameIntervalMs = 25
 const interactiveCoalesceMs = 40
 const backgroundCoalesceMs = 750
@@ -138,6 +139,9 @@ export class RemoteAgent {
   private readonly authRetryWindowMs: number
 
   private connection?: RelayConnection
+  private readonly relayAuthorization?: (request: RemoteMcpEvents.AuthorizationRequest, signal?: AbortSignal) => Promise<RemoteMcpEvents.AuthorizationResponse>
+  private capabilityProbe?: { readonly connection: RelayConnection | undefined; readonly signal: AbortSignal; readonly probe: Promise<boolean> }
+  private readonly authorizationLogged = new Map<string, number>()
   private state: BridgeState = "idle"
   private generation = 0
   private readonly lifetime = new AbortController()
@@ -191,9 +195,14 @@ export class RemoteAgent {
       ...(mcp.authorizationFetch === undefined ? {} : { fetcher: mcp.authorizationFetch }),
     })
     const unavailable = () => new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" })
-    const authorize = async (request: Parameters<NonNullable<typeof authorization>["authorize"]>[0], signal?: AbortSignal) => {
-      if (authorization === undefined) throw unavailable()
-      const response = await authorization.authorize(request, signal).catch(() => { throw unavailable() })
+    this.relayAuthorization = authorization === undefined ? undefined : (request, signal) =>
+      authorization.authorize(request, signal).catch((error: unknown) => {
+        this.authorizationFailed(request.action, error)
+        throw error
+      })
+    const authorize = async (request: RemoteMcpEvents.AuthorizationRequest, signal?: AbortSignal) => {
+      if (this.relayAuthorization === undefined) throw unavailable()
+      const response = await this.relayAuthorization(request, signal).catch(() => { throw unavailable() })
       if (response.action === "capabilities") throw unavailable()
       if (!response.authorized) throw new McpEvents.Failure({
         category: response.reason === "unavailable" ? "unavailable" : "unauthorized",
@@ -202,8 +211,23 @@ export class RemoteAgent {
       return response
     }
     this.mcpEvents = {
-      capabilities: async () => authorization === undefined ? false : authorization.authorize({ action: "capabilities" })
-        .then((response) => response.action === "capabilities" && response.supported, () => false),
+      capabilities: async () => {
+        if (authorization === undefined || mcp === undefined) return false
+        const signal = mcp.host.authorizationSignal()
+        const held = this.capabilityProbe
+        if (held !== undefined && held.connection === this.connection && held.signal === signal && !signal.aborted) return held.probe
+        const probe: Promise<boolean> = authorization.authorize({ action: "capabilities" })
+          .then((response) => response.action === "capabilities" && response.supported, (error: unknown) => {
+            this.authorizationFailed("capabilities", error)
+            return false
+          })
+          .then((supported) => {
+            if (!supported && this.capabilityProbe?.probe === probe) this.capabilityProbe = undefined
+            return supported
+          })
+        this.capabilityProbe = { connection: this.connection, signal, probe }
+        return probe
+      },
       resolve: (context, signal) => authorize({ action: "resolve", ...context }, signal)
         .then((response) => ({ grantID: response.grantID, expiresAt: response.expiresAt })),
       check: async (principal, signal) => {
@@ -251,6 +275,7 @@ export class RemoteAgent {
 
   private setConnected(connected: boolean) {
     this.connected = connected
+    this.capabilityProbe = undefined
     if (!connected) {
       this.credential = undefined
       this.previewEnabled = false
@@ -517,10 +542,29 @@ export class RemoteAgent {
         const { RemoteAppPreviewHost } = await import("./remote-app-preview")
         const authorize = async (scope: McpEvents.Principal, signal: AbortSignal) => this.mcpEvents.check(scope, signal)
           .then((result) => !result.signal.aborted && result.expiresAt > this.now(), () => false)
+        const appAuthorization = async (request: RemoteMcpEvents.AuthorizationRequest, signal: AbortSignal) => {
+          if (this.relayAuthorization === undefined) throw new RemoteMcpApps.Error("access_unavailable")
+          const response = await this.relayAuthorization(request, signal).catch((error: unknown) => {
+            throw new RemoteMcpApps.Error(transientAuthorization(error) ?? "access_unavailable")
+          })
+          if (response.action === "capabilities") throw new RemoteMcpApps.Error("access_unavailable")
+          if (!response.authorized) throw new RemoteMcpApps.Error(response.reason === "unavailable" ? "authorization_unavailable" : "access_unavailable")
+          return response
+        }
         const registry = RemoteLocalApp.create({
           now: this.now,
           verifySession: async (sessionID) => await this.registry.renew(sessionID) !== undefined,
-          authorize,
+          authorize: async (scope, signal) => {
+            await appAuthorization({
+              action: "check", grantID: scope.grantID, epoch: scope.epoch,
+              principal: { ownerID: scope.ownerID, deviceID: scope.deviceID, clientID: scope.clientID },
+            }, signal).catch((error: unknown) => {
+              const reason = error instanceof RemoteMcpApps.Error ? error.reason : undefined
+              throw new RemoteLocalApp.Error(reason === "rate_limited" || reason === "authorization_unavailable" ? reason : "forbidden")
+            })
+            if (mcp.host.authorizationSignal().aborted) throw new RemoteLocalApp.Error("forbidden")
+            return true
+          },
         })
         this.previewHost = mcp.appPreview === undefined ? undefined : RemoteAppPreviewHost.create({
           config: mcp.appPreview,
@@ -545,8 +589,9 @@ export class RemoteAgent {
           registry,
           now: this.now,
           resolve: async (context, signal) => {
-            const grant = await this.mcpEvents.resolve(context, signal)
-            return { ...context.principal, grantID: grant.grantID, epoch: context.epoch }
+            const response = await appAuthorization({ action: "resolve", ...context }, signal)
+            if (response.action !== "resolve") throw new RemoteMcpApps.Error("access_unavailable")
+            return { ...context.principal, grantID: response.grantID, epoch: context.epoch }
           },
           ...(this.previewHost === undefined ? {} : { preview: this.previewHost.preview }),
         })
@@ -1243,6 +1288,22 @@ export class RemoteAgent {
   private diagnostic(message: string) {
     this.options.onDiagnostic?.(message)
   }
+
+  private authorizationFailed(action: string, error: unknown) {
+    if (!(error instanceof RemoteMcpAuthorization.Error) || !error.relay) return
+    const key = `${action}:${error.reason}`
+    const last = this.authorizationLogged.get(key)
+    if (last !== undefined && this.now() - last < authorizationLogIntervalMs) return
+    this.authorizationLogged.set(key, this.now())
+    this.diagnostic(`MCP Events authorization ${action} failed: ${error.reason}`)
+  }
+}
+
+function transientAuthorization(error: unknown) {
+  if (!(error instanceof RemoteMcpAuthorization.Error) || !error.relay) return undefined
+  if (error.reason === "rate_limited") return "rate_limited" as const
+  if (error.reason === "unavailable") return "authorization_unavailable" as const
+  return undefined
 }
 
 function createRelayConnection(input: ConnectionInput): RelayConnection {

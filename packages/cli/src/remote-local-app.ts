@@ -17,7 +17,7 @@ export type Options = {
   now?: () => number
   fetcher?: Fetcher
 }
-export type Category = "invalid_registration" | "forbidden" | "not_found" | "expired" | "busy" | "unsupported_stream" | "upstream_unavailable" | "too_large" | "redirect_rejected"
+export type Category = "invalid_registration" | "forbidden" | "not_found" | "expired" | "busy" | "unsupported_stream" | "upstream_unavailable" | "too_large" | "redirect_rejected" | "rate_limited" | "authorization_unavailable"
 
 export class Error extends globalThis.Error {
   override readonly name = "RemoteLocalAppError"

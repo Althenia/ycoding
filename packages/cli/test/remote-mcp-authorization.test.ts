@@ -131,6 +131,7 @@ describe("remote MCP authorization driver", () => {
     [404, "unsupported"],
     [401, "unauthorized"],
     [403, "forbidden"],
+    [429, "rate_limited"],
     [500, "unavailable"],
     [302, "unavailable"],
   ] as const)("maps HTTP %i to %s without following or retrying", async (status, expected) => {
@@ -191,6 +192,46 @@ describe("remote MCP authorization driver", () => {
       release()
       expect(await reason(pending)).toBe("unavailable")
     }
+  })
+
+  test("flags failures after dispatch as relay failures and local refusals or cancellations as not", async () => {
+    const relay = async (promise: Promise<unknown>) => {
+      const error = await promise.then(() => undefined, (cause: unknown) => cause)
+      if (!(error instanceof RemoteMcpAuthorization.Error)) throw new Error("expected an authorization error")
+      return error.relay
+    }
+    for (const respond of [
+      () => new Response("{}", { status: 429 }),
+      () => new Response("{}", { status: 503 }),
+      () => new Response("not json"),
+      () => { throw new Error("network down") },
+    ]) expect(await relay(harness({ respond }).authorization.authorize(check))).toBe(true)
+
+    const local = harness()
+    expect(await relay(local.authorization.authorize({ ...check, extra: true } as never))).toBe(false)
+    expect(await relay(local.authorization.authorize({ ...check, principal: { ...principal, deviceID: "dev_2" } }))).toBe(false)
+    local.setCredential(undefined)
+    expect(await relay(local.authorization.authorize(check))).toBe(false)
+    local.setCredential({ accessToken: "device-access-token", accessExpiresAt: now + 600_000 })
+    local.setAllowed(false)
+    expect(await relay(local.authorization.authorize(check))).toBe(false)
+    expect(local.calls).toHaveLength(0)
+
+    const caller = new AbortController()
+    const cancelled = harness({ respond: () => new Promise<Response>((_resolve, reject) => caller.signal.addEventListener("abort", () => reject(new Error("aborted")))) })
+    const pending = relay(cancelled.authorization.authorize(check, caller.signal))
+    for (let index = 0; index < 50 && cancelled.calls.length === 0; index++) await Promise.resolve()
+    caller.abort()
+    expect(await pending).toBe(false)
+
+    let release!: () => void
+    const gate = new Promise<void>((done) => { release = done })
+    const replaced = harness({ respond: async () => { await gate; return Response.json({ action: "check", authorized: true, grantID: "grt_1", expiresAt: grantExpiry }) } })
+    const late = relay(replaced.authorization.authorize(check))
+    for (let index = 0; index < 50 && replaced.calls.length === 0; index++) await Promise.resolve()
+    replaced.replaceGeneration()
+    release()
+    expect(await late).toBe(false)
   })
 
   test("never retries a network failure and never refreshes credentials itself", async () => {

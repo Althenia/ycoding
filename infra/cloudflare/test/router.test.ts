@@ -1221,6 +1221,21 @@ describe("router: MCP events grant authorization", () => {
     return (await issued.json()) as { accessToken: string; refreshToken: string }
   }
 
+  const sharedAddress = "198.51.100.7"
+  const otherAddress = "203.0.113.7"
+
+  async function connector(h: Harness, userID: string, name: string) {
+    const device = await enrollDevice(h, userID, name)
+    return { deviceID: device.deviceID, token: (await issueDeviceTokens(h, device)).accessToken }
+  }
+
+  function authorize(h: Harness, deviceID: string, address: string, token?: string, body: unknown = { action: "capabilities" }) {
+    return h.router(jsonRequest(`${origin}/api/devices/${deviceID}/mcp/events/authorize`, body, {
+      "cf-connecting-ip": address,
+      ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+    }))
+  }
+
   test("requires the enrolled device access token, forwards only the typed control to that device's relay, and never rotates credentials", async () => {
     const calls: { readonly name: string; readonly request: Request }[] = []
     const h = await harness({
@@ -1266,5 +1281,89 @@ describe("router: MCP events grant authorization", () => {
     expect(again.status).toBe(200)
     const refreshed = await h.router(jsonRequest(`${origin}/api/devices/refresh`, { deviceID: device.deviceID, refreshToken: tokens.refreshToken }))
     expect(refreshed.status).toBe(200)
+  })
+
+  test("forwards a 35-trigger resolve and check burst from each of two devices behind one address", async () => {
+    const h = await harness()
+    const owner = await signIn(h, "owner")
+    const devices = [await connector(h, owner.userID, "Studio Mac"), await connector(h, owner.userID, "Laptop")]
+    const statuses = await Promise.all(devices.flatMap((device) => {
+      const principal = { ownerID: owner.userID, deviceID: device.deviceID, clientID: "client_1" }
+      return Array.from({ length: 35 }).flatMap((_, trigger) => [
+        { action: "resolve", requestID: `request_${trigger}`, principal, epoch: "epoch_1" },
+        { action: "check", grantID: `grant_${trigger}`, principal, epoch: "epoch_1" },
+      ]).map(async (body) => (await authorize(h, device.deviceID, sharedAddress, device.token, body)).status)
+    }))
+    expect(statuses).toEqual(Array.from({ length: 140 }, () => 200))
+    expect(devices.map((device) => h.relayCalls.filter((call) => call.name === `${owner.userID}:${device.deviceID}`).length)).toEqual([70, 70])
+  })
+
+  test("limits each authenticated device to 300 requests per window while another device behind the address continues", async () => {
+    const h = await harness()
+    const owner = await signIn(h, "owner")
+    const studio = await connector(h, owner.userID, "Studio Mac")
+    const laptop = await connector(h, owner.userID, "Laptop")
+    const burst = await Promise.all(Array.from({ length: 300 }, async () => (await authorize(h, studio.deviceID, sharedAddress, studio.token)).status))
+    expect(burst).toEqual(Array.from({ length: 300 }, () => 200))
+
+    const limited = await authorize(h, studio.deviceID, sharedAddress, studio.token)
+    expect(limited.status).toBe(429)
+    expect(await limited.json()).toEqual({ error: { code: "rate_limited", message: "Too many requests" } })
+    expect(h.relayCalls).toHaveLength(300)
+    expect((await authorize(h, laptop.deviceID, sharedAddress, laptop.token)).status).toBe(200)
+    expect(h.relayCalls.slice(300).map((call) => call.name)).toEqual([`${owner.userID}:${laptop.deviceID}`])
+
+    h.advance(59_999)
+    expect((await authorize(h, studio.deviceID, sharedAddress, studio.token)).status).toBe(429)
+    h.advance(1)
+    expect((await authorize(h, studio.deviceID, sharedAddress, studio.token)).status).toBe(200)
+    expect(h.relayCalls).toHaveLength(302)
+  })
+
+  test("refuses an address with 30 authentication failures in its window before consulting credentials", async () => {
+    const base = createAuthService(createMemoryAuthStore(), { now: () => 1_700_000_000_000 })
+    let authorizations = 0
+    const h = await harness({
+      service: {
+        ...base,
+        authorizeAgentToken: (token) => {
+          authorizations += 1
+          return base.authorizeAgentToken(token)
+        },
+      },
+    })
+    const owner = await signIn(h, "owner")
+    const studio = await connector(h, owner.userID, "Studio Mac")
+    const statuses = [(await authorize(h, studio.deviceID, otherAddress, "not-a-device-token")).status]
+    h.advance(30_000)
+    for (let attempt = 1; attempt < 30; attempt += 1) statuses.push((await authorize(h, studio.deviceID, otherAddress, "not-a-device-token")).status)
+    expect(statuses).toEqual(Array.from({ length: 30 }, () => 401))
+    expect(authorizations).toBe(30)
+
+    const refused = await authorize(h, studio.deviceID, otherAddress, studio.token)
+    expect(refused.status).toBe(429)
+    expect(await refused.json()).toEqual({ error: { code: "rate_limited", message: "Too many requests" } })
+    expect(authorizations).toBe(30)
+    expect(h.relayCalls).toHaveLength(0)
+    expect((await authorize(h, studio.deviceID, sharedAddress, studio.token)).status).toBe(200)
+
+    h.advance(29_999)
+    expect((await authorize(h, studio.deviceID, otherAddress, studio.token)).status).toBe(429)
+    h.advance(1)
+    expect((await authorize(h, studio.deviceID, otherAddress, studio.token)).status).toBe(200)
+    expect(h.relayCalls).toHaveLength(2)
+  })
+
+  test("counts a missing, invalid, or other device's credential as one failure for the address", async () => {
+    const h = await harness()
+    const owner = await signIn(h, "owner")
+    const studio = await connector(h, owner.userID, "Studio Mac")
+    const laptop = await connector(h, owner.userID, "Laptop")
+    const statuses: number[] = []
+    for (let round = 0; round < 10; round += 1)
+      for (const token of [undefined, "not-a-device-token", laptop.token]) statuses.push((await authorize(h, studio.deviceID, otherAddress, token)).status)
+    expect(statuses).toEqual(Array.from({ length: 10 }).flatMap(() => [401, 401, 403]))
+    expect((await authorize(h, studio.deviceID, otherAddress, studio.token)).status).toBe(429)
+    expect(h.relayCalls).toHaveLength(0)
   })
 })

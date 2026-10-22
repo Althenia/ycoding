@@ -43,6 +43,7 @@ import {
   withSecurityHeaders,
   clientAddress,
   createRateLimiter,
+  type RateLimiter,
   isCrossSiteRequest,
   isSameOrigin,
   isWebSocketUpgrade,
@@ -86,6 +87,10 @@ export const cleanupIntervalMs = 60 * 60 * 1000
 export const minCleanupIntervalMs = 10_000
 export const maxCleanupIntervalMs = 24 * 60 * 60 * 1000
 
+export const mcpEventsAuthorizeFailureLimit = 30
+export const mcpEventsAuthorizeDeviceLimit = 300
+export const mcpEventsAuthorizeWindowMs = 60_000
+
 export function boundedCleanupInterval(value: string | undefined): number {
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed < minCleanupIntervalMs || parsed > maxCleanupIntervalMs) return cleanupIntervalMs
@@ -100,6 +105,10 @@ export function createRouter(deps: RouterDeps) {
   const limiter = createRateLimiter({ limit: 30, windowMs: 60_000 })
   const rateLimit = deps.rateLimit ?? limiter.take
   const now = deps.now ?? Date.now
+  const mcpEventsLimits = {
+    failures: createRateLimiter({ limit: mcpEventsAuthorizeFailureLimit, windowMs: mcpEventsAuthorizeWindowMs, now }),
+    devices: createRateLimiter({ limit: mcpEventsAuthorizeDeviceLimit, windowMs: mcpEventsAuthorizeWindowMs, now }),
+  }
   const cleanupEveryMs = deps.cleanupEveryMs ?? cleanupIntervalMs
   let lastCleanupAt = 0
 
@@ -203,7 +212,7 @@ export function createRouter(deps: RouterDeps) {
     const mcpEventsAuthorize = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})\/mcp\/events\/authorize$/.exec(url.pathname)
     if (mcpEventsAuthorize) {
       if (request.method !== "POST") return methodNotAllowed()
-      return authorizeMcpEvents(deps, request, mcpEventsAuthorize[1] ?? "", rateLimit)
+      return authorizeMcpEvents(deps, request, mcpEventsAuthorize[1] ?? "", mcpEventsLimits)
     }
     const remove = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})$/.exec(url.pathname)
     if (remove) {
@@ -644,13 +653,19 @@ async function streamSessionContent(deps: RouterDeps, request: Request, deviceID
   )))
 }
 
-async function authorizeMcpEvents(deps: RouterDeps, request: Request, deviceID: string, rateLimit: (key: string) => boolean): Promise<Response> {
-  if (!rateLimit(`mcp-events-authorize:${clientAddress(request)}`)) return apiError(429, "rate_limited", "Too many requests")
+async function authorizeMcpEvents(deps: RouterDeps, request: Request, deviceID: string, limits: { readonly failures: RateLimiter; readonly devices: RateLimiter }): Promise<Response> {
+  const address = clientAddress(request)
+  if (!limits.failures.check(address)) return apiError(429, "rate_limited", "Too many requests")
+  const recordFailure = (response: Response) => {
+    limits.failures.take(address)
+    return response
+  }
   const token = parseBearerToken(request.headers.get("authorization"))
-  if (token === undefined) return apiError(401, "unauthorized", "Device credential is required")
+  if (token === undefined) return recordFailure(apiError(401, "unauthorized", "Device credential is required"))
   const credential = await deps.service.authorizeAgentToken(token)
-  if (!credential.ok) return apiError(401, "unauthorized", "Device credential is not valid")
-  if (credential.value.deviceID !== deviceID) return apiError(403, "forbidden", "Device credential does not belong to this device")
+  if (!credential.ok) return recordFailure(apiError(401, "unauthorized", "Device credential is not valid"))
+  if (credential.value.deviceID !== deviceID) return recordFailure(apiError(403, "forbidden", "Device credential does not belong to this device"))
+  if (!limits.devices.take(`${credential.value.userID}:${deviceID}`)) return apiError(429, "rate_limited", "Too many requests")
   const authorization = parseAuthorizationRequest(await readJsonBody(request))
   if (authorization === undefined) return apiError(400, "invalid_message", "Request is not a valid MCP events authorization")
   const forwarded = await deps.relay.getByName(`${credential.value.userID}:${deviceID}`).fetch(

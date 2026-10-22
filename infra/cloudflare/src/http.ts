@@ -75,7 +75,7 @@ export function clientAddress(request: Request): string {
   return request.headers.get("cf-connecting-ip") ?? request.headers.get("x-forwarded-for") ?? "unknown"
 }
 
-export type RateLimiter = { readonly take: (key: string) => boolean }
+export type RateLimiter = { readonly take: (key: string) => boolean; readonly check: (key: string) => boolean }
 
 export function createRateLimiter(options: {
   readonly limit: number
@@ -102,6 +102,10 @@ export function createRateLimiter(options: {
       }
       window.count += 1
       return window.count <= options.limit
+    },
+    check: (key) => {
+      const window = windows.get(key)
+      return !window || now() - window.windowStart >= options.windowMs || window.count < options.limit
     },
   }
 }

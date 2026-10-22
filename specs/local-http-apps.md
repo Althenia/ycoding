@@ -25,6 +25,8 @@ Registration lasts 15 minutes by default and at most one hour. Limits are 16 app
 
 Requests select only a route within the registered origin. Encoded separators, traversal, malformed escapes, backslashes, fragments, scheme-relative paths, and extra input fields are rejected. The dispatcher rechecks authority before contact and after response consumption. It performs no automatic replay.
 
+Every tool call resolves the forwarded request's grant at the relay, and each app request checks it again. A relay authorization answer of HTTP 429 fails the call with `rate_limited` and reason `rate_limited`. A relay 5xx or other unexpected status, a timeout, a network failure, an unreadable answer, or an explicit relay `unavailable` rejection fails it with `agent_unavailable` and reason `authorization_unavailable`. These two outcomes are temporary and leave the registration and grant unchanged. Every other authorization failure, including HTTP 401 or 403, a revoked or expired grant, an unknown forwarded request, a local Relay MCP disable or epoch change, and any failure without a relay answer, fails with `forbidden` and reason `access_unavailable`.
+
 The local dispatcher allows at most four concurrent requests per app and sixteen in total. Each request is limited by the remaining registration lifetime and a 15-second deadline. Its local body bounds are 256 KiB request and 2 MiB response. The MCP exchange further limits decoded request bodies to 64 KiB and decoded response bodies to 1 MiB, within the MCP envelope limits.
 
 Status, content types, binary bytes, cache validators, range metadata, and permitted content-disposition values are retained. Decompressed response length is recalculated. HEAD retains a valid unencoded representation length without sending a body. Hop-by-hop headers, server credentials, authentication challenges, and app cookies are not forwarded. The verified preview Origin and Referer translate only to the registered upstream origin.
@@ -76,6 +78,7 @@ Source tests exercise the Worker, directory, relay, connector, gateway, and a di
 - `packages/cli/test/remote-local-app.test.ts` checks registration, containment, headers, cancellation, and limits.
 - `packages/cli/test-integration/remote-local-app.test.ts` checks disposable real HTTP services and binary assets.
 - `packages/cli/test/remote-mcp-apps.test.ts` checks tool, lease, resource, and private-metadata behavior.
+- `packages/cli/test/remote-bridge.test.ts` checks how relay authorization failures during grant resolution and app requests are classified.
 - `packages/cli/test/remote-mcp-app-flow.test.ts` checks the composed MCP and HTTP gateway flow.
 - `packages/remote/test/app-preview.test.ts` checks bootstrap, cookie, grant, origin binding, lease prefix, and CSP boundaries.
 - `packages/remote/test/preview.test.ts` checks the preview relay frames, origin lists, request headers, and result bounds.

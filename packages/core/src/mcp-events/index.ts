@@ -370,6 +370,9 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       if (Result.isFailure(checked)) {
         if (checked.failure.category === "unavailable") {
           yield* db.update(McpEventOutboxTable).set({ next_attempt_at: current + 30_000 }).where(eq(McpEventOutboxTable.seq, row.seq)).run().pipe(Effect.orDie)
+          yield* Effect.logWarning("MCP Events delivery deferred", {
+            subscriptionID: sub.id, eventID: row.id, category: checked.failure.category, reason: checked.failure.reason,
+          })
         } else {
           yield* db.update(McpEventSubscriptionTable).set({ disabled: 1, time_updated: current }).where(eq(McpEventSubscriptionTable.id, sub.id)).run().pipe(Effect.orDie)
           yield* db.update(McpEventOutboxTable).set({ dead: 1 }).where(eq(McpEventOutboxTable.seq, row.seq)).run().pipe(Effect.orDie)

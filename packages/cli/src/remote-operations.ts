@@ -846,7 +846,8 @@ async function run(input: OperationInput) {
       }, input.appContext, input.signal ?? new AbortController().signal)
     } catch (error) {
       if (error instanceof RemoteMcpApps.Error) throw new OperationError(
-        error.reason === "too_large" ? "message_too_large" : error.reason === "access_unavailable" ? "forbidden" : "invalid_message",
+        error.reason === "too_large" ? "message_too_large" : error.reason === "access_unavailable" ? "forbidden"
+          : error.reason === "rate_limited" ? "rate_limited" : error.reason === "authorization_unavailable" ? "agent_unavailable" : "invalid_message",
         `Registered app request failed: ${error.reason}`,
       )
       throw error

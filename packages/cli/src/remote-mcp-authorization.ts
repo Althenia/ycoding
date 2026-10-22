@@ -3,15 +3,17 @@ export * as RemoteMcpAuthorization from "./remote-mcp-authorization"
 import { RemoteMcpEvents } from "@ycoding-ai/remote"
 import { RemoteConfig } from "./remote-config"
 
-export type Reason = "unsupported" | "unavailable" | "unauthorized" | "forbidden"
+export type Reason = "unsupported" | "unavailable" | "unauthorized" | "forbidden" | "rate_limited"
 
 export class Error extends globalThis.Error {
   override readonly name = "RemoteMcpAuthorizationError"
   readonly reason: Reason
+  readonly relay: boolean
 
-  constructor(reason: Reason) {
+  constructor(reason: Reason, relay = false) {
     super("Relay MCP authorization could not be completed")
     this.reason = reason
+    this.relay = relay
   }
 }
 
@@ -59,6 +61,10 @@ export function create(options: Options) {
     if (!Number.isSafeInteger(credential.accessExpiresAt) || now() >= credential.accessExpiresAt) fail("unauthorized")
 
     const combined = AbortSignal.any([AbortSignal.timeout(deadlineMs), generation, ...(signal === undefined ? [] : [signal])])
+    const relay = () => !(signal?.aborted || generation.aborted)
+    function failRelay(reason: Reason): never {
+      throw new Error(reason, relay())
+    }
     const response = await Promise.resolve()
       .then(() =>
         fetcher(endpoint, {
@@ -69,22 +75,23 @@ export function create(options: Options) {
           body: JSON.stringify(parsed),
         }),
       )
-      .then((value) => value, (): Response => fail("unavailable"))
+      .then((value) => value, (): Response => failRelay("unavailable"))
 
-    if (response.status === 404) await discard(response).then(() => fail("unsupported"))
-    if (response.status === 401) await discard(response).then(() => fail("unauthorized"))
-    if (response.status === 403) await discard(response).then(() => fail("forbidden"))
-    if (response.status !== 200) await discard(response).then(() => fail("unavailable"))
+    if (response.status === 404) await discard(response).then(() => failRelay("unsupported"))
+    if (response.status === 401) await discard(response).then(() => failRelay("unauthorized"))
+    if (response.status === 403) await discard(response).then(() => failRelay("forbidden"))
+    if (response.status === 429) await discard(response).then(() => failRelay("rate_limited"))
+    if (response.status !== 200) await discard(response).then(() => failRelay("unavailable"))
 
-    const result = RemoteMcpEvents.parseAuthorizationResponse(decode(await readBounded(response, combined)))
-    if (result === undefined || result.action !== parsed.action) fail("unavailable")
+    const result = RemoteMcpEvents.parseAuthorizationResponse(decode(await readBounded(response, combined, relay), relay))
+    if (result === undefined || result.action !== parsed.action) failRelay("unavailable")
     if (options.signal() !== generation || generation.aborted || combined.aborted) fail("unavailable")
     if (options.credential() !== credential) fail("unavailable")
     if (!options.allowed(epoch)) fail("unavailable")
     if (now() >= credential.accessExpiresAt) fail("unauthorized")
     if (result.action !== "capabilities" && result.authorized) {
-      if (result.expiresAt <= now()) fail("unavailable")
-      if (parsed.action === "check" && result.grantID !== parsed.grantID) fail("unavailable")
+      if (result.expiresAt <= now()) failRelay("unavailable")
+      if (parsed.action === "check" && result.grantID !== parsed.grantID) failRelay("unavailable")
     }
     return result
   }
@@ -108,17 +115,17 @@ async function discard(response: Response): Promise<void> {
   await response.body?.cancel().then(() => undefined, () => undefined)
 }
 
-async function readBounded(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+async function readBounded(response: Response, signal: AbortSignal, relay: () => boolean): Promise<Uint8Array> {
   const declared = Number(response.headers.get("content-length") ?? "0")
   if (Number.isFinite(declared) && declared > maxResponseBytes) {
     await discard(response)
-    fail("unavailable")
+    throw new Error("unavailable", relay())
   }
-  if (response.body === null) fail("unavailable")
+  if (response.body === null) throw new Error("unavailable", relay())
   const reader = response.body.getReader()
   let onAbort = () => {}
   const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () => reject(new Error("unavailable"))
+    onAbort = () => reject(new Error("unavailable", relay()))
     if (signal.aborted) onAbort()
     else signal.addEventListener("abort", onAbort, { once: true })
   })
@@ -130,13 +137,13 @@ async function readBounded(response: Response, signal: AbortSignal): Promise<Uin
       const next = await Promise.race([reader.read(), aborted])
       if (next.done) break
       total += next.value.byteLength
-      if (total > maxResponseBytes) fail("unavailable")
+      if (total > maxResponseBytes) throw new Error("unavailable", relay())
       chunks.push(next.value)
     }
   } catch (error) {
     await reader.cancel().then(() => undefined, () => undefined)
     if (error instanceof Error && error.reason === "unavailable") throw error
-    fail("unavailable")
+    throw new Error("unavailable", relay())
   } finally {
     signal.removeEventListener("abort", onAbort)
   }
@@ -149,10 +156,10 @@ async function readBounded(response: Response, signal: AbortSignal): Promise<Uin
   return bytes
 }
 
-function decode(bytes: Uint8Array): unknown {
+function decode(bytes: Uint8Array, relay: () => boolean): unknown {
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
   } catch {
-    return fail("unavailable")
+    throw new Error("unavailable", relay())
   }
 }

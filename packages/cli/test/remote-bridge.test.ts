@@ -225,6 +225,233 @@ test("MCP event authority uses the current connector credential and cancels on d
   }
 })
 
+describe("MCP Events relay authorization budget", () => {
+  const context = { requestID: "request_fixture", principal: { ownerID: "owner_fixture", deviceID: "dev_test", clientID: "client_fixture" }, epoch: "epoch_test" }
+  const principal = { ...context.principal, epoch: context.epoch, grantID: "grant_fixture" }
+  const unavailable = { category: "unavailable", reason: "authorization_unavailable" }
+
+  function eventsFixture(respond: (action: string, init: RequestInit | undefined) => Response | Promise<Response>) {
+    const state = { authority: new AbortController() }
+    const requests: string[] = []
+    const host: RemoteMcpHost = {
+      status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
+      setLaneHold: () => {},
+      advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
+      allowed: (epoch) => !state.authority.signal.aborted && epoch === "epoch_test",
+      authorizationSignal: () => state.authority.signal,
+      attach: async () => {},
+      detach: () => {},
+      set: async () => ({ state: "off" }),
+      settled: async () => {},
+    }
+    const fixture = harness({ mcp: {
+      host, resource: "https://relay.example/api/mcp/devices/dev_test", deviceID: "dev_test", home: "/home/synthetic",
+      authorizationFetch: async (_url, init) => {
+        const action = (JSON.parse(String(init?.body)) as { action: string }).action
+        requests.push(action)
+        return respond(action, init)
+      },
+    } })
+    const events = fixture.bridge.mcpEvents
+    return { ...fixture, events, requests, state, count: (action: string) => requests.filter((value) => value === action).length }
+  }
+
+  const granted = (action: string) => Response.json(action === "capabilities"
+    ? { action, supported: true }
+    : { action, authorized: true, grantID: "grant_fixture", expiresAt: 900000 })
+
+  test("one connection sends one capabilities request while resolve and check reach the relay every time", async () => {
+    const test = eventsFixture(granted)
+    try {
+      await test.bridge.connect()
+      for (let index = 0; index < 35; index++) expect(await test.events.capabilities()).toBe(true)
+      expect(await Promise.all(Array.from({ length: 35 }, () => test.events.capabilities()))).toEqual(Array(35).fill(true))
+      for (let index = 0; index < 35; index++) await test.events.resolve(context)
+      for (let index = 0; index < 35; index++) await test.events.check(principal)
+      expect(test.count("capabilities")).toBe(1)
+      expect(test.count("resolve")).toBe(35)
+      expect(test.count("check")).toBe(35)
+      expect(test.diagnostics).toEqual([])
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("concurrent first callers share one in-flight probe", async () => {
+    const test = eventsFixture(granted)
+    try {
+      await test.bridge.connect()
+      expect(await Promise.all(Array.from({ length: 10 }, () => test.events.capabilities()))).toEqual(Array(10).fill(true))
+      expect(test.count("capabilities")).toBe(1)
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("capability reuse ends when the connection reconnects", async () => {
+    const test = eventsFixture(granted)
+    try {
+      await test.bridge.connect()
+      expect(await test.events.capabilities()).toBe(true)
+      test.records[0].input.onClose(1006)
+      expect(await test.events.capabilities()).toBe(false)
+      test.records[0].input.onOpen()
+      expect(await test.events.capabilities()).toBe(true)
+      expect(await test.events.capabilities()).toBe(true)
+      expect(test.count("capabilities")).toBe(2)
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("capability reuse ends when the authorization signal is aborted or replaced", async () => {
+    const test = eventsFixture(granted)
+    try {
+      await test.bridge.connect()
+      expect(await test.events.capabilities()).toBe(true)
+      test.state.authority = new AbortController()
+      expect(await test.events.capabilities()).toBe(true)
+      expect(await test.events.capabilities()).toBe(true)
+      expect(test.count("capabilities")).toBe(2)
+      test.state.authority.abort()
+      expect(await test.events.capabilities()).toBe(false)
+      expect(test.count("capabilities")).toBe(2)
+      test.state.authority = new AbortController()
+      expect(await test.events.capabilities()).toBe(true)
+      expect(test.count("capabilities")).toBe(3)
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("a rate-limited or unsupported probe returns false, is not reused, and logs one line without the bearer", async () => {
+    let status = 429
+    const test = eventsFixture((action) => status === 200 ? granted(action) : new Response("{}", { status }))
+    try {
+      await test.bridge.connect()
+      expect(await test.events.capabilities()).toBe(false)
+      expect(test.diagnostics).toEqual(["MCP Events authorization capabilities failed: rate_limited"])
+      expect(test.diagnostics.join(" ")).not.toContain("token_1")
+      expect(await test.events.capabilities()).toBe(false)
+      expect(test.count("capabilities")).toBe(2)
+      expect(test.diagnostics).toHaveLength(1)
+      status = 200
+      expect(await test.events.capabilities()).toBe(true)
+      expect(await test.events.capabilities()).toBe(true)
+      expect(test.count("capabilities")).toBe(3)
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("a probe answered supported:false is never reused", async () => {
+    const test = eventsFixture((action) => Response.json({ action, supported: false }))
+    try {
+      await test.bridge.connect()
+      expect(await test.events.capabilities()).toBe(false)
+      expect(await test.events.capabilities()).toBe(false)
+      expect(test.count("capabilities")).toBe(2)
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("rate-limited resolve and check reject as unavailable and log each cause once per minute", async () => {
+    const test = eventsFixture(() => new Response("{}", { status: 429 }))
+    try {
+      await test.bridge.connect()
+      for (let index = 0; index < 3; index++) {
+        expect(await test.events.resolve(context).catch((error) => error)).toMatchObject(unavailable)
+        expect(await test.events.check(principal).catch((error) => error)).toMatchObject(unavailable)
+      }
+      expect(test.count("resolve")).toBe(3)
+      expect(test.count("check")).toBe(3)
+      expect(test.diagnostics).toEqual([
+        "MCP Events authorization resolve failed: rate_limited",
+        "MCP Events authorization check failed: rate_limited",
+      ])
+      test.advance(59_999)
+      await test.events.resolve(context).catch(() => undefined)
+      expect(test.diagnostics).toHaveLength(2)
+      test.advance(1)
+      await test.events.resolve(context).catch(() => undefined)
+      await test.events.check(principal).catch(() => undefined)
+      expect(test.diagnostics).toHaveLength(4)
+      expect(test.diagnostics.join(" ")).not.toContain("token_1")
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test.each([
+    [401, "unauthorized"],
+    [403, "forbidden"],
+    [404, "unsupported"],
+    [429, "rate_limited"],
+    [503, "unavailable"],
+    ["network", "unavailable"],
+    ["body", "unavailable"],
+  ] as const)("relay failure %p is logged as %s", async (failure, cause) => {
+    const test = eventsFixture(() => {
+      if (failure === "network") throw new Error("socket detail https://relay.example/private")
+      if (failure === "body") return new Response("not json")
+      return new Response("{}", { status: failure })
+    })
+    try {
+      await test.bridge.connect()
+      expect(await test.events.resolve(context).catch((error) => error)).toMatchObject(unavailable)
+      expect(await test.events.check(principal).catch((error) => error)).toMatchObject(unavailable)
+      expect(await test.events.capabilities()).toBe(false)
+      expect(test.diagnostics).toEqual([
+        `MCP Events authorization resolve failed: ${cause}`,
+        `MCP Events authorization check failed: ${cause}`,
+        `MCP Events authorization capabilities failed: ${cause}`,
+      ])
+      expect(test.diagnostics.join(" ")).not.toMatch(/token_|relay\.example|owner_fixture|grant_fixture/)
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("a relay verdict of unauthorized keeps the grant_revoked failure and logs nothing", async () => {
+    const test = eventsFixture((action) => Response.json({ action, authorized: false, reason: "unauthorized" }))
+    try {
+      await test.bridge.connect()
+      expect(await test.events.check(principal).catch((error) => error)).toMatchObject({ category: "unauthorized", reason: "grant_revoked" })
+      expect(test.diagnostics).toEqual([])
+    } finally {
+      await test.bridge.close()
+    }
+  })
+
+  test("local refusals and caller cancellation write no relay diagnostic", async () => {
+    const test = eventsFixture((_action, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new Error("aborted")))
+    }))
+    try {
+      await test.bridge.connect()
+      const wrongDevice = { ...context, principal: { ...context.principal, deviceID: "dev_other" } }
+      expect(await test.events.resolve(wrongDevice).catch((error) => error)).toMatchObject(unavailable)
+      expect(await test.events.resolve({ ...context, epoch: "epoch_other" }).catch((error) => error)).toMatchObject(unavailable)
+      const cancelled = new AbortController()
+      cancelled.abort()
+      expect(await test.events.check(principal, cancelled.signal).catch((error) => error)).toMatchObject(unavailable)
+      expect(test.requests).toEqual([])
+      const inFlight = new AbortController()
+      const pending = test.events.check(principal, inFlight.signal).catch((error) => error)
+      await waitFor(() => test.requests.length === 1 ? true : undefined)
+      inFlight.abort()
+      expect(await pending).toMatchObject(unavailable)
+      test.state.authority.abort()
+      expect(await test.events.check(principal).catch((error) => error)).toMatchObject(unavailable)
+      expect(await test.events.capabilities()).toBe(false)
+      expect(test.diagnostics).toEqual([])
+    } finally {
+      await test.bridge.close()
+    }
+  })
+})
+
 test("connector reconnect discards registered apps without renewing old access", async () => {
   let authority = new AbortController()
   const host: RemoteMcpHost = {
@@ -269,6 +496,111 @@ test("connector reconnect discards registered apps without renewing old access",
   } finally {
     await fixture.bridge.close()
   }
+})
+
+describe("registered app authorization failures", () => {
+  type Answer = (action: string) => Promise<Response>
+  const granted: Answer = async (action) => Response.json(action === "capabilities"
+    ? { action, supported: true }
+    : { action, authorized: true, grantID: "grant_fixture", expiresAt: Date.now() + 3_600_000 })
+  const rejected = (reason: string): Answer => async (action) => action === "capabilities" ? granted(action) : Response.json({ action, authorized: false, reason })
+  const status = (code: number): Answer => async (action) => action === "capabilities" ? granted(action) : new Response(null, { status: code })
+  const thrown = (error: Error): Answer => async (action) => action === "capabilities" ? granted(action) : Promise.reject(error)
+  const cases: Array<[string, Answer, string, string]> = [
+    ["429", status(429), "rate_limited", "rate_limited"],
+    ["503", status(503), "agent_unavailable", "authorization_unavailable"],
+    ["timeout", thrown(new DOMException("The operation timed out", "TimeoutError")), "agent_unavailable", "authorization_unavailable"],
+    ["network failure", thrown(new TypeError("fetch failed")), "agent_unavailable", "authorization_unavailable"],
+    ["relay-reported unavailability", rejected("unavailable"), "agent_unavailable", "authorization_unavailable"],
+    ["401", status(401), "forbidden", "access_unavailable"],
+    ["403", status(403), "forbidden", "access_unavailable"],
+    ["revoked grant", rejected("forbidden"), "forbidden", "access_unavailable"],
+    ["expired grant", rejected("unauthorized"), "forbidden", "access_unavailable"],
+    ["unknown forwarded request", rejected("not_found"), "forbidden", "access_unavailable"],
+  ]
+
+  async function fixture() {
+    const app = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("ok") })
+    const authority = new AbortController()
+    const host: RemoteMcpHost = {
+      status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
+      setLaneHold: () => {},
+      advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
+      allowed: (epoch) => epoch === "epoch_test",
+      authorizationSignal: () => authority.signal,
+      attach: async () => {},
+      detach: () => authority.abort(),
+      set: async () => ({ state: "off" }),
+      settled: async () => {},
+    }
+    const answers: Record<string, Answer> = { capabilities: granted, resolve: granted, check: granted }
+    const bridge = harness({ mcp: {
+      host, resource: "https://relay.example/api/mcp/devices/dev_test", deviceID: "dev_test", home: "/home/synthetic",
+      authorizationFetch: async (_url, init) => {
+        const action = (JSON.parse(String(init?.body)) as { action: string }).action
+        return answers[action]!(action)
+      },
+    } })
+    await bridge.bridge.connect()
+    const connection = bridge.records[0]
+    let sequence = 0
+    const call = async (name: string, input?: unknown) => {
+      const id = `app_${sequence++}`
+      connection.deliver({ type: "request", id, operation: "mcp.request", input: {
+        epoch: "epoch_test", principal: { ownerID: "owner_fixture", deviceID: "dev_test", clientID: "client_fixture" },
+        headers: { "content-type": "application/json", accept: "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": name },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { sessionID: "ses_1", ...(input === undefined ? {} : { input }) }, _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}, "io.modelcontextprotocol/clientInfo": { name: "fixture", version: "1" },
+        } } }),
+      } })
+      const response = await waitFor(() => connection.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "response" && frame.id === id), 5_000)
+      expect(response.ok).toBe(true)
+      return JSON.parse(response.value.body).result as { isError?: boolean; structuredContent: { error?: { code: string; message: string } } & Record<string, unknown> }
+    }
+    const registered = await call("local_app_register", { host: "127.0.0.1", port: app.port, entryPath: "/", routes: [{ path: "/", match: "prefix", methods: ["GET"] }] })
+    expect(registered.isError).not.toBe(true)
+    const registration = registered.structuredContent as { id: string; generation: string }
+    return {
+      answers, diagnostics: bridge.diagnostics, call, registration,
+      close: async () => { await bridge.bridge.close(); app.stop(true) },
+    }
+  }
+
+  test.each(cases)("grant resolution failing with %s", async (_name, answer, code, reason) => {
+    const app = await fixture()
+    try {
+      app.answers.resolve = answer
+      const result = await app.call("local_app_status", { id: app.registration.id })
+      expect(result.isError).toBe(true)
+      expect(result.structuredContent.error).toEqual({ code, message: `Registered app request failed: ${reason}` })
+    } finally {
+      await app.close()
+    }
+  })
+
+  test.each(cases)("a grant check failing with %s during an app request", async (_name, answer, code, reason) => {
+    const app = await fixture()
+    try {
+      expect((await app.call("local_app_http", { id: app.registration.id, generation: app.registration.generation, method: "GET", path: "/" })).isError).not.toBe(true)
+      app.answers.check = answer
+      const result = await app.call("local_app_http", { id: app.registration.id, generation: app.registration.generation, method: "GET", path: "/" })
+      expect(result.isError).toBe(true)
+      expect(result.structuredContent.error).toEqual({ code, message: `Registered app request failed: ${reason}` })
+    } finally {
+      await app.close()
+    }
+  })
+
+  test("a rate-limited resolution names its cause in the connector diagnostic", async () => {
+    const app = await fixture()
+    try {
+      app.answers.resolve = status(429)
+      await app.call("local_app_status", { id: app.registration.id })
+      expect(app.diagnostics).toContain("MCP Events authorization resolve failed: rate_limited")
+    } finally {
+      await app.close()
+    }
+  })
 })
 
 describe("relay MCP mutation lanes", () => {

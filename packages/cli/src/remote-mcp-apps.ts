@@ -22,7 +22,7 @@ export type Options = {
   html?: string
   now?: () => number
 }
-export type FailureReason = Reason | "invalid_params" | "too_large" | "busy" | "unsupported_stream" | "upstream_unavailable" | "redirect_rejected" | "preview_exhausted"
+export type FailureReason = Reason | "invalid_params" | "too_large" | "busy" | "unsupported_stream" | "upstream_unavailable" | "redirect_rejected" | "preview_exhausted" | "rate_limited" | "authorization_unavailable"
 export class Error extends globalThis.Error {
   override readonly name = "RemoteMcpAppsError"
   readonly reason: FailureReason

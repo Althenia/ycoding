@@ -47,6 +47,8 @@ const authorization: SessionMcpEvents.AuthorizationInterface = {
     : Effect.succeed({ grantID: grant.id, expiresAt: grant.expiresAt }),
   check: (principal) => grant.revoked || principal.grantID !== grant.id
     ? Effect.fail(new McpEvents.Failure({ category: "unauthorized", reason: "grant_revoked" }))
+    : !grant.available
+    ? Effect.fail(new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" }))
     : Effect.succeed({ expiresAt: grant.expiresAt, ...(grant.signal === undefined ? {} : { signal: grant.signal }) }),
 }
 const transport: McpEventsHttp.Interface = {
@@ -352,6 +354,74 @@ it.effect("an unexpected subscribe failure preserves its cause but records only 
   expect(recorded).not.toContain("private transport cause")
   expect(recorded).not.toContain(url)
   expect(recorded).not.toContain(secret)
+}).pipe(Effect.provide(diagnosticLogger)))
+
+it.effect("a long subscribe burst keeps admitted rows through an authorization outage and reconciles by identity afterwards", () => Effect.gen(function* () {
+  const { parent } = yield* seed("burst")
+  const svc = yield* make
+  const callback = (index: number) => `${url}/${index}`
+  const burst = (index: number) => subscribe(svc, parent, "session.progress", {
+    delivery: { mode: "webhook", url: callback(index), secret },
+  })
+  const admitted: string[] = []
+  for (let index = 1; index <= 35; index++) {
+    grant.available = index < 8
+    const result = yield* burst(index).pipe(Effect.result)
+    if (index < 8) {
+      expect(result._tag).toBe("Success")
+      if (result._tag === "Success") admitted.push(result.success.id)
+      continue
+    }
+    expect(result).toMatchObject({ _tag: "Failure", failure: { category: "unavailable", reason: "authorization_unavailable" } })
+  }
+  expect(admitted).toHaveLength(7)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 7, activeSubscriptions: 7 })
+  expect(JSON.stringify(diagnostics)).toContain("MCP Events subscription failed")
+  grant.available = true
+  const recovered = yield* burst(8)
+  expect(admitted).not.toContain(recovered.id)
+  expect((yield* burst(8)).id).toBe(recovered.id)
+  expect((yield* burst(1)).id).toBe(admitted[0])
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 8, activeSubscriptions: 8 })
+}).pipe(Effect.provide(diagnosticLogger)))
+
+it.effect("an unavailable delivery check postpones the row 30 seconds, logs the deferral, and a later revocation still disables", () => Effect.gen(function* () {
+  const { parent } = yield* seed("deferred")
+  const svc = yield* make
+  const subscription = yield* subscribe(svc, parent)
+  yield* svc.capture({ type: "permission.asked", id: "src_deferred_1", data: { id: "per_deferred_1", sessionID: parent, action: "read" } })
+  grant.available = false
+  yield* svc.dispatchOnce()
+  yield* svc.dispatchOnce()
+  expect(deliveries()).toHaveLength(0)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 1 })
+  const recorded = JSON.stringify(diagnostics)
+  expect(recorded.split("MCP Events delivery deferred")).toHaveLength(2)
+  expect(recorded).toContain(subscription.id)
+  expect(recorded).toContain('"category":"unavailable"')
+  expect(recorded).toContain('"reason":"authorization_unavailable"')
+  expect(recorded).not.toContain("MCP Events subscription disabled")
+  expect(recorded).not.toContain(url)
+  expect(recorded).not.toContain(secret)
+  grant.available = true
+  yield* TestClock.adjust("29 seconds")
+  yield* svc.dispatchOnce()
+  expect(deliveries()).toHaveLength(0)
+  yield* TestClock.adjust("1 second")
+  yield* svc.dispatchOnce()
+  expect(deliveries()).toHaveLength(1)
+
+  yield* svc.capture({ type: "permission.asked", id: "src_deferred_2", data: { id: "per_deferred_2", sessionID: parent, action: "read" } })
+  grant.available = false
+  yield* svc.dispatchOnce()
+  expect(JSON.stringify(diagnostics).split("MCP Events delivery deferred")).toHaveLength(3)
+  grant.available = true
+  grant.revoked = true
+  yield* TestClock.adjust("30 seconds")
+  yield* svc.dispatchOnce()
+  expect(deliveries()).toHaveLength(1)
+  expect(yield* svc.rows()).toMatchObject({ subscriptions: 1, activeSubscriptions: 0 })
+  expect(JSON.stringify(diagnostics)).toContain("MCP Events subscription disabled")
 }).pipe(Effect.provide(diagnosticLogger)))
 
 it.effect("every authorization or storage disable path records a safe terminal reason", () => Effect.gen(function* () {

@@ -7,8 +7,17 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.10.23 shared decision context first", () => {
+  test("lists v0.10.24 Events authorization budget first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.10.24", date: "2026-10-22", tags: ["Fixed"] })
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["share one network address", "300", "failed authentications", "once per relay connection", "revocation", "rate_limited", "deferred", "agent_unavailable", "revoked or expired grant"])
+      expect(text).toContain(fragment)
+    expect(after("0.10.24")?.version).toBe("0.10.23")
+  })
+
+  test("lists v0.10.23 shared decision context", () => {
+    const entry = byVersion("0.10.23")
     expect(entry).toMatchObject({ version: "0.10.23", date: "2026-10-21", tags: ["Changed", "Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["current goal", "retained summary", "managed ancestors", "review identities", "ordinary reversible choices", "denials", "explicit decision", "palette", "Inherited", "local-only", "applicable rules", "invalid guardrail", "Remote MCP", "model selections", "same prompt ID", "read-only", "five-minute", "authentication required", "another stored profile", "fresh sign-in"])
@@ -1609,7 +1618,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 42)).toEqual([
+    expect(versions.slice(0, 43)).toEqual([
+      "0.10.24",
       "0.10.23",
       "0.10.22",
       "0.10.21",
