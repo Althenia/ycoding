@@ -98,6 +98,43 @@ test("guardrail provenance detail reads the linked resident tool call", () => {
   ])
 })
 
+test("settled reviews precede untimed text after a completed tool on replay", () => {
+  const message = assistant("assistant-ordered", [
+    { type: "reasoning", text: "Inspecting", time: { created: 2, completed: 3 } },
+    { type: "tool", id: "control", name: "subagent_control", state: pending(), time: { created: 4, completed: 20 } },
+    { type: "text", text: "LATER RESPONSE" },
+  ])
+  const rows = reduceSessionRows([message], new Set(), false, {
+    sessionID: "root",
+    decisions: Array.from({ length: 5 }, (_, index) => ({
+      sessionID: "root", created: 5 + index, requestID: `settled-${index}`, reply: "once" as const,
+    })),
+    dismissals: [], pending: [],
+  })
+  expect(rows.map((row) => row.type === "guardrail" ? row.requestID : row.type === "part" ? row.ref.partID : row.type))
+    .toEqual(["group", "control", "settled-0", "settled-1", "settled-2", "settled-3", "settled-4", "text:0"])
+})
+
+test("compaction replay omits covered audit history but keeps retained outcomes and pending family reviews", () => {
+  const decisions = [
+    { sessionID: "root", created: 5, requestID: "covered", reply: "once" as const },
+    { sessionID: "root", created: 25, requestID: "retained", reply: "reject" as const },
+  ]
+  const rows = reduceSessionRows([
+    { type: "synthetic", id: "checkpoint", text: "Summary", metadata: { compactionCheckpoint: { through: 10 } }, time: { created: 40 } },
+    { type: "user", id: "retained-chat", text: "Retained before activation", time: { created: 20 } },
+    { type: "user", id: "later-chat", text: "Later", time: { created: 50 } },
+  ], new Set(), false, {
+    sessionID: "root", decisions,
+    dismissals: [{ sessionID: "root", created: 6, eventID: "covered-dismissal", ruleID: "standard.review.outside-repo", confidence: 0.99 }],
+    pending: [{ id: "pending-family", rootSessionID: "root", sessionID: "child", action: "shell", resources: ["fixture"], ruleIDs: [], reason: "Needs a decision", standard: false, hardReview: true }],
+  })
+  expect(rows.map((row) => row.type === "guardrail" ? row.requestID : row.type === "message" ? row.messageID : row.type))
+    .toEqual(["retained-chat", "retained", "later-chat", "pending-family"])
+  expect(decisions).toHaveLength(2)
+  expect(rows.at(-1)).toEqual({ type: "guardrail", requestID: "pending-family", reason: "Needs a decision" })
+})
+
 test("guardrail provenance detail omits the tool line without a resident source", () => {
   const messages: SessionMessageInfo[] = [{ type: "user", id: "first", text: "Run it", time: { created: 10 } }]
   const rows = reduceSessionRows(messages, new Set(), false, {

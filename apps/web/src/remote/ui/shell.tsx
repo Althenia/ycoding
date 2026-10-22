@@ -60,7 +60,6 @@ import {
 } from "./settings"
 import { RequestCard } from "./conversation"
 import { ReviewBox } from "./review-box"
-import { GuardrailDecisionRows } from "./decision-grades"
 import { KeepAwakeIndicator } from "./keep-awake-indicator"
 import { JumpControls, TranscriptNavigation, jumpBehavior, type TranscriptPosition } from "./transcript-nav"
 import { NotificationCenter, ToastLayer } from "./notifications"
@@ -1299,7 +1298,7 @@ function ConversationView(props: {
     >
       <div class="pane conversation-pane">
         <Show
-          when={messages().length > 0}
+          when={messages().length > 0 || (view()?.guardrailDecisions?.length ?? 0) > 0}
           fallback={
             <div class="empty">
               <p class="empty__title">No messages yet</p>
@@ -1307,9 +1306,8 @@ function ConversationView(props: {
             </div>
           }
         >
-          <TranscriptNavigation messages={messages} active={props.active} position={props.position} onPositioned={props.onPositioned} />
+          <TranscriptNavigation messages={messages} decisions={view()?.guardrailDecisions} active={props.active} position={props.position} onPositioned={props.onPositioned} />
         </Show>
-        <GuardrailDecisionRows decisions={view()?.guardrailDecisions ?? []} />
         <Show when={requests().length > 0}>
           <div id="pending-requests" class="requests" tabindex="-1" aria-label="Pending requests">
             <RequestCards requests={requests} activeSessionID={state().activeSessionID} />

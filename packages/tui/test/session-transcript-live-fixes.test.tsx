@@ -778,7 +778,7 @@ test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in ti
   const base = routeFor(messages)
   const viewed = { ...session, id: viewID, ...(viewID !== sessionID ? { parentID: sessionID } : {}) }
   const screen = await renderScreen({
-    width: 200, height: 65, args: { sessionID: viewID }, settle: "FAMILY PENDING REVIEW",
+    width: 200, height: 65, args: { sessionID: viewID }, settle: "FAMILY PENDING REVIEW", sessionReady: true,
     route: (url) => {
       if (url.pathname === `/api/session/${viewID}`) return json({ data: viewed })
       if (url.pathname === `/api/session/${viewID}/snapshot`) return sessionSnapshot(viewID, messages, { session: viewed })
@@ -813,6 +813,80 @@ test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in ti
     if (viewID !== sessionID) {
       expect(frame).not.toContain("not a real match · 0.94")
       expect(frame).not.toContain("decision model approved once · 0.87")
+    }
+  } finally {
+    await screen.dispose()
+  }
+})
+
+test.each([false, true])("settled audit order survives status hydration with compaction checkpoint %s", async (compacted) => {
+  const messages: SessionMessageInfo[] = [
+    ...(compacted ? [{ type: "synthetic" as const, id: "msg_order_checkpoint", text: "Covered context", metadata: { compactionCheckpoint: { through: 10 } }, time: { created: 40 } }] : []),
+    { type: "user", id: "msg_order_prompt", text: "ORDERED PROMPT", time: { created: 10 } },
+    { type: "assistant", id: "msg_order_assistant", agent: "build", model: session.model, time: { created: 11 }, content: [
+      { type: "reasoning", text: "Completed analysis", time: { created: 12, completed: 13 } },
+      { type: "tool", id: "call_order_control", name: "subagent_control", state: { status: "completed", input: { action: "list" }, content: [], structured: {} }, time: { created: 14, ran: 15, completed: 30 } },
+      { type: "text", text: "RESPONSE AFTER AUDITS" },
+    ] },
+    { type: "user", id: "msg_order_retained", text: "CHAT RETAINED AFTER COMPACTION", time: { created: 50 } },
+  ]
+  const decisions = [
+    { sessionID, created: 2, requestID: "grq_order_covered", reply: "once", confidence: 0.81 },
+    ...Array.from({ length: 5 }, (_, index) => ({ sessionID, created: 16 + index, requestID: `grq_order_${index}`, reply: "once", confidence: 0.91 + index / 100 })),
+  ]
+  const pending = { ...guardrailRequest, id: "grq_order_pending", reason: "CURRENT HARD REVIEW", hardReview: true }
+  const base = routeFor(messages, [pending])
+  const mutations: string[] = []
+  const pruned = Promise.withResolvers<void>()
+  let data: ReturnType<typeof useData> | undefined
+  const screen = await renderScreen({
+    width: 200, height: 90, args: { sessionID }, settle: "CURRENT HARD REVIEW", sessionReady: true,
+    data: (value) => {
+      data = value
+      createEffect(() => {
+        const resident = value.session.message.list(sessionID)
+        if (resident.some((message) => message.id === "msg_order_retained") && !resident.some((message) => message.id === "msg_order_assistant")) pruned.resolve()
+      })
+    },
+    route: (url, request) => {
+      if (request.method !== "GET") mutations.push(url.pathname)
+      return url.pathname === `/api/session/${sessionID}/guardrail`
+        ? json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [], decisions } })
+        : base(url)
+    },
+  })
+  try {
+    const frame = screen.frame()
+    expect(frame).toContain("RESPONSE AFTER AUDITS")
+    for (let index = 0; index < 5; index++) {
+      const outcome = `approved once · ${0.91 + index / 100}`
+      expect(frame).toContain(outcome)
+      expect(frame.indexOf(outcome)).toBeLessThan(frame.indexOf("RESPONSE AFTER AUDITS"))
+    }
+    expect(frame.indexOf("RESPONSE AFTER AUDITS")).toBeLessThan(frame.indexOf("CURRENT HARD REVIEW"))
+    expect(frame.includes("approved once · 0.81")).toBe(!compacted)
+    expect(data!.session.guardrail.decided(sessionID)).toHaveLength(6)
+    expect(data!.session.guardrail.list(sessionID)).toHaveLength(1)
+    expect(mutations).toEqual([])
+    if (!compacted) {
+      await screen.waitForEventStream()
+      screen.events.emit({ id: "evt_order_compacted", created: 60, type: "session.compaction.ended",
+        durable: { aggregateID: sessionID, seq: 60, version: 2 },
+        data: { sessionID, jobID: "cmp_order", revision: 1, boundary: { messageID: "msg_order_assistant", seq: 40 },
+          metrics: { excludedMessages: 2, excludedParts: 0, inputTokens: 1000, retainedTokens: 100 } },
+      } satisfies YCodingEvent)
+      await pruned.promise
+      await screen.renderOnce()
+      expect(screen.frame()).toContain("CHAT RETAINED AFTER COMPACTION")
+      expect(screen.frame()).not.toContain("approved once")
+      expect(screen.frame()).toContain("CURRENT HARD REVIEW")
+      data!.session.guardrail.invalidate(sessionID)
+      await data!.session.guardrail.sync(sessionID)
+      await screen.renderOnce()
+      expect(screen.frame()).not.toContain("approved once")
+      expect(data!.session.guardrail.decided(sessionID)).toHaveLength(6)
+      expect(data!.session.guardrail.list(sessionID)).toHaveLength(1)
+      expect(mutations).toEqual([])
     }
   } finally {
     await screen.dispose()

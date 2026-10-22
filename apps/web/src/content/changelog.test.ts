@@ -7,8 +7,17 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.10.24 Events authorization budget first", () => {
+  test("lists v0.10.25 chronological guardrail history first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.10.25", date: "2026-10-22", tags: ["Fixed", "Changed"] })
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["guardrail", "chronological", "compaction", "audit records", "pending reviews", "macOS Apple Silicon"])
+      expect(text).toContain(fragment)
+    expect(after("0.10.25")?.version).toBe("0.10.24")
+  })
+
+  test("retains v0.10.24 Events authorization budget", () => {
+    const entry = byVersion("0.10.24")
     expect(entry).toMatchObject({ version: "0.10.24", date: "2026-10-22", tags: ["Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["share one network address", "300", "failed authentications", "once per relay connection", "revocation", "rate_limited", "deferred", "agent_unavailable", "revoked or expired grant"])
@@ -1618,7 +1627,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 43)).toEqual([
+    expect(versions.slice(0, 44)).toEqual([
+      "0.10.25",
       "0.10.24",
       "0.10.23",
       "0.10.22",

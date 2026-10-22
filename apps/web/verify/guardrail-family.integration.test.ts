@@ -19,17 +19,98 @@ async function wait(page: Awaited<ReturnType<typeof browser.openPage>>, expressi
 }
 const review = { id: "grq_child", sessionID: "ses_child", rootSessionID: "ses_a", action: "shell", resources: ["rm -rf fixture/trash/<img src=x onerror=alert(1)>"], reason: "Deletion requires review", hardReview: true, metadata: { workdir: "/fixture/project" } }
 
+test("settled audit rows hydrate inside the transcript before later text and reconcile live duplicates", async () => {
+  const decisions = Array.from({ length: 5 }, (_, index) => ({ sessionID: "ses_a", requestID: `grq_${index}`, created: 3 + index, reply: "once", choice: "allow", confidence: 0.91 }))
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [review], messages: { ses_a: [
+    { id: "msg_before", type: "user", text: "Earlier prompt", time: { created: 1 } },
+    { id: "msg_assistant", type: "assistant", time: { created: 2, completed: 20 }, content: [
+      { type: "tool", id: "call_fixture", name: "read", state: { status: "completed", content: [] }, time: { created: 2, completed: 10 } },
+      { type: "text", text: "Later assistant response" },
+    ] },
+  ] }, handler: (request) => request.operation === "session.guardrail.status" ? { ok: true, value: { data: { decisions } } } : "default" })
+  const page = await browser.openPage()
+  try {
+    await page.setReducedMotion(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`)
+    await wait(page, `document.querySelectorAll('[data-guardrail-request]').length === 5 && document.querySelector('.transcript-md')?.textContent.includes('Later assistant response')`)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('[data-guardrail-request]')].every(row => row.closest('ol.transcript') && !row.querySelector('details').open && row.getBoundingClientRect().top < document.querySelector('.transcript-md').getBoundingClientRect().top)`)).toBe(true)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-message__footer').length`)).toBe(1)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.request--hard .request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Reject"])
+    relay.pushEvent("ses_a", { type: "guardrail.replied", created: 7, data: { ...decisions[4], decidedBy: "decision-model" } })
+    relay.pushEvent("ses_a", { type: "session.guardrail.decided", created: 7, data: { ...decisions[4], reviewSessionID: "ses_a" } })
+    relay.pushEvent("ses_a", { type: "session.text.ended", created: 30, data: { assistantMessageID: "msg_later", ordinal: 0, text: "A newer response" } })
+    await wait(page, `document.body.textContent.includes('A newer response')`)
+    expect(await page.evaluate<number>(`document.querySelectorAll('[data-guardrail-request]').length`)).toBe(5)
+    expect(await page.evaluate<number>(`window.guardrailStore.state().view.guardrailDecisions.length`)).toBe(5)
+    expect(await page.evaluate<boolean>(`[...document.querySelectorAll('[data-guardrail-request]')].every(row => row.getBoundingClientRect().top < [...document.querySelectorAll('.transcript-md')].at(-1).getBoundingClientRect().top)`)).toBe(true)
+    await wait(page, `(() => {const root=document.querySelector('.workspace__scroll');return root.scrollHeight-root.clientHeight-root.scrollTop < 1})()`)
+    expect(relay.requests.filter((request) => /\.(reply|set|prompt)$/.test(request.operation))).toEqual([])
+  } finally { await page.close(); await relay.stop() }
+})
+
+test("settled audit rows covered by compaction stay hidden on snapshot and replay without deleting decisions", async () => {
+  const decisions = [{ sessionID: "ses_a", requestID: "grq_old", created: 3, reply: "once" }, { sessionID: "ses_a", requestID: "grq_retained", created: 12, reply: "reject" }]
+  let compacted = false
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], guardrailRequests: [review], snapshot: (sessionID) => ({
+    session: { id: sessionID }, watermark: { seq: 0 }, messages: compacted ? [
+      { id: "msg_checkpoint", type: "synthetic", text: "summary", description: "Compaction checkpoint", metadata: { compactionCheckpoint: { through: 4 } }, time: { created: 20 } },
+      { id: "msg_retained", type: "user", text: "Retained prompt", time: { created: 10 } },
+    ] : [{ id: "msg_covered", type: "user", text: "Covered prompt", time: { created: 1 } }, { id: "msg_retained", type: "user", text: "Retained prompt", time: { created: 10 } }],
+  }), handler: (request) => request.operation === "session.guardrail.status" ? { ok: true, value: { data: { decisions } } } : "default" })
+  const page = await browser.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`)
+    await wait(page, `document.querySelectorAll('[data-guardrail-request]').length === 2`)
+    relay.pushEvent("ses_a", { type: "session.compaction.ended", created: 20, data: { jobID: "cmp_fixture", boundary: { messageID: "msg_covered", seq: 4 }, metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 100, retainedTokens: 40 } } })
+    await wait(page, `!window.guardrailStore.state().view.messages.some(message=>message.id==='msg_covered')`)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('[data-guardrail-request]')].map(row=>row.dataset.guardrailRequest)`)).toEqual(["grq_retained"])
+    compacted = true
+    await page.evaluate(`window.guardrailStore.selectSession('ses_a')`)
+    await wait(page, `window.guardrailStore.state().view.messages.some(message=>message.id==='msg_checkpoint') && window.guardrailStore.state().view.guardrailDecisions?.length === 2`)
+    relay.pushEvent("ses_a", { type: "session.guardrail.decided", created: 3, data: { ...decisions[0], reviewSessionID: "ses_a" } })
+    await wait(page, `window.guardrailStore.state().view.guardrailDecisions.length === 2 && document.querySelector('[data-guardrail-request="grq_retained"]') !== null`)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('[data-guardrail-request]')].map(row=>row.dataset.guardrailRequest)`)).toEqual(["grq_retained"])
+    expect(await page.evaluate<number>(`document.querySelectorAll('.request--hard').length`)).toBe(1)
+    expect(relay.requests.filter((request) => /\.(reply|set|prompt)$/.test(request.operation))).toEqual([])
+  } finally { await page.close(); await relay.stop() }
+})
+
+test("settled audit insertion preserves a reader anchor while latest follow still tracks growth", async () => {
+  const relay = await startRelayDouble({ advertisedSessions: ["ses_a"], messages: { ses_a: Array.from({ length: 60 }, (_, index) => ({ id: `msg_${index}`, type: "user", text: `Prompt ${index}`, time: { created: index * 10 } })) } })
+  const page = await browser.openPage()
+  try {
+    await page.setReducedMotion(true)
+    await page.navigate(`http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`)
+    await wait(page, `document.querySelector('[data-message-id="msg_59"]') !== null`)
+    await page.evaluate(`document.querySelector('[aria-label="Jump to top"]').click()`)
+    await wait(page, `document.querySelector('[data-message-id="msg_0"]') !== null && document.querySelector('.workspace__scroll').scrollTop < 1`)
+    await page.evaluate(`(() => {const root=document.querySelector('.workspace__scroll');root.scrollTop=1500;root.dispatchEvent(new Event('scroll'))})()`)
+    await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+    await page.evaluate(`(() => {const root=document.querySelector('.workspace__scroll');const row=[...document.querySelectorAll('.transcript-navigation__item')].find(row=>row.getBoundingClientRect().bottom>root.getBoundingClientRect().top);window.anchor={id:row.dataset.messageId,top:row.getBoundingClientRect().top}})()`)
+    relay.pushEvent("ses_a", { type: "session.guardrail.decided", created: 5, data: { sessionID: "ses_a", reviewSessionID: "ses_a", requestID: "grq_anchor", reply: "once" } })
+    await wait(page, `window.guardrailStore.state().view.guardrailDecisions?.length === 1`)
+    await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+    expect(await page.evaluate<number>(`Math.abs(document.querySelector('[data-message-id="'+window.anchor.id+'"]').getBoundingClientRect().top-window.anchor.top)`)).toBeLessThanOrEqual(1)
+    expect(await page.evaluate<number>(`document.querySelectorAll('.transcript-navigation__item').length`)).toBeLessThan(60)
+    await page.evaluate(`document.querySelector('[aria-label="Jump to latest"]').click()`)
+    await wait(page, `(() => {const root=document.querySelector('.workspace__scroll');return root.scrollHeight-root.clientHeight-root.scrollTop < 1})()`)
+    relay.pushEvent("ses_a", { type: "session.text.ended", created: 700, data: { assistantMessageID: "msg_latest", ordinal: 0, text: "Latest reply" } })
+    await wait(page, `document.body.textContent.includes('Latest reply') && (() => {const root=document.querySelector('.workspace__scroll');return root.scrollHeight-root.clientHeight-root.scrollTop < 1})()`)
+    expect(relay.requests.filter((request) => /\.(reply|set|prompt)$/.test(request.operation))).toEqual([])
+  } finally { await page.close(); await relay.stop() }
+})
+
 test("an escalated review identifies the human handoff and keeps its chronological transcript notice", async () => {
   const relay = await startRelayDouble({ advertisedSessions: ["ses_a"],
-    guardrailRequests: [{ ...review, sessionID: "ses_a", escalation: { choice: "reject", confidence: 0.7 } }],
-    messages: { ses_a: [{ id: "msg_escalation", type: "system", text: "Decision model escalated this review · choice reject · confidence 0.7 · Review this request manually.", time: { created: 2 } }] },
+    guardrailRequests: [{ ...review, sessionID: "ses_a", escalation: { choice: "escalate", confidence: 0.7 } }],
+    messages: { ses_a: [{ id: "msg_escalation", type: "system", text: "Decision model escalated this review · choice escalate · confidence 0.7 · Review this request manually.", time: { created: 2 } }] },
   })
   const page = await browser.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/guardrail-family-fixture.html?relay=${encodeURIComponent(relay.wsURL("dev_1"))}&http=${encodeURIComponent(relay.httpURL)}`)
     await wait(page, `document.querySelector('.request__note[role="status"]') !== null`)
-    expect(await page.evaluate<string>(`document.querySelector('.request').textContent`)).toContain("Decision model escalated this review · choice reject · confidence 0.7 · Review this request manually. — your decision is required.")
-    expect(await page.evaluate<string>(`document.body.textContent`)).toContain("choice reject · confidence 0.7")
+    expect(await page.evaluate<string>(`document.querySelector('.request').textContent`)).toContain("Decision model escalated this review · choice escalate · confidence 0.7 · Review this request manually. — your decision is required.")
+    expect(await page.evaluate<string>(`document.body.textContent`)).toContain("choice escalate · confidence 0.7")
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Reject"])
     await page.evaluate(`document.querySelector('.request__actions button').click()`)
     await wait(page, `document.querySelector('.request') === null`)

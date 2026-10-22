@@ -32,7 +32,7 @@ function Fixture() {
   const request = (id: string) => remote.state().view!.requests.find((item) => item.id === id)!
   return <div class="app app--conversation app--selected" style={{ height: "100dvh", "grid-template-rows": "minmax(0, 1fr)" }}>
     <main class="workspace__main" style={{ "grid-template-rows": "minmax(0, 1fr) auto auto", "min-height": "0" }}>
-      <div class="workspace__scroll"><div class="conversation-pane"><TranscriptNavigation messages={() => remote.state().view?.messages ?? []} /><div class="requests"><For each={keys()}>{(id) => <RequestCard request={() => request(id)} activeSessionID={remote.state().activeSessionID} />}</For></div></div></div>
+      <div class="workspace__scroll"><div class="conversation-pane"><TranscriptNavigation messages={() => remote.state().view?.messages ?? []} decisions={remote.state().view?.guardrailDecisions} /><div class="requests"><For each={keys()}>{(id) => <RequestCard request={() => request(id)} activeSessionID={remote.state().activeSessionID} />}</For></div></div></div>
       <div class="conversation-jump-slot" />
       <div class="composer-resident" style={{ height: "100px" }} />
     </main>

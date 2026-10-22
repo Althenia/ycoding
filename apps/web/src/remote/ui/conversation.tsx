@@ -360,7 +360,7 @@ function ReasoningPart(props: { readonly text: () => string; readonly parts: () 
   )
 }
 
-export function MessageRow(props: { readonly message: () => RemoteMessageView }): JSX.Element {
+export function MessageRow(props: { readonly message: () => RemoteMessageView; readonly continued?: boolean }): JSX.Element {
   const kind = () => props.message().kind
   const remote = useRemote()
   const selectedView = () => remote.state().view
@@ -418,8 +418,10 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         <Show when={kind() === "assistant"}>
           <Show when={assistantOf(props.message())?.parts.some((part) => part.kind === "text" && part.text.trim() !== "")}><h3 class="transcript-message__agent">{agent()}</h3></Show>
           <AssistantParts parts={() => assistantOf(props.message())?.parts ?? []} />
-          <Show when={assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>
-          <footer class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></footer>
+          <Show when={!props.continued}>
+            <Show when={assistantOf(props.message())?.error}><p class="transcript-message__error" role="status">{assistantOf(props.message())?.error}</p></Show>
+            <footer class="transcript-message__footer">{agent()}<Show when={assistantOf(props.message())?.model}>{(model) => <> · {modelDisplayLabel(model(), models())}<Show when={model().variant}> · {model().variant}</Show></>}</Show><Show when={assistantOf(props.message())?.completed}>{(end) => <> · {formatPartDuration(end() - (assistantOf(props.message())?.created ?? end()))}</>}</Show></footer>
+          </Show>
         </Show>
 
         <Show when={kind() === "system" || kind() === "synthetic"}>
@@ -449,7 +451,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
         <Show when={kind() === "compaction"}>
           <CompactionDivider message={props.message} />
         </Show>
-        <Show when={kind() === "assistant" && showFileChanges()}>
+        <Show when={kind() === "assistant" && !props.continued && showFileChanges()}>
           <FileChangeCard files={fileChanges} />
         </Show>
       </article>

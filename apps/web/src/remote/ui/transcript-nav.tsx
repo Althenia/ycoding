@@ -3,8 +3,12 @@ import { Portal } from "solid-js/web"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
-import { hasCompactionCheckpoint, visibleTranscriptMessages, type RemoteMessageView } from "../projection"
+import { hasCompactionCheckpoint, type RemoteMessageView } from "../projection"
+import type { GuardrailDecisionView } from "../decision-grades"
 import { MessageRow } from "./conversation"
+import { GuardrailDecisionRows } from "./decision-grades"
+import { transcriptRows, type TranscriptRow } from "./transcript-rows"
+export { rowKey } from "./transcript-rows"
 import { LoadingPlaceholder } from "./loading"
 import { createRowVirtualizer, sameKeys } from "./virtual-rows"
 import "./transcript-nav.css"
@@ -28,10 +32,6 @@ export function JumpControls(props: { readonly onTop?: () => void; readonly onBo
   return <div class="transcript-navigation__controls" style={{ "margin-block-end": `${props.clearance ?? 0}px` }} classList={{ "transcript-navigation__controls--visible": props.hidden !== true && (props.onTop !== undefined || props.onBottom !== undefined) }}><Show when={props.onTop}>{(jump) => <button type="button" aria-label="Jump to top" onClick={jump()}><Icon name="arrow-up" size={18} /></button>}</Show><Show when={props.onBottom}>{(jump) => <button type="button" aria-label="Jump to latest" onClick={jump()}><Icon name="arrow-down" size={18} /></button>}</Show></div>
 }
 
-export function rowKey(message: RemoteMessageView): string {
-  return message.kind === "compaction" && message.jobID ? message.jobID : message.id
-}
-
 export function estimateRowHeight(message: RemoteMessageView | undefined): number {
   if (message === undefined) return 120
   if (message.kind === "compaction") return 196
@@ -46,7 +46,7 @@ export function promptPreview(text: string): string {
 
 export type TranscriptPosition = { readonly top: number; readonly key?: string; readonly offset?: number }
 
-export function TranscriptNavigation(props: { readonly messages: () => readonly RemoteMessageView[]; readonly active?: boolean; readonly position?: TranscriptPosition; readonly onPositioned?: () => void }): JSX.Element {
+export function TranscriptNavigation(props: { readonly messages: () => readonly RemoteMessageView[]; readonly decisions?: readonly GuardrailDecisionView[]; readonly active?: boolean; readonly position?: TranscriptPosition; readonly onPositioned?: () => void }): JSX.Element {
   const remote = useRemote()
   const [intent, setIntent] = createSignal<"following" | "leaving" | "reading">("following")
   const following = () => intent() === "following"
@@ -59,14 +59,14 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
   const [jumpSlot, setJumpSlot] = createSignal<HTMLElement>()
   const [clearance, setClearance] = createSignal(0)
   const targets = () => navigationTargets(scrollTop(), !away())
-  const rows = createMemo(() => visibleTranscriptMessages(props.messages()))
+  const rows = createMemo(() => transcriptRows(props.messages(), props.decisions ?? []))
   const checkpoint = createMemo(() => hasCompactionCheckpoint(props.messages()))
-  const ids = createMemo(() => rows().map(rowKey), [], { equals: sameKeys })
-  const byKey = createMemo(() => new Map(rows().map((entry) => [rowKey(entry), entry])))
-  const prompts = createMemo(() => rows().filter((message): message is Extract<RemoteMessageView, { kind: "user" }> => message.kind === "user"))
+  const ids = createMemo(() => rows().map((row) => row.id), [], { equals: sameKeys })
+  const byKey = createMemo(() => new Map(rows().map((entry) => [entry.id, entry])))
+  const prompts = createMemo(() => rows().flatMap((row) => row.kind === "message" && row.message.kind === "user" ? [row.message] : []))
   const preview = (id: string) => {
     const item = byKey().get(id)
-    return item?.kind === "user" ? promptPreview(item.text) : ""
+    return item?.kind === "message" && item.message.kind === "user" ? promptPreview(item.message.text) : ""
   }
   let wrapper: HTMLDivElement | undefined
   let railSlot: HTMLDivElement | undefined
@@ -129,7 +129,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
     list: () => list,
     scroller: () => scrollRoot ??= wrapper?.closest<HTMLElement>(".workspace__scroll") ?? undefined,
     keys: ids,
-    estimate: (index) => estimateRowHeight(rows()[index]),
+    estimate: (index) => { const row = rows()[index]; return row?.kind === "decision" ? 56 : estimateRowHeight(row?.message) },
     overscan: 8,
     scrollPaddingStart: 12,
     scrollEndThreshold: 48,
@@ -340,8 +340,11 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
       <For each={virtual.rendered()}>{(id) => {
         const row = virtual.row(id)
         const settled = !arrivals.has(id)
-        const item = createMemo<RemoteMessageView>((previous) => byKey().get(id) ?? previous, byKey().get(id)!)
-        return <li class="transcript-navigation__item" data-message-id={id} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={item().kind === "user" ? id : undefined} tabindex={item().kind === "user" ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
+        const item = createMemo<TranscriptRow>((previous) => byKey().get(id) ?? previous, byKey().get(id)!)
+        const message = () => { const current = item(); return current.kind === "message" ? current.message : undefined }
+        const decision = () => { const current = item(); return current.kind === "decision" ? current.decision : undefined }
+        const continued = () => { const current = item(); return current.kind === "message" && current.continued }
+        return <li class="transcript-navigation__item" data-message-id={id} data-index={row.index()} data-settled={settled ? "" : undefined} data-prompt-id={message()?.kind === "user" ? id : undefined} tabindex={message()?.kind === "user" ? -1 : undefined} style={{ "inset-block-start": `${row.top()}px` }}
           onFocusOut={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) virtual.release(id) }}
           ref={(element) => {
             row.measure(element)
@@ -350,7 +353,7 @@ export function TranscriptNavigation(props: { readonly messages: () => readonly 
               pendingFocus = undefined
               element.focus({ preventScroll: true })
             })
-          }}><MessageRow message={item} /></li>
+          }}><Show when={decision()}>{(value) => <GuardrailDecisionRows decisions={[value()]} />}</Show><Show when={message()}><MessageRow message={() => message()!} continued={continued()} /></Show></li>
       }}</For>
     </ol>
     <Show when={jumpSlot()}>{(slot) => <Portal mount={slot()}><JumpControls hidden={!active()} clearance={clearance()} onTop={targets().top ? jumpToTop : undefined} onBottom={targets().bottom ? jumpToBottom : undefined} /></Portal>}</Show>

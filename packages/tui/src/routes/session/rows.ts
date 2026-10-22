@@ -95,6 +95,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
       decisions: data.session.guardrail.decided(sessionID()),
       dismissals: data.session.guardrail.dismissed(sessionID()),
       pending: data.session.guardrail.list(sessionID()),
+      compactionTime: data.session.compaction.list(sessionID()).findLast((item) => item.status === "completed")?.time.created,
     })
     if (showLifecycle) {
       const row: SessionRow = { type: "compaction", jobID: latestLifecycle.jobID }
@@ -364,6 +365,7 @@ export function reduceSessionRows(
   idle = false,
   guardrails?: {
     sessionID: string
+    compactionTime?: number
     decisions: ReadonlyArray<
       NonNullable<GuardrailStatusOutput["decisions"]>[number] & {
         action?: string
@@ -377,9 +379,15 @@ export function reduceSessionRows(
     pending: GuardrailRequestListOutput
   },
 ) {
+  const checkpoint = messages.findLast(
+    (message) => isCompactionCheckpoint(message) || (message.type === "compaction" && message.status === "completed"),
+  )
+  const compactionTime = checkpoint?.time.created ?? guardrails?.compactionTime
+  const auditFloor = compactionTime === undefined ? 0
+    : messages.find((message) => message.type !== "compaction" && !isCompactionCheckpoint(message) && !inputs.has(message.id))?.time.created ?? compactionTime
   const provenance = [
     ...(guardrails?.decisions ?? [])
-      .filter((item) => item.sessionID === guardrails?.sessionID)
+      .filter((item) => item.sessionID === guardrails?.sessionID && item.created >= auditFloor)
       .map((item) => {
         const model = item.authority === "baseline" ? "baseline decision model" : item.authority === "yolo" ? "YOLO decision model" : "decision model"
         const decided =
@@ -405,7 +413,7 @@ export function reduceSessionRows(
         }
       }),
     ...(guardrails?.dismissals ?? [])
-      .filter((item) => item.sessionID === guardrails?.sessionID)
+      .filter((item) => item.sessionID === guardrails?.sessionID && item.created >= auditFloor)
       .map((item) => {
         const decided = `match verifier · not a real match · ${item.confidence.toString()}`
         return {
@@ -457,8 +465,10 @@ export function reduceSessionRows(
       return rows
     }
     const ordinals = { text: 0, reasoning: 0 }
+    let partTime = message.time.created
     message.content.forEach((part) => {
-      insertThrough(rows, "time" in part ? (part.time?.created ?? message.time.created) : message.time.created)
+      insertThrough(rows, "time" in part ? (part.time?.created ?? partTime) : partTime)
+      if ("time" in part && part.time) partTime = Math.max(partTime, part.time.completed ?? part.time.created)
       const partID = part.type === "tool" ? part.id : `${part.type}:${ordinals[part.type]++}`
       if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
       append(rows, { messageID: message.id, partID }, part)

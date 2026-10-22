@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.10.25",
+    date: "2026-10-22",
+    title: "Chronological guardrail history",
+    tags: ["Fixed", "Changed"],
+    changes: [
+      { tag: "Fixed", text: "Settled guardrail outcomes stay in chronological conversation order instead of collecting below newer output. The TUI includes match dismissals and decision outcomes; the web keeps its decision disclosures inside the transcript." },
+      { tag: "Fixed", text: "After compaction, covered guardrail rows stay out of the current transcript through refresh and reconnect. Their audit records remain available, and true pending reviews retain their human decision controls." },
+      { tag: "Changed", text: "Native downloads for this release are limited to macOS Apple Silicon. Other platforms retain their previously published release artifacts." },
+    ],
+  },
+  {
     version: "0.10.24",
     date: "2026-10-22",
     title: "Reliable Relay MCP Events authorization",
