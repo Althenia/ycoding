@@ -1,0 +1,11 @@
+{
+  "name": "photon-patch-compatibility",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "@silvia-odwyer/photon-node": "0.3.4"
+  },
+  "patchedDependencies": {
+    "@silvia-odwyer/photon-node@0.3.4": "patches/photon.patch"
+  }
+}

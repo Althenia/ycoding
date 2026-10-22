@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "photon-patch-compatibility",
+      "dependencies": {
+        "@silvia-odwyer/photon-node": "0.3.4",
+      },
+    },
+  },
+  "patchedDependencies": {
+    "@silvia-odwyer/photon-node@0.3.4": "patches/photon.patch",
+  },
+  "packages": {
+    "@silvia-odwyer/photon-node": ["@silvia-odwyer/photon-node@0.3.4", "", {}, "sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA=="],
+  }
+}
