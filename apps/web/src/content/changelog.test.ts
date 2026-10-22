@@ -9,10 +9,11 @@ const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.ve
 describe("release entries", () => {
   test("lists v0.10.25 guardrail history and Muse quota fixes first", () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.10.25", date: "2026-10-22", tags: ["Fixed", "Changed"] })
+    expect(entry).toMatchObject({ version: "0.10.25", date: "2026-10-22", tags: ["Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["guardrail", "chronological", "compaction", "audit records", "pending reviews", "macOS Apple Silicon", "Muse", "provider quotas", "reported zero", "workspaces", "replacement accounts"])
+    for (const fragment of ["guardrail", "chronological", "compaction", "audit records", "pending reviews", "Muse", "provider quotas", "reported zero", "workspaces", "replacement accounts"])
       expect(text).toContain(fragment)
+    expect(text).not.toContain("limited to macOS Apple Silicon")
     expect(after("0.10.25")?.version).toBe("0.10.24")
   })
 

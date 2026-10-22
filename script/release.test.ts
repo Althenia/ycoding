@@ -235,30 +235,11 @@ for (const extra of [undefined, "LICENSE", "NOTICE", "extra"])
     },
   )
 
-test("manual v0.10.25 publication excludes only that tag from Actions", async () => {
-  const directory = path.join(import.meta.dir, "../.github/workflows")
-  const triggers = await Promise.all((await fs.readdir(directory))
-    .filter((name) => /\.ya?ml$/.test(name))
-    .sort()
-    .map(async (name) => {
-      const events = Bun.YAML.parse(await Bun.file(path.join(directory, name)).text()).on
-      return { name, events: Object.keys(events).sort(), push: events.push }
-    }))
-  expect(triggers).toEqual([
-    { name: "nix-eval.yml", events: ["pull_request", "push", "workflow_dispatch"], push: { branches: ["dev"] } },
-    { name: "nix-hashes.yml", events: ["push", "workflow_dispatch"], push: {
-      branches: ["dev", "beta"], paths: ["bun.lock", "package.json", "packages/*/package.json", "flake.lock", "nix/node_modules.nix", "nix/scripts/**", "patches/**", ".github/workflows/nix-hashes.yml"],
-    } },
-    { name: "release.yml", events: ["push", "workflow_dispatch"], push: { tags: ["v*", "!v0.10.25"] } },
-    { name: "test.yml", events: ["pull_request", "push", "workflow_dispatch"], push: { branches: ["dev", "v2"] } },
-    { name: "typecheck.yml", events: ["pull_request", "push", "workflow_dispatch"], push: { branches: ["dev", "v2"] } },
-  ])
-})
-
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {
   const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0]
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
   expect(workflow).toContain("      - v*")
+  expect(Bun.YAML.parse(workflow).on.push.tags).toEqual(["v*"])
   expect(workflow).not.toContain("      - tui-v*")
   expect(workflow).not.toContain("      - web-v*")
   expect(verify).toContain('release_notes="docs/releases/v$RELEASE_VERSION.md"')
