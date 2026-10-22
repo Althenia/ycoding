@@ -23,7 +23,8 @@ const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
 const oldGroups = new URLSearchParams(location.search).has("old-groups")
 const forecastMode = new URLSearchParams(location.search).get("forecast")
 const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
-const museMode = new URLSearchParams(location.search).get("provider") === "muse"
+const musePendingMode = new URLSearchParams(location.search).get("provider") === "muse-pending"
+const museMode = new URLSearchParams(location.search).get("provider") === "muse" || musePendingMode
 const states = forecastMode === "states"
 const providers: UsageProvider[] = [
   { providerID: "openai", label: longDistribution ? "Provider with a long descriptive name and a shared workspace plan" : "Codex", profile: "Personal", status: "available", source: "provider_api", stability: "stable", updatedAt: Date.now(), windows: [
@@ -60,6 +61,12 @@ const museProvider: UsageProvider = { providerID: "muse", label: "Muse (Meta)", 
   { id: "window", label: "5-hour window", unit: "percent", used: 35, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 18_000 },
   { id: "weekly", label: "Weekly", unit: "percent", used: 64, resetAt: Date.now() + 4 * 86_400_000, periodSeconds: 604_800 },
 ] }
+const musePendingProvider: UsageProvider = { providerID: "muse", label: "Muse (Meta)", profile: "Muse", status: "unsupported", source: "response_stream", stability: "observed", updatedAt: Date.now(), windows: [], message: "Quota is reported after the next Muse response" }
+const museObservedProvider: UsageProvider = { ...museProvider, updatedAt: Date.now(), windows: [
+  { id: "window", label: "5-hour window", unit: "percent", used: 0, resetAt: Date.now() + 2 * 3600_000, periodSeconds: 18_000 },
+  { id: "weekly", label: "Weekly", unit: "percent", used: 64, resetAt: Date.now() + 4 * 86_400_000, periodSeconds: 604_800 },
+] }
+let museRefreshed = false
 const tokens = longDistribution
   ? { input: 1_000_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
   : { input: 12_400, output: 3_200, reasoning: 1_440, cache: { read: 5_600, write: 320 } }
@@ -159,7 +166,7 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
   if (operation === "usage.report" && oldZone && input?.timeZone !== undefined) return failure("invalid_message", "Unknown usage report field")
   if (operation === "usage.report" && oldGroups && input && !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group)) return failure("invalid_message", "Unknown usage report group")
   if (refreshCycle && pendingReload) await pendingReload
-  if (operation === "usage.providers") { quotaSnapshots = museMode ? [museProvider, ...providers] : none ? providers.slice(-4, -1) : refreshCycle ? refreshedProviders() : providers; return ok(quotaSnapshots) }
+  if (operation === "usage.providers") { if (musePendingMode && input && "refresh" in input && input.refresh === true) museRefreshed = true; quotaSnapshots = musePendingMode ? [museRefreshed ? museObservedProvider : musePendingProvider, ...providers] : museMode ? [museProvider, ...providers] : none ? providers.filter((provider) => provider.providerID === "other" || provider.providerID === "empty") : refreshCycle ? refreshedProviders() : providers; return ok(quotaSnapshots) }
   if (operation === "usage.summary") return ok({ logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 })
   if (operation === "usage.forecast") {
     const asOf = Date.now()

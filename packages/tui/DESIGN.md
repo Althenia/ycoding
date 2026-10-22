@@ -168,6 +168,8 @@ The picker MUST offer Kill only for running shells. Archived selection MUST omit
 
 Usage MUST render the backend summary, reports, and cached forecast independently of provider quota refresh. Each region MUST settle to values, an empty state, or an inline failure; a quota refresh MUST NOT hold the other regions on loading text.
 
+A response-stream quota source awaiting its first observation MUST remain visible with its provider/profile and next-response message, using the existing quota header and subdued detail ink without numeric usage or a progress bar. Unauthorized providers MUST retain their status and safe message; hide only genuinely unsupported quota sources. A later observation MUST replace the empty state with the reported windows, preserving real zero values. Verify with `test/cli/tui/provider-usage-command.test.tsx`.
+
 A fixed-reset quota with a reported whole-window pace MUST show `Ahead`, `Cutting it close`, or `Will run out` beside its existing recent-delta forecast. Use subdued ink for Ahead, warning ink for Cutting it close, and error ink for Will run out. Show the pace run-out time only when reported. Omit the pace label for windows without a verdict; never infer one from recent-delta estimates. Reuse wrapping quota metadata and semantic ink, with no animation or new token. Quota alerts MUST show their title and body in the existing warning toast and use the existing terminal attention channel without changing focus or the draft. Mount toast delivery through the existing app slot without extending the public plugin UI.
 
 ## Colors

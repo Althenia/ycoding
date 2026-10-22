@@ -95,8 +95,9 @@ export function reportLabel(row: Pick<UsageReportRow, "key" | "label">, group: U
 }
 
 export const visibleProviders = (providers: readonly UsageProvider[]) => providers.filter((provider) =>
-  provider.status !== "unsupported" && provider.status !== "unauthorized" &&
-  (provider.windows.length > 0 || provider.status === "error" && Boolean(provider.message?.trim())))
+  provider.status === "unsupported"
+    ? provider.source === "response_stream" && provider.stability === "observed" && Boolean(provider.message?.trim())
+    : provider.status === "unauthorized" || provider.windows.length > 0 || provider.status === "error" && Boolean(provider.message?.trim()))
 
 export type DistributionSegment = { readonly providerID: string; readonly label: string; readonly value: number; readonly share: number; readonly costLabel?: string }
 

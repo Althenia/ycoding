@@ -73,7 +73,7 @@ test("provider marks follow reported identities and retain labels without invent
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?provider=muse&forecast=states`)
-    await wait(page, `document.querySelectorAll('.usage-provider').length === 6`)
+    await wait(page, `document.querySelectorAll('.usage-provider').length === 7`)
     await wait(page, `[...document.querySelectorAll('.usage-provider .provider-logo img')].every(image => image.complete && image.naturalWidth > 0)`)
     const providers = await page.evaluate<{ id: string; label: string; marks: number; transparent: boolean; size: boolean; sources: boolean }[]>(`[...document.querySelectorAll('.usage-provider')].map(node => {
       const marks = [...node.querySelectorAll('.provider-logo')];
@@ -83,7 +83,7 @@ test("provider marks follow reported identities and retain labels without invent
         sources: marks.every(mark => [...mark.querySelectorAll('img')].every(image => image.complete && image.naturalWidth > 0)) };
     })`)
     expect(providers.map(provider => [provider.id, provider.label, provider.marks])).toEqual([
-      ["muse", "Muse (Meta)", 1], ["openai", "Codex", 1], ["anthropic", "Claude", 1], ["github-copilot", "Copilot", 1], ["openrouter", "OpenRouter", 1], ["failed", "Provider with an error", 0],
+      ["muse", "Muse (Meta)", 1], ["openai", "Codex", 1], ["anthropic", "Claude", 1], ["github-copilot", "Copilot", 1], ["openrouter", "OpenRouter", 1], ["disconnected", "Disconnected provider", 0], ["failed", "Provider with an error", 0],
     ])
     expect(providers.every(provider => provider.transparent && provider.size && provider.sources)).toBe(true)
     expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(6)

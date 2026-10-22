@@ -103,14 +103,14 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
       try {
         await page.setViewport(width!, height!)
         await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
-        await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-donut__arc').length === 2`)
+        await wait(page, `document.querySelectorAll('.usage-provider').length === 6 && document.querySelectorAll('.usage-donut__arc').length === 2`)
         await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
         await Bun.sleep(400)
         expect(await page.evaluate<string>(`document.querySelector('.usage-page')?.innerText ?? ''`)).toContain("AI credits")
         expect(await page.evaluate<number>(`document.querySelectorAll('.usage-provider:first-child .usage-meter').length`)).toBe(2)
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider:first-child .usage-window__top')?.innerText ?? ''`)).toContain("38%")
         expect(await page.evaluate<string>(`document.querySelector('.usage-cost-note')?.textContent ?? ''`)).toContain("not provider bills")
-        expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-provider h3')].map(item => item.textContent.trim())`)).toEqual(["Codex", "Claude", "Copilot", "OpenRouter", "Provider with an error"])
+        expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-provider h3')].map(item => item.textContent.trim())`)).toEqual(["Codex", "Claude", "Copilot", "OpenRouter", "Disconnected provider", "Provider with an error"])
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider')?.innerText ?? ''`)).not.toContain("provider api")
         expect(await page.evaluate<string>(`document.querySelector('.usage-provider time')?.getAttribute('aria-label') ?? ''`)).toBe("")
         await page.evaluate(`document.querySelector('.usage-provider button[aria-label="Codex details"]').focus()`)
@@ -353,6 +353,31 @@ test("quota and recorded-consumption Details open bounded dialogs without moving
   }
 }, 90_000)
 
+test("Muse pending quota card names the configured provider without numeric quota and shows reported zero after refresh", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?provider=muse-pending`)
+    await wait(page, `document.querySelector('[data-provider-id="muse"] .usage-provider__empty')?.textContent === 'Quota is reported after the next Muse response'`)
+    const pending = await page.evaluate<{ heading: string; plan: string; text: string; windows: number; meters: number; headings: string[] }>(`(() => {
+      const card = document.querySelector('[data-provider-id="muse"]')
+      return { heading: card.querySelector('h3')?.textContent ?? '', plan: card.querySelector('.usage-provider__plan')?.textContent ?? '', text: card.innerText ?? '',
+        windows: card.querySelectorAll('.usage-window').length, meters: card.querySelectorAll('.usage-meter').length,
+        headings: [...document.querySelectorAll('.usage-provider h3')].map((item) => item.textContent.trim()) }
+    })()`)
+    expect(pending.heading).toBe("Muse (Meta)")
+    expect(pending.plan).toBe("Muse")
+    expect(pending.windows).toBe(0)
+    expect(pending.meters).toBe(0)
+    expect(pending.text).not.toContain("%")
+    expect(pending.headings).not.toContain("Other provider")
+    expect(pending.headings).toContain("Disconnected provider")
+    await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
+    await wait(page, `document.querySelector('[data-provider-id="muse"]')?.textContent?.includes('0% used') === true && document.querySelector('[data-provider-id="muse"]')?.textContent?.includes('64% used') === true`)
+    expect(await page.evaluate<number>(`document.querySelector('[data-provider-id="muse"]')?.querySelectorAll('.usage-meter').length ?? 0`)).toBe(2)
+    expect(await page.evaluate<number>(`document.querySelector('[data-provider-id="muse"]')?.querySelectorAll('.usage-provider__empty').length ?? 0`)).toBe(0)
+  } finally { await page.close() }
+})
+
 test("usage waits for a connected machine and loads after connection opens", async () => {
   const page = await browser!.openPage()
   try {
@@ -360,9 +385,9 @@ test("usage waits for a connected machine and loads after connection opens", asy
     await wait(page, `document.querySelector('.usage-page')?.textContent?.includes('Connect to a machine to see usage.') === true`)
     expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(0)
     expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page .loading-placeholder').length`)).toBe(0)
-    expect(await page.evaluate<number>(`[...document.querySelectorAll('.usage-page [role="status"]')].filter((item) => !item.closest('.incidents')).length`)).toBe(1)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-page [role="status"]')].filter((item) => !item.closest('.incidents')).map(item => item.textContent)`)).toEqual(["Connect to a machine to see usage.", "Connect to a machine to see recorded consumption."])
     await page.evaluate(`window.usageConnect()`)
-    await wait(page, `document.querySelectorAll('.usage-provider').length === 5`)
+    await wait(page, `document.querySelectorAll('.usage-provider').length === 6`)
     expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(6)
   } finally { await page.close() }
 })
@@ -380,7 +405,7 @@ test("quota refresh returns to idle after a failed provider read", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?unknown-usage`)
-    await wait(page, `document.querySelectorAll('.usage-provider').length === 5`)
+    await wait(page, `document.querySelectorAll('.usage-provider').length === 6`)
     await page.evaluate(`window.usageAgentBack(true)`)
     await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
     await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === 2`)
@@ -524,7 +549,7 @@ test("three same-device reloads and Refresh update values without removing cards
     try {
       await page.setViewport(width!, height!)
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?refresh-cycle`)
-      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 6 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       await Bun.sleep(900)
       const refresh = await page.evaluate<{ accessibleName: string | null; title: string | null; text: string; idle: string | null; target: number; width: number; icon: boolean }>(`(() => {
@@ -564,11 +589,11 @@ test("three same-device reloads and Refresh update values without removing cards
         await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === ${cycle + 1}`)
         const pending = await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean; providers: number; tiles: number; session: string; today: string; donut: string; height: number }>(`window.usageProbeSnapshot()`)
         if (cycle === 1 && width === 390 && theme === "light") await Bun.write(join(captures, "usage-reconnect-pending.png"), Buffer.from(await page.screenshot(), "base64"))
-        expect(pending).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true, providers: 5, tiles: 3, today: cycle === 1 ? "$5.40" : `$${(5.4 + cycle - 1).toFixed(2)}`, donut: cycle === 1 ? "$15.00" : `$${(15 + 3 * (cycle - 1)).toFixed(2)}`, height: baseline.height })
+        expect(pending).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true, providers: 6, tiles: 3, today: cycle === 1 ? "$5.40" : `$${(5.4 + cycle - 1).toFixed(2)}`, donut: cycle === 1 ? "$15.00" : `$${(15 + 3 * (cycle - 1)).toFixed(2)}`, height: baseline.height })
         await page.evaluate(`window.usageReleaseReload()`)
         await wait(page, `document.querySelector('.usage-provider:first-child .usage-window__top')?.textContent?.includes('${38 + cycle}%') === true`)
         const settled = await page.evaluate<{ removed: number; starts: number; empty: number; same: boolean; providers: number; tiles: number; today: string; donut: string; height: number }>(`window.usageProbeSnapshot()`)
-        expect(settled).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true, providers: 5, tiles: 3, today: `$${(5.4 + cycle).toFixed(2)}`, donut: `$${(15 + 3 * cycle).toFixed(2)}`, height: baseline.height })
+        expect(settled).toMatchObject({ removed: 0, starts: 0, empty: 0, same: true, providers: 6, tiles: 3, today: `$${(5.4 + cycle).toFixed(2)}`, donut: `$${(15 + 3 * cycle).toFixed(2)}`, height: baseline.height })
       }
       await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
       await wait(page, `window.usageRequests().filter(item => item.operation === 'usage.providers').length === 5`)
@@ -617,7 +642,7 @@ test("a device switch, explicit disconnect, or sign-out clears the previous mach
     const page = await browser!.openPage()
     try {
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?refresh-cycle`)
-      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 6 && document.querySelectorAll('.usage-tile').length === 3`)
       await page.evaluate(`window.${action}()`)
       await wait(page, `document.querySelectorAll('.usage-provider').length === 0 && document.querySelectorAll('.usage-tile').length === 0`)
       expect(await page.evaluate<string>(`document.querySelector('.usage-quotas')?.textContent ?? ''`)).toContain("Connect to a machine")
@@ -678,13 +703,13 @@ test("unknown Usage reads keep good panels while one recovery read settles, then
     try {
       await page.setViewport(width, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?unknown-usage`)
-      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 6 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
       await page.evaluate(`window.usageOutage()`)
       expect(await page.evaluate<{ providers: number; tiles: number; arcs: number; rows: number; alerts: number; requests: number }>(`({
         providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
         arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
         alerts: document.querySelectorAll('.usage-page [role="alert"]').length, requests: window.usageRequests().length,
-      })`)).toEqual({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: 0, requests: 12 })
+      })`)).toEqual({ providers: 6, tiles: 3, arcs: 2, rows: 25, alerts: 0, requests: 12 })
       await page.evaluate(`window.usageAgentBack(false)`)
       await wait(page, `window.usageRequests().length === 18`)
       expect(await page.evaluate<number>(`document.querySelectorAll('.usage-page [role="alert"]').length`)).toBe(0)
@@ -695,7 +720,7 @@ test("unknown Usage reads keep good panels while one recovery read settles, then
         providers: document.querySelectorAll('.usage-provider').length, tiles: document.querySelectorAll('.usage-tile').length,
         arcs: document.querySelectorAll('.usage-donut__arc').length, rows: document.querySelectorAll('.usage-breakdown tbody tr').length,
         alerts: [...document.querySelectorAll('.usage-page [role="alert"]')].map(item => item.textContent ?? ''),
-      })`)).toMatchObject({ providers: 5, tiles: 3, arcs: 2, rows: 25, alerts: [expect.stringContaining("retry failed"), expect.stringContaining("retry failed"), expect.stringContaining("retry failed"), expect.stringContaining("retry failed")] })
+      })`)).toMatchObject({ providers: 6, tiles: 3, arcs: 2, rows: 25, alerts: [expect.stringContaining("retry failed"), expect.stringContaining("retry failed"), expect.stringContaining("retry failed"), "Usage forecast: Report retry failed. Refresh quotas to retry.", expect.stringContaining("retry failed")] })
     } finally { await page.close() }
   }
 }, 180_000)
@@ -706,7 +731,7 @@ test("first Usage reads reserve visible placeholders without replacing settled c
     try {
       await page.setViewport(width, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?initial-loading&refresh-cycle`)
-      await wait(page, `window.usageRequests().length === 6 && document.querySelectorAll('.usage-page .loading-placeholder').length === 4`)
+      await wait(page, `window.usageRequests().length === 6 && document.querySelectorAll('.usage-page .loading-placeholder').length === 5`)
       const pending = await page.evaluate<{ kinds: string[]; labels: string[]; statuses: number; heights: number[]; cards: number[]; monthlyReserve: number; overflow: boolean }>(`(() => {
         const placeholders = [...document.querySelectorAll('.usage-page .loading-placeholder')];
         return { kinds: placeholders.map(item => [...item.classList].find(name => name.startsWith('loading-placeholder--'))), labels: placeholders.map(item => item.textContent.trim()),
@@ -716,14 +741,14 @@ test("first Usage reads reserve visible placeholders without replacing settled c
           monthlyReserve: document.querySelectorAll('.usage-distribution .loading-placeholder__shape')[0]?.getBoundingClientRect().height ?? 0,
           overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
       })()`)
-      expect(pending.kinds).toEqual(["loading-placeholder--usage", "loading-placeholder--chart", "loading-placeholder--chart", "loading-placeholder--usage"])
-      expect(pending.labels).toEqual(["Loading provider quotas…", "Loading daily spend…", "Loading monthly usage…", "Loading breakdown…"])
-      expect(pending.statuses).toBe(4)
+      expect(pending.kinds).toEqual(["loading-placeholder--usage", "loading-placeholder--chart", "loading-placeholder--chart", "loading-placeholder--usage", "loading-placeholder--usage"])
+      expect(pending.labels).toEqual(["Loading provider quotas…", "Loading daily spend…", "Loading monthly usage…", "Loading recorded consumption…", "Loading breakdown…"])
+      expect(pending.statuses).toBe(5)
       expect(pending.heights.every((height) => height >= 64)).toBe(true)
       expect(pending.monthlyReserve).toBeGreaterThanOrEqual(width === 390 ? 400 : 280)
       expect(pending.overflow).toBe(false)
       await page.evaluate(`window.usageCards = [...document.querySelectorAll('.usage-chart, .usage-distribution, .usage-breakdown')]; window.usageReleaseInitial()`)
-      await wait(page, `document.querySelectorAll('.usage-provider').length === 5 && document.querySelectorAll('.usage-donut__arc').length === 2 && document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
+      await wait(page, `document.querySelectorAll('.usage-provider').length === 6 && document.querySelectorAll('.usage-donut__arc').length === 2 && document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
       const settled = await page.evaluate<{ placeholders: number; sameCards: boolean; cards: number[]; overflow: boolean }>(`({
         placeholders: document.querySelectorAll('.usage-page .loading-placeholder').length,
         sameCards: window.usageCards.every(node => node.isConnected && document.querySelector('.usage-page')?.contains(node)),

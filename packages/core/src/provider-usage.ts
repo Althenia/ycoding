@@ -29,6 +29,7 @@ import { CursorUsage } from "./provider-usage/cursor"
 import { SessionRunnerModel } from "./session/runner/model"
 import { GoUsage } from "./provider-usage/go"
 import { ProviderUsageCache } from "./provider-usage/cache"
+import { ProviderUsageObservations } from "./provider-usage/observations"
 import { ProviderUsageForecast } from "./provider-usage/forecast"
 import { ProviderUsagePaceAlerts } from "./provider-usage/pace-alerts"
 import { UsageForecast } from "@ycoding-ai/schema/usage-forecast"
@@ -70,6 +71,7 @@ export interface MakeInput {
   }
   readonly adapters: Readonly<Record<string, Adapter>>
   readonly cache?: ProviderUsageCache.Interface
+  readonly accountObservations?: Map<string, ProviderUsage.Snapshot>
   readonly ttlMs?: Readonly<Record<string, number>>
   readonly now?: () => number
   readonly alerts?: Pick<ProviderUsagePaceAlerts.Interface, "observe">
@@ -133,6 +135,7 @@ export function make(input: MakeInput): Interface {
   const now = input.now ?? Date.now
   const cache = input.cache ?? ProviderUsageCache.make({ now })
   const observations = new Map<string, ProviderUsage.Snapshot>()
+  const accountObservations = input.accountObservations ?? observations
   const forecast = ProviderUsageForecast.make()
   const accounts = new WeakMap<ProviderUsage.Snapshot, string>()
   const retain = (snapshot: ProviderUsage.Snapshot, account?: string) =>
@@ -191,7 +194,7 @@ export function make(input: MakeInput): Interface {
         : undefined
     const observed = () =>
       profileSource !== undefined
-        ? observations.get(`${providerID}:${profileSource}`)
+        ? accountObservations.get(`${providerID}:${profileSource}`)
         : credentialID === undefined
           ? observations.get(`${providerID}:`)
           : undefined
@@ -396,11 +399,12 @@ export function make(input: MakeInput): Interface {
           windows: observation.windows,
         })
         const key = `${observation.providerID}:${profileSource ?? ""}`
-        const current = observations.get(key)
+        const store = profileSource === undefined ? observations : accountObservations
+        const current = store.get(key)
         if (current && snapshot.updatedAt < current.updatedAt) return
-        observations.delete(key)
-        observations.set(key, snapshot)
-        while (observations.size > 256) observations.delete(observations.keys().next().value!)
+        store.delete(key)
+        store.set(key, snapshot)
+        while (store.size > 256) store.delete(store.keys().next().value!)
         if (profileSource === undefined) return
         yield* retain(snapshot, profileSource)
       }).pipe(Effect.catchCause(() => Effect.void))
@@ -509,6 +513,7 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     const location = yield* Location.Service
     const alerts = yield* ProviderUsagePaceAlerts.Service
+    const accountObservations = yield* ProviderUsageObservations.Service
     const providerUsage = Config.latest(yield* config.entries(), "provider_usage")
     const cache = ProviderUsageCache.make()
     const claude = createClaudeCodeCredentialStore({
@@ -517,6 +522,7 @@ const layer = Layer.effect(
     return Service.of(
       make({
         cache,
+        accountObservations,
         alerts,
         credentials,
         providers: catalog.provider,
@@ -583,6 +589,7 @@ export const node = makeLocationNode({
     Global.node,
     Location.node,
     ProviderUsagePaceAlerts.node,
+    ProviderUsageObservations.node,
     httpClient,
   ],
 })

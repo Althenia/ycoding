@@ -74,7 +74,7 @@ test("daily spend uses UTC days, all token buckets, zeroes unknown cost, and lab
   expect(reportKey({ group: "model", limit: 25, sort: "cost", order: "desc" })).toBe(reportKey({ order: "desc", sort: "cost", limit: 25, group: "model" }))
 })
 
-test("quota cards include only connected, supported snapshots with windows or an error message", () => {
+test("quota cards include snapshots with windows, an error message, or any unauthorized status, and hide unsupported ones", () => {
   const snapshot = (providerID: string, status: UsageProvider["status"], windows: UsageProvider["windows"], message?: string): UsageProvider => ({
     providerID, label: providerID, status, windows, message, source: "provider_api", stability: "stable", updatedAt: 1,
   })
@@ -82,9 +82,26 @@ test("quota cards include only connected, supported snapshots with windows or an
   expect(visibleProviders([
     snapshot("connected", "available", window), snapshot("stale", "stale", window), snapshot("failed", "error", [], "Quota refresh failed"),
     snapshot("unsupported", "unsupported", window), snapshot("unauthorized", "unauthorized", window),
+    snapshot("unauthorized-message", "unauthorized", [], "Reconnect this provider"), snapshot("unauthorized-empty", "unauthorized", []),
     snapshot("available-empty", "available", []), snapshot("stale-empty", "stale", []), snapshot("error-empty", "error", []),
-  ]).map((item) => item.providerID)).toEqual(["connected", "stale", "failed"])
+  ]).map((item) => item.providerID)).toEqual(["connected", "stale", "failed", "unauthorized", "unauthorized-message", "unauthorized-empty"])
   expect(visibleProviders([snapshot("unsupported", "unsupported", [])])).toEqual([])
+})
+
+test("a response-observed snapshot with no quota sample yet stays visible as a pending card, without unhiding genuine unsupported providers", () => {
+  const pending: UsageProvider = {
+    providerID: "muse", label: "Muse (Meta)", status: "unsupported", source: "response_stream", stability: "observed",
+    updatedAt: 1, windows: [], message: "Quota is reported after the next Muse response",
+  }
+  expect(visibleProviders([pending]).map((item) => item.providerID)).toEqual(["muse"])
+  expect(visibleProviders([{ ...pending, source: "provider_api" }])).toEqual([])
+  expect(visibleProviders([{ ...pending, stability: "stable" }])).toEqual([])
+  expect(visibleProviders([{ ...pending, message: undefined }])).toEqual([])
+  expect(visibleProviders([{ ...pending, message: "   " }])).toEqual([])
+  expect(visibleProviders([{ ...pending, providerID: "disconnected", status: "unauthorized", windows: [{ id: "window", label: "Window", unit: "percent", used: 10 }] }]).map((item) => item.providerID)).toEqual(["disconnected"])
+  const observed: UsageProvider = { ...pending, status: "available", message: undefined, windows: [{ id: "window", label: "5-hour window", unit: "percent", used: 0 }] }
+  expect(visibleProviders([observed]).map((item) => item.providerID)).toEqual(["muse"])
+  expect(quotaWindow(observed.windows[0]!, 1_000).used).toBe("0%")
 })
 
 test("monthly model report groups encoded provider keys and puts only the unpaged remainder into Other", () => {

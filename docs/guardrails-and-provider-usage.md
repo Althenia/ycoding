@@ -230,7 +230,7 @@ Weekly        ███░░░░░░░ 31% used
 Spark weekly  █░░░░░░░░░ 7% used
 ```
 
-Percentage windows show stable ten-cell progress bars, reset times, freshness, and source stability. Claude Pro/Max and ChatGPT Plus/Pro are included in the safe provider label only when the account source reports the tier; YCoding does not infer a tier from missing quota categories. Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, credit, and additional named windows render only when reported. Percentages below 70% use normal styling, 70–89% use warning styling, and 90% or above use error styling. Providers without a supported quota path or usable credential are hidden. Unauthorized and failed providers remain visible with their status and safe message. A failed request retains a prior snapshot as stale and surfaces a partial-refresh warning.
+Percentage windows show stable ten-cell progress bars, reset times, freshness, and source stability. Claude Pro/Max and ChatGPT Plus/Pro are included in the safe provider label only when the account source reports the tier; YCoding does not infer a tier from missing quota categories. Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, credit, and additional named windows render only when reported. Percentages below 70% use normal styling, 70–89% use warning styling, and 90% or above use error styling. Providers without a supported quota path or usable credential are hidden. Muse remains visible before its first quota observation with a next-response message and no numeric quota. Unauthorized and failed providers remain visible with their status and safe message. A failed request retains a prior snapshot as stale and surfaces a partial-refresh warning.
 
 Unknown quota values render as `Not reported`; unreported report values render as `Unknown` rather than a bare placeholder, and an empty activity period reads `No usage yet`. Displayed report costs are catalog/provider estimates, not provider bills; unpriced requests contribute $0, and aggregates include cost and provenance when any request is priced.
 
@@ -243,6 +243,7 @@ For Meta Model API credentials, YCoding sums the USD cost buckets reported for t
 | OpenRouter | Current-key spend, optional account credits and balance with the configured key, capped-key limit | stable provider API |
 | OpenAI API | Organization usage and cost endpoints for an explicitly marked admin credential | stable provider API |
 | Meta Model API | Organization usage and USD cost buckets for the current-bill and weekly/monthly request and token views | stable provider API |
+| Muse subscription | Trailing subscription-usage events from inference responses; window and weekly percentages and reset times | observed response stream |
 | Claude subscription | Unified response headers from normal Claude Code requests | observed live state |
 | Claude subscription | OAuth usage snapshot for cold start and model-specific buckets | best-effort provider-internal API |
 | Codex / Spark | Configured Codex app-server `account/rateLimits/read` | official local client contract |

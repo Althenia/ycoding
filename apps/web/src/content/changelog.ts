@@ -24,11 +24,13 @@ export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.10.25",
     date: "2026-10-22",
-    title: "Chronological guardrail history",
+    title: "Guardrail history and Muse quota",
     tags: ["Fixed", "Changed"],
     changes: [
       { tag: "Fixed", text: "Settled guardrail outcomes stay in chronological conversation order instead of collecting below newer output. The TUI includes match dismissals and decision outcomes; the web keeps its decision disclosures inside the transcript." },
       { tag: "Fixed", text: "After compaction, covered guardrail rows stay out of the current transcript through refresh and reconnect. Their audit records remain available, and true pending reviews retain their human decision controls." },
+      { tag: "Fixed", text: "Muse stays visible in TUI and web provider quotas before its first quota sample, with a next-response message instead of invented amounts. A reported zero stays zero, and unauthorized providers retain their status and message." },
+      { tag: "Fixed", text: "Muse account quota observed in one workspace remains available in other workspaces on the same backend. Profiles and replacement accounts remain isolated; environment-key observations stay workspace-local." },
       { tag: "Changed", text: "Native downloads for this release are limited to macOS Apple Silicon. Other platforms retain their previously published release artifacts." },
     ],
   },

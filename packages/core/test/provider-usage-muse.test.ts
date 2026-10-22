@@ -6,6 +6,7 @@ import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
 import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
+import { observeMuseUsage } from "@ycoding-ai/core/plugin/provider/muse"
 import { Effect } from "effect"
 
 const event = {
@@ -18,6 +19,59 @@ const event = {
 }
 
 describe("MuseUsage", () => {
+  test("shares streamed account quota across Location readers without crossing profiles or replacement accounts", async () => {
+    const providerID = Provider.ID.make("muse")
+    const personal = new Credential.Info({
+      id: Credential.ID.make("cred_muse_personal"), integrationID: Integration.ID.make("muse"),
+      label: "Personal", value: Credential.Key.make({ type: "key", key: "fixture-personal" }), active: true,
+    })
+    const work = new Credential.Info({
+      id: Credential.ID.make("cred_muse_work"), integrationID: Integration.ID.make("muse"),
+      label: "Work", value: Credential.Key.make({ type: "key", key: "fixture-work" }),
+    })
+    let credentials = [personal, work]
+    const accountObservations = new Map<string, ProviderUsage.Snapshot>()
+    const input = {
+      credentials: { all: () => Effect.succeed(credentials) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: { muse: ProviderUsageRuntime.muse }, accountObservations,
+    }
+    const inference = ProviderUsageRuntime.make(input)
+    const reader = ProviderUsageRuntime.make(input)
+    expect(await Effect.runPromise(reader.get({ providerID, refresh: true }))).toMatchObject({
+      status: "unsupported", windows: [], message: "Quota is reported after the next Muse response",
+    })
+    const data = `data: ${JSON.stringify(event)}\n\n`
+    expect(await observeMuseUsage(
+      new Response(data, { headers: { "content-type": "text/event-stream" } }), inference,
+      SessionRunnerModel.accountIdentityDigest(personal),
+    ).text()).toBe(data)
+    expect(await Effect.runPromise(reader.list({ refresh: true }))).toMatchObject([
+      { profile: "Personal", status: "available", source: "response_stream", windows: [{ used: 0 }, { used: 0 }] },
+      { profile: "Work", status: "unsupported", windows: [] },
+    ])
+    const otherBackend = ProviderUsageRuntime.make({ ...input, accountObservations: new Map() })
+    expect(await Effect.runPromise(otherBackend.get({ providerID }))).toMatchObject({ status: "unsupported", windows: [] })
+    credentials = [new Credential.Info({ ...personal, accountGeneration: 1 }), work]
+    expect(await Effect.runPromise(reader.get({ providerID, refresh: true }))).toMatchObject({ status: "unsupported", windows: [] })
+  })
+
+  test("keeps environment observations local even when account observations are shared", async () => {
+    const providerID = Provider.ID.make("muse")
+    const input = {
+      credentials: { all: () => Effect.succeed([]) },
+      providers: { available: () => Effect.succeed([{ id: providerID }]) },
+      adapters: { muse: ProviderUsageRuntime.muse }, accountObservations: new Map<string, ProviderUsage.Snapshot>(),
+    }
+    const inference = ProviderUsageRuntime.make(input)
+    const reader = ProviderUsageRuntime.make(input)
+    await observeMuseUsage(new Response(`data: ${JSON.stringify(event)}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    }), inference).text()
+    expect(await Effect.runPromise(inference.get({ providerID }))).toMatchObject({ status: "available", windows: [{ used: 0 }, { used: 0 }] })
+    expect(await Effect.runPromise(reader.get({ providerID }))).toMatchObject({ status: "unsupported", windows: [] })
+  })
+
   test("normalizes live subscription windows with reported zeros and millisecond resets", () => {
     expect(MuseUsage.normalize(event, 100)).toMatchObject({
       providerID: "muse",

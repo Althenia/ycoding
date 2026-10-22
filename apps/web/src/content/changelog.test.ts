@@ -7,11 +7,11 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.10.25 chronological guardrail history first", () => {
+  test("lists v0.10.25 guardrail history and Muse quota fixes first", () => {
     const entry = RELEASES[0]
     expect(entry).toMatchObject({ version: "0.10.25", date: "2026-10-22", tags: ["Fixed", "Changed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["guardrail", "chronological", "compaction", "audit records", "pending reviews", "macOS Apple Silicon"])
+    for (const fragment of ["guardrail", "chronological", "compaction", "audit records", "pending reviews", "macOS Apple Silicon", "Muse", "provider quotas", "reported zero", "workspaces", "replacement accounts"])
       expect(text).toContain(fragment)
     expect(after("0.10.25")?.version).toBe("0.10.24")
   })

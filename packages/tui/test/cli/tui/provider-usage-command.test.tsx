@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
+import { createSignal } from "solid-js"
 import type { ProviderRequestSummary, ProviderUsageListOutput } from "@ycoding-ai/client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -55,6 +56,44 @@ test("invalidates stale asynchronous generations", () => {
 
   guard.invalidate()
   expect(guard.current(second)).toBeFalse()
+})
+
+test.each(["dark", "light"] as const)("renders Muse before a quota sample and updates to reported zero in %s mode", async (mode) => {
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
+    import("../../../src/config"), import("../../../src/context/theme"), import("../../../src/context/keymap"),
+    import("../../../src/ui/dialog"), import("../../../src/ui/toast"),
+  ])
+  const pending: Snapshot = {
+    providerID: "muse", label: "Muse (Meta)", profile: "Personal", status: "unsupported",
+    source: "response_stream", stability: "observed", updatedAt: 1_000, windows: [],
+    message: "Quota is reported after the next Muse response",
+  }
+  expect(visibleProviderSnapshots([pending, snapshot("hidden", "unsupported"), snapshot("unauthorized", "unauthorized")]))
+    .toEqual([pending, snapshot("unauthorized", "unauthorized")])
+  expect(visibleProviderSnapshots([{ ...pending, source: "provider_api" }, { ...pending, message: " " }])).toEqual([])
+  const [snapshots, setSnapshots] = createSignal<Snapshot[]>([pending])
+  const app = await testRender(() => (
+    <TestTuiContexts><ConfigProvider config={createTuiResolvedConfig()}><Keymap.Provider>
+      <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}><ToastProvider><DialogProvider>
+        <ProviderUsageScreenContent snapshots={snapshots} initialTab="usage" now={() => 1_000} />
+      </DialogProvider></ToastProvider></ThemeProvider>
+    </Keymap.Provider></ConfigProvider></TestTuiContexts>
+  ), { width: 80, height: 32 })
+  app.renderer.start()
+  try {
+    const frame = await app.waitForFrame((value) => value.includes(pending.message!))
+    expect(frame).toContain("Muse (Meta) · Personal")
+    expect(frame).not.toContain("0%")
+    expect(frame).not.toContain("░")
+    setSnapshots([{ ...pending, status: "available", message: undefined, windows: [
+      { id: "window", label: "5-hour window", unit: "percent", used: 0, resetAt: 18_001_000, periodSeconds: 18000 },
+      { id: "weekly", label: "Weekly", unit: "percent", used: 24 },
+    ] }])
+    const observed = await app.waitForFrame((value) => value.includes("0% used") && value.includes("24% used"))
+    expect(observed).not.toContain(pending.message!)
+    expect(observed).toContain("5-hour window")
+    expect(observed).toContain("Weekly")
+  } finally { app.renderer.destroy() }
 })
 
 test("renders provider progress and unavailable states in a dedicated dialog", async () => {

@@ -37,7 +37,8 @@ export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 const NAV_CELL_WIDTH = 12
 
 export function visibleProviderSnapshots(snapshots: readonly ProviderUsageSnapshot[]) {
-  return [...snapshots.filter((snapshot) => snapshot.status !== "unsupported").reduce((result, snapshot) => {
+  return [...snapshots.filter((snapshot) => snapshot.status !== "unsupported" ||
+    snapshot.source === "response_stream" && snapshot.stability === "observed" && Boolean(snapshot.message?.trim())).reduce((result, snapshot) => {
     const key = JSON.stringify([snapshot.providerID, snapshot.profile])
     const current = result.get(key)
     if (!current || snapshot.updatedAt >= current.updatedAt) result.set(key, snapshot)
