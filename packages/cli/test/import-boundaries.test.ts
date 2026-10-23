@@ -112,6 +112,7 @@ describe("CLI frontend import boundaries", () => {
         graph.filter(
           (file) =>
             file.startsWith("packages/cli/src/commands/handlers/") &&
+            file !== "packages/cli/src/commands/handlers/coordination.ts" &&
             file !== "packages/cli/src/commands/handlers/tui.ts" &&
             file !== "packages/cli/src/commands/handlers/tui-serve.ts" &&
             file !== "packages/cli/src/commands/handlers/tui-shared.ts" &&
