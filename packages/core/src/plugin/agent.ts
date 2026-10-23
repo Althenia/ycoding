@@ -204,6 +204,8 @@ export const Plugin = define({
     ]
     const defaults: Permission.Ruleset = [
       { action: "*", resource: "*", effect: "allow" },
+      { action: "chatgpt_*", resource: "*", effect: "ask" },
+      { action: "claude_*", resource: "*", effect: "ask" },
       ...readonlyExternalDirectory,
       { action: "question", resource: "*", effect: "deny" },
       { action: "plan_enter", resource: "*", effect: "deny" },

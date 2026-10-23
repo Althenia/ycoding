@@ -64,6 +64,7 @@ export const AssertInput = Schema.Struct({
   ...RequestFields,
   agent: Agent.ID.pipe(Schema.optional),
   consumeReview: Schema.Boolean.pipe(Schema.optional),
+  requireHuman: Schema.Boolean.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
 
@@ -262,7 +263,8 @@ const layer = Layer.effect(
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return decision(input, rules, [])
-      return decision(input, rules, yield* savedRules())
+      const result = decision(input, rules, yield* savedRules())
+      return input.requireHuman ? { ...result, effect: "ask" as const } : result
     })
 
     const evaluateEffective = Effect.fn("Permission.evaluateEffectiveService")(function* (
@@ -284,8 +286,8 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
-        save: input.save,
-        metadata: input.metadata,
+        save: input.requireHuman ? undefined : input.save,
+        metadata: input.requireHuman ? { ...input.metadata, requireHuman: true } : input.metadata,
         source: input.source,
         ...(escalation === undefined ? {} : { escalation }),
       }
@@ -336,8 +338,8 @@ const layer = Layer.effect(
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
     })
 
-    const fingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata">) =>
-      SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory, metadata: input.metadata })
+    const fingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata"> & { readonly requireHuman?: boolean }) =>
+      SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory, metadata: input.requireHuman ? { ...input.metadata, requireHuman: true } : input.metadata })
 
     const rejections = new Set<string>()
     const rejectionKey = (request: Pick<Request, "sessionID" | "action" | "resources" | "metadata">) =>
@@ -500,7 +502,7 @@ const layer = Layer.effect(
     const ask = Effect.fn("Permission.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
-      if (result.effect === "ask" && (yield* autonomousPermission(input.sessionID)))
+      if (result.effect === "ask" && !input.requireHuman && (yield* autonomousPermission(input.sessionID)))
         return yield* autoPermissionAllow(value)
       if (result.effect === "ask") {
         if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input))))
@@ -526,7 +528,7 @@ const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
-          if (yield* autonomousPermission(input.sessionID)) {
+          if (!input.requireHuman && (yield* autonomousPermission(input.sessionID))) {
             yield* autoPermissionAllow(request(input))
             return
           }
@@ -535,7 +537,7 @@ const layer = Layer.effect(
             Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: input.sessionID })),
           )
           const yolo = yield* DecisionChoice.yoloEnabled(autonomy, input.sessionID)
-          const modeled = baselineEnabled || yolo
+          const modeled = !input.requireHuman && (baselineEnabled || yolo)
           const applicability = modeled ? yield* applicabilityOf(input) : undefined
           const authority = modeled ? SessionDecisionContext.authorityDigest(yield* SessionDecisionContext.read(database.db, input.sessionID)) : undefined
           const assessed = applicability === undefined ? undefined : yield* restore(assess(input, yolo, applicability))
@@ -639,6 +641,7 @@ const layer = Layer.effect(
 
           const rememberedRules = yield* savedRules()
           for (const [id, item] of pending) {
+            if (item.request.metadata?.requireHuman === true) continue
             const input = { ...item.request }
             const rules = yield* configured(item.request.sessionID, item.agent).pipe(
               Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)),

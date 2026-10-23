@@ -106,12 +106,60 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
     )
     yield* Effect.addFinalizer(() => unsubscribe)
     const fiber = yield* service.assert(value).pipe(Effect.forkScoped)
-    const request = yield* Deferred.await(asked)
+    const request = yield* Effect.race(
+      Deferred.await(asked),
+      Fiber.join(fiber).pipe(Effect.as(undefined)),
+    )
+    if (!request) return yield* Effect.die(new Error("Permission settled without a prompt"))
     return { service, fiber, request }
   })
 }
 
 describe("Permission", () => {
+  it.effect("assert waits for an explicit human reply when approval is mandatory", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "read", resource: "*", effect: "allow" }])
+      const { service, fiber, request } = yield* waitForRequest({ requireHuman: true })
+      expect(request.metadata?.requireHuman).toBe(true)
+      yield* service.reply({ requestID: request.id, reply: "once" })
+      yield* Fiber.join(fiber)
+    }),
+  )
+
+  it.effect("requires a one-shot human decision despite allow rules, saved approvals, and automation", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "read", resource: "*", effect: "allow" }])
+      const service = yield* Permission.Service
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID: Session.ID.make("ses_test"), autoPermission: true })
+      yield* autonomy.setYolo({ sessionID: Session.ID.make("ses_test"), yolo: true })
+      const value = assertion({ requireHuman: true, save: ["src/*"] })
+      expect(yield* service.ask(value)).toEqual({ id: value.id, effect: "ask" })
+      expect((yield* service.get(value.id))?.save).toBeUndefined()
+      yield* service.reply({ requestID: value.id, reply: "once" })
+      yield* setRules([])
+      const next = assertion({ id: Permission.ID.create("per_next"), requireHuman: true })
+      expect(yield* service.ask(next)).toEqual({ id: next.id, effect: "ask" })
+      yield* service.reply({ requestID: next.id, reply: "reject" })
+    }),
+  )
+
+  it.effect("remembered replies never settle another human-required request", () =>
+    Effect.gen(function* () {
+      yield* setup([])
+      const service = yield* Permission.Service
+      const ordinary = assertion({ save: ["src/*"] })
+      const human = assertion({ id: Permission.ID.create("per_human"), requireHuman: true, save: ["src/*"] })
+      yield* service.ask(ordinary)
+      yield* service.ask(human)
+      yield* service.reply({ requestID: ordinary.id, reply: "always" })
+      expect((yield* service.list()).map((request) => request.id)).toEqual([human.id])
+      yield* service.reply({ requestID: human.id, reply: "once" })
+      yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+      expect((yield* service.ask(assertion({ requireHuman: true }))).effect).toBe("deny")
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])

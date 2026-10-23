@@ -235,6 +235,10 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 - Agent permissions and Session guardrails are separate mediation layers; neither approval widens the other layer.
 - Provider usage failures remain isolated from Session startup and model execution.
 
+## Account-hosted connector tools
+
+Core owns account connector composition and ChatGPT discovery in `account-connectors.ts`, Claude account-list and fixed-proxy transport in `account-connectors/claude.ts`, and shared canonical tool construction in `account-connectors/tools.ts`. Configuration selects each provider independently. ChatGPT reuses Integration credential snapshots and refresh; Claude resolves its existing managed profile reference through the Claude credential source and refresh implementation. Both reuse the MCP client, Permission, and SessionGuardrail. Session model-request preparation supplies provider-specific profile bindings and request-local registrations to ToolRegistry; materialization captures executable bindings without changing Location-wide registrations. Schema owns the default ask rules for account connector actions. Permission owns mandatory human-only decisions for Claude organization controls. No native client process, desktop bridge, copied credential store, or browser execution participates.
+
 ## Task MCP gateway
 
 Core owns the opt-in task MCP transport, OAuth resource-server verification, and durable ownership/admission index. CLI owns the localhost listener and adapts existing generated Client operations to the gateway. The existing service owns Session execution and transcript persistence. The main HttpApi, remote relay, and generated Client surface are unchanged. See [task contract](../specs/task-mcp.md).

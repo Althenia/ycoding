@@ -172,7 +172,7 @@ export interface Interface extends State.Transformable<Draft> {
   readonly connection: {
     readonly snapshot: (
       connection: IntegrationConnection.Info,
-      options?: { readonly refresh?: boolean },
+      options?: { readonly refresh?: boolean; readonly rejectedAccessToken?: string },
     ) => Effect.Effect<Snapshot, AuthorizationError>
     /** Returns the active connection for one integration. */
     readonly active: (id: ID) => Effect.Effect<IntegrationConnection.Info | undefined>
@@ -680,7 +680,7 @@ const layer = Layer.effect(
 
     const snapshot = Effect.fn("Integration.connection.snapshot")(function* (
       connection: IntegrationConnection.Info,
-      options?: { readonly refresh?: boolean },
+      options?: { readonly refresh?: boolean; readonly rejectedAccessToken?: string },
     ) {
       if (connection.type === "env") {
         const key = process.env[connection.name]
@@ -697,7 +697,8 @@ const layer = Layer.effect(
       if (
         options?.refresh === false ||
         !implementation?.refresh ||
-        credential.value.expires > now + Duration.toMillis(Duration.minutes(5))
+        (credential.value.expires > now + Duration.toMillis(Duration.minutes(5)) &&
+          credential.value.access !== options?.rejectedAccessToken)
       )
         return { connection, credential, value: credential.value }
       const refreshed = yield* authorize(credentials.refresh(credential, implementation.refresh(credential.value)))

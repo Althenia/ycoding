@@ -57,6 +57,21 @@ const cacheTTLs = (value: unknown): string[] => {
 }
 
 describe("Claude Code credentials", () => {
+  test("retains granted scopes from managed credentials and OAuth responses", () => {
+    expect(parseClaudeCodeCredentials(JSON.stringify({ ...credentials("scoped"), scopes: ["user:inference", "user:mcp_servers"] }))?.scopes).toEqual(["user:inference", "user:mcp_servers"])
+    expect(parseClaudeCodeOAuthResponse(JSON.stringify({ access_token: "scoped", scope: "user:inference user:mcp_servers" }), "refresh", 0)?.scopes).toEqual(["user:inference", "user:mcp_servers"])
+  })
+
+  test("retains existing scopes when refresh omits them and honors an explicit scope reduction", async () => {
+    for (const scope of [undefined, "user:inference"]) {
+      let value: ClaudeCodeCredentials = { ...credentials("scoped", 1), scopes: ["user:inference", "user:mcp_servers"] }
+      const store = createClaudeCodeCredentialStore({ source: {
+        list: async () => [], read: async () => value, write: async (_source, next) => { value = next; return true },
+      }, now: () => 10_000, fetch: Object.assign(async () => Response.json({ access_token: "rotated", expires_in: 3600, ...(scope === undefined ? {} : { scope }) }), { preconnect: fetch.preconnect }) })
+      expect((await store.resolve("fixture"))?.scopes).toEqual(scope === undefined ? ["user:inference", "user:mcp_servers"] : ["user:inference"])
+    }
+  })
+
   test("parses wrapped Claude Code credentials and truncates fractional expiry", () => {
     expect(
       parseClaudeCodeCredentials(

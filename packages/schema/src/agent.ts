@@ -49,6 +49,8 @@ export const Info = Schema.Struct({
           hidden: false,
           permissions: [
             { action: "*", resource: "*", effect: "allow" },
+            { action: "chatgpt_*", resource: "*", effect: "ask" },
+            { action: "claude_*", resource: "*", effect: "ask" },
             { action: "external_directory", resource: "*", effect: "ask" },
           ],
         }) satisfies Info,

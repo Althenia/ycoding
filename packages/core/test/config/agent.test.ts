@@ -19,6 +19,8 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([Agent.node, FSUtil.n
 const decode = Schema.decodeUnknownSync(Config.Info)
 const defaultPermissions = [
   { action: "*", resource: "*", effect: "allow" },
+  { action: "chatgpt_*", resource: "*", effect: "ask" },
+  { action: "claude_*", resource: "*", effect: "ask" },
   { action: "external_directory", resource: "*", effect: "ask" },
 ] satisfies Permission.Ruleset
 

@@ -15,6 +15,22 @@ const fixture = join(import.meta.dir, "../fixture/claude-login.ts")
 const credentials = { accessToken: "token", refreshToken: "refresh", expiresAt: Date.now() + 3600_000, subscriptionType: "max" }
 
 describe("managed Claude CLI profile boundary", () => {
+  test("persists refreshed scope reductions only in the selected managed profile", async () => {
+    const base = await mkdtemp(join(tmpdir(), "ycoding-claude-scopes-"))
+    try {
+      const id = randomUUID()
+      await mkdir(join(base, id))
+      const file = join(base, id, ".credentials.json")
+      await writeFile(file, JSON.stringify({ claudeAiOauth: { ...credentials, scopes: ["user:inference", "user:mcp_servers"] }, other: { keep: true } }))
+      const source = createManagedClaudeCodeCredentialSource({ directory: base, platform: "linux" })
+      expect(await source.write(id, { ...credentials, scopes: ["user:inference"] })).toBe(true)
+      expect((await source.read(id))?.scopes).toEqual(["user:inference"])
+      expect(JSON.parse(await readFile(file, "utf8")).other).toEqual({ keep: true })
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
   test("UUID paths cannot escape the absolute managed root and macOS service hashes NFC path", async () => {
     const base = await mkdtemp(join(tmpdir(), "ycoding-claude-"))
     try {

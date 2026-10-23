@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 
-test("legacy local auto state cannot approve a permission outside durable autonomy", async () => {
+test.each([false, true])("permission remains manual despite legacy local auto state, human-only=%s", async (requireHuman) => {
   const sessionID = "ses_permission_autonomy_only"
   const directory = "/tmp/ycoding/permission-autonomy-only"
   const location = { directory, project: { id: "proj_permission_autonomy_only", directory } }
@@ -18,7 +18,7 @@ test("legacy local auto state cannot approve a permission outside durable autono
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 1, updated: 2 },
   }
-  const permission = { id: "permission_autonomy_only", sessionID, action: "shell", resources: ["git status"], metadata: {} }
+  const permission = { id: "permission_autonomy_only", sessionID, action: requireHuman ? "claude_mail_send" : "shell", resources: [requireHuman ? "mail" : "git status"], metadata: requireHuman ? { requireHuman: true } : {} }
   const replies: unknown[] = []
   const replied = Promise.withResolvers<void>()
   const screen = await renderScreen({
@@ -53,6 +53,9 @@ test("legacy local auto state cannot approve a permission outside durable autono
   })
   try {
     expect(screen.frame()).toContain("Permission required")
+    expect(screen.frame()).toContain("Allow once")
+    expect(screen.frame()).toContain("Deny")
+    expect(screen.frame()).not.toContain("Allow for this session")
     expect(replies).toEqual([])
     screen.input.pressEnter()
     await replied.promise

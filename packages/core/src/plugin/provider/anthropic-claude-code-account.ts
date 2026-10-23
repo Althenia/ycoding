@@ -3,6 +3,7 @@ export interface ClaudeCodeCredentials {
   readonly refreshToken: string
   readonly expiresAt: number
   readonly subscriptionType?: string
+  readonly scopes?: ReadonlyArray<string>
 }
 
 export interface ClaudeCodeAccount {
@@ -57,6 +58,7 @@ export function parseClaudeCodeCredentials(raw: string): ClaudeCodeCredentials |
     refreshToken: value.refreshToken,
     expiresAt: Math.trunc(value.expiresAt),
     subscriptionType: typeof value.subscriptionType === "string" ? value.subscriptionType : undefined,
+    ...(Array.isArray(value.scopes) && value.scopes.every((scope): scope is string => typeof scope === "string") ? { scopes: value.scopes } : {}),
   }
 }
 
@@ -116,7 +118,8 @@ export function createClaudeCodeCredentialStore(input: {
       const latest = await input.source.read(source)
       if (!latest) return null
       if (replaced(latest, current)) return fresh(latest) ? remember(source, latest) : null
-      const next = { ...refreshed, subscriptionType: current.subscriptionType }
+      const scopes = refreshed.scopes ?? current.scopes
+      const next = { ...refreshed, subscriptionType: current.subscriptionType, ...(scopes === undefined ? {} : { scopes }) }
       const written = await input.source.write(source, next)
       input.onEvent?.({
         event: "oauth-refresh",
@@ -202,11 +205,13 @@ export function parseClaudeCodeOAuthResponse(
     return null
   }
   if (!record(parsed) || typeof parsed.access_token !== "string" || !parsed.access_token.trim()) return null
+  if (parsed.scope !== undefined && typeof parsed.scope !== "string") return null
   const expires = typeof parsed.expires_in === "number" ? parsed.expires_in : 36_000
   return {
     accessToken: parsed.access_token,
     refreshToken: typeof parsed.refresh_token === "string" ? parsed.refresh_token : refreshToken,
     expiresAt: Math.trunc(now + expires * 1_000),
+    ...(typeof parsed.scope === "string" ? { scopes: parsed.scope.split(/\s+/).filter(Boolean) } : {}),
   }
 }
 

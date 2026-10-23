@@ -104,6 +104,7 @@ function replaceCredentials(raw: string, credentials: ClaudeCodeCredentials): st
   target.accessToken = credentials.accessToken
   target.refreshToken = credentials.refreshToken
   target.expiresAt = credentials.expiresAt
+  if (credentials.scopes !== undefined) target.scopes = [...credentials.scopes]
   return JSON.stringify(parsed)
 }
 

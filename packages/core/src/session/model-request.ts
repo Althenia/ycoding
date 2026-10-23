@@ -15,6 +15,7 @@ import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Context, Effect, Layer } from "effect"
 import { Config } from "../config"
+import { AccountConnectors } from "../account-connectors"
 import { ConfigEfficiency } from "../config/efficiency"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
@@ -113,6 +114,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const hooks = yield* PluginHooks.Service
       const registry = yield* ToolRegistry.Service
       const config = yield* Config.Service
+      const connectors = yield* AccountConnectors.Service
       const cacheRuntime = yield* SessionCacheRuntime.Service
       const continuation = yield* SessionContinuation.Service
       const providerState = yield* SessionProviderState.Service
@@ -150,7 +152,17 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const permissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [])
         const executableTools = toolsDisabled
           ? undefined
-          : yield* registry.materialize(permissions, Config.capabilities(configEntries))
+          : yield* registry.materialize(
+              permissions,
+              Config.capabilities(configEntries),
+              yield* connectors
+                .tools({
+                  profile: resolved.ref.providerID === "openai" ? resolved.ref.profile : undefined,
+                  binding: resolved.ref.providerID === "openai" ? resolved.profileBinding : undefined,
+                  claude: resolved.ref.providerID === "anthropic" ? { profile: resolved.ref.profile, binding: resolved.profileBinding } : undefined,
+                })
+                .pipe(Effect.orDie),
+            )
         const system = baseSystem(input.context)
         const directOpenAIResponses =
           model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)
@@ -378,7 +390,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           resolved.accountIdentityDigest !== undefined &&
           /^[a-f0-9]{64}$/.test(resolved.accountIdentityDigest) &&
           /^[a-f0-9]{64}$/.test(resolved.connectionIdentityDigest)
-            ? yield* db.get<{ readonly id: string }>(sql`
+            ? yield* db
+                .get<{ readonly id: string }>(
+                  sql`
                 WITH RECURSIVE ancestry(id, parent_id) AS (
                   SELECT id, parent_id FROM session WHERE id = ${session.id}
                   UNION
@@ -386,7 +400,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                   JOIN ancestry AS child ON parent.id = child.parent_id
                 )
                 SELECT id FROM ancestry WHERE parent_id IS NULL LIMIT 1
-              `).pipe(Effect.orDie)
+              `,
+                )
+                .pipe(Effect.orDie)
             : undefined
         const experimentalCache =
           familyRoot === undefined || sharedContextSnapshot === undefined
@@ -406,8 +422,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                 preparedCache,
               )
         const requestBase =
-          experimentalCache === undefined ||
-          experimentalCache.wirePromptCacheKey === cache.wirePromptCacheKey
+          experimentalCache === undefined || experimentalCache.wirePromptCacheKey === cache.wirePromptCacheKey
             ? baseRequest
             : LLMRequest.update(baseRequest, {
                 providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
@@ -562,6 +577,7 @@ export function configured(options?: SessionModelHeaders.Options) {
       PluginHooks.node,
       ToolRegistry.node,
       Config.node,
+      AccountConnectors.node,
       Database.node,
       SessionCacheRuntime.node,
       SessionContinuation.node,

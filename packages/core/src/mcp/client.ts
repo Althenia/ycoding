@@ -171,6 +171,7 @@ export interface ToolDefinition {
   readonly description: string | undefined
   readonly inputSchema: unknown
   readonly outputSchema: unknown
+  readonly metadata?: Readonly<Record<string, unknown>>
 }
 
 export interface PromptDefinition {
@@ -325,7 +326,7 @@ export const connect = Effect.fnUntraced(function* (
   directory: string,
   // Only consumed by the remote transport; stdio servers have no auth concept. A provider with no
   // stored token (and a no-op redirect) surfaces an UnauthorizedError, which we map to needs_auth.
-  auth?: { readonly provider: OAuthClientProvider; readonly fetch?: FetchLike },
+  auth?: { readonly provider?: OAuthClientProvider; readonly fetch?: FetchLike },
   elicitation?: ElicitationHandler,
 ) {
   const create: () => Transport = yield* Effect.gen(function* () {
@@ -542,6 +543,7 @@ export const connect = Effect.fnUntraced(function* (
             description: tool.description,
             inputSchema: tool.inputSchema,
             outputSchema: tool.outputSchema,
+            metadata: tool._meta,
           }))
         }),
       prompts: () =>

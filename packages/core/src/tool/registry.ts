@@ -43,11 +43,13 @@ export interface Interface {
   readonly materialize: (
     permissions?: Permission.Ruleset,
     capabilities?: ConfigCapabilities.Resolved,
+    registrations?: Parameters<Tools.Interface["registerBatch"]>[0],
   ) => Effect.Effect<Materialization>
   /** Names of every tool a request with these rules would expose, including CodeMode tools behind `execute`. */
   readonly available: (
     permissions?: Permission.Ruleset,
     capabilities?: ConfigCapabilities.Resolved,
+    registrations?: Parameters<Tools.Interface["registerBatch"]>[0],
   ) => Effect.Effect<ReadonlySet<string>>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (
@@ -264,12 +266,31 @@ const registryLayer = Layer.effect(
 
     // Catalog visibility: permission rules that wholly deny a tool's action and capability
     // toggles that exclude its name both remove it from every request and from CodeMode.
-    const select = (rules: Permission.Ruleset, capabilities: ConfigCapabilities.Resolved) => {
+    const select = (
+      rules: Permission.Ruleset,
+      capabilities: ConfigCapabilities.Resolved,
+      registrations: Parameters<Tools.Interface["registerBatch"]>[0] = [],
+    ) => {
       const direct = new Map<string, Registration>()
       const codemode = new Map<string, Registration>()
-      for (const [name, entries] of local) {
-        const registration = entries.at(-1)?.registration
-        if (!registration) continue
+      const selected = new Map(
+        Array.from(local).flatMap(([name, entries]) => {
+          const registration = entries.at(-1)?.registration
+          return registration ? [[name, registration] as const] : []
+        }),
+      )
+      for (const registration of registrations)
+        for (const entry of registrationEntries(registration.tools, registration.options?.namespace)) {
+          if (entry.key === "execute") throw new Error('Tool name "execute" is reserved for CodeMode')
+          if (selected.has(entry.key)) throw new Error(`Request tool collides with a registered tool: ${entry.key}`)
+          selected.set(entry.key, {
+            tool: entry.tool,
+            name: entry.name,
+            namespace: entry.namespace,
+            codemode: registration.options?.codemode ?? true,
+          })
+        }
+      for (const [name, registration] of selected) {
         if (whollyDisabled(permission(registration.tool, name), rules)) continue
         if (!ConfigCapabilities.allowsTool(capabilities, name)) continue
         if (registration.codemode) codemode.set(name, registration)
@@ -290,18 +311,18 @@ const registryLayer = Layer.effect(
         ]),
       ),
       registerBatch,
-      available: Effect.fn("ToolRegistry.available")((permissions, capabilities) =>
+      available: Effect.fn("ToolRegistry.available")((permissions, capabilities, registrations) =>
         registrationLock.withPermit(
           Effect.sync(() => {
-            const visible = select(permissions ?? [], capabilities ?? {})
+            const visible = select(permissions ?? [], capabilities ?? {}, registrations)
             return new Set([...visible.direct.keys(), ...(visible.execute ? visible.codemode.keys() : [])])
           }),
         ),
       ),
-      materialize: Effect.fn("ToolRegistry.materialize")((permissions, capabilities) =>
+      materialize: Effect.fn("ToolRegistry.materialize")((permissions, capabilities, registrations) =>
         registrationLock.withPermit(
           Effect.sync(() => {
-            const visible = select(permissions ?? [], capabilities ?? {})
+            const visible = select(permissions ?? [], capabilities ?? {}, registrations)
             const ordered = (registrations: Map<string, Registration>) =>
               new Map([...registrations].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)))
             const orderedDirect = ordered(visible.direct)

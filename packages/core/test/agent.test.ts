@@ -317,18 +317,28 @@ describe("Agent", () => {
         throw new Error("expected maintained built-in prompts")
       }
       expect(god.system).toContain("Denies remain denied.")
-      expect(god.system).toContain("Four independent Session toggles: YOLO, autoPermission, autoGuardrail, and autoAnswer, each off by default; changing one rewrites none of the others")
+      expect(god.system).toContain(
+        "Four independent Session toggles: YOLO, autoPermission, autoGuardrail, and autoAnswer, each off by default; changing one rewrites none of the others",
+      )
       expect(god.system).toContain("autoPermission approves ask permissions by rule across the managed-task chain")
-      expect(god.system).toContain("awake autoGuardrail approves ordinary standard guardrail reviews, never hard or custom-rule reviews")
-      expect(god.system).toContain("autoAnswer supplies only an explicit valid default or a single option labelled (Recommended)")
-      expect(god.system).toContain("YOLO alone enables the hidden yolo-permission, yolo-guardrail, and yolo-answer evaluators")
+      expect(god.system).toContain(
+        "awake autoGuardrail approves ordinary standard guardrail reviews, never hard or custom-rule reviews",
+      )
+      expect(god.system).toContain(
+        "autoAnswer supplies only an explicit valid default or a single option labelled (Recommended)",
+      )
+      expect(god.system).toContain(
+        "YOLO alone enables the hidden yolo-permission, yolo-guardrail, and yolo-answer evaluators",
+      )
       expect(god.system).toContain("only YOLO generates answers, including free text")
       expect(god.system).toContain("guardrails.decide_reviews is on unless explicitly false")
       expect(god.system).toContain("strict allow, deny, or escalate")
       expect(god.system).toContain("never answers questions or forms")
       expect(god.system).toContain("A hard review is never model-approved")
       expect(god.system).toContain("Goals grant no permission, answer, or review authority")
-      expect(god.system).toContain("Enabled standard verification dismisses only a confident non-match at confidence ≥0.9")
+      expect(god.system).toContain(
+        "Enabled standard verification dismisses only a confident non-match at confidence ≥0.9",
+      )
       expect(god.system).toContain("denies and custom rules are never verified")
       expect(god.system).toContain("asleep, it defers to the review box")
       for (const stale of ["YOLO 1", "YOLO 2", "default false", "≥0.95", "Session's auto-answer toggle, default off"])
@@ -344,29 +354,45 @@ describe("Agent", () => {
         expect(primary?.system).toContain("Honor explicit user selections of subagent profile, provider, and model.")
         expect(primary?.system).toContain("Otherwise choose among configured available models for the task")
         expect(primary?.system).toContain("the child provider may differ from the parent's")
-        expect(primary?.system).toContain("Set a model only with an exact provider, model, and advertised variant known to be available")
+        expect(primary?.system).toContain(
+          "Set a model only with an exact provider, model, and advertised variant known to be available",
+        )
         expect(primary?.system).toContain("each changed file path")
         expect(primary?.system).toContain(
           "Keep working while subagents and background shells run. A response without tool calls stops you until a notification or the user arrives, so never send one only to wait or to report progress while any task is ready.",
         )
-        expect(primary?.system).toContain("continue at once with every task that neither consumes a running task's output nor edits its files")
-        expect(primary?.system).toContain("Start a long command, such as a build, test suite, or eval, in the background whenever other work remains.")
-        expect(primary?.system).toContain("Stop only when every unfinished task waits on a running task or on the user, and name that dependency for each.")
+        expect(primary?.system).toContain(
+          "continue at once with every task that neither consumes a running task's output nor edits its files",
+        )
+        expect(primary?.system).toContain(
+          "Start a long command, such as a build, test suite, or eval, in the background whenever other work remains.",
+        )
+        expect(primary?.system).toContain(
+          "Stop only when every unfinished task waits on a running task or on the user, and name that dependency for each.",
+        )
         expect(primary?.system).not.toContain("Orchestrate; do not implement.")
         expect(primary?.system).toContain("Preserve permission ceilings")
         expect(primary?.system).toContain("never silently substitute a different profile or provider")
         expect(primary?.system).not.toContain("choose a model from the provider of this session's active model")
       }
       expect(god.system).toContain("Use the decision tool")
-      expect(god.system).toContain("Issue independent tool calls together in one step. Serialize only for a real dependency")
-      expect(god.system).toContain("A queued or running heavy check delays only other heavy checks, never code-writing or review work.")
+      expect(god.system).toContain(
+        "Issue independent tool calls together in one step. Serialize only for a real dependency",
+      )
+      expect(god.system).toContain(
+        "A queued or running heavy check delays only other heavy checks, never code-writing or review work.",
+      )
       expect(god.system).toContain(
         "merge them through one dedicated integration lane that resolves conflicts and runs the full checks",
       )
       expect(gsd.system).not.toContain("prove RED")
       expect(zeus.system).toContain("Issue independent tool calls together in one step")
-      expect(zeus.system).toContain("A rule you choose to settle conflicting data is a decision for the parent, not evidence.")
-      expect(god.system).toContain("After a worktree's branch is merged into main, remove that worktree with `git worktree remove <path>`")
+      expect(zeus.system).toContain(
+        "A rule you choose to settle conflicting data is a decision for the parent, not evidence.",
+      )
+      expect(god.system).toContain(
+        "After a worktree's branch is merged into main, remove that worktree with `git worktree remove <path>`",
+      )
       expect(god.system).not.toContain("Use durable subagents only for isolated work.")
       expect(zeus.system).not.toContain("Implement or delegate as your role directs.")
       expect(zeus.system).toContain("Never take a destructive or irreversible action")
@@ -476,6 +502,8 @@ describe("Agent", () => {
 
       expect((yield* agent.get(Agent.ID.make("god")))?.permissions).toEqual([
         { action: "*", resource: "*", effect: "allow" },
+        { action: "chatgpt_*", resource: "*", effect: "ask" },
+        { action: "claude_*", resource: "*", effect: "ask" },
         { action: "external_directory", resource: "*", effect: "ask" },
         { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
         { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },

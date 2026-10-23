@@ -143,6 +143,51 @@ const admitSteer = (text: string) =>
   })
 
 describe("YOLO permission applicability evidence", () => {
+  const human = harness({ baseline: true, decide: (request) => Effect.succeed(graded(request, { allow: 0.99 })) })
+  human.it.effect("mandatory human approval never reaches a baseline or YOLO evaluator", () =>
+    Effect.gen(function* () {
+      yield* setup({ yolo: true, rules: [{ action: "read", resource: "*", effect: "allow" }] })
+      const service = yield* Permission.Service
+      const events = yield* EventRuntime.Service
+      const entered = yield* Deferred.make<Permission.Request>()
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === Permission.Event.Asked.type && Schema.is(Permission.Request)(event.data)
+          ? Deferred.succeed(entered, event.data).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* service.assert(request({ requireHuman: true })).pipe(Effect.forkScoped)
+      const pending = yield* Effect.race(Deferred.await(entered), Fiber.join(fiber).pipe(Effect.as(undefined)))
+      expect(pending).toBeDefined()
+      expect(human.calls).toEqual([])
+      if (!pending) return
+      yield* service.reply({ requestID: pending.id, reply: "once" })
+      yield* Fiber.join(fiber)
+    }),
+  )
+
+  human.it.effect("sleep defers mandatory human decisions and an exact human grant is consumed only once", () =>
+    Effect.gen(function* () {
+      yield* setup({ yolo: true, rules: [{ action: "read", resource: "*", effect: "allow" }] })
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, autoPermission: true, sleep: true })
+      const service = yield* Permission.Service
+      const input = request({ requireHuman: true, save: ["secret/*"], metadata: { operationDigest: "synthetic" } })
+      expect(Exit.isFailure(yield* service.assert(input).pipe(Effect.exit))).toBe(true)
+      const database = yield* Database.Service
+      const items = yield* SessionReviewFold.fold(database.db, [sessionID])
+      expect(items).toHaveLength(1)
+      expect(items[0]?.payload).toMatchObject({ type: "permission" })
+      expect(items[0]?.payload).not.toHaveProperty("save")
+      const events = yield* EventRuntime.Service
+      yield* events.publish(SessionEvent.Review.Decided, { sessionID, itemID: items[0]!.itemID, decision: { kind: "permission", reply: "once" } })
+      yield* service.assert(input)
+      expect(Exit.isFailure(yield* service.assert(input).pipe(Effect.exit))).toBe(true)
+      expect(yield* SessionReviewFold.fold(database.db, [sessionID])).toHaveLength(2)
+      expect(human.calls).toEqual([])
+    }),
+  )
+
   const origins = harness({ baseline: false, decide: (request) => Effect.succeed(graded(request, { allow: 0.95 })) })
   origins.it.effect("grading state names the deciding rule and its agent or unmatched origin for every resource", () =>
     Effect.gen(function* () {
