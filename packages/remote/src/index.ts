@@ -1375,6 +1375,7 @@ export type RemotePublicKey = {
 export type RemoteDeviceInfo = {
   readonly id: string
   readonly name: string
+  readonly alias?: string | null
   readonly createdAt: number
   readonly lastSeenAt?: number
   readonly revokedAt?: number
@@ -1391,6 +1392,18 @@ export type MeResponse = {
 
 /** `GET /api/devices` body. */
 export type DevicesResponse = { readonly devices: readonly RemoteDeviceInfo[] }
+
+export const deviceAliasLimit = 48
+export type DeviceAliasRequest = { readonly alias: string | null }
+export type DeviceAliasResponse = { readonly deviceID: string; readonly alias: string | null }
+
+export function parseDeviceAliasRequest(value: unknown): ParseResult<DeviceAliasRequest> {
+  if (!isRecord(value) || !withOnlyKeys(value, ["alias"], value).ok) return invalidBody()
+  if (value.alias === null) return { ok: true, value: { alias: null } }
+  if (typeof value.alias !== "string" || /[\x00-\x1f\x7f\u0085\u2028\u2029]/.test(value.alias)) return invalidBody()
+  const alias = value.alias.trim()
+  return alias.length > 0 && alias.length <= deviceAliasLimit ? { ok: true, value: { alias } } : invalidBody()
+}
 
 export type CreateEnrollmentResponse = {
   readonly enrollmentID: string

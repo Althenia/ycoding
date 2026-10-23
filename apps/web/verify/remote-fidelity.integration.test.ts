@@ -806,12 +806,12 @@ describe("remote responsive state behavior", () => {
   test("supports keyboard and coarse-pointer operation for device, delivery, appearance, and overlays", async () => {
     const workspace = await scenario("conversation-workspace", 768, "Run test suite against auth services.")
     await workspace.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-    for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
-    await workspace.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
-    await workspace.pressKey("Enter", "Enter", 13)
-    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
+    for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] .machine-row__edit') !== null`); attempt += 1) await Bun.sleep(50)
+    await workspace.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] .machine-row__edit')?.focus()`)
+    await workspace.pressKey("Enter", "Enter", 13, "\r")
+    expect(await workspace.evaluate<boolean>(`document.activeElement === document.querySelector('[aria-labelledby="machine-settings"] .machine-row__input') && document.activeElement !== null`)).toBe(true)
     await workspace.pressEscape()
-    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
+    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] .machine-row__input') === null && document.activeElement?.classList.contains('machine-row__edit') === true`)).toBe(true)
 
     await workspace.evaluate(`document.querySelector('a[href^="/remote/session?"]')?.click()`)
     for (let attempt = 0; attempt < 40 && !await workspace.evaluate<boolean>(`document.querySelector('.composer__delivery-toggle') !== null`); attempt += 1) await Bun.sleep(50)

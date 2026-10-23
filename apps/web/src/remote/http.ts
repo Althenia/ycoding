@@ -1,4 +1,4 @@
-import { type CreateEnrollmentResponse, type MeResponse, type RemoteDeviceInfo, type PushKeyResponse, type PushRegistration } from "@ycoding-ai/remote"
+import { parseDeviceAliasRequest, type DeviceAliasResponse, type CreateEnrollmentResponse, type MeResponse, type RemoteDeviceInfo, type PushKeyResponse, type PushRegistration } from "@ycoding-ai/remote"
 
 type RemoteHttpFailureReason = "http" | "unexpected-body" | "network"
 
@@ -14,6 +14,7 @@ export type RemoteHttpResult<T> =
 export type RemoteHttp = {
   readonly me: () => Promise<RemoteHttpResult<MeResponse>>
   readonly devices: () => Promise<RemoteHttpResult<readonly RemoteDeviceInfo[]>>
+  readonly setDeviceAlias: (deviceID: string, alias: string | null) => Promise<RemoteHttpResult<DeviceAliasResponse>>
   readonly createEnrollment: () => Promise<RemoteHttpResult<CreateEnrollmentResponse>>
   readonly revokeDevice: (deviceID: string) => Promise<RemoteHttpResult<void>>
   readonly removeRevokedDevices: (deviceID?: string) => Promise<RemoteHttpResult<void>>
@@ -92,6 +93,13 @@ export function createRemoteHttp(options: RemoteHttpOptions = {}): RemoteHttp {
   return {
     me: () => json<MeResponse>("/api/me", undefined, readMe),
     devices: () => json<readonly RemoteDeviceInfo[]>("/api/devices", undefined, readDevices),
+    setDeviceAlias: (deviceID, alias) => json<DeviceAliasResponse>(`/api/devices/${encodeURIComponent(deviceID)}/alias`, {
+      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias }),
+    }, (payload) => {
+      if (!isRecord(payload) || payload.deviceID !== deviceID) return undefined
+      const parsed = parseDeviceAliasRequest({ alias: payload.alias })
+      return parsed.ok && parsed.value.alias === payload.alias ? { deviceID, alias: parsed.value.alias } : undefined
+    }),
     createEnrollment: () =>
       json<CreateEnrollmentResponse>("/api/devices/enrollments", { method: "POST" }, readEnrollment),
     revokeDevice: (deviceID) =>
@@ -173,9 +181,12 @@ function readDeviceInfo(value: unknown): RemoteDeviceInfo | undefined {
   if (typeof value.name !== "string") return undefined
   if (value.status !== "active" && value.status !== "revoked") return undefined
   if (typeof value.online !== "boolean") return undefined
+  const alias = value.alias === undefined ? undefined : parseDeviceAliasRequest({ alias: value.alias })
+  if (alias !== undefined && (!alias.ok || alias.value.alias !== value.alias)) return undefined
   return {
     id: value.id,
     name: value.name,
+    ...(alias?.ok ? { alias: alias.value.alias } : {}),
     createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
     ...(typeof value.lastSeenAt === "number" ? { lastSeenAt: value.lastSeenAt } : {}),
     ...(typeof value.revokedAt === "number" ? { revokedAt: value.revokedAt } : {}),

@@ -23,6 +23,7 @@ type DeviceRecord = {
   readonly id: string
   readonly user_id: string
   readonly name: string
+  readonly alias: string | null
   readonly public_key_jwk: string
   readonly key_algorithm: string
   readonly created_at: number
@@ -181,16 +182,16 @@ export function createD1AuthStore(db: D1Database): AuthStore {
     async insertDevice(row) {
       await db
         .prepare(
-          "INSERT INTO device (id, user_id, name, public_key_jwk, key_algorithm, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT INTO device (id, user_id, name, alias, public_key_jwk, key_algorithm, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(row.id, row.userID, row.name, JSON.stringify(row.publicKey), row.publicKey.crv, row.createdAt)
+        .bind(row.id, row.userID, row.name, row.alias ?? null, JSON.stringify(row.publicKey), row.publicKey.crv, row.createdAt)
         .run()
     },
 
     async findDevice(id) {
       const row = await db
         .prepare(
-          "SELECT id, user_id, name, public_key_jwk, key_algorithm, created_at, last_seen_at, revoked_at FROM device WHERE id = ?",
+          "SELECT id, user_id, name, alias, public_key_jwk, key_algorithm, created_at, last_seen_at, revoked_at FROM device WHERE id = ?",
         )
         .bind(id)
         .first<DeviceRecord>()
@@ -200,11 +201,16 @@ export function createD1AuthStore(db: D1Database): AuthStore {
     async listDevices(userID) {
       const result = await db
         .prepare(
-          "SELECT id, user_id, name, public_key_jwk, key_algorithm, created_at, last_seen_at, revoked_at FROM device WHERE user_id = ? ORDER BY created_at DESC",
+          "SELECT id, user_id, name, alias, public_key_jwk, key_algorithm, created_at, last_seen_at, revoked_at FROM device WHERE user_id = ? ORDER BY created_at DESC",
         )
         .bind(userID)
         .all<DeviceRecord>()
       return result.results.map(toDevice)
+    },
+
+    async setDeviceAlias(id, userID, alias) {
+      return changed(await db.prepare("UPDATE device SET alias = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL")
+        .bind(alias, id, userID).run())
     },
 
     async markDeviceSeen(id, now) {
@@ -401,6 +407,7 @@ function toDevice(row: DeviceRecord): DeviceRow {
     id: row.id,
     userID: row.user_id,
     name: row.name,
+    alias: row.alias,
     publicKey: publicKey.value,
     createdAt: row.created_at,
     ...(row.last_seen_at === null ? {} : { lastSeenAt: row.last_seen_at }),

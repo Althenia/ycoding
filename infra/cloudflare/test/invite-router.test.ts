@@ -50,6 +50,7 @@ async function harness(options: { readonly key?: string } = { key: adminKey }) {
   sqlite.exec(await Bun.file(new URL("../migrations/0001_auth.sql", import.meta.url)).text())
   sqlite.exec(await Bun.file(new URL("../migrations/0002_push.sql", import.meta.url)).text())
   sqlite.exec(await Bun.file(new URL("../migrations/0003_invite.sql", import.meta.url)).text())
+  sqlite.exec(await Bun.file(new URL("../migrations/0008_device_alias.sql", import.meta.url)).text())
   const service = createAuthService(createD1AuthStore(databasePort(sqlite)), { now: () => 100 })
   const closed: string[] = []
   const router = createRouter({ service, invite: createInviteService(createD1InviteStore(databasePort(sqlite)), () => 100), adminKey: options.key,

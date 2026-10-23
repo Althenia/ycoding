@@ -14,6 +14,7 @@ import {
   parseChallengeRequest,
   parseDeviceRefreshRequest,
   parseDeviceTokenRequest,
+  parseDeviceAliasRequest,
   parseEnrollRequest,
   parsePushSubscription,
   parsePushEndpoint,
@@ -203,6 +204,11 @@ export function createRouter(deps: RouterDeps) {
     if (url.pathname === "/api/devices/refresh") {
       if (request.method !== "POST") return methodNotAllowed()
       return refreshDeviceCredentials(deps, request, rateLimit)
+    }
+    const alias = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})\/alias$/.exec(url.pathname)
+    if (alias) {
+      if (request.method !== "PATCH") return methodNotAllowed()
+      return setDeviceAlias(deps, request, alias[1] ?? "")
     }
     const revoke = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})\/revoke$/.exec(url.pathname)
     if (revoke) {
@@ -572,6 +578,17 @@ async function refreshDeviceCredentials(deps: RouterDeps, request: Request, rate
   if (!refreshed.ok) return apiError(401, "unauthorized", "Device credentials cannot be rotated")
   const body: DeviceTokenResponse = refreshed.value
   return jsonResponse(body)
+}
+
+async function setDeviceAlias(deps: RouterDeps, request: Request, deviceID: string): Promise<Response> {
+  const guarded = requireMutationGuard(request)
+  if (guarded) return guarded
+  const authenticated = await requireSession(deps, request)
+  if (!authenticated.ok) return authenticated.response
+  const parsed = parseDeviceAliasRequest(await readJsonBody(request))
+  if (!parsed.ok) return apiError(400, parsed.error.code, parsed.error.message)
+  const saved = await deps.service.setDeviceAlias({ deviceID, userID: authenticated.session.userID, alias: parsed.value.alias })
+  return saved.ok ? jsonResponse(saved.value) : apiError(404, "invalid_message", "Device is not available")
 }
 
 async function revokeDevice(deps: RouterDeps, request: Request, deviceID: string): Promise<Response> {

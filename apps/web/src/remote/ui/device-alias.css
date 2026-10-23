@@ -1,21 +1,115 @@
-.device-alias {
-  align-items: start;
+.machine-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--yc-space-3);
+  inline-size: 100%;
+  min-inline-size: 0;
+  margin: 0;
+  padding: var(--yc-space-1);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  list-style: none;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: var(--yc-space-1);
 }
 
-.device-alias .defs__value {
+.machine-row__item {
+  display: grid;
+  flex: 1 0 min(220px, 72vw);
+  align-content: start;
+  gap: var(--yc-space-2);
+  min-inline-size: 0;
+  max-inline-size: 300px;
+  padding: var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface-raised);
+  scroll-snap-align: start;
+}
+
+.machine-row__item[aria-current="true"] {
+  border-color: var(--yc-green-strong);
+}
+
+.machine-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yc-space-2);
+  min-block-size: var(--yc-hit-min);
+}
+
+.machine-row__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+}
+
+.machine-row__identity {
+  display: grid;
+  gap: var(--yc-space-1);
+  min-inline-size: 0;
+}
+
+.machine-row__name,
+.machine-row__hostname {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.machine-row__name {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.machine-row__hostname {
+  color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+}
+
+.machine-row__form {
   display: grid;
   gap: var(--yc-space-2);
 }
 
-.device-alias__actions {
+.machine-row__actions {
   display: flex;
-  flex-wrap: wrap;
   gap: var(--yc-space-2);
 }
 
-.device-alias__actions .button {
+.machine-row__actions .button {
+  flex: 1 1 0;
+}
+
+.machine-row .button {
   min-inline-size: var(--yc-hit-min);
   min-block-size: var(--yc-hit-min);
+}
+
+.machine-row__connect {
+  inline-size: 100%;
+}
+
+.machine-row__edit {
+  inline-size: var(--yc-hit-min);
+  padding: 0;
+}
+
+.machine-row__edit svg {
+  display: block;
+  flex: none;
+}
+
+.machine-row__empty,
+.machine-row__note,
+.machine-row__scope {
+  margin: 0;
 }
 
 .device__hostname {

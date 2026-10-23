@@ -48,6 +48,7 @@ const http: RemoteHttp = {
   devices: async () => ({ ok: true, value: devices }),
   createEnrollment: async () => ({ ok: false, status: 503, message: "Not available in this fixture", kind: "http" }),
   revokeDevice: async () => ({ ok: true, value: undefined }),
+  setDeviceAlias: async (deviceID, alias) => ({ ok: true, value: { deviceID, alias } }),
   removeRevokedDevices: async () => ({ ok: true, value: undefined }),
   logout: async () => ({ ok: true, value: undefined }),
 }

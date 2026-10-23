@@ -1523,8 +1523,6 @@ body:has(.app) {
 .appearance-segments .filters__option { gap: var(--yc-space-2); justify-content: center; }
 .appearance-segments .filters__option svg { flex: none; }
 
-.settings__section[aria-labelledby="machine-settings"] .remote-device__select { inline-size: min(100%, 320px); }
-
 @media (min-width: 768px) {
   .app {
     grid-template-columns: var(--yc-rail-w) minmax(0, 1fr);

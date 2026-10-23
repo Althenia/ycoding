@@ -4,6 +4,8 @@ Operator reference for the `ycoding-cloud` relay Worker and the `ycoding-preview
 
 The relay wire contract is specified in [`packages/remote/CONTRACT.md`](../packages/remote/CONTRACT.md); local CLI usage and relay configuration are in [`configuration.md`](./configuration.md#remote-access).
 
+Device account aliases require `0008_device_alias.sql` before deploying a Worker that reads or writes the field. This additive migration gives each device a nullable alias without changing its stable identity, hostname, ownership, credentials, or enrollment. Unset aliases are null. Browser-local names are not imported. The release workflow does not apply D1 migrations; production application requires separate authorization and the backup and migration procedure below.
+
 ## Deployment inputs
 
 `infra/cloudflare/wrangler.jsonc` is the committed deployment definition:

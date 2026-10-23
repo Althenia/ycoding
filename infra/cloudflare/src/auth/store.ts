@@ -33,6 +33,7 @@ export type DeviceRow = {
   readonly id: string
   readonly userID: string
   readonly name: string
+  readonly alias?: string | null
   readonly publicKey: RemotePublicKey
   readonly createdAt: number
   readonly lastSeenAt?: number
@@ -90,6 +91,7 @@ export type AuthStore = {
   readonly insertDevice: (row: Omit<DeviceRow, "lastSeenAt" | "revokedAt">) => Promise<void>
   readonly findDevice: (id: string) => Promise<DeviceRow | undefined>
   readonly listDevices: (userID: string) => Promise<readonly DeviceRow[]>
+  readonly setDeviceAlias: (id: string, userID: string, alias: string | null) => Promise<boolean>
   readonly markDeviceSeen: (id: string, now: number) => Promise<void>
   /** Atomically revokes an owner's device and its credentials; false when not owned or already revoked. */
   readonly revokeDevice: (id: string, userID: string, now: number) => Promise<boolean>

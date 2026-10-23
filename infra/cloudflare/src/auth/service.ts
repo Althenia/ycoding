@@ -287,6 +287,7 @@ export function createAuthService(store: AuthStore, options: { readonly now?: ()
       return rows.map((row) => ({
         id: row.id,
         name: row.name,
+        ...(row.alias === undefined ? {} : { alias: row.alias }),
         createdAt: row.createdAt,
         ...(row.lastSeenAt === undefined ? {} : { lastSeenAt: row.lastSeenAt }),
         ...(row.revokedAt === undefined ? {} : { revokedAt: row.revokedAt }),
@@ -364,6 +365,12 @@ export function createAuthService(store: AuthStore, options: { readonly now?: ()
       )
       if (!rotated) return { ok: false, reason: "revoked_credential" }
       return { ok: true, value: { accessToken, accessExpiresAt, refreshToken, refreshExpiresAt } }
+    },
+
+    async setDeviceAlias(input: { readonly deviceID: string; readonly userID: string; readonly alias: string | null }): Promise<Outcome<{ readonly deviceID: string; readonly alias: string | null }>> {
+      if (!(await store.setDeviceAlias(input.deviceID, input.userID, input.alias)))
+        return { ok: false, reason: "unknown_device" }
+      return { ok: true, value: { deviceID: input.deviceID, alias: input.alias } }
     },
 
     async revokeDevice(input: { readonly deviceID: string; readonly userID: string }): Promise<Outcome<{ readonly deviceID: string }>> {

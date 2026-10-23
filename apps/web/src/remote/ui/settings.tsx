@@ -1,7 +1,7 @@
 import { createMutation } from "@tanstack/solid-query"
 import { useStore } from "@tanstack/solid-store"
-import { For, Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js"
-import type { RemoteLatencySample } from "@ycoding-ai/remote"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
+import { deviceAliasLimit, type RemoteLatencySample } from "@ycoding-ai/remote"
 import { Icon } from "../../ui/icon"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
@@ -11,7 +11,6 @@ import { useTheme } from "../../theme/theme-store"
 import { normalizeSchemePreference, type ThemePreference } from "../../theme/theme"
 import { SCHEMES, SCHEME_IDS } from "../../theme/schemes"
 import { useRemote } from "../context"
-import { deviceAliasLimit } from "../device-alias"
 import { createRemoteQuery } from "../query"
 import { keepAwakeView } from "../keep-awake"
 import { keepAwakeState } from "../queries"
@@ -23,7 +22,6 @@ import {
   accountReadState,
   accountSectionView,
   deviceAvailabilityView,
-  devicePickerNote,
   enrollmentInstructions,
   type EnrollmentInstructions,
 } from "../view-model"
@@ -52,12 +50,11 @@ const schemeOptions = SCHEME_IDS.map((id) => ({ value: id, label: SCHEMES[id].la
 export function MachineSettings(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
+  const [editing, setEditing] = createSignal<string>()
   const [draft, setDraft] = createSignal("")
-  const selectedDevice = () => state().devices.find((device) => device.id === state().activeDeviceID)
-  createEffect(() => {
-    const deviceID = state().activeDeviceID
-    setDraft(deviceID === undefined ? "" : remote.deviceAliases()[deviceID] ?? "")
-  })
+  const [savingAlias, setSavingAlias] = createSignal(false)
+  const [aliasError, setAliasError] = createSignal<string>()
+  const machineIDs = createMemo(() => state().devices.filter((device) => device.status === "active" || device.id === state().activeDeviceID).map((device) => device.id))
   const reachable = () => state().activeDeviceID !== undefined && state().transport.kind === "open" && state().connection.kind === "connected"
   const keepAwake = createRemoteQuery(remote.store.queryClient, () => remote.queries.keepAwake(remote.scope(), reachable()))
   const setKeepAwake = createMutation(() => remote.queries.keepAwakeMutation(remote.scope()))
@@ -66,33 +63,97 @@ export function MachineSettings(): JSX.Element {
     devices: state().devices.map((device) => ({ ...device, name: remote.deviceName(device) })), activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length,
     unreachable: state().connection.kind === "offline",
   })
-  const saveAlias = (value: string) => {
-    const deviceID = state().activeDeviceID
-    if (deviceID === undefined) return
-    remote.setDeviceAlias(deviceID, value)
-    setDraft(remote.deviceAliases()[deviceID] ?? "")
+  const note = () => {
+    const revoked = state().devices.filter((device) => device.status === "revoked").length
+    const anyOnline = state().devices.some((device) => device.status === "active" && device.online)
+    return [
+      machineIDs().length > 0 && !anyOnline ? "No machines online." : undefined,
+      revoked === 0 ? undefined : revoked === 1 ? "1 revoked machine is managed in Settings → Devices." : `${revoked} revoked machines are managed in Settings → Devices.`,
+    ].filter((line) => line !== undefined).join(" ")
+  }
+  const startEditing = (id: string, current: string, item: Element | null) => {
+    if (savingAlias()) return
+    setAliasError(undefined)
+    setDraft(current)
+    setEditing(id)
+    queueMicrotask(() => {
+      const input = item?.querySelector<HTMLInputElement>(".machine-row__input")
+      input?.focus()
+      input?.select()
+    })
+  }
+  const stopEditing = (item: Element | null) => {
+    if (savingAlias()) return
+    setEditing(undefined)
+    setAliasError(undefined)
+    queueMicrotask(() => item?.querySelector<HTMLButtonElement>(".machine-row__edit")?.focus())
+  }
+  const saveAlias = async (id: string, hostname: string, item: Element | null) => {
+    if (savingAlias()) return
+    setAliasError(undefined)
+    setSavingAlias(true)
+    const alias = draft().trim()
+    const result = await remote.store.setDeviceAlias(id, alias === "" || alias === hostname ? null : alias)
+    setSavingAlias(false)
+    if (!result.ok) {
+      setAliasError(`${result.message}. Refresh the account before retrying.`)
+      return
+    }
+    stopEditing(item)
   }
   return <Section id="machine-settings" category="Machine" title="Machine" hint="Choose an online machine to access its Sessions.">
-    <CustomSelect class="remote-device__select" surfaceClass="remote-device__surface" label="Machine"
-      sheetTitle="Select Active Machine" sheetSubtitle="Online machines you can connect to"
-      value={state().activeDeviceID} placeholder={availability().placeholder} disabled={!availability().selectable}
-      options={state().devices.filter((device) => device.status === "active" && device.online).map((device) => ({ value: device.id, label: remote.deviceName(device), badge: "Online" }))}
-      onChange={(deviceID) => remote.store.connect(deviceID)}
-      footer={devicePickerNote(state().devices)} />
-    <Show when={selectedDevice()}>
-      {(device) => <form class="defs__row device-alias" onSubmit={(event) => { event.preventDefault(); saveAlias(draft()) }}>
-        <label class="defs__key" for="device-display-name">Display name</label>
-        <span class="defs__value">
-          <span id="device-display-name-hint" class="field__hint">Only this browser; the machine keeps its hostname {device().name}</span>
-          <input id="device-display-name" class="input" aria-describedby="device-display-name-hint" value={draft()} maxLength={deviceAliasLimit}
-            onInput={(event) => setDraft(event.currentTarget.value)} />
-          <span class="device-alias__actions">
-            <button type="submit" class="button button--secondary">Save</button>
-            <button type="button" class="button button--ghost" onClick={() => saveAlias("")}>Clear</button>
-          </span>
-        </span>
-      </form>}
+    <Show when={machineIDs().length > 0} fallback={<p class="machine-row__empty field__hint" role="status">{availability().placeholder}</p>}>
+      <ul class="machine-row" role="list" aria-label="Machines">
+        <For each={machineIDs()}>
+          {(id) => {
+            const device = () => state().devices.find((entry) => entry.id === id)
+            return <li class="machine-row__item" data-device-id={id} aria-current={state().activeDeviceID === id ? "true" : undefined}>
+              <Show when={device()}>
+                {(machine) => {
+                  const name = () => remote.deviceName(machine())
+                  const eligible = () => machine().status === "active" && machine().online
+                  const current = () => state().activeDeviceID === id
+                  const isEditing = () => editing() === id
+                  const stateLabel = () => machine().status === "revoked" ? "Revoked" : machine().online ? "Online" : "Offline"
+                  const connectLabel = () => current() && eligible() ? "Connected" : eligible() ? "Connect" : stateLabel()
+                  return <>
+                    <div class="machine-row__head">
+                      <span class="machine-row__state"><span class={`status-dot status-dot--${eligible() ? "online" : "offline"}`} aria-hidden="true" />{stateLabel()}</span>
+                      <Show when={!isEditing()}>
+                        <button type="button" class="button button--ghost machine-row__edit" aria-label={`Edit name of ${name()}`} disabled={savingAlias() || machine().status === "revoked"}
+                          onClick={(event) => startEditing(id, name(), event.currentTarget.closest("li"))}>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
+                        </button>
+                      </Show>
+                    </div>
+                    <div class="machine-row__identity">
+                      <Show when={isEditing()} fallback={<span class="machine-row__name" title={machine().name} onDblClick={(event) => { if (machine().status === "active") startEditing(id, name(), event.currentTarget.closest("li")) }}>{name()}</span>}>
+                        <form class="machine-row__form" aria-busy={savingAlias()} onSubmit={(event) => { event.preventDefault(); void saveAlias(id, machine().name, event.currentTarget.closest("li")) }}
+                          onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); stopEditing(event.currentTarget.closest("li")) } }}>
+                          <input class="input machine-row__input" aria-label={`Name for ${machine().name}`} aria-describedby="machine-row-scope" value={draft()} maxLength={deviceAliasLimit} disabled={savingAlias()}
+                            onInput={(event) => setDraft(event.currentTarget.value)} />
+                          <span class="machine-row__actions">
+                            <button type="submit" class="button button--secondary machine-row__save" disabled={savingAlias()}>{savingAlias() ? "Saving…" : "Save"}</button>
+                            <button type="button" class="button button--ghost machine-row__cancel" disabled={savingAlias()} onClick={(event) => stopEditing(event.currentTarget.closest("li"))}>Cancel</button>
+                          </span>
+                          <Show when={aliasError()}><span class="field__hint" role="alert">{aliasError()}</span></Show>
+                        </form>
+                      </Show>
+                      <Show when={isEditing() || name() !== machine().name}><span class="machine-row__hostname">{machine().name}</span></Show>
+                    </div>
+                    <button type="button" class="button button--secondary machine-row__connect" disabled={!eligible() || current() || editing() !== undefined}
+                      aria-label={current() && eligible() ? `Connected to ${name()}` : eligible() ? `Connect to ${name()}` : `${name()} is ${stateLabel().toLowerCase()}`}
+                      onClick={() => void remote.store.connect(id)}>{connectLabel()}</button>
+                  </>
+                }}
+              </Show>
+            </li>
+          }}
+        </For>
+      </ul>
     </Show>
+    <Show when={note() !== ""}><p class="machine-row__note field__hint" role="status">{note()}</p></Show>
+    <p id="machine-row-scope" class="machine-row__scope field__hint">Names are shared across your account's browsers. Each machine keeps its hostname, shown beneath a renamed machine.</p>
     <div class="defs__row" aria-busy={awake().busy}>
       <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
       <span class="defs__value">

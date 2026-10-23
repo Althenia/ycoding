@@ -25,6 +25,7 @@ vocabulary changes the contract for all three at once.
 | `POST` | `/api/auth/logout` | browser session | same-origin required | Revoke the browser session and close its relay sockets |
 | `GET` | `/api/me` | browser session | not required | Owner, session expiry, and device list (read-only, no `Set-Cookie`) |
 | `GET` | `/api/devices` | browser session | not required | `{ devices: RemoteDeviceInfo[] }` (pinned `DevicesResponse`) |
+| `PATCH` | `/api/devices/:deviceID/alias` | browser session | same-origin required | Save `{ alias: string | null }` for this owner's active device; return `{ deviceID, alias }` |
 | `GET` | `/api/push/key` | browser session | not required | `{ publicKey }`; `503` if VAPID is unavailable |
 | `POST` | `/api/push/subscriptions` | browser session | same-origin required | Upsert `{ endpoint, keys: { p256dh, auth }, categories }` as this browser's registration, or renew `{ endpoint, keys, replaces }`; `404` if `replaces` is not this account's subscription |
 | `DELETE` | `/api/push/subscriptions` | browser session | same-origin required | Remove `{ endpoint }` for this account |
@@ -50,6 +51,10 @@ vocabulary changes the contract for all three at once.
 | `POST` | `/api/mcp/oauth/consent` | transaction cookie + CSRF | same-origin required | Allow or Deny the exact client/device/resource/redirect binding |
 | `POST` | `/api/mcp/oauth/token` | none (rate limited) | none (OAuth client) | Authorization-code exchange or rotating refresh |
 | `POST` | `/api/mcp/oauth/revoke` | none (rate limited) | none (OAuth client) | Revoke a token's grant; unknown credentials also succeed |
+
+`RemoteDeviceInfo.alias` is optional and nullable account-owned metadata. An alias is a trimmed single-line string of 1–48 characters; null clears it. Device `name` remains the real hostname. Alias requests accept only `alias`, never an owner, hostname, or replacement identity. The update is conditional on the stable device ID, authenticated owner, and absence of revocation in one database statement. Unknown, foreign, and revoked devices return the same `404`; absent or expired browser authentication returns `401`, failed origin checks return `403`, malformed input returns `400`, and methods other than PATCH return `405`. Device credentials do not authorize this route. Reads through `/api/me` and `/api/devices` expose the canonical alias only to the owning account. Saving an alias does not change credentials, presence, enrollment, or relay connections.
+
+The web client displays the canonical alias, or the hostname when it is absent or null, on every machine surface. It never reads or imports browser-local alias storage. Saves retain the reported name until acknowledged, preserve the draft on failure, and are not replayed automatically. Other clients obtain updated names through their account reads; alias changes do not create a relay notification or a polling loop.
 
 Every WebSocket connection is authenticated. The only unauthenticated relay paths are
 the public Relay MCP discovery, registration, and OAuth navigation routes in the

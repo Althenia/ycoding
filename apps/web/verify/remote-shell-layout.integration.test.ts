@@ -47,35 +47,40 @@ describe("remote shell layout", () => {
     } finally { await second.close() }
   }, 20_000)
 
-  test("keeps browser-local machine aliases in Settings and the command palette", async () => {
+  test("keeps account-shared machine aliases in Settings and the command palette", async () => {
     const page = await requireBrowser().openPage()
     const url = `http://127.0.0.1:${port}/verify/remote.html?view=settings`
+    const row = `[aria-labelledby="machine-settings"] .machine-row`
+    const nameOf = (name: string) => `[...document.querySelectorAll('${row}__item')].find(node => node.querySelector('.machine-row__name')?.textContent === ${JSON.stringify(name)})`
     try {
       await page.setViewport(1440, 1366)
       await page.navigate(url)
-      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('#device-display-name') !== null`); attempt += 1) await Bun.sleep(50)
-      await page.evaluate(`(() => { const input = document.querySelector('#device-display-name'); input.value = 'Studio Alias'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.form.requestSubmit() })()`)
+      await page.evaluate(`localStorage.removeItem('ycoding.remote.device-aliases')`)
+      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('${row}__edit') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('${row}__item .machine-row__edit').click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('${row}__input') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { const input = document.querySelector('${row}__input'); input.value = 'Studio Alias'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.form.requestSubmit() })()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.device__name')?.textContent?.trim() === 'Studio Alias'`); attempt += 1) await Bun.sleep(50)
-      const aliased = await page.evaluate<{ readonly picker: string; readonly name: string; readonly hostname: string; readonly title: string | null }>(`(() => {
-        const picker = document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')
+      const aliased = await page.evaluate<{ readonly row: string; readonly rowHostname: string; readonly name: string; readonly hostname: string; readonly title: string | null }>(`(() => {
+        const item = ${nameOf("Studio Alias")}
         const name = document.querySelector('.device__name')
         const hostname = name?.parentElement?.querySelector('.device__hostname')
-        return { picker: picker?.textContent?.trim() ?? '', name: name?.textContent?.trim() ?? '', hostname: hostname?.textContent?.trim() ?? '', title: name?.getAttribute('title') ?? null }
+        return { row: item?.querySelector('.machine-row__name')?.textContent?.trim() ?? '', rowHostname: item?.querySelector('.machine-row__hostname')?.textContent?.trim() ?? '', name: name?.textContent?.trim() ?? '', hostname: hostname?.textContent?.trim() ?? '', title: name?.getAttribute('title') ?? null }
       })()`)
-      expect(aliased).toEqual({ picker: "Studio Alias", name: "Studio Alias", hostname: "Studio Mac", title: "Studio Mac" })
-      await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.custom-select__option') !== null`); attempt += 1) await Bun.sleep(50)
-      await page.evaluate(`[...document.querySelectorAll('.custom-select__option')].find(option => option.textContent.includes('Laptop'))?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.textContent?.includes('Laptop') ?? false`); attempt += 1) await Bun.sleep(50)
+      expect(aliased).toEqual({ row: "Studio Alias", rowHostname: "Studio Mac", name: "Studio Alias", hostname: "Studio Mac", title: "Studio Mac" })
+      await page.evaluate(`${nameOf("Laptop")}.querySelector('.machine-row__connect').click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`${nameOf("Laptop")}?.getAttribute('aria-current') === 'true'`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.app-header__palette')?.click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('dialog.overlay--command-palette[open]') !== null`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string[]>(`[...document.querySelectorAll('dialog.overlay--command-palette [role=option] .command-palette__title')].map(title => title.textContent.trim())`)).toContain("Switch machine: Studio Alias")
-      await page.navigate(url)
-      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('#device-display-name') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.pressEscape()
+      for (let attempt = 0; attempt < 50 && !await page.evaluate<boolean>(`document.querySelector('dialog.overlay--command-palette[open]') === null`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<string>(`document.querySelector('.device__name')?.textContent?.trim() ?? ''`)).toBe("Studio Alias")
-      await page.evaluate(`document.querySelector('#device-display-name').form.querySelector('button[type="button"]').click()`)
+      await page.evaluate(`${nameOf("Studio Alias")}.querySelector('.machine-row__edit').click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('${row}__input') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`(() => { const input = document.querySelector('${row}__input'); input.value = ''; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.form.requestSubmit() })()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.device__name')?.textContent?.trim() === 'Studio Mac'`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<{ readonly name: string; readonly hostname: boolean }>(`(() => ({ name: document.querySelector('.device__name')?.textContent?.trim() ?? '', hostname: document.querySelector('.device__hostname') !== null }))()`)).toEqual({ name: "Studio Mac", hostname: false })
+      expect(await page.evaluate<{ readonly name: string; readonly hostname: boolean; readonly rowHostname: boolean }>(`(() => ({ name: document.querySelector('.device__name')?.textContent?.trim() ?? '', hostname: document.querySelector('.device__hostname') !== null, rowHostname: document.querySelector('${row}__hostname') !== null }))()`)).toEqual({ name: "Studio Mac", hostname: false, rowHostname: false })
     } finally { await page.close() }
   }, 30_000)
 
@@ -1274,11 +1279,11 @@ describe("remote shell layout", () => {
     } finally { await page.close() }
   }, 60_000)
 
-  test("uses the SVG chevron primitive without polluting the Device control name at compact and desktop widths", async () => {
+  test("uses the SVG chevron primitive without polluting the Color scheme control name at compact and desktop widths", async () => {
     for (const width of [390, 1440] as const) {
       const page = await fixture("scenario=conversation-workspace-768", width, "Studio Mac")
       await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Color scheme"]') !== null`); attempt += 1) await Bun.sleep(50)
       const state = await page.evaluate<{
         readonly controlName: string
         readonly glyph: boolean
@@ -1287,7 +1292,7 @@ describe("remote shell layout", () => {
         readonly icon: { readonly top: number; readonly bottom: number; readonly triggerTop: number; readonly triggerBottom: number }
         readonly label: { readonly right: number; readonly iconLeft: number; readonly scrollWidth: number; readonly width: number }
       }>(`(() => {
-        const trigger=document.querySelector('[aria-label="Machine"]');
+        const trigger=document.querySelector('[aria-label="Color scheme"]');
         const icon=trigger?.querySelector('.custom-select__chevron');
         const label=trigger?.querySelector('.custom-select__value');
         const iconBox=icon?.getBoundingClientRect();
@@ -1302,7 +1307,7 @@ describe("remote shell layout", () => {
           label:{right:labelBox?.right ?? 0,iconLeft:iconBox?.left ?? 0,scrollWidth:label?.scrollWidth ?? 0,width:label?.clientWidth ?? 0},
         };
       })()`)
-      expect(state.controlName).toBe("Machine")
+      expect(state.controlName).toBe("Color scheme")
       expect(state.glyph).toBe(false)
       expect(state.path).toBe(true)
       expect(state.hidden).toBe("true")
@@ -1310,11 +1315,11 @@ describe("remote shell layout", () => {
       expect(state.icon.bottom).toBeLessThanOrEqual(state.icon.triggerBottom)
       expect(state.label.right).toBeLessThanOrEqual(state.label.iconLeft)
       expect(state.label.scrollWidth).toBeGreaterThanOrEqual(state.label.width)
-      await page.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
+      await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.focus()`)
       await page.pressKey("Enter", "Enter", 13)
-      expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Color scheme"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
       await page.pressEscape()
-      expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Color scheme'`)).toBe(true)
       await page.close()
     }
   }, 30_000)
@@ -1405,12 +1410,12 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("keeps the mobile Settings machine picker usable with three-destination navigation", async () => {
+  test("keeps the mobile Settings color scheme picker usable with three-destination navigation", async () => {
     for (const theme of ["dark", "light"] as const) {
       const page = await fixture("scenario=conversation-workspace-390", 390, "Token expiry refactor", theme, 620)
       await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
-      await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Color scheme"]') !== null`); attempt += 1) await Bun.sleep(50)
+      await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.click()`)
       await page.evaluate(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
       const state = await page.evaluate<{
         readonly resumeVisible: boolean
@@ -1432,14 +1437,18 @@ describe("remote shell layout", () => {
       expect(state.tabs).toEqual(["Sessions", "Usage", "Settings"])
       expect(state.sheet.bottom).toBeCloseTo(620, 0)
       expect(state.sheet.top).toBeLessThan(state.sheet.bottom)
-      expect(state.options.map((option) => option.label)).toEqual(["Studio Mac", "Dev Linux"])
+      expect(state.options.map((option) => option.label)).toEqual(["Default", "One Dark", "One Dark Pro", "High contrast"])
       expect(state.options.every((option) => option.height >= 44)).toBe(true)
       expect(state.overflow).toBe(false)
+      const schemeValue = `document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`
+      const before = await page.evaluate<string>(schemeValue)
+      const target = await page.evaluate<string>(`document.querySelector('.custom-select__option[aria-selected="false"] .custom-select__option-body')?.textContent.trim() ?? ''`)
       await page.evaluate(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
-      expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Studio Mac")
+      expect(await page.evaluate<string>(schemeValue)).toBe(before)
       await page.evaluate(`document.querySelector('.custom-select__confirm')?.click()`)
-      for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.includes('Dev Linux') ?? false`); attempt += 1) await Bun.sleep(50)
-      expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
+      for (let attempt = 0; attempt < 40 && await page.evaluate<string>(schemeValue) === before; attempt += 1) await Bun.sleep(50)
+      expect(await page.evaluate<string>(schemeValue)).toBe(target)
+      expect(target).not.toBe(before)
       expect(await page.evaluate<boolean>(`(() => { const dialog = document.querySelector('.custom-select__dialog'); return dialog === null || (!dialog.open && dialog.inert) })()`)).toBe(true)
       for (let attempt = 0; attempt < 20 && await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog') !== null`); attempt += 1) await Bun.sleep(50)
       expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog') === null`)).toBe(true)

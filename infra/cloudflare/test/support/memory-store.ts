@@ -67,6 +67,12 @@ export function createMemoryAuthStore(): AuthStore {
     },
     findDevice: async (id) => devices.get(id),
     listDevices: async (userID) => [...devices.values()].filter((row) => row.userID === userID),
+    setDeviceAlias: async (id, userID, alias) => {
+      const row = devices.get(id)
+      if (!row || row.userID !== userID || row.revokedAt !== undefined) return false
+      devices.set(id, { ...row, alias })
+      return true
+    },
     markDeviceSeen: async (id, now) => {
       const row = devices.get(id)
       if (row) devices.set(id, { ...row, lastSeenAt: now })

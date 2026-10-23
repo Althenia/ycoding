@@ -27,9 +27,8 @@ afterAll(async () => {
 })
 
 describe("shared selector mobile sheets", () => {
-  test("places sparse machine, workspace and color scheme sheets directly below the grab handle", async () => {
+  test("places sparse workspace and color scheme sheets directly below the grab handle", async () => {
     for (const [scenario, selector, title, count] of [
-      ["autonomy-goal-notification-settings-390", '[aria-labelledby="machine-settings"] [aria-label="Machine"]', "Select Active Machine", 1],
       ["session-list-390", '.sessions-page [aria-label="Workspace"]', "Select workspace", 4],
       ["autonomy-goal-notification-settings-390", '[aria-label="Color scheme"]', "Select Color Scheme", 4],
     ] as const) {
@@ -65,12 +64,12 @@ describe("shared selector mobile sheets", () => {
 
   test("fills the visual viewport and keeps only the option list scrollable below 768px", async () => {
     for (const width of [390, 767] as const) {
-      const page = await openMachinePicker(width, 844)
+      const page = await openSchemePicker(width, 844)
       try {
         await page.evaluate<void>(`(() => {
           const list = document.querySelector('.custom-select__list')
           const option = list?.querySelector('[role="option"]')
-          if (!list || !option) throw new Error('Machine options are missing')
+          if (!list || !option) throw new Error('Color scheme options are missing')
           list.append(...Array.from({ length: 24 }, () => option.cloneNode(true)))
         })()`)
         const initial = await geometry(page)
@@ -100,15 +99,12 @@ describe("shared selector mobile sheets", () => {
         expect(resized.confirmReachable).toBe(true)
         expect(resized.pageOverflow).toBe(false)
 
-        const before = await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)
-        const requestsBefore = await page.evaluate<number>(`window.remoteDeviceRequests.filter(request => request.deviceID === 'dev_laptop').length`)
+        const before = await page.evaluate<string>(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)
         await page.evaluate<void>(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
-        expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
-        expect(await page.evaluate<number>(`window.remoteDeviceRequests.filter(request => request.deviceID === 'dev_laptop').length`)).toBe(requestsBefore)
+        expect(await page.evaluate<string>(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
         await page.pressEscape()
-        expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.open === false && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
-        expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
-        expect(await page.evaluate<number>(`window.remoteDeviceRequests.filter(request => request.deviceID === 'dev_laptop').length`)).toBe(requestsBefore)
+        expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__dialog')?.open === false && document.activeElement?.getAttribute('aria-label') === 'Color scheme'`)).toBe(true)
+        expect(await page.evaluate<string>(`document.querySelector('[aria-label="Color scheme"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe(before)
       } finally {
         await page.close()
       }
@@ -116,17 +112,17 @@ describe("shared selector mobile sheets", () => {
   }, 40_000)
 
   test("retains the anchored popover at 768px", async () => {
-    const page = await openMachinePicker(768, 900)
+    const page = await openSchemePicker(768, 900)
     try {
       const state = await page.evaluate<{ dialog: boolean; bounded: boolean; anchored: boolean; width: number; height: number }>(`(() => {
         const surface = document.querySelector('.custom-select__surface')
-        const trigger = document.querySelector('[aria-label="Machine"]')
+        const trigger = document.querySelector('[aria-label="Color scheme"]')
         const box = surface?.getBoundingClientRect()
         const anchor = trigger?.getBoundingClientRect()
         return {
           dialog: document.querySelector('.custom-select__dialog') !== null,
           bounded: !!box && box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
-          anchored: !!box && !!anchor && box.top >= anchor.bottom,
+          anchored: !!box && !!anchor && (box.top >= anchor.bottom || box.bottom <= anchor.top),
           width: box?.width ?? 0,
           height: box?.height ?? 0,
         }
@@ -142,15 +138,15 @@ describe("shared selector mobile sheets", () => {
   }, 20_000)
 })
 
-async function openMachinePicker(width: number, height: number) {
+async function openSchemePicker(width: number, height: number) {
   const page = await requireBrowser().openPage()
   if (width < 768) await page.setMobileViewport(width, height)
   else await page.setViewport(width, height)
   await page.navigate(`${url()}/verify/remote.html?scenario=conversation-workspace-390`)
   await waitFor(page, `document.querySelector('a[href="/remote/settings"]') !== null`)
   await page.evaluate<void>(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-  await waitFor(page, `document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`)
-  await page.evaluate<void>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+  await waitFor(page, `document.querySelector('[aria-label="Color scheme"]') !== null`)
+  await page.evaluate<void>(`document.querySelector('[aria-label="Color scheme"]')?.click()`)
   await waitFor(page, width < 768 ? `document.querySelector('.custom-select__dialog[open]') !== null` : `document.querySelector('.custom-select__surface [role="listbox"]') !== null`)
   await page.evaluate<void>(`Promise.all([...document.querySelector('.custom-select__dialog .overlay__surface, .custom-select__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
   return page

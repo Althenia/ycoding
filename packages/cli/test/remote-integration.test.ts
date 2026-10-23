@@ -375,6 +375,7 @@ test("a disconnected connector reconciles a promoted prompt from the real server
     devices: async () => ({ ok: true, value: [device] }),
     createEnrollment: async () => ({ ok: false, status: 403, kind: "http", message: "Unavailable" }),
     revokeDevice: async () => ({ ok: false, status: 403, kind: "http", message: "Unavailable" }),
+    setDeviceAlias: async () => ({ ok: false, status: 403, kind: "http", message: "Unavailable" }),
     removeRevokedDevices: async () => ({ ok: false, status: 403, kind: "http", message: "Unavailable" }),
     logout: async () => ({ ok: true, value: undefined }),
   }
@@ -455,6 +456,7 @@ test("a real finished run reaches the web activity store without changing Sessio
     devices: async () => ({ ok: true, value: [{ id: "dev_test", name: "Test", createdAt: 1, status: "active", online: true }] }),
     createEnrollment: async () => ({ ok: false, status: 403, kind: "http", message: "Not available" }),
     revokeDevice: async () => ({ ok: false, status: 403, kind: "http", message: "Not available" }),
+    setDeviceAlias: async () => ({ ok: false, status: 403, kind: "http", message: "Not available" }),
     removeRevokedDevices: async () => ({ ok: false, status: 403, kind: "http", message: "Not available" }),
     logout: async () => ({ ok: true, value: undefined }),
   }

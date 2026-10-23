@@ -24,6 +24,35 @@ describe("signInURL", () => {
 })
 
 describe("remote HTTP integration", () => {
+  test("retains canonical optional aliases in account and device reads without replacing hostnames", async () => {
+    const devices = [
+      { id: "dev_alias", name: "host.local", alias: "Studio", createdAt: 1, status: "active", online: false },
+      { id: "dev_clear", name: "second.local", alias: null, createdAt: 1, status: "active", online: true },
+      { id: "dev_plain", name: "third.local", createdAt: 1, status: "active", online: true },
+    ] as const
+    const http = createRemoteHttp({ fetch: Object.assign(async (input: RequestInfo | URL) =>
+      Response.json(String(input) === "/api/me" ? { user: { id: "owner" }, session: { expiresAt: 100 }, devices } : { devices }), { preconnect: () => {} }) })
+    const me = await http.me()
+    expect(me.ok && me.value.devices).toEqual(devices)
+    expect(await http.devices()).toEqual({ ok: true, value: devices })
+  })
+
+  test("updates and clears an alias through the same-origin device endpoint and validates its identity", async () => {
+    const requests: { path: string; method?: string; credentials?: RequestCredentials; body: unknown }[] = []
+    const http = createRemoteHttp({ fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body: unknown = JSON.parse(String(init?.body))
+      requests.push({ path: String(input), method: init?.method, credentials: init?.credentials, body })
+      return Response.json({ deviceID: requests.length === 3 ? "dev_other" : "dev_one", alias: requests.length === 2 ? null : "Studio" })
+    }, { preconnect: () => {} }) })
+    expect(await http.setDeviceAlias("dev_one", "Studio")).toEqual({ ok: true, value: { deviceID: "dev_one", alias: "Studio" } })
+    expect(await http.setDeviceAlias("dev_one", null)).toEqual({ ok: true, value: { deviceID: "dev_one", alias: null } })
+    expect((await http.setDeviceAlias("dev_one", "Studio")).ok).toBe(false)
+    expect(requests.slice(0, 2)).toEqual([
+      { path: "/api/devices/dev_one/alias", method: "PATCH", credentials: "same-origin", body: { alias: "Studio" } },
+      { path: "/api/devices/dev_one/alias", method: "PATCH", credentials: "same-origin", body: { alias: null } },
+    ])
+  })
+
   test("removes one or all revoked devices with same-origin DELETE and reports refusal", async () => {
     const sent: { readonly url: string; readonly method: string | undefined; readonly credentials: RequestCredentials | undefined }[] = []
     const http = createRemoteHttp({ fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {

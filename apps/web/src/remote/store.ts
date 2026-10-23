@@ -1,7 +1,8 @@
 import { replaceEqualDeep } from "@tanstack/solid-query"
 import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, isWellFormedBase64, noticeSequence, type CreateEnrollmentResponse, type RemoteDeviceInfo, type RemoteFamilyActivity, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, parseNoticePage, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticePage, type RemoteOperation, type RemoteWorkspaceInfo } from "@ycoding-ai/remote"
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
-import type { RemoteStoppedRecovery, RemoteUsageTaskCost } from "@ycoding-ai/remote"
+import type { DeviceAliasResponse, RemoteStoppedRecovery, RemoteUsageTaskCost } from "@ycoding-ai/remote"
+import { displayDeviceName } from "./device-alias"
 import { readTaskCosts } from "./usage-read"
 import { readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
@@ -313,6 +314,7 @@ export type RemoteStore = {
   readonly logout: () => Promise<void>
   readonly createEnrollment: () => Promise<RemoteHttpResult<CreateEnrollmentResponse>>
   readonly revokeDevice: (deviceID: string) => Promise<RemoteHttpResult<void>>
+  readonly setDeviceAlias: (deviceID: string, alias: string | null) => Promise<RemoteHttpResult<DeviceAliasResponse>>
   readonly connect: (deviceID: string) => void
   readonly disconnect: () => void
   readonly selectSession: (sessionID: string) => Promise<void>
@@ -428,7 +430,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   const storage = options.storage ?? browserStorage()
   const batchMs = options.batchMs ?? defaultBatchMs
   const createMessageID = options.createMessageID ?? defaultMessageID
-  const deviceName = options.deviceName ?? ((deviceID: string) => deviceID)
+  const deviceName = (deviceID: string) => {
+    const device = container.state.devices.find((entry) => entry.id === deviceID)
+    return device && device.alias !== undefined ? displayDeviceName(device) : options.deviceName?.(deviceID) ?? deviceID
+  }
   const delivery = options.notificationDelivery ?? createNotificationDelivery()
   const queryClient = options.queryClient ?? createRemoteQueryClient()
   const notificationTitles = new Map<string, string | undefined>()
@@ -534,6 +539,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * account, a device list, or a connection the user has already dropped.
    */
   let accountToken = 0
+  let aliasWrite: Promise<RemoteHttpResult<DeviceAliasResponse>> | undefined
+  let aliasAccountToken: number | undefined
   /**
    * Session this connection is registered to stream. The relay tracks client
    * subscriptions per socket and the agent refcounts them, so an unsubscribe is
@@ -3014,11 +3021,16 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     signInURL: (provider, redirectAfter = "/remote/") => signInURL(provider, redirectAfter),
     load: async () => {
       const token = ++accountToken
+      if (aliasWrite !== undefined) await aliasWrite
+      if (token !== accountToken) return
       const startedAt = monotonicNow()
       const me = await options.http.me()
       // A read that settles after sign-out, a rejected credential, a deliberate
       // disconnect, or a newer read describes an account this store no longer shows.
-      if (token !== accountToken) return
+      if (token !== accountToken) {
+        if (aliasAccountToken === accountToken) return api.load()
+        return
+      }
       const elapsed = Math.max(0, Math.round(monotonicNow() - startedAt))
       latency.recordRequest({ operation: "account.read", outcome: me.ok ? "ok" : "failed", queueMs: 0, settlementMs: elapsed, totalMs: elapsed })
       if (!me.ok) {
@@ -3089,7 +3101,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           sessionCreation: creation?.status === "creating"
             ? { ...creation, status: "unknown", message: "The machine went offline before creation settled. Check or retry this session explicitly." }
             : creation,
-          connection: { kind: "offline", deviceName: selected.name },
+          connection: { kind: "offline", deviceName: displayDeviceName(selected) },
           transport: { kind: "idle" },
           notifications: delivery.entries(),
         })
@@ -3104,7 +3116,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt },
         devices,
         connection: stillPresent
-          ? container.state.connection
+          ? selected !== undefined && selected.alias !== undefined && container.state.connection.kind === "connected"
+            ? { kind: "connected", deviceName: displayDeviceName(selected) }
+            : container.state.connection
           : adopted
             ? { kind: "connecting" }
             : deviceConnection(devices.filter((device) => device.status === "active").length),
@@ -3126,6 +3140,26 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       api.disconnect()
       setState({ owner: undefined, devices: [], sessions: [], advertised: [], activeSessionID: undefined, view: undefined,
         team: undefined, teamCues: [], connection: { kind: "signed-out" }, notice: "Signed out." })
+    },
+    setDeviceAlias: async (deviceID, alias) => {
+      const owner = container.state.owner
+      if (owner === undefined) return { ok: false, status: 401, kind: "http", message: "Sign in before changing a machine name" }
+      if (aliasWrite !== undefined) return { ok: false, status: 409, kind: "http", message: "A machine name is already being saved" }
+      const token = accountToken
+      const pending = options.http.setDeviceAlias(deviceID, alias)
+      aliasWrite = pending
+      const result = await pending
+      aliasWrite = undefined
+      if (!result.ok || token !== accountToken || container.state.owner?.id !== owner.id) return result
+      accountToken += 1
+      aliasAccountToken = accountToken
+      const device = container.state.devices.find((entry) => entry.id === result.value.deviceID)
+      const connection = container.state.connection
+      setState({ devices: container.state.devices.map((entry) => entry.id === result.value.deviceID ? { ...entry, alias: result.value.alias } : entry),
+        ...(device !== undefined && container.state.activeDeviceID === device.id && (connection.kind === "connected" || connection.kind === "offline")
+          ? { connection: { ...connection, deviceName: result.value.alias ?? device.name } } : {}),
+      })
+      return result
     },
     createEnrollment: () => options.http.createEnrollment(),
     revokeDevice: async (deviceID) => {

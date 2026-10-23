@@ -109,6 +109,8 @@ if (fixtureTheme !== undefined) localStorage.setItem("ycoding.theme", fixtureThe
 if (remoteScenarioData !== undefined) devices = remoteScenarioData.devices
 const machineName = accountParams.get("machineName")
 if (machineName !== null) devices = devices.map((device, index) => index === 0 ? { ...device, name: machineName } : device)
+const machineAlias = accountParams.get("machineAlias")
+if (machineAlias !== null) devices = devices.map((device, index) => index === 0 ? { ...device, alias: machineAlias } : device)
 if (deviceMode === "none") devices = []
 if (deviceMode === "offline") devices = devices.map((device) => ({ ...device, online: false }))
 if (deviceMode === "revoked") devices = devices.map((device) => ({ ...device, status: "revoked", online: false }))
@@ -147,6 +149,8 @@ window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit
 Object.assign(window, { remoteCleanupReport: () => cleanupRequests })
 
 let accountReads = 0
+const aliasRequests: { readonly deviceID: string; readonly alias: string | null }[] = []
+Object.assign(window, { remoteAliasReport: () => ({ requests: aliasRequests, devices }) })
 const syntheticHttp: RemoteHttp = {
   me: async () => {
     accountReads++
@@ -159,6 +163,12 @@ const syntheticHttp: RemoteHttp = {
     return ok({ user: { id: remoteScenarioData?.accountID ?? "user_fixture" }, session: { expiresAt: Date.now() + 86_400_000 }, devices })
   },
   devices: async () => ok(devices),
+  setDeviceAlias: async (deviceID, alias) => {
+    aliasRequests.push({ deviceID, alias })
+    if (accountParams.get("aliasFailure") === "1") return { ok: false, status: 503, kind: "http", message: "Machine name could not be saved" }
+    devices = devices.map((device) => device.id === deviceID ? { ...device, alias } : device)
+    return ok({ deviceID, alias })
+  },
   createEnrollment: async () =>
     ok({ enrollmentID: "enr_fixture", code: "AAAA-BBBB-CCCC-DDDD-EEEE", expiresAt: Date.now() + 600_000 }),
   revokeDevice: async (deviceID) => {

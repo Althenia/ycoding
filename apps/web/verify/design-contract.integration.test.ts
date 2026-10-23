@@ -195,19 +195,19 @@ describe("web design contract inventory", () => {
     await page.navigate(`${url("/verify/remote.html")}?scenario=conversation-workspace-390`)
     for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('a[href="/remote/settings"]') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('a[href="/remote/settings"]')?.click()`)
-    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]') !== null`); attempt += 1) await Bun.sleep(50)
-    await page.evaluate(`document.querySelector('[aria-labelledby="machine-settings"] [aria-label="Machine"]')?.click()`)
+    for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('[aria-label="Color scheme"]') !== null`); attempt += 1) await Bun.sleep(50)
+    await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.click()`)
     const dropdown = await page.evaluate<{ readonly expanded: boolean; readonly withinViewport: boolean }>(`(() => {
-      const trigger = document.querySelector('[aria-label="Machine"]')
+      const trigger = document.querySelector('[aria-label="Color scheme"]')
       const list = document.querySelector('[role="listbox"]')
       if (!(trigger instanceof HTMLElement) || !(list instanceof HTMLElement)) return { expanded: false, withinViewport: false }
       const rect = list.getBoundingClientRect()
       return { expanded: trigger.getAttribute("aria-expanded") === "true", withinViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight }
     })()`)
     expect(dropdown).toEqual({ expanded: true, withinViewport: true })
-    await page.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
+    await page.evaluate(`document.querySelector('[aria-label="Color scheme"]')?.focus()`)
     await page.pressEscape()
-    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Machine"`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Color scheme"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Color scheme"`)).toBe(true)
 
     await page.close()
   }, 30_000)
