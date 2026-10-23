@@ -918,7 +918,10 @@ async function run(input: OperationInput) {
   if (validated.kind === "keepAwake.set") return { data: await input.local.keepAwakeSet(validated.enabled) }
   if (validated.kind === "telemetryConsent.get") return { data: await input.local.telemetryConsentGet() }
   if (validated.kind === "telemetryConsent.set") return { data: await input.local.telemetryConsentSet({ enabled: validated.enabled, noticeVersion: 1 }) }
-  if (validated.kind === "coordination") return { data: await executeCoordination(input, validated.operation, validated.input) }
+  if (validated.kind === "coordination") {
+    const data = await executeCoordination(input, validated.operation, validated.input)
+    return validated.operation === "coordination.delete" ? {} : { data }
+  }
   if (!scopedOperation(request.operation)) return unknownOperation()
   const sessionID = request.sessionID
   if (sessionID === undefined) throw new OperationError("session_required", "Operation requires a session")
@@ -958,6 +961,9 @@ async function run(input: OperationInput) {
       return { data: await input.local.incidentGuidanceClear(validated.input, location) }
     case "get":
       return { data: verified }
+    case "delete":
+      await input.local.deleteSession(sessionID, location)
+      return {}
     case "pending.list": {
       const pending = await input.local.pendingList(sessionID, location)
       if (!Array.isArray(pending) || pending.length > maxPendingInputs ||
@@ -1229,6 +1235,7 @@ type Validated =
   | { readonly kind: "command"; readonly input: CommandInput }
   | { readonly kind: "skill"; readonly input: { readonly id?: string; readonly skill: string; readonly resume?: boolean } }
   | { readonly kind: "get" }
+  | { readonly kind: "delete" }
   | { readonly kind: "snapshot"; readonly limit?: number; readonly before?: string }
   | { readonly kind: "capturedChanges.list"; readonly cursor?: string }
   | { readonly kind: "attachment.read"; readonly digest: string }
@@ -1273,6 +1280,7 @@ type Validated =
 
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.get": "get",
+  "session.delete": "delete",
   "session.pending.list": "pending.list",
   "session.catalog": "catalog",
   "session.messages": "messages",
@@ -1327,84 +1335,33 @@ function coordinationDelegated(value: unknown) {
   }
 }
 
-function coordinationPolicy(value: unknown) {
-  const fields = coordinationRecord(value, "policy", ["concurrency", "queueCapacity", "budget", "delegatedDecisions"])
-  if (fields.budget !== undefined && (typeof fields.budget !== "number" || !Number.isFinite(fields.budget) || fields.budget <= 0))
-    throw new OperationError("invalid_message", "Invalid policy budget")
+function coordinationSettings(value: unknown) {
+  const fields = coordinationRecord(value, "settings", ["concurrency", "delegatedDecisions"])
   return {
     concurrency: fields.concurrency === null ? null : coordinationInteger(fields.concurrency, "concurrency", 1, Number.MAX_SAFE_INTEGER),
-    queueCapacity: coordinationInteger(fields.queueCapacity, "queueCapacity", 1, 1000),
-    ...(fields.budget === undefined ? {} : { budget: fields.budget }),
     ...(fields.delegatedDecisions === undefined ? {} : { delegatedDecisions: coordinationDelegated(fields.delegatedDecisions) }),
   }
 }
 
-function coordinationMembers(value: unknown) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 64) throw new OperationError("invalid_message", "Invalid members")
-  return value.map((member) => {
-    const fields = coordinationRecord(member, "member", ["sessionID", "role", "allowedTools", "resourceScopes"])
-    return {
-      sessionID: sessionID(fields.sessionID, "sessionID"),
-      role: literal(fields.role, ["coordinator", "worker", "observer"] as const, "role"),
-      ...(fields.allowedTools === undefined ? {} : { allowedTools: coordinationTexts(fields.allowedTools, "allowedTools", 64, 128) }),
-      ...(fields.resourceScopes === undefined ? {} : { resourceScopes: coordinationTexts(fields.resourceScopes, "resourceScopes", 32, 512) }),
-    }
-  })
-}
-
-function coordinationSelection(value: unknown) {
-  const fields = coordinationRecord(value, "selection", ["agent", "model", "reason"])
-  const reason = requireString(fields.reason, "reason", 500)
-  if (reason.trim().length === 0 || /[\x00\r\n]/.test(reason)) throw new OperationError("invalid_message", "Invalid selection reason")
-  return { agent: requireString(fields.agent, "agent", 128), model: modelSelection(fields.model), reason }
+function coordinationMemberSessionIDs(value: unknown) {
+  if (!Array.isArray(value) || value.length > 64) throw new OperationError("invalid_message", "Invalid memberSessionIDs")
+  return value.map((id) => sessionID(id, "memberSessionIDs"))
 }
 
 function coordinationPayload(operation: RemoteOperation, fields: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> | undefined {
   if (operation === "coordination.settings" || operation === "coordination.list") return undefined
   if (operation === "coordination.create")
-    return { name: requireString(fields.name, "name", 120), policy: coordinationPolicy(fields.policy), members: coordinationMembers(fields.members) }
+    return { name: requireString(fields.name, "name", 120), masterSessionID: sessionID(fields.masterSessionID, "masterSessionID"), memberSessionIDs: coordinationMemberSessionIDs(fields.memberSessionIDs) }
   const groupID = coordinationIDOf(fields.groupID, "cgrp_", "groupID")
-  if (operation === "coordination.get" || operation === "coordination.receipts" || operation === "coordination.capacity") return { groupID }
+  if (operation === "coordination.get" || operation === "coordination.delete") return { groupID }
   const revision = coordinationInteger(fields.revision, "revision", 0, Number.MAX_SAFE_INTEGER)
-  if (operation === "coordination.members")
+  if (operation === "coordination.update")
     return { groupID, revision,
       ...(fields.name === undefined ? {} : { name: requireString(fields.name, "name", 120) }),
-      members: coordinationMembers(fields.members),
-      ...(fields.policy === undefined ? {} : { policy: coordinationPolicy(fields.policy) }) }
-  if (operation === "coordination.arm" || operation === "coordination.stop" || operation === "coordination.complete") return { groupID, revision }
-  if (operation === "coordination.claim")
-    return { groupID, revision, targetSessionID: sessionID(fields.targetSessionID, "targetSessionID"),
-      holderSessionID: sessionID(fields.holderSessionID, "holderSessionID"), leaseMs: coordinationInteger(fields.leaseMs, "leaseMs", 1000, 300000) }
-  if (operation === "coordination.release")
-    return { groupID, revision, targetSessionID: sessionID(fields.targetSessionID, "targetSessionID"),
-      holderSessionID: sessionID(fields.holderSessionID, "holderSessionID"), generation: coordinationInteger(fields.generation, "generation", 0, Number.MAX_SAFE_INTEGER) }
-  if (operation === "coordination.dispatch")
-    return { groupID, revision, holderSessionID: sessionID(fields.holderSessionID, "holderSessionID"),
-      generation: coordinationInteger(fields.generation, "generation", 0, Number.MAX_SAFE_INTEGER),
-      ...(fields.dispatchID === undefined ? {} : { dispatchID: coordinationIDOf(fields.dispatchID, "cdsp_", "dispatchID") }),
-      targetSessionID: sessionID(fields.targetSessionID, "targetSessionID"), text: requireString(fields.text, "text", 32000),
-      ...(fields.dependsOn === undefined ? {} : { dependsOn: coordinationTexts(fields.dependsOn, "dependsOn", 32, 96).map((id) => coordinationIDOf(id, "cdsp_", "dependsOn")) }),
-      ...(fields.resourceScope === undefined ? {} : { resourceScope: requireString(fields.resourceScope, "resourceScope", 512) }),
-      ...(fields.allowedTools === undefined ? {} : { allowedTools: coordinationTexts(fields.allowedTools, "allowedTools", 64, 128) }),
-      selection: coordinationSelection(fields.selection) }
-  if (operation === "coordination.wait")
-    return { groupID, revision, holderSessionID: sessionID(fields.holderSessionID, "holderSessionID"),
-      ...(fields.waitID === undefined ? {} : { waitID: coordinationIDOf(fields.waitID, "cwait_", "waitID") }),
-      ...(fields.targets === undefined ? {} : { targets: coordinationTexts(fields.targets, "targets", 64, 128).map((id) => sessionID(id, "targets")) }),
-      ...(fields.timeoutMs === undefined ? {} : { timeoutMs: coordinationInteger(fields.timeoutMs, "timeoutMs", 0, 300000) }),
-      ...(fields.batch === undefined ? {} : { batch: coordinationInteger(fields.batch, "batch", 1, 200) }) }
-  if (operation === "coordination.cancelWait")
-    return { groupID, revision, waitID: coordinationIDOf(fields.waitID, "cwait_", "waitID"), holderSessionID: sessionID(fields.holderSessionID, "holderSessionID") }
+      ...(fields.masterSessionID === undefined ? {} : { masterSessionID: sessionID(fields.masterSessionID, "masterSessionID") }),
+      ...(fields.memberSessionIDs === undefined ? {} : { memberSessionIDs: coordinationMemberSessionIDs(fields.memberSessionIDs) }),
+      ...(fields.settings === undefined ? {} : { settings: coordinationSettings(fields.settings) }) }
   return unknownOperation()
-}
-
-async function requireCoordinatorHolder(input: OperationInput, groupID: string, holderSessionID: string) {
-  const detail = await input.local.coordinationGet({ groupID } as Parameters<LocalServer["coordinationGet"]>[0])
-  const members = typeof detail === "object" && detail !== null ? Reflect.get(detail, "members") : undefined
-  if (!Array.isArray(members)) throw new OperationError("internal_error", "The local server returned an unusable coordination group")
-  const coordinator = members.some((member) => typeof member === "object" && member !== null &&
-    Reflect.get(member, "sessionID") === holderSessionID && Reflect.get(member, "role") === "coordinator")
-  if (!coordinator) throw new OperationError("forbidden", "The holder Session is not a coordinator of this coordination group")
 }
 
 async function executeCoordination(input: OperationInput, operation: RemoteOperation, payload: Readonly<Record<string, unknown>> | undefined) {
@@ -1412,27 +1369,17 @@ async function executeCoordination(input: OperationInput, operation: RemoteOpera
   if (operation === "coordination.settings") return local.coordinationSettings()
   if (operation === "coordination.list") return local.coordinationList()
   if (payload === undefined) return unknownOperation()
-  if (operation === "coordination.create" || operation === "coordination.members") {
-    const members = payload.members as readonly { readonly sessionID: string }[]
-    for (const member of members)
-      if (await input.sessions.verify(member.sessionID, input.signal) === undefined)
-        throw new OperationError("session_not_allowed", "A member Session is not available at its recorded location")
+  if (operation === "coordination.create" || operation === "coordination.update") {
+    const ids = [...(payload.memberSessionIDs as readonly string[] | undefined ?? []), ...(typeof payload.masterSessionID === "string" ? [payload.masterSessionID] : [])]
+    for (const id of ids)
+      if (await input.sessions.verify(id, input.signal) === undefined)
+        throw new OperationError("session_not_allowed", "A Project Session is not available at its recorded location")
     return operation === "coordination.create"
       ? local.coordinationCreate(payload as Parameters<LocalServer["coordinationCreate"]>[0])
-      : local.coordinationMembers(payload as Parameters<LocalServer["coordinationMembers"]>[0])
+      : local.coordinationUpdate(payload as Parameters<LocalServer["coordinationUpdate"]>[0])
   }
   if (operation === "coordination.get") return local.coordinationGet(payload as Parameters<LocalServer["coordinationGet"]>[0])
-  if (operation === "coordination.receipts") return local.coordinationReceipts(payload as Parameters<LocalServer["coordinationReceipts"]>[0])
-  if (operation === "coordination.capacity") return local.coordinationCapacity(payload as Parameters<LocalServer["coordinationCapacity"]>[0])
-  if (operation === "coordination.arm") return local.coordinationArm(payload as Parameters<LocalServer["coordinationArm"]>[0])
-  if (operation === "coordination.stop") return local.coordinationStop(payload as Parameters<LocalServer["coordinationStop"]>[0])
-  if (operation === "coordination.complete") return local.coordinationComplete(payload as Parameters<LocalServer["coordinationComplete"]>[0])
-  await requireCoordinatorHolder(input, payload.groupID as string, payload.holderSessionID as string)
-  if (operation === "coordination.claim") return local.coordinationClaim(payload as Parameters<LocalServer["coordinationClaim"]>[0])
-  if (operation === "coordination.release") return local.coordinationRelease(payload as Parameters<LocalServer["coordinationRelease"]>[0])
-  if (operation === "coordination.dispatch") return local.coordinationDispatch(payload as Parameters<LocalServer["coordinationDispatch"]>[0])
-  if (operation === "coordination.wait") return local.coordinationWait(payload as Parameters<LocalServer["coordinationWait"]>[0])
-  if (operation === "coordination.cancelWait") return local.coordinationCancelWait(payload as Parameters<LocalServer["coordinationCancelWait"]>[0])
+  if (operation === "coordination.delete") return local.coordinationDelete(payload as Parameters<LocalServer["coordinationDelete"]>[0])
   return unknownOperation()
 }
 
@@ -1440,18 +1387,9 @@ export async function coordinationCoordinatorMap(local: LocalServer): Promise<Re
   const summaries = await local.coordinationList()
   const map = new Map<string, string[]>()
   if (!Array.isArray(summaries)) return map
-  const details = await Promise.all(summaries.map(async (summary) => {
-    const id = typeof summary === "object" && summary !== null ? Reflect.get(summary, "id") : undefined
-    return typeof id === "string" ? local.coordinationGet({ groupID: id } as Parameters<LocalServer["coordinationGet"]>[0]).catch(() => undefined) : undefined
-  }))
-  for (const detail of details) {
-    const members = typeof detail === "object" && detail !== null ? Reflect.get(detail, "members") : undefined
-    if (!Array.isArray(members)) continue
-    for (const member of members) {
-      if (typeof member !== "object" || member === null || Reflect.get(member, "role") !== "coordinator") continue
-      const sessionID = Reflect.get(member, "sessionID")
-      if (typeof sessionID === "string") map.set(sessionID, [sessionID])
-    }
+  for (const summary of summaries) {
+    const id = summary.masterSessionID
+    if (typeof id === "string") map.set(id, [id])
   }
   return map
 }
@@ -2281,19 +2219,10 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "incident.guidance.clear": ["provider", "model"],
   "coordination.settings": [],
   "coordination.list": [],
-  "coordination.create": ["name", "policy", "members"],
+  "coordination.create": ["name", "masterSessionID", "memberSessionIDs"],
   "coordination.get": ["groupID"],
-  "coordination.members": ["groupID", "revision", "name", "members", "policy"],
-  "coordination.arm": ["groupID", "revision"],
-  "coordination.stop": ["groupID", "revision"],
-  "coordination.complete": ["groupID", "revision"],
-  "coordination.claim": ["groupID", "revision", "targetSessionID", "holderSessionID", "leaseMs"],
-  "coordination.release": ["groupID", "revision", "targetSessionID", "holderSessionID", "generation"],
-  "coordination.dispatch": ["groupID", "revision", "holderSessionID", "generation", "dispatchID", "targetSessionID", "text", "dependsOn", "resourceScope", "allowedTools", "selection"],
-  "coordination.receipts": ["groupID"],
-  "coordination.wait": ["groupID", "revision", "holderSessionID", "waitID", "targets", "timeoutMs", "batch"],
-  "coordination.cancelWait": ["groupID", "revision", "waitID", "holderSessionID"],
-  "coordination.capacity": ["groupID"],
+  "coordination.update": ["groupID", "revision", "name", "masterSessionID", "memberSessionIDs", "settings"],
+  "coordination.delete": ["groupID"],
   "session.status": [],
   "session.catalog": [],
   "workspace.catalog": ["workspace"],
@@ -2368,15 +2297,9 @@ const mutations: ReadonlySet<string> = new Set([
   "machine.keepAwake.set",
   "incident.guidance.clear",
   "coordination.create",
-  "coordination.members",
-  "coordination.arm",
-  "coordination.stop",
-  "coordination.complete",
-  "coordination.claim",
-  "coordination.release",
-  "coordination.dispatch",
-  "coordination.wait",
-  "coordination.cancelWait",
+  "coordination.update",
+  "coordination.delete",
+  "session.delete",
   "session.compact",
   "session.create",
   "session.subagent.cancel",

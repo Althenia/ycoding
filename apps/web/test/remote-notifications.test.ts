@@ -188,11 +188,11 @@ async function raised(test: Harness, category: NoticeCategory, sessionID = "ses_
 describe("external delivery filter", () => {
   const coordination = (lead: string): RelayRequestHandler => (request) => {
     if (!request.operation.startsWith("coordination.")) return "default"
-    const group = { id: "cgrp_1", name: "Release", status: "armed", revision: 1, policy: { concurrency: 1, queueCapacity: 64 }, fencingGeneration: 1, time: { created: 1, updated: 1 } }
-    if (request.operation === "coordination.list") return { ok: true, value: { data: [{ ...group, memberCount: 2 }] } }
-    if (request.operation === "coordination.get") return { ok: true, value: { data: { ...group, members: [{ sessionID: lead, role: "coordinator", location: { directory: "/repo" } }, { sessionID: lead === "ses_b" ? "ses_a" : "ses_b", role: "worker", location: { directory: "/repo" } }], claims: [], dispatches: [] } } }
-    if (request.operation === "coordination.capacity") return { ok: true, value: { data: { groupID: "cgrp_1", concurrency: 1, hardLimit: 2, effectiveLimit: 1, active: 0, waiting: 0, queued: 0, queueCapacity: 64, available: 1, spent: 0 } } }
-    if (request.operation === "coordination.receipts") return { ok: true, value: { data: [] } }
+    const participant = (sessionID: string) => ({ sessionID, title: sessionID, location: { directory: "/repo" }, state: "idle", lastActivity: 1, pending: [] })
+    const worker = lead === "ses_b" ? "ses_a" : "ses_b"
+    const group = { id: "cgrp_1", name: "Release", revision: 1, active: true, settings: { concurrency: 1 }, time: { created: 1, updated: 1 } }
+    if (request.operation === "coordination.list") return { ok: true, value: { data: [{ ...group, masterSessionID: lead, memberCount: 1 }] } }
+    if (request.operation === "coordination.get") return { ok: true, value: { data: { ...group, master: participant(lead), members: [participant(worker)] } } }
     return { ok: false, code: "unknown_operation", message: "unknown" }
   }
 
@@ -223,7 +223,7 @@ describe("external delivery filter", () => {
     } finally { await broken.stop() }
   })
 
-  test("the coordinators scope withholds alerts until the coordinator list loads and never reads as all sessions", async () => {
+  test("the masters scope withholds alerts until the master list loads and never reads as all sessions", async () => {
     const test = await harness({ storage: storage(), handler: coordination("ses_a") })
     try {
       await test.openSession()
@@ -238,7 +238,7 @@ describe("external delivery filter", () => {
     } finally { await test.stop() }
   })
 
-  test("a connector without the Projects operations keeps the coordinators scope withheld", async () => {
+  test("a connector without the Projects operations keeps the masters scope withheld", async () => {
     const test = await harness({ storage: storage(), handler: (request) => request.operation.startsWith("coordination.") ? { ok: false, code: "unknown_operation", message: "unknown" } : "default" })
     try {
       await test.openSession()

@@ -38,7 +38,13 @@ type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
 type AssistantMessageView = Extract<RemoteMessageView, { kind: "assistant" }>
 
 function SyntheticNotice(props: { readonly notice: NonNullable<ReturnType<typeof classifySyntheticNotice>> }): JSX.Element {
+  const remote = useRemote()
   const notice = props.notice
+  if (notice.kind === "member") return <div class="project-event" data-event={notice.event} role="group" aria-label={`Member update: ${notice.label}`}><span aria-hidden="true">{notice.event === "failed" ? "×" : notice.event === "completed" ? "✓" : "△"}</span><strong>{notice.label}</strong><span>{notice.event}</span><span class="project-event__excerpt">{notice.excerpt}</span><a class="button button--ghost button--small" href={`/remote/session?session_id=${encodeURIComponent(notice.memberSessionID)}${remote.state().activeDeviceID ? `&device_id=${encodeURIComponent(remote.state().activeDeviceID!)}` : ""}`} aria-label={`Open session ${notice.label}`} onClick={(event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    event.preventDefault()
+    window.dispatchEvent(new CustomEvent("ycoding:open-session", { detail: { sessionID: notice.memberSessionID, deviceID: remote.state().activeDeviceID } }))
+  }}>Open<Icon name="chevron-right" size={16} /></a></div>
   if (notice.kind === "goal") return <div class="transcript-notice transcript-notice--goal"><strong>Goal · steer</strong><p>{notice.text}</p></div>
   if (notice.kind === "completion") return <p class={`transcript-notice transcript-notice--${notice.status}`}><strong>{notice.label} {notice.status}</strong><Show when={notice.description}> · {notice.description}</Show></p>
   const heading = <><span class="transcript-notice__mark" aria-hidden="true">◦</span><strong>Subagent · {notice.label}</strong><span class="transcript-notice__status">{notice.status}</span></>

@@ -22,8 +22,6 @@ import { SessionMessage } from "./session/message"
 import { SessionReviewFold } from "./session/review-fold"
 import { SessionAssessment } from "./session/assessment"
 import { SessionDecisionContext } from "./session/decision-context"
-import { CoordinationAccess } from "./session/coordination-access"
-import { CoordinationAccessResolver } from "./coordination/access"
 import { Hash } from "./util/hash"
 
 const assessmentInstructions =
@@ -189,40 +187,6 @@ export interface EvaluateEffectiveInput {
   readonly resource: string
 }
 
-export interface RoleAccess {
-  readonly role: CoordinationAccess.Access["role"]
-  readonly allowedTools?: readonly string[]
-  readonly resourceScopes?: readonly string[]
-  readonly status?: string
-}
-
-export type RoleFor = (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<RoleAccess>>
-
-export const RoleFor = Context.Reference<RoleFor | undefined>("@ycoding/Permission/CoordinationRoleFor", {
-  defaultValue: () => undefined,
-})
-
-export function coordinationRules(
-  access: RoleAccess | undefined,
-  input: Pick<AssertInput, "action" | "resources">,
-): Permission.Ruleset {
-  if (access === undefined) return []
-  if (access.status !== undefined && access.status !== "armed" && access.status !== "waiting" && access.status !== "active") return []
-  const ancillary = input.action === "external_directory" || input.action === "file_mutation"
-  const allowed =
-    ancillary ||
-    (input.action === "edit"
-      ? ["edit", "write", "patch"].some((name) => CoordinationAccess.allowsTool(access, name))
-      : CoordinationAccess.allowsTool(access, input.action))
-  if (!allowed) return [{ action: input.action, resource: "*", effect: "deny" }]
-  if (access.resourceScopes === undefined) return []
-  return input.resources.flatMap((resource) =>
-    access.resourceScopes!.some((scope) => Wildcard.match(resource, scope))
-      ? []
-      : [{ action: input.action, resource, effect: "deny" as const }],
-  )
-}
-
 export interface Snapshot {
   readonly request: Request
   readonly fingerprint: string
@@ -286,7 +250,6 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
-    const accessResolver = yield* Effect.serviceOption(CoordinationAccessResolver.Service)
     const pending = new Map<ID, Pending>()
     const reconsidering = new Set<ID>()
     const settlement = yield* Semaphore.make(1)
@@ -323,22 +286,8 @@ const layer = Layer.effect(
     const configured = (sessionID: SessionSchema.ID, agentID?: Agent.ID) =>
       ruleSources(sessionID, agentID).pipe(Effect.map((sources) => [...sources.agent, ...sources.ceiling]))
 
-    const roleRules = Effect.fnUntraced(function* (input: AssertInput) {
-      const roleFor = yield* RoleFor
-      const restrictions =
-        roleFor !== undefined
-          ? yield* roleFor(input.sessionID)
-          : Option.isSome(accessResolver)
-            ? yield* accessResolver.value
-                .forSession(input.sessionID)
-                .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-            : []
-      if (restrictions === undefined) return [{ action: input.action, resource: "*", effect: "deny" as const }]
-      return restrictions.flatMap((access) => coordinationRules(access, input))
-    })
-
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
-      const rules = [...(yield* configured(input.sessionID, input.agent)), ...(yield* roleRules(input))]
+      const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return decision(input, rules, [])
       const result = decision(input, rules, yield* savedRules())
       return input.requireHuman ? { ...result, effect: "ask" as const } : result
@@ -997,5 +946,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node, CoordinationAccessResolver.node],
+  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node],
 })

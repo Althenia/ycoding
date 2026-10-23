@@ -56,6 +56,7 @@ export const remoteOperations = [
   "session.list",
   "session.active",
   "session.get",
+  "session.delete",
   "session.messages",
   "session.capturedChanges.list",
   "session.compaction.list",
@@ -124,17 +125,8 @@ export const remoteOperations = [
   "coordination.list",
   "coordination.create",
   "coordination.get",
-  "coordination.members",
-  "coordination.arm",
-  "coordination.stop",
-  "coordination.complete",
-  "coordination.claim",
-  "coordination.release",
-  "coordination.dispatch",
-  "coordination.receipts",
-  "coordination.wait",
-  "coordination.cancelWait",
-  "coordination.capacity",
+  "coordination.update",
+  "coordination.delete",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
   "machine.telemetry.consent.get",
@@ -147,6 +139,7 @@ export const remoteOperations = [
 export const remoteSessionOperations = [
   ...localAppOperations,
   "session.get",
+  "session.delete",
   "session.messages",
   "session.capturedChanges.list",
   "session.compaction.list",
@@ -227,6 +220,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.list": "read",
   "session.active": "read",
   "session.get": "read",
+  "session.delete": "mutation",
   "session.messages": "read",
   "session.capturedChanges.list": "read",
   "session.compaction.list": "read",
@@ -295,17 +289,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "coordination.list": "read",
   "coordination.create": "mutation",
   "coordination.get": "read",
-  "coordination.members": "mutation",
-  "coordination.arm": "mutation",
-  "coordination.stop": "mutation",
-  "coordination.complete": "mutation",
-  "coordination.claim": "mutation",
-  "coordination.release": "mutation",
-  "coordination.dispatch": "mutation",
-  "coordination.receipts": "read",
-  "coordination.wait": "mutation",
-  "coordination.cancelWait": "mutation",
-  "coordination.capacity": "read",
+  "coordination.update": "mutation",
+  "coordination.delete": "mutation",
   "machine.keepAwake.get": "read",
   "machine.keepAwake.set": "mutation",
   "machine.telemetry.consent.get": "read",
@@ -872,6 +857,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
   if (operation === "artifact.demo.preview" || operation === "artifact.demo.export") return input === undefined
   if (operation === "session.list") return input === undefined || isRecord(input) &&
@@ -1032,97 +1018,43 @@ function validCoordinationDelegated(value: unknown): boolean {
     (value.expiresAt === undefined || coordinationInt(value.expiresAt, 0, Number.MAX_SAFE_INTEGER))
 }
 
-function validCoordinationPolicy(value: unknown): boolean {
-  if (!isRecord(value) || !coordinationKeys(value, ["concurrency", "queueCapacity", "budget", "delegatedDecisions"])) return false
+function validCoordinationSettings(value: unknown): boolean {
+  if (!isRecord(value) || !coordinationKeys(value, ["concurrency", "delegatedDecisions"])) return false
   return (value.concurrency === null || coordinationInt(value.concurrency, 1, Number.MAX_SAFE_INTEGER)) &&
-    coordinationInt(value.queueCapacity, 1, 1000) &&
-    (value.budget === undefined || (typeof value.budget === "number" && Number.isFinite(value.budget) && value.budget > 0)) &&
     (value.delegatedDecisions === undefined || validCoordinationDelegated(value.delegatedDecisions))
 }
 
-function validCoordinationMembers(value: unknown): boolean {
-  return Array.isArray(value) && value.length >= 1 && value.length <= 64 && value.every((member) =>
-    isRecord(member) && coordinationKeys(member, ["sessionID", "role", "allowedTools", "resourceScopes"]) &&
-    isSessionID(member.sessionID) && (member.role === "coordinator" || member.role === "worker" || member.role === "observer") &&
-    (member.allowedTools === undefined || coordinationTexts(member.allowedTools, 64, 128)) &&
-    (member.resourceScopes === undefined || coordinationTexts(member.resourceScopes, 32, 512)))
-}
-
-function validCoordinationSelection(value: unknown): boolean {
-  if (!isRecord(value) || !coordinationKeys(value, ["agent", "model", "reason"])) return false
-  if (!validName(value.agent)) return false
-  if (typeof value.reason !== "string" || value.reason.length > 500 || value.reason.trim().length === 0 || /[\x00\r\n]/.test(value.reason)) return false
-  if (!isRecord(value.model) || !coordinationKeys(value.model, ["providerID", "id", "profile", "variant"])) return false
-  return validName(value.model.providerID) && validName(value.model.id) &&
-    (value.model.profile === undefined || validName(value.model.profile)) &&
-    (value.model.variant === undefined || validName(value.model.variant))
+function validMemberSessionIDs(value: unknown): boolean {
+  return Array.isArray(value) && value.length <= 64 && value.every(isSessionID)
 }
 
 function validCoordinationInput(operation: RemoteOperation, input: unknown): boolean {
   if (operation === "coordination.settings" || operation === "coordination.list") return input === undefined
   if (!isRecord(input)) return false
   if (operation === "coordination.create")
-    return coordinationKeys(input, ["name", "policy", "members"]) && coordinationText(input.name, 120) &&
-      validCoordinationPolicy(input.policy) && validCoordinationMembers(input.members)
+    return coordinationKeys(input, ["name", "masterSessionID", "memberSessionIDs"]) && coordinationText(input.name, 120) &&
+      isSessionID(input.masterSessionID) && validMemberSessionIDs(input.memberSessionIDs)
   if (!coordinationID(input.groupID, "cgrp_")) return false
-  if (operation === "coordination.get" || operation === "coordination.receipts" || operation === "coordination.capacity")
+  if (operation === "coordination.get" || operation === "coordination.delete")
     return coordinationKeys(input, ["groupID"])
-  if (operation === "coordination.members")
-    return coordinationKeys(input, ["groupID", "revision", "name", "members", "policy"]) &&
+  if (operation === "coordination.update")
+    return coordinationKeys(input, ["groupID", "revision", "name", "masterSessionID", "memberSessionIDs", "settings"]) &&
       coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) &&
       (input.name === undefined || coordinationText(input.name, 120)) &&
-      validCoordinationMembers(input.members) &&
-      (input.policy === undefined || validCoordinationPolicy(input.policy))
-  if (operation === "coordination.arm" || operation === "coordination.stop" || operation === "coordination.complete")
-    return coordinationKeys(input, ["groupID", "revision"]) && coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER)
-  if (operation === "coordination.claim")
-    return coordinationKeys(input, ["groupID", "revision", "targetSessionID", "holderSessionID", "leaseMs"]) &&
-      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.targetSessionID) &&
-      isSessionID(input.holderSessionID) && coordinationInt(input.leaseMs, 1000, 300000)
-  if (operation === "coordination.release")
-    return coordinationKeys(input, ["groupID", "revision", "targetSessionID", "holderSessionID", "generation"]) &&
-      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.targetSessionID) &&
-      isSessionID(input.holderSessionID) && coordinationInt(input.generation, 0, Number.MAX_SAFE_INTEGER)
-  if (operation === "coordination.dispatch")
-    return coordinationKeys(input, ["groupID", "revision", "holderSessionID", "generation", "dispatchID", "targetSessionID", "text", "dependsOn", "resourceScope", "allowedTools", "selection"]) &&
-      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.holderSessionID) &&
-      coordinationInt(input.generation, 0, Number.MAX_SAFE_INTEGER) &&
-      (input.dispatchID === undefined || coordinationID(input.dispatchID, "cdsp_")) &&
-      isSessionID(input.targetSessionID) && coordinationText(input.text, 32000) &&
-      (input.dependsOn === undefined || (Array.isArray(input.dependsOn) && input.dependsOn.length <= 32 && input.dependsOn.every((id) => coordinationID(id, "cdsp_")))) &&
-      (input.resourceScope === undefined || coordinationText(input.resourceScope, 512)) &&
-      (input.allowedTools === undefined || coordinationTexts(input.allowedTools, 64, 128)) &&
-      validCoordinationSelection(input.selection)
-  if (operation === "coordination.wait")
-    return coordinationKeys(input, ["groupID", "revision", "holderSessionID", "waitID", "targets", "timeoutMs", "batch"]) &&
-      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.holderSessionID) &&
-      (input.waitID === undefined || coordinationID(input.waitID, "cwait_")) &&
-      (input.targets === undefined || (Array.isArray(input.targets) && input.targets.length <= 64 && input.targets.every((id) => isSessionID(id)))) &&
-      (input.timeoutMs === undefined || coordinationInt(input.timeoutMs, 0, 300000)) &&
-      (input.batch === undefined || coordinationInt(input.batch, 1, 200))
-  if (operation === "coordination.cancelWait")
-    return coordinationKeys(input, ["groupID", "revision", "waitID", "holderSessionID"]) &&
-      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && coordinationID(input.waitID, "cwait_") && isSessionID(input.holderSessionID)
+      (input.masterSessionID === undefined || isSessionID(input.masterSessionID)) &&
+      (input.memberSessionIDs === undefined || validMemberSessionIDs(input.memberSessionIDs)) &&
+      (input.settings === undefined || validCoordinationSettings(input.settings))
   return false
 }
 
-export type RemoteCoordinationRole = "coordinator" | "worker" | "observer"
-export type RemoteCoordinationGroupStatus = "disarmed" | "armed" | "waiting" | "stopped" | "completed" | "needs-rearm"
 export type RemoteCoordinationDelegatedDecisions = { readonly categories: readonly ("question" | "permission" | "review")[]; readonly actions?: readonly string[]; readonly resources?: readonly string[]; readonly expiresAt?: number }
 export type RemoteCoordinationSettings = { readonly enabled: boolean; readonly categories: readonly ("question" | "permission" | "review")[]; readonly actions?: readonly string[]; readonly resources?: readonly string[]; readonly expiresAt?: number }
-export type RemoteCoordinationPolicy = { readonly concurrency: number | null; readonly queueCapacity: number; readonly budget?: number; readonly delegatedDecisions?: RemoteCoordinationDelegatedDecisions }
-export type RemoteCoordinationMemberInput = { readonly sessionID: string; readonly role: RemoteCoordinationRole; readonly allowedTools?: readonly string[]; readonly resourceScopes?: readonly string[] }
-export type RemoteCoordinationMember = RemoteCoordinationMemberInput & { readonly location: { readonly directory: string; readonly workspaceID?: string } }
-export type RemoteCoordinationSelection = { readonly agent: string; readonly model: { readonly providerID: string; readonly id: string; readonly profile?: string; readonly variant?: string }; readonly reason: string }
-export type RemoteCoordinationGroup = { readonly id: string; readonly name: string; readonly status: RemoteCoordinationGroupStatus; readonly revision: number; readonly policy: RemoteCoordinationPolicy; readonly fencingGeneration: number; readonly members: readonly RemoteCoordinationMember[]; readonly time: { readonly created: number; readonly updated: number } }
-export type RemoteCoordinationGroupSummary = { readonly id: string; readonly name: string; readonly status: RemoteCoordinationGroupStatus; readonly revision: number; readonly policy: RemoteCoordinationPolicy; readonly fencingGeneration: number; readonly memberCount: number; readonly time: { readonly created: number; readonly updated: number } }
-export type RemoteCoordinationClaim = { readonly groupID: string; readonly targetSessionID: string; readonly holderSessionID: string; readonly generation: number; readonly status: "active" | "released" | "revoked" | "expired"; readonly leaseExpiresAt: number }
-export type RemoteCoordinationDispatch = { readonly id: string; readonly groupID: string; readonly targetSessionID: string; readonly coordinatorSessionID: string; readonly generation: number; readonly status: "queued" | "pending" | "admitted" | "failed" | "cancelled" | "completed"; readonly reason?: "capacity" | "hard-limit" | "dependency" | "budget"; readonly text: string; readonly dependsOn?: readonly string[]; readonly resourceScope?: string; readonly allowedTools?: readonly string[]; readonly selection: RemoteCoordinationSelection; readonly messageID?: string; readonly time: { readonly created: number; readonly updated: number } }
-export type RemoteCoordinationGroupDetail = RemoteCoordinationGroup & { readonly claims: readonly RemoteCoordinationClaim[]; readonly dispatches: readonly RemoteCoordinationDispatch[] }
-export type RemoteCoordinationReceipt = { readonly id: string; readonly groupID: string; readonly dispatchID?: string; readonly kind: "dispatched" | "admitted" | "failed" | "cancelled" | "completed"; readonly sessionID: string; readonly messageID?: string; readonly generation?: number; readonly selection: RemoteCoordinationSelection; readonly time: number; readonly detail?: string }
-export type RemoteCoordinationCapacity = { readonly groupID: string; readonly concurrency: number | null; readonly hardLimit: number | null; readonly effectiveLimit: number | null; readonly active: number; readonly waiting: number; readonly queued: number; readonly queueCapacity: number; readonly available: number | null; readonly runtimeUsed?: number; readonly budget?: number; readonly spent: number; readonly budgetRemaining?: number }
-export type RemoteCoordinationObservation = { readonly sessionID: string; readonly eventID?: string; readonly seq: number; readonly type: string; readonly time: number; readonly gap?: true }
-export type RemoteCoordinationWaitResult = { readonly waitID: string; readonly groupID: string; readonly status: "active" | "cancelled" | "expired"; readonly observations: readonly RemoteCoordinationObservation[]; readonly cursors: Readonly<Record<string, number>> }
+export type RemoteCoordinationGroupSettings = { readonly concurrency: number | null; readonly delegatedDecisions?: RemoteCoordinationDelegatedDecisions }
+export type RemoteCoordinationMemberState = "idle" | "running" | "waiting" | "failed"
+export type RemoteCoordinationPendingRequest = { readonly kind: "question" | "permission" | "review"; readonly requestID: string; readonly fingerprint: string; readonly summary: string }
+export type RemoteCoordinationParticipant = { readonly sessionID: string; readonly title: string; readonly location: { readonly directory: string; readonly workspaceID?: string }; readonly state: RemoteCoordinationMemberState; readonly lastActivity: number; readonly pending: readonly RemoteCoordinationPendingRequest[]; readonly drivenBy?: { readonly sessionID: string; readonly title: string } }
+export type RemoteCoordinationGroupSummary = { readonly id: string; readonly name: string; readonly revision: number; readonly active: boolean; readonly pausedReason?: "interrupted" | "restart"; readonly masterSessionID: string; readonly memberCount: number; readonly settings: RemoteCoordinationGroupSettings; readonly time: { readonly created: number; readonly updated: number } }
+export type RemoteCoordinationGroup = Omit<RemoteCoordinationGroupSummary, "masterSessionID" | "memberCount"> & { readonly master: RemoteCoordinationParticipant; readonly members: readonly RemoteCoordinationParticipant[] }
 
 export function isRemoteLatencySample(value: unknown): value is RemoteLatencySample {
   if (!isRecord(value) || typeof value.at !== "string" || value.at.length !== 24 ||

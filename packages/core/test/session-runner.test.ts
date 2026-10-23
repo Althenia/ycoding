@@ -65,8 +65,6 @@ import { Money } from "@ycoding-ai/schema/money"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionContext } from "@ycoding-ai/core/session/context"
-import { CoordinationAccessResolver } from "@ycoding-ai/core/coordination/access"
-import { Coordination } from "@ycoding-ai/schema/coordination"
 import { SessionHistoryPruning } from "@ycoding-ai/core/session/history-pruning"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 import { SessionSharedContext } from "@ycoding-ai/core/session/shared-context"
@@ -838,21 +836,6 @@ const pluginSupervisor = Layer.succeed(
   }),
 )
 let defaultSelectionRef: CatalogModel.Ref | undefined
-const dispatchSelections = new Map<SessionMessage.ID, Coordination.DispatchSelection>()
-const coordinationAccess = Layer.effect(CoordinationAccessResolver.Service, Effect.gen(function* () {
-  const { db } = yield* Database.Service
-  return CoordinationAccessResolver.make({ db, coordination: {
-    standingRoles: () => Effect.succeed([]),
-    accessForInput: (input) => {
-      const selection = dispatchSelections.get(input.messageID)
-      return Effect.succeed(selection === undefined ? undefined : Coordination.AssignmentAccess.make({
-        groupID: Coordination.GroupID.make("cgrp_runner"), revision: Coordination.Revision.make(1), status: "armed", role: "worker",
-        dispatchID: Coordination.DispatchID.make("cdsp_runner"), coordinatorSessionID: Session.ID.make("ses_dispatch_owner"),
-        generation: 1, selection,
-      }))
-    },
-  } })
-}))
 const promptCatalog = Layer.mock(Catalog.Service, {
   provider: {
     get: () => Effect.succeed(undefined),
@@ -887,7 +870,6 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, snapshotLayer],
   [LayerNodePlatform.llmClient, client],
   [Catalog.node, promptCatalog],
-  [CoordinationAccessResolver.node, coordinationAccess],
   [SessionRunnerModel.node, models],
   [InstructionBuiltIns.node, systemContext],
   [InstructionDiscovery.node, instructionContext],
@@ -968,8 +950,7 @@ const it = testEffect(
       [Project.node, projects],
       [Permission.node, permission],
       [Catalog.node, promptCatalog],
-      [CoordinationAccessResolver.node, coordinationAccess],
-      [SessionRunnerModel.node, models],
+          [SessionRunnerModel.node, models],
       [InstructionBuiltIns.node, systemContext],
       [InstructionDiscovery.node, instructionContext],
       [Location.node, Location.boundNode({ directory: runnerDirectory })],
@@ -1034,7 +1015,6 @@ const setup = Effect.gen(function* () {
   pluginFlushHook = Effect.void
   currentModel = model
   defaultSelectionRef = undefined
-  dispatchSelections.clear()
   currentCost = []
   currentAccountIdentityDigest = "a".repeat(64)
   fallbackModels.clear()
@@ -1460,41 +1440,31 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
-  it.effect("uses each promoted dispatch selection on its first request and restores defaults for a later human input", () =>
+  it.effect("uses a coordination message's model override on its first request and restores defaults for a later human input", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const agents = yield* Agent.Service
       const { db } = yield* Database.Service
       const original = CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model"), variant: CatalogModel.VariantID.make("low") })
-      const selection = Coordination.DispatchSelection.make({
-        agent: Agent.ID.make("dispatch-worker"),
-        model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("replacement"), variant: CatalogModel.VariantID.make("high") }),
-        reason: "A cross-module assignment needs the evidence-led worker",
-      })
-      yield* agents.transform((draft) => draft.update(selection.agent, (agent) => {
-        agent.mode = "primary"
-        agent.system = "Dispatch-specific worker instructions"
-      }))
+      const override = CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("replacement"), variant: CatalogModel.VariantID.make("high") })
       yield* db.update(SessionTable).set({ agent: Agent.ID.make("build"), model: original }).where(eq(SessionTable.id, sessionID)).run()
       const events = yield* EventRuntime.Service
       const inputID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.InputAdmitted, {
         sessionID, inputID,
-        input: { type: "user", delivery: "steer", data: { text: "Do the assigned work", metadata: { inputOrigin: "coordination" } } },
+        input: { type: "user", delivery: "steer", data: { text: "Do the assigned work", metadata: {
+          inputOrigin: "coordination", coordination: { groupID: "cgrp_runner", senderSessionID: "ses_master", messageID: inputID, model: override },
+        } } },
       })
-      dispatchSelections.set(inputID, selection)
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(1)
       expect(String(requests[0]?.model.id)).toBe("replacement")
-      expect(requests[0]?.system.map((part) => part.text).join("\n")).toContain("Dispatch-specific worker instructions")
       const first = (yield* session.messages({ sessionID })).find((message) => message.type === "assistant")
-      expect(first).toMatchObject({ agent: selection.agent, model: selection.model })
+      expect(first).toMatchObject({ agent: "build", model: override })
       expect(yield* session.get(sessionID)).toMatchObject({ agent: "build", model: original })
       yield* session.prompt({ sessionID, text: "Now do my separate request", resume: false })
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(2)
       expect(String(requests[1]?.model.id)).toBe("fake-model")
-      expect(requests[1]?.system.map((part) => part.text).join("\n")).not.toContain("Dispatch-specific worker instructions")
       const last = (yield* session.messages({ sessionID, order: "desc" })).find((message) => message.type === "assistant")
       expect(last).toMatchObject({ agent: "build", model: original })
       expect(yield* session.get(sessionID)).toMatchObject({ agent: "build", model: original })
@@ -11198,7 +11168,7 @@ const providerRecords = SessionProviderRequest.Service.pipe(Effect.flatMap((serv
 
 describe("SessionRunnerLLM model fallback", () => {
   for (const failure of ["quota", "unavailable"] as const)
-    it.effect(`keeps a dispatch on its selected model after ${failure} failure`, () =>
+    it.effect(`keeps a coordination message on its overridden model after ${failure} failure`, () =>
       Effect.gen(function* () {
         const session = yield* setup
         configureFallbacks(["fake/backup"])
@@ -11211,13 +11181,11 @@ describe("SessionRunnerLLM model fallback", () => {
         yield* events.publish(SessionEvent.InputAdmitted, {
           sessionID,
           inputID,
-          input: { type: "user", delivery: "steer", data: { text: "Complete the assignment", metadata: { inputOrigin: "coordination" } } },
+          input: { type: "user", delivery: "steer", data: { text: "Complete the assignment", metadata: {
+            inputOrigin: "coordination",
+            coordination: { groupID: "cgrp_runner", senderSessionID: "ses_master", messageID: inputID, model: { providerID: "fake", id: "fake-model", variant: "high" } },
+          } } },
         })
-        dispatchSelections.set(inputID, Coordination.DispatchSelection.make({
-          agent: Agent.ID.make("build"),
-          model: CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("fake-model"), variant: CatalogModel.VariantID.make("high") }),
-          reason: "Use the verified assignment model",
-        }))
         expect(Exit.isFailure(yield* session.resume(sessionID).pipe(Effect.exit))).toBe(true)
         expect(requests.map((request) => String(request.model.id))).toEqual(failure === "quota" ? ["fake-model"] : [])
         expect(yield* recordedEventTypes(sessionID)).not.toContain("session.step.rerouted.1")

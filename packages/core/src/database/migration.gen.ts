@@ -43,5 +43,6 @@ export const migrations = (
     import("./migration/20261018121535_mcp-events-retention"),
     import("./migration/20261020120000_session-yolo-toggle"),
     import("./migration/20261023093249_coordination-groups"),
+    import("./migration/20261023160000_projects-redesign"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

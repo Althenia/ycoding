@@ -328,7 +328,7 @@ const layer = Layer.effect(
         }
         if (promoted > 0) {
           currentStep = 1
-          if (selected.dispatchSelection !== undefined || dispatchInputs.size > 0) {
+          if (selected.modelOverride !== undefined || dispatchInputs.size > 0) {
             selected = yield* context.select(sessionID)
             yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
           }
@@ -336,7 +336,7 @@ const layer = Layer.effect(
         }
       }
       requestTrackerState.agent = selected.agent.id
-      const selectedModel = selected.dispatchSelection?.model ?? selected.session.model
+      const selectedModel = selected.modelOverride ?? selected.session.model
       if (
         route.primary !== undefined &&
         selectedModel !== undefined &&
@@ -357,7 +357,7 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           const primary = route.primary ?? attempted
           const next =
-            recoveryMode === "terminal-response" || selected.dispatchSelection !== undefined
+            recoveryMode === "terminal-response" || selected.modelOverride !== undefined
               ? undefined
               : SessionModelFallback.next(configEntries, primary, [...route.tried, attempted])
           if (next === undefined) return undefined
@@ -418,7 +418,7 @@ const layer = Layer.effect(
       const compactionPolicy = SessionContextPressure.policy(configEntries)
       const lastProviderInput = SessionCacheDiagnostics.latestAssistant(initialContext.messages)?.tokens
       const fallbackNext =
-        recoveryMode === "terminal-response" || selected.dispatchSelection !== undefined
+        recoveryMode === "terminal-response" || selected.modelOverride !== undefined
           ? undefined
           : SessionModelFallback.next(configEntries, primary, [...route.tried, attempting])
       if (

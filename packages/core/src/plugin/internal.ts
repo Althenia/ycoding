@@ -14,8 +14,7 @@ import { Computer } from "../computer"
 import { Credential } from "../credential"
 import { Decision } from "../decision"
 import { Database } from "../database/database"
-import { CoordinationService } from "../coordination/index"
-import { CoordinationDecisions } from "../session/coordination-decisions"
+import { CoordinationRuntime } from "../session/coordination-runtime"
 import { CoordinationTool } from "../tool/coordination"
 import { ConfigAgentPlugin } from "../config/plugin/agent"
 import { ConfigCommandPlugin } from "../config/plugin/command"
@@ -102,7 +101,6 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const credential = yield* Credential.Service
   const decision = yield* Decision.Service
   const database = yield* Database.Service
-  const coordination = yield* CoordinationService.Service
   const events = yield* EventRuntime.Service
   const mutation = yield* FileMutation.Service
   const filesystem = yield* FileSystem.Service
@@ -119,7 +117,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const mcp = yield* MCP.Service
   const npm = yield* Npm.Service
   const permission = yield* Permission.Service
-  const coordinationDecisions = yield* CoordinationDecisions.Service
+  const coordination = yield* CoordinationRuntime.Service
   const providerUsage = yield* ProviderUsageRuntime.Service
   const projectCopy = yield* ProjectCopy.Service
   const guardrail = yield* SessionGuardrail.Service
@@ -152,8 +150,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(Credential.Service, credential),
     Context.make(Decision.Service, decision),
     Context.make(Database.Service, database),
-    Context.make(CoordinationService.Service, coordination),
-    Context.make(CoordinationDecisions.Service, coordinationDecisions),
+    Context.make(CoordinationRuntime.Service, coordination),
     Context.make(EventRuntime.Service, events),
     Context.make(FileMutation.Service, mutation),
     Context.make(FileSystem.Service, filesystem),

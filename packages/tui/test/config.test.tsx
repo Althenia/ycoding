@@ -1,7 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { resolve, ConfigProvider, useConfig, type Interface } from "../src/config"
+import { Schema } from "effect"
+import { resolve, ConfigProvider, CoordinationNotifications, useConfig, type Interface } from "../src/config"
+
+test("notification selections accept 128 master Sessions and reject larger selections", () => {
+  const sessionIDs = Array.from({ length: 128 }, (_, index) => `ses_master_${index}`)
+  expect(Schema.decodeUnknownSync(CoordinationNotifications)({ scope: "selected", sessionIDs }).sessionIDs).toHaveLength(128)
+  expect(() => Schema.decodeUnknownSync(CoordinationNotifications)({ scope: "selected", sessionIDs: [...sessionIDs, "ses_extra"] })).toThrow()
+})
 
 test("coordination notification preferences preserve all-source defaults and explicit bounded selections", () => {
   expect(resolve({}, { terminalSuspend: true }).attention.coordination).toEqual({ scope: "all" })

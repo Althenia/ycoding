@@ -26,17 +26,8 @@ export type TelemetryRequestSample = {
     | "coordination.list"
     | "coordination.create"
     | "coordination.get"
-    | "coordination.members"
-    | "coordination.arm"
-    | "coordination.stop"
-    | "coordination.complete"
-    | "coordination.claim"
-    | "coordination.release"
-    | "coordination.dispatch"
-    | "coordination.receipts"
-    | "coordination.wait"
-    | "coordination.cancelWait"
-    | "coordination.capacity"
+    | "coordination.update"
+    | "coordination.delete"
     | "workspace.list"
     | "session.list"
     | "session.active"
@@ -85,6 +76,7 @@ export type TelemetryRequestSample = {
     | "session.goal.set"
     | "session.goal.stop"
     | "session.create"
+    | "session.delete"
     | "session.status"
     | "session.catalog"
     | "workspace.catalog"
@@ -613,20 +605,7 @@ export type CoordinationGroupID = string
 
 export type CoordinationRevision = number
 
-export type CoordinationDelegatedDecisions = {
-  categories: Array<"question" | "permission" | "review">
-  actions?: Array<string>
-  resources?: Array<string>
-  expiresAt?: number
-}
-
-export type CoordinationRole = "coordinator" | "worker" | "observer"
-
-export type CoordinationDispatchID = string
-
-export type CoordinationQueueReason = "capacity" | "hard-limit" | "dependency" | "budget"
-
-export type CoordinationWaitID = string
+export type CoordinationRequestKind = "question" | "permission" | "review"
 
 export type GuardrailDecision = "allow" | "ask" | "deny" | "cap_exceeded"
 
@@ -801,32 +780,9 @@ export type McpEventsSubscription = {
   truncated: boolean
 }
 
-export type CoordinationSettings = {
-  enabled: boolean
-  categories: Array<"question" | "permission" | "review">
-  actions?: Array<string>
-  resources?: Array<string>
-  expiresAt?: number
-}
+export type CoordinationPausedReason = "interrupted" | "restart"
 
-export type CoordinationGroupStatus = "disarmed" | "armed" | "waiting" | "stopped" | "completed" | "needs-rearm"
-
-export type CoordinationClaimStatus = "active" | "released" | "revoked" | "expired"
-
-export type CoordinationDispatchStatus = "queued" | "pending" | "admitted" | "failed" | "cancelled" | "completed"
-
-export type CoordinationReceiptID = string
-
-export type CoordinationWaitStatus = "active" | "cancelled" | "expired"
-
-export type CoordinationObservation = {
-  sessionID: string
-  eventID?: string
-  seq: number
-  type: string
-  time: number
-  gap?: true
-}
+export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -2336,104 +2292,15 @@ export type ProjectInventoryResponse = { data: Array<ProjectInventoryEntry>; cur
 
 export type ProjectDirectories = Array<ProjectDirectory>
 
-export type CoordinationCapacity = {
-  groupID: CoordinationGroupID
-  concurrency: number | null
-  hardLimit: number | null
-  effectiveLimit: number | null
-  active: number
-  waiting: number
-  queued: number
-  queueCapacity: number
-  available: number | null
-  runtimeUsed?: number
-  budget?: MoneyUSD
-  spent: MoneyUSD
-  budgetRemaining?: MoneyUSD
-}
-
-export type CoordinationEventArmed = {
+export type CoordinationEventDeleted = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "coordination.group.armed"
+  type: "coordination.group.deleted"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { groupID: CoordinationGroupID; revision: CoordinationRevision }
-}
-
-export type CoordinationEventStopped = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.group.stopped"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision }
-}
-
-export type CoordinationEventCompleted = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.group.completed"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision }
-}
-
-export type CoordinationEventNeedsRearm = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.group.needs-rearm"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision }
-}
-
-export type CoordinationEventClaimAcquired = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.claim.acquired"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    groupID: CoordinationGroupID
-    revision: CoordinationRevision
-    targetSessionID: string
-    holderSessionID: string
-    generation: number
-    leaseExpiresAt: number
-  }
-}
-
-export type CoordinationEventClaimReleased = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.claim.released"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision; targetSessionID: string; generation: number }
-}
-
-export type CoordinationEventClaimRevoked = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.claim.revoked"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision; targetSessionID: string; generation: number }
 }
 
 export type CoordinationEventUpdated = {
@@ -2446,94 +2313,26 @@ export type CoordinationEventUpdated = {
   data: { groupID: CoordinationGroupID; revision: CoordinationRevision }
 }
 
-export type CoordinationPolicy = {
-  concurrency: number | null
-  queueCapacity: number
-  budget?: number
-  delegatedDecisions?: CoordinationDelegatedDecisions
+export type CoordinationDelegatedDecisions = {
+  categories: Array<CoordinationRequestKind>
+  actions?: Array<string>
+  resources?: Array<string>
+  expiresAt?: number
 }
 
-export type CoordinationMemberInput = {
-  sessionID: string
-  role: CoordinationRole
-  allowedTools?: Array<string>
-  resourceScopes?: Array<string>
+export type CoordinationSettings = {
+  enabled: boolean
+  categories: Array<CoordinationRequestKind>
+  actions?: Array<string>
+  resources?: Array<string>
+  expiresAt?: number
 }
 
-export type CoordinationMember = {
-  sessionID: string
-  role: CoordinationRole
-  allowedTools?: Array<string>
-  resourceScopes?: Array<string>
-  location: LocationRef
-}
-
-export type CoordinationEventDispatchAdvanced = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.dispatch.advanced"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision; dispatchID: CoordinationDispatchID }
-}
-
-export type CoordinationEventDispatchSettled = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.dispatch.settled"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    groupID: CoordinationGroupID
-    revision: CoordinationRevision
-    dispatchID: CoordinationDispatchID
-    outcome: "completed" | "failed" | "cancelled"
-    detail?: string
-  }
-}
-
-export type CoordinationEventWaitStarted = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.wait.started"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    groupID: CoordinationGroupID
-    revision: CoordinationRevision
-    waitID: CoordinationWaitID
-    coordinatorSessionID: string
-    targets: Array<string>
-    expiresAt: number
-  }
-}
-
-export type CoordinationEventWaitCancelled = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.wait.cancelled"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision; waitID: CoordinationWaitID }
-}
-
-export type CoordinationEventWaitExpired = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.wait.expired"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { groupID: CoordinationGroupID; revision: CoordinationRevision; waitID: CoordinationWaitID }
+export type CoordinationPendingRequest = {
+  kind: CoordinationRequestKind
+  requestID: string
+  fingerprint: string
+  summary: string
 }
 
 export type GuardrailDecided = {
@@ -2730,23 +2529,6 @@ export type McpEventsEventDefinition = {
   payloadSchema: McpEventsJsonSchemaObject
 }
 
-export type CoordinationClaimInfo = {
-  groupID: CoordinationGroupID
-  targetSessionID: string
-  holderSessionID: string
-  generation: number
-  status: CoordinationClaimStatus
-  leaseExpiresAt: number
-}
-
-export type CoordinationWaitResult = {
-  waitID: CoordinationWaitID
-  groupID: CoordinationGroupID
-  status: CoordinationWaitStatus
-  observations: Array<CoordinationObservation>
-  cursors: { [x: string]: number }
-}
-
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
 
 export type SessionMessageModelSelected = {
@@ -2932,8 +2714,6 @@ export type SessionStepRerouted = {
   location?: LocationRef
   data: { sessionID: string; assistantMessageID: string; model: ModelRef; error: SessionStructuredError }
 }
-
-export type CoordinationDispatchSelection = { agent: string; model: ModelRef; reason: string }
 
 export type ModelIncidentItem = {
   id: ModelIncidentID
@@ -3333,60 +3113,19 @@ export type IntegrationOAuthMethod = {
   remote?: boolean
 }
 
-export type CoordinationGroupSummary = {
-  id: CoordinationGroupID
-  name: string
-  status: CoordinationGroupStatus
-  revision: CoordinationRevision
-  policy: CoordinationPolicy
-  fencingGeneration: number
-  memberCount: number
-  time: { created: number; updated: number }
+export type CoordinationGroupSettings = {
+  concurrency: number | null
+  delegatedDecisions?: CoordinationDelegatedDecisions
 }
 
-export type CoordinationEventCreated = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.group.created"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    groupID: CoordinationGroupID
-    revision: CoordinationRevision
-    name: string
-    policy: CoordinationPolicy
-    members: Array<CoordinationMemberInput>
-  }
-}
-
-export type CoordinationEventRosterUpdated = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.group.roster-updated"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    groupID: CoordinationGroupID
-    revision: CoordinationRevision
-    policy: CoordinationPolicy
-    members: Array<CoordinationMemberInput>
-    name?: string
-  }
-}
-
-export type CoordinationInfo = {
-  id: CoordinationGroupID
-  name: string
-  status: CoordinationGroupStatus
-  revision: CoordinationRevision
-  policy: CoordinationPolicy
-  fencingGeneration: number
-  members: Array<CoordinationMember>
-  time: { created: number; updated: number }
+export type CoordinationParticipant = {
+  sessionID: string
+  title: string
+  location: LocationRef
+  state: CoordinationMemberState
+  lastActivity: number
+  pending: Array<CoordinationPendingRequest>
+  drivenBy?: { sessionID: string; title: string }
 }
 
 export type PtyCreated = {
@@ -3531,61 +3270,6 @@ export type SessionOrchestrationPage = {
   data: Array<SessionOrchestrationTask>
   summary: SessionOrchestrationSummary
   cursor: { previous?: string; next?: string }
-}
-
-export type CoordinationEventDispatchRecorded = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "coordination.dispatch.recorded"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    groupID: CoordinationGroupID
-    revision: CoordinationRevision
-    dispatchID: CoordinationDispatchID
-    targetSessionID: string
-    coordinatorSessionID: string
-    generation: number
-    status: "queued" | "pending"
-    reason?: CoordinationQueueReason
-    text: string
-    selection: CoordinationDispatchSelection
-    dependsOn?: Array<CoordinationDispatchID>
-    resourceScope?: string
-    allowedTools?: Array<string>
-  }
-}
-
-export type CoordinationDispatchInfo = {
-  id: CoordinationDispatchID
-  groupID: CoordinationGroupID
-  targetSessionID: string
-  coordinatorSessionID: string
-  generation: number
-  status: CoordinationDispatchStatus
-  reason?: CoordinationQueueReason
-  text: string
-  selection: CoordinationDispatchSelection
-  dependsOn?: Array<CoordinationDispatchID>
-  resourceScope?: string
-  allowedTools?: Array<string>
-  messageID?: string
-  time: { created: number; updated: number }
-}
-
-export type CoordinationReceipt = {
-  id: CoordinationReceiptID
-  groupID: CoordinationGroupID
-  dispatchID?: CoordinationDispatchID
-  kind: "dispatched" | "admitted" | "failed" | "cancelled" | "completed"
-  sessionID: string
-  messageID?: string
-  generation?: number
-  selection: CoordinationDispatchSelection
-  time: number
-  detail?: string
 }
 
 export type ModelIncidentRecent = { items: Array<ModelIncidentItem> }
@@ -3776,6 +3460,66 @@ export type IntegrationMethod =
   | IntegrationCommandMethod
   | IntegrationKeyMethod
   | IntegrationEnvMethod
+
+export type CoordinationEventCreated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "coordination.group.created"
+  durable: { aggregateID: string; seq: number; version: 2 }
+  location?: LocationRef
+  data: {
+    groupID: CoordinationGroupID
+    revision: CoordinationRevision
+    name: string
+    masterSessionID: string
+    memberSessionIDs: Array<string>
+    settings: CoordinationGroupSettings
+  }
+}
+
+export type CoordinationEventChanged = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "coordination.group.changed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    groupID: CoordinationGroupID
+    revision: CoordinationRevision
+    name: string
+    masterSessionID: string
+    memberSessionIDs: Array<string>
+    settings: CoordinationGroupSettings
+  }
+}
+
+export type CoordinationGroupSummary = {
+  id: CoordinationGroupID
+  name: string
+  revision: CoordinationRevision
+  active: boolean
+  pausedReason?: CoordinationPausedReason
+  masterSessionID: string
+  memberCount: number
+  settings: CoordinationGroupSettings
+  time: { created: number; updated: number }
+}
+
+export type CoordinationInfo = {
+  id: CoordinationGroupID
+  name: string
+  revision: CoordinationRevision
+  active: boolean
+  pausedReason?: CoordinationPausedReason
+  master: CoordinationParticipant
+  members: Array<CoordinationParticipant>
+  settings: CoordinationGroupSettings
+  time: { created: number; updated: number }
+}
 
 export type ProjectArtifactPromotionPreview = {
   artifact: ProjectArtifactArtifactSummary
@@ -4933,20 +4677,8 @@ export type ServerEvent =
   | SessionRevertCleared
   | SessionRevertCommitted
   | CoordinationEventCreated
-  | CoordinationEventRosterUpdated
-  | CoordinationEventArmed
-  | CoordinationEventStopped
-  | CoordinationEventCompleted
-  | CoordinationEventNeedsRearm
-  | CoordinationEventClaimAcquired
-  | CoordinationEventClaimReleased
-  | CoordinationEventClaimRevoked
-  | CoordinationEventDispatchRecorded
-  | CoordinationEventDispatchAdvanced
-  | CoordinationEventDispatchSettled
-  | CoordinationEventWaitStarted
-  | CoordinationEventWaitCancelled
-  | CoordinationEventWaitExpired
+  | CoordinationEventChanged
+  | CoordinationEventDeleted
   | CoordinationEventUpdated
   | FilesystemChanged
   | ReferenceUpdated
@@ -5365,17 +5097,8 @@ export type ServerTelemetryAppendInput = {
             | "coordination.list"
             | "coordination.create"
             | "coordination.get"
-            | "coordination.members"
-            | "coordination.arm"
-            | "coordination.stop"
-            | "coordination.complete"
-            | "coordination.claim"
-            | "coordination.release"
-            | "coordination.dispatch"
-            | "coordination.receipts"
-            | "coordination.wait"
-            | "coordination.cancelWait"
-            | "coordination.capacity"
+            | "coordination.update"
+            | "coordination.delete"
             | "workspace.list"
             | "session.list"
             | "session.active"
@@ -5424,6 +5147,7 @@ export type ServerTelemetryAppendInput = {
             | "session.goal.set"
             | "session.goal.stop"
             | "session.create"
+            | "session.delete"
             | "session.status"
             | "session.catalog"
             | "workspace.catalog"
@@ -11071,547 +10795,108 @@ export type CoordinationListOutput = { data: Array<CoordinationGroupSummary> }["
 export type CoordinationCreateInput = {
   readonly name: {
     readonly name: string
-    readonly policy: {
-      readonly concurrency: number | null
-      readonly queueCapacity: number
-      readonly budget?: number
-      readonly delegatedDecisions?: {
-        readonly categories: ReadonlyArray<"question" | "permission" | "review">
-        readonly actions?: ReadonlyArray<string>
-        readonly resources?: ReadonlyArray<string>
-        readonly expiresAt?: number
-      }
-    }
-    readonly members: ReadonlyArray<{
-      readonly sessionID: string
-      readonly role: "coordinator" | "worker" | "observer"
-      readonly allowedTools?: ReadonlyArray<string>
-      readonly resourceScopes?: ReadonlyArray<string>
-    }>
+    readonly masterSessionID: string
+    readonly memberSessionIDs: ReadonlyArray<string>
   }["name"]
-  readonly policy: {
+  readonly masterSessionID: {
     readonly name: string
-    readonly policy: {
-      readonly concurrency: number | null
-      readonly queueCapacity: number
-      readonly budget?: number
-      readonly delegatedDecisions?: {
-        readonly categories: ReadonlyArray<"question" | "permission" | "review">
-        readonly actions?: ReadonlyArray<string>
-        readonly resources?: ReadonlyArray<string>
-        readonly expiresAt?: number
-      }
-    }
-    readonly members: ReadonlyArray<{
-      readonly sessionID: string
-      readonly role: "coordinator" | "worker" | "observer"
-      readonly allowedTools?: ReadonlyArray<string>
-      readonly resourceScopes?: ReadonlyArray<string>
-    }>
-  }["policy"]
-  readonly members: {
+    readonly masterSessionID: string
+    readonly memberSessionIDs: ReadonlyArray<string>
+  }["masterSessionID"]
+  readonly memberSessionIDs: {
     readonly name: string
-    readonly policy: {
-      readonly concurrency: number | null
-      readonly queueCapacity: number
-      readonly budget?: number
-      readonly delegatedDecisions?: {
-        readonly categories: ReadonlyArray<"question" | "permission" | "review">
-        readonly actions?: ReadonlyArray<string>
-        readonly resources?: ReadonlyArray<string>
-        readonly expiresAt?: number
-      }
-    }
-    readonly members: ReadonlyArray<{
-      readonly sessionID: string
-      readonly role: "coordinator" | "worker" | "observer"
-      readonly allowedTools?: ReadonlyArray<string>
-      readonly resourceScopes?: ReadonlyArray<string>
-    }>
-  }["members"]
+    readonly masterSessionID: string
+    readonly memberSessionIDs: ReadonlyArray<string>
+  }["memberSessionIDs"]
 }
 
 export type CoordinationCreateOutput = { data: CoordinationInfo }["data"]
 
 export type CoordinationGetInput = { readonly groupID: { readonly groupID: string }["groupID"] }
 
-export type CoordinationGetOutput = {
-  data: {
-    id: CoordinationGroupID
-    name: string
-    status: CoordinationGroupStatus
-    revision: CoordinationRevision
-    policy: CoordinationPolicy
-    fencingGeneration: number
-    members: Array<CoordinationMember>
-    time: { created: number; updated: number }
-    claims: Array<CoordinationClaimInfo>
-    dispatches: Array<CoordinationDispatchInfo>
-  }
-}["data"]
+export type CoordinationGetOutput = { data: CoordinationInfo }["data"]
 
-export type CoordinationMembersInput = {
+export type CoordinationUpdateInput = {
   readonly groupID: { readonly groupID: string }["groupID"]
   readonly revision: {
     readonly revision: number
-    readonly name?: string | null
-    readonly members: ReadonlyArray<{
-      readonly sessionID: string
-      readonly role: "coordinator" | "worker" | "observer"
-      readonly allowedTools?: ReadonlyArray<string>
-      readonly resourceScopes?: ReadonlyArray<string>
-    }>
-    readonly policy?: {
+    readonly name?: string
+    readonly masterSessionID?: string
+    readonly memberSessionIDs?: ReadonlyArray<string>
+    readonly settings?: {
       readonly concurrency: number | null
-      readonly queueCapacity: number
-      readonly budget?: number
       readonly delegatedDecisions?: {
         readonly categories: ReadonlyArray<"question" | "permission" | "review">
         readonly actions?: ReadonlyArray<string>
         readonly resources?: ReadonlyArray<string>
         readonly expiresAt?: number
       }
-    } | null
+    }
   }["revision"]
   readonly name?: {
     readonly revision: number
-    readonly name?: string | null
-    readonly members: ReadonlyArray<{
-      readonly sessionID: string
-      readonly role: "coordinator" | "worker" | "observer"
-      readonly allowedTools?: ReadonlyArray<string>
-      readonly resourceScopes?: ReadonlyArray<string>
-    }>
-    readonly policy?: {
+    readonly name?: string
+    readonly masterSessionID?: string
+    readonly memberSessionIDs?: ReadonlyArray<string>
+    readonly settings?: {
       readonly concurrency: number | null
-      readonly queueCapacity: number
-      readonly budget?: number
       readonly delegatedDecisions?: {
         readonly categories: ReadonlyArray<"question" | "permission" | "review">
         readonly actions?: ReadonlyArray<string>
         readonly resources?: ReadonlyArray<string>
         readonly expiresAt?: number
       }
-    } | null
+    }
   }["name"]
-  readonly members: {
+  readonly masterSessionID?: {
     readonly revision: number
-    readonly name?: string | null
-    readonly members: ReadonlyArray<{
-      readonly sessionID: string
-      readonly role: "coordinator" | "worker" | "observer"
-      readonly allowedTools?: ReadonlyArray<string>
-      readonly resourceScopes?: ReadonlyArray<string>
-    }>
-    readonly policy?: {
+    readonly name?: string
+    readonly masterSessionID?: string
+    readonly memberSessionIDs?: ReadonlyArray<string>
+    readonly settings?: {
       readonly concurrency: number | null
-      readonly queueCapacity: number
-      readonly budget?: number
       readonly delegatedDecisions?: {
         readonly categories: ReadonlyArray<"question" | "permission" | "review">
         readonly actions?: ReadonlyArray<string>
         readonly resources?: ReadonlyArray<string>
         readonly expiresAt?: number
       }
-    } | null
-  }["members"]
-  readonly policy?: {
+    }
+  }["masterSessionID"]
+  readonly memberSessionIDs?: {
     readonly revision: number
-    readonly name?: string | null
-    readonly members: ReadonlyArray<{
-      readonly sessionID: string
-      readonly role: "coordinator" | "worker" | "observer"
-      readonly allowedTools?: ReadonlyArray<string>
-      readonly resourceScopes?: ReadonlyArray<string>
-    }>
-    readonly policy?: {
+    readonly name?: string
+    readonly masterSessionID?: string
+    readonly memberSessionIDs?: ReadonlyArray<string>
+    readonly settings?: {
       readonly concurrency: number | null
-      readonly queueCapacity: number
-      readonly budget?: number
       readonly delegatedDecisions?: {
         readonly categories: ReadonlyArray<"question" | "permission" | "review">
         readonly actions?: ReadonlyArray<string>
         readonly resources?: ReadonlyArray<string>
         readonly expiresAt?: number
       }
-    } | null
-  }["policy"]
+    }
+  }["memberSessionIDs"]
+  readonly settings?: {
+    readonly revision: number
+    readonly name?: string
+    readonly masterSessionID?: string
+    readonly memberSessionIDs?: ReadonlyArray<string>
+    readonly settings?: {
+      readonly concurrency: number | null
+      readonly delegatedDecisions?: {
+        readonly categories: ReadonlyArray<"question" | "permission" | "review">
+        readonly actions?: ReadonlyArray<string>
+        readonly resources?: ReadonlyArray<string>
+        readonly expiresAt?: number
+      }
+    }
+  }["settings"]
 }
 
-export type CoordinationMembersOutput = { data: CoordinationInfo }["data"]
+export type CoordinationUpdateOutput = { data: CoordinationInfo }["data"]
 
-export type CoordinationArmInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly revision: { readonly revision: number }["revision"]
-}
+export type CoordinationDeleteInput = { readonly groupID: { readonly groupID: string }["groupID"] }
 
-export type CoordinationArmOutput = { data: CoordinationInfo }["data"]
-
-export type CoordinationStopInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly revision: { readonly revision: number }["revision"]
-}
-
-export type CoordinationStopOutput = { data: CoordinationInfo }["data"]
-
-export type CoordinationCompleteInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly revision: { readonly revision: number }["revision"]
-}
-
-export type CoordinationCompleteOutput = { data: CoordinationInfo }["data"]
-
-export type CoordinationClaimInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly revision: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly leaseMs: number
-  }["revision"]
-  readonly targetSessionID: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly leaseMs: number
-  }["targetSessionID"]
-  readonly holderSessionID: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly leaseMs: number
-  }["holderSessionID"]
-  readonly leaseMs: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly leaseMs: number
-  }["leaseMs"]
-}
-
-export type CoordinationClaimOutput = { data: CoordinationClaimInfo }["data"]
-
-export type CoordinationReleaseInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly revision: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly generation: number
-  }["revision"]
-  readonly targetSessionID: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly generation: number
-  }["targetSessionID"]
-  readonly holderSessionID: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly generation: number
-  }["holderSessionID"]
-  readonly generation: {
-    readonly revision: number
-    readonly targetSessionID: string
-    readonly holderSessionID: string
-    readonly generation: number
-  }["generation"]
-}
-
-export type CoordinationReleaseOutput = { data: CoordinationClaimInfo }["data"]
-
-export type CoordinationDispatchInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly dispatchID?: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["dispatchID"]
-  readonly targetSessionID: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["targetSessionID"]
-  readonly text: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["text"]
-  readonly selection: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["selection"]
-  readonly dependsOn?: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["dependsOn"]
-  readonly resourceScope?: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["resourceScope"]
-  readonly allowedTools?: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["allowedTools"]
-  readonly revision: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["revision"]
-  readonly holderSessionID: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["holderSessionID"]
-  readonly generation: {
-    readonly dispatchID?: string
-    readonly targetSessionID: string
-    readonly text: string
-    readonly selection: {
-      readonly agent: string
-      readonly model: {
-        readonly id: string
-        readonly providerID: string
-        readonly variant?: string
-        readonly profile?: string
-      }
-      readonly reason: string
-    }
-    readonly dependsOn?: ReadonlyArray<string>
-    readonly resourceScope?: string
-    readonly allowedTools?: ReadonlyArray<string>
-    readonly revision: number
-    readonly holderSessionID: string
-    readonly generation: number
-  }["generation"]
-}
-
-export type CoordinationDispatchOutput = { data: CoordinationDispatchInfo }["data"]
-
-export type CoordinationReceiptsInput = { readonly groupID: { readonly groupID: string }["groupID"] }
-
-export type CoordinationReceiptsOutput = { data: Array<CoordinationReceipt> }["data"]
-
-export type CoordinationWaitInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly waitID?: {
-    readonly waitID?: string
-    readonly targets?: ReadonlyArray<string>
-    readonly timeoutMs?: number
-    readonly batch?: number
-    readonly revision: number
-    readonly holderSessionID: string
-  }["waitID"]
-  readonly targets?: {
-    readonly waitID?: string
-    readonly targets?: ReadonlyArray<string>
-    readonly timeoutMs?: number
-    readonly batch?: number
-    readonly revision: number
-    readonly holderSessionID: string
-  }["targets"]
-  readonly timeoutMs?: {
-    readonly waitID?: string
-    readonly targets?: ReadonlyArray<string>
-    readonly timeoutMs?: number
-    readonly batch?: number
-    readonly revision: number
-    readonly holderSessionID: string
-  }["timeoutMs"]
-  readonly batch?: {
-    readonly waitID?: string
-    readonly targets?: ReadonlyArray<string>
-    readonly timeoutMs?: number
-    readonly batch?: number
-    readonly revision: number
-    readonly holderSessionID: string
-  }["batch"]
-  readonly revision: {
-    readonly waitID?: string
-    readonly targets?: ReadonlyArray<string>
-    readonly timeoutMs?: number
-    readonly batch?: number
-    readonly revision: number
-    readonly holderSessionID: string
-  }["revision"]
-  readonly holderSessionID: {
-    readonly waitID?: string
-    readonly targets?: ReadonlyArray<string>
-    readonly timeoutMs?: number
-    readonly batch?: number
-    readonly revision: number
-    readonly holderSessionID: string
-  }["holderSessionID"]
-}
-
-export type CoordinationWaitOutput = { data: CoordinationWaitResult }["data"]
-
-export type CoordinationCancelWaitInput = {
-  readonly groupID: { readonly groupID: string }["groupID"]
-  readonly revision: {
-    readonly revision: number
-    readonly waitID: string
-    readonly holderSessionID: string
-  }["revision"]
-  readonly waitID: { readonly revision: number; readonly waitID: string; readonly holderSessionID: string }["waitID"]
-  readonly holderSessionID: {
-    readonly revision: number
-    readonly waitID: string
-    readonly holderSessionID: string
-  }["holderSessionID"]
-}
-
-export type CoordinationCancelWaitOutput = { data: CoordinationWaitResult }["data"]
-
-export type CoordinationCapacityInput = { readonly groupID: { readonly groupID: string }["groupID"] }
-
-export type CoordinationCapacityOutput = { data: CoordinationCapacity }["data"]
+export type CoordinationDeleteOutput = void

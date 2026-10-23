@@ -1,8 +1,9 @@
 export * as CoordinationDecisions from "./coordination-decisions"
 
-import { Coordination } from "@ycoding-ai/schema/coordination"
+import type { Coordination } from "@ycoding-ai/schema/coordination"
 import { Context, Effect, Layer } from "effect"
 import { ConfigCoordination } from "../config/coordination"
+import type { CoordinationService } from "../coordination/index"
 import type { Form } from "../form"
 import type { Permission } from "../permission"
 import type { SessionGuardrail } from "./guardrail"
@@ -38,8 +39,7 @@ export interface Result {
 
 export interface Dependencies {
   readonly policy: () => Effect.Effect<ConfigCoordination.Resolved>
-  readonly roleFor: (sessionID: SessionSchema.ID) => Effect.Effect<Coordination.RoleAccess | undefined>
-  readonly parentOf: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.ID | undefined>
+  readonly scopeOf: (sessionID: SessionSchema.ID) => Effect.Effect<CoordinationService.Scope | undefined>
   readonly permission: Pick<Permission.Interface, "snapshot" | "snapshots" | "reconsider">
   readonly form: Pick<Form.Interface, "snapshot" | "snapshots" | "reconsider">
   readonly guardrail: Pick<SessionGuardrail.Interface, "requestSnapshot" | "requestSnapshots" | "reconsider">
@@ -138,39 +138,24 @@ export function routineEligible(input: {
 }
 
 export function make(deps: Dependencies): Interface {
-  const nearestRole = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-    const visited = new Set<SessionSchema.ID>()
-    let currentID: SessionSchema.ID | undefined = sessionID
-    while (currentID !== undefined && !visited.has(currentID) && visited.size < 32) {
-      visited.add(currentID)
-      const access = yield* deps.roleFor(currentID)
-      if (access !== undefined) return access
-      currentID = yield* deps.parentOf(currentID)
-    }
-    return undefined
+  const authorize = Effect.fnUntraced(function* (input: PendingInput, inspectMaster = false) {
+    const scope = yield* deps.scopeOf(input.coordinatorSessionID)
+    if (scope === undefined || scope.groupID !== input.groupID) return { ok: false as const, reason: "delegation-unavailable" }
+    if (!(inspectMaster && input.targetSessionID === scope.masterSessionID) &&
+      (!scope.memberSessionIDs.includes(input.targetSessionID) || input.coordinatorSessionID === input.targetSessionID))
+      return { ok: false as const, reason: "delegation-out-of-scope" }
+    return { ok: true as const, scope }
   })
 
   const validate = (input: EvaluateInput, action: string, resources: ReadonlyArray<string>) =>
     Effect.gen(function* () {
-      const coordinator = yield* nearestRole(input.coordinatorSessionID)
-      const target = yield* nearestRole(input.targetSessionID)
-      if (coordinator === undefined || target === undefined) return { ok: false as const, reason: "delegation-unavailable" }
-      if (
-        coordinator.role !== "coordinator" ||
-        target.role === "observer" ||
-        coordinator.groupID !== input.groupID ||
-        target.groupID !== input.groupID ||
-        coordinator.status !== target.status ||
-        (coordinator.status !== "armed" && coordinator.status !== "waiting") ||
-        input.coordinatorSessionID === input.targetSessionID
-      )
-        return { ok: false as const, reason: "delegation-out-of-scope" }
-      if (coordinator.fencingGeneration !== target.fencingGeneration || coordinator.revision !== target.revision)
-        return { ok: false as const, reason: "delegation-fence-mismatch" }
+      const authorized = yield* authorize(input)
+      if (!authorized.ok) return authorized
+      if (!authorized.scope.active) return { ok: false as const, reason: "delegation-inactive" }
       const policy = yield* deps.policy()
       if (!policy.enabled) return { ok: false as const, reason: "delegation-revoked" }
       const now = yield* (deps.now ?? Effect.sync(() => Date.now()))
-      const group = coordinator.delegatedDecisions
+      const group = authorized.scope.settings.delegatedDecisions
       if ((policy.expiresAt !== undefined && policy.expiresAt <= now) || (group?.expiresAt !== undefined && group.expiresAt <= now))
         return { ok: false as const, reason: "delegation-expired" }
       if (!ConfigCoordination.permits(policy, group, { category: input.kind, action, resources, now }))
@@ -179,21 +164,7 @@ export function make(deps: Dependencies): Interface {
     })
 
   const pending = Effect.fn("CoordinationDecisions.pending")(function* (input: PendingInput) {
-    const coordinator = yield* nearestRole(input.coordinatorSessionID)
-    const target = yield* nearestRole(input.targetSessionID)
-    if (
-      coordinator === undefined ||
-      target === undefined ||
-      coordinator.role !== "coordinator" ||
-      target.role === "observer" ||
-      coordinator.groupID !== input.groupID ||
-      target.groupID !== input.groupID ||
-      coordinator.fencingGeneration !== target.fencingGeneration ||
-      coordinator.revision !== target.revision ||
-      coordinator.status !== target.status ||
-      (coordinator.status !== "armed" && coordinator.status !== "waiting")
-    )
-      return [] as ReadonlyArray<PendingSnapshot>
+    if (!(yield* authorize(input, true)).ok) return [] as ReadonlyArray<PendingSnapshot>
     const limit = Math.max(1, Math.min(50, Math.trunc(input.limit ?? 20)))
     const permissions = yield* deps.permission.snapshots(input.targetSessionID)
     const reviews = yield* deps.guardrail

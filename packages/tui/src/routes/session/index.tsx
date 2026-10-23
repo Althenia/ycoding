@@ -17,6 +17,9 @@ import path from "node:path"
 import { EOL, tmpdir } from "node:os"
 import { mkdir, writeFile } from "node:fs/promises"
 import { useRoute, useRouteData } from "../../context/route"
+import { useCoordinationOptional } from "../../context/coordination"
+import { ProjectChips, ProjectMembers, ProjectStrip, useProjectClock } from "./project-members"
+import { projectNotification } from "../../util/coordination"
 import { createStore } from "solid-js/store"
 import {
   sessionMemoryLines,
@@ -207,6 +210,26 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const config = configState.data
   const { theme } = useTheme()
   const promptRef = usePromptRef()
+  const coordination = useCoordinationOptional()
+  const projectOwner = createMemo(() => coordination?.projectOf(route.sessionID))
+  const [membersFocused, setMembersFocused] = createSignal(false)
+  const projectNow = useProjectClock()
+  const focusMembers = () => { promptRef.current?.blur(); setMembersFocused(true) }
+  const leaveMembers = () => { setMembersFocused(false); promptRef.current?.focus() }
+  const openProjectSession = (sessionID: string) => navigate({ type: "session", sessionID })
+  const openProjectSettings = () => {
+    const owner = projectOwner()
+    if (owner) navigate({ type: "projects", sessionID: route.sessionID, projectID: owner.project.id })
+  }
+  const navigateProjectMember = (direction: "up" | "left" | "right") => {
+    const owner = projectOwner()
+    if (!owner) return
+    if (direction === "up") return openProjectSession(owner.project.master.sessionID)
+    const members = owner.project.members
+    const position = members.findIndex((member) => member.sessionID === route.sessionID)
+    const member = members[(position + (direction === "left" ? -1 : 1) + members.length) % members.length]
+    if (member) openProjectSession(member.sessionID)
+  }
   const session = createMemo(() => data.session.get(route.sessionID))
   const messages = () => data.session.message.list(route.sessionID)
   const [currentSkillIDs, setCurrentSkillIDs] = createSignal<ReadonlySet<string>>()
@@ -344,12 +367,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
 
   const wide = createMemo(() => railPlacement(dimensions().width) === "docked")
   const sidebarVisible = createMemo(() => {
+    if (projectOwner()) return false
     if (session()?.parentID) return false
     if (sidebarOpen()) return true
     if (sidebar() === "auto" && wide()) return true
     return false
   })
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? railWidth(dimensions().width) : 0) - 4)
+  const projectPaneVisible = () => !!projectOwner() && dimensions().width >= 100
+  const projectTrayVisible = () => !!projectOwner() && dimensions().width < 100 && membersFocused()
+  const contentWidth = createMemo(() => dimensions().width - (projectPaneVisible() ? 32 : sidebarVisible() ? railWidth(dimensions().width) : 0) - 4)
   const models = createMemo(() => data.location.model.list(location()) ?? [])
   const daybreakPrograms = createMemo(() => {
     const selected = local.model.pendingTarget(route.sessionID) ?? local.model.current()
@@ -1258,6 +1284,32 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
 
   const baseCommands = createMemo(() => [
     {
+      id: "project.notification.open",
+      title: "Open notifying Project member",
+      group: "Projects",
+      bind: "o",
+      enabled: !membersFocused() && !!navigationMessage() && !!projectNotification(data.session.message.get(route.sessionID, navigationMessage()!)?.metadata),
+      run: () => {
+        const notification = projectNotification(data.session.message.get(route.sessionID, navigationMessage() ?? "")?.metadata)
+        if (notification) openProjectSession(notification.sessionID)
+      },
+    },
+    {
+      id: "project.members",
+      title: "Project members",
+      group: "Projects",
+      enabled: !!projectOwner(),
+      run: () => membersFocused() ? leaveMembers() : focusMembers(),
+    },
+    {
+      id: "project.settings",
+      title: "Project settings",
+      group: "Projects",
+      enabled: !!projectOwner(),
+      slash: { name: "project-settings" },
+      run: openProjectSettings,
+    },
+    {
       title: "Find in loaded history",
       id: "session.find",
       group: "Session",
@@ -1701,11 +1753,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     },
     {
-      title: "Go to parent session",
+      title: projectOwner()?.role === "member" ? "Go to Project Master" : "Go to parent session",
       id: "session.parent",
       group: "Session",
-      enabled: !!session()?.parentID,
+      enabled: !!session()?.parentID || projectOwner()?.role === "member",
       run: () => {
+        if (projectOwner()?.role === "member") return navigateProjectMember("up")
         const parentID = session()?.parentID
         if (parentID) {
           navigate({
@@ -1717,21 +1770,23 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     },
     {
-      title: "Next subagent",
+      title: projectOwner()?.role === "member" ? "Next Project member" : "Next subagent",
       id: "session.child.next",
       group: "Session",
-      enabled: subagent(),
+      enabled: subagent() || projectOwner()?.role === "member",
       run: () => {
-        navigateSibling(1)
+        if (projectOwner()?.role === "member") navigateProjectMember("right")
+        else navigateSibling(1)
       },
     },
     {
-      title: "Previous subagent",
+      title: projectOwner()?.role === "member" ? "Previous Project member" : "Previous subagent",
       id: "session.child.previous",
       group: "Session",
-      enabled: subagent(),
+      enabled: subagent() || projectOwner()?.role === "member",
       run: () => {
-        navigateSibling(-1)
+        if (projectOwner()?.role === "member") navigateProjectMember("left")
+        else navigateSibling(-1)
       },
     },
   ])
@@ -1781,7 +1836,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Show when={contextReady() && location()}>
           {(ownerLocation) => <SessionIsolatedBrowserCommand sessionID={route.sessionID} location={ownerLocation()} />}
         </Show>
-        <Header
+      <Header
+        projectTitle={projectOwner() ? session()?.title : undefined}
         path={location()?.directory}
         branch={branch()}
         agent={headerAgent()}
@@ -1797,6 +1853,10 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         subagent={subagent()}
         sideChat={btw()}
       />
+      <Show when={projectOwner()}>{(owner) => <>
+        <ProjectStrip project={owner().project} role={owner().role} sessionID={route.sessionID} onProjects={() => navigate({ type: "projects", sessionID: route.sessionID })} onMaster={() => openProjectSession(owner().project.master.sessionID)} />
+        <Show when={dimensions().width < 100 && dimensions().width >= 70}><ProjectChips project={owner().project} currentSessionID={route.sessionID} onOpen={openProjectSession} onFocus={focusMembers} /></Show>
+      </>}</Show>
       <box flexDirection="row" flexGrow={1} minHeight={0}>
         <box flexGrow={1} minHeight={0}>
           <Show
@@ -1814,6 +1874,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
               <Show when={subagent()}>
                 <SubagentSiblingSwitcher />
               </Show>
+              <Show when={projectTrayVisible()}><ProjectMembers project={projectOwner()!.project} currentSessionID={route.sessionID} focused={membersFocused()} onFocus={focusMembers} onBack={leaveMembers} onOpen={openProjectSession} onSettings={openProjectSettings} sessions={coordination!.sessions} service={coordination!.service} loadedAt={coordination!.loadedAt} now={projectNow} compact /></Show>
               <Show when={btw() && parentID()}>
                 {(id) => <BtwContext parentID={id()} />}
               </Show>
@@ -1825,6 +1886,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 </box>
               </Show>
               <scrollbox
+                visible={!projectTrayVisible()}
+                maxHeight={projectTrayVisible() ? 0 : undefined}
                 ref={(r) => {
                   scroll = r
                 }}
@@ -2089,6 +2152,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
             </box>
             </Show>
         </box>
+        <Show when={projectPaneVisible()}><ProjectMembers project={projectOwner()!.project} currentSessionID={route.sessionID} focused={membersFocused()} onFocus={focusMembers} onBack={leaveMembers} onOpen={openProjectSession} onSettings={openProjectSettings} sessions={coordination!.sessions} service={coordination!.service} loadedAt={coordination!.loadedAt} now={projectNow} /></Show>
         <Show when={contextReady() && sidebarVisible()}>
           <Switch>
             <Match when={wide()}>
@@ -2115,8 +2179,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           {(id) => <BtwFooter sessionID={route.sessionID} parentID={id()} />}
         </Match>
         <Match when={subagent()}><SubagentFooter reviewing={disabled()} /></Match>
-        <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} /></Match>
+        <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} project={!!projectOwner()} /></Match>
       </Switch>
+      <Show when={projectOwner()}><text fg={theme.text.subdued} wrapMode="none" truncate>{membersFocused() ? "↑↓ member · o open · a add · n new session · x remove · D delete · s settings · ? keys · esc chat" : `${projectOwner()?.role === "member" ? "↑ master · ←→ member · " : ""}ctrl+x p members · enter send · esc interrupt`}</text></Show>
     </context.Provider>
   )
 
@@ -2133,7 +2198,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       >
         <Prompt
           visible={props.visible !== false}
-          focusBlocked={reviewFocused()}
+          focusBlocked={reviewFocused() || membersFocused()}
+          projectMember={projectOwner()?.role === "member"}
           ref={bind}
           disabled={props.visible === false}
           submitDisabled={!sessionReady()}
@@ -2740,6 +2806,8 @@ function SessionSwitchMessage(props: { message: SessionMessageInfo }) {
 function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   const ctx = use()
   const { theme } = useTheme()
+  const route = useRoute()
+  const projectNotice = () => projectNotification(props.message.metadata)
   const metadata = () => (props.message.type === "synthetic" ? props.message.metadata : undefined)
   const source = () => stringValue(metadata()?.source)
   const contextSource = () => stringValue(props.message.metadata?.contextSource)
@@ -2776,6 +2844,10 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   }
   return (
     <Switch>
+      <Match when={projectNotice()}>{(notice) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
+        <box flexDirection="row"><text fg={notice().event === "failed" ? theme.text.feedback.error.default : theme.text.subdued} wrapMode="none" truncate flexGrow={1}>{notice().title} {notice().event === "completed" ? "finished" : notice().event === "question" ? "asks a question" : notice().event}</text><text fg={theme.text.feedback.info.default} onMouseUp={() => route.navigate({ type: "session", sessionID: notice().sessionID })}>[o] Open</text></box>
+        <Show when={notice().excerpt}><text fg={theme.text.subdued}>{notice().excerpt}</text></Show>
+      </box>}</Match>
       <Match when={goalSteer()}>
         <box paddingLeft={1} paddingRight={1} paddingBottom={1} border={["top"]} borderColor={theme.border.default}>
           <text fg={theme.text.feedback.info.default}><b>Goal · steer</b></text>
@@ -3514,6 +3586,7 @@ function TextPart(props: {
 function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; findActive?: boolean }) {
   const ctx = use()
   const data = useData()
+  const coordination = useCoordinationOptional()
   const display = createMemo(() => toolDisplay(props.part.name))
 
   const toolprops = {
@@ -3591,7 +3664,9 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
           ? "subagent"
           : props.part.name
     const detail =
-      display() === "shell"
+      props.part.name === "project"
+        ? [stringValue(input.action), stringValue(input.sessionID) ? `→ ${coordination?.projects()?.flatMap((project) => project.members).find((member) => member.sessionID === input.sessionID)?.title ?? stringValue(input.sessionID)}` : undefined, stringValue(input.delivery)].filter(Boolean).join(" · ")
+        : display() === "shell"
         ? ""
         : display() === "subagent"
           ? [stringValue(input.agent) ?? stringValue(input.subagent_type), stringValue(input.description)]
@@ -3610,7 +3685,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean; 
             ...(state.status === "error" ? { error: state.error.message } : {}),
           }
     return {
-      tool,
+      tool: props.part.name === "project" ? "Project" : tool,
       detail,
       variant:
         display() === "subagent" && !background && !running && state.status !== "error"

@@ -98,45 +98,23 @@ const providerInput = (properties: Record<string, Schema>, required: readonly st
   object({ target: providerTarget, integrationID, ...properties }, ["target", "integrationID", ...required])
 
 const coordinationGroupID = prefixed("^cgrp_[A-Za-z0-9_-]+$", 96)
-const coordinationDispatchID = prefixed("^cdsp_[A-Za-z0-9_-]+$", 96)
-const coordinationWaitID = prefixed("^cwait_[A-Za-z0-9_-]+$", 96)
 const coordinationRevision = integer(0, maxSafeInteger)
 const coordinationScopeText = text(512)
 const coordinationDelegated = object(
   {
-    categories: array(choice("question", "permission", "review"), 0, 3, true),
+    categories: array(choice("question", "permission", "review"), 0, 3),
     actions: array(coordinationScopeText, 0, 32),
     resources: array(coordinationScopeText, 0, 32),
     expiresAt: integer(0, maxSafeInteger),
   },
   ["categories"],
 )
-const coordinationPolicy = object(
+const coordinationSettings = object(
   {
     concurrency: { anyOf: [integer(1, maxSafeInteger), { type: "null" }] },
-    queueCapacity: integer(1, 1_000),
-    budget: { type: "number", exclusiveMinimum: 0 },
     delegatedDecisions: coordinationDelegated,
   },
-  ["concurrency", "queueCapacity"],
-)
-const coordinationMember = object(
-  {
-    sessionID,
-    role: choice("coordinator", "worker", "observer"),
-    allowedTools: array(text(128), 0, 64),
-    resourceScopes: array(coordinationScopeText, 0, 32),
-  },
-  ["sessionID", "role"],
-)
-const coordinationMembers = array(coordinationMember, 1, 64)
-const coordinationSelection = object(
-  {
-    agent: text(128),
-    model: object({ providerID: text(128), id: text(128), profile: text(128), variant: text(128) }, ["providerID", "id"]),
-    reason: line(500),
-  },
-  ["agent", "model", "reason"],
+  ["concurrency"],
 )
 
 const usageReport = object(
@@ -250,6 +228,7 @@ const specs = {
   },
   "session.active": { description: "Read which Sessions are executing now." },
   "session.get": { description: "Read one Session's record." },
+  "session.delete": { description: "Delete a Session and its history at its backend-resolved Location. Deleting a Project's Master deletes the Project; deleting a member detaches it." },
   "session.messages": { description: "Read a Session's full projected transcript." },
   "session.capturedChanges.list": {
     description: "Page through the file changes a Session and its subagents captured.",
@@ -449,58 +428,22 @@ const specs = {
   },
   "artifact.demo.preview": { description: "Render the fixed two-variant MCP Apps capability demo. No Session or workspace content is read. Actual host support requires verification." },
   "artifact.demo.export": { description: "Export only the fixed expiring PNG demo with original-byte integrity metadata. Native attachment creation belongs to the host." },
-  "coordination.settings": { description: "Read the backend's resolved delegated-decision settings for coordination groups (enabled, categories, optional action/resource bounds and expiry)." },
-  "coordination.list": { description: "List the backend's coordination groups (Projects) with status, revision, policy and member counts. Read a group with coordination_get for its roster." },
+  "coordination.settings": { description: "Read the backend's resolved delegated-decision settings for Projects (enabled, categories, optional action/resource bounds and expiry)." },
+  "coordination.list": { description: "List Projects with their Master Session IDs, active state, revision, settings and member counts." },
   "coordination.create": {
-    description: "Create a coordination group (Project) from existing backend Sessions. Every member Session must already exist on this backend; its Location is resolved by the backend and no directory is accepted. Exactly the listed Sessions become coordinator, worker or observer members under the policy bounds.",
-    input: object({ name: text(120), policy: coordinationPolicy, members: coordinationMembers }, ["name", "policy", "members"]),
+    description: "Create a Project with one Master and up to 64 member Sessions. All Sessions must exist on this backend; their Locations are resolved by the backend.",
+    input: object({ name: text(120), masterSessionID: sessionID, memberSessionIDs: array(sessionID, 0, 64) }, ["name", "masterSessionID", "memberSessionIDs"]),
   },
   "coordination.get": {
-    description: "Read one coordination group with its roster (including each member's backend-resolved Location), active claims and dispatches.",
+    description: "Read a Project's Master, members, live states, pending requests, settings and active state.",
     input: object({ groupID: coordinationGroupID }, ["groupID"]),
   },
-  "coordination.members": {
-    description: "Replace a coordination group's roster at the expected revision, optionally renaming the Project and replacing its policy. Member Sessions must exist on this backend; Locations are resolved by the backend.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision, name: text(120), members: coordinationMembers, policy: coordinationPolicy }, ["groupID", "revision", "members"]),
+  "coordination.update": {
+    description: "Update a Project at the expected revision. Omitted fields are preserved; memberSessionIDs and settings replace their whole values. Sessions must exist on this backend.",
+    input: object({ groupID: coordinationGroupID, revision: coordinationRevision, name: text(120), masterSessionID: sessionID, memberSessionIDs: array(sessionID, 0, 64), settings: coordinationSettings }, ["groupID", "revision"]),
   },
-  "coordination.arm": {
-    description: "Arm a coordination group at the expected revision so its coordinators may claim and dispatch work.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision }, ["groupID", "revision"]),
-  },
-  "coordination.stop": {
-    description: "Stop a coordination group at the expected revision, revoking coordinator dispatch authority until it is armed again.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision }, ["groupID", "revision"]),
-  },
-  "coordination.complete": {
-    description: "Mark a coordination group completed at the expected revision.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision }, ["groupID", "revision"]),
-  },
-  "coordination.claim": {
-    description: "Claim a worker Session for a coordinator holder Session at the expected revision. The holder must be a current coordinator member of the group; the lease bounds the claim.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision, targetSessionID: sessionID, holderSessionID: sessionID, leaseMs: integer(1_000, 300_000) }, ["groupID", "revision", "targetSessionID", "holderSessionID", "leaseMs"]),
-  },
-  "coordination.release": {
-    description: "Release a coordinator's claim on a worker Session, naming the claim generation returned by coordination_claim. The holder must be a current coordinator member.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision, targetSessionID: sessionID, holderSessionID: sessionID, generation: coordinationRevision }, ["groupID", "revision", "targetSessionID", "holderSessionID", "generation"]),
-  },
-  "coordination.dispatch": {
-    description: "Dispatch work text to a claimed worker Session. The holder must be a current coordinator member holding the named claim generation. Selection is required and is carried unchanged onto the dispatch and its receipts: name the agent and model the worker should run and a one-line reason; the backend validates them against the target Session's Location — no default is invented.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision, holderSessionID: sessionID, generation: coordinationRevision, dispatchID: coordinationDispatchID, targetSessionID: sessionID, text: text(32_000), dependsOn: array(coordinationDispatchID, 0, 32), resourceScope: coordinationScopeText, allowedTools: array(text(128), 0, 64), selection: coordinationSelection }, ["groupID", "revision", "holderSessionID", "generation", "targetSessionID", "text", "selection"]),
-  },
-  "coordination.receipts": {
-    description: "Read a coordination group's dispatch receipts (dispatched, admitted, failed, cancelled, completed), each carrying its dispatch selection unchanged.",
-    input: object({ groupID: coordinationGroupID }, ["groupID"]),
-  },
-  "coordination.wait": {
-    description: "Record a coordinator wait over target Sessions and read current observations. The holder must be a current coordinator member. Timeout and batch are bounded; omit targets to observe the group's workers.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision, holderSessionID: sessionID, waitID: coordinationWaitID, targets: array(sessionID, 0, 64, true), timeoutMs: integer(0, 300_000), batch: integer(1, 200) }, ["groupID", "revision", "holderSessionID"]),
-  },
-  "coordination.cancelWait": {
-    description: "Cancel a coordinator wait recorded by coordination_wait. The holder must be a current coordinator member.",
-    input: object({ groupID: coordinationGroupID, revision: coordinationRevision, waitID: coordinationWaitID, holderSessionID: sessionID }, ["groupID", "revision", "waitID", "holderSessionID"]),
-  },
-  "coordination.capacity": {
-    description: "Read a coordination group's capacity: concurrency limits, active/waiting/queued work, queue capacity and budget spend.",
+  "coordination.delete": {
+    description: "Delete a Project while preserving its Master and member Sessions and their histories.",
     input: object({ groupID: coordinationGroupID }, ["groupID"]),
   },
   "session.createInDirectory": {

@@ -1,15 +1,12 @@
 import { describe, expect } from "bun:test"
 import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols/openai-chat"
-import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Provider } from "@ycoding-ai/schema/provider"
 import { Agent } from "@ycoding-ai/core/agent"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
 import { CoordinationService } from "@ycoding-ai/core/coordination/index"
-import { CoordinationAccessResolver } from "@ycoding-ai/core/coordination/access"
-import { CoordinationDispatchSelection } from "@ycoding-ai/core/coordination/selection"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
@@ -39,7 +36,9 @@ import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-
 import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
 import { SessionContext } from "@ycoding-ai/core/session/context"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
@@ -49,7 +48,6 @@ import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import { SessionRunnerLLM } from "@ycoding-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { CoordinationRuntime } from "@ycoding-ai/core/session/coordination-runtime"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
@@ -122,7 +120,7 @@ const toolNamesFixture = [
   "read",
   "glob",
   "grep",
-  "coordination",
+  "project",
   "decision",
   "question",
   "todowrite",
@@ -204,42 +202,6 @@ const compactionExecution = Layer.succeed(
     run: () => Effect.die("unused"),
   }),
 )
-const dispatchSelection: Coordination.DispatchSelection = {
-  agent: Agent.ID.make("occam"),
-  model: CatalogModel.Ref.make({
-    providerID: Provider.ID.make("fake"),
-    id: CatalogModel.ID.make("replacement"),
-    variant: CatalogModel.VariantID.make("medium"),
-  }),
-  reason: "Bounded assignment with settled behavior",
-}
-const fixtureSelections = CoordinationDispatchSelection.layerWith((_target, chosen) =>
-  Effect.gen(function* () {
-    const agent =
-      chosen.agent === "occam" || chosen.agent === "build"
-        ? { ...Agent.Info.empty(chosen.agent), mode: "subagent" as const, hidden: false }
-        : undefined
-    const info =
-      chosen.model.providerID === "fake" && (chosen.model.id === "replacement" || chosen.model.id === "fake-model")
-        ? {
-            ...CatalogModel.Info.empty(chosen.model.providerID, CatalogModel.ID.make(chosen.model.id)),
-            variants: ["low", "medium", "high"].map((id) => ({ id: CatalogModel.VariantID.make(id) })),
-          }
-        : undefined
-    const problem = CoordinationDispatchSelection.check({ agent, model: info, selection: chosen })
-    if (problem !== undefined)
-      return yield* new CoordinationDispatchSelection.InvalidSelectionError({ message: problem })
-  }),
-)
-const coordinationLayer = CoordinationService.layer.pipe(Layer.provide(fixtureSelections))
-const resolverLayer = Layer.effect(
-  CoordinationAccessResolver.Service,
-  Effect.gen(function* () {
-    const database = yield* Database.Service
-    const coordination = yield* CoordinationService.Service
-    return CoordinationAccessResolver.Service.of(CoordinationAccessResolver.make({ db: database.db, coordination }))
-  }),
-).pipe(Layer.provide(coordinationLayer))
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [Snapshot.node, snapshotLayer],
   [LayerNodePlatform.llmClient, client],
@@ -255,9 +217,6 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [McpInstructions.node, mcpInstructions],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   [PluginSupervisor.node, pluginSupervisor],
-  [CoordinationAccessResolver.node, resolverLayer],
-  [CoordinationService.node, coordinationLayer],
-  [CoordinationDispatchSelection.node, fixtureSelections],
   [
     SessionCompaction.node,
     Layer.succeed(SessionCompaction.Service, SessionCompaction.Service.of({ manifest: () => Effect.die("unused") })),
@@ -322,8 +281,6 @@ const it = testEffect(
       SessionContext.node,
       SessionModelRequest.node,
       CoordinationService.node,
-      CoordinationDispatchSelection.node,
-      CoordinationAccessResolver.node,
     ]),
     [
       [LayerNodePlatform.llmClient, client],
@@ -342,7 +299,6 @@ const it = testEffect(
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [PluginSupervisor.node, pluginSupervisor],
       [SessionCompactionExecution.node, compactionExecution],
-      [CoordinationDispatchSelection.node, fixtureSelections],
     ],
   ),
 )
@@ -405,193 +361,115 @@ const providerRows = (id: Session.ID) =>
       .all()
       .pipe(Effect.orDie)
   })
-const setupCoordination = Effect.gen(function* () {
+const setupProject = Effect.gen(function* () {
   const session = yield* setup
   yield* insertSession(otherSessionID)
   const coordination = yield* CoordinationService.Service
-  const group = yield* coordination.create(
-    { kind: "human" },
-    {
-      name: "Runner team",
-      policy: { concurrency: 2, queueCapacity: 10 },
-      members: [
-        { sessionID: otherSessionID, role: "coordinator" },
-        { sessionID, role: "worker", allowedTools: ["read", "edit", "shell"], resourceScopes: ["src/*"] },
-      ],
-    },
-  )
-  const armed = yield* coordination.arm({ kind: "human" }, { groupID: group.id, expectedRevision: group.revision })
-  const actor = { kind: "coordinator" as const, sessionID: otherSessionID }
-  const claim = yield* coordination.claim(actor, {
-    groupID: group.id,
-    expectedRevision: armed.revision,
-    targetSessionID: sessionID,
-    leaseMs: 60_000,
-  })
-  return { session, coordination, group: armed, claim, actor }
+  const group = yield* coordination.create({ name: "Runner team", masterSessionID: otherSessionID, memberSessionIDs: [sessionID] })
+  return { session, coordination, group }
 })
-const dispatchToWorker = (
-  fixture: Effect.Success<typeof setupCoordination>,
-  text: string,
-  chosen: Coordination.DispatchSelection,
-  extra?: { readonly allowedTools?: string[] },
-) =>
+const overrideRef = CatalogModel.Ref.make({
+  providerID: Provider.ID.make("fake"),
+  id: CatalogModel.ID.make("replacement"),
+  variant: CatalogModel.VariantID.make("medium"),
+})
+const sendFromMaster = (groupID: string, text: string, model?: CatalogModel.Ref) =>
   Effect.gen(function* () {
-    const current = yield* fixture.coordination.get(fixture.group.id)
-    return yield* fixture.coordination.dispatch(fixture.actor, {
-      groupID: fixture.group.id,
-      expectedRevision: current.revision,
-      generation: fixture.claim.generation,
-      targetSessionID: sessionID,
-      text,
-      selection: chosen,
-      ...(extra ?? {}),
+    const events = yield* EventRuntime.Service
+    const inputID = SessionMessage.ID.create()
+    yield* events.publish(SessionEvent.InputAdmitted, {
+      sessionID,
+      inputID,
+      input: {
+        type: "user",
+        delivery: "steer",
+        data: { text, metadata: { inputOrigin: "coordination", coordination: { groupID, senderSessionID: otherSessionID, messageID: inputID, ...(model === undefined ? {} : { model }) } } },
+      },
     })
   })
-const admitDispatch = (fixture: Effect.Success<typeof setupCoordination>, dispatch: Coordination.DispatchInfo) =>
+const requestFor = (id: Session.ID, text: string) =>
   Effect.gen(function* () {
-    const { db } = yield* Database.Service
-    const events = yield* EventRuntime.Service
-    const runtime = CoordinationRuntime.make({ db, events, coordination: fixture.coordination, wake: () => Effect.void })
-    return yield* runtime.admit(dispatch)
+    const session = yield* Session.Service
+    yield* session.prompt({ sessionID: id, text, resume: false })
+    response = replyText("Reply", `reply-${id}`)
+    yield* session.resume(id)
+    return requests.at(-1)
   })
 
-describe("coordination model request materialization", () => {
-  it.effect("ordinary Sessions keep their configured tools, agent, and model", () =>
+describe("project tool and model request materialization", () => {
+  it.effect("ordinary Sessions keep their configured tools and model and never see the project tool", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Ordinary work")
       response = replyText("Ordinary reply", "ordinary")
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(1)
-      expect(toolNames(requests[0])).toEqual(
-        expect.arrayContaining(["shell", "patch", "edit", "coordination", "mcp_fixture_update"]),
-      )
-      expect(JSON.stringify(requests[0])).not.toContain("I need [the concrete outcome]")
+      const names = toolNames(requests[0])
+      expect(names).toEqual(expect.arrayContaining(["shell", "patch", "edit", "mcp_fixture_update"]))
+      expect(names).not.toContain("project")
+      expect(JSON.stringify(requests[0])).not.toContain("Project notifications")
       const rows = yield* providerRows(sessionID)
-      expect(rows[0]?.agent).not.toBe("occam")
       expect(rows[0]?.model.id).toBe(CatalogModel.ID.make("fake-model"))
     }),
   )
 
-  it.effect("armed coordinators lose implementation tools and gain the coordination voice instructions", () =>
+  it.effect("a Master keeps every ordinary tool, gains the project tool, and gets the Master instructions", () =>
     Effect.gen(function* () {
-      const fixture = yield* setupCoordination
-      yield* fixture.session.prompt({ sessionID: otherSessionID, text: "Coordinate the team", resume: false })
-      response = replyText("Coordinating", "coordinator")
-      yield* fixture.session.resume(otherSessionID)
-      expect(requests).toHaveLength(1)
-      const names = toolNames(requests[0])
-      for (const banned of ["shell", "patch", "edit", "write", "mcp_fixture_update"]) expect(names).not.toContain(banned)
-      for (const allowed of ["coordination", "read", "glob", "grep", "decision"]) expect(names).toContain(allowed)
-      expect(JSON.stringify(requests[0])).toContain("I need [the concrete outcome]")
-      expect(JSON.stringify(requests[0])).toContain("Do not invent decisions")
+      yield* setupProject
+      const request = yield* requestFor(otherSessionID, "Coordinate the team")
+      const names = toolNames(request)
+      expect(names).toEqual(expect.arrayContaining(["project", "shell", "patch", "edit", "write", "read", "mcp_fixture_update"]))
+      expect(JSON.stringify(request)).toContain("Project notifications")
     }),
   )
 
-  it.effect("a promoted worker assignment narrows the first physical request and applies its selection", () =>
+  it.effect("a subagent of the Master gets the project tool; a member and a member's subagent do not", () =>
     Effect.gen(function* () {
-      const fixture = yield* setupCoordination
-      const first = yield* dispatchToWorker(fixture, "Assigned work", dispatchSelection, {
-        allowedTools: ["read", "edit"],
-      })
-      const second = yield* dispatchToWorker(
-        fixture,
-        "Queued work",
-        { ...dispatchSelection, agent: Agent.ID.make("build"), reason: "Queued choice must not leak into the active assignment" },
-        { allowedTools: ["glob"] },
-      )
-      expect(second.status).toBe("queued")
-      yield* admitDispatch(fixture, first)
+      yield* setupProject
+      const masterChild = Session.ID.make("ses_coord_master_child")
+      const memberChild = Session.ID.make("ses_coord_member_child")
+      yield* insertSession(masterChild, otherSessionID)
+      yield* insertSession(memberChild, sessionID)
+      expect(toolNames(yield* requestFor(masterChild, "Drive the member"))).toContain("project")
+      expect(toolNames(yield* requestFor(sessionID, "Member work"))).not.toContain("project")
+      expect(toolNames(yield* requestFor(memberChild, "Member child work"))).not.toContain("project")
+      expect(toolNames(yield* requestFor(memberChild, "Again"))).toContain("shell")
+    }),
+  )
+
+  it.effect("deleting the Project removes the project tool from the former Master", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupProject
+      expect(toolNames(yield* requestFor(otherSessionID, "First"))).toContain("project")
+      yield* fixture.coordination.delete(fixture.group.id)
+      expect(toolNames(yield* requestFor(otherSessionID, "Second"))).not.toContain("project")
+    }),
+  )
+
+  it.effect("a coordination message's model override applies to its turn and a later human input restores the configured model", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setupProject
+      yield* sendFromMaster(fixture.group.id, "Assigned work", overrideRef)
       response = replyText("Assigned reply", "assigned")
       yield* fixture.session.resume(sessionID)
-      expect(requests).toHaveLength(1)
-      const names = toolNames(requests[0])
-      expect(names).toEqual(expect.arrayContaining(["read", "edit"]))
-      for (const banned of ["shell", "patch", "write", "glob", "mcp_fixture_update"]) expect(names).not.toContain(banned)
-      const rows = yield* providerRows(sessionID)
-      expect(rows.at(-1)?.agent).toBe(Agent.ID.make("occam"))
-      expect(rows.at(-1)?.model).toMatchObject({ id: "replacement", variant: "medium" })
-      const { db } = yield* Database.Service
-      const stored = yield* db
-        .select({ agent: SessionTable.agent, model: SessionTable.model })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      expect(stored?.agent ?? null).toBeNull()
-      expect(stored?.model ?? null).toBeNull()
-      expect(JSON.stringify(requests[0])).not.toContain("I need [the concrete outcome]")
-    }),
-  )
-
-  it.effect("later human input restores the configured Session selection without touching persistent defaults", () =>
-    Effect.gen(function* () {
-      const fixture = yield* setupCoordination
-      const first = yield* dispatchToWorker(fixture, "Assigned work", dispatchSelection, {
-        allowedTools: ["read", "edit"],
-      })
-      yield* admitDispatch(fixture, first)
-      response = replyText("Assigned reply", "assigned-first")
-      yield* fixture.session.resume(sessionID)
-      const assignedRows = yield* providerRows(sessionID)
-      yield* fixture.coordination.settleDispatch(
-        { kind: "system" },
-        { groupID: fixture.group.id, dispatchID: first.id, outcome: "completed" },
-      )
+      const assigned = yield* providerRows(sessionID)
+      expect(assigned.at(-1)?.model).toMatchObject({ id: "replacement", variant: "medium" })
       yield* admit(fixture.session, "Human follow-up")
       response = replyText("Human reply", "human-next")
       yield* fixture.session.resume(sessionID)
       const rows = yield* providerRows(sessionID)
-      expect(rows.length).toBeGreaterThan(assignedRows.length)
-      expect(rows.at(-1)?.agent).not.toBe("occam")
+      expect(rows.length).toBeGreaterThan(assigned.length)
       expect(rows.at(-1)?.model.id).toBe(CatalogModel.ID.make("fake-model"))
-      const names = toolNames(requests.at(-1))
-      expect(names).toContain("shell")
-      expect(names).not.toContain("patch")
     }),
   )
 
-  it.effect("independent standing restrictions intersect with the assignment narrowing", () =>
+  it.effect("a coordination message without a model override uses the configured model", () =>
     Effect.gen(function* () {
-      const fixture = yield* setupCoordination
-      const coordinator2 = Session.ID.make("ses_coord_coordinator2")
-      yield* insertSession(coordinator2)
-      const second = yield* fixture.coordination.create(
-        { kind: "human" },
-        {
-          name: "Observer overlap",
-          policy: { concurrency: 1, queueCapacity: 4 },
-          members: [
-            { sessionID: coordinator2, role: "coordinator" },
-            { sessionID, role: "observer" },
-          ],
-        },
-      )
-      yield* fixture.coordination.arm({ kind: "human" }, { groupID: second.id, expectedRevision: second.revision })
-      const first = yield* dispatchToWorker(fixture, "Assigned work", dispatchSelection, {
-        allowedTools: ["read", "edit"],
-      })
-      yield* admitDispatch(fixture, first)
-      response = replyText("Intersected reply", "intersected")
+      const fixture = yield* setupProject
+      yield* sendFromMaster(fixture.group.id, "Plain work")
+      response = replyText("Plain reply", "plain")
       yield* fixture.session.resume(sessionID)
-      const names = toolNames(requests.at(-1))
-      expect(names).toContain("read")
-      expect(names).not.toContain("edit")
-      expect(names).not.toContain("shell")
-    }),
-  )
-
-  it.effect("a subagent of a coordinator does not inherit the coordinator implementation ban", () =>
-    Effect.gen(function* () {
-      const fixture = yield* setupCoordination
-      const childID = Session.ID.make("ses_coord_child")
-      yield* insertSession(childID, otherSessionID)
-      yield* fixture.session.prompt({ sessionID: childID, text: "Child work", resume: false })
-      response = replyText("Child reply", "child")
-      yield* fixture.session.resume(childID)
-      const names = toolNames(requests.at(-1))
-      expect(names).toEqual(expect.arrayContaining(["shell", "patch", "edit"]))
+      expect((yield* providerRows(sessionID)).at(-1)?.model.id).toBe(CatalogModel.ID.make("fake-model"))
     }),
   )
 })

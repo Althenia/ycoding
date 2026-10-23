@@ -4,8 +4,19 @@ import { expect, test } from "bun:test"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
 import { CoordinationProvider, useCoordination } from "../src/context/coordination"
-import { capacitySummary, queueReasonLabel } from "../src/util/coordination"
-import { backend, delegatedDecisions, dispatch, groupID, leadID, location, watcherID, workerID, type WriteBody } from "./fixture/coordination-backend"
+import {
+  apiID,
+  backend,
+  delegatedDecisions,
+  designID,
+  docsGroupID,
+  docsID,
+  groupID,
+  infraID,
+  leadID,
+  notesID,
+  scratchID,
+} from "./fixture/coordination-backend"
 import { createApi, createEventStream, createFetch } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
@@ -23,7 +34,9 @@ async function mount(
       <text>
         {coordination.error()
           ? `error ${coordination.error()}`
-          : (coordination.groups() ?? []).map((group) => `${group.name} ${group.status}`).join(" | ") || "loading"}
+          : (coordination.projects() ?? [])
+              .map((project) => `${project.name} ${project.active ? "active" : "paused"}`)
+              .join(" | ") || "loading"}
       </text>
     )
   }
@@ -42,6 +55,7 @@ async function mount(
     { width: 100, height: 8 },
   )
   app.renderer.start()
+  await app.waitForFrame((frame) => !frame.includes("loading"))
   return { app, events, coordination: () => coordination }
 }
 
@@ -51,320 +65,335 @@ async function until(check: () => boolean, label: string, timeout = 5_000) {
   if (!check()) throw new Error(`Timed out waiting for ${label}`)
 }
 
-function emit(events: ReturnType<typeof createEventStream>, type: "coordination.group.armed" | "coordination.group.needs-rearm", revision: number) {
-  events.emit({
-    id: `evt_${type}_${revision}`,
-    created: revision,
-    type,
-    data: { groupID, revision },
-    location,
-    durable: { aggregateID: groupID, seq: revision, version: 1 },
-  })
-}
+const writes = (server: ReturnType<typeof backend>) =>
+  server.state.writes.map((write) => [write.method, write.path, write.body] as const)
 
-test("the provider loads groups, capacity, receipts and Session titles through the generated client", async () => {
-  const server = backend({ dispatches: [dispatch("q1", "queued", "capacity")] })
-  const { app, coordination } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    const group = coordination().groups()![0]!
-    expect(group).toMatchObject({
-      id: groupID,
-      name: "Release train",
-      status: "armed",
-      revision: 7,
-      capacity: { active: 2, hardLimit: 5 },
-      policy: { concurrency: 3, queueCapacity: 40, budget: 5 },
-    })
-    expect(group.roster).toEqual([
-      { sessionID: leadID, title: "Lead session", role: "coordinator", allowedTools: ["read"], resourceScopes: ["/repo/**"] },
-      { sessionID: workerID, title: "Worker A", role: "worker", allowedTools: ["read", "grep"], resourceScopes: ["/repo/src/**"] },
-      { sessionID: watcherID, title: "Watcher", role: "observer" },
-    ])
-    expect(group.policy.delegatedDecisions).toEqual({ ...delegatedDecisions, categories: ["permission", "review"] })
-    expect(group.receipts.map((receipt) => receipt.worker)).toEqual(["Worker A"])
-    expect(group.receipts[0]!.selection).toEqual({
-      agent: "omoikane",
-      model: { providerID: "anthropic", id: "claude-sonnet-5-5", variant: "high" },
-      reason: "Needs deep reasoning",
-    })
-    expect(group.queue[0]!.selection).toEqual({
-      agent: "build",
-      model: { providerID: "openai", id: "gpt-6", profile: "work" },
-      reason: "Quick lease check",
-    })
-    expect(group.leases).toEqual([{ id: `${workerID}:1`, holder: "Lead session", resource: "Worker A", expiresAt: 99 }])
-    expect(coordination().sessions().map((item) => item.sessionID)).toEqual([leadID, watcherID, workerID])
-    expect(server.state.sessionQueries.map((url) => [url.searchParams.get("parentID"), url.searchParams.get("cursor")])).toEqual(
-      expect.arrayContaining([["null", null], ["null", "page-2"]]),
-    )
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("a terminal session-list cursor of null ends pagination and keeps every Session title", async () => {
-  const server = backend({ lastCursor: { next: null } })
-  const page = await createApi(createFetch(server.route, createEventStream()).fetch).session.list({ parentID: null, limit: 200, cursor: "page-2" })
-  expect(page.cursor.next).toBeNull()
-  const { app, coordination } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    expect(coordination().sessions().map((item) => item.title)).toEqual(["Lead session", "Watcher", "Worker A"])
-    expect(server.state.sessionQueries.map((url) => url.searchParams.get("cursor"))).toSatisfy((cursors: Array<string | null>) =>
-      cursors.length > 0 && cursors.every((cursor) => cursor === null || cursor === "page-2"),
-    )
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("queue reasons carry each actual backend reason as a readable sentence", async () => {
-  const reasons = ["capacity", "hard-limit", "dependency", "budget"]
-  const server = backend({ dispatches: reasons.map((reason) => dispatch(reason, "queued", reason)) })
-  const { app, coordination } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    const queue = coordination().groups()![0]!.queue
-    expect(queue.map((item) => item.reason)).toEqual(reasons)
-    for (const item of queue) expect(queueReasonLabel(item.reason)).not.toStartWith("reason ")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("a backend that reports no hard limit never renders a null or zero bound", async () => {
-  const server = backend({ capacity: { hardLimit: null, effectiveLimit: null, available: null, concurrency: null } })
-  const { app, coordination } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    const group = coordination().groups()![0]!
-    const summary = capacitySummary(group.capacity, group.policy)
-    expect(summary).not.toContain("null")
-    expect(summary).not.toContain("0/0")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("the resolved global delegation policy is loaded and stays unavailable when it cannot be read", async () => {
+test("the provider loads each Project with the master first, live member state, pending count and directory", async () => {
   const server = backend()
   const { app, coordination } = await mount(server)
   try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    expect(coordination().globalDelegation()).toEqual({
-      enabled: true,
-      categories: ["permission", "review"],
-      actions: ["shell:git status"],
-      expiresAt: 5_000_000_000_000,
+    const release = coordination().projects()![0]!
+    expect(release).toMatchObject({ id: groupID, name: "Release train", revision: 7, active: true, concurrency: 2 })
+    expect(release.delegatedDecisions).toEqual(delegatedDecisions)
+    expect(release.master).toMatchObject({
+      sessionID: leadID,
+      title: "Lead",
+      role: "master",
+      state: "running",
+      directory: "/home/dev/Workspace/api",
+      pending: 0,
     })
+    expect(release.members.map((member) => [member.sessionID, member.state, member.pending])).toEqual([
+      [docsID, "idle", 0],
+      [apiID, "running", 0],
+      [infraID, "waiting", 1],
+      [designID, "running", 0],
+    ])
+    expect(release.members.every((member) => member.role === "member")).toBe(true)
+    expect(release.members[1]!.drivenBy).toBe("Migration agent")
+    expect(coordination().projects()![1]).toMatchObject({ id: docsGroupID, active: false, concurrency: null })
+    expect(coordination().loadedAt()).toBeGreaterThan(0)
+    expect(coordination().globalDelegation()).toMatchObject({ enabled: true, categories: ["permission", "review"] })
   } finally {
     app.renderer.destroy()
   }
-  const unavailable = backend()
-  unavailable.state.settings = undefined
-  const second = await mount(unavailable)
+})
+
+test("root Sessions carry the name of the Project that already holds them", async () => {
+  const { app, coordination } = await mount(backend())
   try {
-    await second.app.waitForFrame((frame) => frame.includes("Release train armed"))
-    expect(second.coordination().globalDelegation()).toBeUndefined()
-    expect(second.coordination().groups()).toHaveLength(1)
+    await until(() => coordination().sessions().length > 0, "root sessions")
+    const byID = new Map(
+      coordination()
+        .sessions()
+        .map((session) => [session.sessionID, session]),
+    )
+    expect(byID.get(leadID)?.projectName).toBe("Release train")
+    expect(byID.get(notesID)?.projectName).toBe("Docs sweep")
+    expect(byID.get(scratchID)).toMatchObject({ title: "Scratch", directory: "/home/dev/tmp" })
+    expect(byID.get(scratchID)?.projectName).toBeUndefined()
+    expect(coordination().projectOf(infraID)).toMatchObject({ role: "member" })
+    expect(coordination().projectOf(scratchID)).toBeUndefined()
   } finally {
-    second.app.renderer.destroy()
+    app.renderer.destroy()
   }
 })
 
-test("a failed load surfaces the error, and a coordination event recovers it", async () => {
+test("Project snapshots preserve the reported pause reason", async () => {
+  const server = backend()
+  server.state.projects[0]!.active = false
+  server.state.projects[0]!.pausedReason = "restart"
+  const { app, coordination } = await mount(server)
+  try {
+    expect(coordination().projects()![0]!.pausedReason).toBe("restart")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a failed list reports the backend reason and keeps the Projects unloaded", async () => {
   const server = backend()
   server.state.failList = true
-  const { app, events, coordination } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("error"))
-    expect(coordination().error()).toBeTruthy()
-    expect(coordination().groups()).toBeUndefined()
-    server.state.failList = false
-    emit(events, "coordination.group.armed", 8)
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    expect(coordination().error()).toBeUndefined()
-  } finally {
-    app.renderer.destroy()
+  const events = createEventStream()
+  const fetch = createFetch(server.route, events)
+  let coordination!: ReturnType<typeof useCoordination>
+  function Probe() {
+    coordination = useCoordination()
+    return <text>{coordination.error() ?? "no error"}</text>
   }
-})
-
-test("a disconnected event stream reconnects and reloads the groups", async () => {
-  const server = backend()
-  const { app, events } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    await until(() => events.subscriptions() > 0, "event subscription")
-    const before = server.state.calls.filter((path) => path === "/api/coordination").length
-    events.disconnect()
-    server.state.status = "stopped"
-    await until(() => server.state.calls.filter((path) => path === "/api/coordination").length > before, "reload after reconnect", 6_000)
-    await app.waitForFrame((frame) => frame.includes("Release train stopped"))
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("a durable coordination event refreshes the displayed lifecycle status", async () => {
-  const server = backend()
-  const { app, events } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    await until(() => events.subscriptions() > 0, "event subscription")
-    server.state.status = "needs-rearm"
-    emit(events, "coordination.group.needs-rearm", 8)
-    await app.waitForFrame((frame) => frame.includes("Release train needs-rearm"))
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-type MemberFields = { sessionID: string; role: string; allowedTools?: ReadonlyArray<string>; resourceScopes?: ReadonlyArray<string> }
-
-function memberFields(body: WriteBody): MemberFields[] {
-  return (body.members ?? []).map((member) => ({
-    sessionID: member.sessionID,
-    role: member.role,
-    allowedTools: member.allowedTools,
-    resourceScopes: member.resourceScopes,
-  }))
-}
-
-const loadedMembers = [
-  { sessionID: leadID, role: "coordinator", allowedTools: ["read"], resourceScopes: ["/repo/**"] },
-  { sessionID: workerID, role: "worker", allowedTools: ["read", "grep"], resourceScopes: ["/repo/src/**"] },
-  { sessionID: watcherID, role: "observer" },
-]
-
-async function member(change: (service: ReturnType<typeof useCoordination>["service"]) => Promise<void>) {
-  const server = backend()
-  const { app, coordination } = await mount(server)
-  try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    await change(coordination().service)
-    return server.state.writes.find((item) => item.method === "PUT" && item.path.endsWith("/members"))
-  } finally {
-    app.renderer.destroy()
-  }
-}
-
-test("editing capacity sends only the changed fields and keeps the delegated-decision narrowing and member limits", async () => {
-  const write = await member((service) => service.updatePolicy(groupID, { concurrency: 2, queueCapacity: 10 }))
-  expect(write!.body.revision).toBe(7)
-  expect(write!.body.policy).toEqual({ concurrency: 2, queueCapacity: 10, budget: 5, delegatedDecisions })
-  expect(memberFields(write!.body)).toEqual(loadedMembers)
-})
-
-test("an explicit uncapped concurrency reaches the backend as null while narrowing stays", async () => {
-  const write = await member((service) => service.updatePolicy(groupID, { concurrency: null }))
-  expect(write!.body.policy).toEqual({ concurrency: null, queueCapacity: 40, budget: 5, delegatedDecisions })
-})
-
-test("clearing the budget removes it and leaves the narrowing", async () => {
-  const write = await member((service) => service.updatePolicy(groupID, { budget: null }))
-  expect(write!.body.policy).toEqual({ concurrency: 3, queueCapacity: 40, delegatedDecisions })
-  expect(write!.body.policy).not.toHaveProperty("budget")
-})
-
-test("delegated decisions can be narrowed, disabled with no categories, or returned to the global policy", async () => {
-  const narrowed = await member((service) =>
-    service.updatePolicy(groupID, { delegatedDecisions: { categories: ["permission"], actions: ["shell:ls"] } }),
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ClientProvider api={createApi(fetch.fetch)}>
+            <CoordinationProvider>
+              <Probe />
+            </CoordinationProvider>
+          </ClientProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 4 },
   )
-  expect(narrowed!.body.policy).toEqual({
-    concurrency: 3,
-    queueCapacity: 40,
-    budget: 5,
-    delegatedDecisions: { categories: ["permission"], actions: ["shell:ls"] },
-  })
-  const disabled = await member((service) => service.updatePolicy(groupID, { delegatedDecisions: { categories: [] } }))
-  expect(disabled!.body.policy).toEqual({ concurrency: 3, queueCapacity: 40, budget: 5, delegatedDecisions: { categories: [] } })
-  const inherited = await member((service) => service.updatePolicy(groupID, { delegatedDecisions: null }))
-  expect(inherited!.body.policy).toEqual({ concurrency: 3, queueCapacity: 40, budget: 5 })
-  expect(inherited!.body.policy).not.toHaveProperty("delegatedDecisions")
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Projects backend offline"))
+    expect(coordination.projects()).toBeUndefined()
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
-test("changing a role keeps every member's tool and scope limits, demotes the previous coordinator and sends no policy", async () => {
-  const observer = await member((service) => service.setMemberRole(groupID, workerID, "observer"))
-  expect(memberFields(observer!.body)).toEqual([
-    loadedMembers[0],
-    { ...loadedMembers[1], role: "observer" },
-    loadedMembers[2],
-  ])
-  expect(observer!.body.policy).toBeUndefined()
-  const promoted = await member((service) => service.setMemberRole(groupID, workerID, "coordinator"))
-  expect(memberFields(promoted!.body)).toEqual([
-    { ...loadedMembers[0], role: "worker" },
-    { ...loadedMembers[1], role: "coordinator" },
-    loadedMembers[2],
-  ])
-})
-
-test("member access edits change one member and clearing a list means all", async () => {
-  const tools = await member((service) => service.setMemberAccess(groupID, workerID, { allowedTools: ["read"] }))
-  expect(memberFields(tools!.body)).toEqual([loadedMembers[0], { ...loadedMembers[1], allowedTools: ["read"] }, loadedMembers[2]])
-  const cleared = await member((service) => service.setMemberAccess(groupID, workerID, { resourceScopes: undefined }))
-  expect(memberFields(cleared!.body)).toEqual([loadedMembers[0], { ...loadedMembers[1], resourceScopes: undefined }, loadedMembers[2]])
-})
-
-test("adding a member sends a worker without invented limits, and removal refuses the only coordinator before any write", async () => {
-  const added = await member((service) => service.addMember(groupID, "ses_fresh00000001", "worker"))
-  expect(memberFields(added!.body)).toEqual([...loadedMembers, { sessionID: "ses_fresh00000001", role: "worker" }])
-  const removed = await member((service) => service.removeMember(groupID, watcherID))
-  expect(memberFields(removed!.body)).toEqual(loadedMembers.slice(0, 2))
+test("creating with an existing master sends the name and master with no members", async () => {
   const server = backend()
   const { app, coordination } = await mount(server)
   try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    await expect(coordination().service.removeMember(groupID, leadID)).rejects.toThrow("A group needs exactly one coordinator")
+    const masterID = await coordination().service.create({ name: "Q4 planning", master: { sessionID: scratchID } })
+    expect(masterID).toBe(scratchID)
+    expect(writes(server)).toEqual([
+      ["POST", "/api/coordination", { name: "Q4 planning", masterSessionID: scratchID, memberSessionIDs: [] }],
+    ])
+    await until(
+      () =>
+        coordination()
+          .projects()!
+          .some((project) => project.name === "Q4 planning"),
+      "created project",
+    )
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("creating with a new master creates the Session in the directory, titles it and makes it the master", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    const masterID = await coordination().service.create({
+      name: "Infra move",
+      master: { directory: "/home/dev/Workspace/infra" },
+    })
+    expect(masterID).toStartWith("ses_new")
+    expect(writes(server)).toEqual([
+      ["POST", "/api/session", { location: { directory: "/home/dev/Workspace/infra" } }],
+      ["POST", `/api/session/${masterID}/rename`, { title: "Infra move" }],
+      ["POST", "/api/coordination", { name: "Infra move", masterSessionID: masterID, memberSessionIDs: [] }],
+    ])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a new master takes an explicit title over the Project name", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await coordination().service.create({ name: "Infra move", master: { directory: "/x", title: "Ops lead" } })
+    expect(server.state.writes[1]!.body).toEqual({ title: "Ops lead" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renaming and changing concurrency send only the changed field and keep delegated decisions", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await coordination().service.rename(groupID, "Release train 2")
+    await coordination().service.setConcurrency(groupID, null)
+    await coordination().service.setConcurrency(groupID, 4)
+    expect(writes(server)).toEqual([
+      ["PATCH", `/api/coordination/${groupID}`, { revision: 7, name: "Release train 2" }],
+      ["PATCH", `/api/coordination/${groupID}`, { revision: 8, settings: { concurrency: null, delegatedDecisions } }],
+      ["PATCH", `/api/coordination/${groupID}`, { revision: 9, settings: { concurrency: 4, delegatedDecisions } }],
+    ])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("delegation edits keep concurrency, and inheriting clears the narrowing", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await coordination().service.setDelegation(groupID, { categories: ["review"] })
+    await coordination().service.setDelegation(groupID, null)
+    expect(writes(server).map(([, , body]) => body)).toEqual([
+      { revision: 7, settings: { concurrency: 2, delegatedDecisions: { categories: ["review"] } } },
+      { revision: 8, settings: { concurrency: 2 } },
+    ])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("choosing another master moves the old master to the members and keeps every other member", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await coordination().service.setMaster(groupID, apiID)
+    expect(server.state.writes[0]!.body).toEqual({
+      revision: 7,
+      masterSessionID: apiID,
+      memberSessionIDs: [leadID, docsID, infraID, designID],
+    })
+    await until(() => coordination().projects()![0]!.master.sessionID === apiID, "new master")
+    expect(
+      coordination()
+        .projects()![0]!
+        .members.map((member) => member.sessionID),
+    ).toEqual([leadID, docsID, infraID, designID])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("adding, creating and removing members rewrite only the member list", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await coordination().service.addMember(groupID, scratchID)
+    const created = await coordination().service.newMember(groupID, "/home/dev/Workspace/new", "Fresh")
+    await coordination().service.removeMember(groupID, docsID)
+    expect(
+      writes(server)
+        .filter(([method]) => method === "PATCH")
+        .map(([, , body]) => body),
+    ).toEqual([
+      { revision: 7, memberSessionIDs: [docsID, apiID, infraID, designID, scratchID] },
+      { revision: 8, memberSessionIDs: [docsID, apiID, infraID, designID, scratchID, created] },
+      { revision: 9, memberSessionIDs: [apiID, infraID, designID, scratchID, created] },
+    ])
+    expect(server.state.writes[1]).toMatchObject({
+      path: "/api/session",
+      body: { location: { directory: "/home/dev/Workspace/new" } },
+    })
+    expect(server.state.sessions[docsID]).toBeDefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a Session already in a Project cannot be added again", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await expect(coordination().service.addMember(groupID, docsID)).rejects.toThrow(
+      "A Session can belong to a Project once",
+    )
+    await expect(coordination().service.addMember(groupID, leadID)).rejects.toThrow(
+      "A Session can belong to a Project once",
+    )
     expect(server.state.writes).toEqual([])
   } finally {
     app.renderer.destroy()
   }
 })
 
-test("renaming sends the name with the loaded revision and the unchanged members", async () => {
-  const write = await member((service) => service.rename(groupID, "Shipping train"))
-  expect(write!.body.name).toBe("Shipping train")
-  expect(write!.body.revision).toBe(7)
-  expect(memberFields(write!.body)).toEqual(loadedMembers)
-})
-
-test("a lifecycle call sends the loaded revision and reloads the group afterwards", async () => {
+test("deleting a member deletes its Session, and deleting a Project keeps every Session", async () => {
   const server = backend()
   const { app, coordination } = await mount(server)
   try {
-    await app.waitForFrame((frame) => frame.includes("Release train armed"))
-    const before = server.state.calls.filter((path) => path === "/api/coordination").length
-    server.state.status = "stopped"
-    await coordination().service.stop(groupID)
-    expect(server.state.writes.map((item) => [item.method, item.path, item.body])).toEqual([
-      ["POST", `/api/coordination/${groupID}/stop`, { revision: 7 }],
-    ])
-    expect(server.state.calls.filter((path) => path === "/api/coordination").length).toBeGreaterThan(before)
-    await app.waitForFrame((frame) => frame.includes("Release train stopped"))
+    await expect(coordination().service.deleteMember(groupID, leadID)).rejects.toThrow(
+      "Only a member Session can be deleted",
+    )
+    await coordination().service.deleteMember(groupID, designID)
+    expect(writes(server)).toEqual([["DELETE", `/api/session/${designID}`, {}]])
+    await coordination().service.deleteProject(docsGroupID)
+    expect(server.state.writes.at(-1)).toMatchObject({ method: "DELETE", path: `/api/coordination/${docsGroupID}` })
+    expect(server.state.sessions[notesID]).toBeDefined()
+    await until(() => coordination().projects()!.length === 1, "project removed")
+    expect(
+      coordination()
+        .projects()![0]!
+        .members.map((member) => member.sessionID),
+    ).not.toContain(designID)
   } finally {
     app.renderer.destroy()
   }
 })
 
-test("external delivery follows the persisted filter and the loaded coordinator roots", async () => {
+test("a stale revision surfaces the backend reason and a refresh recovers", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    server.state.projects[0]!.revision = 9
+    await expect(coordination().service.rename(groupID, "Late")).rejects.toThrow("Project changed; refresh and retry")
+    await until(() => coordination().projects()![0]!.revision === 9, "refreshed revision")
+    await coordination().service.rename(groupID, "Late")
+    expect(server.state.projects[0]!.name).toBe("Late")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("member state changes arrive in place from coordination and execution events", async () => {
+  const server = backend()
+  const { app, events, coordination } = await mount(server)
+  try {
+    server.state.sessions[docsID]!.state = "running"
+    events.emit({
+      id: "evt_updated",
+      created: 1,
+      type: "coordination.updated",
+      data: { groupID, revision: 7 },
+    } as never)
+    await until(() => coordination().projects()![0]!.members[0]!.state === "running", "docs worker running")
+    server.state.sessions[docsID]!.state = "failed"
+    events.emit({
+      id: "evt_failed",
+      created: 2,
+      type: "session.execution.failed",
+      data: { sessionID: docsID },
+    } as never)
+    await until(() => coordination().projects()![0]!.members[0]!.state === "failed", "docs worker failed")
+    expect(
+      coordination()
+        .projects()![0]!
+        .members.map((member) => member.sessionID),
+    ).toEqual([docsID, apiID, infraID, designID])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("external notifications gate on master Sessions from the loaded Projects", async () => {
   const everything = await mount(backend())
   try {
-    await everything.app.waitForFrame((frame) => frame.includes("Release train armed"))
-    for (const sessionID of [leadID, workerID, "ses_other"]) expect(everything.coordination().externalAllowed(sessionID, "failure")).toBe(true)
+    for (const sessionID of [leadID, docsID, "ses_other"])
+      expect(everything.coordination().externalAllowed(sessionID, "failure")).toBe(true)
   } finally {
     everything.app.renderer.destroy()
   }
-  const coordinators = await mount(backend(), { config: { attention: { coordination: { scope: "coordinators", categories: ["failure"] } } } })
+  const masters = await mount(backend(), {
+    config: { attention: { coordination: { scope: "coordinators", categories: ["failure"] } } },
+  })
   try {
-    await coordinators.app.waitForFrame((frame) => frame.includes("Release train armed"))
-    const allowed = coordinators.coordination().externalAllowed
+    const allowed = masters.coordination().externalAllowed
     expect(allowed(leadID, "failure")).toBe(true)
+    expect(allowed(docsID, "failure")).toBe(false)
     expect(allowed(leadID, "completion")).toBe(false)
-    expect(allowed(workerID, "failure")).toBe(false)
-    expect(allowed(watcherID, "failure")).toBe(false)
   } finally {
-    coordinators.app.renderer.destroy()
+    masters.app.renderer.destroy()
   }
 })

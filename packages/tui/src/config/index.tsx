@@ -25,7 +25,7 @@ export type AttentionSoundPaths = Partial<Record<AttentionSoundName, string>>
 
 export const CoordinationNotifications = Schema.Struct({
   scope: Schema.Literals(["all", "coordinators", "selected"]),
-  sessionIDs: Schema.Array(Schema.String.check(Schema.isStartsWith("ses_"))).check(Schema.isMaxLength(64)).pipe(Schema.optional),
+  sessionIDs: Schema.Array(Schema.String.check(Schema.isStartsWith("ses_"))).check(Schema.isMaxLength(128)).pipe(Schema.optional),
   categories: Schema.Array(Schema.Literals(["question", "permission", "review", "failure", "completion"])).check(Schema.isMaxLength(5)).pipe(Schema.optional),
 })
 export type CoordinationNotifications = typeof CoordinationNotifications.Type

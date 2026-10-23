@@ -1,5 +1,8 @@
-export type CoordinationRole = "coordinator" | "worker" | "observer"
-export type CoordinationStatus = "disarmed" | "armed" | "waiting" | "stopped" | "completed" | "needs-rearm"
+import { Locale } from "./locale"
+import { stringWidth } from "./string-width"
+
+export type MemberState = "idle" | "running" | "waiting" | "failed"
+export type ProjectRole = "master" | "member"
 
 export const delegatedCategories = ["question", "permission", "review"] as const
 export type DelegatedCategory = (typeof delegatedCategories)[number]
@@ -19,100 +22,51 @@ export type GlobalDelegationView = {
   readonly expiresAt?: number
 }
 
-export type CoordinationMemberView = {
+export type ProjectMemberView = {
   readonly sessionID: string
   readonly title: string
-  readonly role: CoordinationRole
-  readonly allowedTools?: ReadonlyArray<string>
-  readonly resourceScopes?: ReadonlyArray<string>
+  readonly role: ProjectRole
+  readonly state: MemberState
+  readonly directory: string
+  readonly lastActivity: number
+  readonly pending: number
+  readonly drivenBy?: string
 }
 
-export type CoordinationCapacityView = {
-  readonly active: number
-  readonly hardLimit: number | null
-}
-
-export type CoordinationPolicyView = {
-  readonly concurrency: number | null
-  readonly queueCapacity: number
-  readonly budget?: number
-  readonly delegatedDecisions?: DelegatedDecisionsView
-}
-
-export type DispatchSelectionView = {
-  readonly agent: string
-  readonly model: {
-    readonly providerID: string
-    readonly id: string
-    readonly profile?: string
-    readonly variant?: string
-  }
-  readonly reason: string
-}
-
-export type CoordinationQueueItemView = {
-  readonly id: string
-  readonly title: string
-  readonly reason: string
-  readonly selection?: DispatchSelectionView
-}
-export type CoordinationLeaseView = {
-  readonly id: string
-  readonly holder: string
-  readonly resource: string
-  readonly expiresAt?: number
-}
-export type CoordinationReceiptView = {
-  readonly id: string
-  readonly worker: string
-  readonly outcome: string
-  readonly reason?: string
-  readonly time: number
-  readonly selection?: DispatchSelectionView
-}
-
-export type CoordinationGroupView = {
+export type ProjectView = {
   readonly id: string
   readonly name: string
-  readonly status: CoordinationStatus
   readonly revision: number
-  readonly roster: ReadonlyArray<CoordinationMemberView>
-  readonly capacity: CoordinationCapacityView
-  readonly policy: CoordinationPolicyView
-  readonly queue: ReadonlyArray<CoordinationQueueItemView>
-  readonly leases: ReadonlyArray<CoordinationLeaseView>
-  readonly receipts: ReadonlyArray<CoordinationReceiptView>
+  readonly active: boolean
+  readonly pausedReason?: "interrupted" | "restart"
+  readonly concurrency: number | null
+  readonly delegatedDecisions?: DelegatedDecisionsView
+  readonly created: number
+  readonly master: ProjectMemberView
+  readonly members: ReadonlyArray<ProjectMemberView>
 }
 
-export type CoordinationSessionChoice = { readonly sessionID: string; readonly title: string }
-export type CoordinationMemberInput = {
+export type ProjectSessionChoice = {
   readonly sessionID: string
-  readonly role: CoordinationRole
-  readonly allowedTools?: ReadonlyArray<string>
-  readonly resourceScopes?: ReadonlyArray<string>
-}
-export type MemberAccessPatch = {
-  readonly allowedTools?: ReadonlyArray<string>
-  readonly resourceScopes?: ReadonlyArray<string>
-}
-export type CoordinationPolicyPatch = {
-  readonly concurrency?: number | null
-  readonly queueCapacity?: number
-  readonly budget?: number | null
-  readonly delegatedDecisions?: DelegatedDecisionsView | null
+  readonly title: string
+  readonly directory: string
+  readonly updated: number
+  readonly projectName?: string
 }
 
-export type CoordinationService = {
-  create(input: { name: string; roster: ReadonlyArray<CoordinationMemberInput> }): Promise<void>
-  rename(groupID: string, name: string): Promise<void>
-  addMember(groupID: string, sessionID: string, role: CoordinationRole): Promise<void>
-  setMemberRole(groupID: string, sessionID: string, role: CoordinationRole): Promise<void>
-  setMemberAccess(groupID: string, sessionID: string, patch: MemberAccessPatch): Promise<void>
-  removeMember(groupID: string, sessionID: string): Promise<void>
-  updatePolicy(groupID: string, patch: CoordinationPolicyPatch): Promise<void>
-  arm(groupID: string): Promise<void>
-  stop(groupID: string): Promise<void>
-  complete(groupID: string): Promise<void>
+export type NewMaster = { readonly sessionID: string } | { readonly directory: string; readonly title?: string }
+
+export type ProjectService = {
+  create(input: { name: string; master: NewMaster }): Promise<string>
+  rename(projectID: string, name: string): Promise<void>
+  setMaster(projectID: string, sessionID: string): Promise<void>
+  setConcurrency(projectID: string, value: number | null): Promise<void>
+  setDelegation(projectID: string, value: DelegatedDecisionsView | null): Promise<void>
+  addMember(projectID: string, sessionID: string): Promise<void>
+  newMember(projectID: string, directory: string, title?: string): Promise<string>
+  removeMember(projectID: string, sessionID: string): Promise<void>
+  deleteMember(projectID: string, sessionID: string): Promise<void>
+  deleteProject(projectID: string): Promise<void>
 }
 
 export const externalNotificationKinds = ["question", "permission", "review", "failure", "completion"] as const
@@ -124,81 +78,210 @@ export type NotificationFilter = {
   readonly categories?: ReadonlyArray<ExternalNotificationKind>
 }
 
-export const maxSelectedCoordinators = 128
+export const maxSelectedMasters = 128
 
-const coordinatorRule = "A group needs exactly one coordinator"
-
-export function effectiveLimit(capacity: CoordinationCapacityView, policy: CoordinationPolicyView) {
-  if (capacity.hardLimit === null) return null
-  return Math.min(policy.concurrency ?? capacity.hardLimit, capacity.hardLimit)
+export function projectNotification(metadata: unknown) {
+  if (metadata === null || typeof metadata !== "object") return
+  if (!("source" in metadata) || metadata.source !== "project_notification") return
+  if (
+    !("memberSessionID" in metadata) ||
+    typeof metadata.memberSessionID !== "string" ||
+    !metadata.memberSessionID.startsWith("ses_")
+  )
+    return
+  if (!("title" in metadata) || typeof metadata.title !== "string") return
+  if (
+    !("event" in metadata) ||
+    typeof metadata.event !== "string" ||
+    !["completed", "failed", "interrupted", "question", "permission", "review"].includes(metadata.event)
+  )
+    return
+  return {
+    sessionID: metadata.memberSessionID,
+    title: metadata.title.slice(0, 120),
+    event: metadata.event,
+    excerpt: "excerpt" in metadata && typeof metadata.excerpt === "string" ? metadata.excerpt.slice(0, 500) : "",
+  }
 }
 
-export function capacitySummary(capacity: CoordinationCapacityView, policy: CoordinationPolicyView) {
-  if (capacity.hardLimit === null)
-    return `${capacity.active} workers · ${policy.concurrency === null ? "uncapped policy" : `policy ${policy.concurrency}`} · hard limit unreported`
-  const base = `${capacity.active}/${effectiveLimit(capacity, policy)} workers`
-  if (policy.concurrency === null) return `${base} · uncapped policy · hard limit ${capacity.hardLimit}`
-  const capped = policy.concurrency > capacity.hardLimit ? ` · policy ${policy.concurrency} capped` : ""
-  return `${base} · hard limit ${capacity.hardLimit}${capped}`
+export function roster(project: ProjectView): ReadonlyArray<ProjectMemberView> {
+  return [project.master, ...project.members]
 }
 
-export function statusLabel(status: CoordinationStatus) {
-  if (status === "stopped") return "stopped · workers keep running"
-  if (status === "needs-rearm") return "needs re-arm"
-  return status
+export function projectOfSession(projects: ReadonlyArray<ProjectView> | undefined, sessionID: string) {
+  for (const project of projects ?? []) {
+    if (project.master.sessionID === sessionID) return { project, role: "master" as const }
+    if (project.members.some((member) => member.sessionID === sessionID)) return { project, role: "member" as const }
+  }
 }
 
-const arm = { id: "arm", title: "Arm group" } as const
-const stop = { id: "stop", title: "Stop dispatch · workers keep running" } as const
-const rearm = { id: "rearm", title: "Re-arm group" } as const
-const complete = { id: "complete", title: "Complete project" } as const
-
-export function lifecycleActions(status: CoordinationStatus) {
-  if (status === "disarmed") return [arm]
-  if (status === "armed" || status === "waiting") return [stop, complete]
-  if (status === "completed") return []
-  return [rearm, complete]
+export function memberPosition(project: ProjectView, sessionID: string) {
+  const index = project.members.findIndex((member) => member.sessionID === sessionID)
+  if (index < 0) return undefined
+  return { index: index + 1, total: project.members.length }
 }
 
-const concurrencyRule = "Concurrency must be a whole number of at least 1, or uncapped"
-const queueRule = "Queue capacity must be a whole number from 1 to 1000"
-const budgetRule = "Budget must be a positive USD amount with up to two decimals, or none"
-const expiryRule = "Expiry must be never or a duration such as 30m, 2h, or 1d"
+const glyphs: Record<MemberState, string> = { running: "●", idle: "○", waiting: "?", failed: "✗" }
+
+export function stateGlyph(state: MemberState, animated: boolean) {
+  return state === "running" && animated ? "⠋" : glyphs[state]
+}
+
+export function stateWord(state: MemberState) {
+  return state
+}
+
+export function runningMembers(project: ProjectView) {
+  return project.members.filter((member) => member.state === "running").length
+}
+
+export function concurrencyMeter(project: ProjectView) {
+  const running = runningMembers(project)
+  if (project.concurrency === null) return `${running} running · no limit`
+  const cells = Math.min(project.concurrency, 8)
+  const filled = Math.min(cells, Math.round((running / project.concurrency) * cells))
+  const bar = `${"█".repeat(filled)}${"░".repeat(cells - filled)}`
+  return `${bar} ${running}/${project.concurrency} running${running >= project.concurrency ? " · at limit" : ""}`
+}
+
+export function liveSummary(project: ProjectView, animated: boolean) {
+  const states: MemberState[] = ["running", "waiting", "failed", "idle"]
+  return states
+    .flatMap((state) => {
+      const count = roster(project).filter((member) => member.state === state).length
+      return count === 0 ? [] : [`${stateGlyph(state, animated)}${count}`]
+    })
+    .join(" ")
+}
+
+export function projectStatusLabel(active: boolean) {
+  return active ? "● active" : "○ paused"
+}
+
+export function masterSummary(project: ProjectView) {
+  const count = roster(project).length
+  const waiting = project.members.filter((member) => member.state === "waiting").length
+  return [
+    `${count} member${count === 1 ? "" : "s"}`,
+    `${runningMembers(project)} running`,
+    ...(waiting === 0 ? [] : [`${waiting} waiting`]),
+  ].join(" · ")
+}
+
+function compactCounts(project: ProjectView) {
+  const waiting = project.members.filter((member) => member.state === "waiting").length
+  const running = runningMembers(project)
+  return [
+    project.concurrency === null ? `${running} running` : `${running}/${project.concurrency} running`,
+    ...(waiting === 0 ? [] : [`? ${waiting}`]),
+  ].join(" · ")
+}
+
+export function ageLabel(elapsed: number) {
+  if (elapsed < 1_000) return "now"
+  return relativeAge(elapsed)
+}
+
+export function updatedLabel(elapsed: number | undefined) {
+  return elapsed === undefined ? "" : `updated ${relativeAge(elapsed)}`
+}
+
+function span(milliseconds: number) {
+  const seconds = Math.floor(milliseconds / 1_000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+export function relativeAge(elapsed: number) {
+  return `${span(Math.max(0, elapsed))} ago`
+}
+
+export function relativeFuture(remaining: number) {
+  return `in ${span(Math.max(0, remaining))}`
+}
+
+export function collapseLevel(width: number) {
+  return { pane: width >= 100, updated: width >= 120, breadcrumb: width >= 100, chips: width < 100 && width >= 70 }
+}
+
+export function stripLine(input: { project: ProjectView; role: ProjectRole; sessionID: string; width: number }) {
+  const level = collapseLevel(input.width)
+  const separator = level.breadcrumb ? "   ·   " : " · "
+  const compose = (name: string) => {
+    const parts: string[] = []
+    if (level.breadcrumb) parts.push(`Projects › ${name}`)
+    if (input.role === "master") {
+      parts.push(`Master of ${name}`, projectStatusLabel(input.project.active))
+      parts.push(level.breadcrumb ? masterSummary(input.project) : compactCounts(input.project))
+      return parts.join(separator)
+    }
+    const member = roster(input.project).find((item) => item.sessionID === input.sessionID)
+    const position = memberPosition(input.project, input.sessionID)
+    parts.push(`Member of ${name} · master: ${input.project.master.title}`)
+    parts.push(
+      level.breadcrumb && position
+        ? `↑ ${input.project.master.title}   ←→ member ${position.index} of ${position.total}`
+        : `↑ ${input.project.master.title}`,
+    )
+    if (member) parts.push(`${stateGlyph(member.state, false)} ${stateWord(member.state)}`)
+    return parts.join(separator)
+  }
+  const full = compose(input.project.name)
+  const overflow = stringWidth(full) - input.width
+  if (overflow <= 0) return full
+  const nameWidth = Math.max(4, stringWidth(input.project.name) - overflow)
+  return Locale.truncateWidth(compose(Locale.truncateWidth(input.project.name, nameWidth)), input.width)
+}
+
+function firstWord(title: string) {
+  return title.trim().split(/\s+/)[0] || title
+}
+
+export function chipsRow(project: ProjectView, width: number) {
+  const members = roster(project)
+  const words = members.map((member) => firstWord(member.title))
+  const chips = members.map((member, index) => {
+    const name = words.filter((word) => word === words[index]).length > 1 ? member.title : words[index]!
+    const label = member.role === "master" ? `MASTER ${name}` : name
+    return { sessionID: member.sessionID, label, state: member.state, width: stringWidth(label) + 2 }
+  })
+  const separator = 3
+  const overflowWidth = (hidden: number) => (hidden > 0 ? separator + stringWidth(`+${hidden}`) : 0)
+  const visible: typeof chips = []
+  let used = 0
+  for (const [index, chip] of chips.entries()) {
+    const next = used + (visible.length > 0 ? separator : 0) + chip.width
+    if (visible.length > 0 && next + overflowWidth(chips.length - index - 1) > width) break
+    visible.push(chip)
+    used = next
+  }
+  return { chips: visible, overflow: chips.length - visible.length }
+}
+
+const concurrencyRule = "Concurrency must be a whole number of at least 1, or no limit"
 
 export function parseConcurrency(text: string) {
-  const trimmed = text.trim()
-  if (trimmed.toLowerCase() === "uncapped") return { value: null }
+  const trimmed = text.trim().toLowerCase()
+  if (trimmed === "" || trimmed === "none" || trimmed === "no limit") return { value: null }
   if (!/^\d+$/.test(trimmed) || Number(trimmed) < 1) return { error: concurrencyRule }
   return { value: Number(trimmed) }
 }
 
-export function parseQueueCapacity(text: string) {
-  const trimmed = text.trim()
-  if (!/^\d+$/.test(trimmed) || Number(trimmed) < 1 || Number(trimmed) > 1000) return { error: queueRule }
-  return { value: Number(trimmed) }
-}
-
-export function parseBudget(text: string) {
-  const trimmed = text.trim().replace(/^\$/, "")
-  if (trimmed === "" || trimmed.toLowerCase() === "none") return { value: undefined }
-  if (!/^\d+(\.\d{1,2})?$/.test(trimmed) || Number(trimmed) <= 0) return { error: budgetRule }
-  return { value: Number(trimmed) }
-}
-
-export function formatBudget(amount: number) {
-  return `$${amount.toFixed(2)}`
-}
-
 const listLimits = {
-  tools: { singular: "tool name", plural: "tools", items: 64, length: 128 },
-  scopes: { singular: "scope", plural: "scopes", items: 32, length: 512 },
   actions: { singular: "action", plural: "actions", items: 32, length: 512 },
   resources: { singular: "resource", plural: "resources", items: 32, length: 512 },
 } as const
 
 export function parseList(text: string, kind: keyof typeof listLimits) {
   const limit = listLimits[kind]
-  const items = text.split(",").map((item) => item.trim()).filter((item) => item !== "")
+  const items = text
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "")
   if (items.length === 0) return { value: undefined }
   if (items.length > limit.items) return { error: `At most ${limit.items} ${limit.plural} are allowed` }
   if (items.some((item) => item.length > limit.length))
@@ -212,7 +295,7 @@ export function parseExpiry(text: string, now: number) {
   const trimmed = text.trim().toLowerCase()
   if (trimmed === "" || trimmed === "never" || trimmed === "none") return { value: undefined }
   const match = /^([1-9]\d*)([mhd])$/.exec(trimmed)
-  if (!match) return { error: expiryRule }
+  if (!match) return { error: "Expiry must be never or a duration such as 30m, 2h, or 1d" }
   return { value: now + Number(match[1]) * durations[match[2] as keyof typeof durations] }
 }
 
@@ -228,7 +311,10 @@ export function narrowingError(proposed: DelegatedDecisionsView, global: GlobalD
     return "Expiry cannot be later than the global policy allows"
 }
 
-export function delegationSummary(project: DelegatedDecisionsView | undefined, global: GlobalDelegationView | undefined) {
+export function delegationSummary(
+  project: DelegatedDecisionsView | undefined,
+  global: GlobalDelegationView | undefined,
+) {
   if (global === undefined) return "global policy unavailable"
   if (!global.enabled) return "globally disabled"
   if (project === undefined) return `inherit global (${global.categories.join(", ")})`
@@ -236,93 +322,24 @@ export function delegationSummary(project: DelegatedDecisionsView | undefined, g
   return `custom narrowing (${project.categories.join(", ")})`
 }
 
-const queueReasons: Record<string, string> = {
-  capacity: "waiting for a free worker slot",
-  "hard-limit": "at the hard limit",
-  dependency: "waiting for a dependency to finish",
-  budget: "at the budget limit",
-}
-
-export function queueReasonLabel(reason: string) {
-  return queueReasons[reason] ?? `reason ${reason.slice(0, 40)}`
-}
-
-function span(milliseconds: number) {
-  const seconds = Math.floor(milliseconds / 1_000)
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  return `${Math.floor(minutes / 60)}h`
-}
-
-export function relativeAge(elapsed: number) {
-  return `${span(Math.max(0, elapsed))} ago`
-}
-
-export function relativeFuture(remaining: number) {
-  return `in ${span(Math.max(0, remaining))}`
-}
-
-export function leaseLine(lease: CoordinationLeaseView, now: number) {
-  const base = `${lease.resource} · held by ${lease.holder}`
-  if (lease.expiresAt === undefined) return base
-  return lease.expiresAt > now ? `${base} · expires in ${span(lease.expiresAt - now)}` : `${base} · expired`
-}
-
-export function receiptLine(receipt: CoordinationReceiptView) {
-  const base = `${receipt.outcome} → ${receipt.worker}`
-  return receipt.reason === undefined ? base : `${base} · ${queueReasonLabel(receipt.reason)}`
-}
-
-export function selectionLine(selection: DispatchSelectionView) {
-  const model = `${selection.model.providerID}/${selection.model.id}${selection.model.profile === undefined ? "" : ` (${selection.model.profile})`}`
-  const reason = selection.reason.replace(/\s+/g, " ").trim()
-  return `agent ${selection.agent} · ${model} · variant ${selection.model.variant ?? "unavailable"}${reason === "" ? "" : ` · ${reason}`}`
-}
-
-export function rosterError(roster: ReadonlyArray<{ readonly sessionID: string; readonly role: CoordinationRole }>) {
-  if (new Set(roster.map((member) => member.sessionID)).size !== roster.length)
-    return "A session can appear once in a roster"
-  if (roster.filter((member) => member.role === "coordinator").length !== 1) return coordinatorRule
-}
-
-export function assignRole(
-  roster: ReadonlyArray<CoordinationMemberView>,
-  session: { readonly sessionID: string; readonly title: string },
-  role: CoordinationRole,
-): CoordinationMemberView[] {
-  const demoted = roster.map((member) =>
-    role === "coordinator" && member.role === "coordinator" ? { ...member, role: "worker" as const } : member,
-  )
-  if (!demoted.some((member) => member.sessionID === session.sessionID))
-    return [...demoted, { sessionID: session.sessionID, title: session.title, role }]
-  return demoted.map((member) => (member.sessionID === session.sessionID ? { ...member, role } : member))
-}
-
-export function removeMember(roster: ReadonlyArray<CoordinationMemberView>, sessionID: string) {
-  const next = roster.filter((member) => member.sessionID !== sessionID)
-  const error = rosterError(next)
-  return error === undefined ? { roster: next } : { error }
-}
-
-export function coordinatorChoices(groups: ReadonlyArray<CoordinationGroupView> | undefined) {
-  if (groups === undefined) return undefined
+export function masterChoices(projects: ReadonlyArray<ProjectView> | undefined) {
+  if (projects === undefined) return undefined
   const seen = new Set<string>()
-  return groups
-    .flatMap((group) => group.roster)
-    .filter((member) => member.role === "coordinator" && !seen.has(member.sessionID) && seen.add(member.sessionID))
-    .map((member) => ({ sessionID: member.sessionID, title: member.title }))
+  return projects
+    .map((project) => project.master)
+    .filter((master) => !seen.has(master.sessionID) && seen.add(master.sessionID))
+    .map((master) => ({ sessionID: master.sessionID, title: master.title }))
 }
 
 export function externalNotificationAllowed(
   filter: NotificationFilter,
-  groups: ReadonlyArray<CoordinationGroupView> | undefined,
+  projects: ReadonlyArray<ProjectView> | undefined,
   sessionID: string,
   kind: ExternalNotificationKind,
 ) {
   if (filter.categories && !filter.categories.includes(kind)) return false
   if (filter.scope === "all") return true
-  if (!coordinatorChoices(groups)?.some((choice) => choice.sessionID === sessionID)) return false
+  if (!masterChoices(projects)?.some((choice) => choice.sessionID === sessionID)) return false
   return filter.scope === "coordinators" || (filter.sessionIDs?.includes(sessionID) ?? false)
 }
 
@@ -330,35 +347,50 @@ function withCategories(filter: NotificationFilter) {
   return filter.categories === undefined ? {} : { categories: filter.categories }
 }
 
-export function toggleCoordinator(filter: NotificationFilter, sessionID: string): NotificationFilter {
+export function toggleMaster(filter: NotificationFilter, sessionID: string): NotificationFilter {
   const current = filter.scope === "selected" ? (filter.sessionIDs ?? []) : []
-  if (!current.includes(sessionID) && current.length >= maxSelectedCoordinators) return filter
+  if (!current.includes(sessionID) && current.length >= maxSelectedMasters) return filter
   const next = current.includes(sessionID) ? current.filter((id) => id !== sessionID) : [...current, sessionID]
   return { scope: "selected", sessionIDs: next, ...withCategories(filter) }
 }
 
 export function toggleCategory(filter: NotificationFilter, kind: ExternalNotificationKind): NotificationFilter {
   const current = filter.categories ?? externalNotificationKinds
-  const next = externalNotificationKinds.filter((item) => (item === kind ? !current.includes(item) : current.includes(item)))
-  const scope = filter.scope === "selected" ? { scope: filter.scope, sessionIDs: filter.sessionIDs ?? [] } : { scope: filter.scope }
+  const next = externalNotificationKinds.filter((item) =>
+    item === kind ? !current.includes(item) : current.includes(item),
+  )
+  const scope =
+    filter.scope === "selected" ? { scope: filter.scope, sessionIDs: filter.sessionIDs ?? [] } : { scope: filter.scope }
   if (next.length === externalNotificationKinds.length) return scope
   return { ...scope, categories: next }
 }
 
 export function notificationFilterLabel(
   filter: NotificationFilter,
-  coordinators: ReadonlyArray<{ readonly sessionID: string; readonly title: string }> | undefined,
+  masters: ReadonlyArray<{ readonly sessionID: string; readonly title: string }> | undefined,
 ) {
   const categories =
-    filter.categories === undefined ? "" : filter.categories.length === 0 ? " · no categories" : ` · ${filter.categories.join(", ")}`
-  if (filter.scope === "all") return `all sessions${categories}`
+    filter.categories === undefined
+      ? ""
+      : filter.categories.length === 0
+        ? " · no categories"
+        : ` · ${filter.categories.join(", ")}`
+  if (filter.scope === "all") return `all Sessions${categories}`
   if (filter.scope === "coordinators")
-    return `all coordinators${coordinators === undefined ? " · list unavailable" : ""}${categories}`
+    return `all masters${masters === undefined ? " · list unavailable" : ""}${categories}`
   const ids = filter.sessionIDs ?? []
-  if (ids.length === 0) return `no coordinators selected${categories}`
-  if (coordinators === undefined)
-    return `${ids.length} selected coordinator${ids.length === 1 ? "" : "s"} · list unavailable${categories}`
-  const names = ids.map((id) => coordinators.find((coordinator) => coordinator.sessionID === id)?.title ?? "unknown session")
+  if (ids.length === 0) return `no masters selected${categories}`
+  if (masters === undefined)
+    return `${ids.length} selected master${ids.length === 1 ? "" : "s"} · list unavailable${categories}`
+  const names = ids.map((id) => masters.find((master) => master.sessionID === id)?.title ?? "unknown Session")
   const extra = names.length > 2 ? ` +${names.length - 2}` : ""
-  return `coordinators: ${names.slice(0, 2).join(", ")}${extra}${categories}`
+  return `masters: ${names.slice(0, 2).join(", ")}${extra}${categories}`
+}
+
+export function recentDirectories(sessions: ReadonlyArray<ProjectSessionChoice>) {
+  const seen = new Set<string>()
+  return [...sessions]
+    .sort((a, b) => b.updated - a.updated)
+    .map((session) => session.directory)
+    .filter((directory) => directory !== "" && !seen.has(directory) && seen.add(directory))
 }

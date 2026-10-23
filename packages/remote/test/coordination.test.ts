@@ -14,30 +14,17 @@ export const coordinationOperations = [
   "coordination.list",
   "coordination.create",
   "coordination.get",
-  "coordination.members",
-  "coordination.arm",
-  "coordination.stop",
-  "coordination.complete",
-  "coordination.claim",
-  "coordination.release",
-  "coordination.dispatch",
-  "coordination.receipts",
-  "coordination.wait",
-  "coordination.cancelWait",
-  "coordination.capacity",
+  "coordination.update",
+  "coordination.delete",
 ] as const
 
-const reads = ["coordination.settings", "coordination.list", "coordination.get", "coordination.receipts", "coordination.capacity"]
+const reads = ["coordination.settings", "coordination.list", "coordination.get"]
 
 function frame(operation: string, input?: Record<string, unknown>, sessionID?: string) {
   return JSON.stringify({ type: "request", id: "req_1", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) })
 }
 
-const policy = { concurrency: 2, queueCapacity: 10 }
-const members = [
-  { sessionID: "ses_coord", role: "coordinator" },
-  { sessionID: "ses_worker", role: "worker", allowedTools: ["read"], resourceScopes: ["packages/remote"] },
-]
+const create = { name: "Project", masterSessionID: "ses_master", memberSessionIDs: ["ses_member"] }
 
 test("coordination operations form a classified sessionless part of the closed remote set", () => {
   expect(remoteOperations.filter((operation) => operation.startsWith("coordination."))).toEqual([...coordinationOperations])
@@ -54,26 +41,26 @@ test("coordination requests accept only bounded ordinary-object inputs without a
   expect(parseClientMessage(frame("coordination.get", { groupID: "cgrp_1" })).ok).toBe(true)
   expect(parseClientMessage(frame("coordination.get", { groupID: "grp_1" })).ok).toBe(false)
   expect(parseClientMessage(frame("coordination.get", { groupID: "cgrp_1", directory: "/tmp" })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.create", { name: "Project", policy, members })).ok).toBe(true)
-  expect(parseClientMessage(frame("coordination.create", { name: "Project", policy, members: [] })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.create", { name: "Project", policy: { ...policy, queueCapacity: 1001 }, members })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.create", { name: "Project", policy, members: [{ sessionID: "ses_coord", role: "owner" }] })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.members", { groupID: "cgrp_1", revision: 3, name: "Renamed", members, policy })).ok).toBe(true)
-  expect(parseClientMessage(frame("coordination.arm", { groupID: "cgrp_1", revision: 3 })).ok).toBe(true)
-  expect(parseClientMessage(frame("coordination.arm", { groupID: "cgrp_1", revision: -1 })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.claim", { groupID: "cgrp_1", revision: 3, targetSessionID: "ses_worker", holderSessionID: "ses_coord", leaseMs: 60_000 })).ok).toBe(true)
-  expect(parseClientMessage(frame("coordination.claim", { groupID: "cgrp_1", revision: 3, targetSessionID: "ses_worker", holderSessionID: "ses_coord", leaseMs: 999 })).ok).toBe(false)
-  const selection = { agent: "omoikane", model: { providerID: "muse", id: "muse-wonder", variant: "high" }, reason: "Transport boundaries need the systems agent" }
-  const dispatched = parseClientMessage(frame("coordination.dispatch", { groupID: "cgrp_1", revision: 3, holderSessionID: "ses_coord", generation: 1, targetSessionID: "ses_worker", text: "Do work", selection }))
-  expect(dispatched.ok && "input" in dispatched.value && dispatched.value.input && "selection" in dispatched.value.input ? dispatched.value.input.selection : undefined).toEqual(selection)
-  expect(parseClientMessage(frame("coordination.dispatch", { groupID: "cgrp_1", revision: 3, holderSessionID: "ses_coord", generation: 1, targetSessionID: "ses_worker", text: "Do work" })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.dispatch", { groupID: "cgrp_1", revision: 3, holderSessionID: "ses_coord", generation: 1, targetSessionID: "ses_worker", text: "", selection })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.dispatch", { groupID: "cgrp_1", revision: 3, holderSessionID: "ses_coord", generation: 1, targetSessionID: "ses_worker", text: "Do work", selection: { ...selection, reason: "line one\nline two" } })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.dispatch", { groupID: "cgrp_1", revision: 3, holderSessionID: "ses_coord", generation: 1, targetSessionID: "ses_worker", text: "Do work", selection: { ...selection, model: { providerID: "muse" } } })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.wait", { groupID: "cgrp_1", revision: 3, holderSessionID: "ses_coord", targets: ["ses_worker"], timeoutMs: 300_000, batch: 200 })).ok).toBe(true)
-  expect(parseClientMessage(frame("coordination.wait", { groupID: "cgrp_1", revision: 3, holderSessionID: "ses_coord", timeoutMs: 300_001 })).ok).toBe(false)
-  expect(parseClientMessage(frame("coordination.cancelWait", { groupID: "cgrp_1", revision: 3, waitID: "cwait_1", holderSessionID: "ses_coord" })).ok).toBe(true)
-  expect(parseClientMessage(frame("coordination.release", { groupID: "cgrp_1", revision: 3, targetSessionID: "ses_worker", holderSessionID: "ses_coord", generation: 1 })).ok).toBe(true)
+  for (const memberSessionIDs of [[], ["ses_member"], Array.from({ length: 64 }, (_, i) => `ses_${i}`)])
+    expect(parseClientMessage(frame("coordination.create", { ...create, memberSessionIDs })).ok).toBe(true)
+  for (const fields of [{ name: "" }, { name: "x".repeat(121) }, { masterSessionID: "bad" }, { memberSessionIDs: ["bad"] }, { memberSessionIDs: Array(65).fill("ses_member") }, { directory: "/tmp" }])
+    expect(parseClientMessage(frame("coordination.create", { ...create, ...fields })).ok).toBe(false)
+  const update = { groupID: "cgrp_1", revision: 0 }
+  for (const fields of [{}, { name: "Renamed" }, { masterSessionID: "ses_other" }, { memberSessionIDs: [] }, { settings: { concurrency: null } }, { settings: { concurrency: 2, delegatedDecisions: { categories: ["question"], actions: [], resources: [], expiresAt: 1 } } }])
+    expect(parseClientMessage(frame("coordination.update", { ...update, ...fields })).ok).toBe(true)
+  for (const fields of [{ revision: -1 }, { revision: 0.5 }, { settings: {} }, { settings: { concurrency: 0 } }, { settings: { concurrency: null, notifications: {} } }, { settings: { concurrency: null, delegatedDecisions: { categories: ["invalid"] } } }, { memberSessionIDs: ["invalid"] }])
+    expect(parseClientMessage(frame("coordination.update", { ...update, ...fields })).ok).toBe(false)
+  expect(parseClientMessage(frame("coordination.delete", { groupID: "cgrp_1" })).ok).toBe(true)
+  expect(parseClientMessage(frame("coordination.delete", update)).ok).toBe(false)
+})
+
+test("Session deletion is a scoped mutation with no caller-provided placement", () => {
+  expect(remoteOperations).toContain("session.delete")
+  expect(requireSession("session.delete" as RemoteOperation)).toBe(true)
+  expect(remoteOperationAccess["session.delete" as RemoteOperation]).toBe("mutation")
+  expect(parseClientMessage(frame("session.delete", undefined, "ses_member")).ok).toBe(true)
+  expect(parseClientMessage(frame("session.delete")).ok).toBe(false)
+  expect(parseClientMessage(frame("session.delete", { directory: "/tmp" }, "ses_member")).ok).toBe(false)
 })
 
 const pushKeys = () => {
@@ -100,7 +87,7 @@ test("push registrations accept only the bounded coordination filter DTO", () =>
   expect(parsePushSubscription(registration({ scope: "all", categories: [] })).ok).toBe(true)
 })
 
-test("coordination push filter requires the source Session itself to be a verified coordinator, failing closed on unknown sources", () => {
+test("coordination push filter requires the source Session itself to be a verified Master, failing closed on unknown sources", () => {
   const workerEvent = { category: "approval-requested" as const, need: "question" as const, sessionID: "ses_worker", coordinatorSessionIDs: ["ses_coord"] }
   const observerEvent = { ...workerEvent, sessionID: "ses_observer" }
   const coordinatorEvent = { category: "approval-requested" as const, need: "question" as const, sessionID: "ses_coord", coordinatorSessionIDs: ["ses_coord"] }

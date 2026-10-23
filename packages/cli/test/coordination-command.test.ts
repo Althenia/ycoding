@@ -1,33 +1,58 @@
 import { expect, test } from "bun:test"
 import { coordinationRequest } from "../src/commands/coordination"
 
-test("shipped CLI advertises local coordination controls without starting a server", async () => {
-  const process = Bun.spawn(["bun", new URL("../src/tui.ts", import.meta.url).pathname, "coordination", "--help"], { stdout: "pipe", stderr: "pipe" })
-  const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited])
-  expect(code, stderr).toBe(0)
-  expect(stdout).toContain("Manage local coordination groups")
-  expect(stdout).toContain("--group")
-  expect(stdout).toContain("--data")
+test("CLI advertises Project management without starting a server", async () => {
+  const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "coordination", "--help"], { stdout: "pipe", stderr: "pipe" })
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+  expect(exit).toBe(0)
+  expect(stderr).toBe("")
+  expect(stdout).toContain("Manage Projects")
+  expect(stdout).toContain("list, get, create, update or delete")
 })
 
-test("coordination CLI addresses only fixed local operations by group identity", () => {
+test("CLI addresses the five fixed Project management routes", () => {
   expect(coordinationRequest("list")).toEqual({ method: "GET", path: "/api/coordination" })
   expect(coordinationRequest("get", "cgrp_one")).toEqual({ method: "GET", path: "/api/coordination/cgrp_one" })
-  expect(coordinationRequest("create", undefined, '{"title":"Release"}')).toEqual({ method: "POST", path: "/api/coordination", body: { title: "Release" } })
-  expect(coordinationRequest("members", "cgrp_one", '{"revision":1,"members":[]}')).toEqual({ method: "PUT", path: "/api/coordination/cgrp_one/members", body: { revision: 1, members: [] } })
-  expect(coordinationRequest("arm", "cgrp_one", '{"revision":2}')).toEqual({ method: "POST", path: "/api/coordination/cgrp_one/arm", body: { revision: 2 } })
-  expect(coordinationRequest("stop", "cgrp_one", '{"revision":3}')).toEqual({ method: "POST", path: "/api/coordination/cgrp_one/stop", body: { revision: 3 } })
-  for (const action of ["receipts", "capacity"])
-    expect(coordinationRequest(action, "cgrp_one")).toEqual({ method: "GET", path: `/api/coordination/cgrp_one/${action}` })
+  const body = { name: "Project", masterSessionID: "ses_master", memberSessionIDs: [] }
+  expect(coordinationRequest("create", undefined, JSON.stringify(body))).toEqual({ method: "POST", path: "/api/coordination", body })
+  expect(coordinationRequest("update", "cgrp_one", '{"revision":1,"name":"Renamed"}')).toEqual({ method: "PATCH", path: "/api/coordination/cgrp_one", body: { revision: 1, name: "Renamed" } })
+  expect(coordinationRequest("delete", "cgrp_one")).toEqual({ method: "DELETE", path: "/api/coordination/cgrp_one" })
 })
 
-test("coordination CLI rejects arbitrary routes, malformed identities and invalid JSON before transport", () => {
-  for (const action of ["/api/config", "shell", "../stop"])
-    expect(() => coordinationRequest(action, "cgrp_one")).toThrow()
-  for (const id of [undefined, "../other", "cgrp_a/b", "https://host", "ses_one"])
-    expect(() => coordinationRequest("get", id)).toThrow()
-  for (const data of ["{", "[]", "null", '"text"'])
-    expect(() => coordinationRequest("create", undefined, data)).toThrow()
-  expect(() => coordinationRequest("get", "cgrp_one", "{}")).toThrow()
-  expect(() => coordinationRequest("arm", "cgrp_one")).toThrow()
+test("CLI rejects malformed routing and JSON before transport", () => {
+  for (const action of ["unknown", "../session", "settings"]) expect(() => coordinationRequest(action, "cgrp_one")).toThrow()
+  for (const id of [undefined, "bad", "cgrp_../escape"]) expect(() => coordinationRequest("get", id)).toThrow()
+  for (const data of ["null", "[]", "1", "{"]) expect(() => coordinationRequest("create", undefined, data)).toThrow()
+  expect(() => coordinationRequest("list", "cgrp_one")).toThrow()
+  for (const action of ["get", "delete"]) expect(() => coordinationRequest(action, "cgrp_one", "{}")).toThrow()
+  expect(() => coordinationRequest("update", "cgrp_one")).toThrow()
 })
+
+test("CLI prints data envelopes, accepts empty deletion responses and preserves backend errors", async () => {
+  const seen: { method: string; path: string; body: string }[] = []
+  const server = Bun.serve({ port: 0, async fetch(request) {
+    const path = new URL(request.url).pathname
+    if (path === "/api/health") return Response.json({ healthy: true, version: "test", pid: process.pid })
+    seen.push({ method: request.method, path, body: await request.text() })
+    if (request.method === "DELETE") return new Response(null, { status: 204 })
+    if (request.method === "PATCH") return Response.json({ reason: "Coordination.ConflictError", message: "Stale revision" }, { status: 409 })
+    return Response.json({ data: [{ id: "cgrp_one" }] })
+  } })
+  const run = async (...args: string[]) => {
+    const child = Bun.spawn([process.execPath, new URL("../src/tui.ts", import.meta.url).pathname, "coordination", ...args, "--server", server.url.toString()], { stdout: "pipe", stderr: "pipe" })
+    const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+    return { stdout, stderr, exit }
+  }
+  try {
+    const listed = await run("list")
+    expect(listed.exit).toBe(0)
+    expect(JSON.parse(listed.stdout)).toEqual({ data: [{ id: "cgrp_one" }] })
+    const deleted = await run("delete", "--group", "cgrp_one")
+    expect(deleted.exit).toBe(0)
+    expect(deleted.stdout).toBe("")
+    const updated = await run("update", "--group", "cgrp_one", "--data", '{"revision":1}')
+    expect(updated.exit).toBe(1)
+    expect(updated.stderr).toContain("Stale revision")
+    expect(seen).toEqual([{ method: "GET", path: "/api/coordination", body: "" }, { method: "DELETE", path: "/api/coordination/cgrp_one", body: "" }, { method: "PATCH", path: "/api/coordination/cgrp_one", body: '{"revision":1}' }])
+  } finally { server.stop(true) }
+}, 30000)

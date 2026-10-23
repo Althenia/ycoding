@@ -42,6 +42,7 @@ export type ProviderUsageRoute = {
 export type ProjectsRoute = {
   type: "projects"
   sessionID?: string
+  projectID?: string
 }
 
 export type WorkspacesRoute = {

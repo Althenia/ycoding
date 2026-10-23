@@ -7,6 +7,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
 import { Project } from "../project"
+import { CoordinationService } from "../coordination/index"
 import { Workspace } from "../workspace"
 import { CatalogModel } from "../model"
 import { Provider } from "../provider"
@@ -841,6 +842,7 @@ const layer = Layer.effect(
     const usageDb = database.reader ?? db
     const events = yield* EventRuntime.Service
     const projects = yield* Project.Service
+    const coordination = yield* CoordinationService.Service
     const global = yield* Global.Service
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
@@ -3233,7 +3235,11 @@ const layer = Layer.effect(
           }),
         ),
       ),
-      interrupt: Effect.fn("Session.interrupt")((sessionID) => Effect.uninterruptible(execution.interrupt(sessionID))),
+      interrupt: Effect.fn("Session.interrupt")((sessionID) => Effect.uninterruptible(Effect.gen(function* () {
+        const project = yield* coordination.scopeOf(sessionID)
+        if (project?.masterSessionID === sessionID) yield* coordination.pause(project.groupID)
+        yield* execution.interrupt(sessionID)
+      }))),
       revert: {
         stage: Effect.fn("Session.revert.stage")(function* (input) {
           const session = yield* result.get(input.sessionID)
@@ -3551,6 +3557,7 @@ export const node = makeGlobalNode({
     Database.node,
     EventRuntime.node,
     Project.node,
+    CoordinationService.node,
     SessionExecution.node,
     SessionAutonomy.node,
     KeepAwake.node,

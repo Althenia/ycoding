@@ -504,20 +504,20 @@ endpoint.
 
 A registration may also carry `coordinationFilter: { scope, sessionIDs?, categories? }`,
 where `scope` is `all`, `coordinators`, or `selected`, `sessionIDs` holds at most 128
-coordinator root Session IDs, and `categories` holds at most the five values
+Master root Session IDs, and `categories` holds at most the five values
 `question`, `permission`, `review`, `failure`, and `completion`. Re-registering
 without the filter clears it; a renewal keeps the replaced subscription's filter.
 The filter narrows external push delivery only and never changes native pending
 reviews or controls. The connector attaches backend-verified `coordinatorSessionIDs`
 to status details, completion receipts, and blocked frames only when the frame's
-source Session itself is a coordinator member of a current group roster, carrying
-that Session's own ID; worker and observer sources carry no attribution. The relay
+source Session itself is a Project's Master in `coordination.list`, carrying
+that Session's own ID; member and unrelated sources carry no attribution. The relay
 copies that attribution onto its push events and never accepts it from a browser.
 An absent `categories` allows every mapped category and an empty array
 mutes all of them: `agent-completed` maps to `completion`, an approval need of
 `question`, `permission`, or `review` maps to itself, `blocked` maps to `review`,
 and `failed` or `lost` map to `failure`. Both restricted scopes require the source
-Session itself to be a verified coordinator: scope `selected` additionally requires
+Session itself to be a verified Master: scope `selected` additionally requires
 that exact source ID to be selected (an empty selection notifies none), and any
 scope other than `all` withholds delivery when a Session source has no verified
 coordinator attribution. Machine-level notifications without a Session source keep
@@ -704,21 +704,13 @@ grouping and Session-list filters are derived from backend metadata.
 | `machine.latency.list` | no | `telemetry.list` | `GET /api/server/web-latency` | `limit?` (1–200), `before?` (opaque, ≤256 chars) |
 | `coordination.settings` | no | `coordination.settings` | `GET /api/coordination/settings` | — |
 | `coordination.list` | no | `coordination.list` | `GET /api/coordination` | — |
-| `coordination.create` | no | `coordination.create` | `POST /api/coordination` | `name`, `policy`, `members` |
+| `coordination.create` | no | `coordination.create` | `POST /api/coordination` | `name`, `masterSessionID`, `memberSessionIDs` |
 | `coordination.get` | no | `coordination.get` | `GET /api/coordination/:groupID` | `groupID` |
-| `coordination.members` | no | `coordination.members` | `PUT /api/coordination/:groupID/members` | `groupID`, `revision`, `name?`, `members`, `policy?` |
-| `coordination.arm` | no | `coordination.arm` | `POST /api/coordination/:groupID/arm` | `groupID`, `revision` |
-| `coordination.stop` | no | `coordination.stop` | `POST /api/coordination/:groupID/stop` | `groupID`, `revision` |
-| `coordination.complete` | no | `coordination.complete` | `POST /api/coordination/:groupID/complete` | `groupID`, `revision` |
-| `coordination.claim` | no | `coordination.claim` | `POST /api/coordination/:groupID/claim` | `groupID`, `revision`, `targetSessionID`, `holderSessionID`, `leaseMs` |
-| `coordination.release` | no | `coordination.release` | `POST /api/coordination/:groupID/release` | `groupID`, `revision`, `targetSessionID`, `holderSessionID`, `generation` |
-| `coordination.dispatch` | no | `coordination.dispatch` | `POST /api/coordination/:groupID/dispatch` | `groupID`, `revision`, `holderSessionID`, `generation`, `dispatchID?`, `targetSessionID`, `text`, `dependsOn?`, `resourceScope?`, `allowedTools?`, `selection` |
-| `coordination.receipts` | no | `coordination.receipts` | `GET /api/coordination/:groupID/receipts` | `groupID` |
-| `coordination.wait` | no | `coordination.wait` | `POST /api/coordination/:groupID/wait` | `groupID`, `revision`, `holderSessionID`, `waitID?`, `targets?`, `timeoutMs?`, `batch?` |
-| `coordination.cancelWait` | no | `coordination.cancelWait` | `POST /api/coordination/:groupID/wait/cancel` | `groupID`, `revision`, `waitID`, `holderSessionID` |
-| `coordination.capacity` | no | `coordination.capacity` | `GET /api/coordination/:groupID/capacity` | `groupID` |
+| `coordination.update` | no | `coordination.update` | `PATCH /api/coordination/:groupID` | `groupID`, `revision`, `name?`, `masterSessionID?`, `memberSessionIDs?`, `settings?` |
+| `coordination.delete` | no | `coordination.delete` | `DELETE /api/coordination/:groupID` | `groupID` |
 | `session.status` | no | `session.active`, `session.outstanding`, pending Session permission/form/guardrail reads | Local active, outstanding-work, and pending-request GET routes | — |
 | `session.get` | yes | `session.get` | `GET /api/session/:sessionID` | — |
+| `session.delete` | yes | `session.remove` | `DELETE /api/session/:sessionID` | — |
 | `session.messages` | yes | `message.list` | `GET /api/session/:sessionID/message` | — |
 | `session.capturedChanges.list` | yes | `message.list` | Verified root and dispatched direct-child reads at their backend Locations | `cursor?` (opaque, at most 256 chars) |
 | `session.compaction.list` | yes | `message.list` | `GET /api/session/:sessionID/message` at the verified Session Location | — |
@@ -767,7 +759,9 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.goal.stop` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
 | `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
 
-Coordination operations address the connected backend, never a frame `sessionID`, a directory, a workspace, or a caller-provided actor. The connector forwards each validated input to the same local coordination route the TUI uses and returns that route's `{ data }` envelope unchanged; member Session Locations are resolved by the backend, and create and roster changes first verify every member Session against the backend inventory. Group, dispatch, and wait IDs carry the `cgrp_`, `cdsp_`, and `cwait_` prefixes. `revision` is the expected non-negative group revision. A policy is `{ concurrency: positive integer or null, queueCapacity: 1–1000, budget?, delegatedDecisions? }`; a member is `{ sessionID, role: coordinator | worker | observer, allowedTools?, resourceScopes? }`, with 1–64 members, at most 64 tool names, and at most 32 resource scopes. `coordination.members` may also carry `name` to rename the Project. Claim, release, dispatch, wait, and cancel-wait name a `holderSessionID`; the connector reads the current group first and rejects with `forbidden` unless that Session is a current coordinator member, and the local route applies the same coordinator actor. Dispatch requires `selection: { agent, model: { providerID, id, profile?, variant? }, reason }`, with a nonblank single-line reason of at most 500 characters; the connector carries it unchanged, invents no default, and maps no effort names, and the backend validates the agent and model against the target Session's Location and exposes the selection unchanged on the dispatch and its receipts. Reads are `settings`, `list`, `get`, `receipts`, and `capacity`; every other coordination operation is a mutation, ordered per group by Relay MCP. No coordination operation grants authority beyond the local route's native permission ceilings, guardrail reviews, and hard-review rules. The transport exports matching plain DTOs (`RemoteCoordinationSettings`, `RemoteCoordinationPolicy`, `RemoteCoordinationMember`, `RemoteCoordinationSelection`, `RemoteCoordinationGroup`, `RemoteCoordinationGroupSummary`, `RemoteCoordinationGroupDetail`, `RemoteCoordinationClaim`, `RemoteCoordinationDispatch`, `RemoteCoordinationReceipt`, `RemoteCoordinationCapacity`, `RemoteCoordinationWaitResult`) for clients that depend only on this package. An older connector rejects these operations with `unknown_operation`.
+Coordination operations address the connected backend, never a frame `sessionID`, a directory, a workspace, or a caller-provided actor. Reads are `settings`, `list` and `get`; mutations are `create`, `update` and `delete`, ordered per Project by Relay MCP. The connector verifies supplied Master and member Session IDs against the backend inventory before creating or updating a Project. Locations and membership eligibility remain backend-owned. Each Project has one Master and up to 64 members. Updates require the expected non-negative `revision`; omitted fields are preserved, while `memberSessionIDs` and `settings` replace their whole values. Settings contain `concurrency` (positive integer or null) and optional `delegatedDecisions` narrowing. Names contain 1–120 characters and Project IDs use `cgrp_`. Successful reads, creates and updates return `{ data }`; deletion returns `{}` after the local 204 response. Owner authorization, native permission ceilings and uncertain-outcome handling are unchanged. Plain transport DTOs are `RemoteCoordinationSettings`, `RemoteCoordinationGroupSettings`, `RemoteCoordinationDelegatedDecisions`, `RemoteCoordinationMemberState`, `RemoteCoordinationPendingRequest`, `RemoteCoordinationParticipant`, `RemoteCoordinationGroup` and `RemoteCoordinationGroupSummary`. Participants carry backend-resolved Locations, live state, last activity, pending requests and optional `drivenBy`; Projects carry `active` and optional `pausedReason`.
+
+`session.delete` requires the frame's `sessionID`, accepts no input fields, and resolves the Location from the backend inventory before calling `session.remove`. Success returns `{}`. Deleting a member Session removes its membership; deleting a Master Session deletes its Project. A Project deletion alone preserves all Sessions and their histories. Unconfirmed mutations return `outcome_unknown` and are not automatically replayed.
 
 `session.compaction.list` returns `{ data, truncated, completedBefore, completedCount, totalSavedTokens }`. `data` contains the latest 100 job-backed compaction messages in chronological order, each with `jobID`, `trigger`, `status`, `created` (milliseconds), and completed `metrics` or failure `code` where applicable. `truncated` marks omitted older jobs; `completedBefore` counts completed jobs omitted from `data`. `completedCount` and `totalSavedTokens` cover all completed jobs, including omitted ones; savings is the sum of `inputTokens - retainedTokens`. The connector verifies the Session against its recorded Location, excludes message content and error text, and accepts no caller-selected path, cursor, or Location.
 
@@ -1015,11 +1009,11 @@ before the gate opens. Requests recheck live authority and the epoch before forw
 and before local dispatch.
 
 The endpoint speaks MCP revision 2026-07-28 through the SDK's JSON response mode and
-rejects legacy transports. It exposes 96 tools: one per closed remote operation in sections 3.4 and 3.4b
+rejects legacy transports. It exposes 88 tools: one per closed remote operation in sections 3.4 and 3.4b
 except `session.subscribe`, `session.unsubscribe`, `session.message.stream`,
 `session.attachment.upload`, `machine.telemetry.consent.get`,
 `machine.telemetry.consent.set`, `machine.latency.append`, and `machine.latency.list`
-(95 operations), plus `session_create_in_directory`. The fifteen `coordination_*`
+(87 operations), plus `session_create_in_directory`. The six `coordination_*`
 tools are part of that set with no exclusion; mutation tools order per coordination
 group, and read tools carry read-only hints. Tool names are the operation
 names in snake_case with dots and hyphens replaced by underscores (for example

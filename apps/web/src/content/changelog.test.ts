@@ -11,7 +11,7 @@ describe("release entries", () => {
     const entry = RELEASES[0]
     expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-23", tags: ["Added", "Changed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Projects", "Relay MCP", "dispatch", "agent", "reasoning variant", "receipt", "Session defaults", "re-arm", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified"])
+    for (const fragment of ["Projects", "Master", "member Sessions", "desktop Sessions panel", "phone sheet", "interruption", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified"])
       expect(text).toContain(fragment)
     expect(after("0.11.0")?.version).toBe("0.10.25")
   })

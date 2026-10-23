@@ -1,21 +1,20 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { CoordinationDecisions } from "../src/session/coordination-decisions"
-import { Permission } from "../src/permission"
 
 const coordinatorSessionID = "ses_coord"
 const targetSessionID = "ses_worker"
 const groupID = "cgrp_one"
 
 function role(overrides: Record<string, unknown> = {}) {
+  const { delegatedDecisions, ...rest } = overrides
   return {
     groupID,
-    revision: 3,
-    status: "armed",
-    role: "coordinator",
-    fencingGeneration: 2,
-    delegatedDecisions: { categories: ["permission", "review", "question"], actions: ["read", "file_mutation", "question"], resources: ["src/*"], expiresAt: 100 },
-    ...overrides,
+    masterSessionID: coordinatorSessionID,
+    memberSessionIDs: [targetSessionID],
+    active: true,
+    settings: { concurrency: null, delegatedDecisions: Object.hasOwn(overrides, "delegatedDecisions") ? delegatedDecisions : { categories: ["permission", "review", "question"], actions: ["read", "file_mutation", "question"], resources: ["src/*"], expiresAt: 100 } },
+    ...rest,
   } as never
 }
 
@@ -63,8 +62,7 @@ function harness(
   }
   const decisions = CoordinationDecisions.make({
     policy: overrides.policy ?? (defaultPolicy as never),
-    roleFor: (sessionID) => Effect.succeed(roles[sessionID] as never),
-    parentOf: (sessionID) => Effect.succeed(parents[sessionID] as never),
+    scopeOf: (sessionID) => Effect.succeed((roles[sessionID] ?? roles[parents[sessionID] ?? ""]) as never),
     now: Effect.succeed(overrides.now ?? 50),
     permission: {
       snapshot: (requestID) => Effect.succeed(requestID === "per_one" ? { request: permissionRequest as never, fingerprint: "fp_per" } : undefined),
@@ -131,7 +129,7 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(calls).toEqual(["permission"])
   })
 
-  test("expired, out-of-scope, wrong-group, and fence-mismatched delegations escalate before native settlement", async () => {
+  test("expired, out-of-scope, and wrong-group delegations escalate before native settlement", async () => {
     const expired = harness({ now: 100 })
     expect(await evaluate(expired.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({
       outcome: "escalated",
@@ -154,13 +152,12 @@ describe("CoordinationDecisions.evaluate", () => {
 
     const fenced = harness({
       roles: {
-        [coordinatorSessionID]: role(),
-        [targetSessionID]: role({ role: "worker", fencingGeneration: 9, delegatedDecisions: undefined }),
+        [coordinatorSessionID]: role({ groupID: "cgrp_other" }),
       },
     })
     expect(await evaluate(fenced.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({
       outcome: "escalated",
-      reason: "delegation-fence-mismatch",
+      reason: "delegation-unavailable",
     })
     expect(fenced.calls).toEqual([])
   })
@@ -172,7 +169,7 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(calls).toEqual([])
   })
 
-  test("nearest grouped ancestor bounds child Sessions on both sides", async () => {
+  test("a Master descendant can settle member requests", async () => {
     const { decisions, calls } = harness({
       roles: {
         ses_coord_parent: role(),
@@ -185,11 +182,10 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(calls).toEqual(["guardrail"])
   })
 
-  test("observer roots and observer descendants are never coordinator-controllable targets", async () => {
+  test("Sessions outside the member roster are never controllable targets", async () => {
     const observerRoot = harness({
       roles: {
-        [coordinatorSessionID]: role(),
-        [targetSessionID]: role({ role: "observer", delegatedDecisions: undefined }),
+        [coordinatorSessionID]: role({ memberSessionIDs: [] }),
       },
     })
     expect(await evaluate(observerRoot.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({
@@ -204,8 +200,7 @@ describe("CoordinationDecisions.evaluate", () => {
 
     const observerDescendant = harness({
       roles: {
-        [coordinatorSessionID]: role(),
-        ses_observer_parent: role({ role: "observer", delegatedDecisions: undefined }),
+        [coordinatorSessionID]: role({ memberSessionIDs: [] }),
       },
       parents: { [targetSessionID]: "ses_observer_parent" },
     })
@@ -221,14 +216,13 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(observerDescendant.calls).toEqual([])
   })
 
-  test("a coordinator's own managed child remains a controllable target through coordinator ancestry", async () => {
+  test("an inactive Project escalates without native settlement", async () => {
     const { decisions, calls } = harness({
-      roles: { [coordinatorSessionID]: role() },
-      parents: { [targetSessionID]: coordinatorSessionID },
+      roles: { [coordinatorSessionID]: role({ active: false }) },
     })
     const result = await evaluate(decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })
-    expect(result).toMatchObject({ outcome: "allowed", settled: true })
-    expect(calls).toEqual(["permission"])
+    expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "delegation-inactive" })
+    expect(calls).toEqual([])
   })
 
   test("final native validate re-reads delegation after revocation", async () => {
@@ -236,8 +230,7 @@ describe("CoordinationDecisions.evaluate", () => {
     let validate: ((snapshot: never) => Effect.Effect<boolean>) | undefined
     const decisionsWithCapture = CoordinationDecisions.make({
       policy: defaultPolicy as never,
-      roleFor: (sessionID) => Effect.succeed(roles[sessionID] as never),
-      parentOf: () => Effect.succeed(undefined),
+      scopeOf: (sessionID) => Effect.succeed(roles[sessionID] as never),
       now: Effect.succeed(50),
       permission: {
         snapshot: () => Effect.succeed({ request: { id: "per_one", sessionID: targetSessionID, action: "read", resources: ["src/run"] } as never, fingerprint: "fp_per" }),
@@ -385,28 +378,5 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(await evaluate(readDocs.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({
       outcome: "allowed",
     })
-  })
-})
-
-describe("Permission.coordinationRules", () => {
-  test("deny-only role rules distinguish tools from ancillary semantic actions and enforce scopes", () => {
-    const coordinator = { role: "coordinator" as const, status: "armed" }
-    expect(Permission.coordinationRules(undefined, { action: "shell", resources: ["src/run"] })).toEqual([])
-    expect(Permission.coordinationRules(coordinator, { action: "shell", resources: ["src/run"] })).toEqual([
-      { action: "shell", resource: "*", effect: "deny" },
-    ])
-    expect(Permission.coordinationRules(coordinator, { action: "read", resources: ["src/a"] })).toEqual([])
-    expect(Permission.coordinationRules(coordinator, { action: "external_directory", resources: ["src/*"] })).toEqual([])
-    expect(Permission.coordinationRules(coordinator, { action: "file_mutation", resources: ["src/a"] })).toEqual([])
-
-    const patchWorker = { role: "worker" as const, status: "armed", allowedTools: ["patch"], resourceScopes: ["src/*"] }
-    expect(Permission.coordinationRules(patchWorker, { action: "edit", resources: ["src/a"] })).toEqual([])
-    expect(Permission.coordinationRules(patchWorker, { action: "edit", resources: ["outside/a"] })).toEqual([
-      { action: "edit", resource: "outside/a", effect: "deny" },
-    ])
-    expect(Permission.coordinationRules({ ...patchWorker, resourceScopes: [] }, { action: "edit", resources: ["src/a"] })).toEqual([
-      { action: "edit", resource: "src/a", effect: "deny" },
-    ])
-    expect(Permission.coordinationRules({ ...patchWorker, status: "stopped" }, { action: "shell", resources: ["outside/a"] })).toEqual([])
   })
 })

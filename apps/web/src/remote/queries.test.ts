@@ -264,27 +264,25 @@ describe("incident queries", () => {
 })
 
 describe("Projects reads and changes", () => {
-  const policy = { concurrency: 1, queueCapacity: 64 }
-  const summary = { id: "cgrp_1", name: "Release", status: "armed", revision: 4, policy, fencingGeneration: 1, memberCount: 2, time: { created: 1, updated: 9 } }
-  const detail = { ...summary, members: [{ sessionID: "ses_lead", role: "coordinator", location: { directory: "/repo" } }, { sessionID: "ses_w1", role: "worker", location: { directory: "/repo" } }], claims: [], dispatches: [] }
-  const capacity = { groupID: "cgrp_1", concurrency: 1, hardLimit: 4, effectiveLimit: 1, active: 1, waiting: 0, queued: 0, queueCapacity: 64, available: 0, spent: 0 }
+  const participant = (id: string, state = "idle") => ({ sessionID: id, title: id, location: { directory: "/repo" }, state, lastActivity: 5, pending: [] })
+  const summary = { id: "cgrp_1", name: "Release", revision: 4, active: true, masterSessionID: "ses_lead", memberCount: 1, settings: { concurrency: 2 }, time: { created: 1, updated: 9 } }
+  const detail = { id: "cgrp_1", name: "Release", revision: 4, active: true, settings: { concurrency: 2 }, time: { created: 1, updated: 9 }, master: participant("ses_lead", "running"), members: [participant("ses_w1")] }
   const central = { enabled: true, categories: ["question", "permission", "review"] as const }
   const answers = (overrides: Record<string, RemoteRequestOutcome> = {}) => (operation: string): RemoteRequestOutcome => overrides[operation] ?? ({
     "coordination.list": { status: "ok", value: { data: [summary] } },
     "coordination.get": { status: "ok", value: { data: detail } },
-    "coordination.capacity": { status: "ok", value: { data: capacity } },
-    "coordination.receipts": { status: "ok", value: { data: [] } },
     "coordination.settings": { status: "ok", value: { data: central } },
+    "session.list": { status: "ok", value: { data: [{ id: "ses_x", title: "Triage", location: { directory: "/work/web" }, time: { updated: 1, active: 2 } }] } },
   } as Record<string, RemoteRequestOutcome>)[operation] ?? { status: "ok", value: { data: {} } }
 
-  test("the overview reads each group's detail, capacity and receipts and the central policy once", async () => {
+  test("the overview reads each project's detail and the central policy once, with no lifecycle, capacity or receipt reads", async () => {
     const { calls, client, queries } = incidents(answers())
     const overview = await client.fetchQuery(queries.coordination(scope, true))
     expect(overview.status).toBe("ready")
     if (overview.status !== "ready") return
-    expect(overview.groups.map((group) => [group.summary.id, group.detail.members.length, group.capacity.hardLimit, group.receipts.length])).toEqual([["cgrp_1", 2, 4, 0]])
+    expect(overview.groups.map((group) => [group.summary.id, group.detail.master.sessionID, group.detail.members.length])).toEqual([["cgrp_1", "ses_lead", 1]])
     expect(overview.central).toEqual(central)
-    expect(calls.map((call) => call.operation).sort()).toEqual(["coordination.capacity", "coordination.get", "coordination.list", "coordination.receipts", "coordination.settings"])
+    expect(calls.map((call) => call.operation).sort()).toEqual(["coordination.get", "coordination.list", "coordination.settings"])
     expect(calls.find((call) => call.operation === "coordination.get")?.request?.input).toEqual({ groupID: "cgrp_1" })
   })
 
@@ -293,27 +291,33 @@ describe("Projects reads and changes", () => {
     const older = incidents(answers({ "coordination.list": unknown }))
     expect(await older.client.fetchQuery(older.queries.coordination(scope, true))).toEqual({ status: "unsupported" })
     const noSettings = incidents(answers({ "coordination.settings": unknown }))
-    const overview = await noSettings.client.fetchQuery(noSettings.queries.coordination(scope, true))
-    expect(overview).toMatchObject({ status: "ready", central: undefined })
+    expect(await noSettings.client.fetchQuery(noSettings.queries.coordination(scope, true))).toMatchObject({ status: "ready", central: undefined })
     const garbled = incidents(answers({ "coordination.settings": { status: "ok", value: { data: { enabled: "maybe" } } } }))
     expect(await garbled.client.fetchQuery(garbled.queries.coordination(scope, true))).toMatchObject({ status: "ready", central: undefined })
   })
 
-  test("an unreadable group answer fails the read instead of showing a partial project", async () => {
-    const { client, queries } = incidents(answers({ "coordination.capacity": { status: "ok", value: { data: { active: "x" } } } }))
+  test("an unreadable project answer fails the read instead of showing a partial project", async () => {
+    const { client, queries } = incidents(answers({ "coordination.get": { status: "ok", value: { data: { name: "x" } } } }))
     await expect(client.fetchQuery(queries.coordination(scope, true))).rejects.toThrow("The device returned an unreadable project answer.")
   })
 
-  test("a change sends once, preserves a refusal reason, and rereads the overview", async () => {
+  test("an empty list is ready with no projects and reads no detail", async () => {
+    const { calls, client, queries } = incidents(answers({ "coordination.list": { status: "ok", value: { data: [] } } }))
+    expect(await client.fetchQuery(queries.coordination(scope, true))).toMatchObject({ status: "ready", groups: [] })
+    expect(calls.some((call) => call.operation === "coordination.get")).toBe(false)
+  })
+
+  test("each change sends once with its operation name, keeps a refusal reason, and rereads the overview", async () => {
     const { calls, client, queries } = incidents(answers())
     await client.fetchQuery(queries.coordination(scope, true))
-    const done = await queries.changeCoordination(scope, "coordination.arm", { groupID: "cgrp_1", revision: 4 })
-    expect(done).toEqual({ reached: true })
-    expect(calls.filter((call) => call.operation === "coordination.arm")).toHaveLength(1)
-    expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
-    const refused = incidents(answers({ "coordination.arm": { status: "failed", error: { code: "invalid_message", message: "Group revision changed" } } }))
+    for (const operation of ["coordination.create", "coordination.update", "coordination.delete"] as const) {
+      expect(await queries.changeCoordination(scope, operation, { groupID: "cgrp_1", revision: 4 })).toEqual({ reached: true })
+      expect(calls.filter((call) => call.operation === operation)).toHaveLength(1)
+    }
+    expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(4)
+    const refused = incidents(answers({ "coordination.update": { status: "failed", error: { code: "invalid_message", message: "Project revision changed" } } }))
     await refused.client.fetchQuery(refused.queries.coordination(scope, true))
-    expect(await refused.queries.changeCoordination(scope, "coordination.arm", { groupID: "cgrp_1", revision: 3 })).toEqual({ reached: false, message: "Projects: Group revision changed" })
+    expect(await refused.queries.changeCoordination(scope, "coordination.update", { groupID: "cgrp_1", revision: 3 })).toEqual({ reached: false, message: "Projects: Project revision changed" })
     expect(refused.calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
   })
 
@@ -327,9 +331,42 @@ describe("Projects reads and changes", () => {
   })
 
   test("a connector without the operation says to update instead of failing generically", async () => {
-    const { client, queries } = incidents(answers({ "coordination.stop": { status: "failed", error: { code: "unknown_operation", message: "unknown" } } }))
+    const { client, queries } = incidents(answers({ "coordination.delete": { status: "failed", error: { code: "unknown_operation", message: "unknown" } } }))
     await client.fetchQuery(queries.coordination(scope, true))
-    expect(await queries.changeCoordination(scope, "coordination.stop", { groupID: "cgrp_1", revision: 4 })).toEqual({ reached: false, message: "Update YCoding on this machine to manage Projects from here." })
+    expect(await queries.changeCoordination(scope, "coordination.delete", { groupID: "cgrp_1" })).toEqual({ reached: false, message: "Update YCoding on this machine to manage Projects from here." })
+  })
+
+  test("deleting a Session sends the Session delete for that Session alone and rereads the projects", async () => {
+    const { calls, client, queries } = incidents(answers())
+    await client.fetchQuery(queries.coordination(scope, true))
+    expect(await queries.deleteProjectSession(scope, "ses_w1")).toEqual({ reached: true })
+    const sent = calls.filter((call) => call.operation === "session.delete")
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.request?.sessionID).toBe("ses_w1")
+    expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
+  })
+
+  test("a new Project Session is created once in the chosen workspace and confirmed by its echoed id", async () => {
+    const created = answers({ "session.create": { status: "ok", value: { data: { id: "ses_new", title: "New", location: { directory: "/work/web" }, time: { created: 1, updated: 1 } } } } })
+    const { calls, queries } = incidents(created)
+    expect(await queries.createProjectSession(scope, "wsp_web", "ses_new")).toEqual({ reached: true, sessionID: "ses_new" })
+    expect(calls.filter((call) => call.operation === "session.create").map((call) => call.request?.input)).toEqual([{ id: "ses_new", workspace: "wsp_web" }])
+    const mismatch = incidents(answers({ "session.create": { status: "ok", value: { data: { id: "ses_other" } } } }))
+    expect(await mismatch.queries.createProjectSession(scope, "wsp_web", "ses_new")).toEqual({ reached: false, message: "The device returned a different Session than the one requested. Check Sessions before trying again." })
+    const unknown = incidents(answers({ "session.create": { status: "unknown", error: { code: "outcome_unknown", message: "Request timed out" } } }))
+    expect(await unknown.queries.createProjectSession(scope, "wsp_web", "ses_new")).toEqual({ reached: false, unconfirmed: true, message: "Session creation: Request timed out. The Session may already exist; it was not created again." })
+    expect(unknown.calls.filter((call) => call.operation === "session.create")).toHaveLength(1)
+    const refused = incidents(answers({ "session.create": { status: "failed", error: { code: "invalid_message", message: "Workspace is unavailable" } } }))
+    expect(await refused.queries.createProjectSession(scope, "wsp_web", "ses_new")).toEqual({ reached: false, message: "Session creation: Workspace is unavailable" })
+  })
+
+  test("Session candidates read root Sessions across directories with the search text", async () => {
+    const { calls, client, queries } = incidents(answers())
+    const found = await client.fetchQuery(queries.projectCandidates(scope, true, "triage"))
+    expect(found).toEqual([{ id: "ses_x", title: "Triage", directory: "/work/web", active: 2 }])
+    expect(calls.find((call) => call.operation === "session.list")?.request?.input).toEqual({ limit: 25, order: "active", parentID: null, searchFields: "summary", search: "triage" })
+    await client.fetchQuery(queries.projectCandidates(scope, true, ""))
+    expect(calls.filter((call) => call.operation === "session.list").at(-1)?.request?.input).not.toHaveProperty("search")
   })
 
   test("a replaced connection never reads or invalidates the new generation", async () => {
@@ -337,7 +374,7 @@ describe("Projects reads and changes", () => {
     const { client, queries } = incidents(answers())
     await client.fetchQuery(queries.coordination(scope, true))
     await client.fetchQuery(queries.coordination(next, true))
-    await queries.changeCoordination(scope, "coordination.arm", { groupID: "cgrp_1", revision: 4 })
+    await queries.changeCoordination(scope, "coordination.update", { groupID: "cgrp_1", revision: 4 })
     expect(client.getQueryState(queries.coordination(next, true).queryKey)?.isInvalidated).toBe(false)
     expect(queries.coordination(scope, true).queryKey).not.toEqual(queries.coordination(next, true).queryKey)
   })

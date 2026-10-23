@@ -100,6 +100,7 @@ export type PromptProps = {
   onLandingDaybreakChange?: (next: ModelDaybreak | undefined) => void
   visible?: boolean
   focusBlocked?: boolean
+  projectMember?: boolean
   disabled?: boolean
   submitDisabled?: boolean
   onSubmit?: () => void
@@ -1602,6 +1603,16 @@ export function Prompt(props: PromptProps) {
       { bind: "escape", title: "Dismiss suggestion", run: dismissPrediction },
     ],
   }))
+
+  Keymap.createLayer(() => {
+    cursorVersion()
+    return {
+      priority: 4,
+      target: inputTarget,
+      enabled: props.projectMember === true && inputTarget() !== undefined && !props.disabled && !auto()?.visible && input?.plainText === "",
+      bindings: ["session.parent", "session.child.previous", "session.child.next"],
+    }
+  })
 
   Keymap.createLayer(() => ({
     priority: 2,

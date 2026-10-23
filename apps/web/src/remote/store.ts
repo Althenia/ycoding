@@ -694,23 +694,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     },
   }
 
-  const coordinatorIDs = (): ReadonlySet<string> | undefined => {
+  const masterIDs = (): ReadonlySet<string> | undefined => {
     const scope = currentScope()
     const overview = scope === undefined ? undefined : queryClient.getQueryData<CoordinationOverview>(remoteKeys.coordination(scope))
     return overview?.status === "ready"
-      ? new Set(overview.groups.flatMap((group) => group.detail.members.filter((entry) => entry.role === "coordinator").map((entry) => entry.sessionID)))
+      ? new Set(overview.groups.map((group) => group.detail.master.sessionID))
       : undefined
   }
 
-  const ensureCoordinators = () => {
+  const ensureMasters = () => {
     const scope = currentScope()
-    if (scope !== undefined && coordinatorIDs() === undefined) void queryClient.fetchQuery(createRemoteQueries(link, queryClient).coordination(scope, true)).catch(() => undefined)
+    if (scope !== undefined && masterIDs() === undefined) void queryClient.fetchQuery(createRemoteQueries(link, queryClient).coordination(scope, true)).catch(() => undefined)
   }
 
   const externalAllowed = (sessionID: string | undefined, kind: ExternalKind | undefined) => {
     const filter = container.state.notificationFilter
-    if (filter.scope !== "all") ensureCoordinators()
-    return externalDelivery(filter, coordinatorIDs(), sessionID, kind)
+    if (filter.scope !== "all") ensureMasters()
+    return externalDelivery(filter, masterIDs(), sessionID, kind)
   }
 
   const signalRecovery = () => {
@@ -4029,7 +4029,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const next = normalizeFilter(filter)
       const saved = writeFilter(storage, next)
       setState({ notificationFilter: next })
-      if (next.scope !== "all") ensureCoordinators()
+      if (next.scope !== "all") ensureMasters()
       return saved
     },
     reloadNotificationFilter: () => setState({ notificationFilter: readFilter(storage) }),

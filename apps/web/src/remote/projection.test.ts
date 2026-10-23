@@ -434,6 +434,20 @@ test("classifies terminal synthetic statuses without inventing raw-text user mes
   expect(classifySyntheticNotice({ kind: "synthetic", id: "n", text: "Keep going", metadata: { autonomy: { goal: true } }, created: 1 })).toEqual({ kind: "goal", text: "Keep going" })
 })
 
+test("classifies a Project notification as a member event with its target, event kind and excerpt", () => {
+  const metadata = { source: "project_notification", groupID: "cgrp_1", memberSessionID: "ses_w1", title: "Audit dashboards", event: "question", requestID: "q1", excerpt: "Which column?" }
+  const message = { kind: "synthetic" as const, id: "n", text: `Project notification:\n${JSON.stringify(metadata)}`, description: "Project notification", metadata, created: 1 }
+  expect(classifySyntheticNotice(message)).toEqual({ kind: "member", label: "Audit dashboards", event: "question", memberSessionID: "ses_w1", requestID: "q1", excerpt: "Which column?" })
+  expect(transcriptMessageVisible(message)).toBe(true)
+  for (const event of ["completed", "failed", "interrupted", "permission", "review"] as const) {
+    expect(classifySyntheticNotice({ ...message, metadata: { ...metadata, event, requestID: undefined, excerpt: undefined } })).toEqual({ kind: "member", label: "Audit dashboards", event, memberSessionID: "ses_w1" })
+  }
+  const hydrated = readMessageList({ data: [{ id: "n", type: "synthetic", text: message.text, description: "Project notification", metadata, time: { created: 1 } }] })
+  expect(classifySyntheticNotice(hydrated[0]!)).toMatchObject({ kind: "member", memberSessionID: "ses_w1" })
+  expect(classifySyntheticNotice({ ...message, metadata: { ...metadata, event: "exploded" } })).toBeUndefined()
+  expect(classifySyntheticNotice({ ...message, metadata: { ...metadata, memberSessionID: 5 } })).toBeUndefined()
+})
+
 test("hides internal observations, empty synthetic rows, and non-display compactions", () => {
   expect(transcriptMessageVisible({ kind: "system", id: "s", text: "state", source: "session-state", created: 1 })).toBe(false)
   expect(transcriptMessageVisible({ kind: "synthetic", id: "t", text: "team", source: "team-view", description: "TeamView update", created: 2 })).toBe(false)
@@ -1490,7 +1504,7 @@ test("attributes a rerouted Step's answer to the model it switched to", () => {
 })
 
 describe("master-origin input is the user's own channel", () => {
-  const provenance = { inputOrigin: "coordination", coordination: { coordinatorSessionID: "ses_master", groupID: "cgrp_1", dispatchID: "cdsp_1", generation: 2 } }
+  const provenance = { inputOrigin: "coordination", coordination: { senderSessionID: "ses_master", groupID: "cgrp_1", messageID: "msg_origin" } }
   const body = "I need the failing suite fixed before we ship, so please take it."
 
   test("a projected message with coordination provenance presents exactly as a typed one", () => {
@@ -1498,7 +1512,7 @@ describe("master-origin input is the user's own channel", () => {
     const recorded = readProjectedMessage({ id: "msg_1", type: "user", text: body, metadata: provenance, time: { created: 1, consumed: 2 } })
     expect(recorded).toEqual(typed)
     expect(recorded).toEqual({ kind: "user", id: "msg_1", text: body, state: "consumed", created: 1 })
-    expect(JSON.stringify(recorded)).not.toMatch(/ses_master|cgrp_1|cdsp_1|coordination|coordinator/i)
+    expect(JSON.stringify(recorded)).not.toMatch(/ses_master|cgrp_1|msg_origin|coordination|coordinator|master/i)
   })
 
   test("pending and admitted inputs project without any origin field and keep their delivery and state", () => {

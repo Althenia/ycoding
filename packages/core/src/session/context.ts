@@ -3,15 +3,15 @@ export * as SessionContext from "./context"
 import { Context, Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import type { Model } from "@ycoding-ai/schema/model"
-import type { Coordination } from "@ycoding-ai/schema/coordination"
 import { Agent } from "../agent"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { ConfigMemory } from "../config/memory"
 import { Database } from "../database/database"
-import { CoordinationAccessResolver } from "../coordination/access"
+import { CoordinationService } from "../coordination/index"
 import { CoordinationInstructions } from "../coordination/instructions"
 import { CoordinationAccess } from "./coordination-access"
+import { CoordinationModel } from "./coordination-model"
 import { makeLocationNode } from "../effect/app-node"
 import { InstructionDiscovery } from "../instruction-discovery"
 import { Instructions } from "../instructions/index"
@@ -40,7 +40,7 @@ export interface Selection {
   readonly session: SessionSchema.Info
   readonly agent: Agent.Selection & { readonly info: Agent.Info }
   readonly instructions: Instructions.Instructions
-  readonly dispatchSelection?: Coordination.DispatchSelection
+  readonly modelOverride?: Model.Ref
 }
 
 export interface Loaded {
@@ -94,7 +94,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const agents = yield* Agent.Service
     const catalog = yield* Catalog.Service
-    const coordination = yield* CoordinationAccessResolver.Service
+    const coordination = yield* CoordinationService.Service
     const builtins = yield* InstructionBuiltIns.Service
     const config = yield* Config.Service
     const db = (yield* Database.Service).db
@@ -130,19 +130,18 @@ const layer = Layer.effect(
         return yield* Effect.interrupt
 
       yield* plugins.flush
-      const restrictions = yield* coordination.forSession(sessionID)
-      const dispatchSelection = restrictions.find((access) => access.selection !== undefined)?.selection
-      const agent = yield* agents.select(dispatchSelection?.agent ?? session.agent)
-      if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: dispatchSelection?.agent ?? session.agent ?? agent.id })
+      const scoped = (yield* coordination.scopeOf(sessionID)) !== undefined
+      const modelOverride = yield* CoordinationModel.override(db, sessionID)
+      const agent = yield* agents.select(session.agent)
+      if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: session.agent ?? agent.id })
       const configEntries = yield* config.entries()
       const capabilities = Config.capabilities(configEntries)
       const permissions = toolPermissions(agent.info, session.permissionCeiling ?? [])
-      const available = yield* registry.available(permissions, capabilities)
-      const tools = yield* registry.available([...permissions, ...restrictions.flatMap((access) => CoordinationAccess.rules(access, available))], capabilities)
+      const tools = yield* registry.available([...permissions, ...CoordinationAccess.rules(scoped)], capabilities)
       const memoryEnabled = ConfigMemory.resolve(
         configEntries.flatMap((entry) => (entry.type === "document" && entry.info.memory ? [entry.info.memory] : [])),
       ).enabled
-      const guidanceModel = dispatchSelection?.model ?? session.model ?? (yield* catalog.model.defaultSelection())
+      const guidanceModel = modelOverride ?? session.model ?? (yield* catalog.model.defaultSelection())
       const instructions = yield* Effect.all(
         [
           builtins.load({ sessionID, capabilities, tools }),
@@ -150,7 +149,7 @@ const layer = Layer.effect(
           skillInstructions.load(agent),
           referenceInstructions.load(),
           mcpInstructions.load(agent),
-          Effect.succeed(Instructions.when(restrictions.some((access) => access.role === "coordinator"), CoordinationInstructions.make())),
+          Effect.succeed(Instructions.when(scoped, CoordinationInstructions.make())),
           Effect.succeed(
             Instructions.when(
               InstructionBuiltIns.enabled("project-artifact-authoring", { capabilities, tools }),
@@ -175,7 +174,7 @@ const layer = Layer.effect(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.map(Instructions.combine))
-      return { session, agent: { ...agent, info: agent.info }, instructions, ...(dispatchSelection === undefined ? {} : { dispatchSelection }) }
+      return { session, agent: { ...agent, info: agent.info }, instructions, ...(modelOverride === undefined ? {} : { modelOverride }) }
     })
 
     const load = Effect.fn("SessionContext.load")(function* (
@@ -183,7 +182,7 @@ const layer = Layer.effect(
       options?: { readonly model?: Model.Ref },
     ) {
       const contextRevision = yield* revision(selection.session.id)
-      const modelRef = options?.model ?? selection.dispatchSelection?.model
+      const modelRef = options?.model ?? selection.modelOverride
       const model = yield* models.resolve(
         modelRef === undefined ? selection.session : { ...selection.session, model: modelRef },
       )
@@ -230,6 +229,6 @@ export const node = makeLocationNode({
     SessionStore.node,
     SkillInstructions.node,
     ToolRegistry.node,
-    CoordinationAccessResolver.node,
+    CoordinationService.node,
   ],
 })

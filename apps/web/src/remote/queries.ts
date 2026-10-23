@@ -10,10 +10,7 @@ import type {
   RemoteWorkspaceInfo,
   RemoteUsageForecast,
 } from "@ycoding-ai/remote"
-import {
-  readCapacity, readCentralPolicy, readDetail, readGroups, readReceipts,
-  type CapacityView, type CentralPolicy, type GroupDetail, type GroupSummary, type ReceiptView,
-} from "./coordination"
+import { readCentralPolicy, readProject, readProjects, readSessionCandidates, type CentralPolicy, type ProjectBundle, type SessionCandidate } from "./coordination"
 import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
 import { describeOutcome } from "./outcome"
@@ -57,19 +54,15 @@ export const remoteKeys = {
   keepAwake: (scope: QueryScope) => [...remoteKeys.scope(scope), "keepAwake"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
   coordination: (scope: QueryScope) => [...remoteKeys.scope(scope), "coordination"] as const,
+  projectCandidates: (scope: QueryScope, search: string) => [...remoteKeys.scope(scope), "project-candidates", search] as const,
 }
 
-export type CoordinationBundle = {
-  readonly summary: GroupSummary
-  readonly detail: GroupDetail
-  readonly capacity: CapacityView
-  readonly receipts: readonly ReceiptView[]
-}
 export type CoordinationOverview =
-  | { readonly status: "ready"; readonly groups: readonly CoordinationBundle[]; readonly central: CentralPolicy | undefined }
+  | { readonly status: "ready"; readonly groups: readonly ProjectBundle[]; readonly central: CentralPolicy | undefined }
   | { readonly status: "unsupported" }
-export type CoordinationOperation = "coordination.create" | "coordination.members" | "coordination.arm" | "coordination.stop" | "coordination.complete"
-export type CoordinationChange = { readonly reached: true } | { readonly reached: false; readonly message: string; readonly unconfirmed?: true }
+export type CoordinationOperation = "coordination.create" | "coordination.update" | "coordination.delete"
+export type CoordinationFailure = { readonly reached: false; readonly message: string; readonly unconfirmed?: true }
+export type CoordinationChange = { readonly reached: true } | CoordinationFailure
 
 export type IncidentGuidanceQueryInput = RemoteIncidentGuidanceInput & { readonly sessionID?: string }
 
@@ -337,27 +330,22 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       enabled: scope !== undefined && enabled,
       staleTime: 15_000,
       refetchOnMount: "always",
+      refetchInterval: 5_000,
       retry: false,
       queryFn: async (): Promise<CoordinationOverview> => {
         const listed = await link.request(current, "coordination.list", { timeoutMs: 10_000 })
         if (unknownOperation(listed)) return { status: "unsupported" }
         if (listed.status !== "ok") throw new Error(describeOutcome(listed, "Projects"))
-        const summaries = readGroups(listed.value)
+        const summaries = readProjects(listed.value)
         if (summaries === undefined) throw unreadable
-        const read = async <Value>(operation: "coordination.get" | "coordination.capacity" | "coordination.receipts", groupID: string, parse: (value: unknown) => Value | undefined) => {
-          const outcome = await link.request(current, operation, { input: { groupID }, timeoutMs: 10_000 })
-          if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Projects"))
-          const value = parse(outcome.value)
-          if (value === undefined) throw unreadable
-          return value
-        }
-        const groups: CoordinationBundle[] = []
+        const groups: ProjectBundle[] = []
         for (let start = 0; start < summaries.length; start += 3) {
           groups.push(...await Promise.all(summaries.slice(start, start + 3).map(async (summary) => {
-            const [detail, capacity, receipts] = await Promise.all([
-              read("coordination.get", summary.id, readDetail), read("coordination.capacity", summary.id, readCapacity), read("coordination.receipts", summary.id, readReceipts),
-            ])
-            return { summary, detail, capacity, receipts }
+            const outcome = await link.request(current, "coordination.get", { input: { groupID: summary.id }, timeoutMs: 10_000 })
+            if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Projects"))
+            const detail = readProject(outcome.value)
+            if (detail === undefined) throw unreadable
+            return { summary, detail }
           })))
         }
         const settings = await link.request(current, "coordination.settings", { timeoutMs: 10_000 })
@@ -368,8 +356,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
 
   const refreshCoordination = (scope: QueryScope) => refetchFresh([remoteKeys.coordination(scope)])
 
-  const changeCoordination = async (scope: QueryScope, operation: CoordinationOperation, input: Readonly<Record<string, unknown>>): Promise<CoordinationChange> => {
-    const outcome = await link.request(scope, operation, { input })
+  const settleCoordination = async (scope: QueryScope, outcome: RemoteRequestOutcome): Promise<CoordinationChange> => {
     const reread = () => client.refetchQueries({ queryKey: remoteKeys.coordination(scope), type: "all" }).catch(() => undefined)
     if (outcome.status === "ok") {
       await reread()
@@ -384,8 +371,41 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     return { reached: false, message: describeOutcome(outcome, "Projects") }
   }
 
+  const changeCoordination = async (scope: QueryScope, operation: CoordinationOperation, input: Readonly<Record<string, unknown>>): Promise<CoordinationChange> =>
+    settleCoordination(scope, await link.request(scope, operation, { input }))
+
+  const deleteProjectSession = async (scope: QueryScope, sessionID: string): Promise<CoordinationChange> =>
+    settleCoordination(scope, await link.request(scope, "session.delete", { sessionID }))
+
+  const createProjectSession = async (scope: QueryScope, workspaceID: string, id = `ses_${crypto.randomUUID().replaceAll("-", "")}`): Promise<{ readonly reached: true; readonly sessionID: string } | CoordinationFailure> => {
+    const outcome = await link.request(scope, "session.create", { input: { id, workspace: workspaceID } })
+    if (outcome.status === "ok") {
+      const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+      const echoed = typeof data === "object" && data !== null ? Reflect.get(data, "id") : undefined
+      return echoed === id ? { reached: true, sessionID: id } : { reached: false, message: "The device returned a different Session than the one requested. Check Sessions before trying again." }
+    }
+    if (outcome.status === "unknown") return { reached: false, unconfirmed: true, message: `${describeOutcome(outcome, "Session creation")}. The Session may already exist; it was not created again.` }
+    return { reached: false, message: describeOutcome(outcome, "Session creation") }
+  }
+
+  const projectCandidates = (scope: QueryScope | undefined, enabled: boolean, search: string) => {
+    const current = scope ?? idleScope
+    const needle = search.trim()
+    return queryOptions({
+      queryKey: remoteKeys.projectCandidates(current, needle),
+      enabled: scope !== undefined && enabled,
+      staleTime: 10_000,
+      retry: false,
+      queryFn: async (): Promise<readonly SessionCandidate[]> => {
+        const outcome = await link.request(current, "session.list", { input: { limit: 25, order: "active", parentID: null, searchFields: "summary", ...(needle === "" ? {} : { search: needle }) }, timeoutMs: 10_000 })
+        if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Sessions"))
+        return readSessionCandidates(outcome.value)
+      },
+    })
+  }
+
   return {
-    coordination, refreshCoordination, changeCoordination,
+    coordination, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates,
     usageProviders, usageSummary, usageForecast, usageReport, refreshUsage, retryUsageReport,
     incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
     keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,

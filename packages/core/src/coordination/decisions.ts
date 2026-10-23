@@ -26,15 +26,7 @@ export const layerWith = (getLocation: (location: Location.Ref) => Layer.Layer<P
         const guardrail = yield* SessionGuardrail.Service
         return yield* run(CoordinationDecisions.make({
           policy: settings.read,
-          roleFor: (sessionID) => Effect.gen(function* () {
-            const group = yield* coordination.get(input.groupID).pipe(Effect.orDie)
-            const member = group.members.find((entry) => entry.sessionID === sessionID)
-            if (member === undefined) return undefined
-            return { groupID: group.id, revision: group.revision, status: group.status, role: member.role,
-              allowedTools: member.allowedTools, resourceScopes: member.resourceScopes,
-              fencingGeneration: group.fencingGeneration, delegatedDecisions: group.policy.delegatedDecisions }
-          }),
-          parentOf: (sessionID) => store.get(sessionID).pipe(Effect.map((session) => session?.parentID)),
+          scopeOf: coordination.scopeOf,
           permission,
           form,
           guardrail,

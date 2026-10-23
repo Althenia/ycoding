@@ -32,6 +32,13 @@ test("accepts every incident operation name", () => {
   for (const operation of names) expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation as never)
 })
 
+test("accepts telemetry for deleting a Session through the remote operation", () => {
+  expect(Schema.decodeUnknownSync(Telemetry.Operation)("session.delete")).toBe("session.delete")
+  expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...request, operation: "session.delete" })).toMatchObject({
+    operation: "session.delete",
+  })
+})
+
 test("validates notice versions and omits undecided consent", () => {
   expect(Schema.decodeUnknownSync(Telemetry.ConsentInput)({ enabled: true, noticeVersion: 1 })).toEqual({
     enabled: true,

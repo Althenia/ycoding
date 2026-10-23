@@ -672,7 +672,6 @@ describe("LocationServiceMap", () => {
               const expected = [
                 "browser",
                 "computer",
-                "coordination",
                 "decision",
                 "edit",
                 "glob",
@@ -680,6 +679,7 @@ describe("LocationServiceMap", () => {
                 "grep",
                 "memory",
                 "patch",
+                "project",
                 "project_artifact",
                 "question",
                 "read",

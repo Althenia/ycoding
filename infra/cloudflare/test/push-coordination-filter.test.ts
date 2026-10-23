@@ -69,7 +69,7 @@ function memoryStore(rows: readonly PushSubscription[]): PushStore {
     claimTest: async () => ({ status: "missing" }), recordFailure: async () => undefined, recordSuccess: async () => undefined }
 }
 
-test("push delivery applies the persisted coordination filter to verified coordinator attribution only", async () => {
+test("push delivery interprets persisted coordinator filters as verified Master Session attribution only", async () => {
   const selected = await receiver("https://fcm.googleapis.com/send/selected", { scope: "selected", sessionIDs: ["ses_coord"], categories: ["question", "completion"] })
   const coordinators = await receiver("https://fcm.googleapis.com/send/coordinators", { scope: "coordinators" })
   const unfiltered = await receiver("https://fcm.googleapis.com/send/all")

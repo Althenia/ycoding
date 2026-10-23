@@ -46,7 +46,7 @@ import { CommandPalette, focusComposerField, type PaletteHandlers } from "./comm
 import { NewSessionButton, NewSessionComposer } from "./new-session"
 import { ProviderConnect } from "./provider-connect"
 import type { CatalogTarget } from "../catalog"
-import { ProjectsPage } from "./projects"
+import { ProjectsPage, ProjectsRail, ProjectPanel, ProjectsDialogs, ProjectStatus, ProjectFreshness, createProjectsData } from "./projects"
 import { UsagePage } from "./usage"
 import {
   AccountSettings,
@@ -274,6 +274,11 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   })
   const openFromTeam = (sessionID: string) => { closeTeam(); openSession(sessionID) }
   const openCreatedSession = (sessionID: string) => { setNewSessionVisited(false); openSession(sessionID) }
+  const projects = createProjectsData(() => view() === "/remote/projects" || view() === "/remote/session", openSession)
+  const projectContext = () => view() === "/remote/session" ? projects.membership() : undefined
+  const [projectSheet, setProjectSheet] = createSignal(false)
+  let projectTrigger: HTMLButtonElement | undefined
+  const newProject = () => { projects.setCreating(true); navigate({ to: "/remote/projects" }) }
   const requested = () => view() === "/remote/session" ? readSessionSearch(search()) : undefined
   const ownsSessionRoute = () => {
     const target = requested()
@@ -455,7 +460,10 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             <ResumeSession view={view()} />
           </div>
           <div ref={rail} class="workspace__rail-body" inert={railCollapsed()}>
-            <Show when={composition().showSessionRail}>
+            <Show when={view() === "/remote/projects" || projectContext()}>
+              <ProjectsRail data={projects} onNew={newProject} />
+            </Show>
+            <Show when={composition().showSessionRail && !projectContext()}>
               <SessionPanel canCreateSession={canCreateSession()} onNewSession={() => openNewSession("sidebar")} onSelectSession={openSession} />
             </Show>
             <Show when={view() === "/remote/sessions"}><WorkspaceNav /></Show>
@@ -481,11 +489,11 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
 
         <ConnectionStrip />
 
-        <div class="workspace">
+        <div class="workspace" classList={{ "workspace--project": !!projectContext() }}>
           <main id="remote-main" tabindex="-1" class="workspace__main">
             <Show when={view() === "/remote/session" && selected() && ownsSessionDevice()}>
-              <div class="workspace__topbar" data-toast-clearance aria-hidden={selectedLoading() ? "true" : undefined} inert={selectedLoading()}>
-                <div class="workspace__heading">
+              <div class="workspace__topbar" classList={{ "project-topbar": !!projectContext() }} data-toast-clearance aria-hidden={selectedLoading() ? "true" : undefined} inert={selectedLoading()}>
+                <Show when={projectContext()} fallback={<div class="workspace__heading">
                   <div class="conversation-breadcrumb" tabindex="-1" aria-label="Selected workspace and session">
                     <Link to="/remote/sessions" class="conversation-back button button--ghost button--icon" ariaLabel="Back to Sessions" title="Back to Sessions"><Icon name="arrow-left" /></Link>
                     <div class="conversation-breadcrumb__identity"><span class="conversation-breadcrumb__project" title={activeSession()?.directory}>{sessionProjectLabel(activeSession() ?? {})}</span><h1><strong title={activeSession()?.title}>{activeSession()?.title ?? noSessionTitle}</strong></h1></div>
@@ -496,7 +504,10 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                     onChange={office.present}
                   /></Show>
                   <KeepAwakeIndicator />
-                </div>
+                </div>}>{(context) => <>
+                  <div class="project-heading"><div><Link to="/remote/projects" class="text-link">Projects</Link><h1>{context().role === "master" ? context().detail.name : activeSession()?.title}</h1><div class="project-actions"><ProjectStatus project={context().detail} /><span class="project-meta">Master: {context().detail.master.title}</span></div></div><div class="project-actions"><ProjectFreshness data={projects} /><button class="button button--ghost button--small" disabled={projects.query().isFetching} onClick={projects.refresh}>Refresh</button><button ref={projectTrigger} class="button button--secondary button--small project-phone" aria-haspopup="dialog" onClick={() => setProjectSheet(true)}>Sessions {context().detail.members.length + 1}</button></div></div>
+                  <div class="project-context"><span class={`project-badge${context().role === "master" ? " project-badge--master" : ""}`}>{context().role === "master" ? "Master" : "Member"}</span><strong>{context().role === "master" ? "Master" : "Member"} of {context().detail.name}</strong><Show when={context().role === "member"}><span>· master {context().detail.master.title}</span><button class="text-link" onClick={() => openSession(context().detail.master.sessionID)}>Back to project chat</button></Show><Show when={!context().detail.active}><span class="project-meta">Send a message in the Master chat to resume.</span></Show></div>
+                </>}</Show>
               </div>
             </Show>
             <div class="workspace__scroll" ref={scrollHost} onScroll={() => {
@@ -523,7 +534,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                       onSelectSession={openSession}
                     />
                   </RoutePanel>
-                  <RoutePanel active={view() === "/remote/projects"}><ProjectsPage /></RoutePanel>
+                  <RoutePanel active={view() === "/remote/projects"}><ProjectsPage data={projects} /></RoutePanel>
                   <RoutePanel active={view() === "/remote/usage" && routeError() !== undefined}><p class="notice-strip" role="alert">{routeError()}</p></RoutePanel>
                   <RoutePanel active={view() === "/remote/usage" && routeError() === undefined && ownsUsageRoute()}><UsagePage /></RoutePanel>
                   <RoutePanel active={view() === "/remote/settings"}><SettingsPage office={office} phoneLayout={phoneLayout()} /></RoutePanel>
@@ -566,8 +577,13 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                 </RoutePanel>
             </Show>
           </main>
-
+          <Show when={projectContext()}>{(context) => <aside class="project-desktop"><ProjectPanel data={projects} project={context().detail} /></aside>}</Show>
         </div>
+        <Show when={projectSheet() && projectContext()}>{(context) => <Modal class="overlay--sheet project-sheet" label={context().detail.name} returnFocus={projectTrigger!} onClose={() => setProjectSheet(false)}><ProjectPanel data={projects} project={context().detail} onManage={() => {
+          setProjectSheet(false)
+          return projectTrigger
+        }} /></Modal>}</Show>
+        <ProjectsDialogs data={projects} />
 
         <Show when={providerConnect()}>{(connection) => <ProviderConnect target={connection().target} returnFocus={connection().returnFocus} onClose={() => setProviderConnect(undefined)} onConnected={() => { void remote.store.loadCatalog(connection().target, { refresh: true }) }} />}</Show>
         <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote/session" && state().team !== undefined && selected()}>

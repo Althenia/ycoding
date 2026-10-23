@@ -48,6 +48,13 @@ export const usePages: readonly DocPage[] = [
         ],
       },
       {
+        heading: "Coordinate Sessions in a Project",
+        blocks: [
+          { kind: "paragraph", text: "Open Projects from the command palette. A Project contains one Master Session and member Sessions. Create a Project with an existing Master or a new Session in a directory already opened on the connected machine. Opening the Project opens the ordinary Master chat." },
+          { kind: "list", items: ["Use Sessions beside the Master chat, or the Sessions sheet on a phone, to open, add or create members. The Master stays pinned first.", "Remove detaches a member without stopping it or deleting its history. Delete Session permanently deletes its history after confirmation. Delete project leaves every Session running with its history intact.", "Settings changes the name, Master, members, concurrency limit and delegated-decision narrowing. Changing the Master retains the previous Master as a member.", "A message to the Master activates the Project. Interruption or a backend restart pauses it until the next Master message. Pending requests and member updates link to the relevant Session.", "Notification preferences apply to this browser. All masters and Selected masters restrict external alerts, not in-app notices or pending decisions."] },
+        ],
+      },
+      {
         heading: "Run a scripted example",
         blocks: [
           { kind: "code", language: "sh", label: "Run and request JSON output", code: 'ycoding run --format json "Summarize the failing tests in this project"' },

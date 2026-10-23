@@ -207,6 +207,7 @@ export function Header(
     focused?: SessionHeaderSegmentKey
     subagent?: boolean
     sideChat?: boolean
+    projectTitle?: string
   },
 ) {
   const { theme } = useTheme()
@@ -277,6 +278,7 @@ export function Header(
     !props.connection &&
     ((effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying")
   const brandWidth = () =>
+    props.projectTitle ? Math.min(24, stringWidth(props.projectTitle)) :
     stringWidth(
       props.sideChat ? "BTW" : props.subagent ? `${getGlyph("subagent").glyph} subagent` : `v${InstallationVersion}`,
     ) + (!props.sideChat && !props.subagent ? 3 : 0)
@@ -355,13 +357,13 @@ export function Header(
         gap={gap()}
         paddingLeft={inset()}
         paddingRight={3}
-        height={3}
+        height={props.projectTitle ? 1 : 3}
         flexShrink={0}
         alignItems="center"
         backgroundColor={theme.background.chrome}
       >
         <Show
-          when={props.subagent || props.sideChat}
+          when={props.subagent || props.sideChat || props.projectTitle}
           fallback={
             <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
               <BrandMark width={2} height={1} />
@@ -372,7 +374,7 @@ export function Header(
           }
         >
           <text fg={theme.text.feedback.info.default} wrapMode="none">
-            {props.sideChat ? "BTW" : `${getGlyph("subagent").glyph} subagent`}
+            {props.projectTitle ? Locale.truncateWidth(props.projectTitle, 24) : props.sideChat ? "BTW" : `${getGlyph("subagent").glyph} subagent`}
           </text>
         </Show>
         <text flexGrow={1} minWidth={0} wrapMode="none">

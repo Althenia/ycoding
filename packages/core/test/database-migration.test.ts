@@ -74,6 +74,7 @@ const currentMigrations = [
   { id: "20261018121535_mcp-events-retention" },
   { id: "20261020120000_session-yolo-toggle" },
   { id: "20261023093249_coordination-groups" },
+  { id: "20261023160000_projects-redesign" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -307,6 +308,35 @@ function normalizeSqlWhitespace(value: string) {
 }
 
 describe("DatabaseMigration", () => {
+  test("resets unreleased Projects without changing Sessions, messages, or Session events", async () => {
+    await run(Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* seedPreviousDatabase(db)
+      const migration = migrations.find((item) => item.id === "20261023160000_projects-redesign")!
+      yield* DatabaseMigration.applyOnly(db, migrations.filter((item) => item.id < migration.id))
+      yield* seedSession(db, "ses_project_master")
+      yield* seedSession(db, "ses_project_member")
+      yield* seedMessage(db, { id: "msg_project_history", sessionID: "ses_project_member", type: "user", seq: 1, data: { text: "Retained history" } })
+      yield* seedEvent(db, { id: "evt_project_history", sessionID: "ses_project_member", seq: 1, type: "session.execution.succeeded.1", data: { sessionID: "ses_project_member" } })
+      yield* db.run(sql`INSERT INTO coordination_group (id, name, status, revision, concurrency, queue_capacity, time_created, time_updated) VALUES ('cgrp_before', 'Old', 'armed', 1, 2, 10, 1, 1)`)
+      yield* db.run(sql`INSERT INTO coordination_member (group_id, session_id, role) VALUES ('cgrp_before', 'ses_project_master', 'coordinator'), ('cgrp_before', 'ses_project_member', 'worker')`)
+      const sessions = yield* db.all(sql`SELECT * FROM session ORDER BY id`)
+      const messages = yield* db.all(sql`SELECT * FROM session_message`)
+      const events = yield* db.all(sql`SELECT * FROM event`)
+      yield* DatabaseMigration.applyOnly(db, [migration])
+      expect(yield* db.all(sql`SELECT * FROM session ORDER BY id`)).toEqual(sessions)
+      expect(yield* db.all(sql`SELECT * FROM session_message`)).toEqual(messages)
+      expect(yield* db.all(sql`SELECT * FROM event`)).toEqual(events)
+      expect(yield* db.all(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('coordination_claim','coordination_dispatch','coordination_wait','coordination_receipt')`)).toEqual([])
+      expect(yield* db.all(sql`SELECT * FROM coordination_group`)).toEqual([])
+      expect(yield* db.all(sql`SELECT * FROM coordination_member`)).toEqual([])
+      yield* db.run(sql`INSERT INTO coordination_group (id, name, revision, master_session_id, concurrency, time_created, time_updated) VALUES ('cgrp_after', 'New', 0, 'ses_project_master', 2, 1, 1)`)
+      yield* db.run(sql`INSERT INTO coordination_member (group_id, session_id) VALUES ('cgrp_after', 'ses_project_member')`)
+      expect(yield* db.get(sql`SELECT master_session_id, concurrency FROM coordination_group WHERE id = 'cgrp_after'`)).toEqual({ master_session_id: "ses_project_master", concurrency: 2 })
+      expect(yield* db.get(sql`SELECT session_id FROM coordination_member`)).toEqual({ session_id: "ses_project_member" })
+    }))
+  })
+
   test("adds private provider profile storage without attributing historical rows", async () => {
     await run(
       Effect.gen(function* () {

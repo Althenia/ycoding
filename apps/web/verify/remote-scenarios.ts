@@ -397,12 +397,15 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     ...common,
     view: "projects",
     sessions: [
-      baseSession({ id: "ses_lead", title: "Release coordinator", time: time(5) }),
+      baseSession({ id: "ses_lead", title: "Release lead", time: time(5) }),
       baseSession({ id: "ses_docs", title: "Docs worker", time: time(8) }),
       baseSession({ id: "ses_tests", title: "Test runner", time: time(12) }),
       baseSession({ id: "ses_spare", title: "Spare research session", time: time(30) }),
+      baseSession({ id: "ses_api", title: "Update checkout API", time: time(1) }),
+      baseSession({ id: "ses_audit", title: "Audit dashboards", time: time(26) }),
+      baseSession({ id: "ses_available", title: "Triage flaky tests", time: time(35) }),
     ],
-    expectedText: ["Projects", "Release train", "Docs sweep", "External notifications"],
+    expectedText: ["Projects", "Release train", "Docs sweep", "Open project"],
   }
   return {
     ...common,

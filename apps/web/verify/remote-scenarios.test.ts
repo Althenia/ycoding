@@ -23,9 +23,9 @@ describe("remote product-state scenarios", () => {
     for (const viewport of [1440, 768, 390]) {
       const projects = remoteScenario(new URLSearchParams(`scenario=coordination-projects-${viewport}`))!
       expect(projects).toMatchObject({ view: "projects", account: "ok", connection: "open" })
-      expect(projects.sessions.map((session) => session.id)).toEqual(["ses_lead", "ses_docs", "ses_tests", "ses_spare"])
+      expect(projects.sessions.map((session) => session.id)).toEqual(["ses_lead", "ses_docs", "ses_tests", "ses_spare", "ses_api", "ses_audit", "ses_available"])
       projects.sessions.forEach((session) => expect(session).not.toHaveProperty("parentID"))
-      expect(projects.expectedText).toEqual(["Projects", "Release train", "Docs sweep", "External notifications"])
+      expect(projects.expectedText).toEqual(["Projects", "Release train", "Docs sweep", "Open project"])
     }
   })
 

@@ -11,6 +11,7 @@ export function Footer(props: {
   branch?: string
   sessionID: string
   subagent?: boolean
+  project?: boolean
 }) {
   const { theme } = useTheme()
   const data = useData()
@@ -61,7 +62,7 @@ export function Footer(props: {
     >
       <box
         width="100%"
-        height={props.subagent ? 1 : 3}
+        height={props.project && compact() ? 2 : props.subagent || props.project ? 1 : 3}
         flexShrink={0}
         flexDirection={compact() ? "column" : "row"}
         justifyContent={compact() ? "center" : "space-between"}

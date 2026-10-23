@@ -643,13 +643,25 @@ export function reconcilePendingInputs(view: SessionView, pending: readonly Remo
   return { ...view, messages: visibleTranscript([...retained.filter((message) => !admitted.some((item) => item.id === message.id)), ...admitted]) }
 }
 
+const memberEventKinds = ["completed", "failed", "interrupted", "question", "permission", "review"] as const
+export type MemberEventKind = (typeof memberEventKinds)[number]
+
 export function classifySyntheticNotice(message: RemoteMessageView):
   | { readonly kind: "subagent"; readonly label: string; readonly status: "completed" | "failed" | "waiting" | "updated"; readonly excerpt?: string }
   | { readonly kind: "completion"; readonly label: string; readonly status: string; readonly description: string }
   | { readonly kind: "goal"; readonly text: string }
+  | { readonly kind: "member"; readonly label: string; readonly event: MemberEventKind; readonly memberSessionID: string; readonly requestID?: string; readonly excerpt?: string }
   | undefined {
   if (message.kind !== "synthetic") return undefined
   const metadata = message.metadata
+  if (metadata?.source === "project_notification") {
+    const event = memberEventKinds.find((kind) => kind === metadata.event)
+    if (event === undefined || typeof metadata.memberSessionID !== "string" || metadata.memberSessionID.length === 0) return undefined
+    const label = typeof metadata.title === "string" && metadata.title.length > 0 ? metadata.title : metadata.memberSessionID
+    return { kind: "member", label, event, memberSessionID: metadata.memberSessionID,
+      ...(typeof metadata.requestID === "string" && metadata.requestID.length > 0 ? { requestID: metadata.requestID } : {}),
+      ...(typeof metadata.excerpt === "string" && metadata.excerpt.trim() ? { excerpt: metadata.excerpt } : {}) }
+  }
   if (metadata?.source === "subagent_notification") {
     const type = metadata.type
     const status = type === "completed" || type === "failed" || type === "waiting" ? type : "updated"
