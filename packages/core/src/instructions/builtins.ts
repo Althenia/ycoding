@@ -1,8 +1,10 @@
 export * as InstructionBuiltIns from "./builtins"
 
+import path from "path"
 import { makeLocationNode } from "../effect/app-node"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { ConfigCapabilities } from "../config/capabilities"
+import { Global } from "../global"
 import { Location } from "../location"
 import { SessionSchema } from "../session/schema"
 import { Instructions } from "./index"
@@ -42,6 +44,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const location = yield* Location.Service
+    const worktrees = path.join(Global.Path.data, "worktrees")
     const decodeName = Schema.decodeUnknownSync(ConfigCapabilities.BuiltinInstruction)
     return Service.of({
       load: (input) =>
@@ -110,7 +113,7 @@ const layer = Layer.effect(
               key: Instructions.Key.make("core/git-worktree"),
               codec: Schema.toCodecJson(Schema.String),
               read: Effect.succeed(
-                "When working with a Git worktree, create it at `<main repository root>/.worktrees/<name>`, creating the `.worktrees` directory first if it does not exist. Give every worktree a named branch identical to its worktree name, for example `git worktree add -b <name> .worktrees/<name>`; never create a detached HEAD worktree. Keep history linear when integrating a worktree branch: if the target branch has moved, rebase the worktree branch onto it, then from the target branch checkout run `git merge --ff-only --autostash <name>`; never create a merge commit.",
+                `When working with a Git worktree, create it at \`${worktrees}/<repo-key>/<name>\`, where \`<repo-key>\` is \`repo_\` followed by the SHA-256 hex digest of the real path of the repository's Git common directory. Give every worktree a named branch identical to its worktree name, for example \`git worktree add -b <name> ${worktrees}/<repo-key>/<name>\`; never create a detached HEAD worktree. Keep history linear when integrating a worktree branch: if the target branch has moved, rebase the worktree branch onto it, then from the target branch checkout run \`git merge --ff-only --autostash <name>\`; never create a merge commit.`,
               ),
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),

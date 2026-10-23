@@ -195,7 +195,7 @@ function sourceSystem(content: string, mode: "primary" | "subagent") {
 export const Plugin = define({
   id: "ycoding.agent",
   effect: Effect.fn(function* (ctx) {
-    const whitelistedDirs = [SHELL_OUTPUT_GLOB, path.join(Global.Path.tmp, "*")]
+    const whitelistedDirs = [SHELL_OUTPUT_GLOB, path.join(Global.Path.data, "worktrees", "*"), path.join(Global.Path.tmp, "*")]
     const readonlyExternalDirectory: Permission.Ruleset = [
       { action: "external_directory", resource: "*", effect: "ask" },
       ...whitelistedDirs.map(

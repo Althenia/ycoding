@@ -932,7 +932,7 @@ function createFixtureStore(): Fixture {
       if (accountParams.get("workspaces") === "many") return { status: "ok", value: { data: [
         { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "ycoding" },
         { id: "workspace_agents", projectID: "12fd42415fd3fa9c65332dd8ad2128cc83499df6", directory: "/Users/me/.agents", name: ".agents" },
-        { id: "workspace_worktree", projectID: "3e5803fe818b6335dfb7f71ec17671f3fa4cd538", directory: "/Users/me/Project/ycoding.worktrees/office", name: "office" },
+        { id: "workspace_worktree", projectID: "3e5803fe818b6335dfb7f71ec17671f3fa4cd538", directory: "/Users/me/.local/share/ycoding/worktrees/repo_abc/office", name: "office" },
         { id: "workspace_archive", projectID: "8139fb02d3972656a258b05074bf17af4f6a9a6a", directory: "/Users/me/Archive/ycoding", name: "ycoding" },
         { id: "workspace_proxy", projectID: "6c9b1273dcfa1c7614271448a568d2e27f6db3d3", directory: "/Users/me/Project/llama-cpp-proxy-with-a-long-repository-name", name: "llama-cpp-proxy-with-a-long-repository-name" },
       ] } }

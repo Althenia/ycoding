@@ -5,10 +5,10 @@ import { Effect, Schema } from "effect"
 import type { AccountConnectors } from "../account-connectors"
 import type { ConfigAccountConnectors } from "../config/account-connectors"
 import { Integration } from "../integration"
-import { InstallationVersion } from "../installation/version"
 import { MCPClient } from "../mcp/client"
 import type { Permission } from "../permission"
 import type { ClaudeCodeCredentialStore } from "../plugin/provider/anthropic-claude-code-account"
+import { claudeCodeAPIUserAgent, claudeCodeMCPProxyHeaders } from "../plugin/provider/anthropic-claude-code-request"
 import type { SessionGuardrail } from "../session/guardrail"
 import { AccountConnectorTools } from "./tools"
 
@@ -105,11 +105,15 @@ export function make(options: {
           const request = (access: string) => {
             const headers = new Headers(init?.headers)
             headers.set("authorization", `Bearer ${access}`)
-            headers.set("user-agent", `ycoding/${InstallationVersion}`)
-            if (id === undefined) {
-              headers.set("anthropic-version", "2023-06-01")
-              headers.set("anthropic-beta", "mcp-servers-2025-12-04")
-            }
+            Object.entries(
+              id === undefined
+                ? {
+                    "user-agent": claudeCodeAPIUserAgent(),
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "mcp-servers-2025-12-04",
+                  }
+                : claudeCodeMCPProxyHeaders(),
+            ).forEach(([key, value]) => headers.set(key, value))
             return (options.fetch ?? fetch)(url, { ...init, headers, redirect: "error" })
           }
           const first = await request(before.value.accessToken)

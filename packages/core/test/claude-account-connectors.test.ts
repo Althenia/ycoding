@@ -98,6 +98,14 @@ function backend(
       return Response.json({ data: catalog, has_more: options.incomplete ?? false })
     if (request.url !== "https://mcp-proxy.anthropic.com/v1/mcp/mail")
       throw new Error("Unexpected credential destination")
+    if (!request.headers.get("x-mcp-client-session-id"))
+      return Response.json(
+        {
+          type: "error",
+          error: { type: "invalid_request_error", message: "header.X-Mcp-Client-Session-Id: Field required" },
+        },
+        { status: 400 },
+      )
     return handler.fetch(request)
   }
   return { requests, fetch: fetcher, close: () => handler.close() }
@@ -232,13 +240,15 @@ describe("Claude account connectors", () => {
       expect(
         remote.requests.every((request) => request.headers.get("authorization") === "Bearer fixture-access-a"),
       ).toBe(true)
-      expect(remote.requests.every((request) => request.headers.get("user-agent")?.startsWith("ycoding/"))).toBe(true)
-      expect(
-        remote.requests.every(
-          (request) =>
-            request.headers.get("x-mcp-client-session-id") === null && request.headers.get("cookie") === null,
-        ),
-      ).toBe(true)
+      const [discovery, ...proxied] = remote.requests
+      expect(discovery.headers.get("user-agent")).toMatch(/^claude-cli\/\S+ \(external, sdk-cli\)$/)
+      expect(discovery.headers.get("x-mcp-client-session-id")).toBeNull()
+      expect(proxied.every((request) => /^claude-code\/\S+ \(cli\)$/.test(request.headers.get("user-agent") ?? ""))).toBe(true)
+      expect(proxied.every((request) => request.headers.get("accept-encoding") === "identity")).toBe(true)
+      const sessions = new Set(proxied.map((request) => request.headers.get("x-mcp-client-session-id")))
+      expect(sessions.size).toBe(1)
+      expect([...sessions][0]).toMatch(/^[0-9a-f-]{36}$/)
+      expect(remote.requests.every((request) => request.headers.get("cookie") === null)).toBe(true)
       expect(remote.requests.filter((request) => request.body?.method === "tools/list")).toHaveLength(2)
     }),
   )

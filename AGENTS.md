@@ -298,6 +298,12 @@ const table = sqliteTable("session", {
 - Timeline selection follows option identity, not list index, because new events can reorder options.
 - Messages render through the same typed transcript components.
 
+## Native client identity
+
+- Keep each impersonated native-client identity in its owning module: Claude Code in `packages/core/src/plugin/provider/anthropic-claude-code-request.ts` (`defaultVersion`, beta flags, Stainless headers, `claudeCodeAPIUserAgent`, `claudeCodeMCPProxyHeaders`), Codex in `packages/core/src/plugin/provider/openai-codex.ts` (`catalogClientVersion`), and Cursor in `packages/core/src/cursor/provider/shared.js` with `shared.d.ts` (`FALLBACK_CLIENT_VERSION`). Consumers, including account connectors, import these values; never copy a client version or identity string into another module.
+- When bumping a native client version, read the installed native client's current values (version, user agents, required headers such as `X-Mcp-Client-Session-Id`, beta flags, and MCP protocol revisions) and update every identity surface of that client in one change: model requests, catalog requests, and account connector discovery and proxy requests.
+- In the same change, update the pinned expectations in `packages/core/test/plugin/provider-anthropic-claude-code.test.ts`, `packages/core/test/plugin/provider-openai.test.ts`, and `packages/core/test/claude-account-connectors.test.ts`, the identity description in `docs/configuration.md`, and the release note. Then `git grep` the old version string and replace every current-behavior occurrence; historical release notes and changelog entries keep their recorded versions.
+
 ## Provider cache and usage behavior
 
 - Keep backend/Location usage analytics in `usage_analytics_request` and Session/tree views on Session-owned records; select the source once by scope and never mix stores in a read. Capture analytics dimensions at request time and retain facts independently of Session lifetime. Read global-only retention at each sweep: `session_retention.records_days` defaults to 7 idle days, `analytics_retention.usage_days` to 30 request-date days, and `analytics_retention.latency_days` to 30 server-receipt days; require positive integers. Keep exact boundaries, skip executing Sessions during record cleanup, and never reconstruct expired Session records from analytics.

@@ -83,7 +83,7 @@ export function buildClaudeCodeHeaders(
   headers.set("anthropic-beta", [...new Set([...getClaudeCodeModelBetas(modelID, excluded), ...incoming])].join(","))
   headers.set("anthropic-dangerous-direct-browser-access", "true")
   headers.set("x-app", "cli")
-  headers.set("user-agent", process.env.ANTHROPIC_USER_AGENT ?? `claude-cli/${version()} (external, sdk-cli)`)
+  headers.set("user-agent", claudeCodeAPIUserAgent())
   headers.set("x-client-request-id", options.requestID?.() ?? randomUUID())
   headers.set("x-claude-code-session-id", options.sessionID ?? headers.get("x-session-id") ?? claudeCodeSessionID)
   const stainless = {
@@ -101,6 +101,18 @@ export function buildClaudeCodeHeaders(
   })
   headers.delete("x-api-key")
   return headers
+}
+
+export function claudeCodeAPIUserAgent() {
+  return process.env.ANTHROPIC_USER_AGENT ?? `claude-cli/${version()} (external, sdk-cli)`
+}
+
+export function claudeCodeMCPProxyHeaders() {
+  return {
+    "user-agent": `claude-code/${version()} (cli)`,
+    "accept-encoding": "identity",
+    "x-mcp-client-session-id": claudeCodeSessionID,
+  }
 }
 
 export function transformClaudeCodeBody(

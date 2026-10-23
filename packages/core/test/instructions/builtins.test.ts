@@ -1,3 +1,4 @@
+import path from "path"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import * as TestClock from "effect/testing/TestClock"
@@ -20,6 +21,7 @@ const timestamp = Date.parse("2026-06-03T12:00:00.000Z")
 const sessionID = SessionSchema.ID.make("ses_builtin_test")
 const otherSessionID = SessionSchema.ID.make("ses_builtin_other")
 const localDate = (time: number) => new Date(time).toDateString()
+const worktrees = path.join(Global.Path.data, "worktrees")
 const gitAttribution =
   "When creating commits, use the user's existing Git author and committer identity and write messages without Co-authored-by trailers or AI, model, agent, or provider attribution. Do not set `user.name`, `user.email`, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, or pass `--author` or `--reset-author`, as part of committing. If Git reports a missing identity, report it and ask the user to configure their own identity; never invent one."
 const taskCompletion =
@@ -99,7 +101,7 @@ describe("InstructionBuiltIns", () => {
           "",
           "At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact.",
           "",
-          "When working with a Git worktree, create it at `<main repository root>/.worktrees/<name>`, creating the `.worktrees` directory first if it does not exist. Give every worktree a named branch identical to its worktree name, for example `git worktree add -b <name> .worktrees/<name>`; never create a detached HEAD worktree. Keep history linear when integrating a worktree branch: if the target branch has moved, rebase the worktree branch onto it, then from the target branch checkout run `git merge --ff-only --autostash <name>`; never create a merge commit.",
+          `When working with a Git worktree, create it at \`${worktrees}/<repo-key>/<name>\`, where \`<repo-key>\` is \`repo_\` followed by the SHA-256 hex digest of the real path of the repository's Git common directory. Give every worktree a named branch identical to its worktree name, for example \`git worktree add -b <name> ${worktrees}/<repo-key>/<name>\`; never create a detached HEAD worktree. Keep history linear when integrating a worktree branch: if the target branch has moved, rebase the worktree branch onto it, then from the target branch checkout run \`git merge --ff-only --autostash <name>\`; never create a merge commit.`,
           "",
           gitAttribution,
           "",

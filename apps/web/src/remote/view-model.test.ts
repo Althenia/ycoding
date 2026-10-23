@@ -324,7 +324,7 @@ describe("workspaceLabels", () => {
   test("adds the parent folder only where two workspaces would share a label", () => {
     const labels = workspaceLabels([
       { id: "w1", projectID: "p1", directory: "/Users/me/Project/ycoding" },
-      { id: "w2", projectID: "p1", directory: "/Users/me/Project/ycoding.worktrees/office" },
+      { id: "w2", projectID: "p1", directory: "/Users/me/.local/share/ycoding/worktrees/repo_abc/office" },
       { id: "w3", projectID: "p2", directory: "/Users/me/Archive/ycoding" },
       { id: "w4", projectID: "p1", directory: "/Users/me/Project/ycoding/packages/schema" },
     ])

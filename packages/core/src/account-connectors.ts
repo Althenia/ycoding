@@ -122,7 +122,7 @@ export function make(options: {
               const send = (value: typeof before.value) => {
                 const headers = new Headers(init?.headers)
                 headers.set("authorization", `Bearer ${value.access}`)
-                headers.set("chatgpt-account-id", before.accountID)
+                headers.set("ChatGPT-Account-Id", before.accountID)
                 headers.set("user-agent", `ycoding/${InstallationVersion}`)
                 return (options.fetch ?? fetch)(url, { ...init, headers, redirect: "error" })
               }
@@ -157,9 +157,11 @@ export function make(options: {
               return response
             },
           },
+          undefined,
+          "legacy",
         )
 
-      const catalog = yield* Effect.scoped(connect().pipe(Effect.flatMap((client) => client.tools())))
+      const catalog = yield* Effect.scoped(connect().pipe(Effect.flatMap((client) => client.rawTools())))
       if (catalog.length > 8192) return yield* Effect.fail(new Error("ChatGPT connector catalog exceeds 8192 tools"))
       const entries: Array<{ id: string; label: string; tool: MCPClient.ToolDefinition }> = []
       for (const tool of catalog) {
@@ -227,13 +229,26 @@ const layer = Layer.effect(
     return Service.of({
       tools: (input) =>
         Effect.gen(function* () {
-          const first = yield* chatgpt.tools(input)
-          const second = yield* claude.tools(input.claude ?? {})
+          const first = yield* isolate("chatgpt-account-connectors", chatgpt.tools(input))
+          const second = yield* isolate("claude-account-connectors", claude.tools(input.claude ?? {}))
           return [...first, ...second]
         }),
     })
   }),
 )
+
+/**
+ * A hosted catalog failure (including a protocol-invalid listing) makes only that provider's tools
+ * unavailable for the request; the Session still runs, and the warning names the connector server.
+ */
+export const isolate = <A>(server: string, catalog: Effect.Effect<ReadonlyArray<A>, Error>) =>
+  catalog.pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("account connector tools unavailable", { server, error: error.message }).pipe(
+        Effect.as([] as ReadonlyArray<A>),
+      ),
+    ),
+  )
 
 export const node = makeLocationNode({
   service: Service,

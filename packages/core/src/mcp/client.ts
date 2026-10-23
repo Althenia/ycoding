@@ -283,6 +283,7 @@ export interface Connection {
   }) => Effect.Effect<MCPSkills.Entry, Error | SkillRequestError | EntryRejectedError>
   /** Lists the server's tools; returns [] when the server doesn't advertise tool support, fails on a transport error. */
   readonly tools: () => Effect.Effect<ToolDefinition[], Error>
+  readonly rawTools: () => Effect.Effect<ToolDefinition[], Error>
   /** Lists the server's prompts; returns [] when the server doesn't advertise prompt support, fails on a transport error. */
   readonly prompts: () => Effect.Effect<PromptDefinition[], Error>
   /** Lists the server's resources; returns [] when the server doesn't advertise resource support. */
@@ -328,6 +329,7 @@ export const connect = Effect.fnUntraced(function* (
   // stored token (and a no-op redirect) surfaces an UnauthorizedError, which we map to needs_auth.
   auth?: { readonly provider?: OAuthClientProvider; readonly fetch?: FetchLike },
   elicitation?: ElicitationHandler,
+  negotiation?: "legacy",
 ) {
   const create: () => Transport = yield* Effect.gen(function* () {
     if (config.type === "local") {
@@ -415,7 +417,7 @@ export const connect = Effect.fnUntraced(function* (
   const known = JSON.stringify([directory, config])
   const negotiate = Effect.gen(function* () {
     const transport = open()
-    if (legacyServers.has(known)) return yield* handshake(transport, { kind: "legacy" })
+    if (negotiation === "legacy" || legacyServers.has(known)) return yield* handshake(transport, { kind: "legacy" })
     if (!(transport instanceof HandoverStdioTransport)) return yield* handshake(transport)
     const reply = yield* probe(transport, Math.min(DEFAULT_PROBE_TIMEOUT, startupTimeout), {
       [PROTOCOL_VERSION_META_KEY]: MODERN_PROTOCOL_VERSION,
@@ -539,6 +541,32 @@ export const connect = Effect.fnUntraced(function* (
             Effect.tapError((error) => Effect.logWarning("failed to list MCP tools", { server, error: error.message })),
           )
           return result.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+            metadata: tool._meta,
+          }))
+        }),
+      rawTools: () =>
+        Effect.gen(function* () {
+          if (!client.getServerCapabilities()?.tools) return []
+          const tools = yield* Effect.tryPromise({
+            try: () =>
+              paginate(
+                (cursor) =>
+                  client.request(
+                    { method: "tools/list", params: cursor === undefined ? {} : { cursor } },
+                    RawToolListResult,
+                    { timeout: catalogTimeout },
+                  ),
+                (result) => result.tools,
+              ),
+            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          }).pipe(
+            Effect.tapError((error) => Effect.logWarning("failed to list MCP tools", { server, error: error.message })),
+          )
+          return tools.map((tool) => ({
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema,
@@ -848,6 +876,18 @@ const SkillGetResult = z.object({
   ttlMs: z.number(),
   cacheScope: z.string(),
   skill: z.unknown(),
+})
+const RawToolListResult = z.object({
+  tools: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string().optional(),
+      inputSchema: z.record(z.string(), z.unknown()),
+      outputSchema: z.record(z.string(), z.unknown()).optional(),
+      _meta: z.record(z.string(), z.unknown()).optional(),
+    }),
+  ),
+  nextCursor: z.string().optional(),
 })
 const ResourceDirectoryResult = z.object({
   resources: z.array(

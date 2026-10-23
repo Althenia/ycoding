@@ -506,6 +506,7 @@ describe("Agent", () => {
         { action: "claude_*", resource: "*", effect: "ask" },
         { action: "external_directory", resource: "*", effect: "ask" },
         { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
+        { action: "external_directory", resource: `${Global.Path.data}/worktrees/*`, effect: "allow" },
         { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },
         { action: "question", resource: "*", effect: "deny" },
         { action: "plan_enter", resource: "*", effect: "deny" },
@@ -518,6 +519,22 @@ describe("Agent", () => {
         { action: "plan_enter", resource: "*", effect: "allow" },
         { action: "shell", resource: "*", effect: "allow" },
       ])
+    }),
+  )
+
+  it.effect("lets the default primary agent reach every managed worktree without an external-directory prompt", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+      const permissions = (yield* agent.get(Agent.ID.make("god")))?.permissions ?? []
+      const evaluate = (resource: string) => Permission.evaluate("external_directory", resource, permissions).effect
+
+      expect(evaluate(`${Global.Path.data}/worktrees/repo_other/feature/*`)).toBe("allow")
+      expect(evaluate(`${Global.Path.data}/worktrees/repo_other/feature/src/*`)).toBe("allow")
+      expect(evaluate(`${Global.Path.data}/memory/*`)).toBe("ask")
+      expect(evaluate("/outside/project/*")).toBe("ask")
     }),
   )
 

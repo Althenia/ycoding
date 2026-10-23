@@ -79,7 +79,7 @@ describe("ProjectInventory", () => {
       const sessions = yield* Session.Service
       const directories = yield* ProjectDirectories.Service
       const inventory = yield* ProjectInventory.Service
-      const copy = AbsolutePath.make(path.join(roots.alpha, ".worktrees", "gone"))
+      const copy = AbsolutePath.make(path.join(roots.alpha, "worktrees", "gone"))
 
       yield* sessions.create({ location: at(roots.alpha) })
       yield* sessions.create({ location: at(roots.alpha) })
@@ -105,7 +105,6 @@ describe("ProjectInventory", () => {
           sessions: 2,
           available: true,
         },
-        { projectID: alpha, directory: copy, strategy: "git_worktree", sessions: 0, available: false },
         {
           projectID: alpha,
           directory: AbsolutePath.make(path.join(roots.alpha, "packages", "tui")),
@@ -113,6 +112,7 @@ describe("ProjectInventory", () => {
           sessions: 1,
           available: true,
         },
+        { projectID: alpha, directory: copy, strategy: "git_worktree", sessions: 0, available: false },
         {
           projectID: beta,
           directory: AbsolutePath.make(roots.beta),

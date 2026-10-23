@@ -13,7 +13,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { Tool } from "@ycoding-ai/core/tool/tool"
-import { Deferred, Effect, Exit, Fiber, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Logger, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventRuntime.node])))
@@ -67,6 +67,7 @@ function backend(
     isError?: boolean
     malformedIdentity?: boolean
     invalidOutput?: boolean
+    hosted?: boolean
   } = {},
 ) {
   const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = []
@@ -96,9 +97,47 @@ function backend(
     requests.push({ url: request.url, headers: request.headers, body })
     if (options.status) return new Response("Synthetic denied response", { status: options.status })
     if (options.onceUnauthorized && requests.length === 1) return new Response(null, { status: 401 })
+    if (options.hosted) return hosted(body)
     return handler.fetch(request)
   }
   return { requests, fetch: fetcher, close: () => handler.close() }
+}
+
+// The SDK server always adds `resultType`, so these replies are hand-rolled to reproduce the hosted endpoint,
+// which advertises 2026-07-28 through server/discover but answers tools/list in the earlier-revision shape.
+function hosted(body: Record<string, unknown>) {
+  if (body.id === undefined) return new Response(null, { status: 202 })
+  const reply = (result: Record<string, unknown>) => Response.json({ jsonrpc: "2.0", id: body.id, result })
+  if (body.method === "server/discover")
+    return reply({
+      resultType: "complete",
+      ttlMs: 0,
+      cacheScope: "private",
+      supportedVersions: ["2026-07-28"],
+      capabilities: { tools: {} },
+    })
+  if (body.method === "initialize")
+    return reply({
+      protocolVersion: "2025-11-25",
+      capabilities: { tools: {} },
+      serverInfo: { name: "synthetic-hosted", version: "1" },
+    })
+  if (body.method === "tools/call")
+    return reply({ content: [{ type: "text", text: "published" }], structuredContent: { status: "published" } })
+  return reply({ tools: [tools[0], unionOutputTool] })
+}
+
+const unionOutputTool = {
+  name: "space_progress_update",
+  description: "Publish synthetic progress",
+  inputSchema: { type: "object", properties: { status: { type: "string" } }, required: ["status"] },
+  outputSchema: {
+    anyOf: [
+      { type: "object", properties: { status: { const: "published" } }, required: ["status"] },
+      { type: "object", properties: { error: { type: "string" } }, required: ["error"] },
+    ],
+  },
+  _meta: { connector_id: "connector_space", connector_name: "Space" },
 }
 
 const profiles = Effect.fn(function* () {
@@ -328,6 +367,61 @@ describe("account connectors", () => {
       expect(Exit.isFailure(yield* current.service.tools({}).pipe(Effect.exit))).toBe(true)
       expect(current.refreshed).toEqual([])
       expect(remote.requests).toHaveLength(1)
+    }),
+  )
+
+  it.live("lists and calls the hosted catalog through initialize, including union output schemas", () =>
+    Effect.gen(function* () {
+      const remote = backend({ hosted: true })
+      const current = yield* client({ backend: remote })
+      const registrations = yield* current.service.tools({})
+      expect(registrations.flatMap((item) => Object.keys(item.tools))).toHaveLength(2)
+      expect(remote.requests.map((request) => request.body.method)).toEqual([
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+      ])
+      const [, progress] = find(registrations, "Publish synthetic progress")
+      expect(yield* Tool.settle(progress, { input: { status: "done" } }, context)).toMatchObject({
+        structured: { status: "published" },
+        content: [{ type: "text", text: "published" }],
+      })
+      expect(remote.requests.map((request) => request.body.method)).not.toContain("server/discover")
+    }),
+  )
+
+  it.live("leaves only the failing provider's tools unavailable and logs the connector server", () =>
+    Effect.gen(function* () {
+      const { AccountConnectors } = yield* Effect.promise(() => import("../src/account-connectors"))
+      const remote = backend({ status: 403 })
+      const current = yield* client({ backend: remote })
+      expect((yield* current.service.tools({}).pipe(Effect.flip)).message).toContain("HTTP 403")
+      const logs: string[] = []
+      const isolated = yield* AccountConnectors.isolate("chatgpt-account-connectors", current.service.tools({})).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make((entry) => void logs.push(JSON.stringify(entry.message)))], {
+            mergeWithExisting: false,
+          }),
+        ),
+      )
+      expect(isolated).toEqual([])
+      expect(logs.find((line) => line.includes("account connector tools unavailable"))).toContain(
+        "chatgpt-account-connectors",
+      )
+      expect(logs.join("\n")).toContain("HTTP 403")
+      expect(logs.join("\n")).not.toContain("fixture-access")
+    }),
+  )
+
+  it.live("accepts a complete catalog through the isolation boundary", () =>
+    Effect.gen(function* () {
+      const { AccountConnectors } = yield* Effect.promise(() => import("../src/account-connectors"))
+      const remote = backend()
+      const current = yield* client({ backend: remote })
+      const registrations = yield* AccountConnectors.isolate("chatgpt-account-connectors", current.service.tools({}))
+      expect(registrations.flatMap((item) => Object.keys(item.tools))).toHaveLength(2)
+      expect(remote.requests.map((request) => request.body.method)).toContain("initialize")
+      expect(remote.requests.map((request) => request.body.method)).not.toContain("server/discover")
     }),
   )
 
