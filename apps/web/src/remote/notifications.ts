@@ -1,5 +1,6 @@
 import { noticeSequence, quotaKey, type RemoteNoticePresentation, type RemoteQuota } from "@ycoding-ai/remote"
 import { alertCopy, quotaCopy, type AlertNotice } from "./alert"
+import { externalKind, type ExternalKind } from "./coordination"
 import { readNotificationPreferences, type NotificationCategory, type NotificationPreferences } from "./preferences"
 
 export type RemoteNotificationView = {
@@ -108,6 +109,7 @@ export type NotificationDeliveryOptions = {
   readonly preferences?: () => NotificationPreferences
   readonly desktop?: DesktopNotifier
   readonly now?: () => number
+  readonly externalAllowed?: (sessionID: string | undefined, kind: ExternalKind | undefined) => boolean
 }
 
 export type NotificationDelivery = {
@@ -132,6 +134,7 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
   const preferences = options.preferences ?? (() => readNotificationPreferences())
   const desktop = options.desktop ?? createDesktopNotifier()
   const now = options.now ?? (() => Date.now())
+  const externalAllowed = options.externalAllowed ?? (() => true)
   let entries: readonly RemoteNotificationView[] = []
   let hidden = new Set<string>()
   let nextID = 0
@@ -191,7 +194,7 @@ export function createNotificationDelivery(options: NotificationDeliveryOptions 
           if (preferences()["quota-pace"].desktop)
             desktop.show({ ...quotaCopy(item.milestone), tag: `ycoding-${deviceID}-quota-${quotaKey(item)}`, usageDeviceID: deviceID })
         } else if (item.kind === "offline") alert("machine-offline", undefined, `ycoding-${deviceID}-offline-${item.at}`)
-        else if (preferences()[item.notice.category].desktop)
+        else if (preferences()[item.notice.category].desktop && externalAllowed(item.notice.sessionID, externalKind(item.notice.category, item.detail?.need)))
           desktop.show({ ...alertCopy(item.notice.category, item.detail), tag: `ycoding-${deviceID}-${item.notice.id}`,
             sessionID: item.notice.sessionID, notice: { deviceID, noticeID: item.notice.id }, ...(item.detail?.repeat ? { renotify: true } : {}) })
       }

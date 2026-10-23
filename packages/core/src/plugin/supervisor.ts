@@ -18,6 +18,7 @@ import { ConfigPlugin } from "../config/plugin"
 import { Credential } from "../credential"
 import { Decision } from "../decision"
 import { Database } from "../database/database"
+import { CoordinationService } from "../coordination/index"
 import { makeLocationNode } from "../effect/app-node"
 import { httpClient } from "../effect/app-node-platform"
 import { EventRuntime } from "../event"
@@ -37,6 +38,7 @@ import { Memory } from "../memory"
 import { MCP } from "../mcp"
 import { Npm } from "../npm"
 import { Permission } from "../permission"
+import { CoordinationDecisionRuntime } from "../coordination/decisions"
 import { ProviderUsageRuntime } from "../provider-usage"
 import { PluginRegistry } from "../plugin"
 import { PluginPromise } from "../plugin/promise"
@@ -342,6 +344,7 @@ export const node = makeLocationNode({
     Credential.node,
     Decision.node,
     Database.node,
+    CoordinationService.node,
     EventRuntime.node,
     FileMutation.node,
     Git.node,
@@ -359,6 +362,7 @@ export const node = makeLocationNode({
     MCP.node,
     Npm.node,
     Permission.node,
+    CoordinationDecisionRuntime.node,
     ProviderUsageRuntime.node,
     SessionAutonomy.node,
     SessionStore.node,

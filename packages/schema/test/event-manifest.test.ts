@@ -4,6 +4,7 @@ import {
   AbsolutePath,
   Agent,
   Config,
+  Coordination,
   FileSystem,
   Form,
   Integration,
@@ -25,6 +26,11 @@ import { SessionMessage } from "../src/session-message.js"
 import { WorkspaceEvent } from "../src/workspace-event.js"
 
 describe("public event manifest", () => {
+  test("publishes coordination invalidation without persisting it as a durable fact", () => {
+    expect(EventManifest.Latest.get("coordination.updated")).toBe(Coordination.Event.Updated)
+    expect(EventManifest.Server.get("coordination.updated")).toBe(Coordination.Event.Updated)
+    expect(EventManifest.Durable.has("coordination.updated.1")).toBe(false)
+  })
   test("matches documented guardrail durable-event visibility", async () => {
     const specification = await Bun.file(new URL("../../../specs/session-guardrails.md", import.meta.url)).text()
     const claims = Array.from(specification.matchAll(/\b(public|private) durable `(session\.guardrail\.[a-z]+)`/g))
@@ -240,6 +246,21 @@ describe("public event manifest", () => {
   test("derives durable definitions from current explicit durability", () => {
     expect(Array.from(EventManifest.Durable.keys()).toSorted()).toEqual(
       [
+        "coordination.group.created.1",
+        "coordination.group.roster-updated.1",
+        "coordination.group.armed.1",
+        "coordination.group.stopped.1",
+        "coordination.group.completed.1",
+        "coordination.group.needs-rearm.1",
+        "coordination.claim.acquired.1",
+        "coordination.claim.released.1",
+        "coordination.claim.revoked.1",
+        "coordination.dispatch.recorded.1",
+        "coordination.dispatch.advanced.1",
+        "coordination.dispatch.settled.1",
+        "coordination.wait.started.1",
+        "coordination.wait.cancelled.1",
+        "coordination.wait.expired.1",
         "session.created.2",
         "session.deleted.2",
         "session.archived.2",

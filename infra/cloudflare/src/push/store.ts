@@ -1,9 +1,10 @@
-import type { PushCategories, PushKeys, PushRegistration, PushRenewal } from "../../../../packages/remote/src/index"
+import type { CoordinationPushFilter, PushCategories, PushKeys, PushRegistration, PushRenewal } from "../../../../packages/remote/src/index"
 
 export type PushSubscription = {
   readonly endpoint: string
   readonly keys: PushKeys
   readonly categories: PushCategories
+  readonly coordinationFilter?: CoordinationPushFilter
   readonly accountID: string
   readonly browserSessionID: string
   readonly createdAt: number

@@ -5,7 +5,7 @@ import { LandingPage, MarketingLayout, NotFoundPage } from "./ui/site"
 import { DocsIndexPage, DocsPage, useDocAnchor } from "./ui/docs"
 import { ChangelogPage } from "./ui/changelog"
 import { RemoteProvider, createRemoteSession, type RemoteSession } from "./remote/context"
-import { preloadKeepAwake, preloadUsage, preloadWorkspaces } from "./remote/preload"
+import { preloadCoordination, preloadKeepAwake, preloadUsage, preloadWorkspaces } from "./remote/preload"
 import type { RemoteStore } from "./remote/store"
 import { RemoteShell } from "./remote/ui/shell"
 import { InvitePage } from "./remote/ui/invite"
@@ -65,7 +65,7 @@ export function createAppRouter(options: { readonly createRemoteStore?: () => Re
       )
     },
   })
-  const preloads = { usage: preloadUsage, settings: preloadKeepAwake, sessions: undefined, session: undefined }
+  const preloads = { usage: preloadUsage, settings: preloadKeepAwake, projects: preloadCoordination, sessions: undefined, session: undefined }
   return createRouter({
     history: options.history,
     caseSensitive: true,

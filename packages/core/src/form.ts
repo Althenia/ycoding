@@ -12,6 +12,7 @@ import { SessionAutonomy } from "./session/autonomy"
 import { SessionMessage } from "./session/message"
 import { SessionReviewFold } from "./session/review-fold"
 import { SessionSchema } from "./session/schema"
+import { Hash } from "./util/hash"
 
 const RETENTION = Duration.minutes(10)
 
@@ -40,6 +41,40 @@ export type Answer = typeof Answer.Type
 
 export const Reply = Form.Reply
 export type Reply = typeof Reply.Type
+
+export const ReplySource = Form.ReplySource
+export type ReplySource = typeof ReplySource.Type
+
+export function fingerprint(form: Pick<Info, "sessionID" | "title" | "fields">) {
+  return Hash.json({ sessionID: form.sessionID, title: form.title, fields: form.fields })
+}
+
+export interface Snapshot {
+  readonly form: Info
+  readonly fingerprint: string
+  readonly state: State
+}
+
+export interface ReconsiderInput {
+  readonly id: ID
+  readonly fingerprint: string
+  readonly actor: "coordinator"
+  readonly source: { readonly coordinatorSessionID: string; readonly groupID: string; readonly rationale: string }
+  readonly answer?: Answer
+  readonly confidence?: number
+  readonly validate: (snapshot: Info) => Effect.Effect<boolean>
+}
+
+export interface ReconsiderResult {
+  readonly outcome: "allowed" | "denied" | "escalated" | "stale"
+  readonly requestID: ID
+  readonly fingerprint: string
+  readonly settled: boolean
+  readonly via?: "auto-answer" | "yolo" | "coordination"
+  readonly confidence?: number
+  readonly source?: ReplySource
+  readonly reason?: string
+}
 
 export const Event = Form.Event
 
@@ -96,6 +131,9 @@ export interface Interface {
   readonly get: (id: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly state: (id: ID) => Effect.Effect<State, NotFoundError>
+  readonly snapshot: (id: ID) => Effect.Effect<Snapshot | undefined>
+  readonly snapshots: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Snapshot>>
+  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
   readonly cancel: (id: ID) => Effect.Effect<void, AlreadySettledError | NotFoundError>
   readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
@@ -119,6 +157,7 @@ export const layer = Layer.effect(
     const autonomy = yield* SessionAutonomy.Service
     const decision = yield* Decision.Service
     const settle = Semaphore.makeUnsafe(1)
+    const reconsidering = new Set<ID>()
     const asks = new Map<string, { epoch: number; count: number }>()
     const enter = (sessionID: string) => {
       const state = asks.get(sessionID) ?? { epoch: 0, count: 0 }
@@ -158,11 +197,12 @@ export const layer = Layer.effect(
     const complete = Effect.fn("Form.complete")(function* (
       entry: Entry,
       state: Exclude<TerminalState, { readonly status: "timed_out" }>,
+      source?: ReplySource,
     ) {
       const id = entry.form.id
       const sessionID = entry.form.sessionID
       yield* state.status === "answered"
-        ? events.publish(Event.Replied, { id, sessionID, answer: state.answer })
+        ? events.publish(Event.Replied, { id, sessionID, answer: state.answer, ...(source === undefined ? {} : { source }) })
         : state.status === "cancelled"
           ? events.publish(Event.Cancelled, { id, sessionID })
           : events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID })
@@ -378,6 +418,133 @@ export const layer = Layer.effect(
       return (yield* find(id)).state
     })
 
+    const snapshot = Effect.fn("Form.snapshot")((id: ID) =>
+      find(id).pipe(
+        Effect.map((entry) => ({ form: entry.form, fingerprint: fingerprint(entry.form), state: entry.state })),
+        Effect.catchTag("Form.NotFoundError", () => Effect.succeed(undefined)),
+      ),
+    )
+
+    const snapshots = Effect.fn("Form.snapshots")(function* (sessionID: SessionSchema.ID) {
+      const entries = yield* Cache.values(forms)
+      return Array.from(entries)
+        .filter((entry) => entry.state.status === "pending" && entry.form.sessionID === sessionID)
+        .slice(0, 50)
+        .map((entry) => ({ form: entry.form, fingerprint: fingerprint(entry.form), state: entry.state }))
+    })
+
+    const reconsider = Effect.fn("Form.reconsider")((input: ReconsiderInput) =>
+      Effect.acquireUseRelease(
+        exclusive(
+          Effect.gen(function* (): Effect.fn.Return<{ readonly entry?: Entry; readonly result?: ReconsiderResult }> {
+            const entry = yield* find(input.id).pipe(Effect.catchTag("Form.NotFoundError", () => Effect.succeed(undefined)))
+            if (entry === undefined || entry.state.status !== "pending" || fingerprint(entry.form) !== input.fingerprint)
+              return { result: { outcome: "stale", requestID: input.id, fingerprint: input.fingerprint, settled: false } }
+            if (reconsidering.has(input.id))
+              return {
+                result: {
+                  outcome: "escalated",
+                  requestID: input.id,
+                  fingerprint: input.fingerprint,
+                  settled: false,
+                  reason: "native-assessment-in-progress",
+                },
+              }
+            reconsidering.add(input.id)
+            return { entry }
+          }),
+        ),
+        (acquired) =>
+          acquired.entry === undefined
+            ? Effect.succeed(acquired.result!)
+            : Effect.uninterruptibleMask((restore) =>
+                Effect.gen(function* () {
+                  const entry = acquired.entry!
+                  const base = { requestID: input.id, fingerprint: input.fingerprint }
+                  if (!(yield* input.validate(entry.form)))
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                  if (
+                    input.answer !== undefined &&
+                    input.confidence !== undefined &&
+                    (!Number.isFinite(input.confidence) || input.confidence < 0.8)
+                  )
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "low-confidence" }
+                  const sessionID = Schema.is(SessionSchema.ID)(entry.form.sessionID) ? entry.form.sessionID : undefined
+                  if (sessionID === undefined) return { ...base, outcome: "stale" as const, settled: false }
+                  const authorization =
+                    input.answer === undefined
+                      ? yield* autonomy
+                          .snapshot(sessionID, { inherited: true })
+                          .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                      : undefined
+                  if (input.answer === undefined && authorization === undefined)
+                    return { ...base, outcome: "stale" as const, settled: false }
+                  const autoAnswer = authorization === undefined ? false : SessionAutonomy.canAutoAnswer(authorization.state)
+                  const yolo = input.answer === undefined ? yield* DecisionChoice.yoloEnabled(autonomy, sessionID) : false
+                  const outcome: SleepOutcome =
+                    input.answer !== undefined
+                      ? {
+                          type: "answer",
+                          answer: input.answer,
+                          via: "auto-answer",
+                          ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+                        }
+                      : yield* restore(decisionAnswer(decision, sessionID, entry.form, { autoAnswer: true, yolo }))
+                  if (outcome.type === "defer")
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: outcome.reason }
+                  if (
+                    input.answer === undefined &&
+                    authorization !== undefined &&
+                    !(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, authorization))
+                  )
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "stale-assessment" }
+                  const via =
+                    input.answer !== undefined
+                      ? ("coordination" as const)
+                      : outcome.via === "yolo"
+                        ? ("yolo" as const)
+                        : autoAnswer
+                          ? ("auto-answer" as const)
+                          : ("coordination" as const)
+                  const source: ReplySource = {
+                    kind: "coordinator",
+                    coordinatorSessionID: input.source.coordinatorSessionID,
+                    groupID: input.source.groupID,
+                    via,
+                    rationale: input.source.rationale,
+                    ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                  }
+                  return yield* exclusive(
+                    Effect.gen(function* () {
+                      const current = yield* find(input.id).pipe(
+                        Effect.catchTag("Form.NotFoundError", () => Effect.succeed(undefined)),
+                      )
+                      if (current === undefined || current.state.status !== "pending" || fingerprint(current.form) !== input.fingerprint)
+                        return { ...base, outcome: "stale" as const, settled: false }
+                      if (!(yield* input.validate(current.form)))
+                        return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                      const invalid = validateAnswer(current.form, outcome.answer)
+                      if (invalid) return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-answer" }
+                      yield* complete(current, { status: "answered", answer: outcome.answer }, source)
+                      return {
+                        ...base,
+                        outcome: "allowed" as const,
+                        settled: true,
+                        via,
+                        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                        source,
+                      }
+                    }),
+                  )
+                }),
+              ),
+        (acquired) =>
+          Effect.sync(() => {
+            if (acquired.entry !== undefined) reconsidering.delete(input.id)
+          }),
+      ),
+    )
+
     const reply = Effect.fn("Form.reply")((input: ReplyInput) =>
       exclusive(
         Effect.gen(function* () {
@@ -412,7 +579,7 @@ export const layer = Layer.effect(
       ),
     )
 
-    return Service.of({ create, ask, deferPending, get, list, state, reply, cancel, cancelPending })
+    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, reply, cancel, cancelPending })
   }),
 )
 

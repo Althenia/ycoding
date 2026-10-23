@@ -23,7 +23,7 @@ const sessionLimit = 25
 const maxFocusFrames = 30
 
 export type PaletteHandlers = {
-  readonly go: (view: "new" | "sessions" | "session" | "usage" | "settings") => void
+  readonly go: (view: "new" | "sessions" | "session" | "projects" | "usage" | "settings") => void
   readonly openSession: (sessionID: string) => void
   readonly openTeam: () => void
   readonly draft: (text: string) => void

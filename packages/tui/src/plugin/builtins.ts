@@ -5,11 +5,12 @@ import SidebarMcp from "../feature-plugins/sidebar/mcp"
 import SidebarSubagents from "../feature-plugins/sidebar/subagents"
 import SidebarTodo from "../feature-plugins/sidebar/todo"
 import DiffViewer from "../feature-plugins/system/diff-viewer"
-import Notifications from "../feature-plugins/system/notifications"
+import { createNotifications } from "../feature-plugins/system/notifications"
+import type { ExternalNotificationKind } from "../util/coordination"
 import Scrap from "../feature-plugins/system/scrap"
 
-export const builtins = [
-  Notifications,
+export const createBuiltins = (externalAllowed?: (sessionID: string, kind: ExternalNotificationKind) => boolean) => [
+  createNotifications(undefined, externalAllowed),
   HomeFooter,
   SidebarContext,
   SidebarTodo,
@@ -19,3 +20,5 @@ export const builtins = [
   Scrap,
   DiffViewer,
 ]
+
+export const builtins = createBuiltins()

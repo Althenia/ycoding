@@ -33,6 +33,7 @@ test("delivers a blurred notification before focus is reported through Ghostty's
         volume: 0.4,
         sound_pack: "ycoding.default",
         sounds: {},
+        coordination: { scope: "all" },
       },
     },
   })
@@ -95,6 +96,7 @@ test("plays the built-in done sound through the TUI audio host", async () => {
         volume: 0.4,
         sound_pack: "ycoding.default",
         sounds: {},
+        coordination: { scope: "all" },
       },
     },
     audio: {

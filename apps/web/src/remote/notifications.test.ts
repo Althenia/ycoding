@@ -352,6 +352,27 @@ describe("createNotificationDelivery", () => {
     ])
   })
 
+  test("the external delivery gate withholds only the System alert, never the in-app list or session-less alerts", () => {
+    const recorder = desktopRecorder()
+    const asked: { sessionID: string | undefined; kind: string | undefined }[] = []
+    const delivery = createNotificationDelivery({
+      preferences: () => normalizeNotificationPreferences(undefined), desktop: recorder.notifier, now: clock(),
+      externalAllowed: (sessionID, kind) => { asked.push({ sessionID, kind }); return sessionID !== "ses_quiet" },
+    })
+    const attention = (id: string, sessionID: string, need?: RemoteAlertDetail["need"]) =>
+      ({ kind: "notice" as const, notice: { id, category: "approval-requested" as const, sessionID, createdAt: 1 }, ...(need === undefined ? {} : { detail: { need } }) })
+    const done = (id: string, sessionID: string) => ({ kind: "notice" as const, notice: { id, category: "agent-completed" as const, sessionID, createdAt: 1 } })
+    delivery.present([attention("ntc_1", "ses_quiet", "question"), attention("ntc_2", "ses_loud", "failed"), done("ntc_3", "ses_loud"), attention("ntc_4", "ses_loud"), { kind: "offline", at: 5 }], "dev_1")
+    expect(recorder.alerts.map((alert) => alert.tag)).toEqual(["ycoding-dev_1-ntc_2", "ycoding-dev_1-ntc_3", "ycoding-dev_1-ntc_4", "ycoding-dev_1-offline-5"])
+    expect(asked).toEqual([
+      { sessionID: "ses_quiet", kind: "question" }, { sessionID: "ses_loud", kind: "failure" }, { sessionID: "ses_loud", kind: "completion" }, { sessionID: "ses_loud", kind: undefined },
+    ])
+    delivery.receive({ id: "ntc_9", category: "approval-requested", at: 9, sessionID: "ses_quiet" }, "dev_1")
+    expect(delivery.entries().map((entry) => entry.id)).toEqual(["ntc_9"])
+    delivery.present([{ kind: "quota", providerID: "prov_a", windowID: "five_hour", milestone: "will-run-out", resetAt: 1_790_000_030_000 }], "dev_1")
+    expect(recorder.alerts.at(-1)?.usageDeviceID).toBe("dev_1")
+  })
+
   test("a presented notice names its Session and what the Session needs", () => {
     const test = deliveryWith({})
     const attention = (id: string, detail: RemoteAlertDetail) =>

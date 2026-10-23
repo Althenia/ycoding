@@ -37,7 +37,7 @@ import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
-import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput, type RemoteIncidentGuidance, type RemoteIncidentGuidanceInput, type RemoteIncidentRecent, type RemoteIncidentRecentInput, type RemoteIncidentReport, type RemoteIncidentReportInput } from "@ycoding-ai/remote"
+import { RemoteLimits, type RemoteCompactionHistory, type RemoteCoordinationSelection, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput, type RemoteIncidentGuidance, type RemoteIncidentGuidanceInput, type RemoteIncidentRecent, type RemoteIncidentRecentInput, type RemoteIncidentReport, type RemoteIncidentReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
 // the TUI uses, addressed with a Location derived from the backend inventory.
@@ -129,6 +129,21 @@ export type LocalServer = {
   readonly incidentRecent: (input: RemoteIncidentRecentInput) => Promise<RemoteIncidentRecent["data"]>
   readonly incidentGuidance: (input: RemoteIncidentGuidanceInput, location?: LocalLocation) => Promise<RemoteIncidentGuidance["data"]>
   readonly incidentGuidanceClear: (input: RemoteIncidentGuidanceInput, location?: LocalLocation) => Promise<RemoteIncidentGuidance["data"]>
+  readonly coordinationSettings: () => ReturnType<YCodingClient["coordination"]["settings"]>
+  readonly coordinationList: () => ReturnType<YCodingClient["coordination"]["list"]>
+  readonly coordinationCreate: (input: Parameters<YCodingClient["coordination"]["create"]>[0]) => ReturnType<YCodingClient["coordination"]["create"]>
+  readonly coordinationGet: (input: Parameters<YCodingClient["coordination"]["get"]>[0]) => ReturnType<YCodingClient["coordination"]["get"]>
+  readonly coordinationMembers: (input: Parameters<YCodingClient["coordination"]["members"]>[0]) => ReturnType<YCodingClient["coordination"]["members"]>
+  readonly coordinationArm: (input: Parameters<YCodingClient["coordination"]["arm"]>[0]) => ReturnType<YCodingClient["coordination"]["arm"]>
+  readonly coordinationStop: (input: Parameters<YCodingClient["coordination"]["stop"]>[0]) => ReturnType<YCodingClient["coordination"]["stop"]>
+  readonly coordinationComplete: (input: Parameters<YCodingClient["coordination"]["complete"]>[0]) => ReturnType<YCodingClient["coordination"]["complete"]>
+  readonly coordinationClaim: (input: Parameters<YCodingClient["coordination"]["claim"]>[0]) => ReturnType<YCodingClient["coordination"]["claim"]>
+  readonly coordinationRelease: (input: Parameters<YCodingClient["coordination"]["release"]>[0]) => ReturnType<YCodingClient["coordination"]["release"]>
+  readonly coordinationDispatch: (input: Parameters<YCodingClient["coordination"]["dispatch"]>[0] & { readonly selection: RemoteCoordinationSelection }) => ReturnType<YCodingClient["coordination"]["dispatch"]>
+  readonly coordinationReceipts: (input: Parameters<YCodingClient["coordination"]["receipts"]>[0]) => ReturnType<YCodingClient["coordination"]["receipts"]>
+  readonly coordinationWait: (input: Parameters<YCodingClient["coordination"]["wait"]>[0]) => ReturnType<YCodingClient["coordination"]["wait"]>
+  readonly coordinationCancelWait: (input: Parameters<YCodingClient["coordination"]["cancelWait"]>[0]) => ReturnType<YCodingClient["coordination"]["cancelWait"]>
+  readonly coordinationCapacity: (input: Parameters<YCodingClient["coordination"]["capacity"]>[0]) => ReturnType<YCodingClient["coordination"]["capacity"]>
   readonly agentList: (location: LocalLocation) => Promise<readonly AgentInfo[]>
   readonly modelList: (location: LocalLocation) => Promise<readonly ModelInfo[]>
   readonly modelDefault: (location: LocalLocation) => Promise<ModelDefault | null>
@@ -308,6 +323,21 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     incidentRecent: (input) => call(() => client.incident.recent(input, { signal: AbortSignal.timeout(timeoutMs) })),
     incidentGuidance: (input, location) => call(() => client.incident.guidance.get(input, location ? request(location, timeoutMs) : { signal: AbortSignal.timeout(timeoutMs) })),
     incidentGuidanceClear: (input, location) => call(() => client.incident.guidance.clear(input, location ? request(location, timeoutMs) : { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationSettings: () => call(() => client.coordination.settings({ signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationList: () => call(() => client.coordination.list({ signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationCreate: (input) => call(() => client.coordination.create(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationGet: (input) => call(() => client.coordination.get(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationMembers: (input) => call(() => client.coordination.members(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationArm: (input) => call(() => client.coordination.arm(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationStop: (input) => call(() => client.coordination.stop(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationComplete: (input) => call(() => client.coordination.complete(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationClaim: (input) => call(() => client.coordination.claim(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationRelease: (input) => call(() => client.coordination.release(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationDispatch: (input) => call(() => client.coordination.dispatch(input as Parameters<YCodingClient["coordination"]["dispatch"]>[0], { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationReceipts: (input) => call(() => client.coordination.receipts(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationWait: (input) => call(() => client.coordination.wait(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationCancelWait: (input) => call(() => client.coordination.cancelWait(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    coordinationCapacity: (input) => call(() => client.coordination.capacity(input, { signal: AbortSignal.timeout(timeoutMs) })),
     agentList: (location) => call(async () => (await client.agent.list({}, request(location, timeoutMs))).data),
     modelList: (location) => call(async () => (await client.model.list({}, request(location, timeoutMs))).data),
     modelDefault: (location) => call(async () => (await client.model.default({}, request(location, timeoutMs))).data),
@@ -558,7 +588,7 @@ function classify(cause: unknown, timeoutMs: number): LocalFailure {
     return new LocalFailure("not_found", "Session is not available on this device", { cause })
   if (tag === "CommandEvaluationError") return new LocalFailure("invalid", "Local server rejected the command", { cause })
   if (tag === "AttachmentTooLargeError") return new LocalFailure("too_large", "Attachment exceeds the read size limit", { cause })
-  if (tag === "ConflictError" || tag === "SessionBusyError" || tag === "ModelSwitchBlockedError")
+  if (tag === "ConflictError" || tag === "SessionBusyError" || tag === "ModelSwitchBlockedError" || tag === "CoordinationError")
     return new LocalFailure("conflict", "Local server rejected the request", { cause })
   return new LocalFailure("server", `Local server failed the request after ${timeoutMs}ms timeout policy`, { cause })
 }

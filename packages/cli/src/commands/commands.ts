@@ -6,6 +6,7 @@ import { RemoteCommand } from "./remote"
 import { RunCommand, ServerParams } from "./run"
 import { ServiceCommand } from "./service"
 import { UpdateCommand } from "./update"
+import { CoordinationCommand } from "./coordination"
 
 declare const YCODING_CLI_NAME: string | undefined
 
@@ -35,6 +36,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
     ),
   },
   commands: [
+    CoordinationCommand,
     Spec.make("api", {
       description: "Make a request to the running server",
       params: {

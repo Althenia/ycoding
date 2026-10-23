@@ -1,7 +1,7 @@
 export * as Permission from "./permission"
 
 import { makeLocationNode } from "./effect/app-node"
-import { Context, Deferred, Effect, Layer, Schema, Semaphore, Stream } from "effect"
+import { Context, Deferred, Effect, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { EventRuntime } from "./event"
@@ -22,6 +22,8 @@ import { SessionMessage } from "./session/message"
 import { SessionReviewFold } from "./session/review-fold"
 import { SessionAssessment } from "./session/assessment"
 import { SessionDecisionContext } from "./session/decision-context"
+import { CoordinationAccess } from "./session/coordination-access"
+import { CoordinationAccessResolver } from "./coordination/access"
 import { Hash } from "./util/hash"
 
 const assessmentInstructions =
@@ -187,6 +189,62 @@ export interface EvaluateEffectiveInput {
   readonly resource: string
 }
 
+export interface RoleAccess {
+  readonly role: CoordinationAccess.Access["role"]
+  readonly allowedTools?: readonly string[]
+  readonly resourceScopes?: readonly string[]
+  readonly status?: string
+}
+
+export type RoleFor = (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<RoleAccess>>
+
+export const RoleFor = Context.Reference<RoleFor | undefined>("@ycoding/Permission/CoordinationRoleFor", {
+  defaultValue: () => undefined,
+})
+
+export function coordinationRules(
+  access: RoleAccess | undefined,
+  input: Pick<AssertInput, "action" | "resources">,
+): Permission.Ruleset {
+  if (access === undefined) return []
+  if (access.status !== undefined && access.status !== "armed" && access.status !== "waiting" && access.status !== "active") return []
+  const ancillary = input.action === "external_directory" || input.action === "file_mutation"
+  const allowed =
+    ancillary ||
+    (input.action === "edit"
+      ? ["edit", "write", "patch"].some((name) => CoordinationAccess.allowsTool(access, name))
+      : CoordinationAccess.allowsTool(access, input.action))
+  if (!allowed) return [{ action: input.action, resource: "*", effect: "deny" }]
+  if (access.resourceScopes === undefined) return []
+  return input.resources.flatMap((resource) =>
+    access.resourceScopes!.some((scope) => Wildcard.match(resource, scope))
+      ? []
+      : [{ action: input.action, resource, effect: "deny" as const }],
+  )
+}
+
+export interface Snapshot {
+  readonly request: Request
+  readonly fingerprint: string
+}
+
+export interface ReconsiderInput {
+  readonly requestID: ID
+  readonly fingerprint: string
+  readonly actor: "coordinator"
+  readonly source: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID: string; readonly rationale: string }
+  readonly validate: (snapshot: Request) => Effect.Effect<boolean>
+}
+
+export interface ReconsiderResult {
+  readonly outcome: "allowed" | "denied" | "escalated" | "stale"
+  readonly requestID: ID
+  readonly fingerprint: string
+  readonly settled: boolean
+  readonly via?: "auto-permission" | "baseline" | "yolo" | "permission-rules" | "coordination"
+  readonly reason?: string
+}
+
 export interface Interface {
   readonly evaluateEffective: (
     input: EvaluateEffectiveInput,
@@ -195,6 +253,9 @@ export interface Interface {
   readonly assert: (input: AssertInput) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
   readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
+  readonly snapshot: (id: ID) => Effect.Effect<Snapshot | undefined>
+  readonly snapshots: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Snapshot>>
+  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
@@ -225,7 +286,9 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
+    const accessResolver = yield* Effect.serviceOption(CoordinationAccessResolver.Service)
     const pending = new Map<ID, Pending>()
+    const reconsidering = new Set<ID>()
     const settlement = yield* Semaphore.make(1)
     const exclusive = settlement.withPermit
 
@@ -260,8 +323,22 @@ const layer = Layer.effect(
     const configured = (sessionID: SessionSchema.ID, agentID?: Agent.ID) =>
       ruleSources(sessionID, agentID).pipe(Effect.map((sources) => [...sources.agent, ...sources.ceiling]))
 
+    const roleRules = Effect.fnUntraced(function* (input: AssertInput) {
+      const roleFor = yield* RoleFor
+      const restrictions =
+        roleFor !== undefined
+          ? yield* roleFor(input.sessionID)
+          : Option.isSome(accessResolver)
+            ? yield* accessResolver.value
+                .forSession(input.sessionID)
+                .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+            : []
+      if (restrictions === undefined) return [{ action: input.action, resource: "*", effect: "deny" as const }]
+      return restrictions.flatMap((access) => coordinationRules(access, input))
+    })
+
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
-      const rules = yield* configured(input.sessionID, input.agent)
+      const rules = [...(yield* configured(input.sessionID, input.agent)), ...(yield* roleRules(input))]
       if (denied(input, rules)) return decision(input, rules, [])
       const result = decision(input, rules, yield* savedRules())
       return input.requireHuman ? { ...result, effect: "ask" as const } : result
@@ -433,9 +510,10 @@ const layer = Layer.effect(
       value: Request,
       assessed: {
         readonly outcome: "allow" | "deny" | "escalate"
-        readonly via: "auto-permission" | "baseline" | "yolo"
+        readonly via: "auto-permission" | "baseline" | "yolo" | "coordination"
         readonly reply?: Reply
         readonly escalation?: Guardrail.Escalation
+        readonly coordination?: { readonly coordinatorSessionID: SessionSchema.ID; readonly groupID: string; readonly rationale: string }
       },
     ) =>
       events.publish(SessionEvent.PermissionAssessed, {
@@ -448,6 +526,14 @@ const layer = Layer.effect(
         ...(value.source?.messageID.startsWith("msg_")
           ? { source: { messageID: SessionMessage.ID.make(value.source.messageID), callID: value.source.callID } }
           : {}),
+        ...(assessed.coordination === undefined
+          ? {}
+          : {
+              actor: "coordinator" as const,
+              coordinatorSessionID: assessed.coordination.coordinatorSessionID,
+              groupID: assessed.coordination.groupID,
+              rationale: assessed.coordination.rationale,
+            }),
       })
 
     const boundedEvidence = (input: AssertInput) => ({
@@ -595,6 +681,231 @@ const layer = Layer.effect(
       ),
     )
 
+    const snapshot = Effect.fn("Permission.snapshot")(function* (id: ID) {
+      const item = pending.get(id)
+      return item === undefined ? undefined : { request: item.request, fingerprint: fingerprintOf(item.request) }
+    })
+
+    const snapshots = Effect.fn("Permission.snapshots")(function* (sessionID: SessionSchema.ID) {
+      return Array.from(pending.values())
+        .filter((item) => item.request.sessionID === sessionID)
+        .slice(0, 50)
+        .map((item) => ({ request: item.request, fingerprint: fingerprintOf(item.request) }))
+    })
+
+    const reconsider = Effect.fn("Permission.reconsider")((input: ReconsiderInput) =>
+      Effect.acquireUseRelease(
+        exclusive(
+          Effect.sync((): { readonly item?: Pending; readonly result?: ReconsiderResult } => {
+            const item = pending.get(input.requestID)
+            if (item === undefined || fingerprintOf(item.request) !== input.fingerprint)
+              return { result: { outcome: "stale", requestID: input.requestID, fingerprint: input.fingerprint, settled: false } }
+            if (reconsidering.has(input.requestID))
+              return {
+                result: {
+                  outcome: "escalated",
+                  requestID: input.requestID,
+                  fingerprint: input.fingerprint,
+                  settled: false,
+                  reason: "native-assessment-in-progress",
+                },
+              }
+            reconsidering.add(input.requestID)
+            return { item }
+          }),
+        ),
+        (acquired) =>
+          acquired.item === undefined
+            ? Effect.succeed(acquired.result!)
+            : Effect.uninterruptibleMask((restore) =>
+                Effect.gen(function* () {
+                  const item = acquired.item!
+                  const assertInput: AssertInput = {
+                    id: item.request.id,
+                    sessionID: item.request.sessionID,
+                    action: item.request.action,
+                    resources: item.request.resources,
+                    save: item.request.save,
+                    metadata: item.request.metadata,
+                    source: item.request.source,
+                    requireHuman: item.request.metadata?.requireHuman === true,
+                    agent: item.agent,
+                    consumeReview: false,
+                  }
+                  const base = { requestID: input.requestID, fingerprint: input.fingerprint }
+                  if (!(yield* input.validate(item.request)))
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+
+                  const settleRules = (effect: "allow" | "deny") =>
+                    exclusive(
+                      Effect.gen(function* () {
+                        if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                        if (!(yield* input.validate(item.request)))
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                        const current = yield* evaluateInput(assertInput)
+                        if (current.effect === "ask")
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "permission-ask" }
+                        yield* publishAssessed(item.request, {
+                          outcome: current.effect,
+                          via: "coordination",
+                          reply: current.effect === "allow" ? "once" : "reject",
+                          coordination: input.source,
+                        })
+                        pending.delete(input.requestID)
+                        if (current.effect === "allow") yield* Deferred.succeed(item.deferred, undefined)
+                        else yield* Deferred.fail(item.deferred, new DeclinedError())
+                        return {
+                          ...base,
+                          outcome: current.effect === "allow" ? ("allowed" as const) : ("denied" as const),
+                          settled: true,
+                          via: "permission-rules" as const,
+                        }
+                      }),
+                    )
+
+                  const initial = yield* evaluateInput(assertInput)
+                  if (initial.effect !== "ask") return yield* settleRules(initial.effect)
+                  if (assertInput.requireHuman)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:request" }
+                  if (yield* autonomousPermission(assertInput.sessionID)) {
+                    return yield* exclusive(
+                      Effect.gen(function* () {
+                        if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                        if (!(yield* input.validate(item.request)))
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                        const current = yield* evaluateInput(assertInput)
+                        if (current.effect === "deny") {
+                          yield* publishAssessed(item.request, { outcome: "deny", via: "coordination", reply: "reject", coordination: input.source })
+                          pending.delete(input.requestID)
+                          yield* Deferred.fail(item.deferred, new DeclinedError())
+                          return { ...base, outcome: "denied" as const, settled: true, via: "permission-rules" as const }
+                        }
+                        yield* publishAssessed(item.request, {
+                          outcome: "allow",
+                          via: current.effect === "allow" ? "coordination" : "auto-permission",
+                          reply: "once",
+                          coordination: input.source,
+                        })
+                        pending.delete(input.requestID)
+                        yield* Deferred.succeed(item.deferred, undefined)
+                        return {
+                          ...base,
+                          outcome: "allowed" as const,
+                          settled: true,
+                          via: current.effect === "allow" ? ("permission-rules" as const) : ("auto-permission" as const),
+                        }
+                      }),
+                    )
+                  }
+
+                  const authorization = yield* autonomy.snapshot(assertInput.sessionID, { inherited: true }).pipe(
+                    Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: assertInput.sessionID })),
+                  )
+                  const yolo = yield* DecisionChoice.yoloEnabled(autonomy, assertInput.sessionID)
+                  if (!baselineEnabled && !yolo)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "native-assessment-unavailable" }
+                  const applicability = yield* applicabilityOf(assertInput)
+                  const authority = SessionDecisionContext.authorityDigest(
+                    yield* SessionDecisionContext.read(database.db, assertInput.sessionID),
+                  )
+                  const assessed = yield* restore(assess(assertInput, yolo, applicability))
+                  if (assessed === undefined)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "native-assessment-unavailable" }
+                  const current = yield* evaluateInput(assertInput)
+                  if (current.effect !== "ask") return yield* settleRules(current.effect)
+                  const stale =
+                    assessed.type !== "escalate" &&
+                    ((assessed.provenance.authority === "yolo" &&
+                      !(yield* DecisionChoice.autonomyUnchanged(autonomy, assertInput.sessionID, authorization))) ||
+                      Hash.json(yield* applicabilityOf(assertInput)) !== Hash.json(applicability) ||
+                      SessionDecisionContext.authorityDigest(
+                        yield* SessionDecisionContext.read(database.db, assertInput.sessionID),
+                      ) !== authority)
+                  const held = !stale && assessed.type === "approve" && humanRejected(applicability.prior)
+                  const settled = stale || held ? undefined : assessed
+                  if (settled !== undefined && settled.type !== "escalate") {
+                    return yield* exclusive(
+                      Effect.gen(function* () {
+                        if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                        if (!(yield* input.validate(item.request)))
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                        const final = yield* evaluateInput(assertInput)
+                        if (final.effect !== "ask") {
+                          yield* publishAssessed(item.request, {
+                            outcome: final.effect,
+                            via: "coordination",
+                            reply: final.effect === "allow" ? "once" : "reject",
+                            coordination: input.source,
+                          })
+                          pending.delete(input.requestID)
+                          if (final.effect === "allow") yield* Deferred.succeed(item.deferred, undefined)
+                          else yield* Deferred.fail(item.deferred, new DeclinedError())
+                          return {
+                            ...base,
+                            outcome: final.effect === "allow" ? ("allowed" as const) : ("denied" as const),
+                            settled: true,
+                            via: "permission-rules" as const,
+                          }
+                        }
+                        yield* publishAssessed(item.request, {
+                          outcome: settled.type === "approve" ? "allow" : "deny",
+                          via: settled.provenance.authority!,
+                          reply: settled.type === "approve" ? settled.reply : "reject",
+                          escalation: settled.provenance,
+                          coordination: input.source,
+                        })
+                        pending.delete(input.requestID)
+                        if (settled.type === "approve") yield* Deferred.succeed(item.deferred, undefined)
+                        else
+                          yield* Deferred.fail(
+                            item.deferred,
+                            new CorrectedError({ feedback: deniedFeedback("permission", settled.provenance) }),
+                          )
+                        return {
+                          ...base,
+                          outcome: settled.type === "approve" ? ("allowed" as const) : ("denied" as const),
+                          settled: true,
+                          via: settled.provenance.authority!,
+                        }
+                      }),
+                    )
+                  }
+                  const escalation: Guardrail.Escalation =
+                    stale || held
+                      ? { ...(held ? assessed.provenance : { authority: assessed.provenance.authority }), reason: "escalated" }
+                      : assessed.provenance
+                  yield* exclusive(
+                    Effect.gen(function* () {
+                      if (pending.get(input.requestID) !== item) return
+                      if (escalation.authority !== undefined)
+                        yield* publishAssessed(item.request, {
+                          outcome: "escalate",
+                          via: escalation.authority,
+                          escalation,
+                          coordination: input.source,
+                        })
+                    }),
+                  )
+                  return {
+                    ...base,
+                    outcome: "escalated" as const,
+                    settled: false,
+                    via: escalation.authority,
+                    reason: stale ? "stale-assessment" : held ? "human-rejected" : (escalation.reason ?? "escalated"),
+                  }
+                }),
+              ).pipe(
+                Effect.catchTag("Session.NotFoundError", () =>
+                  Effect.succeed({ outcome: "stale" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false }),
+                ),
+              ),
+        (acquired) =>
+          Effect.sync(() => {
+            if (acquired.item !== undefined) reconsidering.delete(input.requestID)
+          }),
+      ),
+    )
+
     const reply = Effect.fn("Permission.reply")((input: ReplyInput) =>
       exclusive(Effect.uninterruptible(
         Effect.gen(function* () {
@@ -679,12 +990,12 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 
-    return Service.of({ evaluateEffective, ask, assert, deferPending, reply, get, forSession, list })
+    return Service.of({ evaluateEffective, ask, assert, deferPending, reply, snapshot, snapshots, reconsider, get, forSession, list })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node],
+  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node, CoordinationAccessResolver.node],
 })

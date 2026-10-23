@@ -155,11 +155,14 @@ export function buildLocationServiceMap(
   })
   const map = Layer.effect(
     LocationServiceMap.Service,
-    Effect.map(
-      LayerMap.make(
+    Effect.gen(function* () {
+      const inner: LayerMap.LayerMap<Location.Ref, LocationServices, LocationError> = yield* LayerMap.make(
         (ref: Location.Ref) => {
           const startedAt = performance.now()
-          const allReplacements = replacements.concat([[Location.node, Location.boundNode(ref)]])
+          const allReplacements = replacements.concat([
+            [Location.node, Location.boundNode(ref)],
+            [LocationServiceMap.node, Layer.succeed(LocationServiceMap.Service, mapped)],
+          ])
           // Apply replacements during hoist, not afterward: replacements can
           // introduce new tagged dependencies (Location.boundNode depends on
           // Project), and the hoist walk is the only pass that can still slice
@@ -200,14 +203,15 @@ export function buildLocationServiceMap(
           )
         },
         { idleTimeToLive: "60 minutes" },
-      ),
-      (inner) => ({
+      )
+      const mapped: LayerMap.LayerMap<Location.Ref, LocationServices, LocationError> = {
         ...inner,
         get: (ref: Location.Ref) => inner.get(canonical(ref)),
         contextEffect: (ref: Location.Ref) => inner.contextEffect(canonical(ref)),
         invalidate: (ref: Location.Ref) => inner.invalidate(canonical(ref)),
-      }),
-    ),
+      }
+      return mapped
+    }),
   )
   return map
 }

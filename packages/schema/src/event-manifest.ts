@@ -5,6 +5,7 @@ import { Agent } from "./agent.js"
 import { Catalog } from "./catalog.js"
 import { Command } from "./command.js"
 import { Config } from "./config.js"
+import { Coordination } from "./coordination.js"
 import { Durable } from "./durable-event-manifest.js"
 import { Event } from "./event.js"
 import { FileSystem } from "./filesystem.js"
@@ -35,7 +36,7 @@ import { VcsEvent } from "./vcs-event.js"
 import { WorkspaceEvent } from "./workspace-event.js"
 import { WorktreeEvent } from "./worktree-event.js"
 
-const coreDefinitions = Event.inventory(...SessionEvent.Definitions)
+const coreDefinitions = Event.inventory(...SessionEvent.Definitions, ...Coordination.DurableDefinitions, Coordination.Event.Updated)
 
 const foundationDefinitions = Event.inventory(
   ...ModelsDev.Event.Definitions,

@@ -265,6 +265,30 @@ Meeting requires the native Bun-built `ycoding` executable. The Node CLI exclude
 
 `ycoding meeting [directory] [--no-open]` starts a private server with the bundled meeting runtime for the directory (default: the current directory), arms a meeting, and opens or prints its local live page; it reuses a meeting runtime that already serves the directory. `ycoding serve --meeting` starts a server with the same runtime plugin. The live page owns browser-tab audio capture using its per-bridge view key, with fresh participant consent and an optional microphone; no capture extension or pairing is required. Keep it open while recording. Speech prerequisites and recording consent are described in [meeting intelligence](./meeting-intelligence.md#ycoding-meeting).
 
+### Local coordination
+
+Use the TUI **Projects** screen or the web Projects view to create a coordination group, select existing roots across directories, edit its name, roster and policy, arm or stop it, inspect capacity and receipts, and re-arm after restart. Stopping a group does not cancel worker Sessions. Group state and authority live in the local backend, not the presentation client. Relay MCP exposes these controls through the same remote operations.
+
+The CLI exposes `ycoding coordination <action> [--group cgrp_...] [--data '<JSON object>']`. Read actions are `list`, `get`, `receipts`, and `capacity`; mutation actions include `create`, `members`, `arm`, `stop`, `complete`, `claim`, `release`, `dispatch`, `wait`, and `cancelWait`. Mutations require the expected revision and fields specified by the [local coordination contract](../specs/coordination.md). The CLI never retries an uncertain mutation automatically.
+
+Group policy sets concurrency, bounded queue capacity, and optional spending and delegated-decision limits. A null concurrency is an uncapped policy, not unrestricted capacity: hard runtime, nesting, permission, and resource limits remain enforced. The capacity view reports the effective constraints.
+
+Routine delegated decisions are enabled by default through the user-level `coordination.delegated_decisions` configuration. Its `enabled`, `categories`, `actions`, `resources`, and `expires_at` fields centrally constrain every group; project configuration cannot broaden this policy. Per-group decision policy can only narrow it. Set `enabled` to false in the global configuration to revoke routine delegation for all groups. Invalid coordination policy fails closed. This changes no YOLO or independent auto flag. Hard reviews, irreversible or external actions, credential/account changes, installs/downloads, production migrations, CI/CD or public-contract changes, scope expansion, and uncertain/conflicting cases still require human review.
+
+The default categories are `question`, `permission`, and `review`. Optional `actions` and `resources` contain wildcard patterns; every requested resource must match. `expires_at` is a Unix timestamp in milliseconds. An empty category list disables delegation. Omitted group narrowing inherits the global policy; a group's empty `delegatedDecisions.categories` list disables its delegation.
+
+```json
+{
+  "coordination": {
+    "delegated_decisions": {
+      "enabled": false
+    }
+  }
+}
+```
+
+TUI `attention.coordination` stores only external-notification preferences: `scope` is `all` (default), `coordinators`, or `selected`; `sessionIDs` identifies selected coordinator roots; optional `categories` contains `question`, `permission`, `review`, `failure`, and `completion`. Pending controls and in-app notices remain visible. These preferences do not enable automation or grant decision authority.
+
 ### Remote access
 
 `ycoding remote` gives the authenticated owner of an enrolled machine access to every Session in that machine's backend through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for backend-derived Location, authorization, reconnection, and frame-bounding rules.

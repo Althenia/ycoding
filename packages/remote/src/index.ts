@@ -120,6 +120,21 @@ export const remoteOperations = [
   "incident.recent",
   "incident.guidance",
   "incident.guidance.clear",
+  "coordination.settings",
+  "coordination.list",
+  "coordination.create",
+  "coordination.get",
+  "coordination.members",
+  "coordination.arm",
+  "coordination.stop",
+  "coordination.complete",
+  "coordination.claim",
+  "coordination.release",
+  "coordination.dispatch",
+  "coordination.receipts",
+  "coordination.wait",
+  "coordination.cancelWait",
+  "coordination.capacity",
   "machine.keepAwake.get",
   "machine.keepAwake.set",
   "machine.telemetry.consent.get",
@@ -276,6 +291,21 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "incident.recent": "read",
   "incident.guidance": "read",
   "incident.guidance.clear": "mutation",
+  "coordination.settings": "read",
+  "coordination.list": "read",
+  "coordination.create": "mutation",
+  "coordination.get": "read",
+  "coordination.members": "mutation",
+  "coordination.arm": "mutation",
+  "coordination.stop": "mutation",
+  "coordination.complete": "mutation",
+  "coordination.claim": "mutation",
+  "coordination.release": "mutation",
+  "coordination.dispatch": "mutation",
+  "coordination.receipts": "read",
+  "coordination.wait": "mutation",
+  "coordination.cancelWait": "mutation",
+  "coordination.capacity": "read",
   "machine.keepAwake.get": "read",
   "machine.keepAwake.set": "mutation",
   "machine.telemetry.consent.get": "read",
@@ -488,12 +518,12 @@ export type RemoteStoppedRecovery = { readonly itemID: string }
 export function isRemoteReviewItemID(value: unknown): value is string {
   return typeof value === "string" && value.length <= 128 && /^rvw_[A-Za-z0-9_-]+$/.test(value)
 }
-export type RemoteAttentionDetail = { readonly sessionID: string; readonly title?: string; readonly need?: RemoteAttentionNeed }
+export type RemoteAttentionDetail = { readonly sessionID: string; readonly title?: string; readonly need?: RemoteAttentionNeed; readonly coordinatorSessionIDs?: readonly string[] }
 export type RemoteStatus = { readonly type: "status"; readonly running: readonly string[]; readonly attention: readonly string[]; readonly outstanding?: readonly string[]; readonly failed?: readonly string[]; readonly lost?: readonly string[];
   readonly details?: readonly RemoteAttentionDetail[] }
-export type RemoteWorkCompletion = { readonly id: string; readonly seq: number; readonly created: number; readonly sessionID: string; readonly title?: string }
-export type RemoteAlertDetail = { readonly title?: string; readonly need?: RemoteAttentionNeed | "failed" | "blocked" | "lost"; readonly repeat?: true }
-export type RemoteBlocked = { readonly type: "blocked"; readonly sessionID: string; readonly title?: string }
+export type RemoteWorkCompletion = { readonly id: string; readonly seq: number; readonly created: number; readonly sessionID: string; readonly title?: string; readonly coordinatorSessionIDs?: readonly string[] }
+export type RemoteAlertDetail = { readonly title?: string; readonly need?: RemoteAttentionNeed | "failed" | "blocked" | "lost"; readonly repeat?: true; readonly coordinatorSessionIDs?: readonly string[] }
+export type RemoteBlocked = { readonly type: "blocked"; readonly sessionID: string; readonly title?: string; readonly coordinatorSessionIDs?: readonly string[] }
 export type RemoteCompletions = { readonly type: "completions"; readonly data: readonly RemoteWorkCompletion[]; readonly more: boolean }
 export type RemoteSubscriptions = {
   readonly type: "subscriptions"
@@ -606,13 +636,15 @@ export function serializeStatus(status: RemoteStatus): string {
 }
 
 export function serializeBlocked(frame: RemoteBlocked): string {
-  return JSON.stringify({ type: frame.type, sessionID: frame.sessionID, ...(frame.title === undefined ? {} : { title: frame.title }) })
+  return JSON.stringify({ type: frame.type, sessionID: frame.sessionID, ...(frame.title === undefined ? {} : { title: frame.title }),
+    ...(frame.coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs: [...frame.coordinatorSessionIDs] }) })
 }
 
 export function serializeCompletions(frame: RemoteCompletions): string {
   return JSON.stringify({
     type: frame.type,
-    data: frame.data.map((item) => ({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID, ...(item.title === undefined ? {} : { title: item.title }) })),
+    data: frame.data.map((item) => ({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID, ...(item.title === undefined ? {} : { title: item.title }),
+      ...(item.coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs: [...item.coordinatorSessionIDs] }) })),
     more: frame.more,
   })
 }
@@ -760,30 +792,41 @@ function parseAgentFrame(frame: unknown): ParseResult<RemoteAgentMessage> {
   return invalid()
 }
 
+function parseCoordinatorSessionIDs(value: unknown): readonly string[] | undefined | null {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length > 64 || !value.every(isSessionID) || new Set(value).size !== value.length) return null
+  return value
+}
+
 function parseCompletions(frame: Record<string, unknown>): ParseResult<RemoteCompletions> {
   const keys = withOnlyKeys(frame, ["type", "data", "more"], frame.type)
   if (!keys.ok) return keys
   if (!Array.isArray(frame.data) || frame.data.length > RemoteLimits.maxCompletionBatch || typeof frame.more !== "boolean") return invalid()
   const data: RemoteWorkCompletion[] = []
   for (const item of frame.data) {
-    if (!isRecord(item) || Object.keys(item).some((key) => !["id", "seq", "created", "sessionID", "title"].includes(key)) ||
+    if (!isRecord(item) || Object.keys(item).some((key) => !["id", "seq", "created", "sessionID", "title", "coordinatorSessionIDs"].includes(key)) ||
       typeof item.id !== "string" || !/^evt_[A-Za-z0-9_-]+$/.test(item.id) || item.id.length > 128 ||
       typeof item.seq !== "number" || !Number.isSafeInteger(item.seq) || item.seq < 1 ||
       typeof item.created !== "number" || !Number.isSafeInteger(item.created) || item.created < 0 ||
       !isSessionID(item.sessionID) || item.sessionID.length > RemoteLimits.maxSessionIDChars ||
       (item.title !== undefined && !isAlertTitle(item.title))) return invalid()
-    data.push({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID, ...(isAlertTitle(item.title) ? { title: item.title } : {}) })
+    const coordinatorSessionIDs = parseCoordinatorSessionIDs(item.coordinatorSessionIDs)
+    if (coordinatorSessionIDs === null) return invalid()
+    data.push({ id: item.id, seq: item.seq, created: item.created, sessionID: item.sessionID, ...(isAlertTitle(item.title) ? { title: item.title } : {}),
+      ...(coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs }) })
   }
   if (new Set(data.map((item) => item.sessionID)).size !== data.length) return invalid()
   return { ok: true, value: { type: "completions", data, more: frame.more } }
 }
 
 function parseBlocked(frame: Record<string, unknown>): ParseResult<RemoteBlocked> {
-  const keys = withOnlyKeys(frame, ["type", "sessionID", "title"], frame.type)
+  const keys = withOnlyKeys(frame, ["type", "sessionID", "title", "coordinatorSessionIDs"], frame.type)
   if (!keys.ok) return keys
   const sessionID = frame.sessionID
-  if (!isSessionID(sessionID) || sessionID.length > RemoteLimits.maxSessionIDChars || (frame.title !== undefined && !isAlertTitle(frame.title))) return invalid()
-  return { ok: true, value: { type: "blocked", sessionID, ...(isAlertTitle(frame.title) ? { title: frame.title } : {}) } }
+  const coordinatorSessionIDs = parseCoordinatorSessionIDs(frame.coordinatorSessionIDs)
+  if (!isSessionID(sessionID) || sessionID.length > RemoteLimits.maxSessionIDChars || (frame.title !== undefined && !isAlertTitle(frame.title)) || coordinatorSessionIDs === null) return invalid()
+  return { ok: true, value: { type: "blocked", sessionID, ...(isAlertTitle(frame.title) ? { title: frame.title } : {}),
+    ...(coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs }) } }
 }
 
 function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest> {
@@ -802,7 +845,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (operation === "usage.forecast" && (!isRecord(frame.input) ||
     (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
-  if ((operation === "artifact.demo.preview" || operation === "artifact.demo.export" || operation.startsWith("provider.auth.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+  if ((operation === "artifact.demo.preview" || operation === "artifact.demo.export" || operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
@@ -829,6 +872,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
   if (operation === "artifact.demo.preview" || operation === "artifact.demo.export") return input === undefined
   if (operation === "session.list") return input === undefined || isRecord(input) &&
     (input.status === undefined || input.status === "waiting" || input.status === "running" || input.status === "idle") &&
@@ -958,6 +1002,127 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     return false
   return Object.keys(input).every((key) => key === "id" || key === "workspace" || key === "agent" || key === "model")
 }
+
+function coordinationKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key))
+}
+
+function coordinationInt(value: unknown, minimum: number, maximum: number): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum
+}
+
+function coordinationText(value: unknown, maximum: number): boolean {
+  return typeof value === "string" && value.length >= 1 && value.length <= maximum
+}
+
+function coordinationID(value: unknown, prefix: string): boolean {
+  return typeof value === "string" && value.length > prefix.length && value.length <= 96 && value.startsWith(prefix) && /^[A-Za-z0-9_-]+$/.test(value.slice(prefix.length))
+}
+
+function coordinationTexts(value: unknown, maxItems: number, maxChars: number): boolean {
+  return Array.isArray(value) && value.length <= maxItems && value.every((item) => coordinationText(item, maxChars))
+}
+
+function validCoordinationDelegated(value: unknown): boolean {
+  if (!isRecord(value) || !coordinationKeys(value, ["categories", "actions", "resources", "expiresAt"])) return false
+  return Array.isArray(value.categories) && value.categories.length <= 3 &&
+    value.categories.every((category) => category === "question" || category === "permission" || category === "review") &&
+    (value.actions === undefined || coordinationTexts(value.actions, 32, 512)) &&
+    (value.resources === undefined || coordinationTexts(value.resources, 32, 512)) &&
+    (value.expiresAt === undefined || coordinationInt(value.expiresAt, 0, Number.MAX_SAFE_INTEGER))
+}
+
+function validCoordinationPolicy(value: unknown): boolean {
+  if (!isRecord(value) || !coordinationKeys(value, ["concurrency", "queueCapacity", "budget", "delegatedDecisions"])) return false
+  return (value.concurrency === null || coordinationInt(value.concurrency, 1, Number.MAX_SAFE_INTEGER)) &&
+    coordinationInt(value.queueCapacity, 1, 1000) &&
+    (value.budget === undefined || (typeof value.budget === "number" && Number.isFinite(value.budget) && value.budget > 0)) &&
+    (value.delegatedDecisions === undefined || validCoordinationDelegated(value.delegatedDecisions))
+}
+
+function validCoordinationMembers(value: unknown): boolean {
+  return Array.isArray(value) && value.length >= 1 && value.length <= 64 && value.every((member) =>
+    isRecord(member) && coordinationKeys(member, ["sessionID", "role", "allowedTools", "resourceScopes"]) &&
+    isSessionID(member.sessionID) && (member.role === "coordinator" || member.role === "worker" || member.role === "observer") &&
+    (member.allowedTools === undefined || coordinationTexts(member.allowedTools, 64, 128)) &&
+    (member.resourceScopes === undefined || coordinationTexts(member.resourceScopes, 32, 512)))
+}
+
+function validCoordinationSelection(value: unknown): boolean {
+  if (!isRecord(value) || !coordinationKeys(value, ["agent", "model", "reason"])) return false
+  if (!validName(value.agent)) return false
+  if (typeof value.reason !== "string" || value.reason.length > 500 || value.reason.trim().length === 0 || /[\x00\r\n]/.test(value.reason)) return false
+  if (!isRecord(value.model) || !coordinationKeys(value.model, ["providerID", "id", "profile", "variant"])) return false
+  return validName(value.model.providerID) && validName(value.model.id) &&
+    (value.model.profile === undefined || validName(value.model.profile)) &&
+    (value.model.variant === undefined || validName(value.model.variant))
+}
+
+function validCoordinationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "coordination.settings" || operation === "coordination.list") return input === undefined
+  if (!isRecord(input)) return false
+  if (operation === "coordination.create")
+    return coordinationKeys(input, ["name", "policy", "members"]) && coordinationText(input.name, 120) &&
+      validCoordinationPolicy(input.policy) && validCoordinationMembers(input.members)
+  if (!coordinationID(input.groupID, "cgrp_")) return false
+  if (operation === "coordination.get" || operation === "coordination.receipts" || operation === "coordination.capacity")
+    return coordinationKeys(input, ["groupID"])
+  if (operation === "coordination.members")
+    return coordinationKeys(input, ["groupID", "revision", "name", "members", "policy"]) &&
+      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) &&
+      (input.name === undefined || coordinationText(input.name, 120)) &&
+      validCoordinationMembers(input.members) &&
+      (input.policy === undefined || validCoordinationPolicy(input.policy))
+  if (operation === "coordination.arm" || operation === "coordination.stop" || operation === "coordination.complete")
+    return coordinationKeys(input, ["groupID", "revision"]) && coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER)
+  if (operation === "coordination.claim")
+    return coordinationKeys(input, ["groupID", "revision", "targetSessionID", "holderSessionID", "leaseMs"]) &&
+      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.targetSessionID) &&
+      isSessionID(input.holderSessionID) && coordinationInt(input.leaseMs, 1000, 300000)
+  if (operation === "coordination.release")
+    return coordinationKeys(input, ["groupID", "revision", "targetSessionID", "holderSessionID", "generation"]) &&
+      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.targetSessionID) &&
+      isSessionID(input.holderSessionID) && coordinationInt(input.generation, 0, Number.MAX_SAFE_INTEGER)
+  if (operation === "coordination.dispatch")
+    return coordinationKeys(input, ["groupID", "revision", "holderSessionID", "generation", "dispatchID", "targetSessionID", "text", "dependsOn", "resourceScope", "allowedTools", "selection"]) &&
+      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.holderSessionID) &&
+      coordinationInt(input.generation, 0, Number.MAX_SAFE_INTEGER) &&
+      (input.dispatchID === undefined || coordinationID(input.dispatchID, "cdsp_")) &&
+      isSessionID(input.targetSessionID) && coordinationText(input.text, 32000) &&
+      (input.dependsOn === undefined || (Array.isArray(input.dependsOn) && input.dependsOn.length <= 32 && input.dependsOn.every((id) => coordinationID(id, "cdsp_")))) &&
+      (input.resourceScope === undefined || coordinationText(input.resourceScope, 512)) &&
+      (input.allowedTools === undefined || coordinationTexts(input.allowedTools, 64, 128)) &&
+      validCoordinationSelection(input.selection)
+  if (operation === "coordination.wait")
+    return coordinationKeys(input, ["groupID", "revision", "holderSessionID", "waitID", "targets", "timeoutMs", "batch"]) &&
+      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && isSessionID(input.holderSessionID) &&
+      (input.waitID === undefined || coordinationID(input.waitID, "cwait_")) &&
+      (input.targets === undefined || (Array.isArray(input.targets) && input.targets.length <= 64 && input.targets.every((id) => isSessionID(id)))) &&
+      (input.timeoutMs === undefined || coordinationInt(input.timeoutMs, 0, 300000)) &&
+      (input.batch === undefined || coordinationInt(input.batch, 1, 200))
+  if (operation === "coordination.cancelWait")
+    return coordinationKeys(input, ["groupID", "revision", "waitID", "holderSessionID"]) &&
+      coordinationInt(input.revision, 0, Number.MAX_SAFE_INTEGER) && coordinationID(input.waitID, "cwait_") && isSessionID(input.holderSessionID)
+  return false
+}
+
+export type RemoteCoordinationRole = "coordinator" | "worker" | "observer"
+export type RemoteCoordinationGroupStatus = "disarmed" | "armed" | "waiting" | "stopped" | "completed" | "needs-rearm"
+export type RemoteCoordinationDelegatedDecisions = { readonly categories: readonly ("question" | "permission" | "review")[]; readonly actions?: readonly string[]; readonly resources?: readonly string[]; readonly expiresAt?: number }
+export type RemoteCoordinationSettings = { readonly enabled: boolean; readonly categories: readonly ("question" | "permission" | "review")[]; readonly actions?: readonly string[]; readonly resources?: readonly string[]; readonly expiresAt?: number }
+export type RemoteCoordinationPolicy = { readonly concurrency: number | null; readonly queueCapacity: number; readonly budget?: number; readonly delegatedDecisions?: RemoteCoordinationDelegatedDecisions }
+export type RemoteCoordinationMemberInput = { readonly sessionID: string; readonly role: RemoteCoordinationRole; readonly allowedTools?: readonly string[]; readonly resourceScopes?: readonly string[] }
+export type RemoteCoordinationMember = RemoteCoordinationMemberInput & { readonly location: { readonly directory: string; readonly workspaceID?: string } }
+export type RemoteCoordinationSelection = { readonly agent: string; readonly model: { readonly providerID: string; readonly id: string; readonly profile?: string; readonly variant?: string }; readonly reason: string }
+export type RemoteCoordinationGroup = { readonly id: string; readonly name: string; readonly status: RemoteCoordinationGroupStatus; readonly revision: number; readonly policy: RemoteCoordinationPolicy; readonly fencingGeneration: number; readonly members: readonly RemoteCoordinationMember[]; readonly time: { readonly created: number; readonly updated: number } }
+export type RemoteCoordinationGroupSummary = { readonly id: string; readonly name: string; readonly status: RemoteCoordinationGroupStatus; readonly revision: number; readonly policy: RemoteCoordinationPolicy; readonly fencingGeneration: number; readonly memberCount: number; readonly time: { readonly created: number; readonly updated: number } }
+export type RemoteCoordinationClaim = { readonly groupID: string; readonly targetSessionID: string; readonly holderSessionID: string; readonly generation: number; readonly status: "active" | "released" | "revoked" | "expired"; readonly leaseExpiresAt: number }
+export type RemoteCoordinationDispatch = { readonly id: string; readonly groupID: string; readonly targetSessionID: string; readonly coordinatorSessionID: string; readonly generation: number; readonly status: "queued" | "pending" | "admitted" | "failed" | "cancelled" | "completed"; readonly reason?: "capacity" | "hard-limit" | "dependency" | "budget"; readonly text: string; readonly dependsOn?: readonly string[]; readonly resourceScope?: string; readonly allowedTools?: readonly string[]; readonly selection: RemoteCoordinationSelection; readonly messageID?: string; readonly time: { readonly created: number; readonly updated: number } }
+export type RemoteCoordinationGroupDetail = RemoteCoordinationGroup & { readonly claims: readonly RemoteCoordinationClaim[]; readonly dispatches: readonly RemoteCoordinationDispatch[] }
+export type RemoteCoordinationReceipt = { readonly id: string; readonly groupID: string; readonly dispatchID?: string; readonly kind: "dispatched" | "admitted" | "failed" | "cancelled" | "completed"; readonly sessionID: string; readonly messageID?: string; readonly generation?: number; readonly selection: RemoteCoordinationSelection; readonly time: number; readonly detail?: string }
+export type RemoteCoordinationCapacity = { readonly groupID: string; readonly concurrency: number | null; readonly hardLimit: number | null; readonly effectiveLimit: number | null; readonly active: number; readonly waiting: number; readonly queued: number; readonly queueCapacity: number; readonly available: number | null; readonly runtimeUsed?: number; readonly budget?: number; readonly spent: number; readonly budgetRemaining?: number }
+export type RemoteCoordinationObservation = { readonly sessionID: string; readonly eventID?: string; readonly seq: number; readonly type: string; readonly time: number; readonly gap?: true }
+export type RemoteCoordinationWaitResult = { readonly waitID: string; readonly groupID: string; readonly status: "active" | "cancelled" | "expired"; readonly observations: readonly RemoteCoordinationObservation[]; readonly cursors: Readonly<Record<string, number>> }
 
 export function isRemoteLatencySample(value: unknown): value is RemoteLatencySample {
   if (!isRecord(value) || typeof value.at !== "string" || value.at.length !== 24 ||
@@ -1098,28 +1263,32 @@ function parseAttentionDetails(value: unknown, attention: readonly string[]): re
   if (!Array.isArray(value) || value.length > attention.length) return null
   const details: RemoteAttentionDetail[] = []
   for (const item of value) {
-    if (!isRecord(item) || !withOnlyKeys(item, ["sessionID", "title", "need"], item).ok) return null
+    if (!isRecord(item) || !withOnlyKeys(item, ["sessionID", "title", "need", "coordinatorSessionIDs"], item).ok) return null
     const sessionID = item.sessionID
     const title = isAlertTitle(item.title) ? item.title : undefined
     const need = isAttentionNeed(item.need) ? item.need : undefined
+    const coordinatorSessionIDs = parseCoordinatorSessionIDs(item.coordinatorSessionIDs)
     if (!isSessionID(sessionID) || !attention.includes(sessionID) || details.some((detail) => detail.sessionID === sessionID) ||
-      (item.title !== undefined && title === undefined) || (item.need !== undefined && need === undefined)) return null
-    details.push({ sessionID, ...(title === undefined ? {} : { title }), ...(need === undefined ? {} : { need }) })
+      (item.title !== undefined && title === undefined) || (item.need !== undefined && need === undefined) || coordinatorSessionIDs === null) return null
+    details.push({ sessionID, ...(title === undefined ? {} : { title }), ...(need === undefined ? {} : { need }),
+      ...(coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs }) })
   }
   return details
 }
 
 function parseAlertDetail(value: unknown): RemoteAlertDetail | undefined {
-  if (!isRecord(value) || !withOnlyKeys(value, ["title", "need", "repeat"], value).ok) return undefined
+  if (!isRecord(value) || !withOnlyKeys(value, ["title", "need", "repeat", "coordinatorSessionIDs"], value).ok) return undefined
   const title = isAlertTitle(value.title) ? value.title : undefined
   const need = value.need === "failed" || value.need === "blocked" || value.need === "lost" || isAttentionNeed(value.need) ? value.need : undefined
-  if ((value.title !== undefined && title === undefined) || (value.need !== undefined && need === undefined) || (value.repeat !== undefined && value.repeat !== true)) return undefined
-  return alertDetailWire({ title, need, ...(value.repeat === true ? { repeat: true } : {}) })
+  const coordinatorSessionIDs = parseCoordinatorSessionIDs(value.coordinatorSessionIDs)
+  if ((value.title !== undefined && title === undefined) || (value.need !== undefined && need === undefined) || (value.repeat !== undefined && value.repeat !== true) || coordinatorSessionIDs === null) return undefined
+  return alertDetailWire({ title, need, ...(value.repeat === true ? { repeat: true } : {}), ...(coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs }) })
 }
 
 function alertDetailWire(detail: RemoteAlertDetail): RemoteAlertDetail {
   return { ...(detail.title === undefined ? {} : { title: detail.title }), ...(detail.need === undefined ? {} : { need: detail.need }),
-    ...(detail.repeat === true ? { repeat: true } : {}) }
+    ...(detail.repeat === true ? { repeat: true } : {}),
+    ...(detail.coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs: [...detail.coordinatorSessionIDs] }) }
 }
 
 function isAttentionNeed(value: unknown): value is RemoteAttentionNeed {
@@ -1449,7 +1618,10 @@ export const pushCategories = ["agent-completed", "approval-requested", "machine
 export type PushCategory = (typeof pushCategories)[number]
 export type PushCategories = { readonly [Category in PushCategory]: boolean }
 export type PushKeys = { readonly p256dh: string; readonly auth: string }
-export type PushRegistration = { readonly endpoint: string; readonly keys: PushKeys; readonly categories: PushCategories }
+export const coordinationPushCategories = ["question", "permission", "review", "failure", "completion"] as const
+export type CoordinationPushCategory = (typeof coordinationPushCategories)[number]
+export type CoordinationPushFilter = { readonly scope: "all" | "coordinators" | "selected"; readonly sessionIDs?: readonly string[]; readonly categories?: readonly CoordinationPushCategory[] }
+export type PushRegistration = { readonly endpoint: string; readonly keys: PushKeys; readonly categories: PushCategories; readonly coordinationFilter?: CoordinationPushFilter }
 export type PushRenewal = { readonly endpoint: string; readonly keys: PushKeys; readonly replaces: string }
 export type PushSubscriptionInput = PushRegistration | PushRenewal
 
@@ -1548,10 +1720,49 @@ export type RemoteIncidentRecent = { readonly data: { readonly items: readonly R
 export type RemoteIncidentGuidanceInput = { readonly provider: string; readonly model: string }
 export type RemoteIncidentGuidance = { readonly data: { readonly text?: string; readonly clearedAt?: number; readonly enabled: boolean } }
 
+export function parseCoordinationPushFilter(value: unknown): CoordinationPushFilter | undefined {
+  if (!isRecord(value) || !withOnlyKeys(value, ["scope", "sessionIDs", "categories"], value).ok) return undefined
+  if (value.scope !== "all" && value.scope !== "coordinators" && value.scope !== "selected") return undefined
+  if (value.sessionIDs !== undefined && (!Array.isArray(value.sessionIDs) || value.sessionIDs.length > 128 ||
+    !value.sessionIDs.every(isSessionID) || new Set(value.sessionIDs).size !== value.sessionIDs.length)) return undefined
+  if (value.categories !== undefined && (!Array.isArray(value.categories) || value.categories.length > coordinationPushCategories.length ||
+    !value.categories.every((category) => (coordinationPushCategories as readonly string[]).includes(category as string)) ||
+    new Set(value.categories).size !== value.categories.length)) return undefined
+  return { scope: value.scope,
+    ...(value.sessionIDs === undefined ? {} : { sessionIDs: [...value.sessionIDs] as string[] }),
+    ...(value.categories === undefined ? {} : { categories: [...value.categories] as CoordinationPushCategory[] }) }
+}
+
+export type CoordinationPushEvent = { readonly category: string; readonly need?: string; readonly sessionID?: string; readonly coordinatorSessionIDs?: readonly string[] }
+
+export function coordinationPushCategory(event: CoordinationPushEvent): CoordinationPushCategory | undefined {
+  if (event.category === "agent-completed") return "completion"
+  if (event.category !== "approval-requested") return undefined
+  if (event.need === "question") return "question"
+  if (event.need === "permission") return "permission"
+  if (event.need === "review") return "review"
+  if (event.need === "blocked") return "review"
+  if (event.need === "failed" || event.need === "lost") return "failure"
+  return undefined
+}
+
+export function coordinationPushAllows(filter: CoordinationPushFilter | undefined, event: CoordinationPushEvent): boolean {
+  if (filter === undefined) return true
+  if (event.sessionID === undefined) return true
+  if (filter.categories !== undefined) {
+    const category = coordinationPushCategory(event)
+    if (category === undefined || !filter.categories.includes(category)) return false
+  }
+  if (filter.scope === "all") return true
+  if (event.coordinatorSessionIDs?.includes(event.sessionID) !== true) return false
+  if (filter.scope === "coordinators") return true
+  return (filter.sessionIDs ?? []).includes(event.sessionID)
+}
+
 export function parsePushSubscription(value: unknown): ParseResult<PushSubscriptionInput> {
   if (!isRecord(value) || !isRecord(value.keys)) return invalidBody()
   const renewal = "replaces" in value
-  if (!withOnlyKeys(value, ["endpoint", "keys", renewal ? "replaces" : "categories"], value).ok ||
+  if (!withOnlyKeys(value, renewal ? ["endpoint", "keys", "replaces"] : ["endpoint", "keys", "categories", "coordinationFilter"], value).ok ||
     !withOnlyKeys(value.keys, ["p256dh", "auth"], value.keys).ok) return invalidBody()
   if (!isPushEndpoint(value.endpoint) || !isPushKey(value.keys.p256dh, 65, 87, 4) || !isPushKey(value.keys.auth, 16, 22)) return invalidBody()
   const keys = { p256dh: value.keys.p256dh, auth: value.keys.auth }
@@ -1559,12 +1770,14 @@ export function parsePushSubscription(value: unknown): ParseResult<PushSubscript
   const categories = value.categories
   if (!isRecord(categories) || Object.keys(categories).length !== pushCategories.length ||
     !pushCategories.every((category) => typeof categories[category] === "boolean")) return invalidBody()
+  const coordinationFilter = value.coordinationFilter === undefined ? undefined : parseCoordinationPushFilter(value.coordinationFilter)
+  if (value.coordinationFilter !== undefined && coordinationFilter === undefined) return invalidBody()
   return { ok: true, value: { endpoint: value.endpoint, keys, categories: {
     "agent-completed": categories["agent-completed"] === true,
     "approval-requested": categories["approval-requested"] === true,
     "machine-offline": categories["machine-offline"] === true,
     "quota-pace": categories["quota-pace"] === true,
-  } } }
+  }, ...(coordinationFilter === undefined ? {} : { coordinationFilter }) } }
 }
 
 export function parsePushEndpoint(value: unknown): ParseResult<PushEndpointInput> {

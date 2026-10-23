@@ -275,27 +275,18 @@ const layer = Layer.effect(
       recoveryMode: RecoveryMode = "normal",
       onPromotion?: () => void,
     ) {
-      const selected = yield* context.select(sessionID)
-      requestTrackerState.agent = selected.agent.id
+      let selected = yield* context.select(sessionID)
       const route = requestTrackerState.route
-      const selectedModel = selected.session.model
-      if (
-        route.primary !== undefined &&
-        selectedModel !== undefined &&
-        (route.primary.providerID !== selectedModel.providerID || route.primary.id !== selectedModel.id)
-      ) {
-        route.primary = undefined
-        route.model = undefined
-        route.tried.length = 0
-      }
       // Establish what the model knows before admitting what the user said, so
       // a blocked first step leaves pending inputs untouched.
       yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
       let currentStep = step
       let promoted = 0
       const inputSkills = new Map<string, ReadonlyArray<Skill.Info>>()
+      const dispatchInputs = new Set<SessionMessage.ID>()
       const prepareInput = Effect.fn("SessionRunner.prepareInput")(function* (entry: SessionPending.Info) {
         if (entry.type !== "user") return
+        if (entry.data.metadata?.inputOrigin === "coordination") dispatchInputs.add(entry.id)
         const requested = SessionSkill.selected(entry.data.metadata)
         if (!requested.length && !entry.data.text.includes("$")) return
         const catalog = yield* skills.list()
@@ -337,8 +328,26 @@ const layer = Layer.effect(
         }
         if (promoted > 0) {
           currentStep = 1
+          if (selected.dispatchSelection !== undefined || dispatchInputs.size > 0) {
+            selected = yield* context.select(sessionID)
+            yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
+          }
           onPromotion?.()
         }
+      }
+      requestTrackerState.agent = selected.agent.id
+      const selectedModel = selected.dispatchSelection?.model ?? selected.session.model
+      if (
+        route.primary !== undefined &&
+        selectedModel !== undefined &&
+        (route.primary.providerID !== selectedModel.providerID ||
+          route.primary.id !== selectedModel.id ||
+          route.primary.profile !== selectedModel.profile ||
+          route.primary.variant !== selectedModel.variant)
+      ) {
+        route.primary = undefined
+        route.model = undefined
+        route.tried.length = 0
       }
       if (!promotion && requestTrackerState.skills?.length)
         yield* activateRequestedSkills(selected, requestTrackerState.skills, yield* skills.list())
@@ -348,7 +357,7 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           const primary = route.primary ?? attempted
           const next =
-            recoveryMode === "terminal-response"
+            recoveryMode === "terminal-response" || selected.dispatchSelection !== undefined
               ? undefined
               : SessionModelFallback.next(configEntries, primary, [...route.tried, attempted])
           if (next === undefined) return undefined
@@ -409,7 +418,7 @@ const layer = Layer.effect(
       const compactionPolicy = SessionContextPressure.policy(configEntries)
       const lastProviderInput = SessionCacheDiagnostics.latestAssistant(initialContext.messages)?.tokens
       const fallbackNext =
-        recoveryMode === "terminal-response"
+        recoveryMode === "terminal-response" || selected.dispatchSelection !== undefined
           ? undefined
           : SessionModelFallback.next(configEntries, primary, [...route.tried, attempting])
       if (

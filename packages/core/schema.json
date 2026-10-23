@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "dfc6455e-6629-470f-b8a1-8369a181b419",
+  "id": "0a7676a1-5c07-4389-b441-35c379dc5c19",
   "prevIds": [
-    "157ab552-bf5f-4979-9845-22bc31da6e1b"
+    "dfc6455e-6629-470f-b8a1-8369a181b419"
   ],
   "ddl": [
     {
@@ -16,6 +16,30 @@
     },
     {
       "name": "usage_analytics_request",
+      "entityType": "tables"
+    },
+    {
+      "name": "coordination_claim",
+      "entityType": "tables"
+    },
+    {
+      "name": "coordination_dispatch",
+      "entityType": "tables"
+    },
+    {
+      "name": "coordination_group",
+      "entityType": "tables"
+    },
+    {
+      "name": "coordination_member",
+      "entityType": "tables"
+    },
+    {
+      "name": "coordination_receipt",
+      "entityType": "tables"
+    },
+    {
+      "name": "coordination_wait",
       "entityType": "tables"
     },
     {
@@ -523,6 +547,576 @@
       "name": "time_created",
       "entityType": "columns",
       "table": "usage_analytics_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_session_id",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "holder_session_id",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_expires_at",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "coordination_claim"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_session_id",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "coordinator_session_id",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reason",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "text",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "selection",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "depends_on",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_scope",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "allowed_tools",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "coordination_dispatch"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "concurrency",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "queue_capacity",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "budget",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "delegated_decisions",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "fencing_generation",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "coordination_group"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "coordination_member"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "coordination_member"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role",
+      "entityType": "columns",
+      "table": "coordination_member"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "allowed_tools",
+      "entityType": "columns",
+      "table": "coordination_member"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource_scopes",
+      "entityType": "columns",
+      "table": "coordination_member"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "dispatch_id",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "detail",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "coordination_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "group_id",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "coordinator_session_id",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "targets",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cursors",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "coordination_wait"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "coordination_wait"
     },
     {
       "type": "text",
@@ -5597,6 +6191,186 @@
     },
     {
       "columns": [
+        "group_id"
+      ],
+      "tableTo": "coordination_group",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_claim_group_id_coordination_group_id_fk",
+      "entityType": "fks",
+      "table": "coordination_claim"
+    },
+    {
+      "columns": [
+        "target_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_claim_target_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "coordination_claim"
+    },
+    {
+      "columns": [
+        "holder_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_claim_holder_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "coordination_claim"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "tableTo": "coordination_group",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_dispatch_group_id_coordination_group_id_fk",
+      "entityType": "fks",
+      "table": "coordination_dispatch"
+    },
+    {
+      "columns": [
+        "target_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_dispatch_target_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "coordination_dispatch"
+    },
+    {
+      "columns": [
+        "coordinator_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_dispatch_coordinator_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "coordination_dispatch"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "tableTo": "coordination_group",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_member_group_id_coordination_group_id_fk",
+      "entityType": "fks",
+      "table": "coordination_member"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_member_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "coordination_member"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "tableTo": "coordination_group",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_receipt_group_id_coordination_group_id_fk",
+      "entityType": "fks",
+      "table": "coordination_receipt"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_receipt_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "coordination_receipt"
+    },
+    {
+      "columns": [
+        "group_id"
+      ],
+      "tableTo": "coordination_group",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_wait_group_id_coordination_group_id_fk",
+      "entityType": "fks",
+      "table": "coordination_wait"
+    },
+    {
+      "columns": [
+        "coordinator_session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_coordination_wait_coordinator_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "coordination_wait"
+    },
+    {
+      "columns": [
         "aggregate_id"
       ],
       "tableTo": "event_sequence",
@@ -6569,6 +7343,26 @@
     },
     {
       "columns": [
+        "group_id",
+        "target_session_id"
+      ],
+      "nameExplicit": false,
+      "name": "coordination_claim_pk",
+      "entityType": "pks",
+      "table": "coordination_claim"
+    },
+    {
+      "columns": [
+        "group_id",
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "coordination_member_pk",
+      "entityType": "pks",
+      "table": "coordination_member"
+    },
+    {
+      "columns": [
         "provider_id",
         "model_id"
       ],
@@ -6707,6 +7501,42 @@
       "nameExplicit": false,
       "name": "usage_analytics_request_pk",
       "table": "usage_analytics_request",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "coordination_dispatch_pk",
+      "table": "coordination_dispatch",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "coordination_group_pk",
+      "table": "coordination_group",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "coordination_receipt_pk",
+      "table": "coordination_receipt",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "coordination_wait_pk",
+      "table": "coordination_wait",
       "entityType": "pks"
     },
     {
@@ -7208,6 +8038,158 @@
       "name": "usage_analytics_request_metrics_idx",
       "entityType": "indexes",
       "table": "usage_analytics_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "target_session_id",
+          "isExpression": false
+        },
+        {
+          "value": "status",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "coordination_claim_target_status_idx",
+      "entityType": "indexes",
+      "table": "coordination_claim"
+    },
+    {
+      "columns": [
+        {
+          "value": "group_id",
+          "isExpression": false
+        },
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "coordination_dispatch_group_status_idx",
+      "entityType": "indexes",
+      "table": "coordination_dispatch"
+    },
+    {
+      "columns": [
+        {
+          "value": "target_session_id",
+          "isExpression": false
+        },
+        {
+          "value": "status",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "coordination_dispatch_target_status_idx",
+      "entityType": "indexes",
+      "table": "coordination_dispatch"
+    },
+    {
+      "columns": [
+        {
+          "value": "message_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"coordination_dispatch\".\"message_id\" IS NOT NULL",
+      "origin": "manual",
+      "name": "coordination_dispatch_message_idx",
+      "entityType": "indexes",
+      "table": "coordination_dispatch"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "coordination_group_status_updated_idx",
+      "entityType": "indexes",
+      "table": "coordination_group"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "coordination_member_session_idx",
+      "entityType": "indexes",
+      "table": "coordination_member"
+    },
+    {
+      "columns": [
+        {
+          "value": "group_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "coordination_receipt_group_time_idx",
+      "entityType": "indexes",
+      "table": "coordination_receipt"
+    },
+    {
+      "columns": [
+        {
+          "value": "group_id",
+          "isExpression": false
+        },
+        {
+          "value": "status",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "coordination_wait_group_status_idx",
+      "entityType": "indexes",
+      "table": "coordination_wait"
     },
     {
       "columns": [

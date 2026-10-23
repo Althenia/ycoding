@@ -30,6 +30,7 @@ import {
   attentionDetails,
   createSubscriptions,
   executeRemoteOperation,
+  coordinationCoordinatorMap,
   successFrames,
   sessionStatus,
   lossOnly,
@@ -165,6 +166,7 @@ export class RemoteAgent {
   private completionDirty = false
   private completionRetryAttempt = 0
   private lastStatus?: string
+  private coordinatorsCache?: { readonly at: number; readonly value: Promise<ReadonlyMap<string, readonly string[]>> }
   private attentionStatus?: Readonly<Record<string, RemoteAttentionNeed>>
   private attentionGeneration = 0
   private failedRoots = new Set<string>()
@@ -741,6 +743,14 @@ export class RemoteAgent {
     }, 250)
   }
 
+  private coordinators(): Promise<ReadonlyMap<string, readonly string[]>> {
+    const at = this.now()
+    if (this.coordinatorsCache !== undefined && at - this.coordinatorsCache.at < 15_000) return this.coordinatorsCache.value
+    const value = coordinationCoordinatorMap(this.options.local).catch((): ReadonlyMap<string, readonly string[]> => new Map())
+    this.coordinatorsCache = { at, value }
+    return value
+  }
+
   private async sendStatus() {
     const connection = this.connection
     const owner = this.statusOwner
@@ -774,7 +784,13 @@ export class RemoteAgent {
       if (attention.length > RemoteLimits.maxStatusSessions) throw new Error("Session status exceeds the bounded root count")
       const lost = lossOnly(status)
       const failed = [...this.failedRoots].filter((root) => !status.requestAttention.includes(root) && !lost.includes(root)).sort()
-      const details = attentionDetails(sessions, attention, status.requestNeeds)
+      const baseDetails = attentionDetails(sessions, attention, status.requestNeeds)
+      const coordinators = baseDetails.length === 0 ? undefined : await this.coordinators()
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
+      const details = baseDetails.map((detail) => {
+        const coordinatorSessionIDs = coordinators?.get(detail.sessionID)
+        return coordinatorSessionIDs === undefined || coordinatorSessionIDs.length === 0 ? detail : { ...detail, coordinatorSessionIDs }
+      })
       const frame = serializeStatus({ type: "status", running: status.running, attention,
         ...(status.outstanding === undefined ? {} : { outstanding: status.outstanding }),
         ...(failed.length === 0 ? {} : { failed }),
@@ -836,9 +852,13 @@ export class RemoteAgent {
         if (page.next !== undefined && (page.next !== page.data.at(-1)?.sessionID || (after !== undefined && page.next <= after)))
           throw new Error("Completion pagination did not advance")
         const titles = new Map(this.registry.snapshot().map((session) => [session.id, session.title]))
+        const coordinators = page.data.length === 0 ? undefined : await this.coordinators()
+        if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live") return
         const data = page.data.map((item) => {
           const title = alertTitle(titles.get(item.sessionID) ?? "")
-          return title === undefined ? item : { ...item, title }
+          const coordinatorSessionIDs = coordinators?.get(item.sessionID)
+          return { ...item, ...(title === undefined ? {} : { title }),
+            ...(coordinatorSessionIDs === undefined || coordinatorSessionIDs.length === 0 ? {} : { coordinatorSessionIDs }) }
         })
         if (!await this.send(serializeCompletions({ type: "completions", data, more: page.next !== undefined }), connection))
           throw new Error("Completion receipt delivery interrupted")
@@ -896,7 +916,10 @@ export class RemoteAgent {
       if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live" || this.eventStreamGeneration !== streamGeneration) return
       if (session === undefined || session.parentID !== undefined) return
       const title = alertTitle(session.title)
-      if (!await this.send(serializeCompletions({ type: "completions", data: [{ ...receipt.value, ...(title === undefined ? {} : { title }) }], more: false }), connection))
+      const coordinatorSessionIDs = (await this.coordinators()).get(receipt.value.sessionID)
+      if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live" || this.eventStreamGeneration !== streamGeneration) return
+      if (!await this.send(serializeCompletions({ type: "completions", data: [{ ...receipt.value, ...(title === undefined ? {} : { title }),
+        ...(coordinatorSessionIDs === undefined || coordinatorSessionIDs.length === 0 ? {} : { coordinatorSessionIDs }) }], more: false }), connection))
         throw new Error("Completion receipt delivery interrupted")
     } catch (error) {
       if (this.connection !== connection || this.statusOwner !== owner || this.state !== "live" || this.eventStreamGeneration !== streamGeneration) return
@@ -996,6 +1019,7 @@ export class RemoteAgent {
         void this.sendQuotas()
         return
       }
+      if (typeof type === "string" && type.startsWith("coordination.")) this.coordinatorsCache = undefined
       if (typeof type === "string" && type.startsWith("session.review.")) this.advertise()
       if (type === "shell.deleted") {
         if (this.eventStreamGeneration === streamGeneration) {
@@ -1144,7 +1168,11 @@ export class RemoteAgent {
     const root = typeof sessionID === "string" ? this.registry.root(sessionID) : undefined
     if (root === undefined) return
     const title = alertTitle(this.registry.snapshot().find((session) => session.id === root)?.title ?? "")
-    void this.send(serializeBlocked({ type: "blocked", sessionID: root, ...(title === undefined ? {} : { title }) }))
+    void this.coordinators().then((coordinators) => {
+      const coordinatorSessionIDs = coordinators.get(root)
+      return this.send(serializeBlocked({ type: "blocked", sessionID: root, ...(title === undefined ? {} : { title }),
+        ...(coordinatorSessionIDs === undefined || coordinatorSessionIDs.length === 0 ? {} : { coordinatorSessionIDs }) }))
+    })
   }
 
   private async deferConnection() {

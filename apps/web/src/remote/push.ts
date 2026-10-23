@@ -1,6 +1,7 @@
 import type { PushCategories, PushKeys } from "@ycoding-ai/remote"
 import { isInstalledApp } from "../pwa/installed"
 import { createPushHttp } from "./http"
+import type { PushCoordinationFilter } from "./coordination"
 
 export type PushStatus = "unsupported" | "unavailable" | "blocked" | "off" | "needs-setup" | "on" | "error"
 
@@ -23,6 +24,8 @@ type Registration = { readonly pushManager: { getSubscription: () => Promise<Sub
   subscribe: (options: { readonly userVisibleOnly: true; readonly applicationServerKey: Uint8Array<ArrayBuffer> }) => Promise<Subscription> } }
 
 type PushHttp = Pick<ReturnType<typeof createPushHttp>, "key" | "subscribe" | "remove">
+type CoordinationFilter = () => PushCoordinationFilter | undefined
+const noFilter: CoordinationFilter = () => undefined
 
 export type PushPlatform = {
   readonly secure: boolean
@@ -49,7 +52,7 @@ export function pushSupport(platform: PushPlatform): PushStatus {
   return "off"
 }
 
-export async function syncPushState(platform: PushPlatform, http: PushHttp, categories: () => PushCategories): Promise<PushStatus> {
+export async function syncPushState(platform: PushPlatform, http: PushHttp, categories: () => PushCategories, filter: CoordinationFilter = noFilter): Promise<PushStatus> {
   const support = pushSupport(platform)
   if (support !== "off") return support
   const key = await http.key()
@@ -66,7 +69,7 @@ export async function syncPushState(platform: PushPlatform, http: PushHttp, cate
     const current = stale ? await manager.subscribe({ userVisibleOnly: true, applicationServerKey }) : existing
     const input = subscriptionInput(current)
     if (!input) return "error"
-    const registered = await register(http, input, categories)
+    const registered = await register(http, input, categories, filter)
     if (!registered.ok) return "error"
     if (stale) await serialized(() => http.remove(existing.endpoint))
     return "on"
@@ -90,15 +93,16 @@ function serialized<Value>(write: () => Promise<Value>): Promise<Value> {
   return next
 }
 
-function register(http: PushHttp, input: { readonly endpoint: string; readonly keys: PushKeys }, categories: () => PushCategories) {
-  return serialized(() => http.subscribe({ ...input, categories: categories() }))
+function register(http: PushHttp, input: { readonly endpoint: string; readonly keys: PushKeys }, categories: () => PushCategories, filter: CoordinationFilter) {
+  const coordinationFilter = filter()
+  return serialized(() => http.subscribe({ ...input, categories: categories(), ...(coordinationFilter === undefined ? {} : { coordinationFilter }) }))
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
-export async function enablePush(platform: PushPlatform, http: PushHttp, categories: () => PushCategories): Promise<{ status: PushStatus; message?: string }> {
+export async function enablePush(platform: PushPlatform, http: PushHttp, categories: () => PushCategories, filter: CoordinationFilter = noFilter): Promise<{ status: PushStatus; message?: string }> {
   const support = pushSupport(platform)
   if (support !== "off") return { status: support }
   const permission = await platform.requestPermission()
@@ -116,7 +120,7 @@ export async function enablePush(platform: PushPlatform, http: PushHttp, categor
       if (!existing) await subscription.unsubscribe()
       return { status: "error", message: "The browser did not provide push keys." }
     }
-    const registered = await register(http, input, categories)
+    const registered = await register(http, input, categories, filter)
     if (!registered.ok) {
       if (!existing) await subscription.unsubscribe()
       return { status: "error", message: registered.message }
@@ -127,13 +131,13 @@ export async function enablePush(platform: PushPlatform, http: PushHttp, categor
   }
 }
 
-export async function savePushCategories(platform: PushPlatform, http: PushHttp, categories: () => PushCategories): Promise<{ status: PushStatus; message?: string }> {
+export async function savePushCategories(platform: PushPlatform, http: PushHttp, categories: () => PushCategories, filter: CoordinationFilter = noFilter): Promise<{ status: PushStatus; message?: string }> {
   try {
     const subscription = pushSupport(platform) === "off" ? await (await platform.registration()).pushManager.getSubscription() : null
     if (!subscription) return { status: "off" }
     const input = subscriptionInput(subscription)
     if (!input) return { status: "error", message: "Saved on this device only. The browser did not provide push keys." }
-    const registered = await register(http, input, categories)
+    const registered = await register(http, input, categories, filter)
     if (!registered.ok) return { status: "error", message: `Saved on this device only. Closed-app alerts still use the previous choice: ${registered.message}` }
     return { status: "on" }
   } catch (cause) {

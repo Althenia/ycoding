@@ -191,7 +191,7 @@ const defaultSessions = [
   ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
-const sessions = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.has("carouselFamily") ? [{
+const sessions = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
   id: "ses_postgres_child", title: "Inspect Postgres indexes", parentID: "ses_postgres", projectID: "project-auth",
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
@@ -453,6 +453,10 @@ const form = {
     },
   ],
 }
+if (accountParams.get("masterInput") === "1") messages = [...messages,
+  { id: "msg_typed", type: "user", text: "Please review the auth change before lunch.", time: { created: ago(4), consumed: ago(3) } },
+  { id: "msg_master", type: "user", text: "I need the flaky suite fixed before we ship, so please take it.", metadata: { inputOrigin: "coordination", coordination: { coordinatorSessionID: "ses_master", groupID: "cgrp_release", dispatchID: "cdsp_9", generation: 1 } }, time: { created: ago(2), consumed: ago(1) } },
+]
 if (questionFlow) messages = [{ id: "msg_question_flow", type: "assistant", content: [{ type: "tool", id: "call_question_flow", name: "question", state: { status: "running", input: { questions: [{ header: "Scope", question: "Which sessions should the workspace reload after reconnect?", options: [{ label: "Active only", description: "Reload just the session you are watching" }, { label: "All advertised", description: "Reload every session in the advertisement" }] }] }, content: [] } }], time: { created: ago(1) } }]
 const allForm = {
   id: "frm_all_fixture",
@@ -634,6 +638,90 @@ function createFixtureStore(): Fixture {
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const inventoryInputs: Readonly<Record<string, unknown>>[] = []
   let transportsCreated = 0
+  type FixtureMember = { sessionID: string; role: "coordinator" | "worker" | "observer"; allowedTools?: string[]; resourceScopes?: string[] }
+  type FixtureGroup = { id: string; name: string; status: string; revision: number; policy: Record<string, unknown>; members: FixtureMember[]; claims: Record<string, unknown>[]; dispatches: Record<string, unknown>[]; receipts: Record<string, unknown>[]; created: number; updated: number }
+  const coordinationMode = accountParams.get("coordination")
+  const coordinationDelay = Number(accountParams.get("coordinationDelay") ?? 0)
+  const coordinationHardLimit = accountParams.get("hardLimit") === "none" ? null : 4
+  let coordinationSeq = 0
+  let coordinationGroups: FixtureGroup[] = coordinationMode === "empty" ? [] : [
+    { id: "cgrp_release", name: "Release train", status: "armed", revision: 3, created: ago(60), updated: ago(2),
+      policy: { concurrency: 2, queueCapacity: 64, budget: 25, delegatedDecisions: { categories: ["question", "review"] } },
+      members: [{ sessionID: "ses_lead", role: "coordinator" }, { sessionID: "ses_docs", role: "worker", allowedTools: ["read", "edit"], resourceScopes: ["docs/**"] }, { sessionID: "ses_tests", role: "observer" }],
+      claims: [{ groupID: "cgrp_release", targetSessionID: "ses_docs", holderSessionID: "ses_lead", generation: 1, status: "active", leaseExpiresAt: Date.now() + 5 * 60_000 }],
+      dispatches: [
+        { id: "cdsp_1", groupID: "cgrp_release", targetSessionID: "ses_tests", coordinatorSessionID: "ses_lead", generation: 1, status: "queued", reason: "capacity", text: "Run the suite", time: { created: ago(3), updated: ago(3) },
+          selection: { agent: "plan", model: { providerID: "openai", id: "gpt-6-sol" }, reason: "Planning only; the suite run needs no extra reasoning." } },
+        { id: "cdsp_2", groupID: "cgrp_release", targetSessionID: "ses_docs", coordinatorSessionID: "ses_lead", generation: 1, status: "admitted", text: "Update the changelog", time: { created: ago(5), updated: ago(4) },
+          selection: { agent: "build", model: { providerID: "anthropic", id: "claude-sonnet-5-5", profile: "work", variant: "high" }, reason: "Needs careful wording across three release notes." } },
+      ],
+      receipts: [
+        { id: "crcpt_1", groupID: "cgrp_release", dispatchID: "cdsp_2", kind: "admitted", sessionID: "ses_docs", time: Date.now() - 4 * 60_000,
+          selection: { agent: "build", model: { providerID: "anthropic", id: "claude-sonnet-5-5", profile: "work", variant: "high" }, reason: "Needs careful wording across three release notes." } },
+        { id: "crcpt_2", groupID: "cgrp_release", dispatchID: "cdsp_1", kind: "dispatched", sessionID: "ses_tests", time: Date.now() - 3 * 60_000,
+          selection: { agent: "plan", model: { providerID: "openai", id: "gpt-6-sol" }, reason: "Planning only; the suite run needs no extra reasoning." } },
+        { id: "crcpt_0", groupID: "cgrp_release", kind: "failed", sessionID: "ses_docs", time: Date.now() - 10 * 60_000, detail: "Session was busy" },
+      ] },
+    { id: "cgrp_docs", name: "Docs sweep", status: "disarmed", revision: 1, created: ago(30), updated: ago(30), policy: { concurrency: null, queueCapacity: 32 },
+      members: [{ sessionID: "ses_spare", role: "coordinator" }], claims: [], dispatches: [], receipts: [] },
+  ]
+  const coordinationInfo = (group: FixtureGroup) => ({ id: group.id, name: group.name, status: group.status, revision: group.revision, policy: group.policy, fencingGeneration: 1,
+    members: group.members.map((member) => ({ ...member, location: { directory: "/workspace/ycoding" } })), time: { created: group.created, updated: group.updated } })
+  const coordinationOutcome = (operation: string, input: Readonly<Record<string, unknown>> | undefined): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (coordinationMode === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
+    const group = coordinationGroups.find((entry) => entry.id === input?.groupID)
+    const missing: RemoteRequestOutcome = { status: "failed", error: { code: "invalid_message", message: "Group not found" } }
+    const mutate = (apply: () => RemoteRequestOutcome): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+      mutationRequests.push({ operation, input })
+      return coordinationDelay > 0 ? new Promise((resolve) => setTimeout(() => resolve(apply()), coordinationDelay)) : apply()
+    }
+    const stale = () => group !== undefined && input?.revision !== group.revision
+    const staleOutcome: RemoteRequestOutcome = { status: "failed", error: { code: "invalid_message", message: "Group revision changed" } }
+    const transition = (status: string) => mutate(() => {
+      if (group === undefined) return missing
+      if (stale()) return staleOutcome
+      group.status = status
+      group.revision += 1
+      return { status: "ok", value: { data: coordinationInfo(group) } }
+    })
+    if (operation === "coordination.list") {
+      if (coordinationMode === "error") return { status: "failed", error: { code: "internal_error", message: "Projects are unavailable" } }
+      return { status: "ok", value: { data: coordinationGroups.map((entry) => ({ ...coordinationInfo(entry), members: undefined, memberCount: entry.members.length })) } }
+    }
+    if (operation === "coordination.settings") {
+      const central = accountParams.get("central")
+      if (central === "unavailable") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
+      return { status: "ok", value: { data: { enabled: central !== "off", categories: ["question", "permission", "review"] } } }
+    }
+    if (operation === "coordination.get") return group === undefined ? missing : { status: "ok", value: { data: { ...coordinationInfo(group), claims: group.claims, dispatches: group.dispatches } } }
+    if (operation === "coordination.receipts") return group === undefined ? missing : { status: "ok", value: { data: group.receipts } }
+    if (operation === "coordination.capacity") {
+      if (group === undefined) return missing
+      const concurrency = group.policy.concurrency as number | null
+      return { status: "ok", value: { data: { groupID: group.id, concurrency, hardLimit: coordinationHardLimit, effectiveLimit: coordinationHardLimit === null ? null : Math.min(concurrency ?? coordinationHardLimit, coordinationHardLimit),
+        active: group.claims.length, waiting: 0, queued: group.dispatches.filter((dispatch) => dispatch.status === "queued").length, queueCapacity: group.policy.queueCapacity, available: null, spent: 1.25 } } }
+    }
+    if (operation === "coordination.create") return mutate(() => {
+      const created: FixtureGroup = { id: `cgrp_new_${++coordinationSeq}`, name: String(input?.name), status: "disarmed", revision: 1, created: Date.now(), updated: Date.now(),
+        policy: input?.policy as Record<string, unknown>, members: structuredClone(input?.members) as FixtureMember[], claims: [], dispatches: [], receipts: [] }
+      coordinationGroups = [...coordinationGroups, created]
+      return { status: "ok", value: { data: coordinationInfo(created) } }
+    })
+    if (operation === "coordination.members") return mutate(() => {
+      if (group === undefined) return missing
+      if (stale()) return staleOutcome
+      if (typeof input?.name === "string") group.name = input.name
+      group.members = structuredClone(input?.members) as FixtureMember[]
+      if (input?.policy !== undefined) group.policy = structuredClone(input.policy) as Record<string, unknown>
+      group.revision += 1
+      return { status: "ok", value: { data: coordinationInfo(group) } }
+    })
+    if (operation === "coordination.arm") return transition("armed")
+    if (operation === "coordination.stop") return transition("stopped")
+    if (operation === "coordination.complete") return transition("completed")
+    return { status: "failed", error: { code: "unknown_operation", message: "Unsupported coordination operation" } }
+  }
+  Object.assign(window, { coordinationBump: (groupID: string) => { const group = coordinationGroups.find((entry) => entry.id === groupID); if (group) group.revision += 1 } })
   let currentYolo = remoteScenarioData?.autonomy.yolo === true
   let currentAutoPermission = remoteScenarioData === undefined ? true : remoteScenarioData.autonomy.autoPermission === true
   let currentAutoGuardrail = remoteScenarioData === undefined ? true : remoteScenarioData.autonomy.autoGuardrail === true
@@ -800,6 +888,7 @@ function createFixtureStore(): Fixture {
     if (transcriptProbe && operation === "session.todo.list") return { status: "ok", value: { data: [{ content: "Verify stable transcript", status: "in_progress", priority: "high" }] } }
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
+    if (operation.startsWith("coordination.")) return coordinationOutcome(operation, input)
     if (accountParams.get("teamControls") === "unsupported" && ["session.taskCosts", "session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
       return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
     if ([

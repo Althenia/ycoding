@@ -24,7 +24,8 @@ import { useRoute } from "../context/route"
 import { useTuiLifecycle } from "../context/runtime"
 import { useLocation } from "../context/location"
 import { createTuiAttention } from "../attention"
-import { builtins } from "./builtins"
+import { createBuiltins } from "./builtins"
+import { useCoordinationOptional } from "../context/coordination"
 
 export interface PackageResolver {
   readonly resolve: (spec: string) => Promise<string | undefined>
@@ -71,6 +72,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver; b
   const shortcuts = Keymap.useShortcuts()
   const lifecycle = useTuiLifecycle()
   const location = useLocation()
+  const coordination = useCoordinationOptional()
   const directory = config.path ? path.dirname(config.path) : process.cwd()
   const [store, setStore] = createStore({
     ready: false,
@@ -143,7 +145,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver; b
             route.navigate(destination)
           },
           current() {
-            if (route.data.type === "provider-usage" || route.data.type === "workspaces")
+            if (route.data.type === "provider-usage" || route.data.type === "projects" || route.data.type === "workspaces")
               return route.data.sessionID
                 ? { type: "session" as const, sessionID: route.data.sessionID }
                 : { type: "home" as const }
@@ -237,7 +239,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver; b
       setStore("states", [])
     })
 
-    for (const plugin of props.builtins ?? builtins) {
+    for (const plugin of props.builtins ?? createBuiltins(coordination?.externalAllowed)) {
       setStore("registrations", plugin.id, {
         target: plugin.id,
         plugin,

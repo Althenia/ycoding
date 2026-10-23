@@ -3,6 +3,7 @@ import { RemoteLimits, isRemoteLatencySample, isRemoteReviewItemID, isWellFormed
 import { catalogKey, readCatalog, readFileFind, type AgentAttachmentInput, type CatalogTarget, type CatalogView, type FileAttachmentInput, type FileFindResult } from "./catalog"
 import type { DeviceAliasResponse, RemoteStoppedRecovery, RemoteUsageTaskCost } from "@ycoding-ai/remote"
 import { displayDeviceName } from "./device-alias"
+import { externalDelivery, readFilter, writeFilter, normalizeFilter, type ExternalKind, type NotificationFilter } from "./coordination"
 import { readTaskCosts } from "./usage-read"
 import { readGuardrailDecisions, mergeGuardrailDecisions } from "./decision-grades"
 import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
@@ -75,7 +76,7 @@ import { hasWaitingSession, sessionActivityGroup, sessionListRefreshNotice, type
 import type { QueryClient } from "@tanstack/solid-query"
 import { Store, batch } from "@tanstack/solid-store"
 import { describeOutcome } from "./outcome"
-import { createRemoteQueryClient, readWorkspaces, remoteKeys, type QueryScope, type RemoteLink } from "./queries"
+import { createRemoteQueries, createRemoteQueryClient, readWorkspaces, remoteKeys, type CoordinationOverview, type QueryScope, type RemoteLink } from "./queries"
 export type TodoView = { readonly content: string; readonly status: "pending" | "in_progress" | "completed" | "cancelled"; readonly priority: "high" | "medium" | "low" }
 
 function readTodos(value: unknown): readonly TodoView[] | undefined {
@@ -254,6 +255,7 @@ export type RemoteStoreState = {
   readonly teamCues: readonly TeamCue[]
   readonly transport: RemoteTransportStatus
   readonly latencySync: "idle" | "saving" | "saved" | "waiting" | "unsupported" | "unknown" | "failed"
+  readonly notificationFilter: NotificationFilter
   readonly telemetryConsent: { readonly status: "loading" | "undecided" | "enabled" | "disabled" | "unsupported" | "failed"; readonly consent?: RemoteTelemetryConsent; readonly error?: string }
   readonly lastRelayDrop?: { readonly code: number; readonly reason: string }
   readonly mutations: readonly PendingMutation[]
@@ -374,6 +376,9 @@ export type RemoteStore = {
   readonly setAutoGuardrail: (enabled: boolean) => Promise<boolean>
   readonly setAutoAnswer: (enabled: boolean) => Promise<boolean>
   readonly setSleep: (sleep: boolean) => Promise<boolean>
+  readonly setNotificationFilter: (filter: NotificationFilter) => boolean
+  readonly reloadNotificationFilter: () => void
+  readonly externalAllowed: (sessionID: string | undefined, kind: ExternalKind | undefined) => boolean
   readonly decideReview: (itemID: string, decision: ReviewDecision) => Promise<boolean>
   readonly reloadReview: () => Promise<void>
   readonly setGoal: (text: string) => Promise<boolean>
@@ -434,7 +439,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const device = container.state.devices.find((entry) => entry.id === deviceID)
     return device && device.alias !== undefined ? displayDeviceName(device) : options.deviceName?.(deviceID) ?? deviceID
   }
-  const delivery = options.notificationDelivery ?? createNotificationDelivery()
+  const delivery = options.notificationDelivery ?? createNotificationDelivery({ externalAllowed: (sessionID, kind) => externalAllowed(sessionID, kind) })
   const queryClient = options.queryClient ?? createRemoteQueryClient()
   const notificationTitles = new Map<string, string | undefined>()
   const activeNoticeTitleReads = new Set<string>()
@@ -468,6 +473,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },
     transport: { kind: "idle" },
     latencySync: "idle",
+    notificationFilter: readFilter(storage),
     telemetryConsent: { status: "loading" },
     unhandledEvents: 0,
   })
@@ -686,6 +692,25 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         recoveryWaiters.add(waiter)
       })
     },
+  }
+
+  const coordinatorIDs = (): ReadonlySet<string> | undefined => {
+    const scope = currentScope()
+    const overview = scope === undefined ? undefined : queryClient.getQueryData<CoordinationOverview>(remoteKeys.coordination(scope))
+    return overview?.status === "ready"
+      ? new Set(overview.groups.flatMap((group) => group.detail.members.filter((entry) => entry.role === "coordinator").map((entry) => entry.sessionID)))
+      : undefined
+  }
+
+  const ensureCoordinators = () => {
+    const scope = currentScope()
+    if (scope !== undefined && coordinatorIDs() === undefined) void queryClient.fetchQuery(createRemoteQueries(link, queryClient).coordination(scope, true)).catch(() => undefined)
+  }
+
+  const externalAllowed = (sessionID: string | undefined, kind: ExternalKind | undefined) => {
+    const filter = container.state.notificationFilter
+    if (filter.scope !== "all") ensureCoordinators()
+    return externalDelivery(filter, coordinatorIDs(), sessionID, kind)
   }
 
   const signalRecovery = () => {
@@ -4000,6 +4025,15 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const sessionID = container.state.activeSessionID
       if (sessionID !== undefined && transport !== undefined) await loadReview(transport, sessionID, selectionToken)
     },
+    setNotificationFilter: (filter) => {
+      const next = normalizeFilter(filter)
+      const saved = writeFilter(storage, next)
+      setState({ notificationFilter: next })
+      if (next.scope !== "all") ensureCoordinators()
+      return saved
+    },
+    reloadNotificationFilter: () => setState({ notificationFilter: readFilter(storage) }),
+    externalAllowed,
     setSleep: async (sleep) => {
       const sessionID = container.state.activeSessionID
       const token = selectionToken

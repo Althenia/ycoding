@@ -51,6 +51,8 @@ Supported project resource domains are:
 
 Maintained built-in agent Markdown frontmatter is the source for each built-in's description, mode, color, and request temperature. Visible primary and subagent built-ins use role-specific temperatures from 0.4 to 0.6. Their shared prompt requires current todo state and tool calls constructed from supplied schemas or discovered signatures rather than capability prose. Invalid-input results identify fields to correct only after the preceding call is known not to have mutated state; denial and unavailability are distinct, and uncertain mutations are never automatically replayed. Effective permissions remain runtime defaults and policies, not agent-file frontmatter. Configured Markdown agents continue to use the normal configuration merge.
 
+Active coordination roles add the `ycoding/coordination-voice` instruction source for master Sessions. It specifies the owner's first-person instruction channel, assignment-based agent and reasoning selection, and a receipt reason for every dispatch. Exact agent IDs and model variants must be available in the target Location. Decision claims require recorded instructions or current delegation. Originating Session identity is audit metadata, not a sender persona. Native control settlement remains separate from message text.
+
 There is no generic `.ycoding/tool` loader. Custom tools must be provided by a plugin or MCP server.
 
 ## Built-in workspace memory

@@ -18,6 +18,8 @@ import { Config } from "../config"
 import { AccountConnectors } from "../account-connectors"
 import { ConfigEfficiency } from "../config/efficiency"
 import { Database } from "../database/database"
+import { CoordinationAccessResolver } from "../coordination/access"
+import { CoordinationAccess } from "./coordination-access"
 import { makeLocationNode } from "../effect/app-node"
 import { PluginHooks } from "../plugin/hooks"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
@@ -113,6 +115,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service
       const registry = yield* ToolRegistry.Service
+      const coordination = yield* CoordinationAccessResolver.Service
       const config = yield* Config.Service
       const connectors = yield* AccountConnectors.Service
       const cacheRuntime = yield* SessionCacheRuntime.Service
@@ -149,7 +152,10 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const stepLimitReached = agent.info.steps !== undefined && input.step >= agent.info.steps
         const terminalResponseRecovery = input.terminalResponseRecovery === true
         const toolsDisabled = terminalResponseRecovery || stepLimitReached
-        const permissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [])
+        const basePermissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [])
+        const available = yield* registry.available(basePermissions, Config.capabilities(configEntries))
+        const restrictions = yield* coordination.forSession(session.id)
+        const permissions = [...basePermissions, ...restrictions.flatMap((access) => CoordinationAccess.rules(access, available))]
         const executableTools = toolsDisabled
           ? undefined
           : yield* registry.materialize(
@@ -579,6 +585,7 @@ export function configured(options?: SessionModelHeaders.Options) {
       Config.node,
       AccountConnectors.node,
       Database.node,
+      CoordinationAccessResolver.node,
       SessionCacheRuntime.node,
       SessionContinuation.node,
       SessionProviderState.node,

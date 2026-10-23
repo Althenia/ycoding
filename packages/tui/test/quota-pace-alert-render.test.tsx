@@ -30,7 +30,7 @@ test.each([
   const slots: Array<Parameters<Context["ui"]["slot"]>[1]> = []
   const attention = createTuiAttention({
     renderer: { isDestroyed: false, on() {}, off() {}, triggerNotification: () => true },
-    config: { attention: { enabled: true, notifications: true, sound: false, volume: 0.4, sound_pack: "ycoding.default", sounds: {} } },
+    config: { attention: { enabled: true, notifications: true, sound: false, volume: 0.4, sound_pack: "ycoding.default", sounds: {}, coordination: { scope: "all" } } },
   })
   const context = createTuiPluginContext({
       attention,

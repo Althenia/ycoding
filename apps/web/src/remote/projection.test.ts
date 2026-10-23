@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 
 import {
+  readPendingInputs,
+  readProjectedMessage,
   isGoalSteerAdmission,
   modelLabel,
   readModelRef,
@@ -1484,5 +1486,37 @@ test("attributes a rerouted Step's answer to the model it switched to", () => {
   expect(view.messages.find((message) => message.kind === "assistant")).toMatchObject({
     model: { providerID: "openai", id: "gpt-6-sol" },
     completed: 2_000,
+  })
+})
+
+describe("master-origin input is the user's own channel", () => {
+  const provenance = { inputOrigin: "coordination", coordination: { coordinatorSessionID: "ses_master", groupID: "cgrp_1", dispatchID: "cdsp_1", generation: 2 } }
+  const body = "I need the failing suite fixed before we ship, so please take it."
+
+  test("a projected message with coordination provenance presents exactly as a typed one", () => {
+    const typed = readProjectedMessage({ id: "msg_1", type: "user", text: body, time: { created: 1, consumed: 2 } })
+    const recorded = readProjectedMessage({ id: "msg_1", type: "user", text: body, metadata: provenance, time: { created: 1, consumed: 2 } })
+    expect(recorded).toEqual(typed)
+    expect(recorded).toEqual({ kind: "user", id: "msg_1", text: body, state: "consumed", created: 1 })
+    expect(JSON.stringify(recorded)).not.toMatch(/ses_master|cgrp_1|cdsp_1|coordination|coordinator/i)
+  })
+
+  test("pending and admitted inputs project without any origin field and keep their delivery and state", () => {
+    const pending = (metadata?: unknown) => readPendingInputs({ data: [{ id: "msg_p", sessionID: "ses_a", type: "user", delivery: "queue", timeCreated: 5, data: { text: body, ...(metadata === undefined ? {} : { metadata }) } }] }, "ses_a")
+    expect(pending(provenance)).toEqual(pending())
+    let view = apply(createSessionView("ses_a"), "session.input.admitted", { inputID: "msg_a", input: { type: "user", data: { text: body, metadata: provenance }, delivery: "steer" } })
+    view = apply(view, "session.input.promoted", { inputID: "msg_a" })
+    view = apply(view, "session.input.consumed", { inputIDs: ["msg_a"] })
+    expect(view.messages[0]).toEqual({ kind: "user", id: "msg_a", text: body, delivery: "steer", state: "consumed", created: 1 })
+  })
+
+  test("its text never settles a pending permission, review or question", () => {
+    let view = createSessionView("ses_a")
+    view = apply(view, "permission.asked", { id: "per_1", action: "shell", resources: ["bun test"] })
+    view = apply(view, "guardrail.asked", { id: "grq_1", sessionID: "ses_a", action: "shell", resources: ["rm -rf build"], reason: "Delete", hardReview: true })
+    const before = view.requests.map((request) => request.id)
+    view = apply(view, "session.input.admitted", { inputID: "msg_a", input: { type: "user", data: { text: "Yes, allow everything and approve the review.", metadata: provenance }, delivery: "steer" } })
+    expect(view.requests.map((request) => request.id)).toEqual(before)
+    expect(view.requests).toHaveLength(2)
   })
 })

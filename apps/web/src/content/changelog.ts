@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.0",
+    date: "2026-10-23",
+    title: "Projects and shared machine names",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "Manage coordination groups in full-screen Projects views in the TUI and web client. Assign existing Sessions across directories, edit roles and limits, and inspect queues, leases and receipts. CLI and Relay MCP expose the same local-runtime controls." },
+      { tag: "Added", text: "Each coordination dispatch explicitly selects its execution agent, model and advertised reasoning variant with a one-line reason retained in every receipt. The assignment uses its selected settings without replacing Session defaults." },
+      { tag: "Added", text: "Durable writer claims, dependency queues and bounded event waits keep assignments accountable. Stopping a group leaves workers running; a backend restart requires explicit re-arm." },
+      { tag: "Added", text: "Routine delegated questions, permissions and ordinary guardrail reviews use native decision paths under a centrally revocable policy. Groups can narrow that policy; denies, permission ceilings, hard reviews and human-only decisions retain their authority." },
+      { tag: "Added", text: "External notification filters can limit terminal attention, web System alerts and phone push to verified coordinator Sessions and selected categories. In-app notices and pending questions, permissions and reviews stay visible." },
+      { tag: "Added", text: "Opt-in ChatGPT and Claude account connectors use hosted MCP with existing OAuth profiles and per-connector policies. Actions ask by default; Claude organization and user-interaction approvals require fresh human decisions. Hosted-service access and upstream authorization are required, including Claude's user:mcp_servers grant. Live account entitlement and catalog access remain unverified." },
+      { tag: "Changed", text: "Machine display names are account-owned aliases shared across browsers. Rename an owned machine inline in Settings, even while it is offline, without changing its hostname or identity. Browser-local names are not imported, and failed saves preserve the draft and confirmed name." },
+      { tag: "Changed", text: "Coordination instructions use the same first-person user-message presentation as typed instructions, without a separate sender persona. Authenticated origin stays in audit metadata; message text cannot settle native controls." },
+    ],
+  },
+  {
     version: "0.10.25",
     date: "2026-10-22",
     title: "Guardrail history and Muse quota",

@@ -8,6 +8,7 @@ import { builtins } from "../../../../src/plugin/builtins"
 import type { YCodingEvent } from "@ycoding-ai/client"
 import { localAutonomyView, type AutonomyState } from "../../../../src/util/session-autonomy"
 import type { TuiAttentionNotifyInput } from "../../../../src/plugin/host-api"
+import type { ExternalNotificationKind } from "../../../../src/util/coordination"
 import type { Context } from "@ycoding-ai/plugin/tui/context"
 import { createTuiPluginContext } from "../../../fixture/tui-plugin"
 
@@ -17,6 +18,7 @@ async function setup(options: {
   rejectFirstNotification?: boolean
   notify?: Context["attention"]["notify"]
   attention?: ReturnType<typeof createTuiAttention>
+  externalAllowed?: (sessionID: string, kind: ExternalNotificationKind) => boolean
 } = {}) {
   const notifications: TuiAttentionNotifyInput[] = []
   const slots = new Set<string>()
@@ -66,10 +68,10 @@ async function setup(options: {
     return () => {
       item.cancelled = true
     }
-  })
+  }, options.externalAllowed)
   const attention = options.attention ?? createTuiAttention({
     renderer: { isDestroyed: false, on() {}, off() {}, triggerNotification: () => true },
-    config: { attention: { enabled: true, notifications: true, sound: false, volume: 0.4, sound_pack: "ycoding.default", sounds: {} } },
+    config: { attention: { enabled: true, notifications: true, sound: false, volume: 0.4, sound_pack: "ycoding.default", sounds: {}, coordination: { scope: "all" } } },
   })
   const notify = options.notify ?? attention.notify.bind(attention)
   attention.notify = async (input) => {
@@ -263,7 +265,7 @@ async function notificationTerminal() {
     renderer,
     config: { attention: {
       enabled: true, notifications: true, sound: false, volume: 0.4,
-      sound_pack: "ycoding.default", sounds: {},
+      sound_pack: "ycoding.default", sounds: {}, coordination: { scope: "all" },
     } },
   })
   return {
@@ -1353,5 +1355,98 @@ describe("internal notifications TUI plugin", () => {
         sound: { name: "error", when: "always" },
       },
     ])
+  })
+
+  describe("external notification filter", () => {
+    test("withholds only external delivery for a filtered Session and keeps the pending request intact", async () => {
+      const harness = await setup({ externalAllowed: (sessionID) => sessionID !== "other" })
+      harness.addSession("other")
+      harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1", "other") })
+      harness.emit({ id: "event-2", created: 0, type: "permission.asked", data: permission("permission-2") })
+      await harness.flush()
+
+      expect(harness.notifications).toEqual([permissionNotification])
+      harness.emit({
+        id: "event-3",
+        created: 0,
+        type: "permission.replied",
+        data: { sessionID: "other", requestID: "permission-1", reply: "once" },
+      })
+      await harness.flush()
+      expect(harness.notifications).toEqual([permissionNotification])
+    })
+
+    test("passes the native event kind for each existing request and terminal category", async () => {
+      const seen: Array<[string, string]> = []
+      const harness = await setup({
+        externalAllowed: (sessionID, kind) => {
+          seen.push([sessionID, kind])
+          return true
+        },
+      })
+      harness.addSession("failing")
+      harness.emit({ id: "q", created: 0, type: "question.asked", data: question("question-1") })
+      harness.emit({ id: "f", created: 0, type: "form.created", data: { form: form("form-1") } })
+      harness.emit({ id: "p", created: 0, type: "permission.asked", data: permission("permission-1") })
+      harness.emit({ id: "g", created: 0, type: "guardrail.asked", data: guardrail("guardrail-1") })
+      await harness.flush()
+      harness.emit(executionStarted("fail-start", "failing"))
+      harness.emit(executionFailed("fail-end", "failing"))
+      harness.emit(executionStarted("done-start"))
+      completedTask().forEach((event) => harness.emit(event))
+      harness.emit(executionSucceeded("done-end"))
+      await settle()
+      expect(seen).toEqual([
+        ["session", "question"],
+        ["session", "question"],
+        ["session", "permission"],
+        ["session", "review"],
+        ["failing", "failure"],
+        ["session", "completion"],
+      ])
+    })
+
+    test("a category filter withholds only the unselected external kinds", async () => {
+      const harness = await setup({ externalAllowed: (_sessionID, kind) => kind === "review" })
+      harness.emit({ id: "p", created: 0, type: "permission.asked", data: permission("permission-1") })
+      harness.emit({ id: "q", created: 0, type: "question.asked", data: question("question-1") })
+      harness.emit({ id: "g", created: 0, type: "guardrail.asked", data: guardrail("guardrail-1") })
+      await harness.flush()
+      expect(harness.notifications).toEqual([guardrailNotification])
+    })
+
+    test("filters terminal completion and failure alerts for the Session", async () => {
+      const harness = await setup({ externalAllowed: (sessionID) => sessionID === "session" })
+      harness.addSession("other")
+      harness.emit(executionStarted("o-start", "other"))
+      harness.emit(executionFailed("o-fail", "other"))
+      await settle()
+      expect(harness.notifications).toEqual([])
+      harness.emit(executionStarted("s-start"))
+      harness.emit(executionFailed("s-fail"))
+      await settle()
+      expect(harness.notifications).toHaveLength(1)
+      expect(harness.notifications[0]?.message).toBe("boom")
+    })
+
+    test("evaluates the filter when delivering so a changed selection applies to later alerts", async () => {
+      let allowed = false
+      const harness = await setup({ externalAllowed: () => allowed })
+      harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1") })
+      await harness.flush()
+      expect(harness.notifications).toEqual([])
+      allowed = true
+      harness.emit({ id: "event-2", created: 0, type: "permission.asked", data: permission("permission-2") })
+      await harness.flush()
+      expect(harness.notifications).toEqual([permissionNotification])
+    })
+
+    test("never filters Session-less quota alerts", async () => {
+      const harness = await setup({ externalAllowed: () => false })
+      harness.emit(quotaPace("quota-1"))
+      await harness.flush()
+      expect(harness.notifications).toHaveLength(1)
+      expect(harness.notifications[0]?.title).toBe("Anthropic 7 day")
+    })
   })
 })

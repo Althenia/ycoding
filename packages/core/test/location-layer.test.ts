@@ -672,6 +672,7 @@ describe("LocationServiceMap", () => {
               const expected = [
                 "browser",
                 "computer",
+                "coordination",
                 "decision",
                 "edit",
                 "glob",

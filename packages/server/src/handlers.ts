@@ -39,9 +39,11 @@ import { BrowserHandler } from "./handlers/browser"
 import { IsolatedBrowserHandler } from "./handlers/isolated-browser"
 import { KeepAwakeHandler } from "./handlers/keep-awake"
 import { RemoteHandler } from "./handlers/remote"
+import { CoordinationHandler } from "./handlers/coordination"
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
+  CoordinationHandler,
   ServerHandler,
   DebugHandler,
   LocationHandler,

@@ -74,6 +74,7 @@ async function harness(options: {
   readonly noticeError?: { readonly code: RemoteErrorCode; readonly message: string }
   readonly noticePage?: RemoteNoticePage
   readonly noticeHandler?: (request: RemoteNoticeRequest) => unknown | Promise<unknown>
+  readonly storage?: StorageLike
 } = {}): Promise<Harness> {
   const devices: readonly RemoteDeviceInfo[] =
     options.devices ?? [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true }]
@@ -117,8 +118,10 @@ async function harness(options: {
     schedule,
     batchMs: 20,
     now: () => 1_000,
+    ...(options.storage === undefined ? {} : { storage: options.storage }),
     notificationDelivery: createNotificationDelivery({
       preferences: () => readNotificationPreferences(preferences),
+      externalAllowed: (sessionID, kind) => store.externalAllowed(sessionID, kind),
       desktop: {
         show: (alert) => {
           alerts.push(alert)
@@ -181,6 +184,75 @@ async function raised(test: Harness, category: NoticeCategory, sessionID = "ses_
   await test.runUntil(() => test.store.state().notifications.some((entry) => entry.id === id))
   return id
 }
+
+describe("external delivery filter", () => {
+  const coordination = (lead: string): RelayRequestHandler => (request) => {
+    if (!request.operation.startsWith("coordination.")) return "default"
+    const group = { id: "cgrp_1", name: "Release", status: "armed", revision: 1, policy: { concurrency: 1, queueCapacity: 64 }, fencingGeneration: 1, time: { created: 1, updated: 1 } }
+    if (request.operation === "coordination.list") return { ok: true, value: { data: [{ ...group, memberCount: 2 }] } }
+    if (request.operation === "coordination.get") return { ok: true, value: { data: { ...group, members: [{ sessionID: lead, role: "coordinator", location: { directory: "/repo" } }, { sessionID: lead === "ses_b" ? "ses_a" : "ses_b", role: "worker", location: { directory: "/repo" } }], claims: [], dispatches: [] } } }
+    if (request.operation === "coordination.capacity") return { ok: true, value: { data: { groupID: "cgrp_1", concurrency: 1, hardLimit: 2, effectiveLimit: 1, active: 0, waiting: 0, queued: 0, queueCapacity: 64, available: 1, spent: 0 } } }
+    if (request.operation === "coordination.receipts") return { ok: true, value: { data: [] } }
+    return { ok: false, code: "unknown_operation", message: "unknown" }
+  }
+
+  test("a stored selection gates System alerts by Session while the in-app list keeps every notice", async () => {
+    const backing = storage()
+    const test = await harness({ storage: backing, handler: coordination("ses_b") })
+    try {
+      await test.openSession()
+      expect(test.store.state().notificationFilter).toEqual({ scope: "all" })
+      expect(test.store.setNotificationFilter({ scope: "selected", sessionIDs: ["ses_b"], categories: ["completion"] })).toBe(true)
+      expect(JSON.parse(backing.getItem("ycoding.remote.notification-filter") ?? "null")).toEqual({ scope: "selected", sessionIDs: ["ses_b"], categories: ["completion"] })
+      await test.runUntil(() => test.store.externalAllowed("ses_b", "completion"))
+      await raised(test, "agent-completed", "ses_a")
+      await raised(test, "approval-requested", "ses_b")
+      await raised(test, "agent-completed", "ses_b")
+      expect(test.store.state().notifications.map((entry) => entry.sessionID).sort()).toEqual(["ses_a", "ses_b", "ses_b"])
+      expect(test.alerts.map((alert) => [alert.sessionID, alert.title])).toEqual([["ses_b", "YCoding — work finished"]])
+    } finally { await test.stop() }
+  })
+
+  test("the stored filter is adopted at start and a malformed stored value reads as all", async () => {
+    const stored = await harness({ storage: storage({ "ycoding.remote.notification-filter": JSON.stringify({ scope: "selected", sessionIDs: [] }) }) })
+    try { expect(stored.store.state().notificationFilter).toEqual({ scope: "selected", sessionIDs: [] }) } finally { await stored.stop() }
+    const broken = await harness({ storage: storage({ "ycoding.remote.notification-filter": "{nope" }) })
+    try {
+      expect(broken.store.state().notificationFilter).toEqual({ scope: "all" })
+      expect(broken.store.externalAllowed("ses_a", "question")).toBe(true)
+    } finally { await broken.stop() }
+  })
+
+  test("the coordinators scope withholds alerts until the coordinator list loads and never reads as all sessions", async () => {
+    const test = await harness({ storage: storage(), handler: coordination("ses_a") })
+    try {
+      await test.openSession()
+      expect(test.store.setNotificationFilter({ scope: "coordinators" })).toBe(true)
+      expect(test.store.externalAllowed("ses_a", "question")).toBe(false)
+      await test.runUntil(() => test.store.externalAllowed("ses_a", "question"))
+      expect(test.store.externalAllowed("ses_b", "question")).toBe(false)
+      expect(test.store.externalAllowed(undefined, undefined)).toBe(true)
+      await raised(test, "approval-requested", "ses_b")
+      await raised(test, "agent-completed", "ses_a")
+      expect(test.alerts.map((alert) => alert.sessionID)).toEqual(["ses_a"])
+    } finally { await test.stop() }
+  })
+
+  test("a connector without the Projects operations keeps the coordinators scope withheld", async () => {
+    const test = await harness({ storage: storage(), handler: (request) => request.operation.startsWith("coordination.") ? { ok: false, code: "unknown_operation", message: "unknown" } : "default" })
+    try {
+      await test.openSession()
+      test.store.setNotificationFilter({ scope: "coordinators" })
+      await test.flush()
+      expect(test.store.externalAllowed("ses_a", "question")).toBe(false)
+      await raised(test, "agent-completed", "ses_a")
+      expect(test.alerts).toEqual([])
+      expect(test.store.setNotificationFilter({ scope: "all" })).toBe(true)
+      await raised(test, "agent-completed", "ses_a")
+      expect(test.alerts).toHaveLength(1)
+    } finally { await test.stop() }
+  })
+})
 
 describe("remote notification delivery", () => {
   test("a synced notice outside the resident Sessions page takes its carousel title without a detail read", async () => {

@@ -19,6 +19,12 @@ export function preloadKeepAwake(remote: RemoteSession | undefined) {
   void remote.store.queryClient.query(remote.queries.keepAwake(scope, true)).catch(() => {})
 }
 
+export function preloadCoordination(remote: RemoteSession | undefined) {
+  const scope = connectedScope(remote)
+  if (remote === undefined || scope === undefined) return
+  void remote.store.queryClient.query(remote.queries.coordination(scope, true)).catch(() => {})
+}
+
 export function preloadWorkspaces(remote: RemoteSession | undefined) {
   const scope = connectedScope(remote)
   if (remote === undefined || scope === undefined) return

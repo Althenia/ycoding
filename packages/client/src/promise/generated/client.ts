@@ -411,6 +411,34 @@ import type {
   McpEventsSubscribeOutput,
   McpEventsUnsubscribeInput,
   McpEventsUnsubscribeOutput,
+  CoordinationSettingsOutput,
+  CoordinationListOutput,
+  CoordinationCreateInput,
+  CoordinationCreateOutput,
+  CoordinationGetInput,
+  CoordinationGetOutput,
+  CoordinationMembersInput,
+  CoordinationMembersOutput,
+  CoordinationArmInput,
+  CoordinationArmOutput,
+  CoordinationStopInput,
+  CoordinationStopOutput,
+  CoordinationCompleteInput,
+  CoordinationCompleteOutput,
+  CoordinationClaimInput,
+  CoordinationClaimOutput,
+  CoordinationReleaseInput,
+  CoordinationReleaseOutput,
+  CoordinationDispatchInput,
+  CoordinationDispatchOutput,
+  CoordinationReceiptsInput,
+  CoordinationReceiptsOutput,
+  CoordinationWaitInput,
+  CoordinationWaitOutput,
+  CoordinationCancelWaitInput,
+  CoordinationCancelWaitOutput,
+  CoordinationCapacityInput,
+  CoordinationCapacityOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -3328,6 +3356,216 @@ export function make(options: ClientOptions) {
             body: { context: input["context"], subscription: input["subscription"] },
             successStatus: 200,
             declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+    },
+    coordination: {
+      settings: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationSettingsOutput }>(
+          {
+            method: "GET",
+            path: `/api/coordination/settings`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      list: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationListOutput }>(
+          {
+            method: "GET",
+            path: `/api/coordination`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      create: (input: CoordinationCreateInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationCreateOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination`,
+            body: { name: input["name"], policy: input["policy"], members: input["members"] },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      get: (input: CoordinationGetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationGetOutput }>(
+          {
+            method: "GET",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      members: (input: CoordinationMembersInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationMembersOutput }>(
+          {
+            method: "PUT",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/members`,
+            body: {
+              revision: input["revision"],
+              name: input["name"],
+              members: input["members"],
+              policy: input["policy"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      arm: (input: CoordinationArmInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationArmOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/arm`,
+            body: { revision: input["revision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      stop: (input: CoordinationStopInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationStopOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/stop`,
+            body: { revision: input["revision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      complete: (input: CoordinationCompleteInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationCompleteOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/complete`,
+            body: { revision: input["revision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      claim: (input: CoordinationClaimInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationClaimOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/claim`,
+            body: {
+              revision: input["revision"],
+              targetSessionID: input["targetSessionID"],
+              holderSessionID: input["holderSessionID"],
+              leaseMs: input["leaseMs"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      release: (input: CoordinationReleaseInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationReleaseOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/release`,
+            body: {
+              revision: input["revision"],
+              targetSessionID: input["targetSessionID"],
+              holderSessionID: input["holderSessionID"],
+              generation: input["generation"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      dispatch: (input: CoordinationDispatchInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationDispatchOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/dispatch`,
+            body: {
+              dispatchID: input["dispatchID"],
+              targetSessionID: input["targetSessionID"],
+              text: input["text"],
+              selection: input["selection"],
+              dependsOn: input["dependsOn"],
+              resourceScope: input["resourceScope"],
+              allowedTools: input["allowedTools"],
+              revision: input["revision"],
+              holderSessionID: input["holderSessionID"],
+              generation: input["generation"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      receipts: (input: CoordinationReceiptsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationReceiptsOutput }>(
+          {
+            method: "GET",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/receipts`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      wait: (input: CoordinationWaitInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationWaitOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/wait`,
+            body: {
+              waitID: input["waitID"],
+              targets: input["targets"],
+              timeoutMs: input["timeoutMs"],
+              batch: input["batch"],
+              revision: input["revision"],
+              holderSessionID: input["holderSessionID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      cancelWait: (input: CoordinationCancelWaitInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationCancelWaitOutput }>(
+          {
+            method: "POST",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/wait/cancel`,
+            body: { revision: input["revision"], waitID: input["waitID"], holderSessionID: input["holderSessionID"] },
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      capacity: (input: CoordinationCapacityInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: CoordinationCapacityOutput }>(
+          {
+            method: "GET",
+            path: `/api/coordination/${encodeURIComponent(input.groupID)}/capacity`,
+            successStatus: 200,
+            declaredStatuses: [409, 401, 400],
             empty: false,
           },
           requestOptions,

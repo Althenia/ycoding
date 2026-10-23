@@ -6,6 +6,7 @@ import { Runtime } from "./framework/runtime"
 import { main } from "./main"
 
 const handlers = Runtime.handlers(TuiCommand, {
+  coordination: () => import("./commands/handlers/coordination"),
   $: () => import("./commands/handlers/tui"),
   run: () => import("./commands/handlers/run"),
   update: () => import("./commands/handlers/update"),

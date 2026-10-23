@@ -14,7 +14,7 @@ import {
   type SessionChip,
 } from "../view-model"
 
-export const views = ["/remote", "/remote/sessions", "/remote/session", "/remote/usage", "/remote/settings"] as const
+export const views = ["/remote", "/remote/sessions", "/remote/session", "/remote/projects", "/remote/usage", "/remote/settings"] as const
 
 export type RemoteView = (typeof views)[number]
 

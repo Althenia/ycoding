@@ -1,4 +1,7 @@
 import { Database } from "@ycoding-ai/core/database/database"
+import { CoordinationRuntime } from "@ycoding-ai/core/session/coordination-runtime"
+import { CoordinationService } from "@ycoding-ai/core/coordination/index"
+import { CoordinationSettings } from "@ycoding-ai/core/coordination-settings"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { httpClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -63,6 +66,9 @@ import { SessionMcpEvents } from "@ycoding-ai/core/mcp-events/index"
 import { McpEventsAuthorization } from "./mcp-events-authorization"
 
 const applicationServices = LayerNode.group([
+  CoordinationRuntime.node,
+  CoordinationService.node,
+  CoordinationSettings.node,
   Database.node,
   EventRuntime.node,
   EventLogger.node,

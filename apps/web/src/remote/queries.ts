@@ -10,6 +10,10 @@ import type {
   RemoteWorkspaceInfo,
   RemoteUsageForecast,
 } from "@ycoding-ai/remote"
+import {
+  readCapacity, readCentralPolicy, readDetail, readGroups, readReceipts,
+  type CapacityView, type CentralPolicy, type GroupDetail, type GroupSummary, type ReceiptView,
+} from "./coordination"
 import { readUsageForecast } from "./usage-read"
 import { keepAwakeAnswer, readKeepAwakeStatus, type KeepAwakeState } from "./keep-awake"
 import { describeOutcome } from "./outcome"
@@ -52,7 +56,20 @@ export const remoteKeys = {
     [...remoteKeys.incidentGuidanceModel(scope, input), input.sessionID ?? ""] as const,
   keepAwake: (scope: QueryScope) => [...remoteKeys.scope(scope), "keepAwake"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
+  coordination: (scope: QueryScope) => [...remoteKeys.scope(scope), "coordination"] as const,
 }
+
+export type CoordinationBundle = {
+  readonly summary: GroupSummary
+  readonly detail: GroupDetail
+  readonly capacity: CapacityView
+  readonly receipts: readonly ReceiptView[]
+}
+export type CoordinationOverview =
+  | { readonly status: "ready"; readonly groups: readonly CoordinationBundle[]; readonly central: CentralPolicy | undefined }
+  | { readonly status: "unsupported" }
+export type CoordinationOperation = "coordination.create" | "coordination.members" | "coordination.arm" | "coordination.stop" | "coordination.complete"
+export type CoordinationChange = { readonly reached: true } | { readonly reached: false; readonly message: string; readonly unconfirmed?: true }
 
 export type IncidentGuidanceQueryInput = RemoteIncidentGuidanceInput & { readonly sessionID?: string }
 
@@ -312,7 +329,63 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     })
   }
 
+  const coordination = (scope: QueryScope | undefined, enabled: boolean) => {
+    const current = scope ?? idleScope
+    const unreadable = new Error("The device returned an unreadable project answer.")
+    return queryOptions({
+      queryKey: remoteKeys.coordination(current),
+      enabled: scope !== undefined && enabled,
+      staleTime: 15_000,
+      refetchOnMount: "always",
+      retry: false,
+      queryFn: async (): Promise<CoordinationOverview> => {
+        const listed = await link.request(current, "coordination.list", { timeoutMs: 10_000 })
+        if (unknownOperation(listed)) return { status: "unsupported" }
+        if (listed.status !== "ok") throw new Error(describeOutcome(listed, "Projects"))
+        const summaries = readGroups(listed.value)
+        if (summaries === undefined) throw unreadable
+        const read = async <Value>(operation: "coordination.get" | "coordination.capacity" | "coordination.receipts", groupID: string, parse: (value: unknown) => Value | undefined) => {
+          const outcome = await link.request(current, operation, { input: { groupID }, timeoutMs: 10_000 })
+          if (outcome.status !== "ok") throw new Error(describeOutcome(outcome, "Projects"))
+          const value = parse(outcome.value)
+          if (value === undefined) throw unreadable
+          return value
+        }
+        const groups: CoordinationBundle[] = []
+        for (let start = 0; start < summaries.length; start += 3) {
+          groups.push(...await Promise.all(summaries.slice(start, start + 3).map(async (summary) => {
+            const [detail, capacity, receipts] = await Promise.all([
+              read("coordination.get", summary.id, readDetail), read("coordination.capacity", summary.id, readCapacity), read("coordination.receipts", summary.id, readReceipts),
+            ])
+            return { summary, detail, capacity, receipts }
+          })))
+        }
+        const settings = await link.request(current, "coordination.settings", { timeoutMs: 10_000 })
+        return { status: "ready", groups, central: settings.status === "ok" ? readCentralPolicy(settings.value) : undefined }
+      },
+    })
+  }
+
+  const refreshCoordination = (scope: QueryScope) => refetchFresh([remoteKeys.coordination(scope)])
+
+  const changeCoordination = async (scope: QueryScope, operation: CoordinationOperation, input: Readonly<Record<string, unknown>>): Promise<CoordinationChange> => {
+    const outcome = await link.request(scope, operation, { input })
+    const reread = () => client.refetchQueries({ queryKey: remoteKeys.coordination(scope), type: "all" }).catch(() => undefined)
+    if (outcome.status === "ok") {
+      await reread()
+      return { reached: true }
+    }
+    if (unknownOperation(outcome)) return { reached: false, message: "Update YCoding on this machine to manage Projects from here." }
+    if (outcome.status === "unknown") {
+      await reread()
+      return { reached: false, unconfirmed: true, message: `${describeOutcome(outcome, "Projects")}. The result is unconfirmed and was not sent again; the list below shows what the machine reports now.` }
+    }
+    if (outcome.status === "failed") await reread()
+    return { reached: false, message: describeOutcome(outcome, "Projects") }
+  }
+
   return {
+    coordination, refreshCoordination, changeCoordination,
     usageProviders, usageSummary, usageForecast, usageReport, refreshUsage, retryUsageReport,
     incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
     keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,

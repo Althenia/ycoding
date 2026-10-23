@@ -6,6 +6,7 @@ import { RemoteCommand } from "./remote"
 import { RunCommand } from "./run"
 import { ServiceCommand } from "./service"
 import { UpdateCommand } from "./update"
+import { CoordinationCommand } from "./coordination"
 
 declare const YCODING_CLI_NAME: string | undefined
 
@@ -23,7 +24,7 @@ const ServeCommand = Spec.make("serve", {
 
 export const TuiCommand = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING_CLI_NAME : "ycoding", {
   description: "YCoding TUI",
-  commands: [RunCommand, UpdateCommand, MeetingCommand, RemoteCommand, ServiceCommand, KeepAwakeCommand, ServeCommand],
+  commands: [RunCommand, UpdateCommand, MeetingCommand, RemoteCommand, ServiceCommand, KeepAwakeCommand, CoordinationCommand, ServeCommand],
   params: {
     standalone: Flag.boolean("standalone").pipe(
       Flag.withDescription("Run with a private server instead of the background service"),

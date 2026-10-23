@@ -23,6 +23,13 @@ export const AttentionSoundName = Schema.Literals([
 export type AttentionSoundName = Schema.Schema.Type<typeof AttentionSoundName>
 export type AttentionSoundPaths = Partial<Record<AttentionSoundName, string>>
 
+export const CoordinationNotifications = Schema.Struct({
+  scope: Schema.Literals(["all", "coordinators", "selected"]),
+  sessionIDs: Schema.Array(Schema.String.check(Schema.isStartsWith("ses_"))).check(Schema.isMaxLength(64)).pipe(Schema.optional),
+  categories: Schema.Array(Schema.Literals(["question", "permission", "review", "failure", "completion"])).check(Schema.isMaxLength(5)).pipe(Schema.optional),
+})
+export type CoordinationNotifications = typeof CoordinationNotifications.Type
+
 export const Plugin = Schema.Union([
   Schema.String,
   Schema.Struct({
@@ -75,6 +82,7 @@ export const Info = Schema.Struct({
       sounds: Schema.optional(Schema.Record(AttentionSoundName, Schema.optionalKey(Schema.String))).annotate({
         description: "Sound file overrides by attention event",
       }),
+      coordination: CoordinationNotifications.pipe(Schema.optional),
     }),
   ).annotate({ description: "System notification and sound settings" }),
   diffs: Schema.optional(
@@ -143,6 +151,7 @@ export type Resolved = Omit<Info, "attention" | "keybinds" | "leader" | "mouse">
     volume: number
     sound_pack: string
     sounds: AttentionSoundPaths
+    coordination: CoordinationNotifications
   }
   keybinds: TuiKeybind.BindingLookupView
   leader: { timeout: number }
@@ -170,6 +179,7 @@ export function resolve(input: Info, options: { terminalSuspend: boolean }): Res
       volume: input.attention?.volume ?? 0.4,
       sound_pack: input.attention?.sound_pack ?? "ycoding.default",
       sounds: input.attention?.sounds ?? {},
+      coordination: input.attention?.coordination ?? { scope: "all" },
     },
     keybinds: createBindingLookup(TuiKeybind.toBindingConfig(TuiKeybind.parse(keybinds)), {
       commandMap: TuiKeybind.CommandMap,

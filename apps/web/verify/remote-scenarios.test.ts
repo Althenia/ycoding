@@ -3,8 +3,8 @@ import { REMOTE_SCENARIOS, remoteScenario } from "./remote-scenarios"
 
 describe("remote product-state scenarios", () => {
   test("defines product states on the handoff viewport matrix with unique IDs", () => {
-    expect(REMOTE_SCENARIOS).toHaveLength(27)
-    expect(new Set(REMOTE_SCENARIOS.map((scenario) => scenario.id)).size).toBe(27)
+    expect(REMOTE_SCENARIOS).toHaveLength(30)
+    expect(new Set(REMOTE_SCENARIOS.map((scenario) => scenario.id)).size).toBe(30)
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("conversation-workspace")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("conversation-landing")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("session-list")
@@ -16,6 +16,17 @@ describe("remote product-state scenarios", () => {
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("signed-out")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("devices-enrollment")
     expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("autonomy-goal-notification-settings")
+    expect(REMOTE_SCENARIOS.map((scenario) => scenario.name)).toContain("coordination-projects")
+  })
+
+  test("the Projects scenario opens the full-screen route with several root Sessions to coordinate", () => {
+    for (const viewport of [1440, 768, 390]) {
+      const projects = remoteScenario(new URLSearchParams(`scenario=coordination-projects-${viewport}`))!
+      expect(projects).toMatchObject({ view: "projects", account: "ok", connection: "open" })
+      expect(projects.sessions.map((session) => session.id)).toEqual(["ses_lead", "ses_docs", "ses_tests", "ses_spare"])
+      projects.sessions.forEach((session) => expect(session).not.toHaveProperty("parentID"))
+      expect(projects.expectedText).toEqual(["Projects", "Release train", "Docs sweep", "External notifications"])
+    }
   })
 
   test("selects the conversation workspace and account/connectivity states by product name and viewport", () => {

@@ -160,8 +160,21 @@ export const Reply = Schema.Struct({
 }).annotate({ identifier: "Form.Reply" })
 export interface Reply extends Schema.Schema.Type<typeof Reply> {}
 
+export const ReplySource = Schema.Struct({
+  kind: Schema.Literal("coordinator"),
+  coordinatorSessionID: Schema.String,
+  groupID: Schema.String.pipe(optional),
+  via: Schema.Literals(["auto-answer", "yolo", "coordination"]).pipe(optional),
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+  rationale: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)).pipe(optional),
+}).annotate({ identifier: "Form.ReplySource" })
+export interface ReplySource extends Schema.Schema.Type<typeof ReplySource> {}
+
 const Created = ephemeral({ type: "form.created", schema: { form: Info } })
-const Replied = ephemeral({ type: "form.replied", schema: { id: ID, sessionID: Schema.String, answer: Answer } })
+const Replied = ephemeral({
+  type: "form.replied",
+  schema: { id: ID, sessionID: Schema.String, answer: Answer, source: ReplySource.pipe(optional) },
+})
 const Cancelled = ephemeral({ type: "form.cancelled", schema: { id: ID, sessionID: Schema.String } })
 const TimedOut = ephemeral({ type: "form.timed_out", schema: { id: ID, sessionID: Schema.String } })
 const Deferred = ephemeral({

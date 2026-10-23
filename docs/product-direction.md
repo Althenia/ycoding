@@ -70,6 +70,8 @@ Subagents are durable child sessions and run in the background. Parent sessions 
 
 Orchestration preserves explicit agent selection, bounded nesting, permission ceilings, and parent-child ownership. An in-memory task list is not a substitute for durable orchestration.
 
+Coordination groups organize existing independent root Sessions across directories without reparenting them or merging their goals. Runtime-enforced coordinator, worker, and observer roles, fenced one-writer claims, dependency waits, and dispatch receipts preserve responsibility and evidence. Each assignment selects its execution agent and advertised reasoning variant, with a one-line reason retained in its receipts. The TUI and web provide full-screen Projects controls; CLI and Relay MCP expose the same backend operations. Web and phone notification filters affect external delivery only. Stopping coordination leaves workers running, and restarting the backend requires human re-arm. An uncapped coordination policy never removes hard runtime or resource limits.
+
 ### 6. Repository-native customization
 
 Customization is a product capability. Supported domains include:

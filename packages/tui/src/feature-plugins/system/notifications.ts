@@ -4,6 +4,7 @@ import { Plugin } from "@ycoding-ai/plugin/tui"
 import { onCleanup } from "solid-js"
 import { onTuiAttentionAvailable } from "../../attention"
 import { useToast } from "../../ui/toast"
+import type { ExternalNotificationKind } from "../../util/coordination"
 
 const id = "internal:notifications"
 const CHECKPOINT_MS = 500
@@ -37,7 +38,10 @@ function schedule(delay: number, run: () => Promise<void>) {
   return () => clearTimeout(timer)
 }
 
-export function createNotifications(scheduleAttention: Schedule = schedule) {
+export function createNotifications(
+  scheduleAttention: Schedule = schedule,
+  externalAllowed: (sessionID: string, kind: ExternalNotificationKind) => boolean = () => true,
+) {
   return Plugin.define({
     id,
     setup(context) {
@@ -79,8 +83,22 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         return `${kind}:${sessionID}:${requestID}:${location?.directory ?? ""}:${location?.workspaceID ?? ""}`
       }
 
-      async function send(input: TuiAttentionNotifyInput, current: () => boolean) {
+      function externalAllowedFor(sessionID: string, kind: ExternalNotificationKind) {
+        return sessionID === "global" || externalAllowed(sessionID, kind)
+      }
+
+      function requestCategory(kind: RequestKind): ExternalNotificationKind {
+        if (kind === "form" || kind === "question") return "question"
+        return kind === "guardrail" ? "review" : "permission"
+      }
+
+      async function send(
+        input: TuiAttentionNotifyInput,
+        current: () => boolean,
+        target?: { sessionID: string; kind: ExternalNotificationKind },
+      ) {
         if (disposed || !current()) return undefined
+        if (target && !externalAllowedFor(target.sessionID, target.kind)) return undefined
         return context.attention.notify(input).catch(() => undefined)
       }
 
@@ -153,6 +171,10 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
       async function confirmRequest(episode: RequestEpisode) {
         if (disposed || requests.get(episode.key) !== episode || episode.state !== "scheduled") return
         episode.cancel = undefined
+        if (!externalAllowedFor(episode.sessionID, requestCategory(episode.kind))) {
+          episode.state = "notified"
+          return
+        }
         episode.state = "querying"
         const availableAt = availabilityRevision
         const controller = new AbortController()
@@ -237,12 +259,17 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         if (terminals.get(episode.sessionID) === episode) terminals.delete(episode.sessionID)
       }
 
-      function goalNotification(state: SessionAutonomyView): Pick<TuiAttentionNotifyInput, "message" | "sound"> {
+      function goalNotification(
+        state: SessionAutonomyView,
+      ): Pick<TuiAttentionNotifyInput, "message" | "sound"> & { kind: ExternalNotificationKind } {
         const status = state.goal?.status
-        if (status === "completed") return { message: "Session done", sound: { name: "done", when: "always" } }
-        if (status === "stopped") return { message: "Goal stopped", sound: { name: "error", when: "always" } }
-        if (status === "exhausted") return { message: "Goal exhausted", sound: { name: "error", when: "always" } }
-        return { message: "Goal state missing", sound: { name: "error", when: "always" } }
+        if (status === "completed")
+          return { message: "Session done", sound: { name: "done", when: "always" }, kind: "completion" }
+        if (status === "stopped")
+          return { message: "Goal stopped", sound: { name: "error", when: "always" }, kind: "failure" }
+        if (status === "exhausted")
+          return { message: "Goal exhausted", sound: { name: "error", when: "always" }, kind: "failure" }
+        return { message: "Goal state missing", sound: { name: "error", when: "always" }, kind: "failure" }
       }
 
       async function finishTerminal(episode: TerminalEpisode, controller: AbortController) {
@@ -291,7 +318,11 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           const output =
             initial.goal?.status === "active"
               ? goalNotification(final)
-              : { message: "Session done", sound: { name: "done" as const, when: "always" as const } }
+              : {
+                  message: "Session done",
+                  sound: { name: "done" as const, when: "always" as const },
+                  kind: "completion" as const,
+                }
           await send(
             {
               title: session.title,
@@ -300,6 +331,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
               sound: output.sound,
             },
             () => terminals.get(episode.sessionID) === episode && episode.state === "terminal",
+            { sessionID: episode.sessionID, kind: output.kind },
           )
         } finally {
           if (!keep && terminals.get(episode.sessionID) === episode && episode.controller === controller)
@@ -331,6 +363,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
               sound: { name: "error", when: "always" },
             },
             () => terminals.get(sessionID) === episode && episode.state === "terminal",
+            { sessionID, kind: "failure" },
           )
         } finally {
           controller.abort()

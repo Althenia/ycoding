@@ -200,3 +200,29 @@ test("registrations from this page reach the relay one at a time, in call order,
   gates[1]?.resolve()
   expect(await second).toEqual({ status: "on" })
 })
+
+const selected = { scope: "selected" as const, sessionIDs: ["ses_lead"], categories: ["failure" as const] }
+
+test("a registration carries the coordination filter only when it narrows delivery", async () => {
+  const test = fixture()
+  test.setPermission("granted")
+  expect(await enablePush(test.platform, test.http, () => allOn, () => selected)).toEqual({ status: "on" })
+  expect(test.inputs.at(-1)).toMatchObject({ categories: allOn, coordinationFilter: selected })
+  expect(await savePushCategories(test.platform, test.http, () => allOn, () => undefined)).toEqual({ status: "on" })
+  expect(test.inputs.at(-1)).toMatchObject({ categories: allOn })
+  expect(test.inputs.at(-1)).not.toHaveProperty("coordinationFilter")
+  expect(await savePushCategories(test.platform, test.http, () => quiet, () => ({ scope: "all", categories: [] }))).toEqual({ status: "on" })
+  expect(test.inputs.at(-1)).toMatchObject({ categories: quiet, coordinationFilter: { scope: "all", categories: [] } })
+})
+
+test("syncing an existing subscription re-registers the stored filter and an unreachable relay keeps the previous choice visible", async () => {
+  const test = fixture()
+  test.setPermission("granted")
+  await enablePush(test.platform, test.http, () => allOn)
+  expect(await syncPushState(test.platform, test.http, () => allOn, () => selected)).toBe("on")
+  expect(test.inputs.at(-1)).toMatchObject({ coordinationFilter: selected })
+  const failing = { ...test.http, subscribe: async () => ({ ok: false as const, status: 500, kind: "http" as const, message: "relay down" }) }
+  const saved = await savePushCategories(test.platform, failing, () => allOn, () => selected)
+  expect(saved.status).toBe("error")
+  expect(saved.message).toContain("Closed-app alerts still use the previous choice")
+})

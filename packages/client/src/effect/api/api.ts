@@ -2167,6 +2167,179 @@ export interface McpEventsApi<E = never> {
   readonly unsubscribe: McpEventsUnsubscribeOperation<E>
 }
 
+export type Endpoint39_0Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.settings"]>
+>["data"]
+export type CoordinationSettingsOperation<E = never> = () => Effect.Effect<Endpoint39_0Output, E>
+
+export type Endpoint39_1Output = EffectValue<ReturnType<RawClient["server.coordination"]["coordination.list"]>>["data"]
+export type CoordinationListOperation<E = never> = () => Effect.Effect<Endpoint39_1Output, E>
+
+type Endpoint39_2Request = Parameters<RawClient["server.coordination"]["coordination.create"]>[0]
+export type Endpoint39_2Input = {
+  readonly name: Endpoint39_2Request["payload"]["name"]
+  readonly policy: Endpoint39_2Request["payload"]["policy"]
+  readonly members: Endpoint39_2Request["payload"]["members"]
+}
+export type Endpoint39_2Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.create"]>
+>["data"]
+export type CoordinationCreateOperation<E = never> = (input: Endpoint39_2Input) => Effect.Effect<Endpoint39_2Output, E>
+
+type Endpoint39_3Request = Parameters<RawClient["server.coordination"]["coordination.get"]>[0]
+export type Endpoint39_3Input = { readonly groupID: Endpoint39_3Request["params"]["groupID"] }
+export type Endpoint39_3Output = EffectValue<ReturnType<RawClient["server.coordination"]["coordination.get"]>>["data"]
+export type CoordinationGetOperation<E = never> = (input: Endpoint39_3Input) => Effect.Effect<Endpoint39_3Output, E>
+
+type Endpoint39_4Request = Parameters<RawClient["server.coordination"]["coordination.members"]>[0]
+export type Endpoint39_4Input = {
+  readonly groupID: Endpoint39_4Request["params"]["groupID"]
+  readonly revision: Endpoint39_4Request["payload"]["revision"]
+  readonly name?: Endpoint39_4Request["payload"]["name"]
+  readonly members: Endpoint39_4Request["payload"]["members"]
+  readonly policy?: Endpoint39_4Request["payload"]["policy"]
+}
+export type Endpoint39_4Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.members"]>
+>["data"]
+export type CoordinationMembersOperation<E = never> = (input: Endpoint39_4Input) => Effect.Effect<Endpoint39_4Output, E>
+
+type Endpoint39_5Request = Parameters<RawClient["server.coordination"]["coordination.arm"]>[0]
+export type Endpoint39_5Input = {
+  readonly groupID: Endpoint39_5Request["params"]["groupID"]
+  readonly revision: Endpoint39_5Request["payload"]["revision"]
+}
+export type Endpoint39_5Output = EffectValue<ReturnType<RawClient["server.coordination"]["coordination.arm"]>>["data"]
+export type CoordinationArmOperation<E = never> = (input: Endpoint39_5Input) => Effect.Effect<Endpoint39_5Output, E>
+
+type Endpoint39_6Request = Parameters<RawClient["server.coordination"]["coordination.stop"]>[0]
+export type Endpoint39_6Input = {
+  readonly groupID: Endpoint39_6Request["params"]["groupID"]
+  readonly revision: Endpoint39_6Request["payload"]["revision"]
+}
+export type Endpoint39_6Output = EffectValue<ReturnType<RawClient["server.coordination"]["coordination.stop"]>>["data"]
+export type CoordinationStopOperation<E = never> = (input: Endpoint39_6Input) => Effect.Effect<Endpoint39_6Output, E>
+
+type Endpoint39_7Request = Parameters<RawClient["server.coordination"]["coordination.complete"]>[0]
+export type Endpoint39_7Input = {
+  readonly groupID: Endpoint39_7Request["params"]["groupID"]
+  readonly revision: Endpoint39_7Request["payload"]["revision"]
+}
+export type Endpoint39_7Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.complete"]>
+>["data"]
+export type CoordinationCompleteOperation<E = never> = (
+  input: Endpoint39_7Input,
+) => Effect.Effect<Endpoint39_7Output, E>
+
+type Endpoint39_8Request = Parameters<RawClient["server.coordination"]["coordination.claim"]>[0]
+export type Endpoint39_8Input = {
+  readonly groupID: Endpoint39_8Request["params"]["groupID"]
+  readonly revision: Endpoint39_8Request["payload"]["revision"]
+  readonly targetSessionID: Endpoint39_8Request["payload"]["targetSessionID"]
+  readonly holderSessionID: Endpoint39_8Request["payload"]["holderSessionID"]
+  readonly leaseMs: Endpoint39_8Request["payload"]["leaseMs"]
+}
+export type Endpoint39_8Output = EffectValue<ReturnType<RawClient["server.coordination"]["coordination.claim"]>>["data"]
+export type CoordinationClaimOperation<E = never> = (input: Endpoint39_8Input) => Effect.Effect<Endpoint39_8Output, E>
+
+type Endpoint39_9Request = Parameters<RawClient["server.coordination"]["coordination.release"]>[0]
+export type Endpoint39_9Input = {
+  readonly groupID: Endpoint39_9Request["params"]["groupID"]
+  readonly revision: Endpoint39_9Request["payload"]["revision"]
+  readonly targetSessionID: Endpoint39_9Request["payload"]["targetSessionID"]
+  readonly holderSessionID: Endpoint39_9Request["payload"]["holderSessionID"]
+  readonly generation: Endpoint39_9Request["payload"]["generation"]
+}
+export type Endpoint39_9Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.release"]>
+>["data"]
+export type CoordinationReleaseOperation<E = never> = (input: Endpoint39_9Input) => Effect.Effect<Endpoint39_9Output, E>
+
+type Endpoint39_10Request = Parameters<RawClient["server.coordination"]["coordination.dispatch"]>[0]
+export type Endpoint39_10Input = {
+  readonly groupID: Endpoint39_10Request["params"]["groupID"]
+  readonly dispatchID?: Endpoint39_10Request["payload"]["dispatchID"]
+  readonly targetSessionID: Endpoint39_10Request["payload"]["targetSessionID"]
+  readonly text: Endpoint39_10Request["payload"]["text"]
+  readonly selection: Endpoint39_10Request["payload"]["selection"]
+  readonly dependsOn?: Endpoint39_10Request["payload"]["dependsOn"]
+  readonly resourceScope?: Endpoint39_10Request["payload"]["resourceScope"]
+  readonly allowedTools?: Endpoint39_10Request["payload"]["allowedTools"]
+  readonly revision: Endpoint39_10Request["payload"]["revision"]
+  readonly holderSessionID: Endpoint39_10Request["payload"]["holderSessionID"]
+  readonly generation: Endpoint39_10Request["payload"]["generation"]
+}
+export type Endpoint39_10Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.dispatch"]>
+>["data"]
+export type CoordinationDispatchOperation<E = never> = (
+  input: Endpoint39_10Input,
+) => Effect.Effect<Endpoint39_10Output, E>
+
+type Endpoint39_11Request = Parameters<RawClient["server.coordination"]["coordination.receipts"]>[0]
+export type Endpoint39_11Input = { readonly groupID: Endpoint39_11Request["params"]["groupID"] }
+export type Endpoint39_11Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.receipts"]>
+>["data"]
+export type CoordinationReceiptsOperation<E = never> = (
+  input: Endpoint39_11Input,
+) => Effect.Effect<Endpoint39_11Output, E>
+
+type Endpoint39_12Request = Parameters<RawClient["server.coordination"]["coordination.wait"]>[0]
+export type Endpoint39_12Input = {
+  readonly groupID: Endpoint39_12Request["params"]["groupID"]
+  readonly waitID?: Endpoint39_12Request["payload"]["waitID"]
+  readonly targets?: Endpoint39_12Request["payload"]["targets"]
+  readonly timeoutMs?: Endpoint39_12Request["payload"]["timeoutMs"]
+  readonly batch?: Endpoint39_12Request["payload"]["batch"]
+  readonly revision: Endpoint39_12Request["payload"]["revision"]
+  readonly holderSessionID: Endpoint39_12Request["payload"]["holderSessionID"]
+}
+export type Endpoint39_12Output = EffectValue<ReturnType<RawClient["server.coordination"]["coordination.wait"]>>["data"]
+export type CoordinationWaitOperation<E = never> = (input: Endpoint39_12Input) => Effect.Effect<Endpoint39_12Output, E>
+
+type Endpoint39_13Request = Parameters<RawClient["server.coordination"]["coordination.cancelWait"]>[0]
+export type Endpoint39_13Input = {
+  readonly groupID: Endpoint39_13Request["params"]["groupID"]
+  readonly revision: Endpoint39_13Request["payload"]["revision"]
+  readonly waitID: Endpoint39_13Request["payload"]["waitID"]
+  readonly holderSessionID: Endpoint39_13Request["payload"]["holderSessionID"]
+}
+export type Endpoint39_13Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.cancelWait"]>
+>["data"]
+export type CoordinationCancelWaitOperation<E = never> = (
+  input: Endpoint39_13Input,
+) => Effect.Effect<Endpoint39_13Output, E>
+
+type Endpoint39_14Request = Parameters<RawClient["server.coordination"]["coordination.capacity"]>[0]
+export type Endpoint39_14Input = { readonly groupID: Endpoint39_14Request["params"]["groupID"] }
+export type Endpoint39_14Output = EffectValue<
+  ReturnType<RawClient["server.coordination"]["coordination.capacity"]>
+>["data"]
+export type CoordinationCapacityOperation<E = never> = (
+  input: Endpoint39_14Input,
+) => Effect.Effect<Endpoint39_14Output, E>
+
+export interface CoordinationApi<E = never> {
+  readonly settings: CoordinationSettingsOperation<E>
+  readonly list: CoordinationListOperation<E>
+  readonly create: CoordinationCreateOperation<E>
+  readonly get: CoordinationGetOperation<E>
+  readonly members: CoordinationMembersOperation<E>
+  readonly arm: CoordinationArmOperation<E>
+  readonly stop: CoordinationStopOperation<E>
+  readonly complete: CoordinationCompleteOperation<E>
+  readonly claim: CoordinationClaimOperation<E>
+  readonly release: CoordinationReleaseOperation<E>
+  readonly dispatch: CoordinationDispatchOperation<E>
+  readonly receipts: CoordinationReceiptsOperation<E>
+  readonly wait: CoordinationWaitOperation<E>
+  readonly cancelWait: CoordinationCancelWaitOperation<E>
+  readonly capacity: CoordinationCapacityOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly server: ServerApi<E>
@@ -2207,4 +2380,5 @@ export interface AppApi<E = never> {
   readonly config: ConfigApi<E>
   readonly review: ReviewApi<E>
   readonly mcpEvents: McpEventsApi<E>
+  readonly coordination: CoordinationApi<E>
 }

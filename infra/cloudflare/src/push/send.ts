@@ -1,4 +1,4 @@
-import { parsePushEndpoint, quotaKey, type PushTestResponse, type RemoteAlertDetail, type RemoteNoticeCategory, type RemoteQuota } from "../../../../packages/remote/src/index"
+import { coordinationPushAllows, parsePushEndpoint, quotaKey, type PushTestResponse, type RemoteAlertDetail, type RemoteNoticeCategory, type RemoteQuota } from "../../../../packages/remote/src/index"
 import { base64UrlEncode, cryptoBytes } from "../auth/crypto"
 import { encryptWebPushPayload, vapidJwt } from "./crypto"
 import type { PushStore, PushSubscription } from "./store"
@@ -38,8 +38,15 @@ export async function sendPushToOwner(input: PushSender & { readonly store: Push
 
 export async function sendPush(input: PushSender & { readonly store: PushStore; readonly event: PushEvent; readonly subscriptions: readonly PushSubscription[] }): Promise<readonly PushOutcome[]> {
   const subscriptions = input.subscriptions
-  const targets = subscriptions.filter((subscription) => subscription.categories[input.event.category])
-  const unsent = subscriptions.filter((subscription) => !subscription.categories[input.event.category])
+  const allows = (subscription: PushSubscription) => subscription.categories[input.event.category] &&
+    coordinationPushAllows(subscription.coordinationFilter, {
+      category: input.event.category,
+      ...("need" in input.event && input.event.need !== undefined ? { need: input.event.need } : {}),
+      ...("sessionID" in input.event ? { sessionID: input.event.sessionID } : {}),
+      ...("coordinatorSessionIDs" in input.event && input.event.coordinatorSessionIDs !== undefined ? { coordinatorSessionIDs: input.event.coordinatorSessionIDs } : {}),
+    })
+  const targets = subscriptions.filter(allows)
+  const unsent = subscriptions.filter((subscription) => !allows(subscription))
     .map((subscription): PushOutcome => ({ owner: subscription.browserSessionID, outcome: "unsent" }))
   if (targets.length === 0) {
     console.info(JSON.stringify({ component: "web-push", category: input.event.category, host: "none", targetCount: 0,

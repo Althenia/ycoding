@@ -38,6 +38,7 @@ function remoteState(patch: Partial<RemoteStoreState> = {}): RemoteStoreState {
     telemetryConsent: { status: "disabled" },
     mutations: [],
     notifications: [],
+    notificationFilter: { scope: "all" },
     noticeSync: { status: "idle", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined },
     unhandledEvents: 0,
     teamCues: [],

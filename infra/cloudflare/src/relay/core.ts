@@ -729,17 +729,19 @@ export function createRelay(deps: RelayDeps) {
         if (message.type === "completions") {
           const recorded = await recordNotices(() => deps.notices.complete(message.data, message.more))
           await deliverAlerts(current.ownerID, (recorded ?? []).map((notice) => {
-            const title = message.data.find((item) => item.sessionID === notice.sessionID)?.title
-            const detail = title === undefined ? {} : { title }
+            const item = message.data.find((entry) => entry.sessionID === notice.sessionID)
+            const detail = { ...(item?.title === undefined ? {} : { title: item.title }),
+              ...(item?.coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs: item.coordinatorSessionIDs }) }
             return { event: { category: "agent-completed", sessionID: notice.sessionID, deviceID: current.deviceID, noticeID: notice.id, ...detail },
-              item: { kind: "notice", notice, ...(title === undefined ? {} : { detail }) } }
+              item: { kind: "notice", notice, ...(Object.keys(detail).length === 0 ? {} : { detail }) } }
           }))
           return
         }
         if (message.type === "blocked") {
           const event = { category: "approval-requested" as const, sessionID: message.sessionID, createdAt: deps.now(), need: "blocked" as const }
           const appended = await recordNotices(() => deps.notices.append([event]))
-          const detail = { ...(message.title === undefined ? {} : { title: message.title }), need: "blocked" as const }
+          const detail = { ...(message.title === undefined ? {} : { title: message.title }), need: "blocked" as const,
+            ...(message.coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs: message.coordinatorSessionIDs }) }
           if (appended === undefined) {
             await deliverAlerts(current.ownerID, [{ event: { category: event.category, sessionID: event.sessionID, deviceID: current.deviceID, ...detail } }])
             return
@@ -763,7 +765,8 @@ export function createRelay(deps: RelayDeps) {
             const detailOf = (sessionID: string): RemoteAlertDetail => {
               const detail = message.details?.find((item) => item.sessionID === sessionID)
               const need = message.lost?.includes(sessionID) ? "lost" : message.failed?.includes(sessionID) ? "failed" : detail?.need
-              return { ...(detail?.title === undefined ? {} : { title: detail.title }), ...(need === undefined ? {} : { need }) }
+              return { ...(detail?.title === undefined ? {} : { title: detail.title }), ...(need === undefined ? {} : { need }),
+                ...(detail?.coordinatorSessionIDs === undefined ? {} : { coordinatorSessionIDs: detail.coordinatorSessionIDs }) }
             }
             const events = message.attention.filter((sessionID) => !oldAttention.has(sessionID))
               .map((sessionID) => ({ category: "approval-requested" as const, sessionID, createdAt: deps.now(), need: detailOf(sessionID).need }))

@@ -3,6 +3,12 @@ import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { resolve, ConfigProvider, useConfig, type Interface } from "../src/config"
 
+test("coordination notification preferences preserve all-source defaults and explicit bounded selections", () => {
+  expect(resolve({}, { terminalSuspend: true }).attention.coordination).toEqual({ scope: "all" })
+  const coordination = { scope: "selected" as const, sessionIDs: ["ses_coordinator"], categories: ["question" as const, "failure" as const] }
+  expect(resolve({ attention: { coordination } }, { terminalSuspend: true }).attention.coordination).toEqual(coordination)
+})
+
 test("resolves nested config and keybind defaults", () => {
   const config = resolve(
     {

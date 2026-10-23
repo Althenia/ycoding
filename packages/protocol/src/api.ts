@@ -42,6 +42,7 @@ import { ProjectArtifactGroup } from "./groups/project-artifact.js"
 import { makeIncidentGroup } from "./groups/incident.js"
 import { makeBrowserGroup } from "./groups/browser.js"
 import { makeIsolatedBrowserGroup } from "./groups/isolated-browser.js"
+import { CoordinationGroup } from "./groups/coordination.js"
 
 type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof LocationGroup, LocationId>
@@ -107,6 +108,7 @@ type ApiGroups<
   | typeof KeepAwakeGroup
   | typeof DebugGroup
   | typeof McpEventsGroup
+  | typeof CoordinationGroup
   | LocationGroups<LocationId>
   | FormGroups<LocationId, LocationService, FormLocationId, FormLocationService>
   | SessionGroups<SessionLocationId, SessionLocationService>
@@ -205,6 +207,7 @@ const makeApiFromGroup = <
     .add(ConfigGroup.middleware(locationMiddleware))
     .add(makeReviewGroup(sessionLocationMiddleware))
     .add(McpEventsGroup)
+    .add(CoordinationGroup)
     .annotateMerge(
       OpenApi.annotations({
         title: "ycoding HttpApi",

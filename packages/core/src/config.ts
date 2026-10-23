@@ -22,6 +22,7 @@ import { ConfigAccountConnectors } from "./config/account-connectors"
 import { ConfigAttachments } from "./config/attachments"
 import { ConfigCapabilities } from "./config/capabilities"
 import { ConfigCompaction } from "./config/compaction"
+import { ConfigCoordination } from "./config/coordination"
 import { ConfigCommand } from "./config/command"
 import { ConfigEfficiency } from "./config/efficiency"
 import { ConfigExperimental } from "./config/experimental"
@@ -133,6 +134,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   guardrails: ConfigGuardrail.Info.pipe(Schema.optional).annotate({
     description: "Session-wide guardrail enablement and runtime caps",
+  }),
+  coordination: ConfigCoordination.Info.pipe(Schema.optional).annotate({
+    description: "Global-only default policy for delegated routine coordination decisions; groups may only narrow it",
   }),
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",
@@ -555,6 +559,7 @@ const recoveryOptions = { errors: "all", onExcessProperty: "error", propertyOrde
 const decodeInfo = Schema.decodeUnknownResult(Info, recoveryOptions)
 const decodeRule = Schema.decodeUnknownResult(Permission.Rule, recoveryOptions)
 const decodeGuardrails = Schema.decodeUnknownResult(ConfigGuardrail.Info, recoveryOptions)
+const decodeCoordination = Schema.decodeUnknownResult(ConfigCoordination.Info, recoveryOptions)
 
 function recoverInfo(input: unknown, target: string) {
   const diagnostics: Diagnostic[] = []
@@ -627,6 +632,11 @@ function recoverInfo(input: unknown, target: string) {
         true,
       )
     }
+  }
+
+  if (Object.hasOwn(record, "coordination") && Result.isFailure(decodeCoordination(record.coordination))) {
+    record.coordination = { delegated_decisions: { enabled: false } }
+    report(["coordination"], "invalid-values", "Invalid coordination policy; delegated decisions are disabled", true)
   }
 
   while (true) {

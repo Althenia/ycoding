@@ -3,6 +3,7 @@ import { useStore } from "@tanstack/solid-store"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { deviceAliasLimit, type RemoteLatencySample } from "@ycoding-ai/remote"
 import { Icon } from "../../ui/icon"
+import { Link } from "../../ui/link"
 import { CustomSelect } from "../../ui/custom-select"
 import { Modal } from "../../ui/modal"
 import { pwaInstall } from "../../pwa/install"
@@ -11,6 +12,7 @@ import { useTheme } from "../../theme/theme-store"
 import { normalizeSchemePreference, type ThemePreference } from "../../theme/theme"
 import { SCHEMES, SCHEME_IDS } from "../../theme/schemes"
 import { useRemote } from "../context"
+import { filterSummary, pushFilterWire, readFilter } from "../coordination"
 import { createRemoteQuery } from "../query"
 import { keepAwakeView } from "../keep-awake"
 import { keepAwakeState } from "../queries"
@@ -173,6 +175,21 @@ export function MachineSettings(): JSX.Element {
         <span id="machine-awake-status" class="field__hint machine-awake__status" data-tone={awake().tone} role="status" aria-live="polite">{awake().detail}</span>
         <span id="machine-awake-caveat" class="field__hint machine-awake__caveat">{awake().caveat}</span>
       </span>
+    </div>
+  </Section>
+}
+
+export function ExternalNotificationSettings(): JSX.Element {
+  const remote = useRemote()
+  return <Section id="external-notification-settings" category="Notifications" title="External notifications" hint="Limits System alerts and closed-app push by Session. In-app notices, pending requests and decisions are never hidden.">
+    <div class="defs">
+      <div class="defs__row">
+        <span class="defs__key" id="external-notifications-label">Currently</span>
+        <span class="defs__value">
+          <span id="external-notifications-summary" data-filter-summary>{filterSummary(remote.state().notificationFilter)}</span>
+          <Link to="/remote/projects" class="button button--secondary button--small" ariaLabel="Choose external notifications in Projects" aria-describedby="external-notifications-summary">Choose in Projects</Link>
+        </span>
+      </div>
     </div>
   </Section>
 }
@@ -800,6 +817,7 @@ export function NotificationSettings(): JSX.Element {
   let active = true
 
   const storedCategories = () => pushCategoriesFor(readNotificationPreferences())
+  const storedFilter = () => pushFilterWire(readFilter())
   const refresh = (event: StorageEvent) => {
     if (event.key === NOTIFICATION_STORAGE_KEY || event.key === null) notificationPreferences.reload()
   }
@@ -807,7 +825,7 @@ export function NotificationSettings(): JSX.Element {
   onMount(() => {
     pushPlatform = browserPushPlatform()
     window.addEventListener("storage", refresh)
-    void syncPushState(pushPlatform, pushHttp, storedCategories).then((status) => {
+    void syncPushState(pushPlatform, pushHttp, storedCategories, storedFilter).then((status) => {
       if (!active) return
       setPushStatus(status)
       setPushBusy(false)
@@ -821,7 +839,7 @@ export function NotificationSettings(): JSX.Element {
   const togglePush = async () => {
     if (!pushPlatform || pushBusy()) return
     setPushBusy(true)
-    const result = pushStatus() === "on" ? await disablePush(pushPlatform, pushHttp) : await enablePush(pushPlatform, pushHttp, storedCategories)
+    const result = pushStatus() === "on" ? await disablePush(pushPlatform, pushHttp) : await enablePush(pushPlatform, pushHttp, storedCategories, storedFilter)
     if (!active) return
     setPushStatus(result.status)
     setPushError(result.message ?? "")
@@ -832,7 +850,7 @@ export function NotificationSettings(): JSX.Element {
     notificationPreferences.toggle(category, channel)
     const platform = pushPlatform
     if (channel !== "desktop" || !platform || (pushStatus() !== "on" && !pushBusy())) return
-    const result = await savePushCategories(platform, pushHttp, storedCategories)
+    const result = await savePushCategories(platform, pushHttp, storedCategories, storedFilter)
     if (!active || result.status === "off") return
     setPushStatus(result.status)
     setPushError(result.message ?? "")

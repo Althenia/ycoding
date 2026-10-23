@@ -46,6 +46,7 @@ import { CommandPalette, focusComposerField, type PaletteHandlers } from "./comm
 import { NewSessionButton, NewSessionComposer } from "./new-session"
 import { ProviderConnect } from "./provider-connect"
 import type { CatalogTarget } from "../catalog"
+import { ProjectsPage } from "./projects"
 import { UsagePage } from "./usage"
 import {
   AccountSettings,
@@ -53,6 +54,7 @@ import {
   LatencySettings,
   AppearanceSettings,
   DeviceSettings,
+  ExternalNotificationSettings,
   MachineSettings,
   NotificationSettings,
   OfficeSettings,
@@ -521,6 +523,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                       onSelectSession={openSession}
                     />
                   </RoutePanel>
+                  <RoutePanel active={view() === "/remote/projects"}><ProjectsPage /></RoutePanel>
                   <RoutePanel active={view() === "/remote/usage" && routeError() !== undefined}><p class="notice-strip" role="alert">{routeError()}</p></RoutePanel>
                   <RoutePanel active={view() === "/remote/usage" && routeError() === undefined && ownsUsageRoute()}><UsagePage /></RoutePanel>
                   <RoutePanel active={view() === "/remote/settings"}><SettingsPage office={office} phoneLayout={phoneLayout()} /></RoutePanel>
@@ -1768,6 +1771,7 @@ function SettingsPage(props: { readonly office: OfficeSettingsStore; readonly ph
           <AppearanceSettings />
           <Show when={!props.phoneLayout}><OfficeSettings office={props.office} /></Show>
           <NotificationSettings />
+          <ExternalNotificationSettings />
         </div>
       </div>
     </>

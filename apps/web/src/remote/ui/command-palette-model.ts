@@ -19,7 +19,7 @@ export type PaletteIntent =
   | { readonly type: "keepAwake" }
   | { readonly type: "skill"; readonly skill: string }
   | { readonly type: "draft"; readonly text: string }
-  | { readonly type: "go"; readonly view: "new" | "sessions" | "session" | "usage" | "settings" }
+  | { readonly type: "go"; readonly view: "new" | "sessions" | "session" | "projects" | "usage" | "settings" }
   | { readonly type: "openSession"; readonly sessionID: string }
   | { readonly type: "team" }
   | { readonly type: "device"; readonly deviceID: string }
@@ -183,7 +183,7 @@ function skillActions(context: PaletteContext): readonly PaletteAction[] {
 }
 
 function navigationActions(context: PaletteContext): readonly PaletteAction[] {
-  const go = (view: "new" | "sessions" | "session" | "usage" | "settings"): PaletteIntent => ({ type: "go", view })
+  const go = (view: "new" | "sessions" | "session" | "projects" | "usage" | "settings"): PaletteIntent => ({ type: "go", view })
   return [
     ...(context.canCreateSession && context.view !== "/remote"
       ? [{ id: "nav.new", title: "New session", description: "Start a conversation on this machine", group: "Navigation" as const, keywords: "create conversation chat", intent: go("new") }]
@@ -192,6 +192,7 @@ function navigationActions(context: PaletteContext): readonly PaletteAction[] {
       ? [{ id: "nav.session", title: "Go to session", description: "Return to the open conversation", group: "Navigation" as const, keywords: "conversation chat", intent: go("session") }]
       : []),
     ...(context.view === "/remote/sessions" ? [] : [{ id: "nav.sessions", title: "Go to Sessions", description: "Browse every session", group: "Navigation" as const, keywords: "list sessions", intent: go("sessions") }]),
+    ...(context.view === "/remote/projects" ? [] : [{ id: "nav.projects", title: "Go to Projects", description: "Coordination groups, roles, policy, and external notifications", group: "Navigation" as const, keywords: "coordination groups coordinator workers roster delegation notify", intent: go("projects") }]),
     ...(context.view === "/remote/usage" ? [] : [{ id: "nav.usage", title: "Go to Usage", description: "Spend, tokens, and provider quotas", group: "Navigation" as const, keywords: "cost quota", intent: go("usage") }]),
     ...(context.view === "/remote/settings" ? [] : [{ id: "nav.settings", title: "Go to Settings", description: "Machine, account, app, and notifications", group: "Navigation" as const, keywords: "preferences configuration", intent: go("settings") }]),
     ...(context.hasTeam ? [{ id: "nav.team", title: "Open Team", description: "Subagents, shells, and side chats", group: "Navigation" as const, keywords: "subagents children shells side chats", intent: { type: "team" as const } }] : []),

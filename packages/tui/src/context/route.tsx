@@ -39,6 +39,11 @@ export type ProviderUsageRoute = {
   sessionID?: string
 }
 
+export type ProjectsRoute = {
+  type: "projects"
+  sessionID?: string
+}
+
 export type WorkspacesRoute = {
   type: "workspaces"
   sessionID?: string
@@ -56,6 +61,7 @@ export type Route =
   | ShellOutputRoute
   | TerminalInspectorRoute
   | ProviderUsageRoute
+  | ProjectsRoute
   | WorkspacesRoute
   | SessionContextRoute
 

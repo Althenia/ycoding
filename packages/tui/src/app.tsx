@@ -64,11 +64,13 @@ import { DialogHelp } from "./ui/dialog-help"
 import open from "open"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
+import { CoordinationProvider } from "./context/coordination"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session, type SessionViewportStore } from "./routes/session"
 import { ShellOutput } from "./routes/shell-output"
 import { SessionTerminalInspector } from "./routes/terminal-inspector"
+import { ProjectsScreen } from "./routes/session/projects"
 import { ProviderUsageScreen } from "./routes/session/provider-usage"
 import { SessionContextScreen } from "./routes/session/context-breakdown"
 import { WorkspacesScreen } from "./routes/workspaces"
@@ -345,6 +347,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                 <LocationProvider>
                                                   <ThemeProvider mode={mode}>
                                                     <LocalProvider>
+                                                      <CoordinationProvider>
                                                       <RemoteProvider server={input.remote}>
                                                       <KeepAwakeProvider server={input.keepAwake}>
                                                       <PromptStashProvider>
@@ -375,6 +378,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                       </PromptStashProvider>
                                                       </KeepAwakeProvider>
                                                       </RemoteProvider>
+                                                      </CoordinationProvider>
                                                     </LocalProvider>
                                                   </ThemeProvider>
                                                 </LocationProvider>
@@ -672,6 +676,13 @@ function App(props: { pair?: DialogPairCredentials; started: number; onData?: Tu
         run: () => {
           dialog.replace(() => <DialogSessionList />)
         },
+      },
+      {
+        name: "projects.open",
+        title: "Projects",
+        category: "Session",
+        slash: { name: "projects" },
+        run: () => route.navigate({ type: "projects", sessionID: route.data.type === "session" ? route.data.sessionID : undefined }),
       },
       {
         name: "session.new",
@@ -1302,6 +1313,9 @@ function App(props: { pair?: DialogPairCredentials; started: number; onData?: Tu
                 </Match>
                 <Match when={route.data.type === "provider-usage"}>
                   <ProviderUsageScreen />
+                </Match>
+                <Match when={route.data.type === "projects"}>
+                  <ProjectsScreen />
                 </Match>
                 <Match when={route.data.type === "session-context"}>
                   <SessionContextScreen />

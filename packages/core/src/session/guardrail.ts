@@ -71,6 +71,29 @@ export interface Snapshot {
   readonly digest: string
 }
 
+export interface RequestSnapshot {
+  readonly request: Guardrail.Request
+  readonly fingerprint: string
+}
+
+export interface ReconsiderInput {
+  readonly sessionID: Session.ID
+  readonly requestID: Guardrail.RequestID
+  readonly fingerprint: string
+  readonly actor: "coordinator"
+  readonly source: { readonly coordinatorSessionID: Session.ID; readonly groupID: string; readonly rationale: string }
+  readonly validate: (snapshot: Guardrail.Request) => Effect.Effect<boolean>
+}
+
+export interface ReconsiderResult {
+  readonly outcome: "allowed" | "denied" | "escalated" | "stale"
+  readonly requestID: Guardrail.RequestID
+  readonly fingerprint: string
+  readonly settled: boolean
+  readonly via?: "auto-guardrail" | "baseline" | "yolo" | "guardrail-rules"
+  readonly reason?: string
+}
+
 export class BlockedError extends Schema.TaggedErrorClass<BlockedError>()("Guardrail.BlockedError", {
   rootSessionID: Session.ID,
   sessionID: Session.ID,
@@ -122,6 +145,12 @@ export interface Interface {
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Evaluation, SessionErrors.NotFoundError>
   readonly assert: (input: EvaluateInput) => Effect.Effect<Reservation, AssertError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
+  readonly requestSnapshot: (
+    sessionID: Session.ID,
+    requestID: Guardrail.RequestID,
+  ) => Effect.Effect<RequestSnapshot | undefined, SessionErrors.NotFoundError>
+  readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult, SessionErrors.NotFoundError>
+  readonly requestSnapshots: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<RequestSnapshot>, SessionErrors.NotFoundError>
   readonly deferPending: (sessionID: Session.ID) => Effect.Effect<void, SessionErrors.NotFoundError>
   readonly forSession: (
     sessionID: Session.ID,
@@ -234,6 +263,7 @@ export const layer = Layer.effect(
     })
     const shellWait = Duration.seconds(settings?.shell_wait_seconds ?? 60)
     const pending = new Map<Guardrail.RequestID, Pending>()
+    const reconsidering = new Set<Guardrail.RequestID>()
     const approvals = new Map<Session.ID, number>()
     const blocked = new Map<Session.ID, number>()
     const sequences = new Map<Session.ID, number>()
@@ -924,7 +954,12 @@ export const layer = Layer.effect(
       return yield* withRootLock(rootSessionID, replyUnlocked(rootSessionID, input))
     })
 
-    const replyUnlocked = (rootSessionID: Session.ID, input: ReplyInput, provenance?: Guardrail.Escalation) =>
+    const replyUnlocked = (
+      rootSessionID: Session.ID,
+      input: ReplyInput,
+      provenance?: Guardrail.Escalation,
+      coordination?: { readonly coordinatorSessionID: Session.ID; readonly groupID: string; readonly rationale: string },
+    ) =>
       Effect.gen(function* () {
         const item = pending.get(input.requestID)
         if (!item) return yield* new RequestNotFoundError({ requestID: input.requestID })
@@ -967,6 +1002,9 @@ export const layer = Layer.effect(
               grades: provenance.grades,
               ruleIDs: [...item.request.ruleIDs],
               ...(item.source ? { source: item.source } : {}),
+              ...(coordination === undefined
+                ? {}
+                : { actor: "coordinator" as const, coordinatorSessionID: coordination.coordinatorSessionID, groupID: coordination.groupID, rationale: coordination.rationale }),
             }, {
               commit: () => reply === "reject"
                 ? ModelIncident.recordRejection(database.db, { ...rejection, decidedBy: "decision-model", time })
@@ -1001,6 +1039,292 @@ export const layer = Layer.effect(
         yield* Deferred.succeed(item.deferred, undefined)
         return yield* Effect.void
       })
+
+    const requestSnapshot = Effect.fn("SessionGuardrail.requestSnapshot")(function* (
+      sessionID: Session.ID,
+      requestID: Guardrail.RequestID,
+    ) {
+      const rootSessionID = yield* root(sessionID)
+      return yield* withRootLock(
+        rootSessionID,
+        Effect.sync(() => {
+          const item = pending.get(requestID)
+          return item === undefined || item.request.rootSessionID !== rootSessionID || item.request.sessionID !== sessionID
+            ? undefined
+            : { request: item.request, fingerprint: requestFingerprint(item.request) }
+        }),
+      )
+    })
+
+    const requestSnapshots = Effect.fn("SessionGuardrail.requestSnapshots")(function* (sessionID: Session.ID) {
+      const rootSessionID = yield* root(sessionID)
+      return yield* withRootLock(
+        rootSessionID,
+        Effect.sync(() =>
+          Array.from(pending.values())
+            .filter(
+              (item) =>
+                item.request.rootSessionID === rootSessionID && item.request.sessionID === sessionID && !item.decisionModel,
+            )
+            .slice(0, 50)
+            .map((item) => ({ request: item.request, fingerprint: requestFingerprint(item.request) })),
+        ),
+      )
+    })
+
+    const reconsider = Effect.fn("SessionGuardrail.reconsider")((input: ReconsiderInput) =>
+      Effect.gen(function* () {
+        const rootSessionID = yield* root(input.sessionID)
+        return yield* Effect.acquireUseRelease(
+          withRootLock(
+            rootSessionID,
+            Effect.sync((): { readonly item?: Pending; readonly result?: ReconsiderResult } => {
+              const item = pending.get(input.requestID)
+              if (
+                item === undefined ||
+                item.request.rootSessionID !== rootSessionID ||
+                item.request.sessionID !== input.sessionID ||
+                requestFingerprint(item.request) !== input.fingerprint
+              )
+                return { result: { outcome: "stale", requestID: input.requestID, fingerprint: input.fingerprint, settled: false } }
+              if (item.decisionModel || reconsidering.has(input.requestID))
+                return {
+                  result: {
+                    outcome: "escalated",
+                    requestID: input.requestID,
+                    fingerprint: input.fingerprint,
+                    settled: false,
+                    reason: "native-assessment-in-progress",
+                  },
+                }
+              reconsidering.add(input.requestID)
+              return { item }
+            }),
+          ),
+          (acquired) =>
+            acquired.item === undefined
+              ? Effect.succeed(acquired.result!)
+              : Effect.uninterruptibleMask((restore) =>
+                  Effect.gen(function* () {
+                    const item = acquired.item!
+                    const base = { requestID: input.requestID, fingerprint: input.fingerprint }
+                    if (item.request.hardReview === true || item.request.ruleIDs.includes("configuration.invalid"))
+                      return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:hard-review" }
+                    if (!(yield* input.validate(item.request)))
+                      return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                    const evaluateInput: EvaluateInput = {
+                      sessionID: item.request.sessionID,
+                      action: item.request.action,
+                      resources: item.request.resources,
+                      metadata: item.request.metadata,
+                      ...(item.source ? { source: item.source } : {}),
+                    }
+                    const settleRules = (evaluation: Evaluation) =>
+                      withRootLock(
+                        rootSessionID,
+                        Effect.gen(function* () {
+                          if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                          if (!(yield* input.validate(item.request)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                          const current = (yield* classify(evaluateInput)).evaluation
+                          if (current.decision === "ask" || current.decision === "hard_review")
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "guardrail-ask" }
+                          removePendingUnlocked(input.requestID)
+                          if (current.decision === "deny") {
+                            blocked.set(rootSessionID, (blocked.get(rootSessionID) ?? 0) + 1)
+                            advanceUnlocked(rootSessionID)
+                          }
+                          yield* events.publish(Guardrail.Event.Decided, {
+                            rootSessionID,
+                            sessionID: item.request.sessionID,
+                            action: item.request.action,
+                            ruleIDs: [...current.ruleIDs],
+                            decision: current.decision,
+                          })
+                          if (current.decision === "allow") yield* Deferred.succeed(item.deferred, undefined)
+                          else yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
+                          return {
+                            ...base,
+                            outcome: current.decision === "allow" ? ("allowed" as const) : ("denied" as const),
+                            settled: true,
+                            via: "guardrail-rules" as const,
+                          }
+                        }),
+                      )
+                    const classification = yield* classify(evaluateInput)
+                    const result = classification.evaluation
+                    if (result.decision !== "ask") return yield* settleRules(result)
+                    if (
+                      result.hardReview !== (item.request.hardReview ?? false) ||
+                      result.standard !== item.request.standard ||
+                      result.ruleIDs.join("\0") !== item.request.ruleIDs.join("\0")
+                    )
+                      return { ...base, outcome: "stale" as const, settled: false }
+                    if (result.hardReview) return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:hard-review" }
+
+                    const autoGuardrail = yield* autonomy
+                      .canAutoGuardrail(rootSessionID)
+                      .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+                    const asleep = yield* autonomy
+                      .isAsleep(rootSessionID)
+                      .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+                    if (result.standard && autoGuardrail && !asleep) {
+                      return yield* withRootLock(
+                        rootSessionID,
+                        Effect.gen(function* () {
+                          if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                          if (!(yield* input.validate(item.request)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                          removePendingUnlocked(input.requestID)
+                          yield* events.publish(Guardrail.Event.Decided, {
+                            rootSessionID,
+                            sessionID: item.request.sessionID,
+                            action: item.request.action,
+                            ruleIDs: [...result.ruleIDs],
+                            decision: "allow",
+                          })
+                          yield* events.publish(SessionEvent.GuardrailDecided, {
+                            sessionID: rootSessionID,
+                            reviewSessionID: item.request.sessionID,
+                            requestID: item.request.id,
+                            reply: "once",
+                            ruleIDs: [...item.request.ruleIDs],
+                            ...(item.source ? { source: item.source } : {}),
+                            actor: "coordinator",
+                            coordinatorSessionID: input.source.coordinatorSessionID,
+                            groupID: input.source.groupID,
+                            rationale: input.source.rationale,
+                          })
+                          yield* Deferred.succeed(item.deferred, undefined)
+                          return { ...base, outcome: "allowed" as const, settled: true, via: "auto-guardrail" as const }
+                        }),
+                      )
+                    }
+
+                    const approvable = !result.ruleIDs.includes("configuration.invalid")
+                    const yolo = yield* DecisionChoice.yoloEnabled(autonomy, rootSessionID)
+                    const stages = [
+                      ...(reviewPolicy.decideReviews ? [SessionAssessment.policy("baseline", approvable)] : []),
+                      ...(yolo ? [SessionAssessment.policy("yolo", approvable)] : []),
+                    ]
+                    if (stages.length === 0)
+                      return { ...base, outcome: "escalated" as const, settled: false, reason: "native-assessment-unavailable" }
+                    const authorization = yield* autonomy
+                      .snapshot(rootSessionID, { inherited: true })
+                      .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                    const applicability = yield* applicabilityOf(evaluateInput, result)
+                    const authority = SessionDecisionContext.authorityDigest(
+                      yield* SessionDecisionContext.read(database.db, item.request.sessionID),
+                    )
+                    const evidence = {
+                      action: item.request.action,
+                      resources: [...item.request.resources],
+                      reason: result.reason ?? item.request.reason,
+                      ruleIDs: [...result.ruleIDs],
+                      hardReview: result.hardReview,
+                      standard: result.standard,
+                      risk: result.risk
+                        ? { level: result.risk.level, label: result.risk.label, score: result.risk.score, metric: result.risk.metric }
+                        : null,
+                      sessionID: item.request.sessionID,
+                      rootSessionID,
+                      workdir: typeof item.request.metadata?.workdir === "string" ? item.request.metadata.workdir : location.directory,
+                      operation: typeof item.request.metadata?.operation === "string" ? item.request.metadata.operation : null,
+                      classifier: classification.evidence
+                        ? {
+                            matchedSegment: classification.evidence.matchedSegment,
+                            resolvedTargets: [...classification.evidence.resolvedTargets],
+                          }
+                        : null,
+                      directories: [...classification.directories],
+                      applicability,
+                    }
+                    const assessed = yield* restore(
+                      Effect.gen(function* () {
+                        let last: SessionAssessment.Result | undefined
+                        for (const policy of stages) {
+                          const graded = yield* DecisionChoice.grade(decision, {
+                            sessionID: item.request.sessionID,
+                            name: "guardrail",
+                            instructions: assessmentInstructions,
+                            state: evidence,
+                            choices: SessionAssessment.choices(policy).map((value) => ({
+                              value,
+                              ...(choiceDescriptions[value] === undefined ? {} : { description: choiceDescriptions[value] }),
+                            })),
+                            purpose: "guardrail",
+                            authority: policy.authority,
+                            invocationKey: `guardrail-reconsider:${Hash.sha256([policy.authority, item.request.id, input.fingerprint, item.source?.messageID ?? "", item.source?.callID ?? ""].join("\0"))}`,
+                          })
+                          last = SessionAssessment.interpret(graded, policy)
+                          if (last.type !== "escalate") break
+                        }
+                        return last
+                      }),
+                    )
+                    if (assessed === undefined)
+                      return { ...base, outcome: "escalated" as const, settled: false, reason: "native-assessment-unavailable" }
+                    const current = (yield* classify(evaluateInput)).evaluation
+                    if (current.decision !== "ask") return yield* settleRules(current)
+                    const stale =
+                      assessed.type !== "escalate" &&
+                      ((assessed.provenance.authority === "yolo" &&
+                        !(authorization !== undefined &&
+                          (yield* DecisionChoice.autonomyUnchanged(autonomy, rootSessionID, authorization)))) ||
+                        current.hardReview !== result.hardReview ||
+                        current.ruleIDs.join("\0") !== result.ruleIDs.join("\0") ||
+                        Hash.json(yield* applicabilityOf(evaluateInput, result)) !== Hash.json(applicability) ||
+                        SessionDecisionContext.authorityDigest(
+                          yield* SessionDecisionContext.read(database.db, item.request.sessionID),
+                        ) !== authority)
+                    const held = !stale && assessed.type === "approve" && Permission.humanRejected(applicability.prior)
+                    const settled = stale || held ? undefined : assessed
+                    if (settled !== undefined && settled.type !== "escalate") {
+                      return yield* withRootLock(
+                        rootSessionID,
+                        Effect.gen(function* () {
+                          if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                          if (!(yield* input.validate(item.request)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                          yield* replyUnlocked(
+                            rootSessionID,
+                            {
+                              sessionID: rootSessionID,
+                              requestID: input.requestID,
+                              reply: settled.type === "approve" ? settled.reply : "reject",
+                            },
+                            settled.provenance,
+                            input.source,
+                          )
+                          return {
+                            ...base,
+                            outcome: settled.type === "approve" ? ("allowed" as const) : ("denied" as const),
+                            settled: true,
+                            via: settled.provenance.authority!,
+                          }
+                        }),
+                      ).pipe(
+                        Effect.catchTag("Guardrail.RequestNotFoundError", () =>
+                          Effect.succeed({ ...base, outcome: "stale" as const, settled: false }),
+                        ),
+                      )
+                    }
+                    return {
+                      ...base,
+                      outcome: "escalated" as const,
+                      settled: false,
+                      via: assessed.provenance.authority,
+                      reason: stale ? "stale-assessment" : held ? "human-rejected" : (assessed.provenance.reason ?? "escalated"),
+                    }
+                  }),
+                ),
+          (acquired) =>
+            Effect.sync(() => {
+              if (acquired.item !== undefined) reconsidering.delete(input.requestID)
+            }),
+        )
+      }),
+    )
 
     const forSession = Effect.fn("SessionGuardrail.forSession")(function* (sessionID: Session.ID) {
       const rootSessionID = yield* root(sessionID)
@@ -1152,7 +1476,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), deferPending, forSession, status, snapshot, withSnapshot })
+    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), requestSnapshot, reconsider, requestSnapshots, deferPending, forSession, status, snapshot, withSnapshot })
   }),
 )
 

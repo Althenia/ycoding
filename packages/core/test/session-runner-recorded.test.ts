@@ -1,3 +1,5 @@
+import { SystemPart } from "@ycoding-ai/ai"
+import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { HttpRecorder } from "@ycoding-ai/http-recorder"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
 import { Auth, LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
@@ -52,10 +54,26 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 const cassetteName = "session-runner/openai-chat-streams-text"
 const cassetteDirectory = path.resolve(import.meta.dir, "fixtures/recordings")
 const sessionID = Session.ID.make("ses_runner_recorded")
-const expectedPromptCacheKey = SessionRunnerCache.promptCacheKeyForGeneration(
-  sessionID,
-  "aaf9a4bf74314f22822545b25934ea6633f4c10836af73197864fa4b24c12410",
-)
+const declaredPermissions: Permission.Ruleset = [
+  { action: "*", resource: "*", effect: "allow" },
+  { action: "chatgpt_*", resource: "*", effect: "ask" },
+  { action: "claude_*", resource: "*", effect: "ask" },
+  { action: "external_directory", resource: "*", effect: "ask" },
+]
+const expectedPromptCacheKey = (system: string) =>
+  SessionRunnerCache.promptCacheKeyForGeneration(
+    sessionID,
+    SessionRunnerCache.promptCacheNamespace({
+      projectID: Project.ID.global,
+      directory: "/project",
+      providerID: model.provider,
+      modelID: model.id,
+      policyRevision: CACHE_POLICY_REVISION,
+      permissions: declaredPermissions,
+      system: [SystemPart.make(system)],
+      tools: [],
+    }),
+  )
 const wireRequest = Promise.withResolvers<{ incoming: HttpRecorder.RequestSnapshot; recorded: HttpRecorder.RequestSnapshot }>()
 const sent: HttpRecorder.RequestSnapshot[] = []
 if (process.env.RECORD === "true") {
@@ -89,6 +107,9 @@ const permission = Layer.succeed(
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
+    snapshot: () => Effect.die("unused"),
+    snapshots: () => Effect.die("unused"),
+    reconsider: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
     list: () => Effect.die("unused"),
@@ -252,12 +273,13 @@ describe("SessionRunnerLLM recorded", () => {
       const execution = yield* session.resume(sessionID).pipe(Effect.forkChild({ startImmediately: true }))
       const wire = yield* Effect.promise(() => wireRequest.promise)
       const expected = JSON.parse(wire.recorded.body)
-      expected.prompt_cache_key = expectedPromptCacheKey
+      const promptCacheKey = expectedPromptCacheKey(expected.messages[0].content)
+      expected.prompt_cache_key = promptCacheKey
       expected.messages[1].content +=
         '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}\n</system-update>'
       const incomingBody = JSON.parse(wire.incoming.body)
       expect(wire.incoming.headers).toEqual(wire.recorded.headers)
-      expect(incomingBody.prompt_cache_key).toBe(expectedPromptCacheKey)
+      expect(incomingBody.prompt_cache_key).toBe(promptCacheKey)
       expect(incomingBody).toEqual(expected)
       yield* Fiber.join(execution)
       expect(sent).toHaveLength(1)

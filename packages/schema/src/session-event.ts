@@ -173,6 +173,10 @@ export const GuardrailDecided = Event.durable({
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
     ruleIDs: Schema.Array(Schema.String).pipe(optional),
     source: Guardrail.Source.pipe(optional),
+    actor: Schema.Literal("coordinator").pipe(optional),
+    coordinatorSessionID: SessionID.pipe(optional),
+    groupID: Schema.String.pipe(optional),
+    rationale: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)).pipe(optional),
   },
 })
 export type GuardrailDecided = typeof GuardrailDecided.Type
@@ -240,10 +244,14 @@ export const PermissionAssessed = Event.durable({
     ...Base,
     requestID: Schema.String,
     outcome: Schema.Literals(["allow", "deny", "escalate"]),
-    via: Schema.Literals(["auto-permission", "baseline", "yolo"]),
+    via: Schema.Literals(["auto-permission", "baseline", "yolo", "coordination"]),
     reply: Permission.Reply.pipe(optional),
     ...Guardrail.Escalation.fields,
     source: Guardrail.Source.pipe(optional),
+    actor: Schema.Literal("coordinator").pipe(optional),
+    coordinatorSessionID: SessionID.pipe(optional),
+    groupID: Schema.String.pipe(optional),
+    rationale: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)).pipe(optional),
   },
 })
 export type PermissionAssessed = typeof PermissionAssessed.Type

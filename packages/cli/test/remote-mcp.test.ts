@@ -29,6 +29,9 @@ const expectedTools = [
   "session_switch_agent", "session_command", "session_skill", "usage_providers", "usage_summary", "usage_report", "session_usage_report",
   "session_prompt_costs", "session_task_costs", "usage_forecast", "incident_report", "incident_recent", "incident_guidance",
   "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "artifact_demo_preview", "artifact_demo_export",
+  "coordination_settings", "coordination_list", "coordination_create", "coordination_get", "coordination_members", "coordination_arm",
+  "coordination_stop", "coordination_complete", "coordination_claim", "coordination_release", "coordination_dispatch", "coordination_receipts",
+  "coordination_wait", "coordination_cancel_wait", "coordination_capacity",
   "local_app_register", "local_app_list", "local_app_revoke", "local_app_open", "local_app_status", "local_app_http", "session_create_in_directory",
 ]
 const excludedOperations = [
@@ -121,7 +124,7 @@ describe("inventory and discovery", () => {
     const operations = RemoteMcpSchemas.tools.map((tool) => tool.operation).filter((operation) => operation !== "session.createInDirectory")
     expect(operations.map(String).toSorted()).toEqual(remoteOperations.filter((operation) => !excludedOperations.includes(operation)).map(String).toSorted())
     expect(RemoteMcpSchemas.tools.at(-1)?.operation).toBe("session.createInDirectory")
-    expect(new Set(expectedTools).size).toBe(81)
+    expect(new Set(expectedTools).size).toBe(96)
   })
 
   test("session-scoped tools require sessionID and parameterless ones publish no input", async () => {

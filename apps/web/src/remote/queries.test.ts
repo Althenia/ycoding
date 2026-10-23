@@ -262,3 +262,83 @@ describe("incident queries", () => {
     expect(queries.incidentGuidance(scope, true, model).queryKey).not.toEqual(queries.incidentGuidance(next, true, model).queryKey)
   })
 })
+
+describe("Projects reads and changes", () => {
+  const policy = { concurrency: 1, queueCapacity: 64 }
+  const summary = { id: "cgrp_1", name: "Release", status: "armed", revision: 4, policy, fencingGeneration: 1, memberCount: 2, time: { created: 1, updated: 9 } }
+  const detail = { ...summary, members: [{ sessionID: "ses_lead", role: "coordinator", location: { directory: "/repo" } }, { sessionID: "ses_w1", role: "worker", location: { directory: "/repo" } }], claims: [], dispatches: [] }
+  const capacity = { groupID: "cgrp_1", concurrency: 1, hardLimit: 4, effectiveLimit: 1, active: 1, waiting: 0, queued: 0, queueCapacity: 64, available: 0, spent: 0 }
+  const central = { enabled: true, categories: ["question", "permission", "review"] as const }
+  const answers = (overrides: Record<string, RemoteRequestOutcome> = {}) => (operation: string): RemoteRequestOutcome => overrides[operation] ?? ({
+    "coordination.list": { status: "ok", value: { data: [summary] } },
+    "coordination.get": { status: "ok", value: { data: detail } },
+    "coordination.capacity": { status: "ok", value: { data: capacity } },
+    "coordination.receipts": { status: "ok", value: { data: [] } },
+    "coordination.settings": { status: "ok", value: { data: central } },
+  } as Record<string, RemoteRequestOutcome>)[operation] ?? { status: "ok", value: { data: {} } }
+
+  test("the overview reads each group's detail, capacity and receipts and the central policy once", async () => {
+    const { calls, client, queries } = incidents(answers())
+    const overview = await client.fetchQuery(queries.coordination(scope, true))
+    expect(overview.status).toBe("ready")
+    if (overview.status !== "ready") return
+    expect(overview.groups.map((group) => [group.summary.id, group.detail.members.length, group.capacity.hardLimit, group.receipts.length])).toEqual([["cgrp_1", 2, 4, 0]])
+    expect(overview.central).toEqual(central)
+    expect(calls.map((call) => call.operation).sort()).toEqual(["coordination.capacity", "coordination.get", "coordination.list", "coordination.receipts", "coordination.settings"])
+    expect(calls.find((call) => call.operation === "coordination.get")?.request?.input).toEqual({ groupID: "cgrp_1" })
+  })
+
+  test("an older connector reads as unsupported and an unreadable central policy stays unavailable", async () => {
+    const unknown: RemoteRequestOutcome = { status: "failed", error: { code: "unknown_operation", message: "unknown" } }
+    const older = incidents(answers({ "coordination.list": unknown }))
+    expect(await older.client.fetchQuery(older.queries.coordination(scope, true))).toEqual({ status: "unsupported" })
+    const noSettings = incidents(answers({ "coordination.settings": unknown }))
+    const overview = await noSettings.client.fetchQuery(noSettings.queries.coordination(scope, true))
+    expect(overview).toMatchObject({ status: "ready", central: undefined })
+    const garbled = incidents(answers({ "coordination.settings": { status: "ok", value: { data: { enabled: "maybe" } } } }))
+    expect(await garbled.client.fetchQuery(garbled.queries.coordination(scope, true))).toMatchObject({ status: "ready", central: undefined })
+  })
+
+  test("an unreadable group answer fails the read instead of showing a partial project", async () => {
+    const { client, queries } = incidents(answers({ "coordination.capacity": { status: "ok", value: { data: { active: "x" } } } }))
+    await expect(client.fetchQuery(queries.coordination(scope, true))).rejects.toThrow("The device returned an unreadable project answer.")
+  })
+
+  test("a change sends once, preserves a refusal reason, and rereads the overview", async () => {
+    const { calls, client, queries } = incidents(answers())
+    await client.fetchQuery(queries.coordination(scope, true))
+    const done = await queries.changeCoordination(scope, "coordination.arm", { groupID: "cgrp_1", revision: 4 })
+    expect(done).toEqual({ reached: true })
+    expect(calls.filter((call) => call.operation === "coordination.arm")).toHaveLength(1)
+    expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
+    const refused = incidents(answers({ "coordination.arm": { status: "failed", error: { code: "invalid_message", message: "Group revision changed" } } }))
+    await refused.client.fetchQuery(refused.queries.coordination(scope, true))
+    expect(await refused.queries.changeCoordination(scope, "coordination.arm", { groupID: "cgrp_1", revision: 3 })).toEqual({ reached: false, message: "Projects: Group revision changed" })
+    expect(refused.calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
+  })
+
+  test("an unconfirmed change is never sent again and says so after rereading", async () => {
+    const { calls, client, queries } = incidents(answers({ "coordination.create": { status: "unknown", error: { code: "outcome_unknown", message: "Request timed out" } } }))
+    await client.fetchQuery(queries.coordination(scope, true))
+    const result = await queries.changeCoordination(scope, "coordination.create", { name: "x" })
+    expect(result).toEqual({ reached: false, unconfirmed: true, message: "Projects: Request timed out. The result is unconfirmed and was not sent again; the list below shows what the machine reports now." })
+    expect(calls.filter((call) => call.operation === "coordination.create")).toHaveLength(1)
+    expect(calls.filter((call) => call.operation === "coordination.list")).toHaveLength(2)
+  })
+
+  test("a connector without the operation says to update instead of failing generically", async () => {
+    const { client, queries } = incidents(answers({ "coordination.stop": { status: "failed", error: { code: "unknown_operation", message: "unknown" } } }))
+    await client.fetchQuery(queries.coordination(scope, true))
+    expect(await queries.changeCoordination(scope, "coordination.stop", { groupID: "cgrp_1", revision: 4 })).toEqual({ reached: false, message: "Update YCoding on this machine to manage Projects from here." })
+  })
+
+  test("a replaced connection never reads or invalidates the new generation", async () => {
+    const next: QueryScope = { deviceID: "dev_1", generation: 2 }
+    const { client, queries } = incidents(answers())
+    await client.fetchQuery(queries.coordination(scope, true))
+    await client.fetchQuery(queries.coordination(next, true))
+    await queries.changeCoordination(scope, "coordination.arm", { groupID: "cgrp_1", revision: 4 })
+    expect(client.getQueryState(queries.coordination(next, true).queryKey)?.isInvalidated).toBe(false)
+    expect(queries.coordination(scope, true).queryKey).not.toEqual(queries.coordination(next, true).queryKey)
+  })
+})

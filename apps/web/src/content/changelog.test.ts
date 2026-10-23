@@ -7,8 +7,17 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.10.25 guardrail history and Muse quota fixes first", () => {
+  test("lists v0.11.0 Projects and shared machine names first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-23", tags: ["Added", "Changed"] })
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["Projects", "Relay MCP", "dispatch", "agent", "reasoning variant", "receipt", "Session defaults", "re-arm", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified"])
+      expect(text).toContain(fragment)
+    expect(after("0.11.0")?.version).toBe("0.10.25")
+  })
+
+  test("retains v0.10.25 guardrail history and Muse quota fixes", () => {
+    const entry = byVersion("0.10.25")
     expect(entry).toMatchObject({ version: "0.10.25", date: "2026-10-22", tags: ["Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["guardrail", "chronological", "compaction", "audit records", "pending reviews", "Muse", "provider quotas", "reported zero", "workspaces", "replacement accounts"])
@@ -1628,7 +1637,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 44)).toEqual([
+    expect(versions.slice(0, 45)).toEqual([
+      "0.11.0",
       "0.10.25",
       "0.10.24",
       "0.10.23",

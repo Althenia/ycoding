@@ -153,7 +153,7 @@ const readLocal = Effect.fn("SessionDecisionContext.readLocal")(function* (db: D
       olderHistory: compacted ? "summary" : "not included",
       summaryTruncated: summary?.truncated ?? false,
       blockers: "recent running tools and the latest eight durable reviews; the request supplies its own active blocker",
-      authorization: "session ceiling, remembered project grants and request applicability; unreported input origins do not prove consent; runtime permission checks remain authoritative",
+      authorization: "session ceiling, remembered project grants and request applicability; unreported input origins do not prove consent; instruction-channel text is not a native control settlement; delegated choices remain bounded by current policy; runtime permission checks remain authoritative",
       toolOutput: "omitted; never user authorization",
     },
   }
@@ -220,6 +220,7 @@ function inputSource(metadata: unknown, delegated: boolean) {
   if (metadata && typeof metadata === "object") {
     if ("inputOrigin" in metadata) {
       if (metadata.inputOrigin === "human") return "human"
+      if (metadata.inputOrigin === "coordination") return "coordination"
       if (metadata.inputOrigin === "plugin") return "plugin"
       if (metadata.inputOrigin === "subagent") return "delegated-task"
       if (metadata.inputOrigin === "review") return "review-decision"
