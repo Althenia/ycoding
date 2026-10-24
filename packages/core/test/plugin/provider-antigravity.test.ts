@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
-import { LLM, ToolDefinition } from "@ycoding-ai/ai"
-import { LLMClient } from "@ycoding-ai/ai/route"
+import { LLM, LLMEvent, Message, ToolDefinition } from "@ycoding-ai/ai"
+import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
@@ -18,12 +18,22 @@ import {
 } from "@ycoding-ai/core/plugin/provider/antigravity"
 import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
+const client = LLMClient.layer.pipe(
+  Layer.provide(
+    Layer.succeed(
+      RequestExecutor.Service,
+      RequestExecutor.Service.of({
+        execute: () => Effect.die("Unexpected native transport"),
+      }),
+    ),
+  ),
+)
 const http = (respond: (request: HttpClientRequest.HttpClientRequest) => Response) =>
   HttpClient.make((request) => Effect.sync(() => HttpClientResponse.fromWeb(request, respond(request))))
 const body = (request: HttpClientRequest.HttpClientRequest) => {
@@ -510,10 +520,10 @@ describe("AntigravityPlugin", () => {
   })
 
   test("fetch wrap unwraps non-streaming JSON and passes error responses through", async () => {
-    const ok = createAntigravityFetch(
-      async () => Response.json({ response: { candidates: [] }, traceId: "t2" }),
-      { access: "google-access", project: "project-1" },
-    )
+    const ok = createAntigravityFetch(async () => Response.json({ response: { candidates: [] }, traceId: "t2" }), {
+      access: "google-access",
+      project: "project-1",
+    })
     const response = await ok(
       "https://generativelanguage.googleapis.com/v1beta/models/claude-fixture:generateContent",
       { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -530,5 +540,366 @@ describe("AntigravityPlugin", () => {
     )
     expect(error.status).toBe(429)
     expect(await error.json()).toEqual({ error: { message: "quota" } })
+  })
+
+  test("level-based thinking settings reach the SDK wire for the base model and its high variant", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const models = await Effect.runPromise(
+      discoverAntigravityModels(
+        http(() =>
+          Response.json({
+            models: {
+              "gemini-4-argon-low": { displayName: "Gemini 4 Argon (Low)", supportsThinking: true, thinkingLevel: 1 },
+              "gemini-4-argon-medium": {
+                displayName: "Gemini 4 Argon (Medium)",
+                supportsThinking: true,
+                thinkingLevel: 2,
+              },
+              "gemini-4-argon-high": { displayName: "Gemini 4 Argon (High)", supportsThinking: true, thinkingLevel: 3 },
+            },
+          }),
+        ),
+        "google-access",
+        "project-1",
+      ),
+    )
+    const sent: Record<string, unknown>[] = []
+    const send = async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+      sent.push(JSON.parse(init.body))
+      return new Response(
+        `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: [{ text: "Ready" }] }, finishReason: "STOP" }] } })}\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      )
+    }
+    const run = async (catalog: (typeof models)[number], gatewayModel?: string) => {
+      const sdk = createGoogleGenerativeAI({
+        apiKey: "placeholder",
+        fetch: Object.assign(
+          createAntigravityFetch(send, {
+            access: "google-access",
+            project: "project-1",
+            ...(gatewayModel ? { model: gatewayModel } : {}),
+          }),
+          { preconnect: fetch.preconnect },
+        ),
+      })
+      const prepared = await Effect.runPromise(
+        Effect.gen(function* () {
+          const aisdk = yield* AISDK.Service
+          yield* aisdk.hook.sdk((event) => {
+            event.sdk = sdk
+          })
+          const model = yield* SessionRunnerModel.fromCatalogModel(catalog, undefined, { loadAISDK: aisdk.model })
+          return yield* LLMClient.prepare<LanguageModelV3CallOptions>(LLM.request({ model, prompt: "Hello" }))
+        }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer)),
+      )
+      const result = await sdk.languageModel(catalog.modelID ?? catalog.id).doStream(prepared.body)
+      await Array.fromAsync(result.stream)
+    }
+    await run(models[0])
+    expect(sent[0]?.model).toBe("gemini-4-argon-medium")
+    expect(sent[0]?.request).toMatchObject({
+      generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "medium" } },
+    })
+    const high = await Effect.runPromise(SessionRunnerModel.withVariant(models[0], CatalogModel.VariantID.make("high")))
+    await run(high, String(high.settings?.antigravityModelID))
+    expect(sent[1]?.model).toBe("gemini-4-argon-high")
+    expect(sent[1]?.request).toMatchObject({
+      generationConfig: { thinkingConfig: { includeThoughts: true, thinkingLevel: "high" } },
+    })
+  })
+
+  test("signed thinking and assistant blocks preserve the request prefix on tool continuation", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const models = await Effect.runPromise(
+      discoverAntigravityModels(
+        http(() =>
+          Response.json({
+            models: {
+              "gemini-4-argon-medium": {
+                displayName: "Gemini 4 Argon (Medium)",
+                supportsThinking: true,
+                thinkingLevel: 2,
+              },
+            },
+          }),
+        ),
+        "google-access",
+        "project-1",
+      ),
+    )
+    const sent: Record<string, unknown>[] = []
+    const sdk = createGoogleGenerativeAI({
+      apiKey: "placeholder",
+      fetch: Object.assign(
+        createAntigravityFetch(
+          async (_input, init) => {
+            if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+            sent.push(JSON.parse(init.body))
+            return new Response(
+              `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: [{ text: "Done" }] }, finishReason: "STOP" }] } })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          },
+          { access: "google-access", project: "project-1" },
+        ),
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const prepared = await Effect.runPromise(
+      Effect.gen(function* () {
+        const aisdk = yield* AISDK.Service
+        yield* aisdk.hook.sdk((event) => {
+          event.sdk = sdk
+        })
+        const model = yield* SessionRunnerModel.fromCatalogModel(models[0], undefined, { loadAISDK: aisdk.model })
+        return yield* LLMClient.prepare<LanguageModelV3CallOptions>(
+          LLM.request({
+            model,
+            messages: [
+              Message.user("Look up fixture"),
+              Message.assistant([
+                {
+                  type: "reasoning",
+                  text: "Check fixture",
+                  providerMetadata: { google: { thoughtSignature: "synthetic-thought-signature" } },
+                },
+                { type: "text", text: "Looking it up" },
+                {
+                  type: "tool-call",
+                  id: "call_1",
+                  name: "lookup",
+                  input: { query: "fixture" },
+                  providerMetadata: { google: { thoughtSignature: "synthetic-call-signature" } },
+                },
+              ]),
+              Message.tool({ id: "call_1", name: "lookup", result: { type: "text", value: "found" } }),
+            ],
+            tools: [
+              ToolDefinition.make({
+                name: "lookup",
+                description: "Look up a fixture",
+                inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+              }),
+            ],
+          }),
+        )
+      }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer)),
+    )
+    const result = await sdk.languageModel(models[0].modelID ?? models[0].id).doStream(prepared.body)
+    await Array.fromAsync(result.stream)
+    expect(sent).toHaveLength(1)
+    const request = sent[0]?.request as { contents: { role: string; parts: Record<string, unknown>[] }[] }
+    const model = request.contents.find((content) => content.role === "model")
+    expect(model?.parts).toEqual([
+      { text: "Check fixture", thought: true, thoughtSignature: "synthetic-thought-signature" },
+      { text: "Looking it up" },
+      { functionCall: { name: "lookup", args: { query: "fixture" } }, thoughtSignature: "synthetic-call-signature" },
+    ])
+  })
+
+  test("multiline gateway SSE preserves thinking, assistant blocks, and cached usage", async () => {
+    const payload = {
+      response: {
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [{ text: "Check", thought: true, thoughtSignature: "synthetic-thought" }, { text: "Ready" }],
+            },
+            finishReason: "STOP",
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 120,
+          cachedContentTokenCount: 100,
+          candidatesTokenCount: 5,
+          thoughtsTokenCount: 2,
+        },
+      },
+      traceId: "synthetic-trace",
+    }
+    const wrapped = createAntigravityFetch(
+      async () =>
+        new Response(
+          `: gateway\r\nid: fixture\r\n${JSON.stringify(payload, null, 2)
+            .split("\n")
+            .map((line) => `data: ${line}\r\n`)
+            .join("")}\r\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { access: "google-access", project: "project-1" },
+    )
+    const response = await wrapped(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+      { method: "POST", body: "{}" },
+    )
+    const text = await response.text()
+    expect(text).toContain(`data: ${JSON.stringify(payload.response)}\n`)
+    expect(text).toContain("id: fixture")
+    expect(text).not.toContain('"traceId"')
+  })
+
+  for (const cached of [undefined, 0, 100]) {
+    test(`cache telemetry stays ${cached === undefined ? "unreported" : cached} through the runtime adapter`, async () => {
+      const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+      const sdk = createGoogleGenerativeAI({
+        apiKey: "placeholder",
+        fetch: Object.assign(
+          createAntigravityFetch(
+            async () =>
+              new Response(
+                `data: ${JSON.stringify({
+                  response: {
+                    candidates: [{ content: { role: "model", parts: [{ text: "Ready" }] }, finishReason: "STOP" }],
+                    usageMetadata: {
+                      promptTokenCount: 120,
+                      candidatesTokenCount: 5,
+                      ...(cached === undefined ? {} : { cachedContentTokenCount: cached }),
+                    },
+                  },
+                })}\n\n`,
+                { headers: { "content-type": "text/event-stream" } },
+              ),
+            { access: "google-access", project: "project-1" },
+          ),
+          { preconnect: fetch.preconnect },
+        ),
+      })
+      const response = await Effect.runPromise(
+        Effect.gen(function* () {
+          const aisdk = yield* AISDK.Service
+          yield* aisdk.hook.sdk((event) => {
+            event.sdk = sdk
+          })
+          const model = yield* SessionRunnerModel.fromCatalogModel(
+            CatalogModel.Info.make({
+              ...CatalogModel.Info.empty(Provider.ID.make("antigravity"), CatalogModel.ID.make("gemini-fixture")),
+              package: Provider.aisdk("@ai-sdk/google"),
+            }),
+            undefined,
+            { loadAISDK: aisdk.model },
+          )
+          return yield* LLMClient.generate(LLM.request({ model, prompt: "Hello" }))
+        }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer), Effect.provide(client)),
+      )
+      const finish = response.events.find(LLMEvent.is.finish)
+      expect(finish?.usage?.cacheReadInputTokens).toBe(cached)
+      expect(finish?.usage?.inputTokens).toBe(120)
+      expect(finish?.usage?.outputTokens).toBe(5)
+    })
+  }
+
+  test("fetch wrap unwraps an SSE line delivered in single-byte chunks", async () => {
+    const payload = `data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "คิด 🤔".repeat(800) }] } }] }, traceId: "t3" })}\r\n\r\n`
+    const bytes = new TextEncoder().encode(payload)
+    const send = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const byte of bytes) controller.enqueue(Uint8Array.of(byte))
+            controller.close()
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      )
+    const wrapped = createAntigravityFetch(send, { access: "google-access", project: "project-1" })
+    const response = await wrapped(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+      {
+        method: "POST",
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "Hello" }] }] }),
+      },
+    )
+    expect(await response.text()).toBe(
+      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "คิด 🤔".repeat(800) }] } }] })}\n\n`,
+    )
+  })
+
+  test("gateway stream keeps errors, malformed data, and completion sentinels visible", async () => {
+    const wrapped = createAntigravityFetch(
+      async () =>
+        new Response(
+          'event: error\nid: fixture\ndata: {"error":{"message":"synthetic failure"}}\n\ndata: {broken\n\ndata: [DONE]\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { access: "google-access" },
+    )
+    const response = await wrapped(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+      { method: "POST", body: "{}" },
+    )
+    const text = await response.text()
+    expect(text).toContain('event: error\ndata: {"error":{"message":"synthetic failure"}}')
+    expect(text).toContain("data: {broken\n\n")
+    expect(text).toContain("data: [DONE]\n\n")
+  })
+
+  test("gateway stream flushes its final event and drops obsolete entity headers", async () => {
+    const wrapped = createAntigravityFetch(
+      async () =>
+        new Response('data: {"response":{"candidates":[]}}', {
+          headers: { "content-type": "text/event-stream", "content-length": "37", "content-encoding": "identity" },
+        }),
+      { access: "google-access" },
+    )
+    const response = await wrapped(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+      { method: "POST", body: "{}" },
+    )
+    expect(await response.text()).toBe('data: {"candidates":[]}\n\n')
+    expect(response.headers.get("content-length")).toBeNull()
+    expect(response.headers.get("content-encoding")).toBeNull()
+  })
+
+  test("gateway stream propagates cancellation to its source", async () => {
+    let cancelled = false
+    const cancellation = Promise.withResolvers<void>()
+    const wrapped = createAntigravityFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: {"response":{"candidates":[]}}\n\n'))
+            },
+            cancel() {
+              cancelled = true
+              cancellation.resolve()
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { access: "google-access" },
+    )
+    const response = await wrapped(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+      { method: "POST", body: "{}" },
+    )
+    const reader = response.body!.getReader()
+    expect((await reader.read()).done).toBe(false)
+    await reader.cancel()
+    await cancellation.promise
+    expect(cancelled).toBe(true)
+  })
+
+  test("gateway stream exposes source read failures", async () => {
+    const wrapped = createAntigravityFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(new Error("synthetic stream failure"))
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { access: "google-access" },
+    )
+    const response = await wrapped(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:streamGenerateContent?alt=sse",
+      { method: "POST", body: "{}" },
+    )
+    await expect(response.text()).rejects.toThrow("synthetic stream failure")
   })
 })

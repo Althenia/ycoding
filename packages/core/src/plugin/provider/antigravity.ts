@@ -2,6 +2,7 @@ import { createServer } from "node:http"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
 import { Clock, Deferred, Effect, Option, Schedule, Schema, Semaphore, Stream } from "effect"
+import { Sse } from "effect/unstable/encoding"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { AISDK } from "../../aisdk"
 import { Catalog } from "../../catalog"
@@ -394,30 +395,51 @@ function stripTrailingModelContents(body: unknown) {
 function unwrapStream(response: Response) {
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
-  let pending = ""
-  const convert = (line: string) => {
-    if (!line.startsWith("data:")) return line
-    const payload = Option.getOrUndefined(decodeBody(line.slice(5).trim()))
-    if (!payload || typeof payload !== "object" || !("response" in payload)) return line
-    return `data: ${JSON.stringify((payload as { response: unknown }).response)}`
-  }
-  return new Response(
-    response.body!.pipeThrough(
-      new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) {
-          pending += decoder.decode(chunk, { stream: true })
-          const lines = pending.split("\n")
-          pending = lines.pop() ?? ""
-          for (const line of lines) controller.enqueue(encoder.encode(`${convert(line)}\n`))
-        },
-        flush(controller) {
-          const rest = pending + decoder.decode()
-          if (rest) controller.enqueue(encoder.encode(convert(rest)))
-        },
+  const frames: string[] = []
+  const partial: string[] = []
+  const parser = Sse.makeParser((event) => {
+    if (event._tag === "Retry") {
+      frames.push(Sse.encoder.write(event))
+      return
+    }
+    const payload = Option.getOrUndefined(decodeBody(event.data))
+    frames.push(
+      Sse.encoder.write({
+        ...event,
+        data:
+          payload && typeof payload === "object" && "response" in payload
+            ? JSON.stringify(payload.response)
+            : event.data,
       }),
-    ),
-    { status: response.status, statusText: response.statusText, headers: response.headers },
+    )
+  })
+  const stream = response.body!.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        const lines = decoder.decode(chunk, { stream: true }).split("\n")
+        for (const [index, line] of lines.entries()) {
+          partial.push(line)
+          if (index === lines.length - 1) continue
+          parser.feed(`${partial.join("").replace(/\r$/, "")}\n`)
+          partial.length = 0
+        }
+        if (frames.length > 0) controller.enqueue(encoder.encode(frames.splice(0).join("")))
+      },
+      flush(controller) {
+        partial.push(decoder.decode())
+        parser.feed(`${partial.join("").replace(/\r$/, "")}\n\n`)
+        if (frames.length > 0) controller.enqueue(encoder.encode(frames.join("")))
+      },
+    }),
   )
+  const headers = new Headers(response.headers)
+  headers.delete("content-length")
+  headers.delete("content-encoding")
+  return new Response(stream, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }
 
 async function generatePKCE(): Promise<Pkce> {

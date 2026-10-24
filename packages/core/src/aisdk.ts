@@ -402,6 +402,7 @@ function modelFromLanguage(info: CatalogModel.Info, language: LanguageModelV3) {
         prepared as LanguageModelV3CallOptions,
         defaultAnthropicThinking,
         packageName === CURSOR_PACKAGE,
+        packageName === "@ai-sdk/google",
       ),
   }
   return Model.make({ id: info.modelID ?? info.id, provider: info.providerID, route })
@@ -741,6 +742,7 @@ function streamLanguage(
   options: LanguageModelV3CallOptions,
   defaultAnthropicThinking: boolean,
   cursor: boolean,
+  google: boolean,
 ) {
   const thinking = options.providerOptions?.anthropic?.thinking
   const reasoningConfig = options.providerOptions?.bedrock?.reasoningConfig
@@ -748,6 +750,7 @@ function streamLanguage(
     step: 0,
     toolNames: {} as Record<string, string>,
     cursor,
+    google,
     outputMayIncludeUnreportedReasoning:
       (ProviderShared.isRecord(thinking)
         ? thinking.type === "enabled" || thinking.type === "adaptive"
@@ -780,6 +783,7 @@ function streamPartEvents(
     step: number
     toolNames: Record<string, string>
     cursor: boolean
+    google: boolean
     outputMayIncludeUnreportedReasoning: boolean
   },
   event: LanguageModelV3StreamPart,
@@ -884,7 +888,7 @@ function streamPartEvents(
     case "finish": {
       const reported = state.cursor
         ? cursorUsage(event.providerMetadata, event.usage)
-        : usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning)
+        : usage(event.usage, event.providerMetadata, state.outputMayIncludeUnreportedReasoning, state.google)
       return Effect.succeed([
         LLMEvent.stepFinish({
           index: state.step++,
@@ -908,12 +912,15 @@ function usage(
   input: Extract<LanguageModelV3StreamPart, { type: "finish" }>["usage"],
   metadata?: unknown,
   outputMayIncludeUnreportedReasoning = false,
+  google = false,
 ): UsageInput | undefined {
   const normalized = ProviderShared.normalizeInputUsage({
     semantics: "ai-sdk",
     total: input.inputTokens.total,
     nonCached: input.inputTokens.noCache,
-    cacheRead: input.inputTokens.cacheRead,
+    cacheRead: google
+      ? nonNegativeCount(ProviderShared.isRecord(input.raw) ? input.raw.cachedContentTokenCount : undefined)
+      : input.inputTokens.cacheRead,
     cacheWrite: input.inputTokens.cacheWrite,
   })
   const output = {
