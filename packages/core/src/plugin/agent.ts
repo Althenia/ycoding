@@ -163,6 +163,8 @@ In replies and in every text you write, including documentation, instruction fil
 
 Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.
 
+Use native and local tools exclusively whenever they support the required capability. Do not discover or invoke connector tools for capabilities available natively or locally. Use connectors only for capabilities unavailable through both native and local tools. Never invoke tools.chatgpt.ycoding* from a local YCoding Session.
+
 Keep a todo list for work with three or more steps, and keep it true to the work: mark an item in_progress when you start it, completed as soon as its check passes, and cancelled when it is dropped or superseded, and add new work as it appears. Every update resends the whole list with content, status, and priority for each item; a rejected update changes nothing, so fix and resend it. Before any response without tool calls, update the list so every item matches its actual state.
 
 Use the supplied tool schema or discovered signature, not capability prose, to construct a call. After invalid input, inspect the returned field or path and correct the request only when the previous call is known not to have mutated state. Treat denial, unavailability, and invalid input as distinct outcomes; never replay an uncertain mutation automatically.

@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
+import { LLM, ToolDefinition } from "@ycoding-ai/ai"
+import { LLMClient } from "@ycoding-ai/ai/route"
+import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
 import { ProviderPlugins } from "@ycoding-ai/core/plugin/provider"
@@ -12,6 +16,7 @@ import {
   exchangeAntigravityCode,
 } from "@ycoding-ai/core/plugin/provider/antigravity"
 import { Provider } from "@ycoding-ai/core/provider"
+import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { Effect } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { testEffect } from "../lib/effect"
@@ -114,7 +119,7 @@ describe("AntigravityPlugin", () => {
     }),
   )
 
-  it.effect("discovers selectable models with limits, capabilities, and thinking variants", () =>
+  it.effect("discovers selectable models with limits, capabilities, and reported thinking defaults", () =>
     Effect.gen(function* () {
       let seen: HttpClientRequest.HttpClientRequest | undefined
       const client = http((request) => {
@@ -150,8 +155,8 @@ describe("AntigravityPlugin", () => {
       expect(gemini.package).toBe(Provider.aisdk("@ai-sdk/google"))
       expect(gemini.limit).toEqual({ context: 1_000_000, output: 65_536 })
       expect(gemini.capabilities.input).toContain("image")
-      expect(gemini.variants.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
-      expect(gemini.variants[2]?.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingLevel: "high" } })
+      expect(gemini.variants).toEqual([])
+      expect(gemini.settings).toEqual({ thinkingConfig: { includeThoughts: true } })
       const claude = models.find((model) => model.id === "claude-fixture")!
       expect(claude.limit).toEqual({ context: 200_000, output: 8_192 })
       expect(claude.capabilities.input).not.toContain("image")
@@ -163,6 +168,161 @@ describe("AntigravityPlugin", () => {
       expect(unlimited.limit.context).toBe(0)
     }),
   )
+
+  it.effect("keeps advertised effort models fixed to their catalog thinking configuration", () =>
+    Effect.gen(function* () {
+      const entries = {
+        "gemini-4-argon-medium": { displayName: "Gemini 4 Argon (Medium)", thinkingLevel: 2, thinkingBudget: -1 },
+        "gemini-3.8-flash-low": { displayName: "Gemini 3.8 Flash (Low)", thinkingBudget: 1000 },
+        "gemini-3.8-flash-medium": { displayName: "Gemini 3.8 Flash (Medium)", thinkingBudget: 4000 },
+        "gemini-3.8-flash-high": { displayName: "Gemini 3.8 Flash (High)", thinkingBudget: -1 },
+        "claude-sonnet-5-5-high": { displayName: "Claude Sonnet 5.5 (High)", thinkingLevel: 3 },
+        "gemini-2.5-pro": { displayName: "Gemini 2.5 Pro", thinkingBudget: 1024 },
+      }
+      const models = yield* discoverAntigravityModels(
+        http(() =>
+          Response.json({
+            models: Object.fromEntries(
+              Object.entries(entries).map(([id, entry]) => [id, { ...entry, supportsThinking: true }]),
+            ),
+          }),
+        ),
+        "google-access",
+        "project-1",
+      )
+      expect(models.map((model) => String(model.id))).toEqual(Object.keys(entries).toSorted())
+      for (const model of models) expect(model.variants).toEqual([])
+      expect(models.find((model) => model.id === "gemini-4-argon-medium")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "medium" },
+      })
+      expect(models.find((model) => model.id === "claude-sonnet-5-5-high")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
+      })
+      for (const [id, budget] of [
+        ["gemini-3.8-flash-low", 1000],
+        ["gemini-3.8-flash-medium", 4000],
+        ["gemini-3.8-flash-high", -1],
+        ["gemini-2.5-pro", 1024],
+      ] as const)
+        expect(models.find((model) => model.id === id)?.settings).toEqual({
+          thinkingConfig: { includeThoughts: true, thinkingBudget: budget },
+        })
+    }),
+  )
+
+  test("catalog thinking settings reach the SDK wire while text, tools, signatures, and cached usage survive unwrapping", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const models = await Effect.runPromise(
+      discoverAntigravityModels(
+        http(() =>
+          Response.json({
+            models: {
+              "gemini-3.8-flash-medium": { supportsThinking: true, thinkingBudget: 4000 },
+            },
+          }),
+        ),
+        "google-access",
+        "project-1",
+      ),
+    )
+    const sent: Record<string, unknown>[] = []
+    const sdk = createGoogleGenerativeAI({
+      apiKey: "placeholder",
+      fetch: Object.assign(
+        createAntigravityFetch(
+          async (_input, init) => {
+            if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+            sent.push(JSON.parse(init.body))
+            const chunks = [
+              { candidates: [{ content: { role: "model", parts: [{ text: "Checking", thought: true }] } }] },
+              {
+                candidates: [
+                  {
+                    content: {
+                      role: "model",
+                      parts: [
+                        { text: "Ready" },
+                        {
+                          functionCall: { name: "lookup", args: { query: "fixture" } },
+                          thoughtSignature: "synthetic-signature",
+                        },
+                      ],
+                    },
+                    finishReason: "STOP",
+                  },
+                ],
+                usageMetadata: {
+                  promptTokenCount: 120,
+                  cachedContentTokenCount: 100,
+                  candidatesTokenCount: 5,
+                  thoughtsTokenCount: 2,
+                },
+              },
+            ]
+            return new Response(chunks.map((response) => `data: ${JSON.stringify({ response })}\n\n`).join(""), {
+              headers: { "content-type": "text/event-stream" },
+            })
+          },
+          { access: "google-access", project: "project-1" },
+        ),
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const prepared = await Effect.runPromise(
+      Effect.gen(function* () {
+        const aisdk = yield* AISDK.Service
+        yield* aisdk.hook.sdk((event) => {
+          event.sdk = sdk
+        })
+        const model = yield* SessionRunnerModel.fromCatalogModel(models[0], undefined, { loadAISDK: aisdk.model })
+        return yield* LLMClient.prepare<LanguageModelV3CallOptions>(
+          LLM.request({
+            model,
+            prompt: "Look up fixture",
+            tools: [
+              ToolDefinition.make({
+                name: "lookup",
+                description: "Look up a fixture",
+                inputSchema: {
+                  type: "object",
+                  properties: { query: { type: "string" } },
+                  required: ["query"],
+                },
+              }),
+            ],
+          }),
+        )
+      }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer)),
+    )
+    const result = await sdk.languageModel(models[0].id).doStream(prepared.body)
+    const events = await Array.fromAsync(result.stream)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.model).toBe("gemini-3.8-flash-medium")
+    expect(sent[0]?.request).toMatchObject({
+      contents: [{ role: "user", parts: [{ text: "Look up fixture" }] }],
+      generationConfig: { thinkingConfig: { includeThoughts: true, thinkingBudget: 4000 } },
+    })
+    expect(events).toContainEqual(expect.objectContaining({ type: "text-delta", delta: "Ready" }))
+    expect(events).toContainEqual(expect.objectContaining({ type: "reasoning-delta", delta: "Checking" }))
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool-call",
+        toolName: "lookup",
+        input: '{"query":"fixture"}',
+        providerMetadata: { google: { thoughtSignature: "synthetic-signature" } },
+      }),
+    )
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "finish",
+        usage: {
+          inputTokens: { total: 120, noCache: 20, cacheRead: 100, cacheWrite: undefined },
+          outputTokens: { total: 7, text: 5, reasoning: 2 },
+          raw: { promptTokenCount: 120, cachedContentTokenCount: 100, candidatesTokenCount: 5, thoughtsTokenCount: 2 },
+        },
+      }),
+    )
+  })
 
   test("fetch wrap rewrites the Gemini request into the Antigravity envelope and unwraps SSE", async () => {
     let seen: { url: string; init?: RequestInit } | undefined

@@ -631,6 +631,8 @@ Direct GPT-5.6 Responses requests enable server-side context management with a `
 
 OpenAI-hosted web search URL citations enter the normal assistant text lifecycle as a `Source: <title>` line followed by the URL. The same text is returned by the native AI call, stored in durable Session history, and rendered by the TUI transcript.
 
+Antigravity effort-specific catalog entries use their advertised thinking level or budget as request defaults and expose no generated effort variants. Prompt-prefix reuse and retention belong to the gateway; YCoding adds no provider-specific cache controls and preserves reported cached input counts. Empty replies remain subject to terminal-response validation regardless of reported cache reuse.
+
 ### Prompt delivery
 
 - **Steer** inputs promote at the next safe step boundary and require the active drain to continue.
@@ -905,6 +907,8 @@ Each primary agent implements or delegates as its role directs. god splits work 
 Built-in subagents never take a destructive or irreversible action, such as rewriting untracked data, that needs a decision the evidence cannot settle; they return it as a blocker with the verified facts needed to decide and the largest useful verified result. A rule they choose to settle conflicting data is a decision for the parent, not evidence. Their reports name the outcome, each changed file path, exact checks, assumptions, any corrected premise, and remaining risk.
 
 Maintained built-in agents verify a stated cause or prescribed fix by reproducing the reported symptom and confirming that the fix removes it. Before overwriting or deleting existing data, they check whether version control can restore it and treat untracked or ignored data as unrecoverable.
+
+Maintained primary and task-subagent prompts require exclusive use of native and local tools for capabilities they support, without discovering or invoking equivalent connector tools. Connectors are reserved for capabilities unavailable through both native and local tools. The prompts also prohibit tools matching `tools.chatgpt.ycoding*` in local YCoding Sessions. This is prompt guidance, not a tool-permission restriction.
 
 Maintained built-in agents keep a todo list for work with three or more steps and keep it current: items move to in progress, completed, or cancelled as the work changes, rejected updates are fixed and resent, and the list matches the actual state before the agent stops.
 

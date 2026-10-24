@@ -787,6 +787,33 @@ test("selecting a model restores its valid stored variant without another varian
   }
 }, 30_000)
 
+test("selecting an Antigravity effort model finishes without a second effort dialog", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "antigravity-fixed-effort",
+    catalog: [
+      model({
+        id: "gemini-3.8-flash-medium",
+        providerID: "antigravity",
+        name: "Gemini 3.8 Flash (Medium)",
+        context: 1_048_576,
+        variants: [],
+      }),
+    ],
+  })
+  try {
+    expect(screen.app.captureCharFrame()).toContain("Gemini 3.8 Flash (Medium)")
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.modelID === "gemini-3.8-flash-medium", "the effort model selection")
+    expect(screen.pendingTarget()).toEqual({ providerID: "antigravity", modelID: "gemini-3.8-flash-medium" })
+    expect(screen.variant()).toBeUndefined()
+    expect(screen.app.captureCharFrame()).not.toContain("Select variant")
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
 test("rapid variant cycling advances from the newest pending variant", async () => {
   switches.length = 0
   const screen = await renderPicker({

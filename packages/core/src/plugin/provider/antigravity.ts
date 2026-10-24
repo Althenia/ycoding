@@ -9,7 +9,6 @@ import { Credential } from "../../credential"
 import { EventRuntime } from "../../event"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
-import { settingsForEffort } from "../../models-dev"
 import { OauthCallbackPage } from "../../oauth/page"
 import { Provider } from "../../provider"
 import type { PluginInternal } from "../internal"
@@ -71,6 +70,8 @@ const ModelEntry = Schema.Struct({
   maxOutputTokens: Schema.optional(Schema.Number),
   supportsImages: Schema.optional(Schema.Boolean),
   supportsThinking: Schema.optional(Schema.Boolean),
+  thinkingLevel: Schema.optional(Schema.Number),
+  thinkingBudget: Schema.optional(Schema.Number),
   disabled: Schema.optional(Schema.Boolean),
 })
 const decodeEntry = Schema.decodeUnknownOption(ModelEntry)
@@ -221,11 +222,34 @@ export const discoverAntigravityModels = Effect.fn("Antigravity.discoverModels")
       const entry = Option.getOrUndefined(decodeEntry(row))
       if (!entry || entry.disabled === true) return []
       const image = id.includes("image")
+      const level =
+        entry.thinkingLevel === 1
+          ? "low"
+          : entry.thinkingLevel === 2
+            ? "medium"
+            : entry.thinkingLevel === 3
+              ? "high"
+              : entry.thinkingLevel === 4
+                ? "minimal"
+                : undefined
       return [
         CatalogModel.Info.make({
           ...CatalogModel.Info.empty(providerID, CatalogModel.ID.make(id)),
           name: entry.displayName ?? id,
           package: Provider.aisdk("@ai-sdk/google"),
+          settings:
+            entry.supportsThinking === true
+              ? {
+                  thinkingConfig: {
+                    includeThoughts: true,
+                    ...(level !== undefined
+                      ? { thinkingLevel: level }
+                      : entry.thinkingBudget !== undefined
+                        ? { thinkingBudget: entry.thinkingBudget }
+                        : {}),
+                  },
+                }
+              : undefined,
           capabilities: {
             tools: !image,
             input: ["text", ...(entry.supportsImages ? ["image"] : [])],
@@ -238,13 +262,6 @@ export const discoverAntigravityModels = Effect.fn("Antigravity.discoverModels")
                 : 0,
             output: entry.maxOutputTokens ?? 8192,
           },
-          variants:
-            entry.supportsThinking === true
-              ? ["low", "medium", "high"].flatMap((level) => {
-                  const settings = settingsForEffort("@ai-sdk/google", id, level)
-                  return settings ? [{ id: CatalogModel.VariantID.make(level), settings }] : []
-                })
-              : [],
         }),
       ]
     })
