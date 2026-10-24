@@ -57,6 +57,7 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+const projectCards = accountParams.get("projectCards") === "1"
 let telemetryConsentEnabled = accountParams.get("telemetryConsent") !== "undecided"
 const requestLatencyMs = Number(accountParams.get("latency") ?? 0)
 const fixtureGrades = [
@@ -1084,8 +1085,16 @@ function createFixtureStore(): Fixture {
           messages: targetSessionID === "ses_lead" ? [
             { id: "project_user", type: "user", text: "Prepare the release, update the checkout API and draft rollout notes.", time: { created: ago(30), consumed: ago(30) } },
             { id: "project_reply", type: "assistant", agent: "build", content: [{ type: "text", text: "I’ll split the work between the members and report their progress here." }], time: { created: ago(29), completed: ago(29) } },
-            { id: "project_done", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_docs", title: "Docs worker", event: "completed", excerpt: "Rollout notes drafted." }, time: { created: ago(18) } },
-            { id: "project_ask", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_tests", title: "Test runner", event: "question", requestID: "q_member", excerpt: "Which column should checkout read?" }, time: { created: ago(4) } },
+            ...(projectCards ? [
+              { title: "Coordinate-the-release-train-checkout-api-migration-and-rollout-notes-for-every-region", event: "completed", excerpt: "## Summary\n- Updated `packages/core/src/session/coordination-runtime.ts` and `apps/web/src/remote/ui/conversation.tsx`\n- Verified **commit** 9f3c2a7d41b8e6f05c9d2e1a7b3f8c4d6e0a1b2c3d4e5f60718293a4b5c6d7e8\n```\nbun test ./test/coordination-runtime.test.ts\n```\nAll cases passed; see /workspace/release/checkout-api/very/long/path/to/the/generated/report.json for detail." },
+              { title: "Build worker", event: "failed", excerpt: "Build failed." },
+              { title: "Lint worker", event: "interrupted" },
+              { title: "Schema reviewer", event: "question", requestID: "q_cards", excerpt: "Which column should checkout read: `orders.total_cents` or `orders.amount`?" },
+              { title: "Update checkout API", event: "escalated", requestID: "per_cards", excerpt: "Needs production credentials.", escalatedBy: { sessionID: "ses_migration", title: "Migration agent" } },
+            ].map((card, index) => ({ id: `project_card_${index}`, type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: `ses_card_${index}`, ...card }, time: { created: ago(18 - index) } })) : [
+              { id: "project_done", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_docs", title: "Docs worker", event: "completed", excerpt: "Rollout notes drafted." }, time: { created: ago(18) } },
+              { id: "project_ask", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_tests", title: "Test runner", event: "question", requestID: "q_member", excerpt: "Which column should checkout read?" }, time: { created: ago(4) } },
+            ]),
             ...(projectChain === undefined ? [] : [{ id: "project_escalated", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_api", title: "Update checkout API", event: "escalated", requestID: "per_api", kind: "permission", excerpt: "Needs production credentials.", escalatedBy: { sessionID: "ses_driver", title: "Migration agent" } }, time: { created: ago(2) } }]),
           ] : targetSessionID === sessionID ? structuredClone(messages) : targetSessionID === "ses_child" && accountParams.has("childTranscript") ? structuredClone(defaultMessages) : [],
           watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? snapshotWatermark : 0 },

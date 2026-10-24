@@ -403,6 +403,10 @@ Breakdown and Model incidents MUST use flat sections with token-border top rules
 
 Options without a description MUST give their label the full row width and wrap long paths without clipping or ellipsis. Rows MUST grow with their content while retaining the 36px minimum height, or 44px on coarse pointers and below 768px. Described options MUST retain aligned name and description columns. Preserve full labels, keyboard navigation, selection, and the panel's bounded scrolling; reuse the existing monospace, spacing, surface, and focus tokens. Verify with `verify/composer-controls.integration.test.ts`.
 
+### Project notification cards (W79)
+
+Project member notifications use a compact glyph, title/status, and Open-link header. The preview sits beneath the header across the full card content width; Open never narrows it. Titles wrap within two lines and non-empty previews preserve line breaks within three lines, including long paths and hashes. Empty previews render no content row. Use the surface, state-border, muted-text, spacing, radius, and shared ghost-button tokens already assigned to `.project-event`. Keep notification order, accessible link names, modified-click navigation, keyboard activation, and visible focus. Verify both themes and desktop/mobile breakpoint edges with `verify/project-notification-card.integration.test.ts`.
+
 ### Verified Master filtering (W76)
 
 Both Master-only and selected-Master delivery MUST require the source Session to appear as a Master in the current Project list. Stored selection IDs MUST NOT promote members or an unreadable source. Preserve the saved filter while the list is unavailable and withhold restricted external delivery; pending controls and in-app feedback remain visible.
