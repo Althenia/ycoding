@@ -12,10 +12,8 @@ export function rowKey(message: RemoteMessageView): string {
 export function transcriptRows(messages: readonly RemoteMessageView[], decisions: readonly GuardrailDecisionView[]): readonly TranscriptRow[] {
   const checkpoint = (message: RemoteMessageView) => message.kind === "compaction" && message.status === "completed" || message.kind === "synthetic" && message.metadata?.compactionCheckpoint !== undefined
   const pending = (message: RemoteMessageView) => message.kind === "user" && message.state === "pending" || message.kind === "synthetic" && message.pending === true
-  const markers = messages.filter(checkpoint)
-  const floor = markers.length === 0 ? undefined : messages.flatMap((message) => message.kind !== "compaction" && !checkpoint(message) && !pending(message) && "created" in message && message.created !== undefined ? [message.created] : [])[0]
-    ?? Math.max(...markers.map((message) => "created" in message ? message.created ?? 0 : 0))
-  const settlements = mergeGuardrailDecisions([], decisions).filter((decision) => floor === undefined || decision.created >= floor)
+  const floor = messages.flatMap((message) => message.kind !== "compaction" && !checkpoint(message) && !pending(message) && "created" in message && message.created !== undefined ? [message.created] : [])[0]
+  const settlements = floor === undefined ? [] : mergeGuardrailDecisions([], decisions).filter((decision) => decision.reply === "reject" && decision.created >= floor)
   const rows: TranscriptRow[] = []
   let next = 0
   const drain = (through: number) => {

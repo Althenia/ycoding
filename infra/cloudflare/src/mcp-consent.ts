@@ -7,7 +7,7 @@ export const authorityLines: readonly string[] = [
   "Create Sessions in recorded workspaces and in existing directories strictly below the home directory.",
   "Send prompts, interrupt running work, and answer questions and forms.",
   "Approve once, approve always, or reject permission and guardrail requests, including persistent approvals where available.",
-  "Change autonomy (YOLO) and goals, switch models and agents, and run commands and skills.",
+  "Change autonomy modes (Manual, YOLO, or Auto for permissions, guardrails, and answers) and goals, switch models and agents, and run commands and skills.",
   "Manage provider connections, background shells, and keep-awake.",
   "Read usage, cost, and incident reports.",
 ]

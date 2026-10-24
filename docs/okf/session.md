@@ -57,11 +57,11 @@ Promoting new user input resets the selected agent step allowance; a batch of st
 
 ## Explicit Decision Judgments
 
-Decision judgments run only when an agent calls decision with provider: "agent", self-contained authorized evidence, and bounded typed questions. Startup uses normal default agent/model selection, question forms use deterministic auto-answering, and goal continuation uses the goal helper with explicit goal state/tool rules. Judgments cannot execute tools, override owner choices, grant permission, supply the user’s answer, certify completion, or change the objective; refusal, errors, and low or close uncalibrated confidence are uncertainty.[^runtime-doc][^decision-core]
+Agent-invoked decision judgments use provider: "agent", self-contained authorized evidence, and bounded typed questions; they grant no permission, user answer, completion evidence, or objective-changing authority. Runtime category evaluators apply only under their effective YOLO mode, with separate validation and safety gates. Refusal, errors, and low or close uncalibrated confidence preserve human review.[^runtime-doc][^decision-core]
 
 ## Autonomy Modes
 
-Session autonomy is durable with normal, yolo levels 0-2, and goal modes; yolo 0 (Ask first) is manual, yolo 1 (Allow tools) auto-approves ask permissions only, and yolo 2 (Tools + reviews) also auto-approves awake ordinary guardrail reviews. Levels above 2 are rejected and a stored 3 migrates once to 2. An active goal grants no permission, answer, or review authority; automatic answers require the Session's own Session-local /auto-answer toggle on (default off); hard reviews require a fresh human decision.[^runtime-doc]
+The Autonomous dialog controls three durable categories: permissions, guardrails, and answers, each Manual by default, YOLO for its hidden evaluator, or Auto for deterministic rules without a model fallback. Manual leaves unresolved requests to humans. Auto answers use only valid explicit defaults or exactly one Recommended option; only YOLO generates validated free text. Effective modes identify inherited authority. Explicit denies and permission ceilings remain enforced, hard and custom-rule review approvals are human-only, and an active goal grants no decision authority.[^runtime-doc]
 
 Goal mode terminates explicitly as completed, stopped, or exhausted; reports are reserved for unresolved blockers after reasonable self-resolution and each accepted report consumes one no-progress attempt.[^runtime-doc]
 

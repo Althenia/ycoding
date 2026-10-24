@@ -241,26 +241,22 @@ describe("session summary", () => {
   test("merges the selected session's autonomy, agent, and model", () => {
     const summary = summarizeSession(
       session({ agent: "god", modelLabel: "openai/gpt-6" }),
-      view({ autonomy: { mode: "normal", yolo: false, goal: { text: "Ship it", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } } }),
+      view({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { text: "Ship it", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } } }),
     )
     expect(summary.status).toBe("idle")
     expect(summary.autonomy).toBe("normal")
     expect(summary.goalActive).toBe(true)
-    expect(summary.yolo).toBe(false)
-    expect(summary.autoAnswer).toBeUndefined()
+    expect([summary.permissions, summary.guardrails, summary.answers]).toEqual(["manual", "manual", "manual"])
     expect("guardrailsEnforced" in summary).toBe(false)
     expect(summary.agent).toBe("god")
     expect(summary.model).toBe("openai/gpt-6")
     expect(summary.updatedAt).toBe("2023-11-14T22:13:20.000Z")
   })
 
-  test("summary YOLO and sleep come from effective values while the auto flags stay the Session's own", () => {
-    const summary = summarizeSession(session({}), view({ autonomy: { mode: "normal", yolo: false, autoPermission: true, autoGuardrail: true, autoAnswer: true, effective: { yolo: true, permissionsAuto: true, permissionModelReviews: false, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } }))
-    expect(summary.yolo).toBe(true)
+  test("summary modes and sleep come from effective values, naming inherited automation instead of Manual", () => {
+    const summary = summarizeSession(session({}), view({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "yolo", effective: { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent" }, asleep: true, guardrailsEnabled: true } } }))
+    expect([summary.permissions, summary.guardrails, summary.answers]).toEqual(["auto", "manual", "yolo"])
     expect(summary.asleep).toBe(true)
-    expect(summary.autoPermission).toBe(true)
-    expect(summary.autoGuardrail).toBe(true)
-    expect(summary.autoAnswer).toBe(true)
   })
 
   test("does not take another session's live view", () => {
@@ -296,8 +292,8 @@ describe("waiting for a decision", () => {
   test("badges the open family's root and the item's member Session with its review count", () => {
     const items = readReviewItems({ data: ["ses_a", "ses_child"].map((sessionID, index) => ({ itemID: `rvw_${index}`, sessionID, rootSessionID: "ses_a", sessionTitle: "T", created: 1, reason: "free_text",
       kind: "subagent_question", origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "?" } })) })!
-    const loaded = view({ review: { status: "ready", items }, autonomy: { mode: "normal", yolo: false } })
-    expect(sessionChips(session({}), loaded).map((chip) => chip.label)).toEqual(["review 2", "YOLO off"])
+    const loaded = view({ review: { status: "ready", items }, autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" } })
+    expect(sessionChips(session({}), loaded).map((chip) => chip.label)).toEqual(["review 2", "Autonomous Manual"])
     expect(sessionChips(session({ id: "ses_child" }), loaded)[0]).toEqual({ label: "review 1", tone: "attention" })
     expect(sessionChips(session({ id: "ses_b" }), loaded).map((chip) => chip.label)).not.toContain("review 2")
     expect(sessionChips(session({}), { ...loaded, requests: [permission] })[0]?.label).toBe("Waiting for approval")
@@ -311,9 +307,9 @@ describe("waiting for a decision", () => {
   test("puts the pending approval first so compact session rows cannot hide it", () => {
     const chips = sessionChips(
       session({ running: true }),
-      view({ requests: [permission], autonomy: { mode: "normal", yolo: true } }),
+      view({ requests: [permission], autonomy: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo" } }),
     )
-    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "YOLO on"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "Autonomous YOLO"])
     expect(chips[0]?.tone).toBe("attention")
   })
 

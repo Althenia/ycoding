@@ -147,7 +147,7 @@ describe("YOLO permission assessment is fenced by current authorization", () => 
     Effect.gen(function* () {
       yield* setup
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID, yolo: true })
+      yield* autonomy.set({ sessionID, permissions: "yolo" })
       const service = yield* Permission.Service
       const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
       yield* Deferred.await(control.entered)
@@ -160,16 +160,16 @@ describe("YOLO permission assessment is fenced by current authorization", () => 
 
   for (const choice of ["allow", "deny"] as const) {
     const aba = harness({ baseline: false, scores: { [choice]: 0.95 } })
-    aba.it.effect(`a YOLO ${choice} is discarded when YOLO is switched off and on again during the assessment`, () =>
+    aba.it.effect(`a YOLO ${choice} is discarded when permissions leave YOLO and return during the assessment`, () =>
       Effect.gen(function* () {
         yield* setup
         const autonomy = yield* SessionAutonomy.Service
-        yield* autonomy.setYolo({ sessionID, yolo: true })
+        yield* autonomy.set({ sessionID, permissions: "yolo" })
         const service = yield* Permission.Service
         const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
         yield* Deferred.await(aba.entered)
-        yield* autonomy.setYolo({ sessionID, yolo: false })
-        yield* autonomy.setYolo({ sessionID, yolo: true })
+        yield* autonomy.set({ sessionID, permissions: "manual" })
+        yield* autonomy.set({ sessionID, permissions: "yolo" })
         yield* Deferred.succeed(aba.gate, undefined)
         const pending = yield* waitForPending
         expect(pending.escalation).toEqual({ authority: "yolo", reason: "escalated" })
@@ -185,11 +185,11 @@ describe("YOLO permission assessment is fenced by current authorization", () => 
     Effect.gen(function* () {
       yield* setup
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID, yolo: true })
+      yield* autonomy.set({ sessionID, permissions: "yolo" })
       const service = yield* Permission.Service
       const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
       yield* Deferred.await(unrelated.entered)
-      yield* autonomy.set({ sessionID, autoAnswer: true })
+      yield* autonomy.set({ sessionID, answers: "auto" })
       yield* Deferred.succeed(unrelated.gate, undefined)
       const pending = yield* waitForPending
       expect(pending.escalation).toEqual({ authority: "yolo", reason: "escalated" })
@@ -202,11 +202,11 @@ describe("YOLO permission assessment is fenced by current authorization", () => 
 describe("permission outcomes re-evaluate the current rules and ceiling", () => {
   for (const baseline of [true, false]) {
     const ceiling = harness({ baseline, scores: { allow: 0.95 } })
-    ceiling.it.effect(`${baseline ? "a baseline" : "a YOLO"} approval cannot outlive a ceiling deny added during the assessment`, () =>
+    ceiling.it.effect(`a YOLO approval with decide_reviews ${baseline} cannot outlive a ceiling deny added during the assessment`, () =>
       Effect.gen(function* () {
         yield* setup
         const autonomy = yield* SessionAutonomy.Service
-        if (!baseline) yield* autonomy.setYolo({ sessionID, yolo: true })
+        yield* autonomy.set({ sessionID, permissions: "yolo" })
         const service = yield* Permission.Service
         const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
         yield* Deferred.await(ceiling.entered)
@@ -225,6 +225,8 @@ describe("permission outcomes re-evaluate the current rules and ceiling", () => 
   escalation.it.effect("an escalation never opens a human prompt for a request the ceiling now denies", () =>
     Effect.gen(function* () {
       yield* setup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, permissions: "yolo" })
       const service = yield* Permission.Service
       const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
       yield* Deferred.await(escalation.entered)
@@ -234,26 +236,6 @@ describe("permission outcomes re-evaluate the current rules and ceiling", () => 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") expect(exit.cause.toString()).toContain("Permission.BlockedError")
       expect(yield* service.list()).toEqual([])
-    }),
-  )
-})
-
-describe("baseline permission assessment stays independent of YOLO", () => {
-  const baseline = harness({ baseline: true, scores: { allow: 0.95 } })
-  baseline.it.effect("a baseline approval is not withheld by YOLO changes during the assessment", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const autonomy = yield* SessionAutonomy.Service
-      const service = yield* Permission.Service
-      const fiber = yield* service.assert(request()).pipe(Effect.forkScoped)
-      yield* Deferred.await(baseline.entered)
-      yield* autonomy.setYolo({ sessionID, yolo: true })
-      yield* autonomy.setYolo({ sessionID, yolo: false })
-      yield* Deferred.succeed(baseline.gate, undefined)
-      yield* Fiber.join(fiber)
-      expect(yield* service.list()).toEqual([])
-      expect(baseline.calls.map((call) => call.authority)).toEqual(["baseline"])
-      expect(yield* facts).toEqual([expect.objectContaining({ outcome: "allow", via: "baseline" })])
     }),
   )
 })

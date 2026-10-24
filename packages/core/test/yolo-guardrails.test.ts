@@ -78,6 +78,18 @@ const matchConfirmed = Schema.decodeUnknownSync(Decision.Output)({
   },
 })
 
+function reviewRule(id: string, decision: "ask" | "hard_review" = "ask") {
+  return `---
+id: ${id}
+decision: ${decision}
+actions: [shell, file_mutation]
+resources: ["*"]
+reason: ${id}
+priority: 0
+---
+`
+}
+
 function denyRule(id: string) {
   return `---
 id: ${id}
@@ -98,6 +110,7 @@ function harness(input: {
 }) {
   const documents = new Map(Array.from(input.documents ?? [], ([file, content]) => [path.normalize(file), content]))
   const choices: Decision.Input[] = []
+  const calls: Array<{ readonly name: string | undefined; readonly authority: string | undefined }> = []
   const storage = Layer.provideMerge(EventRuntime.layer, Database.layer({ path: ":memory:" }))
   const filesystem = Layer.effect(
     FSUtil.Service,
@@ -115,7 +128,8 @@ function harness(input: {
   ).pipe(Layer.provide(FSUtil.layer), Layer.provide(NodeFileSystem.layer))
   const dependencies = Layer.mergeAll(
     Layer.mock(Decision.Service, {
-      evaluate: (request: Decision.Input) => {
+      evaluate: (request: Decision.Input, context: Decision.Invocation) => {
+        calls.push({ name: request.request.questions[0]?.name, authority: context.authority })
         if (request.request.questions[0]?.name === "guardrail_match") return Effect.succeed(matchConfirmed)
         choices.push(request)
         return input.decide(request, choices.length - 1)
@@ -144,15 +158,17 @@ function harness(input: {
     storage,
     SessionAutonomy.layer.pipe(Layer.provide(storage)),
   )
-  return { documents, choices, it: testEffect(SessionGuardrail.layer.pipe(Layer.provideMerge(dependencies))) }
+  return { documents, choices, calls, it: testEffect(SessionGuardrail.layer.pipe(Layer.provideMerge(dependencies))) }
 }
 
-const seed = (options: { readonly yolo: boolean }) =>
+const seed = (options: { readonly yolo?: boolean; readonly guardrails?: "manual" | "yolo" | "auto"; readonly asleep?: boolean }) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make(project), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
     yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: project, title: "yolo guardrails" }).onConflictDoNothing().run().pipe(Effect.orDie)
-    if (options.yolo) yield* (yield* SessionAutonomy.Service).setYolo({ sessionID, yolo: true })
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID, guardrails: options.guardrails ?? (options.yolo ? "yolo" : "manual") })
+    if (options.asleep) yield* autonomy.set({ sessionID, sleep: true })
   })
 
 const state = (request: Decision.Input | undefined) => {
@@ -307,6 +323,8 @@ describe("same-call human permission replies", () => {
       const { db } = yield* Database.Service
       yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make(project), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
       yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: project, title: "same call", agent: "test" }).onConflictDoNothing().run().pipe(Effect.orDie)
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, permissions: "yolo", guardrails: "yolo" })
       const agents = yield* Agent.Service
       yield* agents.transform((editor) =>
         editor.update(Agent.ID.make("test"), (agent) => {
@@ -339,7 +357,7 @@ describe("same-call human permission replies", () => {
       expect(state(grading[0])).toMatchObject({
         applicability: {
           sameCall: [
-            { gate: "permission", source: "automated", outcome: "escalate", via: "baseline" },
+            { gate: "permission", source: "automated", outcome: "escalate", via: "yolo" },
             { gate: "permission", source: "human", reply: "once", action: "external_directory", resources: ["/outside/notes/*"] },
           ],
         },
@@ -403,9 +421,9 @@ describe("automated guardrail outcomes are revalidated under the root lock", () 
       baseline,
       decide: (request) => Deferred.succeed(ruleEntered, undefined).pipe(Effect.andThen(Deferred.await(ruleGate)), Effect.as(graded(request, { allow: 0.95 }))),
     })
-    rules.it.effect(`a custom deny added during a ${baseline ? "baseline" : "YOLO"} assessment blocks the approved action`, () =>
+    rules.it.effect(`a custom deny added during a YOLO assessment with decide_reviews ${baseline} blocks the approved action`, () =>
       Effect.gen(function* () {
-        yield* seed({ yolo: !baseline })
+        yield* seed({ yolo: true })
         const service = yield* SessionGuardrail.Service
         const running = yield* service.assert(outsideShell).pipe(Effect.forkScoped)
         yield* Deferred.await(ruleEntered)
@@ -423,9 +441,9 @@ describe("automated guardrail outcomes are revalidated under the root lock", () 
       baseline,
       decide: (request) => Deferred.succeed(contextEntered, undefined).pipe(Effect.andThen(Deferred.await(contextGate)), Effect.as(graded(request, { allow: 0.95 }))),
     })
-    context.it.effect(`a ${baseline ? "baseline" : "YOLO"} approval is withheld when a user instruction arrives during the assessment`, () =>
+    context.it.effect(`a YOLO approval with decide_reviews ${baseline} is withheld when a user instruction arrives during the assessment`, () =>
       Effect.gen(function* () {
-        yield* seed({ yolo: !baseline })
+        yield* seed({ yolo: true })
         const service = yield* SessionGuardrail.Service
         const running = yield* service.assert(outsideShell).pipe(Effect.forkScoped)
         yield* Deferred.await(contextEntered)
@@ -444,7 +462,7 @@ describe("automated guardrail outcomes are revalidated under the root lock", () 
           .pipe(Effect.orDie)
         yield* Deferred.succeed(contextGate, undefined)
         const pending = yield* awaitRequest()
-        expect(pending.escalation).toMatchObject({ authority: baseline ? "baseline" : "yolo", reason: "escalated" })
+        expect(pending.escalation).toMatchObject({ authority: "yolo", reason: "escalated" })
         yield* rejectPending(running)
       }),
     )
@@ -455,9 +473,9 @@ describe("automated guardrail outcomes are revalidated under the root lock", () 
       baseline,
       decide: (request) => Deferred.succeed(progressEntered, undefined).pipe(Effect.andThen(Deferred.await(progressGate)), Effect.as(graded(request, { allow: 0.95 }))),
     })
-    progressing.it.effect(`sibling assistant progress during a ${baseline ? "baseline" : "YOLO"} assessment does not withhold its approval`, () =>
+    progressing.it.effect(`sibling assistant progress during a YOLO assessment with decide_reviews ${baseline} does not withhold its approval`, () =>
       Effect.gen(function* () {
-        yield* seed({ yolo: !baseline })
+        yield* seed({ yolo: true })
         const service = yield* SessionGuardrail.Service
         const running = yield* service.assert(outsideShell).pipe(Effect.forkScoped)
         yield* Deferred.await(progressEntered)
@@ -485,9 +503,9 @@ describe("automated guardrail outcomes are revalidated under the root lock", () 
       external,
       decide: (request) => Deferred.succeed(allowEntered, undefined).pipe(Effect.andThen(Deferred.await(allowGate)), Effect.as(graded(request, { allow: 0.95 }))),
     })
-    allowed.it.effect(`a ${grant} grant arriving during a ${baseline ? "baseline" : "YOLO"} assessment settles the review by current policy`, () =>
+    allowed.it.effect(`a ${grant} grant arriving during a YOLO assessment with decide_reviews ${baseline} settles the review by current policy`, () =>
       Effect.gen(function* () {
-        yield* seed({ yolo: !baseline })
+        yield* seed({ yolo: true })
         const service = yield* SessionGuardrail.Service
         const running = yield* service.assert(outsideShell).pipe(Effect.forkScoped)
         yield* Deferred.await(allowEntered)
@@ -528,4 +546,175 @@ describe("automated guardrail outcomes are revalidated under the root lock", () 
       expect(SessionGuardrail.reviewMessage(error)).toContain("alternative")
     }),
   )
+})
+
+const reviewBox = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  return yield* SessionReviewFold.fold(db, [sessionID])
+})
+
+describe("guardrail decision modes", () => {
+  for (const baseline of [true, false]) {
+    const manual = harness({ baseline, decide: () => Effect.die("Manual guardrails never reach a model") })
+    manual.it.effect(`Manual with decide_reviews ${baseline} asks the human for an ordinary review without verification or grading`, () =>
+      Effect.gen(function* () {
+        yield* seed({ guardrails: "manual" })
+        const service = yield* SessionGuardrail.Service
+        const running = yield* service.assert(outsideShell).pipe(Effect.forkScoped)
+        const pending = yield* awaitRequest()
+        expect(pending.escalation).toBeUndefined()
+        yield* service.reply({ sessionID, requestID: pending.id, reply: "once" })
+        yield* Fiber.join(running)
+        expect(manual.calls).toEqual([])
+      }),
+    )
+  }
+
+  const manualHard = harness({ baseline: true, decide: () => Effect.die("Manual guardrails never reach a model") })
+  manualHard.it.effect("Manual asks the human for a hard review without verification or grading", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "manual" })
+      const service = yield* SessionGuardrail.Service
+      const running = yield* service.assert(forcePush).pipe(Effect.forkScoped)
+      yield* rejectPending(running)
+      expect(manualHard.calls).toEqual([])
+    }),
+  )
+
+  const manualAsleep = harness({ baseline: true, decide: () => Effect.die("Manual guardrails never reach a model") })
+  manualAsleep.it.effect("Manual defers to the review box while the family sleeps without a helper call", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "manual", asleep: true })
+      const service = yield* SessionGuardrail.Service
+      const exit = yield* service.assert(outsideShell).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(yield* reviewBox).toEqual([expect.objectContaining({ kind: "guardrail", reason: "disabled" })])
+      expect(manualAsleep.calls).toEqual([])
+    }),
+  )
+
+  const autoAwake = harness({ baseline: true, decide: () => Effect.die("Auto guardrails never reach a model") })
+  autoAwake.it.effect("Auto approves an ordinary standard review awake without a helper call", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "auto" })
+      const service = yield* SessionGuardrail.Service
+      yield* service.assert(outsideShell)
+      expect(yield* service.forSession(sessionID)).toEqual([])
+      expect(autoAwake.calls).toEqual([])
+    }),
+  )
+
+  const autoAsleep = harness({ baseline: true, decide: () => Effect.die("Auto guardrails never fall back to a model") })
+  autoAsleep.it.effect("Auto defers an ordinary review while asleep without a model fallback", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "auto", asleep: true })
+      const service = yield* SessionGuardrail.Service
+      expect(Exit.isFailure(yield* service.assert(outsideShell).pipe(Effect.exit))).toBe(true)
+      expect(yield* reviewBox).toEqual([expect.objectContaining({ kind: "guardrail", reason: "disabled" })])
+      expect(autoAsleep.calls).toEqual([])
+    }),
+  )
+
+  const autoHard = harness({ baseline: true, decide: () => Effect.die("Auto guardrails never fall back to a model") })
+  autoHard.it.effect("Auto asks the human for a hard review without verification or grading", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "auto" })
+      const service = yield* SessionGuardrail.Service
+      const running = yield* service.assert(forcePush).pipe(Effect.forkScoped)
+      yield* rejectPending(running)
+      expect(autoHard.calls).toEqual([])
+    }),
+  )
+
+  const autoCustom = harness({
+    baseline: true,
+    documents: [[`${guardrailDirectory}/review.md`, reviewRule("custom-review")]],
+    decide: () => Effect.die("Auto guardrails never fall back to a model"),
+  })
+  autoCustom.it.effect("Auto never approves a custom-rule review and asks the human without a helper call", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "auto" })
+      const service = yield* SessionGuardrail.Service
+      const running = yield* service.assert({ sessionID, action: "shell", resources: ["task-runner execute"], metadata: { workdir: project } }).pipe(Effect.forkScoped)
+      const pending = yield* awaitRequest()
+      expect(pending.ruleIDs).toEqual(["custom-review"])
+      yield* service.reply({ sessionID, requestID: pending.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+      expect(autoCustom.calls).toEqual([])
+    }),
+  )
+
+  for (const baseline of [true, false]) {
+    const yolo = harness({ baseline, decide: (request) => Effect.succeed(graded(request, { allow: 0.95 })) })
+    yolo.it.effect(`YOLO with decide_reviews ${baseline} uses only YOLO authority and ${baseline ? "verifies the match" : "skips match verification"}`, () =>
+      Effect.gen(function* () {
+        yield* seed({ guardrails: "yolo" })
+        const service = yield* SessionGuardrail.Service
+        yield* service.assert(outsideShell)
+        expect(yield* service.forSession(sessionID)).toEqual([])
+        expect(yolo.calls).toEqual([
+          ...(baseline ? [{ name: "guardrail_match", authority: "yolo" }] : []),
+          { name: "guardrail", authority: "yolo" },
+        ])
+      }),
+    )
+  }
+
+  const yoloHard = harness({ baseline: true, decide: (request) => Effect.succeed(graded(request, { allow: 0.99 })) })
+  yoloHard.it.effect("YOLO never approves a hard review; a confident allow still asks the human", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "yolo" })
+      const service = yield* SessionGuardrail.Service
+      const running = yield* service.assert(forcePush).pipe(Effect.forkScoped)
+      const pending = yield* awaitRequest()
+      expect(pending.hardReview).toBe(true)
+      yield* service.reply({ sessionID, requestID: pending.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+      expect(yoloHard.calls.every((call) => call.authority === "yolo")).toBe(true)
+    }),
+  )
+
+  const yoloHardDeny = harness({ baseline: true, decide: (request) => Effect.succeed(graded(request, { deny: 0.95 })) })
+  yoloHardDeny.it.effect("YOLO may deny a hard review", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "yolo" })
+      const service = yield* SessionGuardrail.Service
+      expect(Exit.isFailure(yield* service.assert(forcePush).pipe(Effect.exit))).toBe(true)
+      expect(yield* service.forSession(sessionID)).toEqual([])
+    }),
+  )
+
+  const yoloCustom = harness({
+    baseline: true,
+    documents: [[`${guardrailDirectory}/review.md`, reviewRule("custom-review")]],
+    decide: (request) => Effect.succeed(graded(request, { allow: 0.99 })),
+  })
+  yoloCustom.it.effect("YOLO never approves a custom-rule review; a confident allow still asks the human", () =>
+    Effect.gen(function* () {
+      yield* seed({ guardrails: "yolo" })
+      const service = yield* SessionGuardrail.Service
+      const running = yield* service.assert({ sessionID, action: "shell", resources: ["task-runner execute"], metadata: { workdir: project } }).pipe(Effect.forkScoped)
+      const pending = yield* awaitRequest()
+      expect(pending.ruleIDs).toEqual(["custom-review"])
+      yield* service.reply({ sessionID, requestID: pending.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+      expect(yoloCustom.calls.filter((call) => call.name === "guardrail_match")).toEqual([])
+    }),
+  )
+
+  for (const mode of ["manual", "yolo", "auto"] as const) {
+    const denied = harness({
+      baseline: true,
+      documents: [[`${guardrailDirectory}/deny.md`, denyRule("deny-everything")]],
+      decide: () => Effect.die("Denies never reach a model"),
+    })
+    denied.it.effect(`a deny rule blocks in ${mode} before any helper call`, () =>
+      Effect.gen(function* () {
+        yield* seed({ guardrails: mode })
+        const service = yield* SessionGuardrail.Service
+        expect(Exit.isFailure(yield* service.assert(outsideShell).pipe(Effect.exit))).toBe(true)
+        expect(denied.calls).toEqual([])
+      }),
+    )
+  }
 })

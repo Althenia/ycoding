@@ -10,39 +10,22 @@ import type {
 import { expect, test, beforeEach } from "bun:test"
 import { createSignal, type JSX } from "solid-js"
 import { useTheme } from "../src/context/theme"
+import { autonomyView } from "./fixture/autonomy"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
-function railAutonomy(input: {
-  yolo?: boolean
-  goal?: SessionAutonomyView["goal"]
-  sleep?: boolean
-  autoPermission?: boolean
-  autoGuardrail?: boolean
-  autoAnswer?: boolean
-  modelReviews?: boolean
-  ordinaryReviewsAuto?: boolean
-} = {}): SessionAutonomyView {
-  const yolo = input.yolo ?? false
-  return {
-    mode: "normal",
-    yolo,
-    ...(input.goal ? { goal: input.goal } : {}),
-    ...(input.sleep ? { sleep: {} } : {}),
-    ...(input.autoPermission === undefined ? {} : { autoPermission: input.autoPermission }),
-    ...(input.autoGuardrail === undefined ? {} : { autoGuardrail: input.autoGuardrail }),
-    ...(input.autoAnswer === undefined ? {} : { autoAnswer: input.autoAnswer }),
-    effective: {
-      yolo,
-      permissionsAuto: input.autoPermission ?? false,
-      permissionModelReviews: false,
-      asleep: input.sleep ?? false,
-      ordinaryReviewsAuto: input.ordinaryReviewsAuto ?? ((input.autoGuardrail ?? false) && !(input.sleep ?? false)),
-      guardrailsEnabled: true,
-      modelReviews: input.modelReviews ?? false,
-      hardModelReviews: false,
-    },
-  }
+function railAutonomy(
+  input: {
+    permissions?: SessionAutonomyView["permissions"]
+    guardrails?: SessionAutonomyView["guardrails"]
+    answers?: SessionAutonomyView["answers"]
+    goal?: SessionAutonomyView["goal"]
+    sleep?: boolean
+  } = {},
+  effective: Partial<SessionAutonomyView["effective"]> = {},
+): SessionAutonomyView {
+  const { sleep, ...modes } = input
+  return autonomyView({ ...modes, ...(sleep ? { sleep: {} } : {}) }, effective)
 }
 
 beforeEach(async () => {
@@ -153,7 +136,7 @@ test("renders the session title only inside the section body", async () => {
   }
 })
 
-test("awake YOLO-off rail names the manual decider and the actual auto-answer state", async () => {
+test("awake all-Manual rail names the manual decider on every row", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy()} />, {
     width: 40,
@@ -169,23 +152,23 @@ test("awake YOLO-off rail names the manual decider and the actual auto-answer st
   }
 })
 
-test("an unloaded autonomy read renders unknown rows, never YOLO off or Off", async () => {
+test("an unloaded autonomy read renders unknown rows, never Manual or Off", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const app = await mount(() => <AutonomyRailContent autonomy={undefined} />, { width: 40, height: 20 })
   try {
     await app.waitForFrame((frame) => frame.includes("AUTONOMY"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("unknown")
-    expect(frame).not.toContain("YOLO off")
+    expect(frame).not.toContain("manual")
     expect(frame).not.toContain("Auto-answer")
   } finally {
     app.renderer.destroy()
   }
 })
 
-test("auto-guardrail without ordinary-review authority leaves ordinary reviews manual in the rail", async () => {
+test("disabled guardrails read disabled while the other rows keep their mode", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
-  const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy({ autoPermission: true, autoGuardrail: true, ordinaryReviewsAuto: false })} />, {
+  const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy({ permissions: "auto", guardrails: "auto" }, { guardrailsEnabled: false })} />, {
     width: 60,
     height: 30,
   })
@@ -193,8 +176,24 @@ test("auto-guardrail without ordinary-review authority leaves ordinary reviews m
     await app.waitForFrame((frame) => frame.includes("Guardrails"))
     const frame = app.captureCharFrame().replace(/\s+/g, " ")
     expect(frame).toContain("Permissions auto")
-    expect(frame).toContain("Guardrails manual")
+    expect(frame).toContain("Guardrails disabled")
     expect(frame).not.toContain("YOLO")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("an inherited effective mode names its source Session in the rail", async () => {
+  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
+  const app = await mount(
+    () => <AutonomyRailContent autonomy={railAutonomy({}, { permissions: "auto", inherited: { permissions: "ses_parent" } })} />,
+    { width: 80, height: 30 },
+  )
+  try {
+    await app.waitForFrame((frame) => frame.includes("Permissions"))
+    const frame = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(frame).toContain("Permissions auto · inherited from ses_parent")
+    expect(frame).toContain("Guardrails manual")
   } finally {
     app.renderer.destroy()
   }
@@ -203,20 +202,19 @@ test("auto-guardrail without ordinary-review authority leaves ordinary reviews m
 test("renders who decides each action for every auto flag and with an active goal", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const cases = [
-    { name: "off", flags: {}, goal: false, autoAnswer: false, values: ["manual", "manual", "manual"] },
-    { name: "yolo", flags: { yolo: true }, goal: false, autoAnswer: false, values: ["yolo", "yolo", "yolo"] },
-    { name: "permission", flags: { autoPermission: true }, goal: false, autoAnswer: false, values: ["auto", "manual", "manual"] },
-    { name: "guardrail", flags: { autoGuardrail: true }, goal: false, autoAnswer: false, values: ["manual", "auto", "manual"] },
-    { name: "goal", flags: {}, goal: true, autoAnswer: false, values: ["manual", "manual", "manual"] },
-    { name: "answer", flags: {}, goal: false, autoAnswer: true, values: ["manual", "manual", "auto"] },
-    { name: "yolo with rule flags", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: false, values: ["auto", "auto", "yolo"] },
-    { name: "all", flags: { yolo: true, autoPermission: true, autoGuardrail: true }, goal: false, autoAnswer: true, values: ["auto", "auto", "auto"] },
+    { name: "off", modes: {}, goal: false, values: ["manual", "manual", "manual"] },
+    { name: "yolo", modes: { permissions: "yolo", guardrails: "yolo", answers: "yolo" }, goal: false, values: ["yolo", "yolo", "yolo"] },
+    { name: "permission", modes: { permissions: "auto" }, goal: false, values: ["auto", "manual", "manual"] },
+    { name: "guardrail", modes: { guardrails: "auto" }, goal: false, values: ["manual", "auto", "manual"] },
+    { name: "goal", modes: {}, goal: true, values: ["manual", "manual", "manual"] },
+    { name: "answer", modes: { answers: "auto" }, goal: false, values: ["manual", "manual", "auto"] },
+    { name: "mixed", modes: { permissions: "auto", guardrails: "yolo", answers: "yolo" }, goal: false, values: ["auto", "yolo", "yolo"] },
+    { name: "all", modes: { permissions: "auto", guardrails: "auto", answers: "auto" }, goal: false, values: ["auto", "auto", "auto"] },
   ] as const
 
   for (const item of cases) {
     const autonomy = railAutonomy({
-      ...item.flags,
-      autoAnswer: item.autoAnswer,
+      ...item.modes,
       ...(item.goal
         ? { goal: { text: "Ship safely", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 } }
         : {}),
@@ -232,7 +230,7 @@ test("renders who decides each action for every auto flag and with an active goa
       expect(frame).not.toContain("always you")
       expect(frame).not.toContain("YOLO")
       const rows = frame.split("\n")
-      const expected = ["Permissions", "Guardrails", "Questions"]
+      const expected = ["Permissions", "Guardrails", "Answers"]
       expect(frame).not.toContain("Scope dispatch")
       expect(rows.flatMap((line) => expected.filter((label) => line.includes(label)))).toEqual(expected)
       const labelRows = expected.map((label) => rows.findIndex((line) => line.includes(label)))
@@ -283,7 +281,7 @@ for (const mode of ["dark", "light"] as const) {
           () => (
             <box width={width}>
               <RailProvider>
-                <AutonomyRailContent autonomy={railAutonomy({ autoPermission: true, sleep: asleep })} />
+                <AutonomyRailContent autonomy={railAutonomy({ permissions: "auto", sleep: asleep })} />
               </RailProvider>
             </box>
           ),
@@ -299,14 +297,14 @@ for (const mode of ["dark", "light"] as const) {
           expect(heading?.trim()).toMatch(/^−\s+AUTONOMY$/)
           for (const line of lines) expect(line.slice(width).trim()).toBe("")
           const guardrailLine = lines.findIndex((line) => line.includes("Guardrails"))
-          const questionLine = lines.findIndex((line) => line.includes("Questions"))
+          const questionLine = lines.findIndex((line) => line.includes("Answers"))
           const guardrailValue = asleep ? "review box" : "manual"
           const questionValue = asleep ? "review box" : "manual"
           expect(lines.slice(guardrailLine, questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
             `Guardrails ${guardrailValue}`,
           )
           expect(lines.slice(questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
-            `Questions ${questionValue}`,
+            `Answers ${questionValue}`,
           )
         } finally {
           app.renderer.destroy()
@@ -323,7 +321,6 @@ test("renders the goal panel only while its durable status is active", async () 
       () => (
         <AutonomyRailContent
           autonomy={railAutonomy({
-            yolo: false,
             goal: { text: "Finish the migration", status, iteration: 3, noProgress: 0, maxNoProgress: 3 },
           })}
         />
@@ -410,7 +407,9 @@ test("renders compact operational rail summaries from live component state", asy
       import("../src/feature-plugins/sidebar/subagents"),
     ])
   const autonomy = railAutonomy({
-    yolo: true,
+    permissions: "yolo",
+    guardrails: "yolo",
+    answers: "yolo",
     goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
   })
   const app = await mount(
@@ -867,9 +866,9 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
   )
   const [theme, setTheme] = createSignal<ReturnType<typeof useTheme>["theme"]>()
   const autonomy = railAutonomy({
-    yolo: true,
-    autoPermission: true,
-    autoGuardrail: true,
+    permissions: "auto",
+    guardrails: "auto",
+    answers: "yolo",
     goal: {
       text: "Fix provider cache accounting",
       status: "active",

@@ -63,39 +63,21 @@ export const RunCommand = Spec.make("run", {
     ),
     title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
     thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
-    yolo: Flag.choiceWithValue("yolo", [
-      ["true", true],
-      ["false", false],
-    ]).pipe(
+    permissions: Flag.choice("permissions", ["manual", "yolo", "auto"]).pipe(
       Flag.withDescription(
-        "Set the durable Session YOLO evaluator; omitted preserves it (true/false; permissions, guardrails, and answers keep their separate settings; denies and hard reviews still apply)",
+        "Set the durable Session permissions mode; omitted preserves it (manual: humans decide asks; auto: rules approve asks; yolo: evaluator also decides unresolved asks; denies still apply)",
       ),
       Flag.optional,
     ),
-    autoPermission: Flag.choiceWithValue("auto-permission", [
-      ["true", true],
-      ["false", false],
-    ]).pipe(
+    guardrails: Flag.choice("guardrails", ["manual", "yolo", "auto"]).pipe(
       Flag.withDescription(
-        "Set durable Session auto-permission; omitted preserves it (true: ask-permission tools auto-approve; denies still apply)",
+        "Set the durable Session guardrails mode; omitted preserves it (auto: ordinary reviews approve while awake; hard and custom-rule reviews still need a human)",
       ),
       Flag.optional,
     ),
-    autoGuardrail: Flag.choiceWithValue("auto-guardrail", [
-      ["true", true],
-      ["false", false],
-    ]).pipe(
+    answers: Flag.choice("answers", ["manual", "yolo", "auto"]).pipe(
       Flag.withDescription(
-        "Set durable Session auto-guardrail; omitted preserves it (true: ordinary guardrail reviews auto-approve while awake; hard reviews still ask)",
-      ),
-      Flag.optional,
-    ),
-    autoAnswer: Flag.choiceWithValue("auto-answer", [
-      ["true", true],
-      ["false", false],
-    ]).pipe(
-      Flag.withDescription(
-        "Set durable Session auto-answer; omitted preserves it (true: eligible questions answer automatically for this Session)",
+        "Set the durable Session answers mode; omitted preserves it (auto: exactly one Recommended or default option answers; yolo: evaluator also answers free text)",
       ),
       Flag.optional,
     ),

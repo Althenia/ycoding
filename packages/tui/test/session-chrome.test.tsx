@@ -26,6 +26,7 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
 import { resolveThemeFile } from "../src/theme/resolve"
 import { getGlyph } from "../src/ui/glyph"
+import { autonomyState } from "./fixture/autonomy"
 
 const identity = {
   path: "~/Workspace/Personal/YCoding",
@@ -419,23 +420,23 @@ async function renderHeader(
 }
 
 describe("autonomy mode chips", () => {
-  test("shows both modes off for a normal session", () => {
-    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: false }) })).toEqual([
+  test("shows goal off and manual autonomy for a normal session", () => {
+    expect(modeChips({ autonomy: localAutonomyView(autonomyState()) })).toEqual([
       { key: "goal", label: "goal off", tone: "off" },
-      { key: "yolo", label: "YOLO off", tone: "off" },
+      { key: "autonomy", label: "autonomy manual", tone: "off" },
     ])
   })
 
-  test("inverts the level chip because it auto-approves", () => {
-    expect(modeChips({ autonomy: localAutonomyView({ mode: "normal", yolo: true }) })[1]).toEqual({
-      key: "yolo",
-      label: "YOLO",
+  test("inverts a YOLO category chip because an evaluator decides", () => {
+    expect(modeChips({ autonomy: localAutonomyView(autonomyState({ permissions: "yolo", guardrails: "yolo", answers: "yolo" })) })[1]).toEqual({
+      key: "permissions",
+      label: "permissions yolo",
       tone: "danger",
     })
   })
 
   test("shows only the goal label while goal mode is active", () => {
-    const autonomy = { mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
+    const autonomy = { ...autonomyState(), goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
     } as const
     const chip = modeChips({ autonomy: localAutonomyView(autonomy) })[0]
     expect(chip).toEqual({ key: "goal", label: "goal", tone: "on" })
@@ -443,7 +444,7 @@ describe("autonomy mode chips", () => {
   })
 
   test("shows goal off after leaving goal mode with retained terminal state", () => {
-    const autonomy = { mode: "normal", yolo: false, goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
+    const autonomy = { ...autonomyState(), goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
     } as const
     expect(modeChips({ autonomy: localAutonomyView(autonomy) })[0]).toEqual({ key: "goal", label: "goal off", tone: "off" })
   })
@@ -461,20 +462,20 @@ describe("autonomy mode chips", () => {
           <ConfigProvider config={config}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={localAutonomyView({ mode: "normal", yolo: true })} />
+                <ModeChips autonomy={localAutonomyView(autonomyState({ permissions: "yolo", guardrails: "yolo", answers: "yolo" }))} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
         </TestTuiContexts>
       ),
-      { width: 60, height: 4 },
+      { width: 80, height: 4 },
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("YOLO"))
+    await app.waitForFrame((frame) => frame.includes("permissions yolo"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("goal off")
-    expect(frame).toContain("YOLO")
-    expect(frame).not.toContain("YOLO off")
+    expect(frame).toContain("answers yolo")
+    expect(frame).not.toContain("autonomy manual")
     app.renderer.destroy()
   })
 })

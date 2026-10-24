@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { SessionAutonomyView, YCodingEvent } from "@ycoding-ai/client"
 import { materializeClipboardImage } from "../../src/clipboard"
+import { autonomyState, autonomyView } from "../fixture/autonomy"
 import { json, type FetchHandler, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
@@ -27,33 +28,18 @@ const session = {
   time: { created: 1, updated: 2 },
 }
 
-const withEffective = (state: Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }): SessionAutonomyView => {
-  const asleep = state.sleep !== undefined && state.sleep !== null
-  return {
-    ...state,
-    effective: state.effective ?? {
-      yolo: state.yolo === true,
-      permissionsAuto: state.autoPermission === true,
-      permissionModelReviews: false,
-      asleep,
-      ordinaryReviewsAuto: state.autoGuardrail === true && !asleep,
-      guardrailsEnabled: true,
-      modelReviews: false,
-      hardModelReviews: false,
-    },
-  }
-}
+const withEffective = (state: Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }): SessionAutonomyView =>
+  state.effective ? { ...state, effective: state.effective } : autonomyView(state)
 
 const goalState = (
   status: NonNullable<SessionAutonomyView["goal"]>["status"],
   text: string,
 ): SessionAutonomyView => withEffective({
-  mode: "normal",
-  yolo: false,
+  ...autonomyState(),
   goal: { text, status, iteration: 2, noProgress: 1, maxNoProgress: 3 },
 })
 
-let autonomyState: SessionAutonomyView = withEffective({ mode: "normal", yolo: false })
+let currentAutonomy: SessionAutonomyView = withEffective({ ...autonomyState() })
 let autonomyAfterSet: (Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }) | undefined
 let releaseAutonomySet: (() => void) | undefined
 let autonomySets: Array<Record<string, unknown>> = []
@@ -66,7 +52,7 @@ let requestOrder: string[] = []
 let landingCreates = 0
 
 function resetFixture(state: Omit<SessionAutonomyView, "effective"> & { effective?: SessionAutonomyView["effective"] }) {
-  autonomyState = withEffective(state)
+  currentAutonomy = withEffective(state)
   autonomyAfterSet = undefined
   releaseAutonomySet = undefined
   autonomySets = []
@@ -90,7 +76,7 @@ const route: FetchHandler = async (url, request) => {
       const body: unknown = await request.json()
       if (body && typeof body === "object" && "goal" in body) autonomySets.push({ goal: body.goal })
     }
-    return json({ data: autonomyState })
+    return json({ data: currentAutonomy })
   }
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
@@ -108,10 +94,10 @@ const route: FetchHandler = async (url, request) => {
         failNextAutonomySet = false
         return json({ error: "simulated goal calculation failure" }, { status: 500 })
       }
-      autonomyState = autonomyAfterSet ? withEffective(autonomyAfterSet) : autonomyState
-      return json({ data: autonomyState })
+      currentAutonomy = autonomyAfterSet ? withEffective(autonomyAfterSet) : currentAutonomy
+      return json({ data: currentAutonomy })
     }
-    return json({ data: autonomyState })
+    return json({ data: currentAutonomy })
   }
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     modelSwitchStarted = true
@@ -262,8 +248,8 @@ test("replaces an active goal with the exact /goal text and never admits a promp
 }, 30_000)
 
 test("clears the composer after an explicit /goal starts goal mode from normal", async () => {
-  resetFixture({ mode: "normal", yolo: false })
-  autonomyAfterSet = { mode: "normal", yolo: false, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
+  resetFixture({ ...autonomyState() })
+  autonomyAfterSet = { ...autonomyState(), goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
   const screen = await renderScreen({ width: 160, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)
@@ -288,8 +274,8 @@ for (const { name, running, direct } of [
   { name: "running with slash menu open", running: true, direct: false },
   { name: "running with direct Enter", running: true, direct: true },
 ]) test(`clears a goal draft after ${name} and steer events before the autonomy response`, async () => {
-  resetFixture({ mode: "normal", yolo: false })
-  autonomyAfterSet = { mode: "normal", yolo: false, goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
+  resetFixture({ ...autonomyState() })
+  autonomyAfterSet = { ...autonomyState(), goal: { text: "finish product.", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }
   releaseAutonomySet = () => {}
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
@@ -310,7 +296,7 @@ for (const { name, running, direct } of [
     screen.events.emit({
       id: "evt_goal_admitted", created: 10, type: "session.input.admitted",
       durable: { aggregateID: sessionID, seq: running ? 2 : 1, version: 1 }, location: { directory },
-      data: { sessionID, inputID: "msg_goal_123", input: { type: "synthetic", data: { text: "Goal steer", description: "Goal · steer", metadata: { autonomy: { yolo: false, goal: true, iteration: 0 } } }, delivery: "steer" } },
+      data: { sessionID, inputID: "msg_goal_123", input: { type: "synthetic", data: { text: "Goal steer", description: "Goal · steer", metadata: { autonomy: { goal: true, iteration: 0 } } }, delivery: "steer" } },
     } satisfies YCodingEvent)
     await waitFor(() => screen.frame().includes("Goal · steer"), "projected goal steer")
     if (!running) screen.events.emit({
@@ -357,7 +343,7 @@ for (const { name, running, direct } of [
 }, 30_000)
 
 test("retains the goal draft after a failed PUT across a permission remount", async () => {
-  resetFixture({ mode: "normal", yolo: false })
+  resetFixture({ ...autonomyState() })
   releaseAutonomySet = () => {}
   failNextAutonomySet = true
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
@@ -388,7 +374,7 @@ test("retains the goal draft after a failed PUT across a permission remount", as
 }, 30_000)
 
 test("creates a landing session and sets its goal with the returned session ID", async () => {
-  resetFixture({ mode: "normal", yolo: false })
+  resetFixture({ ...autonomyState() })
   const screen = await renderScreen({ width: 100, height: 69, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)
@@ -589,7 +575,7 @@ test("execution settlement refreshes a completed goal before the header reports 
   try {
     await screen.waitForEventStream()
     expect(goalChip(screen)).toBe(true)
-    autonomyState = goalState("completed", "Ship the patch")
+    currentAutonomy = goalState("completed", "Ship the patch")
     screen.events.emit({
       id: "evt_goal_settled",
       created: 20,
@@ -609,7 +595,7 @@ test("execution settlement refreshes a completed goal before the header reports 
 }, 30_000)
 
 test("opens the explicit objective dialog when a bare /goal has no retained goal", async () => {
-  resetFixture({ mode: "normal", yolo: false })
+  resetFixture({ ...autonomyState() })
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)

@@ -189,20 +189,20 @@ const family = Effect.fn("RevocationTest.family")(function* (input: { readonly a
 const revocations = [
   {
     name: "root ancestor turns YOLO off",
-    grant: (autonomy: SessionAutonomy.Interface) => autonomy.setYolo({ sessionID: root, yolo: true }),
-    revoke: (autonomy: SessionAutonomy.Interface) => autonomy.setYolo({ sessionID: root, yolo: false }),
+    grant: (autonomy: SessionAutonomy.Interface) => autonomy.set({ sessionID: root, answers: "yolo" }),
+    revoke: (autonomy: SessionAutonomy.Interface) => autonomy.set({ sessionID: root, answers: "manual" }),
   },
   {
     name: "intermediate ancestor turns YOLO off",
-    grant: (autonomy: SessionAutonomy.Interface) => autonomy.setYolo({ sessionID: middle, yolo: true }),
-    revoke: (autonomy: SessionAutonomy.Interface) => autonomy.setYolo({ sessionID: middle, yolo: false }),
+    grant: (autonomy: SessionAutonomy.Interface) => autonomy.set({ sessionID: middle, answers: "yolo" }),
+    revoke: (autonomy: SessionAutonomy.Interface) => autonomy.set({ sessionID: middle, answers: "manual" }),
   },
   {
     name: "root ancestor turns YOLO off and on again",
-    grant: (autonomy: SessionAutonomy.Interface) => autonomy.setYolo({ sessionID: root, yolo: true }),
+    grant: (autonomy: SessionAutonomy.Interface) => autonomy.set({ sessionID: root, answers: "yolo" }),
     revoke: (autonomy: SessionAutonomy.Interface) =>
-      autonomy.setYolo({ sessionID: root, yolo: false }).pipe(
-        Effect.andThen(autonomy.setYolo({ sessionID: root, yolo: true })),
+      autonomy.set({ sessionID: root, answers: "manual" }).pipe(
+        Effect.andThen(autonomy.set({ sessionID: root, answers: "yolo" })),
       ),
   },
 ] as const
@@ -238,7 +238,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
   for (const asleep of [false, true]) {
     it.effect(`a human reply during the refreshed sleep read wins for an initially ${asleep ? "asleep" : "awake"} Question`, () => Effect.gen(function* () {
       const autonomy = yield* family({ asleep })
-      yield* autonomy.setYolo({ sessionID: root, yolo: true })
+      yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const reading = yield* Deferred.make<void>()
       const releaseRead = yield* Deferred.make<void>()
@@ -252,7 +252,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
       yield* Effect.addFinalizer(() => unsubscribe)
       const fiber = yield* questions.ask({ sessionID: leaf, questions: [planQuestion] }).pipe(Effect.forkScoped)
       yield* Deferred.await(gate.entered)
-      yield* autonomy.setYolo({ sessionID: root, yolo: false })
+      yield* autonomy.set({ sessionID: root, answers: "manual" })
       yield* Deferred.succeed(gate.release, undefined)
       yield* Deferred.await(reading)
       const [request] = yield* questions.list()
@@ -267,7 +267,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
   it.effect("sleep conversion during the refreshed sleep read owns exactly one Question review", () => Effect.gen(function* () {
     const autonomy = yield* family({ asleep: false })
-    yield* autonomy.setYolo({ sessionID: root, yolo: true })
+    yield* autonomy.set({ sessionID: root, answers: "yolo" })
     const gate = yield* holdChoice("Careful")
     const reading = yield* Deferred.make<void>()
     const releaseRead = yield* Deferred.make<void>()
@@ -275,7 +275,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
     const questions = yield* Question.Service
     const fiber = yield* questions.ask({ sessionID: leaf, questions: [planQuestion] }).pipe(Effect.forkScoped)
     yield* Deferred.await(gate.entered)
-    yield* autonomy.setYolo({ sessionID: root, yolo: false })
+    yield* autonomy.set({ sessionID: root, answers: "manual" })
     yield* Deferred.succeed(gate.release, undefined)
     yield* Deferred.await(reading)
     yield* autonomy.set({ sessionID: root, sleep: true })
@@ -289,7 +289,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
   it.effect("a post-wake Form remains pending without applying the stale answer and cancels on interruption", () => Effect.gen(function* () {
     const autonomy = yield* family({ asleep: true })
-    yield* autonomy.setYolo({ sessionID: root, yolo: true })
+    yield* autonomy.set({ sessionID: root, answers: "yolo" })
     const gate = yield* holdChoice("Careful")
     const visible = yield* Deferred.make<void>()
     const forms = yield* Form.Service
@@ -318,7 +318,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
   for (const refused of [false, true]) {
     it.effect(`a converted Question publishes no phantom Asked event after ${refused ? "unsettled" : "valid"} evaluation`, () => Effect.gen(function* () {
       const autonomy = yield* family({ asleep: false })
-      yield* autonomy.setYolo({ sessionID: root, yolo: true })
+      yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const evaluate = decide
       if (refused) decide = (input) => evaluate(input).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" }))))
@@ -343,7 +343,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
     it.effect(`a managed child sleeps during ${refused ? "unsettled" : "valid"} evaluation and receives one review`, () => Effect.gen(function* () {
       const autonomy = yield* family({ asleep: false })
-      yield* autonomy.setYolo({ sessionID: root, yolo: true })
+      yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const evaluate = decide
       if (refused) decide = (input) => evaluate(input).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" }))))
@@ -374,7 +374,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
       it.effect(`Form ${name}`, () => Effect.gen(function* () {
         const autonomy = yield* family({ asleep: state.asleep })
-        yield* autonomy.setYolo({ sessionID: root, yolo: true })
+        yield* autonomy.set({ sessionID: root, answers: "yolo" })
         const gate = yield* holdChoice("Careful")
         const evaluate = decide
         if (refused) decide = (input) => evaluate(input).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" }))))
@@ -403,7 +403,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
       it.effect(`Question ${name}`, () => Effect.gen(function* () {
         const autonomy = yield* family({ asleep: state.asleep })
-        yield* autonomy.setYolo({ sessionID: root, yolo: true })
+        yield* autonomy.set({ sessionID: root, answers: "yolo" })
         const gate = yield* holdChoice("Careful")
         const evaluate = decide
         if (refused) decide = (input) => evaluate(input).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" }))))
@@ -431,7 +431,7 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
       it.effect(`managed child question ${name}`, () => Effect.gen(function* () {
         const autonomy = yield* family({ asleep: state.asleep })
-        yield* autonomy.setYolo({ sessionID: root, yolo: true })
+        yield* autonomy.set({ sessionID: root, answers: "yolo" })
         const gate = yield* holdChoice("Careful")
         const evaluate = decide
         if (refused) decide = (input) => evaluate(input).pipe(Effect.andThen(Effect.fail(new Decision.Error({ reason: "refused" }))))
@@ -453,10 +453,10 @@ describe("automatic answer fallback uses the current family sleep state", () => 
 
 describe("a revoked inherited YOLO grant never applies a held automatic answer", () => {
   for (const asleep of [false, true]) {
-    it.effect(`a ${asleep ? "sleeping" : "awake"} child does not apply an auto-answer flag revoked during context lookup`, () =>
+    it.effect(`a ${asleep ? "sleeping" : "awake"} child does not apply Auto answers revoked during context lookup`, () =>
       Effect.gen(function* () {
         const autonomy = yield* family({ asleep })
-        yield* autonomy.set({ sessionID: leaf, autoAnswer: true })
+        yield* autonomy.set({ sessionID: leaf, answers: "auto" })
         const entered = yield* Deferred.make<void>()
         const release = yield* Deferred.make<void>()
         beforeSessionGet = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
@@ -465,7 +465,7 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
           options: ["Fast", "Careful (Recommended)"],
         }).pipe(Effect.forkScoped)
         yield* Deferred.await(entered)
-        yield* autonomy.set({ sessionID: leaf, autoAnswer: false })
+        yield* autonomy.set({ sessionID: leaf, answers: "manual" })
         yield* Deferred.succeed(release, undefined)
         const result = yield* Fiber.join(fiber)
         expect(result.autoAnswered).toBe(false)
@@ -573,12 +573,12 @@ describe("a revoked inherited YOLO grant never applies a held automatic answer",
   it.effect("a neighboring Session's autonomy change does not fence the inherited answer", () =>
     Effect.gen(function* () {
       const autonomy = yield* family({ asleep: true })
-      yield* autonomy.setYolo({ sessionID: root, yolo: true })
+      yield* autonomy.set({ sessionID: root, answers: "yolo" })
       const gate = yield* holdChoice("Careful")
       const forms = yield* Form.Service
       const fiber = yield* forms.ask(planForm).pipe(Effect.forkScoped)
       yield* Deferred.await(gate.entered)
-      yield* autonomy.set({ sessionID: sibling, autoAnswer: true })
+      yield* autonomy.set({ sessionID: sibling, answers: "auto" })
       yield* Deferred.succeed(gate.release, undefined)
       expect(yield* Fiber.join(fiber)).toEqual({
         status: "answered",

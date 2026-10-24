@@ -22,8 +22,8 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-test("autonomy and Goal panels enter and leave over frames while restoring focus immediately", async () => {
-  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"] as const) for (const reduce of [false, true]) for (const kind of ["yolo", "goal"] as const) {
+test("the Goal panel enters and leave over frames while restoring focus immediately", async () => {
+  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"] as const) for (const reduce of [false, true]) for (const kind of ["goal"] as const) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -60,20 +60,14 @@ test("autonomy and Goal panels enter and leave over frames while restoring focus
   }
 }, 60_000)
 
-test("switching autonomy panels enters the new content and reopening during exit cancels closure", async () => {
+test("reopening the Goal panel during exit cancels closure", async () => {
   const page = await browser!.openPage()
   try {
     await page.setViewport(390, 844)
     await page.setReducedMotion(false)
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-    for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.session-status__yolo-trigger') !== null`); attempt += 1) await Bun.sleep(50)
-    await page.evaluate(`document.querySelector('.session-status__yolo-trigger').click()`)
-    await page.evaluate(`Promise.all([...document.querySelector('.session-status__popover').getAnimations()].map(animation => animation.finished))`)
+    for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger') !== null`); attempt += 1) await Bun.sleep(50)
     await page.evaluate(`document.querySelector('.session-status__goal-trigger').click()`)
-    const switched = await page.evaluate<{ expanded: string; opacity: number; focused: boolean }>(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => { const panel = document.querySelector('.session-status__popover'); resolve({ expanded: document.querySelector('.session-status__goal-trigger').getAttribute('aria-expanded'), opacity: Number(getComputedStyle(panel).opacity), focused: panel.contains(document.activeElement) }); })))`)
-    expect(switched.expanded).toBe("true")
-    expect(switched.focused).toBe(true)
-    expect(switched.opacity).toBeLessThan(1)
     await page.evaluate(`Promise.all([...document.querySelector('.session-status__popover').getAnimations()].map(animation => animation.finished))`)
     await page.pressEscape()
     await page.evaluate(`document.querySelector('.session-status__goal-trigger').click()`)

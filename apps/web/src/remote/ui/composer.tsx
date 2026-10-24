@@ -14,6 +14,7 @@ import { ComposerPicker } from "./composer-picker"
 import { containTab, createSheetFrame } from "./composer-sheet"
 import { attachmentLimit, encodeAttachment, type ComposerAttachment } from "./composer-attachment"
 import { ModelControl } from "./model-control"
+import { requestAutonomousDialog } from "./autonomous-dialog"
 import { ComposerStatus } from "./status-bar"
 import { composerDockCollapsed, type ComposerDockEvent } from "./composer-dock"
 import "./composer.css"
@@ -615,6 +616,11 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
     if (result.message) throw new Error(result.message)
     return result.reached
   }
+  const openAutonomous = () => {
+    if (remote.state().view?.autonomy === undefined) return false
+    requestAutonomousDialog()
+    return true
+  }
   return <div class="mini-composer__mount" ref={composerMount}>
     <div ref={setMobileMount} class="composer__mobile-identity" />
     <MiniComposer mobileMount={mobileMount()} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
@@ -634,10 +640,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
           : value.kind === "compact" ? await remote.store.compactSession()
           : value.kind === "goal" ? await remote.store.setGoal(value.input.goal)
             : value.kind === "skill" ? await remote.store.activateSkill(value.input.skill)
-              : value.kind === "yolo" ? await remote.store.setYolo(value.input.enabled ?? !((remote.state().view?.autonomy?.effective?.yolo ?? remote.state().view?.autonomy?.yolo) === true))
-                : value.kind === "autoPermission" ? await remote.store.setAutoPermission(value.input.enabled ?? !(remote.state().view?.autonomy?.autoPermission === true))
-                : value.kind === "autoGuardrail" ? await remote.store.setAutoGuardrail(value.input.enabled ?? !(remote.state().view?.autonomy?.autoGuardrail === true))
-                : value.kind === "autoAnswer" ? await remote.store.setAutoAnswer(value.input.enabled ?? !(remote.state().view?.autonomy?.autoAnswer === true))
+              : value.kind === "autonomous" ? openAutonomous()
                 : value.kind === "sleep" || value.kind === "wake" ? await remote.store.setSleep(value.kind === "sleep")
                   : value.kind === "keepAwake" ? await toggleKeepAwake()
                     : false

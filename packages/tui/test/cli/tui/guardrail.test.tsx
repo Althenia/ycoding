@@ -32,6 +32,15 @@ const status: GuardrailStatusOutput = {
   invalidFiles: ["/home/user/.config/ycoding/guardrails/broken.md"],
 }
 
+test("the guardrail hint names who decides and never claims a model check", () => {
+  for (const mode of ["manual", "auto", "yolo", undefined] as const)
+    expect(permission.guardrailHint(true, mode)).toBe("hard review · only you can approve")
+  expect(permission.guardrailHint(false, "manual")).toBe("you decide this review")
+  expect(permission.guardrailHint(false, undefined)).toBe("you decide this review")
+  expect(permission.guardrailHint(false, "auto")).toBe("Auto didn't cover this · you decide")
+  expect(permission.guardrailHint(false, "yolo")).toBe("YOLO escalated this · you decide")
+})
+
 test("formats guardrail profile and family counters", () => {
   expect(module.guardrailSummary(status)).toEqual({
     profile: "Standard + 2 custom",
@@ -159,7 +168,7 @@ test("renders a model-escalated human review with ordinary choices", async () =>
             <ClientProvider api={createApi(transport.fetch)}>
               <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
                 <ToastProvider>
-                  <prompt.GuardrailPrompt request={request} />
+                  <prompt.GuardrailPrompt request={request} guardrailsMode="yolo" />
                 </ToastProvider>
               </ThemeProvider>
             </ClientProvider>
@@ -178,7 +187,7 @@ test("renders a model-escalated human review with ordinary choices", async () =>
     expect(frame).toContain("Destructive Git operation")
     expect(frame).toContain("Decision model escalated")
     expect(frame).toContain("0.2")
-    expect(frame).toContain("ordinary reviews auto-approve with auto-guardrail on while awake")
+    expect(frame).toContain("YOLO escalated this · you decide")
     expect(frame).toContain("Blocked")
     expect(frame).toContain("git reset --hard")
     expect(frame).toContain("Allow once")
@@ -428,8 +437,8 @@ for (const decision of ["once", "reject"] as const) {
       expect(frame).toContain("Deny")
       expect(frame).toContain("Allow once")
       expect(frame).toContain("pgup/pgdn")
-      expect(frame).toContain("hard reviews: model checks, you approve")
-      expect(frame).not.toContain("ordinary reviews auto-approve with auto-guardrail on while awake")
+      expect(frame).toContain("hard review · only you can approve")
+      expect(frame).not.toContain("model checks")
       expect(frame).not.toContain("Allow for this session")
       expect(descendants(app.renderer.root).some((item) => item.id === "session.guardrail.action.reject.band")).toBe(true)
       for (let page = 0; page < 200 && !app.captureCharFrame().includes("NEW_COMMAND_END"); page++) {

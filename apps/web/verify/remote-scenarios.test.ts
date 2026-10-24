@@ -63,11 +63,10 @@ describe("remote product-state scenarios", () => {
     ])
     expect(devices.openControl).toBe("enrollment")
 
-    expect(remoteScenario(new URLSearchParams("scenario=autonomy-goal-notification-settings-1440"))).toMatchObject({ theme: "dark", autonomy: { mode: "normal", yolo: false, autoPermission: true, autoGuardrail: true } })
-    expect(remoteScenario(new URLSearchParams("scenario=autonomy-goal-notification-settings-768"))).toMatchObject({ theme: "light", autonomy: { mode: "normal", yolo: false, autoPermission: true } })
-    expect(remoteScenario(new URLSearchParams("scenario=autonomy-goal-notification-settings-768"))?.autonomy).not.toHaveProperty("autoGuardrail")
-    expect(remoteScenario(new URLSearchParams("scenario=autonomy-goal-notification-settings-390"))).toMatchObject({ theme: "dark", autonomy: { mode: "normal", yolo: false, autoPermission: true, autoGuardrail: true } })
-    expect(remoteScenario(new URLSearchParams("scenario=conversation-workspace-1440"))?.autonomy).toEqual({ mode: "normal", yolo: false })
+    expect(remoteScenario(new URLSearchParams("scenario=autonomy-goal-notification-settings-1440"))).toMatchObject({ theme: "dark", autonomy: { mode: "normal", permissions: "auto", guardrails: "auto", answers: "manual" } })
+    expect(remoteScenario(new URLSearchParams("scenario=autonomy-goal-notification-settings-768"))).toMatchObject({ theme: "light", autonomy: { mode: "normal", permissions: "auto", guardrails: "manual", answers: "manual" } })
+    expect(remoteScenario(new URLSearchParams("scenario=autonomy-goal-notification-settings-390"))).toMatchObject({ theme: "dark", autonomy: { mode: "normal", permissions: "auto", guardrails: "auto", answers: "manual" } })
+    expect(remoteScenario(new URLSearchParams("scenario=conversation-workspace-1440"))?.autonomy).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" })
   })
 
   test("rejects incomplete, unsupported product names, and widths outside the scenario matrix", () => {

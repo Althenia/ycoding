@@ -10,7 +10,6 @@ test("binds supported maintainer shortcuts without leader collisions", () => {
   const definitions = TuiKeybind.Definitions as Record<string, { default: unknown }>
 
   expect(TuiKeybind.Definitions.variant_list.default).toBe("<leader>v")
-  expect(definitions.session_autonomy_normal?.default).toBe("<leader>y")
   expect(TuiKeybind.Definitions.messages_copy.default).toBe("<leader>o")
 
   const leaderBindings = Object.entries(definitions).flatMap(([name, definition]) =>
@@ -24,17 +23,13 @@ test("binds supported maintainer shortcuts without leader collisions", () => {
   expect(leaderBindings).toEqual(
     expect.arrayContaining([
       ["variant_list", "<leader>v"],
-      ["session_autonomy_normal", "<leader>y"],
       ["messages_copy", "<leader>o"],
     ]),
   )
 })
 
 test("new supported shortcuts remain configurable and render in help", async () => {
-  expect(TuiKeybind.parse({ variant_list: "ctrl+v", session_autonomy_normal: "ctrl+d" })).toMatchObject({
-    variant_list: "ctrl+v",
-    session_autonomy_normal: "ctrl+d",
-  })
+  expect(TuiKeybind.parse({ variant_list: "ctrl+v" })).toMatchObject({ variant_list: "ctrl+v" })
 
   // The help dialog is a DialogSelect over commands, so a rebound keybinding must render from the
   // live keymap. Assert the displayed shortcut rather than the component source text.
@@ -108,4 +103,28 @@ test("binds shell output actions through configurable commands", () => {
     shell_output_back: "q",
     shell_output_kill: "ctrl+k",
   })
+})
+
+test("the Autonomous dialog keys are configurable and collide with no dialog list key", () => {
+  const definitions = TuiKeybind.Definitions as Record<string, { default: unknown }>
+  const autonomous = {
+    "dialog.autonomous.mode_previous": "left",
+    "dialog.autonomous.mode_next": "right",
+    "dialog.autonomous.all_manual": "1",
+    "dialog.autonomous.all_yolo": "2",
+    "dialog.autonomous.all_auto": "3",
+  }
+  for (const [name, key] of Object.entries(autonomous)) expect(definitions[name]?.default).toBe(key)
+
+  const listKeys = Object.entries(definitions)
+    .filter(([name]) => name.startsWith("dialog.select."))
+    .flatMap(([, definition]) => String(definition.default).split(","))
+  const keys = [...Object.values(autonomous), ...listKeys]
+  expect(keys.filter((key, index) => keys.indexOf(key) !== index)).toEqual([])
+  expect(TuiKeybind.parse({ "dialog.autonomous.all_auto": "ctrl+a" })).toMatchObject({ "dialog.autonomous.all_auto": "ctrl+a" })
+})
+
+test("the removed YOLO shortcut name is rejected", () => {
+  expect(TuiKeybind.Definitions).not.toHaveProperty("session_autonomy_normal")
+  expect(() => TuiKeybind.parse({ session_autonomy_normal: "ctrl+d" } as never)).toThrow("Unrecognized keybind")
 })

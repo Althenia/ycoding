@@ -87,7 +87,7 @@ function harness(
           if (input.decision === "decline") declines.push("permission")
           const valid = yield* input.validate(permissionRequest as never)
           return valid
-            ? { outcome: "allowed" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "baseline" as const }
+            ? { outcome: "allowed" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "yolo" as const }
             : { outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: "delegation-invalid" }
         }),
     },
@@ -143,7 +143,7 @@ describe("CoordinationDecisions.evaluate", () => {
   test("delegates a source-bound permission request only through native reconsideration", async () => {
     const { decisions, calls } = harness()
     const result = await evaluate(decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })
-    expect(result).toMatchObject({ outcome: "allowed", kind: "permission", actor: "coordinator", settled: true, via: "baseline" })
+    expect(result).toMatchObject({ outcome: "allowed", kind: "permission", actor: "coordinator", settled: true, via: "yolo" })
     expect(calls).toEqual(["permission"])
   })
 

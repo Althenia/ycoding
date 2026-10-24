@@ -1750,19 +1750,19 @@ describe("SubagentTool", () => {
           const db = (yield* Database.Service).db
 
           const autonomy = yield* SessionAutonomy.Service.pipe(Effect.provide(locations.get(parent.location)))
-          for (const yolo of [false, true]) {
-            yield* autonomy.setYolo({ sessionID: parent.id, yolo })
-            expect(yield* autonomy.canAutoPermission(child.sessionID)).toBe(false)
-            expect(yield* autonomy.canAutoGuardrail(child.sessionID)).toBe(false)
-            expect(yield* autonomy.canAutoAnswer(child.sessionID)).toBe(false)
-            const question = yield* orchestration.question(child.sessionID, `Manual question at YOLO ${yolo}`)
+          for (const mode of ["manual", "yolo"] as const) {
+            yield* autonomy.set({ sessionID: parent.id, permissions: mode, guardrails: mode, answers: mode })
+            expect(yield* autonomy.decisionMode(child.sessionID, "permissions")).toBe(mode)
+            expect(yield* autonomy.decisionMode(child.sessionID, "guardrails")).toBe(mode)
+            expect(yield* autonomy.decisionMode(child.sessionID, "answers")).toBe(mode)
+            const question = yield* orchestration.question(child.sessionID, `Manual question at ${mode}`)
             expect(question.autoAnswered).toBe(false)
             expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({ state: "waiting", question: { id: question.question.id } })
             yield* orchestration.answer({ parentID: parent.id, childID: child.sessionID, questionID: question.question.id, text: "Human answer" })
           }
-          yield* autonomy.setYolo({ sessionID: parent.id, yolo: false })
+          yield* autonomy.set({ sessionID: parent.id, permissions: "manual", guardrails: "manual", answers: "manual" })
 
-          yield* autonomy.set({ sessionID: child.sessionID, autoAnswer: true })
+          yield* autonomy.set({ sessionID: child.sessionID, answers: "auto" })
           for (const mode of ["permission", "goal"] as const) {
             yield* db
               .update(SessionTable)
@@ -1771,7 +1771,9 @@ describe("SubagentTool", () => {
                   mode === "goal"
                     ? {
                         mode: "normal",
-                        yolo: false,
+                        permissions: "manual",
+                        guardrails: "manual",
+                        answers: "manual",
                         goal: {
                           text: "Finish the parent goal",
                           status: "active",
@@ -1780,7 +1782,7 @@ describe("SubagentTool", () => {
                           maxNoProgress: 3,
                         },
                       }
-                    : { mode: "normal", yolo: false, autoPermission: true },
+                    : { mode: "normal", permissions: "auto", guardrails: "manual", answers: "manual" },
               })
               .where(eq(SessionTable.id, parent.id))
               .run()

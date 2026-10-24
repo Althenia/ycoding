@@ -333,13 +333,14 @@ export const layer = Layer.effect(
                 .snapshot(sessionID, { inherited: true })
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
             : undefined
-          const autoAnswer = snapshot ? SessionAutonomy.canAutoAnswer(snapshot.state) : false
+          const mode = sessionID && snapshot ? yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers") : "manual"
+          const autoAnswer = mode === "auto"
+          const yolo = mode === "yolo"
           const asleep = sessionID
             ? yield* autonomy
                 .isAsleep(sessionID)
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
             : false
-          const yolo = sessionID ? yield* DecisionChoice.yoloEnabled(autonomy, sessionID) : false
           const auto = autoAnswer || yolo
           if (asleep && sessionID) {
             const form: Info = {
@@ -481,41 +482,35 @@ export const layer = Layer.effect(
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "low-confidence" }
                   const sessionID = Schema.is(SessionSchema.ID)(entry.form.sessionID) ? entry.form.sessionID : undefined
                   if (sessionID === undefined) return { ...base, outcome: "stale" as const, settled: false }
-                  const authorization =
-                    input.answer === undefined
-                      ? yield* autonomy
-                          .snapshot(sessionID, { inherited: true })
-                          .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                  const authorization = yield* autonomy
+                    .snapshot(sessionID, { inherited: true })
+                    .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                  if (authorization === undefined) return { ...base, outcome: "stale" as const, settled: false }
+                  const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")
+                  if (mode === "manual")
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:manual-answers" }
+                  const native =
+                    input.answer === undefined || mode === "auto"
+                      ? yield* restore(
+                          decisionAnswer(decision, sessionID, entry.form, { autoAnswer: mode === "auto", yolo: mode === "yolo" }),
+                        )
                       : undefined
-                  if (input.answer === undefined && authorization === undefined)
-                    return { ...base, outcome: "stale" as const, settled: false }
-                  const autoAnswer = authorization === undefined ? false : SessionAutonomy.canAutoAnswer(authorization.state)
-                  const yolo = input.answer === undefined ? yield* DecisionChoice.yoloEnabled(autonomy, sessionID) : false
-                  const outcome: SleepOutcome =
+                  if (native?.type === "defer")
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: native.reason }
+                  if (native !== undefined && input.answer !== undefined && Hash.json(input.answer) !== Hash.json(native.answer))
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "answer-not-deterministic" }
+                  const outcome: Extract<SleepOutcome, { readonly type: "answer" }> =
                     input.answer !== undefined
                       ? {
                           type: "answer",
                           answer: input.answer,
-                          via: "auto-answer",
+                          via: mode === "auto" ? "auto-answer" : "yolo",
                           ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
                         }
-                      : yield* restore(decisionAnswer(decision, sessionID, entry.form, { autoAnswer: true, yolo }))
-                  if (outcome.type === "defer")
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: outcome.reason }
-                  if (
-                    input.answer === undefined &&
-                    authorization !== undefined &&
-                    !(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, authorization))
-                  )
+                      : native!
+                  if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, authorization)))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "stale-assessment" }
-                  const via =
-                    input.answer !== undefined
-                      ? ("coordination" as const)
-                      : outcome.via === "yolo"
-                        ? ("yolo" as const)
-                        : autoAnswer
-                          ? ("auto-answer" as const)
-                          : ("coordination" as const)
+                  const via = input.answer !== undefined ? ("coordination" as const) : outcome.via
                   const source: ReplySource = {
                     kind: "coordinator",
                     coordinatorSessionID: input.source.coordinatorSessionID,
@@ -776,7 +771,7 @@ function decisionValue(
   }
   if (field.type === "multiselect") {
     const marked = field.options.filter((option) => RECOMMENDED.test(option.label)).map((option) => option.value)
-    if (mode.autoAnswer && marked.length > 0 && !validateField(field, marked))
+    if (mode.autoAnswer && marked.length === 1 && !validateField(field, marked))
       return Effect.succeed<FieldOutcome>({ type: "value", value: marked })
     if (!mode.yolo || field.options.length === 0) return Effect.succeed(unanswered)
     return DecisionChoice.grade(decision, {

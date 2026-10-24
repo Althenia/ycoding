@@ -2,6 +2,7 @@ export * as DecisionChoice from "./decision-choice"
 
 import { Effect, Exit, Result } from "effect"
 import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
+import type { Category, DecisionMode } from "@ycoding-ai/schema/session-autonomy"
 import type { Decision } from "./decision"
 import { DecisionJudgment } from "./decision-judgment"
 import { SessionAutonomy } from "./session/autonomy"
@@ -26,11 +27,14 @@ function invocation(input: Source): Decision.Invocation {
   }
 }
 
-export function yoloEnabled(
+export function decisionMode(
   autonomy: SessionAutonomy.Interface,
   sessionID: SessionSchema.ID,
-): Effect.Effect<boolean> {
-  return autonomy.canYolo(sessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+  category: Category,
+): Effect.Effect<DecisionMode> {
+  return autonomy
+    .decisionMode(sessionID, category)
+    .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed<DecisionMode>("manual")))
 }
 
 export function autonomyUnchanged(

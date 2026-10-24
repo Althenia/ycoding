@@ -636,35 +636,30 @@ test("bridges authorized session operations against an isolated server", async (
     const autonomy = valueOf(await answer(relay, "autonomy_1")) as { data: { mode: string } }
     expect(autonomy.data.mode).toBe("normal")
 
-    relay.deliver(request("autonomy_2", "session.autonomy.set", sessionID, { yolo: true }))
+    relay.deliver(request("autonomy_2", "session.autonomy.set", sessionID, { permissions: "yolo" }))
     expect(valueOf(await answer(relay, "autonomy_2"))).toMatchObject({
-      data: { yolo: true, effective: { yolo: true, permissionsAuto: false, ordinaryReviewsAuto: false } },
+      data: { permissions: "yolo", guardrails: "manual", answers: "manual", effective: { permissions: "yolo", guardrails: "manual", answers: "manual" } },
     })
     relay.deliver(request("autonomy_3", "session.autonomy.get", sessionID))
-    expect((valueOf(await answer(relay, "autonomy_3")) as { data: { yolo?: boolean } }).data.yolo).toBe(true)
-    relay.deliver(request("permission_on", "session.autonomy.set", sessionID, { autoPermission: true }))
-    expect(valueOf(await answer(relay, "permission_on"))).toMatchObject({
-      data: { autoPermission: true, effective: { permissionsAuto: true, ordinaryReviewsAuto: false } },
+    expect(valueOf(await answer(relay, "autonomy_3"))).toMatchObject({ data: { permissions: "yolo" } })
+    relay.deliver(request("autonomy_all", "session.autonomy.set", sessionID, { permissions: "auto", guardrails: "auto", answers: "auto" }))
+    expect(valueOf(await answer(relay, "autonomy_all"))).toMatchObject({
+      data: { permissions: "auto", guardrails: "auto", answers: "auto", effective: { permissions: "auto", guardrails: "auto", answers: "auto" } },
     })
-    relay.deliver(request("permission_off", "session.autonomy.set", sessionID, { autoPermission: false }))
-    expect(valueOf(await answer(relay, "permission_off"))).toMatchObject({
-      data: { autoPermission: false, effective: { permissionsAuto: false } },
-    })
-    relay.deliver(request("autonomy_4", "session.autonomy.set", sessionID, { yolo: false }))
-    valueOf(await answer(relay, "autonomy_4"))
-
-    relay.deliver(request("answers_on", "session.autonomy.set", sessionID, { autoAnswer: true }))
-    expect(valueOf(await answer(relay, "answers_on"))).toMatchObject({
-      data: { yolo: false, autoAnswer: true, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: true, asleep: false, ordinaryReviewsAuto: false } },
+    relay.deliver(request("autonomy_partial", "session.autonomy.set", sessionID, { guardrails: "manual" }))
+    expect(valueOf(await answer(relay, "autonomy_partial"))).toMatchObject({
+      data: { permissions: "auto", guardrails: "manual", answers: "auto" },
     })
     relay.deliver(request("answers_other", "session.autonomy.get", hiddenSessionID))
-    expect((valueOf(await answer(relay, "answers_other")) as { data: { autoAnswer?: boolean } }).data.autoAnswer ?? false).toBe(false)
-    relay.deliver(request("answers_read", "session.autonomy.get", sessionID))
-    expect(valueOf(await answer(relay, "answers_read"))).toMatchObject({ data: { autoAnswer: true } })
-    relay.deliver(request("answers_off", "session.autonomy.set", sessionID, { autoAnswer: false }))
-    expect(valueOf(await answer(relay, "answers_off"))).toMatchObject({ data: { yolo: false, autoAnswer: false } })
-    relay.deliver(request("autonomy_rejected", "session.autonomy.set", sessionID, { yolo: 3 }))
+    expect(valueOf(await answer(relay, "answers_other"))).toMatchObject({ data: { answers: "manual" } })
+    relay.deliver(request("autonomy_reset", "session.autonomy.set", sessionID, { permissions: "manual", guardrails: "manual", answers: "manual" }))
+    expect(valueOf(await answer(relay, "autonomy_reset"))).toMatchObject({
+      data: { permissions: "manual", guardrails: "manual", answers: "manual" },
+    })
+    relay.deliver(request("autonomy_rejected", "session.autonomy.set", sessionID, { yolo: true }))
     expect(errorOf(await answer(relay, "autonomy_rejected")).code).toBe("invalid_message")
+    relay.deliver(request("autonomy_rejected_mode", "session.autonomy.set", sessionID, { permissions: true }))
+    expect(errorOf(await answer(relay, "autonomy_rejected_mode")).code).toBe("invalid_message")
 
     // Goal set and stop against the real server, with the model boundary served by
     // an opt-in loopback stand-in. Goal activation admits the autonomous
@@ -679,7 +674,7 @@ test("bridges authorized session operations against an isolated server", async (
 
     relay.deliver(request("goal_set", "session.goal.set", sessionID, { goal: goalRequest }))
     const goalSet = valueOf(await answer(relay, "goal_set")) as {
-      data: { mode: string; yolo?: boolean; goal?: { text?: string; status?: string; iteration?: number } }
+      data: { mode: string; goal?: { text?: string; status?: string; iteration?: number } }
     }
     // The model boundary is the loopback stand-in: it received the synthesis
     // request carrying the user's goal text, and the projected goal text is the

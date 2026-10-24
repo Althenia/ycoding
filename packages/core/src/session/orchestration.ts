@@ -884,7 +884,9 @@ const layer = Layer.effect(
             const snapshot = yield* autonomy
               .snapshot(childID, { inherited: true })
               .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
-            const autoAnswer = SessionAutonomy.canAutoAnswer(snapshot.state)
+            const mode = yield* DecisionChoice.decisionMode(autonomy, childID, "answers")
+            const autoAnswer = mode === "auto"
+            const yolo = mode === "yolo"
             const asleep = yield* autonomy
               .isAsleep(childID)
               .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
@@ -895,7 +897,6 @@ const layer = Layer.effect(
               Effect.provide(locations.get(child.location)),
               Effect.flatMap((config) => config.entries()),
             )
-            const yolo = yield* DecisionChoice.yoloEnabled(autonomy, childID)
             const settled: SleepAnswerOutcome | undefined = autoAnswer || yolo
               ? yield* sleepAnswer({ childID, text, data, autoAnswer, yolo, questionID: question.id })
               : asleep

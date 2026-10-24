@@ -278,7 +278,7 @@ export type ProviderRequestTiming = {
 
 export type SessionAutonomyMode = "normal"
 
-export type SessionAutonomyYolo = boolean
+export type SessionAutonomyDecisionMode = "manual" | "yolo" | "auto"
 
 export type SessionAutonomyGoalStatus = "active" | "completed" | "stopped" | "exhausted"
 
@@ -1785,14 +1785,12 @@ export type SessionCompactionEnded = {
 }
 
 export type SessionAutonomyEffective = {
-  yolo: SessionAutonomyYolo
-  permissionsAuto: boolean
-  permissionModelReviews: boolean
+  permissions: SessionAutonomyDecisionMode
+  guardrails: SessionAutonomyDecisionMode
+  answers: SessionAutonomyDecisionMode
+  inherited: { permissions?: string | null; guardrails?: string | null; answers?: string | null }
   asleep: boolean
   guardrailsEnabled: boolean
-  ordinaryReviewsAuto: boolean
-  modelReviews: boolean
-  hardModelReviews: boolean
 }
 
 export type SessionAutonomyGoal = {
@@ -2878,10 +2876,9 @@ export type SessionCompactionHistory = {
 
 export type SessionAutonomyView = {
   mode: SessionAutonomyMode
-  yolo: SessionAutonomyYolo
-  autoPermission?: boolean | null
-  autoGuardrail?: boolean | null
-  autoAnswer?: boolean | null
+  permissions: SessionAutonomyDecisionMode
+  guardrails: SessionAutonomyDecisionMode
+  answers: SessionAutonomyDecisionMode
   goal?: SessionAutonomyGoal | null
   sleep?: {} | null
   effective: SessionAutonomyEffective
@@ -5519,19 +5516,25 @@ export type SessionAutonomySetInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly payload:
     | {
-        readonly yolo?: boolean | null
+        readonly yolo?: never | null
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly permissions?: never | null
+        readonly guardrails?: never | null
+        readonly answers?: never | null
         readonly sleep?: never | null
         readonly goal: string | true | null
         readonly maxNoProgress?: number | null
       }
     | {
-        readonly yolo: boolean
+        readonly yolo?: never | null
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly permissions: "manual" | "yolo" | "auto"
+        readonly guardrails?: ("manual" | "yolo" | "auto") | null
+        readonly answers?: ("manual" | "yolo" | "auto") | null
         readonly sleep?: never | null
         readonly goal?: never | null
         readonly maxNoProgress?: never | null
@@ -5541,6 +5544,9 @@ export type SessionAutonomySetInput = {
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly permissions?: never | null
+        readonly guardrails?: never | null
+        readonly answers?: never | null
         readonly sleep: boolean
         readonly goal?: never | null
         readonly maxNoProgress?: never | null
@@ -5549,16 +5555,10 @@ export type SessionAutonomySetInput = {
         readonly yolo?: never | null
         readonly autoPermission?: never | null
         readonly autoGuardrail?: never | null
-        readonly autoAnswer: boolean
-        readonly sleep?: never | null
-        readonly goal?: never | null
-        readonly maxNoProgress?: never | null
-      }
-    | {
-        readonly yolo?: never | null
-        readonly autoPermission: boolean
-        readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly permissions?: ("manual" | "yolo" | "auto") | null
+        readonly guardrails: "manual" | "yolo" | "auto"
+        readonly answers?: ("manual" | "yolo" | "auto") | null
         readonly sleep?: never | null
         readonly goal?: never | null
         readonly maxNoProgress?: never | null
@@ -5566,8 +5566,11 @@ export type SessionAutonomySetInput = {
     | {
         readonly yolo?: never | null
         readonly autoPermission?: never | null
-        readonly autoGuardrail: boolean
+        readonly autoGuardrail?: never | null
         readonly autoAnswer?: never | null
+        readonly permissions?: ("manual" | "yolo" | "auto") | null
+        readonly guardrails?: ("manual" | "yolo" | "auto") | null
+        readonly answers: "manual" | "yolo" | "auto"
         readonly sleep?: never | null
         readonly goal?: never | null
         readonly maxNoProgress?: never | null

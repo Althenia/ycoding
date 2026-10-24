@@ -111,7 +111,10 @@ const setup = (options: { readonly rules?: Permission.Ruleset; readonly yolo?: b
         agent.permissions = [...(options.rules ?? [])]
       }),
     )
-    if (options.yolo) yield* (yield* SessionAutonomy.Service).setYolo({ sessionID, yolo: true })
+    if (options.yolo) {
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, permissions: "yolo" })
+    }
   })
 
 const request = (input: Partial<Permission.AssertInput> = {}) =>
@@ -144,7 +147,7 @@ const admitSteer = (text: string) =>
 
 describe("YOLO permission applicability evidence", () => {
   const human = harness({ baseline: true, decide: (request) => Effect.succeed(graded(request, { allow: 0.99 })) })
-  human.it.effect("mandatory human approval never reaches a baseline or YOLO evaluator", () =>
+  human.it.effect("mandatory human approval never reaches the YOLO evaluator", () =>
     Effect.gen(function* () {
       yield* setup({ yolo: true, rules: [{ action: "read", resource: "*", effect: "allow" }] })
       const service = yield* Permission.Service
@@ -170,7 +173,7 @@ describe("YOLO permission applicability evidence", () => {
     Effect.gen(function* () {
       yield* setup({ yolo: true, rules: [{ action: "read", resource: "*", effect: "allow" }] })
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID, autoPermission: true, sleep: true })
+      yield* autonomy.set({ sessionID, permissions: "auto", sleep: true })
       const service = yield* Permission.Service
       const input = request({ requireHuman: true, save: ["secret/*"], metadata: { operationDigest: "synthetic" } })
       expect(Exit.isFailure(yield* service.assert(input).pipe(Effect.exit))).toBe(true)
@@ -292,16 +295,16 @@ describe("automated permission outcomes are revalidated at application", () => {
           Effect.as(graded(request, { allow: 0.95 })),
         ),
     })
-    fenced.it.effect(`a ${baseline ? "baseline" : "YOLO"} approval is withheld when a user instruction arrives during the assessment`, () =>
+    fenced.it.effect(`a YOLO approval with decide_reviews ${baseline} is withheld when a user instruction arrives during the assessment`, () =>
       Effect.gen(function* () {
-        yield* setup({ yolo: !baseline })
+        yield* setup({ yolo: true })
         const service = yield* Permission.Service
         const running = yield* service.assert(request()).pipe(Effect.forkScoped)
         yield* Deferred.await(entered)
         yield* admitSteer("Stop reading secret files")
         yield* Deferred.succeed(gate, undefined)
         const pending = yield* waitForPending
-        expect(pending.escalation).toMatchObject({ authority: baseline ? "baseline" : "yolo", reason: "escalated" })
+        expect(pending.escalation).toMatchObject({ authority: "yolo", reason: "escalated" })
         yield* service.reply({ requestID: pending.id, reply: "reject" })
         expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
       }),
@@ -319,9 +322,9 @@ describe("automated permission outcomes are revalidated at application", () => {
           Effect.as(graded(request, { allow: 0.95 })),
         ),
     })
-    progressing.it.effect(`sibling assistant progress during a ${baseline ? "baseline" : "YOLO"} assessment does not withhold its approval`, () =>
+    progressing.it.effect(`sibling assistant progress during a YOLO assessment with decide_reviews ${baseline} does not withhold its approval`, () =>
       Effect.gen(function* () {
-        yield* setup({ yolo: !baseline })
+        yield* setup({ yolo: true })
         const service = yield* Permission.Service
         const running = yield* service.assert(request()).pipe(Effect.forkScoped)
         yield* Deferred.await(entered)

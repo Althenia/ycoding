@@ -8,6 +8,7 @@
 
 import type { Form } from "../../../../packages/schema/src/form"
 import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
+import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
 import { parseUnifiedPatch } from "./file-change-diff"
 import { readProjectEscalation, readProjectEscalationEvent, type ProjectEscalationView } from "./project-escalation"
 import { escalationText, readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
@@ -342,23 +343,10 @@ const reviewReasons = [
 ] as const
 export type ReviewReason = (typeof reviewReasons)[number]
 
-export type EffectiveAutonomyView = {
-  readonly yolo: boolean
-  readonly permissionsAuto: boolean
-  readonly permissionModelReviews: boolean
-  readonly asleep: boolean
-  readonly guardrailsEnabled: boolean
-  readonly ordinaryReviewsAuto: boolean
-  readonly modelReviews: boolean
-  readonly hardModelReviews: boolean
-}
+export type { EffectiveAutonomyView } from "./autonomy"
 
-export type SessionAutonomyView = {
+export type SessionAutonomyView = AutonomyModes & {
   readonly mode: "normal"
-  readonly yolo: boolean
-  readonly autoPermission?: boolean
-  readonly autoGuardrail?: boolean
-  readonly autoAnswer?: boolean
   readonly goal?: {
     readonly text: string
     readonly status: "active" | "completed" | "stopped" | "exhausted"
@@ -370,43 +358,12 @@ export type SessionAutonomyView = {
   readonly effective?: EffectiveAutonomyView
 }
 
-export function yoloLabel(yolo: boolean): string {
-  return yolo ? "YOLO on" : "YOLO off"
-}
-
-export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "yolo" | "goal" | "sleep" | "autoPermission" | "autoGuardrail" | "autoAnswer" | "effective">): readonly string[] {
+export function autonomyModeParts(autonomy: Pick<SessionAutonomyView, "permissions" | "guardrails" | "answers" | "goal" | "sleep" | "effective">): readonly string[] {
   const asleep = autonomy.effective?.asleep ?? autonomy.sleep !== undefined
   return [
-    yoloLabel(autonomy.effective?.yolo ?? autonomy.yolo),
+    ...autonomyLabels(autonomy.effective ?? autonomy),
     ...(autonomy.goal?.status === "active" ? ["goal"] : []),
     ...(asleep ? ["asleep"] : []),
-    ...(autonomy.autoPermission === true ? ["auto-permission"] : []),
-    ...(autonomy.autoGuardrail === true ? ["auto-guardrail"] : []),
-    ...(autonomy.autoAnswer === true ? ["auto-answer"] : []),
-  ]
-}
-
-export type AutonomyDecider = { readonly label: "YOLO" | "Auto-permission" | "Auto-guardrail" | "Tools" | "Routine reviews" | "Hard reviews" | "Auto-answer"; readonly value: string }
-
-export function autonomyDeciders(autonomy: { readonly yolo?: boolean; readonly autoPermission?: boolean; readonly autoGuardrail?: boolean; readonly autoAnswer?: boolean; readonly effective?: EffectiveAutonomyView } | undefined): readonly AutonomyDecider[] {
-  const autoAnswer: AutonomyDecider = { label: "Auto-answer", value: autonomy === undefined ? "unreported" : autonomy.autoAnswer === true ? "On · this Session" : "Off" }
-  const effective = autonomy?.effective
-  const flags: readonly AutonomyDecider[] = autonomy === undefined
-    ? [{ label: "YOLO", value: "unreported" }, { label: "Auto-permission", value: "unreported" }, { label: "Auto-guardrail", value: "unreported" }]
-    : [
-        { label: "YOLO", value: (effective?.yolo ?? autonomy.yolo) === true ? "On · evaluates" : "Off" },
-        { label: "Auto-permission", value: autonomy.autoPermission === true ? "On" : "Off" },
-        { label: "Auto-guardrail", value: autonomy.autoGuardrail === true ? "On" : "Off" },
-      ]
-  if (effective === undefined) return [...flags, { label: "Tools", value: "unreported" }, { label: "Routine reviews", value: "unreported" }, { label: "Hard reviews", value: "unreported" }, autoAnswer]
-  const human = effective.asleep ? "Review box" : "Ask you"
-  const modeled = effective.asleep ? "Model assesses, then Review box" : "Model assesses, then you"
-  return [
-    ...flags,
-    { label: "Tools", value: effective.permissionsAuto ? "Auto-approved" : effective.yolo ? "YOLO evaluates" : effective.permissionModelReviews ? modeled : human },
-    { label: "Routine reviews", value: !effective.guardrailsEnabled ? "Off" : effective.ordinaryReviewsAuto ? "Auto-approved" : effective.yolo ? "YOLO evaluates" : effective.modelReviews ? modeled : human },
-    { label: "Hard reviews", value: effective.hardModelReviews ? effective.asleep ? "Model assesses · Review box approves" : "Model assesses · you approve" : human },
-    autoAnswer,
   ]
 }
 
@@ -937,20 +894,13 @@ export function readMessageList(payload: unknown): readonly RemoteMessageView[] 
 
 export function readAutonomyState(payload: unknown): SessionAutonomyView | undefined {
   const data = dataOf(payload)
-  if (!isRecord(data)) return undefined
-  const yolo = readYolo(data.yolo)
-  if (yolo === undefined) return undefined
-  if (data.mode !== undefined && data.mode !== "normal") return undefined
-  if (data.autoPermission !== undefined && typeof data.autoPermission !== "boolean") return undefined
-  if (data.autoGuardrail !== undefined && typeof data.autoGuardrail !== "boolean") return undefined
-  if (data.autoAnswer !== undefined && typeof data.autoAnswer !== "boolean") return undefined
+  if (!isRecord(data) || (data.mode !== undefined && data.mode !== "normal")) return undefined
+  const modes = readModes(data)
+  if (modes === undefined) return undefined
   const goal = isRecord(data.goal) ? readGoal(data.goal) : undefined
   return {
     mode: "normal",
-    yolo,
-    autoPermission: data.autoPermission === true,
-    autoGuardrail: data.autoGuardrail === true,
-    autoAnswer: data.autoAnswer === true,
+    ...modes,
     ...(goal === undefined ? {} : { goal }),
     ...(isRecord(data.sleep) ? { sleep: {} } : {}),
   }
@@ -965,11 +915,25 @@ export function readAutonomy(payload: unknown): SessionAutonomyView | undefined 
   return { ...state, effective }
 }
 
+function readModes(value: Record<string, unknown>): AutonomyModes | undefined {
+  const permissions = readAutonomyMode(value.permissions)
+  const guardrails = readAutonomyMode(value.guardrails)
+  const answers = readAutonomyMode(value.answers)
+  return permissions === undefined || guardrails === undefined || answers === undefined ? undefined : { permissions, guardrails, answers }
+}
+
 function readEffective(value: unknown): EffectiveAutonomyView | undefined {
-  if (!isRecord(value)) return undefined
-  const yolo = readYolo(value.yolo)
-  if (yolo === undefined || typeof value.permissionsAuto !== "boolean" || typeof value.permissionModelReviews !== "boolean" || typeof value.asleep !== "boolean" || typeof value.guardrailsEnabled !== "boolean" || typeof value.ordinaryReviewsAuto !== "boolean" || typeof value.modelReviews !== "boolean" || typeof value.hardModelReviews !== "boolean") return undefined
-  return { yolo, permissionsAuto: value.permissionsAuto, permissionModelReviews: value.permissionModelReviews, asleep: value.asleep, guardrailsEnabled: value.guardrailsEnabled, ordinaryReviewsAuto: value.ordinaryReviewsAuto, modelReviews: value.modelReviews, hardModelReviews: value.hardModelReviews }
+  if (!isRecord(value) || !isRecord(value.inherited) || typeof value.asleep !== "boolean" || typeof value.guardrailsEnabled !== "boolean") return undefined
+  const modes = readModes(value)
+  if (modes === undefined) return undefined
+  const inherited: { -readonly [Category in AutonomyCategory]?: string } = {}
+  for (const category of autonomyCategories) {
+    const source = value.inherited[category]
+    if (source === undefined) continue
+    if (typeof source !== "string") return undefined
+    inherited[category] = source
+  }
+  return { ...modes, inherited, asleep: value.asleep, guardrailsEnabled: value.guardrailsEnabled }
 }
 
 export function applySessionEvent(view: SessionView, payload: unknown, now: number): SessionView {
@@ -1912,10 +1876,6 @@ function readGoal(value: Record<string, unknown>): NonNullable<SessionAutonomyVi
     noProgress: numberField(value.noProgress) ?? 0,
     maxNoProgress: numberField(value.maxNoProgress) ?? 0,
   }
-}
-
-function readYolo(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined
 }
 
 function deliveryField(value: unknown): "steer" | "queue" {

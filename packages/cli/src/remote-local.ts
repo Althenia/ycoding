@@ -55,13 +55,20 @@ export type LocalPrompt = {
   readonly resume?: boolean
 }
 
+export type LocalAutonomyMode = "manual" | "yolo" | "auto"
+
+export type LocalAutonomyModes = AtLeastOne<{
+  readonly permissions: LocalAutonomyMode
+  readonly guardrails: LocalAutonomyMode
+  readonly answers: LocalAutonomyMode
+}>
+
+type AtLeastOne<T> = { [K in keyof T]: Pick<T, K> & Partial<Omit<T, K>> }[keyof T]
+
 export type LocalAutonomy =
-  | { readonly yolo: boolean }
-  | { readonly goal: string | null; readonly yolo?: boolean; readonly maxNoProgress?: number | null }
+  | LocalAutonomyModes
+  | { readonly goal: string | null; readonly maxNoProgress?: number | null }
   | { readonly sleep: boolean }
-  | { readonly autoPermission: boolean }
-  | { readonly autoGuardrail: boolean }
-  | { readonly autoAnswer: boolean }
 
 export type LocalFailureKind = "not_found" | "location_unavailable" | "invalid" | "conflict" | "transport" | "too_large" | "telemetry_disabled" | "server"
 

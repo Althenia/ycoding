@@ -97,18 +97,15 @@ test("one-time migration rewrites numeric YOLO levels into boolean YOLO plus rul
   )
 })
 
-test("stored numeric YOLO that bypasses the migration fails closed instead of granting flags", () => {
-  for (const yolo of [0, 1, 2, 3, -1, 7]) {
-    const state = SessionAutonomy.read({ mode: "normal", yolo })
-    expect(state.yolo).toBe(false)
-    expect(state.autoPermission).toBeUndefined()
-    expect(state.autoGuardrail).toBeUndefined()
-  }
-  expect(SessionAutonomy.read({ mode: "normal", yolo: true }).yolo).toBe(true)
-  expect(SessionAutonomy.read({ mode: "normal", yolo: false }).yolo).toBe(false)
-  expect(SessionAutonomy.read({ mode: "yolo" })).toEqual({ mode: "normal", yolo: false })
-  expect(SessionAutonomy.read({ mode: "goal", yolo: 2 })).toEqual({ mode: "normal", yolo: false })
-  expect(SessionAutonomy.read({ mode: "normal" })).toEqual({ mode: "normal", yolo: false })
-  expect(SessionAutonomy.read({ mode: "normal", yolo: true, autoPermission: true, autoGuardrail: false }))
-    .toEqual({ mode: "normal", yolo: true, autoPermission: true, autoGuardrail: false })
+test("stored legacy YOLO levels and flags that bypass the migrations read as Manual in every category", () => {
+  for (const value of [
+    ...[0, 1, 2, 3, -1, 7].map((yolo) => ({ mode: "normal", yolo })),
+    { mode: "normal", yolo: true },
+    { mode: "normal", yolo: false },
+    { mode: "yolo" },
+    { mode: "goal", yolo: 2 },
+    { mode: "normal" },
+    { mode: "normal", yolo: true, autoPermission: true, autoGuardrail: false },
+  ])
+    expect(SessionAutonomy.read(value)).toEqual(SessionAutonomy.defaultState)
 })

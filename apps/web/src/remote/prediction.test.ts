@@ -16,7 +16,7 @@ test("prediction stays outside messages and only displays for the latest reply a
   expect(nextMessagePrediction(view, "", "msg_reply")).toBeUndefined()
   expect(nextMessagePrediction({ ...view, messages: [...view.messages, { kind: "assistant", id: "msg_new", parts: [], created: 3 }] }, "")).toBeUndefined()
   expect(nextMessagePrediction({ ...view, status: "running" }, "")).toBeUndefined()
-  expect(nextMessagePrediction({ ...view, autonomy: { mode: "normal", yolo: false, goal: { text: "Finish", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } }, "")).toBeUndefined()
+  expect(nextMessagePrediction({ ...view, autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { text: "Finish", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } }, "")).toBeUndefined()
 })
 
 test("keyboard and touch acceptance fill only and never overwrite a draft", () => {
@@ -52,7 +52,7 @@ test("a replacement connection drops the old prediction and ignores late old-tra
         connect: () => callbacks.onStatus?.({ kind: "open" }), close: () => {}, setPriority: () => {}, status: () => ({ kind: "open" }),
         request: async (operation) => operation === "session.snapshot"
           ? { status: "ok", value: { sourceEpoch: "epoch_prediction", session: { id: base.id, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: base.id, seq: 0 } } }
-          : { status: "ok", value: { data: operation === "session.autonomy.get" ? { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } : [] } },
+          : { status: "ok", value: { data: operation === "session.autonomy.get" ? { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } : [] } },
       }
     },
   })
@@ -171,7 +171,7 @@ function predictionStore(
         const answered = await prediction(operation)
         if (answered) return answered
         if (operation === "session.snapshot") return { status: "ok" as const, value: { sourceEpoch: "epoch_prediction", session: { id: request?.sessionID, title: "Prediction", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: request?.sessionID ?? "ses_prediction", seq: 0 } } }
-        if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } } }
+        if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } } }
         return { status: "ok" as const, value: { data: [] } }
       },
     }),

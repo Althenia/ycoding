@@ -18,7 +18,7 @@ const APPROVED_DOC_ROUTES = [
   "/docs/configuration/plugins",
   "/docs/configuration/mcp",
   "/docs/configuration/goal",
-  "/docs/configuration/yolo",
+  "/docs/configuration/autonomous",
   "/docs/configuration/guardrails",
   "/docs/configuration/notifications",
   "/docs/configuration/permissions",
@@ -169,7 +169,7 @@ describe("structured decision documentation", () => {
     expect(text).toContain("during /sleep")
     expect(text).not.toContain("/guardrail-decision")
     expect(text).toContain("confidence 0.8 or higher")
-    expect(text).toContain("auto-answer on (default off)")
+    expect(text).toContain("Answers set to Auto (Manual by default)")
     expect(text).not.toContain("auto_answer")
     expect(text).toContain("guardrails.decide_reviews on (the default when omitted)")
     expect(text).not.toContain("decide_reviews: true (default false)")
@@ -212,7 +212,7 @@ describe("structured decision documentation", () => {
     expect(guardrails).toContain("While awake")
     expect(guardrails).not.toContain("guardrail-decision")
     expect(guardrails).toContain("case-sensitive")
-    expect(guardrails).toContain("autoGuardrail")
+    expect(guardrails).toContain("Guardrails Auto")
     expect(guardrails).not.toMatch(/YOLO [0-9]/)
     expect(guardrails).not.toContain("0.95")
     expect(guardrails).toContain("human handoff")
@@ -243,11 +243,24 @@ describe("structured decision documentation", () => {
     expect(answer).toBeUndefined()
   })
 
-  test("current usage docs name the independent autonomy flags and keep hard-review approval human-only", () => {
+  test("the Autonomous page documents the three categories, the single control, and no removed commands", () => {
+    const page = findDocPage("configuration/autonomous")
+    expect(page?.title).toBe("Autonomous mode")
+    expect(findDocPage("configuration/yolo")).toBeUndefined()
+    const text = JSON.stringify(page?.sections)
+    for (const required of ["`permissions`", "`guardrails`", "`answers`", "Manual", "YOLO", "Auto", "`/autonomous`", "`1`, `2`, `3`", "--permissions", "--guardrails", "--answers", "hard or custom-rule review is always yours", "local Manual never cancels inherited authority"]) expect(text).toContain(required)
+    for (const removed of ["/yolo", "/auto-permission", "/auto-guardrail", "/auto-answer", "--yolo", "--auto-", "autoPermission", "autoAnswer"]) expect(text).not.toContain(removed)
+    for (const slug of ["usage/tui", "usage/cli", "usage/remote", "usage/sessions", "configuration", "configuration/guardrails", "configuration/permissions", "configuration/tools", "getting-started"]) {
+      const body = JSON.stringify(findDocPage(slug)?.sections)
+      for (const removed of ["/yolo", "/auto-permission", "/auto-guardrail", "/auto-answer", "--yolo", "--auto-permission", "autoPermission", "autoGuardrail", "autoAnswer"]) expect(body).not.toContain(removed)
+    }
+  })
+
+  test("current usage docs name the Autonomous modes and keep hard-review approval human-only", () => {
     const remote = findDocPage("usage/remote")
     const control = remote?.sections.flatMap((section) => section.blocks).find((block) => block.kind === "table" && block.head[0] === "Autonomy control")
-    expect(control?.kind === "table" ? control.rows.map((row) => row[0]) : undefined).toEqual(["All flags off", "Auto-permission", "Auto-guardrail", "YOLO", "Auto-answer", "Goal"])
-    for (const slug of ["usage/tui", "usage/cli", "usage/remote", "configuration/yolo", "configuration/guardrails", "configuration/tools"]) {
+    expect(control?.kind === "table" ? control.rows.map((row) => row[0]) : undefined).toEqual(["All Manual", "Auto", "YOLO", "Goal"])
+    for (const slug of ["usage/tui", "usage/cli", "usage/remote", "configuration/autonomous", "configuration/guardrails", "configuration/tools"]) {
       const text = JSON.stringify(findDocPage(slug)?.sections)
       expect(text).not.toContain("unless /sleep delegates")
       expect(text).not.toContain("when /sleep is on")
@@ -357,6 +370,6 @@ describe("slugifyHeading", () => {
   test("produces stable anchors from headings", () => {
     expect(slugifyHeading("What it controls")).toBe("what-it-controls")
     expect(slugifyHeading("Permissions, guardrails & approval")).toBe("permissions-guardrails-approval")
-    expect(slugifyHeading("  YOLO mode  ")).toBe("yolo-mode")
+    expect(slugifyHeading("  Autonomous mode  ")).toBe("autonomous-mode")
   })
 })

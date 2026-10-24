@@ -78,9 +78,9 @@ describe("consent pages", () => {
     expect(html).toContain("30-day grant")
   })
 
-  test("authority covers every Session, below-home creation, Always approvals, YOLO, providers, shells, and usage", () => {
+  test("authority covers every Session, below-home creation, Always approvals, autonomy modes, providers, shells, and usage", () => {
     const text = authorityLines.join("\n")
-    for (const phrase of ["every existing and future Session", "strictly below the home directory", "approve always", "autonomy (YOLO)", "provider connections", "background shells", "usage, cost"])
+    for (const phrase of ["every existing and future Session", "strictly below the home directory", "approve always", "autonomy modes (Manual, YOLO, or Auto for permissions, guardrails, and answers)", "provider connections", "background shells", "usage, cost"])
       expect(text).toContain(phrase)
   })
 

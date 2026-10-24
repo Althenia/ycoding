@@ -2,6 +2,7 @@ export * as SessionAutonomy from "./autonomy"
 
 import { and, eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema, SchemaGetter } from "effect"
+import { Category, DecisionMode, Decisions } from "@ycoding-ai/schema/session-autonomy"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { Hash } from "../util/hash"
@@ -29,15 +30,13 @@ export const Goal = Schema.Struct({
 })
 export type Goal = typeof Goal.Type
 
-export interface Effective {
-  readonly yolo: boolean
-  readonly permissionsAuto: boolean
-  readonly permissionModelReviews: boolean
+export interface EffectiveDecisions extends Decisions {
+  readonly inherited: { readonly [K in Category]?: SessionSchema.ID }
+}
+
+export interface Effective extends EffectiveDecisions {
   readonly asleep: boolean
   readonly guardrailsEnabled: boolean
-  readonly ordinaryReviewsAuto: boolean
-  readonly modelReviews: boolean
-  readonly hardModelReviews: boolean
 }
 
 export const Sleep = Schema.Struct({}).pipe(
@@ -50,41 +49,40 @@ export type Sleep = typeof Sleep.Type
 
 export const State = Schema.Struct({
   mode: Mode,
-  yolo: Schema.Boolean,
-  autoPermission: Schema.Boolean.pipe(Schema.optional),
-  autoGuardrail: Schema.Boolean.pipe(Schema.optional),
+  ...Decisions.fields,
   goal: Goal.pipe(Schema.optional),
   sleep: Sleep.pipe(Schema.optional),
-  autoAnswer: Schema.Boolean.pipe(Schema.optional),
 })
 export type State = typeof State.Type
 
-export const defaultState: State = { mode: "normal", yolo: false }
+export const defaultState: State = { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" }
 const decode = Schema.decodeUnknownOption(State)
+const isDecisionMode = Schema.is(DecisionMode)
+const removedKeys = ["yolo", "autoPermission", "autoGuardrail", "autoAnswer"]
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("SessionAutonomy.NotFound", {
   sessionID: SessionSchema.ID,
 }) {}
 
-function requireYolo(input: unknown): boolean {
-  if (typeof input !== "boolean") throw new TypeError(`Invalid yolo value: ${String(input)}`)
+function requireDecisionMode(category: Category, input: unknown): DecisionMode {
+  if (!isDecisionMode(input)) throw new TypeError(`Invalid ${category} decision mode: ${String(input)}`)
   return input
 }
 
-export function canYolo(state: State): boolean {
-  return state.yolo
+export function decisions(state: State): Decisions {
+  return { permissions: state.permissions, guardrails: state.guardrails, answers: state.answers }
 }
 
-export function canAutoAnswer(state: State): boolean {
-  return state.autoAnswer === true
-}
-
-export function canAutoPermission(state: State): boolean {
-  return state.autoPermission === true
-}
-
-export function canAutoGuardrail(state: State): boolean {
-  return state.autoGuardrail === true
+export function resolveDecisions(chain: ReadonlyArray<State>, root: State): Decisions {
+  return {
+    permissions: chain.some((state) => state.permissions === "auto")
+      ? "auto"
+      : chain.some((state) => state.permissions === "yolo")
+        ? "yolo"
+        : "manual",
+    guardrails: root.guardrails,
+    answers: chain[0]?.answers === "auto" ? "auto" : chain.some((state) => state.answers === "yolo") ? "yolo" : "manual",
+  }
 }
 
 export function isAsleep(state: State): boolean {
@@ -97,16 +95,9 @@ export interface Interface {
     sessionID: SessionSchema.ID,
     options?: { readonly inherited: true },
   ) => Effect.Effect<{ readonly state: State; readonly sequence: number; readonly digest: string }, NotFoundError>
-  readonly canYolo: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
-  readonly canAutoAnswer: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
-  readonly canAutoPermission: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
-  readonly canAutoGuardrail: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
+  readonly effectiveDecisions: (sessionID: SessionSchema.ID) => Effect.Effect<EffectiveDecisions, NotFoundError>
+  readonly decisionMode: (sessionID: SessionSchema.ID, category: Category) => Effect.Effect<DecisionMode, NotFoundError>
   readonly isAsleep: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
-  readonly setMode: (input: {
-    sessionID: SessionSchema.ID
-    mode: "normal" | "yolo"
-  }) => Effect.Effect<State, NotFoundError>
-  readonly setYolo: (input: { sessionID: SessionSchema.ID; yolo: boolean }) => Effect.Effect<State, NotFoundError>
   readonly setGoal: (input: {
     sessionID: SessionSchema.ID
     text: string
@@ -116,7 +107,6 @@ export interface Interface {
   readonly setGoalIfCurrent: (input: {
     sessionID: SessionSchema.ID
     expectedSequence: number
-    yolo?: boolean
     text: string
     rawText?: string
     maxNoProgress?: number
@@ -124,19 +114,17 @@ export interface Interface {
   readonly resumeGoalIfCurrent: (input: {
     sessionID: SessionSchema.ID
     expectedSequence: number
-    yolo?: boolean
   }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
   readonly clearGoal: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly set: (input: {
     sessionID: SessionSchema.ID
-    yolo?: boolean
+    permissions?: DecisionMode
+    guardrails?: DecisionMode
+    answers?: DecisionMode
     goal?: string | null | true
     rawText?: string
     maxNoProgress?: number
     sleep?: boolean
-    autoAnswer?: boolean
-    autoPermission?: boolean
-    autoGuardrail?: boolean
   }) => Effect.Effect<State, NotFoundError>
   readonly stop: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly report: (input: { sessionID: SessionSchema.ID }) => Effect.Effect<State, NotFoundError>
@@ -155,6 +143,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionAutonomy") {}
 
 export const read = (value: unknown): State => {
+  if (typeof value === "object" && value !== null && removedKeys.some((key) => key in value)) return defaultState
   const parsed = decode(value)
   return parsed._tag === "Some" ? parsed.value : defaultState
 }
@@ -264,99 +253,81 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   const apply = (sessionID: SessionSchema.ID, transition: (state: State) => State | undefined) =>
     mutate(sessionID, transition).pipe(Effect.map((result) => result.state))
 
-  const walkEffective = (
+  const managedChain = (
     sessionID: SessionSchema.ID,
-  ): Effect.Effect<{ yolo: boolean; autoPermission: boolean; autoGuardrail: boolean }, NotFoundError> =>
+  ): Effect.Effect<ReadonlyArray<{ readonly id: SessionSchema.ID; readonly state: State }>, NotFoundError> =>
     load(sessionID).pipe(
-      Effect.flatMap((state) => {
-        const current = {
-          yolo: canYolo(state),
-          autoPermission: canAutoPermission(state),
-          autoGuardrail: canAutoGuardrail(state),
-        }
-        return input.db
+      Effect.flatMap((state) =>
+        input.db
           .select({ parentID: SessionTaskTable.parent_id })
           .from(SessionTaskTable)
           .where(eq(SessionTaskTable.session_id, sessionID))
           .get()
           .pipe(
             Effect.orDie,
-            Effect.flatMap((task) => {
-              if (!task) return Effect.succeed(current)
-              return walkEffective(task.parentID).pipe(
-                Effect.map((parent) => ({
-                  yolo: current.yolo || parent.yolo,
-                  autoPermission: current.autoPermission || parent.autoPermission,
-                  autoGuardrail: current.autoGuardrail || parent.autoGuardrail,
-                })),
-                Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(current)),
-              )
-            }),
-          )
-      }),
+            Effect.flatMap((task) =>
+              task
+                ? managedChain(task.parentID).pipe(
+                    Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed([])),
+                  )
+                : Effect.succeed([]),
+            ),
+            Effect.map((ancestors) => [{ id: sessionID, state }, ...ancestors]),
+          ),
+      ),
     )
 
-  const canYoloEffect: Interface["canYolo"] = (sessionID) => walkEffective(sessionID).pipe(Effect.map((v) => v.yolo))
-
-  const canAutoAnswerEffect: Interface["canAutoAnswer"] = (sessionID) => load(sessionID).pipe(Effect.map(canAutoAnswer))
-
-  const canAutoPermissionEffect: Interface["canAutoPermission"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.autoPermission))
-
-  const canAutoGuardrailEffect: Interface["canAutoGuardrail"] = (sessionID) =>
-    walkEffective(sessionID).pipe(Effect.map((v) => v.autoGuardrail))
-
-  const isAsleepEffect: Interface["isAsleep"] = (sessionID) => familyState(sessionID).pipe(Effect.map(isAsleep))
-
-  const setYolo: Interface["setYolo"] = ({ sessionID, yolo }) =>
-    Effect.suspend(() => {
-      const value = requireYolo(yolo)
-      return apply(sessionID, (state) => {
-        if (state.yolo === value) return undefined
-        return { ...state, mode: "normal", yolo: value }
-      })
+  const effectiveDecisions: Interface["effectiveDecisions"] = (sessionID) =>
+    Effect.gen(function* () {
+      const chain = yield* managedChain(sessionID)
+      const local = chain[0]!.state
+      const ancestors = chain.slice(1)
+      const rootID = yield* familyID(sessionID)
+      const resolved = resolveDecisions(
+        chain.map((item) => item.state),
+        rootID === sessionID ? local : yield* load(rootID),
+      )
+      const permissions = resolved.permissions
+      const answers = resolved.answers
+      const guardrails = resolved.guardrails
+      const permissionSource =
+        permissions === local.permissions ? undefined : ancestors.find((item) => item.state.permissions === permissions)?.id
+      const answerSource = answers === local.answers ? undefined : ancestors.find((item) => item.state.answers === answers)?.id
+      return {
+        permissions,
+        guardrails,
+        answers,
+        inherited: {
+          ...(permissionSource === undefined ? {} : { permissions: permissionSource }),
+          ...(rootID === sessionID ? {} : { guardrails: rootID }),
+          ...(answerSource === undefined ? {} : { answers: answerSource }),
+        },
+      }
     })
 
-  const setMode: Interface["setMode"] = ({ sessionID, mode }) => setYolo({ sessionID, yolo: mode === "yolo" })
+  const decisionMode: Interface["decisionMode"] = (sessionID, category) =>
+    effectiveDecisions(sessionID).pipe(Effect.map((effective) => effective[category]))
+
+  const isAsleepEffect: Interface["isAsleep"] = (sessionID) => familyState(sessionID).pipe(Effect.map(isAsleep))
 
   const goalState = (state: State, text: string, rawText: string | undefined, maxNoProgress: number): State => ({
     ...state,
     mode: "normal",
-    yolo: state.yolo,
     goal: makeGoal({ text, rawText, maxNoProgress }),
   })
 
   const setGoal: Interface["setGoal"] = ({ sessionID, text, rawText, maxNoProgress = 3 }) =>
     apply(sessionID, (state) => goalState(state, text, rawText, maxNoProgress))
 
-  const setGoalIfCurrent: Interface["setGoalIfCurrent"] = ({
-    sessionID,
-    expectedSequence,
-    yolo,
-    text,
-    rawText,
-    maxNoProgress = 3,
-  }) =>
-    mutate(
-      sessionID,
-      (state) => ({
-        ...goalState(state, text, rawText, maxNoProgress),
-        yolo: yolo === undefined ? state.yolo : requireYolo(yolo),
-      }),
-      expectedSequence,
-    )
+  const setGoalIfCurrent: Interface["setGoalIfCurrent"] = ({ sessionID, expectedSequence, text, rawText, maxNoProgress = 3 }) =>
+    mutate(sessionID, (state) => goalState(state, text, rawText, maxNoProgress), expectedSequence)
 
-  const resumeGoalIfCurrent: Interface["resumeGoalIfCurrent"] = ({ sessionID, expectedSequence, yolo }) =>
+  const resumeGoalIfCurrent: Interface["resumeGoalIfCurrent"] = ({ sessionID, expectedSequence }) =>
     mutate(
       sessionID,
       (state) => {
         if (!state.goal) return undefined
-        return {
-          ...state,
-          mode: "normal",
-          yolo: yolo === undefined ? state.yolo : requireYolo(yolo),
-          goal: { ...state.goal, status: "active" as const },
-        }
+        return { ...state, mode: "normal", goal: { ...state.goal, status: "active" as const } }
       },
       expectedSequence,
     )
@@ -365,27 +336,14 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     apply(sessionID, (state) => {
       // Persist stop intent to fence calculations even before the first goal exists.
       if (!state.goal || state.goal.status === "stopped") return state
-      return {
-        ...state,
-        mode: "normal",
-        yolo: state.yolo,
-        goal: { ...state.goal, status: "stopped" as const },
-      }
+      return { ...state, mode: "normal", goal: { ...state.goal, status: "stopped" as const } }
     })
 
-  const set: Interface["set"] = ({
-    sessionID,
-    yolo,
-    goal,
-    rawText,
-    maxNoProgress,
-    sleep,
-    autoAnswer,
-    autoPermission,
-    autoGuardrail,
-  }) =>
+  const set: Interface["set"] = ({ sessionID, goal, rawText, maxNoProgress, sleep, ...requested }) =>
     Effect.suspend(() => {
-      if (yolo !== undefined) requireYolo(yolo)
+      const permissions = requested.permissions === undefined ? undefined : requireDecisionMode("permissions", requested.permissions)
+      const guardrails = requested.guardrails === undefined ? undefined : requireDecisionMode("guardrails", requested.guardrails)
+      const answers = requested.answers === undefined ? undefined : requireDecisionMode("answers", requested.answers)
       return apply(sessionID, (state) => {
         let next: State = { ...state, mode: "normal" }
         let changed = false
@@ -399,23 +357,18 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
             changed = true
           }
         }
-        if (yolo !== undefined) {
-          const level = requireYolo(yolo)
-          if (next.yolo !== level) {
-            next = { ...next, yolo: level }
-            changed = true
-          }
+        const decided: State = {
+          ...next,
+          ...(permissions === undefined ? {} : { permissions }),
+          ...(guardrails === undefined ? {} : { guardrails }),
+          ...(answers === undefined ? {} : { answers }),
         }
-        if (autoAnswer !== undefined && next.autoAnswer !== autoAnswer) {
-          next = { ...next, autoAnswer }
-          changed = true
-        }
-        if (autoPermission !== undefined && next.autoPermission !== autoPermission) {
-          next = { ...next, autoPermission }
-          changed = true
-        }
-        if (autoGuardrail !== undefined && next.autoGuardrail !== autoGuardrail) {
-          next = { ...next, autoGuardrail }
+        if (
+          decided.permissions !== next.permissions ||
+          decided.guardrails !== next.guardrails ||
+          decided.answers !== next.answers
+        ) {
+          next = decided
           changed = true
         }
         if (goal !== undefined) {
@@ -434,7 +387,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
             const trimmed = goal.trim()
             if (!trimmed) return next
             const isSameActive = next.goal?.status === "active" && (next.goal.rawText ?? next.goal.text) === trimmed
-            if (isSameActive && yolo === undefined) return changed ? next : undefined
+            if (isSameActive) return changed ? next : undefined
             next = {
               ...next,
               goal: makeGoal({ text: trimmed, rawText, maxNoProgress }),
@@ -449,13 +402,9 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   return {
     get: familyState,
     snapshot,
-    canYolo: canYoloEffect,
-    canAutoAnswer: canAutoAnswerEffect,
-    canAutoPermission: canAutoPermissionEffect,
-    canAutoGuardrail: canAutoGuardrailEffect,
+    effectiveDecisions,
+    decisionMode,
     isAsleep: isAsleepEffect,
-    setMode,
-    setYolo,
     setGoal,
     setGoalIfCurrent,
     resumeGoalIfCurrent,
@@ -468,16 +417,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         if (!goal || goal.status !== "active") return undefined
         const noProgress = goal.noProgress + 1
         const status: GoalStatus = noProgress >= goal.maxNoProgress ? "exhausted" : "active"
-        return {
-          ...state,
-          mode: "normal",
-          yolo: state.yolo,
-          goal: {
-            ...goal,
-            status,
-            noProgress,
-          },
-        }
+        return { ...state, mode: "normal", goal: { ...goal, status, noProgress } }
       }),
     complete: (sessionID) =>
       apply(sessionID, (state) => {

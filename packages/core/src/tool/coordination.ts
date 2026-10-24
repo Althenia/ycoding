@@ -53,7 +53,7 @@ export const description = [
   "The Master and its supervising subagents only coordinate: delegate all implementation, reading, editing, checks, and commits to members.",
   "list: members with state (idle, running, waiting, failed), pending requests with request IDs and fingerprints, and last activity.",
   "send: admit a message to a member (steer or queue, default queue); returns immediately. An optional messageID makes retries idempotent; an optional model overrides the model for the turn the message starts.",
-  "answer: settle a member's pending question, permission, or review under the delegated-decision policy. decision: approve (default) or decline; decline rejects a routine permission or review with your rationale as the member's feedback. Hard, human-only, and uncertain cases are refused with a reason.",
+  "answer: settle a member's pending question, permission, or review under the delegated-decision policy. decision: approve (default) or decline; decline rejects a routine permission or review with your rationale as the member's feedback. Hard, human-only, Manual-mode, and uncertain cases are refused with a reason.",
   "escalate: pass a pending request you cannot settle up the chain with a reason. From a Master subagent it goes to the Master; from the Master it goes to the human, with every reason attached to the member's pending prompt. A request already deferred to the human's review box returns deferred-to-review-box with its item ID. Escalate whatever answer refuses.",
   "interrupt: stop a member's running turn.",
   "Member events (turn settled, question, form, permission ask, guardrail review) arrive automatically as Project notifications; do not poll. Message text never settles a control.",

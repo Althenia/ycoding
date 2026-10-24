@@ -1317,7 +1317,7 @@ function ConversationView(props: {
     >
       <div class="pane conversation-pane">
         <Show
-          when={messages().length > 0 || (view()?.guardrailDecisions?.length ?? 0) > 0}
+          when={messages().length > 0}
           fallback={
             <div class="empty">
               <p class="empty__title">No messages yet</p>

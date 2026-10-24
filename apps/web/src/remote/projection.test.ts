@@ -28,8 +28,6 @@ import {
   readAutonomy,
   readAutonomyState,
   autonomyModeParts,
-  autonomyDeciders,
-  yoloLabel,
   readReviewItems,
   readGuardrailRequests,
   readPermissionRequests,
@@ -181,10 +179,10 @@ test("extracts only durable live subagent delegation and terminal notification i
 
 test("recognizes only the admitted synthetic goal steer as the durable fact that a goal is active", () => {
   const admitted = (input: unknown) => ({ type: "session.input.admitted", data: { sessionID: "ses_a", inputID: "msg_1", input } })
-  const steer = { type: "synthetic", data: { text: "Continue", description: "Goal · steer", metadata: { autonomy: { yolo: false, goal: true, iteration: 0 } } }, delivery: "steer" }
+  const steer = { type: "synthetic", data: { text: "Continue", description: "Goal · steer", metadata: { autonomy: { goal: true, iteration: 0 } } }, delivery: "steer" }
   expect(isGoalSteerAdmission(admitted(steer))).toBe(true)
   expect(isGoalSteerAdmission(admitted({ type: "user", data: { text: "Continue", metadata: { autonomy: { goal: true } } }, delivery: "steer" }))).toBe(false)
-  expect(isGoalSteerAdmission(admitted({ ...steer, data: { ...steer.data, metadata: { autonomy: { yolo: true, goal: false } } } }))).toBe(false)
+  expect(isGoalSteerAdmission(admitted({ ...steer, data: { ...steer.data, metadata: { autonomy: { goal: false } } } }))).toBe(false)
   expect(isGoalSteerAdmission(admitted({ ...steer, data: { ...steer.data, metadata: { source: "subagent_notification" } } }))).toBe(false)
   expect(isGoalSteerAdmission(admitted("not a record"))).toBe(false)
   expect(isGoalSteerAdmission({ type: "session.synthetic", data: { metadata: { autonomy: { goal: true } } } })).toBe(false)
@@ -377,11 +375,14 @@ test("keeps short row durations precise without changing live one-decimal elapse
   expect(formatPartDuration(134_000)).toBe("2m14s")
 })
 
+const manualAll = { permissions: "manual", guardrails: "manual", answers: "manual" } as const
+const yoloAll = { permissions: "yolo", guardrails: "yolo", answers: "yolo" } as const
+
 test("derives operational status and elapsed from active work and retry state", () => {
   const base = { ...createSessionView("ses_a"), status: "running" as const, executionStarted: 1_000 }
   expect(sessionStatusLabel(base, 47_700)).toBe("cooking · 46.7s")
-  expect(sessionStatusLabel({ ...base, autonomy: { mode: "normal", yolo: true } }, 47_700)).toBe("YOLO on · cooking · 46.7s")
-  expect(sessionStatusLabel({ ...base, status: "idle", autonomy: { mode: "normal", yolo: false, sleep: {} } }, 47_700)).toBe("YOLO off · asleep · ready")
+  expect(sessionStatusLabel({ ...base, autonomy: { mode: "normal", ...yoloAll } }, 47_700)).toBe("Autonomous YOLO · cooking · 46.7s")
+  expect(sessionStatusLabel({ ...base, status: "idle", autonomy: { mode: "normal", ...manualAll, sleep: {} } }, 47_700)).toBe("Autonomous Manual · asleep · ready")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "reasoning", ordinal: 0, text: "…", started: 3_000 }] }] }, 49_700)).toBe("thinking · 48.7s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "a", created: 2_000, parts: [{ kind: "tool", callID: "c", name: "shell", status: "running", content: [], started: 3_000 }] }] }, 135_000)).toBe("tool running · 2m14s")
   expect(sessionStatusLabel({ ...base, messages: [{ kind: "assistant", id: "msg_retry", created: 2_000, parts: [], retry: { attempt: 2, at: 6_000, code: "rate_limit" } }] }, 4_000)).toBe("1 failed · retry 2 · in 2s")
@@ -394,10 +395,10 @@ test("derives operational status and elapsed from active work and retry state", 
 })
 
 test("summarizes runtime observations without exposing raw JSON inline", () => {
-  const session = "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"yolo\":true,\"goal\":{\"text\":\"Ship\",\"status\":\"active\",\"iteration\":1,\"noProgress\":0,\"maxNoProgress\":3}},\"todos\":[{}]}"
-  expect(noticeSummary("session-state", session)).toBe("Session state · YOLO on · goal · 1 task")
-  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"sleep\":{},\"yolo\":false},\"todos\":[]}")).toBe("Session state · YOLO off · asleep · 0 tasks")
-  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"yolo\":2},\"todos\":[]}")).toBe("Session state · autonomy unreported · 0 tasks")
+  const session = "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"permissions\":\"yolo\",\"guardrails\":\"yolo\",\"answers\":\"yolo\",\"goal\":{\"text\":\"Ship\",\"status\":\"active\",\"iteration\":1,\"noProgress\":0,\"maxNoProgress\":3}},\"todos\":[{}]}"
+  expect(noticeSummary("session-state", session)).toBe("Session state · Autonomous YOLO · goal · 1 task")
+  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"sleep\":{},\"permissions\":\"manual\",\"guardrails\":\"manual\",\"answers\":\"manual\"},\"todos\":[]}")).toBe("Session state · Autonomous Manual · asleep · 0 tasks")
+  expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"autonomy\":{\"mode\":\"normal\",\"yolo\":false},\"todos\":[]}")).toBe("Session state · autonomy unreported · 0 tasks")
   expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{\"todos\":[]}")).toBe("Session state · autonomy unreported · 0 tasks")
   expect(noticeSummary("team-view", "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{\"children\":[{\"state\":\"running\"},{\"state\":\"running\"}]}" )).toBe("TeamView · 2 running")
   expect(noticeSummary("session-state", "Authoritative current Session state (JSON):\n{" )).toBe("Session state · unavailable")
@@ -983,94 +984,50 @@ describe("snapshot readers", () => {
     expect(parts[3]).toMatchObject({ kind: "tool", callID: "call_2", status: "failed", error: "denied" })
   })
 
-  const effective = { yolo: true, permissionsAuto: true, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false }
+  const effective = { permissions: "auto", guardrails: "yolo", answers: "manual", inherited: { guardrails: "ses_root" }, asleep: false, guardrailsEnabled: true } as const
 
   test("reads autonomy only from the required data and effective response", () => {
-    expect(readAutonomy({ data: { mode: "normal", yolo: true, autoPermission: true, goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 }, effective } }))
-      .toEqual({ mode: "normal", yolo: true, autoPermission: true, autoGuardrail: false, autoAnswer: false, goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 }, effective })
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, autoAnswer: true, effective: { ...effective, yolo: false, permissionsAuto: false } } }))
-      .toEqual({ mode: "normal", yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: true, effective: { ...effective, yolo: false, permissionsAuto: false } })
-    for (const yolo of [0, 1, 2, 3]) {
-      expect(readAutonomy({ data: { mode: "normal", yolo, effective } })).toBeUndefined()
-      expect(readAutonomy({ data: { mode: "normal", yolo: false, effective: { ...effective, yolo } } })).toBeUndefined()
+    const state = { mode: "normal", permissions: "auto", guardrails: "yolo", answers: "manual", goal: { text: "Ship it", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 5 } } as const
+    expect(readAutonomy({ data: { ...state, effective } })).toEqual({ ...state, effective })
+    expect(readAutonomy({ data: { ...state, goal: undefined, effective: { ...effective, inherited: {} } } }))
+      .toEqual({ mode: "normal", permissions: "auto", guardrails: "yolo", answers: "manual", effective: { ...effective, inherited: {} } })
+    for (const field of ["permissions", "guardrails", "answers"] as const) {
+      expect(readAutonomy({ data: { ...state, [field]: undefined, effective } })).toBeUndefined()
+      for (const bad of [true, false, 1, "on", "Auto", "off", null]) {
+        expect(readAutonomy({ data: { ...state, [field]: bad }, effective })).toBeUndefined()
+        expect(readAutonomy({ data: { ...state, effective: { ...effective, [field]: bad } } })).toBeUndefined()
+      }
     }
-    expect(readAutonomy({ data: { mode: "yolo", yolo: true, effective } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "goal", yolo: true, effective } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: true } })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "yolo", permissions: "auto", guardrails: "auto", answers: "auto", effective } })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "goal", permissions: "auto", guardrails: "auto", answers: "auto", effective } })).toBeUndefined()
+    expect(readAutonomy({ data: state })).toBeUndefined()
     expect(readAutonomy({ data: {} })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, effective: { ...effective, modelReviews: "yes" } } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, autoAnswer: "on", effective: { ...effective, yolo: false } } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, autoPermission: "on", effective: { ...effective, yolo: false } } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, autoGuardrail: 1, effective: { ...effective, yolo: false } } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false }, effective })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, effective: { yolo: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })).toBeUndefined()
-    expect(readAutonomy({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } })).toBeUndefined()
+    expect(readAutonomy({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } })).toBeUndefined()
+    expect(readAutonomy({ data: { ...state, effective: { ...effective, inherited: { permissions: 1 } } } })).toBeUndefined()
+    expect(readAutonomy({ data: { ...state, effective: { ...effective, inherited: undefined } } })).toBeUndefined()
+    expect(readAutonomy({ data: { ...state, effective: { ...effective, asleep: "no" } } })).toBeUndefined()
+    expect(readAutonomy({ data: { ...state, effective: { ...effective, guardrailsEnabled: 1 } } })).toBeUndefined()
+    expect(readAutonomy({ data: { ...state }, effective })).toBeUndefined()
     expect(readAutonomy(null)).toBeUndefined()
   })
 
   test("reads sleep presence without retaining removed autonomy fields", () => {
-    expect(readAutonomyState({ data: { mode: "normal", yolo: true, sleep: {} } })).toEqual({ mode: "normal", yolo: true, autoPermission: false, autoGuardrail: false, autoAnswer: false, sleep: {} })
-    expect(readAutonomyState({ data: { mode: "normal", yolo: true, guardrailDecision: true, sleep: { priorGuardrailDecision: true } } }))
-      .toEqual({ mode: "normal", yolo: true, autoPermission: false, autoGuardrail: false, autoAnswer: false, sleep: {} })
-    expect(readAutonomyState({ data: { mode: "normal", yolo: false, guardrailDecision: true } })).toEqual({ mode: "normal", yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
-    for (const sleep of [null, false, "asleep", []]) expect(readAutonomyState({ data: { mode: "normal", yolo: false, sleep } })).toEqual({ mode: "normal", yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
-    expect(readAutonomyState({ data: { mode: "normal", yolo: 1 } })).toBeUndefined()
+    const modes = { permissions: "yolo", guardrails: "auto", answers: "manual" } as const
+    expect(readAutonomyState({ data: { mode: "normal", ...modes, sleep: {} } })).toEqual({ mode: "normal", ...modes, sleep: {} })
+    expect(readAutonomyState({ data: { mode: "normal", ...modes, guardrailDecision: true, sleep: { priorGuardrailDecision: true } } })).toEqual({ mode: "normal", ...modes, sleep: {} })
+    expect(readAutonomyState({ data: { mode: "normal", ...modes, guardrailDecision: true } })).toEqual({ mode: "normal", ...modes })
+    for (const sleep of [null, false, "asleep", []]) expect(readAutonomyState({ data: { mode: "normal", ...modes, sleep } })).toEqual({ mode: "normal", ...modes })
+    for (const old of [{ yolo: true }, { yolo: 1 }, { yolo: false, autoPermission: true, autoGuardrail: true, autoAnswer: true }, { permissions: "auto" }, {}])
+      expect(readAutonomyState({ data: { mode: "normal", ...old } })).toBeUndefined()
   })
 
-  test("names enabled autonomy modes in TUI heading order", () => {
+  test("names the effective modes before goal and sleep", () => {
     const goal = { text: "Ship", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 }
-    expect(yoloLabel(false)).toBe("YOLO off")
-    expect(yoloLabel(true)).toBe("YOLO on")
-    expect(autonomyModeParts({ yolo: false })).toEqual(["YOLO off"])
-    expect(autonomyModeParts({ yolo: true, goal, sleep: {} })).toEqual(["YOLO on", "goal", "asleep"])
-    expect(autonomyModeParts({ yolo: false, sleep: {}, autoPermission: true, autoGuardrail: true, autoAnswer: true })).toEqual(["YOLO off", "asleep", "auto-permission", "auto-guardrail", "auto-answer"])
-    expect(autonomyModeParts({ yolo: false, effective: { ...effective, yolo: true, asleep: true } })).toEqual(["YOLO on", "asleep"])
-    expect(autonomyModeParts({ yolo: true, goal: { ...goal, status: "completed" } })).toEqual(["YOLO on"])
-  })
-
-  test("derives actual deciders from effective values only, never from a goal", () => {
-    const goal = { text: "Ship", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 }
-    const views = [
-      { yolo: false, goal, autoAnswer: true, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
-      { yolo: false, autoPermission: true, effective: { yolo: true, permissionsAuto: true, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: false } },
-      { yolo: true, autoPermission: true, autoGuardrail: true, effective: { yolo: true, permissionsAuto: true, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: true, hardModelReviews: true } },
-      { yolo: true, effective: { yolo: true, permissionsAuto: false, permissionModelReviews: false, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
-      { yolo: true, autoAnswer: true, effective: { yolo: true, permissionsAuto: true, permissionModelReviews: false, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: true } },
-      { yolo: true, effective: { yolo: true, permissionsAuto: true, permissionModelReviews: false, asleep: false, guardrailsEnabled: false, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
-      { yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: true, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: true } },
-      { yolo: true, autoPermission: true, effective: undefined },
-    ] as const
-    expect(autonomyDeciders(views[0]))
-      .toEqual([{ label: "YOLO", value: "Off" }, { label: "Auto-permission", value: "Off" }, { label: "Auto-guardrail", value: "Off" }, { label: "Tools", value: "Ask you" }, { label: "Routine reviews", value: "Ask you" }, { label: "Hard reviews", value: "Ask you" }, { label: "Auto-answer", value: "On · this Session" }])
-    expect(autonomyDeciders(views[1]).map((row) => row.value))
-      .toEqual(["On · evaluates", "On", "Off", "Auto-approved", "YOLO evaluates", "Ask you", "Off"])
-    expect(autonomyDeciders(views[2]).map((row) => row.value))
-      .toEqual(["On · evaluates", "On", "On", "Auto-approved", "Auto-approved", "Model assesses · you approve", "Off"])
-    expect(autonomyDeciders(views[3]).map((row) => row.value))
-      .toEqual(["On · evaluates", "Off", "Off", "YOLO evaluates", "YOLO evaluates", "Review box", "Off"])
-    expect(autonomyDeciders(views[4]).map((row) => row.value))
-      .toEqual(["On · evaluates", "Off", "Off", "Auto-approved", "YOLO evaluates", "Model assesses · Review box approves", "On · this Session"])
-    expect(autonomyDeciders(views[5]).map((row) => row.value))
-      .toEqual(["On · evaluates", "Off", "Off", "Auto-approved", "Off", "Ask you", "Off"])
-    expect(autonomyDeciders(views[6]).map((row) => row.value))
-      .toEqual(["Off", "Off", "Off", "Model assesses, then you", "Model assesses, then you", "Model assesses · you approve", "Off"])
-    expect(autonomyDeciders(undefined).map((row) => row.value)).toEqual(["unreported", "unreported", "unreported", "unreported", "unreported", "unreported", "unreported"])
-    expect(autonomyDeciders(views[7]).map((row) => row.value)).toEqual(["On · evaluates", "On", "Off", "unreported", "unreported", "unreported", "Off"])
-  })
-
-  test("shows sleeping ask-permission tools in the review box when nothing settles them", () => {
-    expect(autonomyDeciders({ effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: true, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } }).map((row) => row.value))
-      .toEqual(["Off", "Off", "Off", "Review box", "Review box", "Review box", "Off"])
-  })
-
-  test("hard review approval always stays human and disabled guardrails never infer model reviews", () => {
-    for (const asleep of [false, true]) for (const hardModelReviews of [false, true]) for (const yolo of [false, true]) {
-      const rows = autonomyDeciders({ effective: { yolo, permissionsAuto: false, permissionModelReviews: false, asleep, guardrailsEnabled: false, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews } })
-      expect(rows[4]?.value).toBe("Off")
-      expect(rows[5]?.value).toBe(hardModelReviews ? asleep ? "Model assesses · Review box approves" : "Model assesses · you approve" : asleep ? "Review box" : "Ask you")
-      expect(rows[5]?.value).not.toBe("Auto-approved")
-    }
+    expect(autonomyModeParts(manualAll)).toEqual(["Autonomous Manual"])
+    expect(autonomyModeParts({ ...yoloAll, goal, sleep: {} })).toEqual(["Autonomous YOLO", "goal", "asleep"])
+    expect(autonomyModeParts({ permissions: "auto", guardrails: "yolo", answers: "manual", sleep: {} })).toEqual(["Permissions Auto", "Guardrails YOLO", "Answers Manual", "asleep"])
+    expect(autonomyModeParts({ ...manualAll, effective: { ...effective, permissions: "auto", guardrails: "auto", answers: "auto", asleep: true } })).toEqual(["Autonomous Auto", "asleep"])
+    expect(autonomyModeParts({ ...yoloAll, goal: { ...goal, status: "completed" } })).toEqual(["Autonomous YOLO"])
   })
 
   test("reads each review item kind from the frozen contract and drops malformed items", () => {
@@ -1138,7 +1095,7 @@ describe("snapshot readers", () => {
     const review = { status: "ready" as const, items: [item("rvw_a", "ses_child"), item("rvw_b", "ses_other")] }
     expect(reviewItemsInScope({ id: "ses_root", review }).map((entry) => entry.itemID)).toEqual(["rvw_a", "rvw_b"])
     expect(reviewItemsInScope({ id: "ses_child", review }).map((entry) => entry.itemID)).toEqual(["rvw_a"])
-    expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, autonomy: { mode: "normal", yolo: false, sleep: {} } }, 1)).toBe("YOLO off · asleep · waiting for your review")
+    expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, autonomy: { mode: "normal", ...manualAll, sleep: {} } }, 1)).toBe("Autonomous Manual · asleep · waiting for your review")
     expect(sessionStatusLabel({ ...createSessionView("ses_root"), review }, 1, 2)).toBe("waiting for your review")
     expect(sessionStatusLabel({ ...createSessionView("ses_root"), review, status: "running", executionStarted: 0 }, 1_000)).toBe("cooking · 1.0s")
     expect(sessionStatusLabel({ ...createSessionView("ses_none"), review }, 1)).toBe("ready")

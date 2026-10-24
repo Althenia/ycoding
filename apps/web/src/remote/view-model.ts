@@ -8,6 +8,7 @@
  */
 
 import type { CreateEnrollmentResponse } from "@ycoding-ai/remote"
+import { autonomySummary, autonomyTone, type AutonomyMode } from "./autonomy"
 import type { KeepAwakeState } from "./keep-awake"
 import type { RemoteRequestOutcome, RemoteTransportStatus } from "./transport"
 import { describeOutcome } from "./outcome"
@@ -167,12 +168,11 @@ export type RemoteSessionSummary = {
   readonly agent?: string
   readonly model?: string
   readonly autonomy?: "normal"
-  readonly yolo?: boolean
+  readonly permissions?: AutonomyMode
+  readonly guardrails?: AutonomyMode
+  readonly answers?: AutonomyMode
   readonly goalActive?: boolean
   readonly asleep?: boolean
-  readonly autoPermission?: boolean
-  readonly autoGuardrail?: boolean
-  readonly autoAnswer?: boolean
   readonly updatedAt?: string
 }
 
@@ -383,12 +383,13 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
   if (session.pinned) chips.push({ label: "Pinned", tone: "neutral" })
 
   if (session.autonomy !== undefined) {
-    chips.push(session.yolo === true ? { label: "YOLO on", tone: "attention" } : { label: "YOLO off", tone: "neutral" })
+    if (session.permissions !== undefined && session.guardrails !== undefined && session.answers !== undefined) {
+      const summary = autonomySummary({ permissions: session.permissions, guardrails: session.guardrails, answers: session.answers })
+      if (summary.chips.length === 0) chips.push({ label: summary.label, tone: autonomyTone({ permissions: session.permissions, guardrails: session.guardrails, answers: session.answers }) })
+      else chips.push(...summary.chips.map((chip) => ({ label: chip.label, tone: chip.mode === "yolo" ? "attention" as const : "neutral" as const })))
+    }
     if (session.goalActive === true) chips.push({ label: "goal", tone: "neutral" })
     if (session.asleep === true) chips.push({ label: "asleep", tone: "success" })
-    if (session.autoPermission === true) chips.push({ label: "auto-permission", tone: "neutral" })
-    if (session.autoGuardrail === true) chips.push({ label: "auto-guardrail", tone: "neutral" })
-    if (session.autoAnswer === true) chips.push({ label: "auto-answer", tone: "neutral" })
   }
 
   return chips

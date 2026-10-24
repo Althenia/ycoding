@@ -1,5 +1,6 @@
 import { SCHEMES, SCHEME_IDS, type SchemeID } from "../../theme/schemes"
 import { themePreferenceLabel, type ThemePreference } from "../../theme/theme"
+import { autonomyLabels, type AutonomyModes } from "../autonomy"
 import { submission } from "./composer-logic"
 import type { RemoteView } from "./shell-model"
 
@@ -11,10 +12,7 @@ export type PaletteIntent =
   | { readonly type: "compact" }
   | { readonly type: "interrupt" }
   | { readonly type: "stopGoal" }
-  | { readonly type: "yolo"; readonly enabled: boolean }
-  | { readonly type: "autoPermission"; readonly enabled: boolean }
-  | { readonly type: "autoGuardrail"; readonly enabled: boolean }
-  | { readonly type: "autoAnswer"; readonly enabled: boolean }
+  | { readonly type: "autonomous" }
   | { readonly type: "sleep"; readonly sleep: boolean }
   | { readonly type: "keepAwake" }
   | { readonly type: "skill"; readonly skill: string }
@@ -53,10 +51,7 @@ export type PaletteContext = {
     readonly id: string
     readonly running: boolean
     readonly managedChild: boolean
-    readonly yolo: boolean
-    readonly autoPermission?: boolean
-    readonly autoGuardrail?: boolean
-    readonly autoAnswer?: boolean
+    readonly autonomous?: AutonomyModes
     readonly goalActive: boolean
     readonly asleep?: boolean
   }
@@ -106,37 +101,13 @@ function sessionActions(context: PaletteContext): readonly PaletteAction[] {
     ...(session.goalActive
       ? [{ id: "session.goal.stop", title: "Stop goal", description: "End the active autonomous goal", group: "Session" as const, keywords: "goal autonomous cancel", intent: { type: "stopGoal" as const } }]
       : []),
-    {
-      id: "session.yolo",
-      title: session.yolo ? "Turn off YOLO for this Session" : "Turn on YOLO for this Session",
-      description: session.yolo ? "Requests YOLO would evaluate wait for you" : "YOLO evaluates requests it can settle; denies block and hard reviews still need your approval",
+    ...(session.autonomous === undefined ? [] : [{
+      id: "session.autonomous",
+      title: "Open Autonomous controls",
+      description: autonomyLabels(session.autonomous).join(" · "),
       group: "Session" as const,
-      keywords: "/yolo autonomy evaluation approval",
-      intent: { type: "yolo" as const, enabled: !session.yolo },
-    },
-    ...(session.autoPermission === undefined ? [] : [{
-      id: "session.autoPermission",
-      title: session.autoPermission ? "Turn off auto-permission for this Session" : "Turn on auto-permission for this Session",
-      description: session.autoPermission ? "Ask-level tool permissions wait for you" : "Auto-approve ask-level tool permissions; denies still block",
-      group: "Session" as const,
-      keywords: "/auto-permission autonomy tool permissions approval",
-      intent: { type: "autoPermission" as const, enabled: !session.autoPermission },
-    }]),
-    ...(session.autoGuardrail === undefined ? [] : [{
-      id: "session.autoGuardrail",
-      title: session.autoGuardrail ? "Turn off auto-guardrail for this Session" : "Turn on auto-guardrail for this Session",
-      description: session.autoGuardrail ? "Routine guardrail reviews wait for you" : "Auto-approve routine guardrail reviews while awake; hard reviews still need your approval",
-      group: "Session" as const,
-      keywords: "/auto-guardrail autonomy routine reviews guardrails",
-      intent: { type: "autoGuardrail" as const, enabled: !session.autoGuardrail },
-    }]),
-    ...(session.autoAnswer === undefined ? [] : [{
-      id: "session.autoAnswer",
-      title: session.autoAnswer ? "Turn off auto-answer for this Session" : "Turn on auto-answer for this Session",
-      description: session.autoAnswer ? "New questions and forms wait for you; while asleep, they go to Review" : "Answer new questions and forms for this Session; items already in Review stay yours",
-      group: "Session" as const,
-      keywords: "/auto-answer autonomy questions forms sleep",
-      intent: { type: "autoAnswer" as const, enabled: !session.autoAnswer },
+      keywords: "/autonomous autonomy manual yolo auto permissions guardrails answers approval",
+      intent: { type: "autonomous" as const },
     }]),
     ...(session.asleep === undefined ? [] : [session.asleep
       ? { id: "session.wake", title: "Wake Session family", description: "End sleep; configured automation stays in effect", group: "Session" as const, keywords: "/wake sleep autonomy", intent: { type: "sleep" as const, sleep: false } }
@@ -149,7 +120,7 @@ function commandActions(context: PaletteContext): readonly PaletteAction[] {
   const session = context.session
   if (!session || !context.connected || session.managedChild) return []
   return context.commands
-    .filter((command) => !["compact", "goal", "yolo", "auto-permission", "auto-guardrail", "auto-answer", "suggest", "prompt", "sleep", "wake", "keep-awake"].includes(command.name))
+    .filter((command) => !["compact", "goal", "autonomous", "suggest", "prompt", "sleep", "wake", "keep-awake"].includes(command.name))
     .filter((command) => submission(`/${command.name}`, [], {
       status: "ready",
       agents: [],

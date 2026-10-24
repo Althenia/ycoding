@@ -231,9 +231,9 @@ const make = (dependencies: Dependencies) => {
   )
   const steer = Effect.fn("SessionGoal.steer")(
     function* (db: Database.Interface["db"], input: Parameters<Interface["steer"]>[0]) {
-      const autoAnswer = yield* dependencies.autonomy.canAutoAnswer(input.session.id).pipe(
-        Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)),
-      )
+      const answers = yield* dependencies.autonomy
+        .decisionMode(input.session.id, "answers")
+        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed("manual" as const)))
       return yield* generate(db, {
         session: input.session,
         request: (assistant) => {
@@ -250,7 +250,7 @@ const make = (dependencies: Dependencies) => {
             `Active goal: ${input.goal.text}`,
             `Phase: ${input.phase}`,
             `Current iteration: ${input.goal.iteration}`,
-            `Automatic answering: ${autoAnswer ? "enabled" : "disabled"}`,
+            `Answers decision mode: ${answers}`,
             `Latest assistant response: ${latestAssistantText?.trim().slice(-2_000) || "(none)"}`,
             "Preserve the active goal and produce only the next concise user-proxy steer.",
           ].join("\n")

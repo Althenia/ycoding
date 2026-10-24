@@ -277,7 +277,7 @@ describe("SessionRunnerLLM recorded", () => {
       const promptCacheKey = expectedPromptCacheKey(expected.messages[0].content)
       expected.prompt_cache_key = promptCacheKey
       expected.messages[1].content +=
-        '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}\n</system-update>'
+        '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"},"permissionCeiling":[],"todos":[]}\n</system-update>'
       const incomingBody = JSON.parse(wire.incoming.body)
       expect(wire.incoming.headers).toEqual(wire.recorded.headers)
       expect(incomingBody.prompt_cache_key).toBe(promptCacheKey)
@@ -296,7 +296,7 @@ describe("SessionRunnerLLM recorded", () => {
       expect(messages[1]).toMatchObject({
         type: "system",
         metadata: { contextSource: "session-state" },
-        text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}',
+        text: 'Authoritative current Session state (JSON):\n{"autonomy":{"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"},"permissionCeiling":[],"todos":[]}',
       })
       expect(messages[2]).toMatchObject({ type: "assistant", agent: "build", finish: "stop" })
       expect(messages[2]?.type === "assistant" ? messages[2].content : []).toMatchObject([

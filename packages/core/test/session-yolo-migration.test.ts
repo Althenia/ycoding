@@ -62,7 +62,6 @@ test("one-time migration rewrites stored YOLO 3 to 2 and nothing else", async ()
   )
 })
 
-test("stored YOLO 3 that bypasses the migration fails closed instead of mapping to 2", () => {
-  expect(SessionAutonomy.read({ mode: "normal", yolo: 3 }).yolo).toBe(false)
-  expect(SessionAutonomy.read({ mode: "normal", yolo: true }).yolo).toBe(true)
+test("stored numeric or boolean YOLO that bypasses the migrations reads as Manual in every category", () => {
+  for (const yolo of [3, true]) expect(SessionAutonomy.read({ mode: "normal", yolo })).toEqual(SessionAutonomy.defaultState)
 })

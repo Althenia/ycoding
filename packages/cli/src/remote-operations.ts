@@ -46,6 +46,7 @@ import {
   LocalFailure,
   findSession,
   type LocalAutonomy,
+  type LocalAutonomyModes,
   type LocalLocation,
   type LocalPrompt,
   type LocalServer,
@@ -1634,7 +1635,6 @@ function validate(request: RemoteRequest): Validated {
         kind: "goal.set",
         payload: {
           goal: requireString(fields.goal, "goal", 8_192),
-          ...(fields.yolo === undefined ? {} : { yolo: requireBoolean(fields.yolo, "yolo") }),
           ...maxNoProgress(fields),
         },
       }
@@ -2283,8 +2283,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.guardrail.reply": ["requestID", "reply"],
   "session.form.reply": ["formID", "answer"],
   "session.form.cancel": ["formID"],
-  "session.autonomy.set": ["yolo", "autoPermission", "autoGuardrail", "autoAnswer", "sleep"],
-  "session.goal.set": ["goal", "maxNoProgress", "yolo"],
+  "session.autonomy.set": ["permissions", "guardrails", "answers", "sleep"],
+  "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
   "session.create": ["id", "workspace", "agent", "model", "title"],
 }
@@ -2417,20 +2417,17 @@ function reviewDecision(value: unknown): ReviewDecision {
 }
 
 function autonomyPayload(fields: Readonly<Record<string, unknown>>): LocalAutonomy {
-  const toggles = (["yolo", "autoPermission", "autoGuardrail", "autoAnswer"] as const).filter(
-    (field) => fields[field] !== undefined,
+  const modes = (["permissions", "guardrails", "answers"] as const).flatMap((category) =>
+    fields[category] === undefined
+      ? []
+      : [[category, literal(fields[category], ["manual", "yolo", "auto"] as const, category)] as const],
   )
-  const [field] = toggles
-  if (field !== undefined) {
-    if (toggles.length > 1 || fields.sleep !== undefined)
-      throw new OperationError("invalid_message", "Set one autonomy toggle per request")
-    return { [field]: requireBoolean(fields[field], field) } as LocalAutonomy
+  if (modes.length > 0) {
+    if (fields.sleep !== undefined) throw new OperationError("invalid_message", "Set sleep in a separate request")
+    return Object.fromEntries(modes) as LocalAutonomyModes
   }
   if (fields.sleep !== undefined) return { sleep: requireBoolean(fields.sleep, "sleep") }
-  throw new OperationError(
-    "invalid_message",
-    "Autonomy changes require one of yolo, autoPermission, autoGuardrail, autoAnswer, or sleep",
-  )
+  throw new OperationError("invalid_message", "Autonomy changes require permissions, guardrails, answers, or sleep")
 }
 
 function maxNoProgress(fields: Readonly<Record<string, unknown>>) {

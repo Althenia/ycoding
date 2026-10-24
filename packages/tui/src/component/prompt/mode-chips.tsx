@@ -2,10 +2,10 @@ import type { SessionAutonomyView } from "@ycoding-ai/client"
 import { For } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { readableForeground } from "../../theme/component"
-import { autoAnswerOn, autonomyModeParts } from "../../util/session-autonomy"
+import { autonomyAutomated, autonomyModeParts, autonomyRows } from "../../util/session-autonomy"
 
 export type ModeChip = {
-  key: "goal" | "yolo" | "permissions" | "guardrails" | "sleep" | "review" | "answers"
+  key: "goal" | "autonomy" | "permissions" | "guardrails" | "answers" | "sleep" | "review"
   label: string;
   tone: "off" | "on" | "warning" | "danger"
 }
@@ -18,40 +18,39 @@ export function modeChips(input: {
 }): ModeChip[] {
   const parts = autonomyModeParts(input.autonomy)
   const active = parts.includes("goal")
-  const yolo = input.autonomy?.effective?.yolo
   const asleep = parts.includes("asleep")
+  const automated = autonomyAutomated(input.autonomy)
   return [
     {
       key: "goal",
       label: active ? "goal" : "goal off",
       tone: active ? "on" : "off",
     },
-    {
-      key: "yolo",
-      label: parts[0],
-      tone: yolo === true ? "danger" : "off",
-    },
-    ...(input.autonomy?.effective?.permissionsAuto
-      ? [{ key: "permissions" as const, label: "permissions auto", tone: "warning" as const }]
-      : []),
-    ...(input.autonomy?.effective?.ordinaryReviewsAuto
-      ? [{ key: "guardrails" as const, label: "guardrails auto", tone: "warning" as const }]
-      : []),
+    ...(automated
+      ? autonomyRows(input.autonomy).flatMap((row) =>
+          row.effective === undefined || row.effective === "manual"
+            ? []
+            : [
+                {
+                  key: row.category,
+                  label: `${row.category} ${row.effective}${row.inherited ? " (inherited)" : ""}`,
+                  tone: row.effective === "yolo" ? ("danger" as const) : ("warning" as const),
+                },
+              ],
+        )
+      : [
+          {
+            key: "autonomy" as const,
+            label: automated === false ? "autonomy manual" : "autonomy unknown",
+            tone: "off" as const,
+          },
+        ]),
     ...(asleep
       ? [
           {
             key: "sleep" as const,
             label: input.machineAwake === false ? "asleep · machine may sleep" : "asleep",
             tone: input.machineAwake === false ? ("warning" as const) : ("on" as const),
-          },
-        ]
-      : []),
-    ...(autoAnswerOn(input.autonomy)
-      ? [
-          {
-            key: "answers" as const,
-            label: "answers auto",
-            tone: "warning" as const,
           },
         ]
       : []),

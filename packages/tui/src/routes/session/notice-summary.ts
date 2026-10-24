@@ -1,5 +1,5 @@
 import { Option, Schema } from "effect"
-import { yoloLabel, yoloOn } from "../../util/session-autonomy"
+import { autonomyCategories, autonomyMode } from "../../util/session-autonomy"
 
 const sessionStatePrefix = "Authoritative current Session state (JSON):\n"
 const teamViewPrefix =
@@ -19,18 +19,16 @@ function sessionStateSummary(value: Record<string, unknown>) {
   const autonomy = record(value.autonomy)
   const todos = Array.isArray(value.todos) ? value.todos.length : 0
   if (!autonomy) return `Session state · autonomy unreported · ${todos} ${todos === 1 ? "task" : "tasks"}`
-  const yolo = yoloOn(autonomy)
-  const parts =
-    yolo === undefined
-      ? ["unknown"]
-      : [
-          yoloLabel(yolo),
-          ...(autonomy.autoPermission === true ? ["permissions auto"] : []),
-          ...(autonomy.autoGuardrail === true ? ["guardrails auto"] : []),
-          ...(record(autonomy.goal)?.status === "active" ? ["goal"] : []),
-          ...(autonomy.sleep !== undefined && autonomy.sleep !== null ? ["asleep"] : []),
-          ...(autonomy.autoAnswer === true ? ["answers auto"] : []),
-        ]
+  const modes = autonomyCategories.map((category) => [category, autonomyMode(autonomy[category])] as const)
+  const parts = modes.some(([, mode]) => mode === undefined)
+    ? ["unknown"]
+    : [
+        ...(modes.every(([, mode]) => mode === "manual")
+          ? ["manual"]
+          : modes.flatMap(([category, mode]) => (mode === "manual" ? [] : [`${category} ${mode}`]))),
+        ...(record(autonomy.goal)?.status === "active" ? ["goal"] : []),
+        ...(autonomy.sleep !== undefined && autonomy.sleep !== null ? ["asleep"] : []),
+      ]
   return `Session state · ${parts.join(" · ")} · ${todos} ${todos === 1 ? "task" : "tasks"}`
 }
 

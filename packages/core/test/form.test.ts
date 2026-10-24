@@ -86,15 +86,15 @@ const setupAutonomy = Effect.fn("FormTest.setupAutonomy")(function* (mode: "norm
     .pipe(Effect.orDie)
   yield* mode === "goal"
     ? autonomy.setGoal({ sessionID: input.sessionID, text: "Finish safely" })
-    : autonomy.setMode({ sessionID: input.sessionID, mode })
+    : autonomy.set({ sessionID: input.sessionID, answers: "manual" })
 })
 
 describe("Form", () => {
   for (const yolo of [false] as const) {
-    it.effect(`forms use explicit defaults automatically only with the Session autoAnswer toggle: yolo ${yolo}`, () => Effect.gen(function* () {
+    it.effect(`forms use explicit defaults automatically only with Auto answers: yolo ${yolo}`, () => Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: yolo ? "yolo" : "manual" })
       const service = yield* Form.Service
       const settings = { ...input, fields: [{ key: "confirm", type: "boolean", default: true }] } satisfies Form.CreateInput
       const events = yield* EventRuntime.Service
@@ -108,7 +108,7 @@ describe("Form", () => {
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([form])
       yield* service.reply({ id: form.id, answer: { confirm: false } })
       expect(yield* Fiber.join(fiber)).toEqual({ status: "answered", answer: { confirm: false } })
-      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "auto" })
       expect(yield* service.ask({ ...settings, id: Form.ID.create("frm_toggle") })).toEqual({ status: "answered", answer: { confirm: true }, automatic: true, via: "auto-answer" })
       expect(yield* service.list({ sessionID: input.sessionID })).toEqual([])
     }))
@@ -118,7 +118,7 @@ describe("Form", () => {
       const service = yield* Form.Service
       const autonomy = yield* SessionAutonomy.Service
       yield* setupAutonomy("normal")
-      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "auto" })
       const events = yield* EventRuntime.Service
       const created = yield* Deferred.make<Form.Info>()
       const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
@@ -171,8 +171,8 @@ describe("Form", () => {
       const service = yield* Form.Service
       const autonomy = yield* SessionAutonomy.Service
       yield* setupAutonomy("goal")
-      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
-      decisionBehavior = () => Effect.die("autoAnswer alone must not request judgments")
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "auto" })
+      decisionBehavior = () => Effect.die("Auto answers must not request judgments")
 
       expect(
         yield* service.ask({
@@ -200,7 +200,7 @@ describe("Form", () => {
       const service = yield* Form.Service
       const autonomy = yield* SessionAutonomy.Service
       yield* setupAutonomy("goal")
-      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "auto" })
       const events = yield* EventRuntime.Service
       const created = yield* Deferred.make<Form.Info>()
       const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
@@ -248,7 +248,7 @@ describe("Form", () => {
       decisionBehavior = () => Effect.die("Awake forms must not request judgments")
       yield* setupAutonomy("goal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "auto" })
       const service = yield* Form.Service
       const events = yield* EventRuntime.Service
       const created = yield* Deferred.make<Form.Info>()
@@ -280,8 +280,7 @@ describe("Form", () => {
       it.effect(`${asleep ? "sleeping" : "awake"} automatic answers preserve a winning human ${settlement}`, () => Effect.gen(function* () {
         yield* setupAutonomy("goal")
         const autonomy = yield* SessionAutonomy.Service
-        yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
-        if (asleep) yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: true })
+        yield* autonomy.set({ sessionID: input.sessionID, answers: asleep ? "yolo" : "auto" })
         if (asleep) yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
         decisionBehavior = asleep ? decisionChoice("Fast", 0.9) : () => Effect.die("Awake forms must not request judgments")
         const service = yield* Form.Service
@@ -619,7 +618,7 @@ describe("Form", () => {
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
       yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
       decisionBehavior = decisionChoice("Careful", 0.9)
       const service = yield* Form.Service
@@ -647,7 +646,7 @@ describe("Form", () => {
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
       yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
       decisionBehavior = () => Effect.fail(new Decision.Error({ reason: "provider-failed" }))
       const service = yield* Form.Service
@@ -676,8 +675,11 @@ describe("Form", () => {
     it.effect(`sleep ${reason} deferral carries no automatic answer attribution`, () => Effect.gen(function* () {
       yield* setupAutonomy("goal")
       const autonomy = yield* SessionAutonomy.Service
-      if (reason === "low_confidence") yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: true })
-      yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: reason === "free_text", sleep: true })
+      yield* autonomy.set({
+        sessionID: input.sessionID,
+        answers: reason === "low_confidence" ? "yolo" : reason === "free_text" ? "auto" : "manual",
+        sleep: true,
+      })
       const calls: Decision.Input[] = []
       decisionBehavior = (value) => {
         calls.push(value)
@@ -699,7 +701,7 @@ describe("Form", () => {
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
       yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
@@ -734,7 +736,7 @@ describe("Form", () => {
     Effect.gen(function* () {
       yield* setupAutonomy("normal")
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: true })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo" })
       yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
@@ -759,7 +761,7 @@ describe("Form", () => {
         ],
       }).pipe(Effect.forkScoped)
       yield* Deferred.await(entered)
-      yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: false })
+      yield* autonomy.set({ sessionID: input.sessionID, answers: "manual" })
       yield* Deferred.succeed(release, undefined)
       expect(yield* Fiber.join(fiber)).toEqual({ status: "deferred", itemID: expect.any(String) })
       expect(yield* service.list()).toEqual([])
@@ -906,16 +908,15 @@ describe("Form", () => {
       }),
     )
 
-    it.effect("explicit automatic answering remains available awake and asleep", () =>
+    it.effect("Auto answers settle a default awake and YOLO answers settle a choice asleep", () =>
       Effect.gen(function* () {
         yield* setupAutonomy("normal")
         const autonomy = yield* SessionAutonomy.Service
         const service = yield* Form.Service
         const settings = { ...input, fields: [{ key: "confirm", type: "boolean", default: true }] } satisfies Form.CreateInput
-        yield* autonomy.setYolo({ sessionID: input.sessionID, yolo: true })
-        yield* autonomy.set({ sessionID: input.sessionID, autoAnswer: true })
+        yield* autonomy.set({ sessionID: input.sessionID, answers: "auto" })
         expect(yield* service.ask(settings)).toEqual({ status: "answered", answer: { confirm: true }, automatic: true, via: "auto-answer" })
-        yield* autonomy.set({ sessionID: input.sessionID, sleep: true })
+        yield* autonomy.set({ sessionID: input.sessionID, answers: "yolo", sleep: true })
         decisionBehavior = decisionChoice("Fast", 0.9)
         expect(
           yield* service.ask({

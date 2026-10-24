@@ -6,7 +6,7 @@ import { Deferred, Effect } from "effect"
 import { sessionHttp } from "./session-http"
 
 const sessionID = Session.ID.make("ses_goal_http")
-const effective = { yolo: true, permissionsAuto: false, permissionModelReviews: true, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: true, modelReviews: false, hardModelReviews: false }
+const effective = { permissions: "yolo" as const, guardrails: "auto" as const, answers: "manual" as const, inherited: { permissions: Session.ID.make("ses_parent") }, asleep: false, guardrailsEnabled: true }
 
 function fixture(set: Session.Interface["autonomy"]["set"]) {
   const http = sessionHttp({ autonomy: { get: () => Effect.succeed(SessionAutonomy.defaultState), set,
@@ -22,29 +22,29 @@ test("autonomy HTTP contract accepts sleep booleans without a review toggle", as
   const received: unknown[] = []
   await using f = fixture(input => Effect.sync(() => {
     received.push(input)
-    return { mode: "normal", yolo: false, ...(input.sleep ? { sleep: {} } : {}) }
+    return { ...SessionAutonomy.defaultState, ...(input.sleep ? { sleep: {} } : {}) }
   }))
   for (const sleep of [true, false]) {
     const response = await f.request({ sleep })
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { mode: "normal", yolo: false, ...(sleep ? { sleep: {} } : {}), effective } })
+    expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, ...(sleep ? { sleep: {} } : {}), effective } })
     expect(received.at(-1)).toEqual({ sessionID, sleep })
   }
   expect((await f.request({ guardrailDecision: true })).status).toBe(400)
   expect(received).toHaveLength(2)
 })
 
-test("R7 goal route preserves explicit resume, replacement, and stop with YOLO", async () => {
+test("R7 goal route preserves explicit resume, replacement, and stop independently from modes", async () => {
   const received: unknown[] = []
   await using f = fixture(input => Effect.sync(() => {
     received.push(input)
     return SessionAutonomy.defaultState
   }))
   for (const goal of [true, "Ship the tested change\nPreserve existing data", null]) {
-    const response = await f.request({ goal, yolo: true })
+    const response = await f.request({ goal })
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, effective } })
-    expect(received.at(-1)).toEqual({ sessionID, goal, yolo: true })
+    expect(received.at(-1)).toEqual({ sessionID, goal })
   }
 })
 
@@ -99,37 +99,41 @@ test("autonomy reads expose effective policy without changing stored controls", 
   expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, effective } })
 })
 
-test("autonomy HTTP preserves each toggle and rejects numeric or combined controls", async () => {
+test("autonomy HTTP preserves each mode and atomic set-all while rejecting obsolete controls", async () => {
   const received: unknown[] = []
   await using f = fixture(input => Effect.sync(() => {
     received.push(input)
     return SessionAutonomy.defaultState
   }))
-  for (const key of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer"]) {
-    for (const value of [false, true]) {
+  for (const key of ["permissions", "guardrails", "answers"]) {
+    for (const value of ["manual", "yolo", "auto"]) {
       expect((await f.request({ [key]: value })).status).toBe(200)
       expect(received.at(-1)).toEqual({ sessionID, [key]: value })
     }
-    for (const value of [0, 1, 2, null, "true"])
+    for (const value of [0, true, false, null, "true"])
       expect((await f.request({ [key]: value })).status).toBe(400)
   }
-  expect((await f.request({ yolo: true, autoPermission: true })).status).toBe(400)
+  for (const key of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer"])
+    expect((await f.request({ [key]: true })).status).toBe(400)
+  const all = { permissions: "auto", guardrails: "yolo", answers: "manual" }
+  expect((await f.request(all)).status).toBe(200)
+  expect(received.at(-1)).toEqual({ sessionID, ...all })
   expect((await f.request({})).status).toBe(400)
-  expect(received).toHaveLength(8)
+  expect(received).toHaveLength(10)
 })
 
-test("auto-answer changes only the addressed Session setting and rejects level 3", async () => {
+test("answer mode changes only the addressed category and rejects numeric levels", async () => {
   const received: unknown[] = []
   await using f = fixture(input => Effect.sync(() => {
     received.push(input)
-    return { ...SessionAutonomy.defaultState, autoAnswer: input.autoAnswer }
+    return { ...SessionAutonomy.defaultState, ...(input.answers === undefined ? {} : { answers: input.answers }) }
   }))
-  for (const autoAnswer of [true, false]) {
-    const response = await f.request({ autoAnswer })
+  for (const answers of ["manual", "yolo", "auto"]) {
+    const response = await f.request({ answers })
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, autoAnswer, effective } })
-    expect(received.at(-1)).toEqual({ sessionID, autoAnswer })
+    expect(await response.json()).toEqual({ data: { ...SessionAutonomy.defaultState, answers, effective } })
+    expect(received.at(-1)).toEqual({ sessionID, answers })
   }
   expect((await f.request({ yolo: 3 })).status).toBe(400)
-  expect(received).toHaveLength(2)
+  expect(received).toHaveLength(3)
 })

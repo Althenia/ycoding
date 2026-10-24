@@ -643,15 +643,15 @@ export const layer = Layer.effect(
             if (!current.evidence) return current
             if (!reviewPolicy.decideReviews) return current
             if (matched.hardReview && (!reviewPolicy.decideHardReviews || current.evidence.confirmed)) return current
-            if (!matched.hardReview) {
-              const auto = yield* autonomy.canAutoGuardrail(matched.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-              const asleep = yield* autonomy.isAsleep(matched.rootSessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-              if (auto && !asleep) return current
-            }
+            const authorization = yield* autonomy
+              .snapshot(matched.rootSessionID, { inherited: true })
+              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+            if (authorization === undefined) return current
+            if ((yield* DecisionChoice.decisionMode(autonomy, matched.rootSessionID, "guardrails")) !== "yolo") return current
             const judgment = yield* DecisionChoice.verifyMatch(decision, {
               sessionID: input.sessionID,
               purpose: "guardrail",
-              authority: "baseline",
+              authority: "yolo",
               invocationKey: `guardrail-match:${Hash.sha256([ruleID, reviewFingerprint(input, matched), input.source?.messageID ?? "", input.source?.callID ?? ""].join("\0"))}`,
               state: {
                 matchedRule: { id: ruleID, reason: matched.reason ?? "Standard guardrail review" },
@@ -664,6 +664,14 @@ export const layer = Layer.effect(
               },
             })
             if (!judgment || judgment.answer) return current
+            if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, matched.rootSessionID, authorization))) return current
+            const fresh = yield* classify(input, dismissedStandardRules)
+            if (
+              fresh.evaluation.decision !== matched.decision ||
+              fresh.evaluation.hardReview !== matched.hardReview ||
+              fresh.evaluation.ruleIDs.join("\0") !== matched.ruleIDs.join("\0")
+            )
+              return fresh
             yield* events.publish(SessionEvent.GuardrailDismissed, { sessionID: matched.rootSessionID, reviewSessionID: input.sessionID, ruleID, confidence: judgment.confidence, ...(input.source ? { source: input.source } : {}) })
             dismissedStandardRules.add(ruleID)
           }
@@ -694,22 +702,18 @@ export const layer = Layer.effect(
         }
         const reservation = yield* Effect.acquireUseRelease(locks.withLock(result.rootSessionID)(
           Effect.gen(function* () {
-            const autoGuardrail = yield* autonomy
-              .canAutoGuardrail(result.rootSessionID)
-              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-            const asleep = yield* autonomy
-              .isAsleep(result.rootSessionID)
-              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
             const authorization = yield* autonomy
               .snapshot(result.rootSessionID, { inherited: true })
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
-            const yolo = (!result.hardReview || reviewPolicy.decideHardReviews) && (yield* DecisionChoice.yoloEnabled(autonomy, result.rootSessionID))
-            const baseline = reviewPolicy.decideReviews && (!result.hardReview || reviewPolicy.decideHardReviews)
-            const decisionEnabled = baseline || yolo
+            const mode = yield* DecisionChoice.decisionMode(autonomy, result.rootSessionID, "guardrails")
+            const asleep = yield* autonomy
+              .isAsleep(result.rootSessionID)
+              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            const decisionEnabled = mode === "yolo" && (!result.hardReview || reviewPolicy.decideHardReviews)
             if (
               result.decision === "allow" ||
               input.skipReview ||
-              (result.decision === "ask" && result.standard && !result.hardReview && autoGuardrail && !asleep)
+              (result.decision === "ask" && result.standard && !result.hardReview && mode === "auto" && !asleep)
             ) {
               const reservation = yield* reserveActionUnlocked(result.rootSessionID, input.action)
               yield* events.publish(Guardrail.Event.Decided, {
@@ -770,17 +774,14 @@ export const layer = Layer.effect(
                   ),
                 )
             return decisionEnabled || asleep
-              ? { type: "decision-review" as const, request, deferred, review, baseline, yolo, authorization }
+              ? { type: "decision-review" as const, request, deferred, review, yolo: decisionEnabled, authorization }
               : { type: "review" as const, request, deferred, review }
           }),
         ), (admission) => Effect.gen(function* () {
           if (admission.type === "allowed") return admission.reservation
           if (admission.type === "decision-review") {
-            const approvable = !result.hardReview && !result.ruleIDs.includes("configuration.invalid")
-            const stages = [
-              ...(admission.baseline ? [SessionAssessment.policy("baseline", approvable)] : []),
-              ...(admission.yolo ? [SessionAssessment.policy("yolo", approvable)] : []),
-            ]
+            const approvable = result.standard && !result.hardReview && !result.ruleIDs.includes("configuration.invalid")
+            const stages = admission.yolo ? [SessionAssessment.policy("yolo", approvable)] : []
             const applicability = stages.length === 0 ? undefined : yield* applicabilityOf(input, result)
             const authority = stages.length === 0
               ? undefined
@@ -1140,6 +1141,8 @@ export const layer = Layer.effect(
                             return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                           if ((yield* classify(evaluateInput)).evaluation.hardReview)
                             return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:hard-review" }
+                          if ((yield* DecisionChoice.decisionMode(autonomy, rootSessionID, "guardrails")) === "manual")
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:manual-guardrails" }
                           removePendingUnlocked(input.requestID)
                           yield* events.publish(Guardrail.Event.Replied, {
                             rootSessionID,
@@ -1208,14 +1211,16 @@ export const layer = Layer.effect(
                     )
                       return { ...base, outcome: "stale" as const, settled: false }
                     if (result.hardReview) return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:hard-review" }
+                    if (!result.standard) return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:custom-review" }
 
-                    const autoGuardrail = yield* autonomy
-                      .canAutoGuardrail(rootSessionID)
-                      .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+                    const authorization = yield* autonomy
+                      .snapshot(rootSessionID, { inherited: true })
+                      .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+                    const mode = yield* DecisionChoice.decisionMode(autonomy, rootSessionID, "guardrails")
                     const asleep = yield* autonomy
                       .isAsleep(rootSessionID)
                       .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-                    if (result.standard && autoGuardrail && !asleep) {
+                    if (mode === "auto" && !asleep) {
                       return yield* withRootLock(
                         rootSessionID,
                         Effect.gen(function* () {
@@ -1249,16 +1254,9 @@ export const layer = Layer.effect(
                     }
 
                     const approvable = !result.ruleIDs.includes("configuration.invalid")
-                    const yolo = yield* DecisionChoice.yoloEnabled(autonomy, rootSessionID)
-                    const stages = [
-                      ...(reviewPolicy.decideReviews ? [SessionAssessment.policy("baseline", approvable)] : []),
-                      ...(yolo ? [SessionAssessment.policy("yolo", approvable)] : []),
-                    ]
+                    const stages = mode === "yolo" ? [SessionAssessment.policy("yolo", approvable)] : []
                     if (stages.length === 0)
                       return { ...base, outcome: "escalated" as const, settled: false, reason: "native-assessment-unavailable" }
-                    const authorization = yield* autonomy
-                      .snapshot(rootSessionID, { inherited: true })
-                      .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
                     const applicability = yield* applicabilityOf(evaluateInput, result)
                     const authority = SessionDecisionContext.authorityDigest(
                       yield* SessionDecisionContext.read(database.db, item.request.sessionID),

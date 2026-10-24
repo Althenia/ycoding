@@ -486,7 +486,7 @@ it.effect("steers from automatic question facts and current answer policy withou
     yield* prompt(sessionID, "Finish the local verification without changing approval boundaries.")
     const autonomy = yield* SessionAutonomy.Service
     yield* autonomy.setGoal({ sessionID, text: "Finish the local verification" })
-    yield* autonomy.set({ sessionID, autoAnswer: true })
+    yield* autonomy.set({ sessionID, answers: "auto" })
     const database = yield* Database.Service
     const time = { created: DateTime.makeUnsafe(100), completed: DateTime.makeUnsafe(101) }
     const messages = [
@@ -516,7 +516,7 @@ it.effect("steers from automatic question facts and current answer policy withou
     const goals = yield* SessionGoal.Service
     yield* goals.steer({ session, goal: before.state.goal!, phase: "continue" })
     const request = JSON.stringify(requests[0]?.messages)
-    expect(request).toContain("Automatic answering: enabled")
+    expect(request).toContain("Answers decision mode: auto")
     expect(request).toContain("Continue verification or wait?")
     expect(request).toContain("Keep waiting")
     expect(request).toContain("Proceed with authorized checks")
@@ -524,9 +524,9 @@ it.effect("steers from automatic question facts and current answer policy withou
     expect(request).toContain("Synthetic observation (not a human reply)")
     expect(request).not.toContain("SYNTHETIC_OTHER_TOOL_PAYLOAD")
     expect(yield* autonomy.snapshot(sessionID)).toEqual(before)
-    yield* autonomy.set({ sessionID, autoAnswer: false })
+    yield* autonomy.set({ sessionID, answers: "manual" })
     yield* goals.steer({ session, goal: before.state.goal!, phase: "continue" })
-    expect(JSON.stringify(requests[1]?.messages)).toContain("Automatic answering: disabled")
+    expect(JSON.stringify(requests[1]?.messages)).toContain("Answers decision mode: manual")
     expect(requests[1]?.system).toEqual(requests[0]?.system)
   }),
 )
@@ -613,7 +613,9 @@ setIt.effect("stores synthesized goals without changing the admitted user prompt
 
     expect(yield* session.autonomy.set({ sessionID: created.id, goal: rawText })).toMatchObject({
       mode: "normal",
-      yolo: false,
+      permissions: "manual",
+      guardrails: "manual",
+      answers: "manual",
       goal: {
         text: "Repair the migration and verify the suite passes.",
         rawText,
@@ -654,7 +656,7 @@ setIt.effect("does not activate or admit a goal when user-proxy steer generation
     const failed = yield* session.autonomy.set({ sessionID: created.id, goal: "Fail steer" }).pipe(Effect.exit)
 
     expect(failed._tag).toBe("Failure")
-    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: false })
+    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" })
     expect(yield* session.pending(created.id)).toEqual(before)
   }),
 )
@@ -668,7 +670,7 @@ setIt.effect("propagates goal synthesis interruption without storing a raw-text 
       .pipe(Effect.exit)
 
     expect(outcome._tag).toBe("Failure")
-    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: false })
+    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" })
   }),
 )
 
@@ -759,7 +761,7 @@ setIt.effect("R7 resumes the retained goal without synthesis and admits its cont
 )
 
 setIt.effect(
-  "R7 refuses resume without a retained goal and commits combined YOLO only with successful calculation",
+  "R7 refuses resume without a retained goal and keeps the retained goal and modes after a failed calculation",
   () =>
     Effect.gen(function* () {
       const session = yield* Session.Service
@@ -768,14 +770,14 @@ setIt.effect(
         code: "goal.no_retained_goal",
       })
       expect(yield* session.pending(created.id)).toEqual([])
-      yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective", yolo: false })
-      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: false, goal: { rawText: "Initial objective" } })
+      yield* session.autonomy.set({ sessionID: created.id, goal: "Initial objective" })
+      expect(yield* session.autonomy.get(created.id)).toMatchObject({ permissions: "manual", guardrails: "manual", answers: "manual", goal: { rawText: "Initial objective" } })
       const before = yield* session.pending(created.id)
       expect(
-        (yield* session.autonomy.set({ sessionID: created.id, goal: "Use the fallback", yolo: true }).pipe(Effect.exit))
+        (yield* session.autonomy.set({ sessionID: created.id, goal: "Use the fallback" }).pipe(Effect.exit))
           ._tag,
       ).toBe("Failure")
-      expect(yield* session.autonomy.get(created.id)).toMatchObject({ yolo: false, goal: { rawText: "Initial objective" } })
+      expect(yield* session.autonomy.get(created.id)).toMatchObject({ permissions: "manual", guardrails: "manual", answers: "manual", goal: { rawText: "Initial objective" } })
       expect(yield* session.pending(created.id)).toEqual(before)
     }),
 )

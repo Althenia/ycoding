@@ -669,7 +669,7 @@ async function route(url: URL, request: Request) {
   if (url.pathname === "/api/server") return json({ urls: ["http://127.0.0.1:4096"] })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`, "/api/reference", "/api/command", "/api/shell", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
   if (url.pathname === "/api/session/active") return json({ data: {} })
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } })
   if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === "/api/session/ses_subagent_capture/subagent") return json({ data: subagents, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })
   return undefined

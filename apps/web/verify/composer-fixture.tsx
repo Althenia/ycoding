@@ -10,6 +10,7 @@ import { catalogKey, type CatalogView } from "../src/remote/catalog"
 import { createRemoteHttp } from "../src/remote/http"
 import { remoteKeys, type RemoteLink } from "../src/remote/queries"
 import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "../src/remote/store"
+import type { AutonomyModes, EffectiveAutonomyView } from "../src/remote/autonomy"
 import { applySessionEvent, createSessionView } from "../src/remote/projection"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
@@ -39,10 +40,9 @@ const catalog: CatalogView = {
   references: [{ name: "design-system", uri: "file:///workspace/design-system" }],
   resources: [{ name: "Runbook", description: "Operational reference", uri: "mcp://docs/runbook" }],
 }
-type FixtureFlags = { readonly yolo: boolean; readonly autoPermission: boolean; readonly autoGuardrail: boolean; readonly autoAnswer: boolean }
-const flagsOff: FixtureFlags = { yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false }
-const fixtureEffective = (flags: FixtureFlags) => ({ yolo: flags.yolo, permissionsAuto: flags.autoPermission, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: flags.autoGuardrail, modelReviews: false, hardModelReviews: false })
-const fixtureAutonomy = (flags: FixtureFlags, goal?: NonNullable<NonNullable<RemoteStoreState["view"]>["autonomy"]>["goal"]) => ({ mode: "normal" as const, ...flags, effective: fixtureEffective(flags), ...(goal ? { goal } : {}) })
+const modesManual: AutonomyModes = { permissions: "manual", guardrails: "manual", answers: "manual" }
+const fixtureEffective = (modes: AutonomyModes, inherited: EffectiveAutonomyView["inherited"] = {}) => ({ ...modes, inherited, asleep: false, guardrailsEnabled: true })
+const fixtureAutonomy = (modes: AutonomyModes, goal?: NonNullable<NonNullable<RemoteStoreState["view"]>["autonomy"]>["goal"]) => ({ mode: "normal" as const, ...modes, effective: fixtureEffective(modes), ...(goal ? { goal } : {}) })
 const requests: { operation: string; input: unknown }[] = []
 let resolveCompact: ((accepted: boolean) => void) | undefined
 const workspace = { id: "work_one", projectID: "project_hash", directory: "/workspace/ycoding", name: "YCoding" }
@@ -53,7 +53,7 @@ const seed: RemoteStoreState = {
   connection: { kind: "connected", deviceName: "Fixture" }, transport: { kind: "open" }, activeDeviceID: "dev_fixture",
   selectedSessionInfo: { id: "ses_fixture", title: "Fixture", agent: "gsd", model: new URLSearchParams(location.search).get("model") === "spectrum" ? { providerID: "openai", id: "effort-spectrum", variant: "medium" } : { providerID: "openai", id: new URLSearchParams(location.search).get("model") === "fast" ? "gpt-6-sol-fast" : "gpt-6-sol", variant: "high" }, updatedAt: 1, archived: false },
   activeSessionID: "ses_fixture", drafts: {}, mutations: [], mutationToasts: [], catalogs: { [catalogKey({ sessionID: "ses_fixture" })]: catalog, [catalogKey({ workspaceID: "work_one" })]: catalog, [catalogKey({ workspaceID: "work_two" })]: catalog },
-  view: { ...createSessionView("ses_fixture"), autonomy: fixtureAutonomy(flagsOff) },
+  view: { ...createSessionView("ses_fixture"), autonomy: fixtureAutonomy(modesManual) },
   devices: [], advertised: [], sessions: [], sessionGroups: [], sessionQuery: "", sessionFilter: "all", sessionListStatus: "ready", sessionPageLoading: false, sessionHasNext: false, sessionHasPrevious: false,
   teamCues: [], notifications: [], noticeSync: { status: "ready", total: 0, loaded: 0, hidden: 0, loadingMore: false, message: undefined }, unhandledEvents: 0,
 }
@@ -64,17 +64,19 @@ Object.assign(window, { composerPrediction: (text = "Run the focused tests", sou
 })) })
 const state = () => base.container.state
 const update = (next: RemoteStoreState) => base.container.setState(() => next)
-const setFlag = (change: Partial<FixtureFlags>) => {
+const setModes = (change: Partial<AutonomyModes>) => {
   const current = state().view!.autonomy!
-  const flags = { yolo: current.yolo, autoPermission: current.autoPermission === true, autoGuardrail: current.autoGuardrail === true, autoAnswer: current.autoAnswer === true, ...change }
-  update({ ...state(), view: { ...state().view!, autonomy: { ...current, ...flags, effective: fixtureEffective(flags) } } })
+  const modes = { permissions: current.permissions, guardrails: current.guardrails, answers: current.answers, ...change }
+  const inherited = current.effective?.inherited ?? {}
+  const inEffect = { permissions: inherited.permissions === undefined ? modes.permissions : current.effective!.permissions, guardrails: inherited.guardrails === undefined ? modes.guardrails : current.effective!.guardrails, answers: inherited.answers === undefined ? modes.answers : current.effective!.answers }
+  update({ ...state(), view: { ...state().view!, autonomy: { ...current, ...modes, effective: { ...fixtureEffective(inEffect, inherited), asleep: current.effective?.asleep === true } } } })
 }
 Object.assign(window, {
   composerPredictionReply: (sourceMessageID: string) => update({ ...state(), view: { ...state().view!, status: "idle", prediction: undefined, messages: [{ kind: "assistant", id: sourceMessageID, created: 1, completed: 2, parts: [{ kind: "text", ordinal: 0, text: "The build is fixed." }] }] } }),
   composerPredictionEvent: (text: string, sourceMessageID: string) => update({ ...state(), view: applySessionEvent(state().view!, { type: "session.prediction.updated", data: { sessionID: state().view!.id, sourceMessageID, text } }, 3) }),
   composerPredictionTransport: (open: boolean) => update({ ...state(), transport: open ? { kind: "open" } : { kind: "closed", code: 1000, reason: "Fixture disconnected", retryable: false } }),
   composerPredictionConnection: (deviceID = state().activeDeviceID) => update({ ...state(), activeDeviceID: deviceID, generation: state().generation + 1, view: { ...state().view!, prediction: undefined } }),
-  composerPredictionSession: (sessionID: string) => update({ ...state(), activeSessionID: sessionID, selectedSessionInfo: { ...state().selectedSessionInfo!, id: sessionID }, view: { ...createSessionView(sessionID), autonomy: fixtureAutonomy(flagsOff) } }),
+  composerPredictionSession: (sessionID: string) => update({ ...state(), activeSessionID: sessionID, selectedSessionInfo: { ...state().selectedSessionInfo!, id: sessionID }, view: { ...createSessionView(sessionID), autonomy: fixtureAutonomy(modesManual) } }),
 })
 let workspaceGate: Promise<void> | undefined
 let releaseWorkspaces: (() => void) | undefined
@@ -122,28 +124,27 @@ const store: RemoteStore = {
   selectWorkspace: () => {}, searchSessions: () => {}, nextSessionsPage: async () => {}, previousSessionsPage: async () => {},
   reloadMessages: async () => {}, loadImageSource: async () => { throw new Error("Composer fixture does not load images") }, loadShellOutputPage: async () => {}, switchModel: async () => true, switchAgent: async () => true, retryMutation: async (id) => { requests.push({ operation: "retry", input: { id } }) }, dismissMutation: (id) => update({ ...state(), mutations: state().mutations.filter((item) => item.id !== id) }), dismissMutationToast: (id) => update({ ...state(), mutationToasts: state().mutationToasts?.filter((item) => item.id !== id) }), readNotification: async () => {}, readAllNotifications: async () => {}, loadMoreNotifications: async () => {}, reloadNotifications: async () => {},
   replyPermission: async () => {}, replyGuardrail: async () => {}, replyForm: async () => {}, cancelForm: async () => {},
-  setYolo: async (enabled) => { requests.push({ operation: "session.autonomy.set", input: { yolo: enabled } }); setFlag({ yolo: enabled }); return true },
-  setAutoPermission: async (enabled) => { requests.push({ operation: "session.autonomy.set", input: { autoPermission: enabled } }); setFlag({ autoPermission: enabled }); return true },
-  setAutoGuardrail: async (enabled) => { requests.push({ operation: "session.autonomy.set", input: { autoGuardrail: enabled } }); setFlag({ autoGuardrail: enabled }); return true },
-  setAutoAnswer: async (enabled) => { requests.push({ operation: "session.autonomy.set", input: { autoAnswer: enabled } }); setFlag({ autoAnswer: enabled }); return true },
+  setAutonomous: async (change) => { requests.push({ operation: "session.autonomy.set", input: change }); setModes(change); return true },
   setGoal: async (goal) => { requests.push({ operation: "session.goal.set", input: { goal } }); update({ ...state(), view: { ...state().view!, autonomy: { ...state().view!.autonomy!, goal: { text: goal, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } } }); return true },
   stopGoal: async () => { requests.push({ operation: "session.goal.stop", input: { goal: null } }); update({ ...state(), view: { ...state().view!, autonomy: { ...state().view!.autonomy!, mode: "normal", goal: undefined } } }) }, setAutonomy: () => {},
 }
 Object.assign(window, { composerUseCommandMutation: () => update({ ...state(), mutations: state().mutations.map((mutation) => ({ ...mutation, kind: "command", operation: "session.command", input: { id: mutation.id, command: "review" } })) }) })
-Object.assign(window, { composerRequests: () => requests, composerState: () => state(), composerSetMutation: (status: "sending" | "unknown" | "failed" | "sent" | null, sessionID = "ses_fixture") => update({ ...state(), mutations: status === null || status === "sent" ? [] : [{ id: "msg_fixture", kind: "prompt", label: "Prompt", state: status, sessionID, operation: "session.prompt", input: { text: "Review" }, detail: status === "failed" ? "Send failed" : status === "unknown" ? "The outcome is unknown" : undefined }], mutationToasts: status === "failed" || status === "unknown" ? [{ id: "msg_fixture", label: "Prompt", state: status, sessionID: "ses_fixture", detail: status === "failed" ? "Send failed" : "The outcome is unknown" }] : [] }), composerSetPending: (delivery: "steer" | "queue", text = "Review") => update({ ...state(), view: { ...state().view!, messages: [{ kind: "user", id: "msg_fixture", text, delivery, state: "pending", created: 1 }] } }), composerSetUpload: (percent: number) => update({ ...state(), upload: { sessionID: "ses_fixture", name: "capture.png", percent } }), composerSetStatus: (status: "idle" | "running" | "tool" | "tool-auto" | "family-auto" | "waiting" | "goal" | "goal-auto" | "auto") => update({ ...state(), view: { ...state().view!, status: status === "running" || status === "tool" || status === "tool-auto" || status === "waiting" ? "running" : "idle", executionStarted: status === "running" ? Date.now() - 6000 : undefined, messages: status === "tool" || status === "tool-auto" ? [{ kind: "assistant", id: "msg_tool", created: Date.now(), parts: [{ kind: "tool", callID: "call_tool", name: "shell", status: "running", content: [], started: Date.now() }] }] : [], requests: status === "waiting" ? [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: Date.now() }] : [], autonomy: fixtureAutonomy(status === "goal-auto" || status === "auto" || status === "tool-auto" || status === "family-auto" ? { ...flagsOff, autoPermission: true, autoGuardrail: true } : flagsOff, status === "goal" || status === "goal-auto" ? { text: "Finish task", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } : undefined) }, sessionStatus: status === "family-auto" ? { running: new Set(["ses_fixture"]), attention: new Set<string>(), outstanding: new Set<string>(), failed: new Set<string>(), lost: new Set<string>() } : undefined }) })
+Object.assign(window, { composerRequests: () => requests, composerState: () => state(), composerSetMutation: (status: "sending" | "unknown" | "failed" | "sent" | null, sessionID = "ses_fixture") => update({ ...state(), mutations: status === null || status === "sent" ? [] : [{ id: "msg_fixture", kind: "prompt", label: "Prompt", state: status, sessionID, operation: "session.prompt", input: { text: "Review" }, detail: status === "failed" ? "Send failed" : status === "unknown" ? "The outcome is unknown" : undefined }], mutationToasts: status === "failed" || status === "unknown" ? [{ id: "msg_fixture", label: "Prompt", state: status, sessionID: "ses_fixture", detail: status === "failed" ? "Send failed" : "The outcome is unknown" }] : [] }), composerSetPending: (delivery: "steer" | "queue", text = "Review") => update({ ...state(), view: { ...state().view!, messages: [{ kind: "user", id: "msg_fixture", text, delivery, state: "pending", created: 1 }] } }), composerSetUpload: (percent: number) => update({ ...state(), upload: { sessionID: "ses_fixture", name: "capture.png", percent } }), composerSetStatus: (status: "idle" | "running" | "tool" | "tool-auto" | "family-auto" | "waiting" | "goal" | "goal-auto" | "auto") => update({ ...state(), view: { ...state().view!, status: status === "running" || status === "tool" || status === "tool-auto" || status === "waiting" ? "running" : "idle", executionStarted: status === "running" ? Date.now() - 6000 : undefined, messages: status === "tool" || status === "tool-auto" ? [{ kind: "assistant", id: "msg_tool", created: Date.now(), parts: [{ kind: "tool", callID: "call_tool", name: "shell", status: "running", content: [], started: Date.now() }] }] : [], requests: status === "waiting" ? [{ kind: "permission", id: "p", action: "read", resources: [], askedAt: Date.now() }] : [], autonomy: fixtureAutonomy(status === "goal-auto" || status === "auto" || status === "tool-auto" || status === "family-auto" ? { permissions: "auto", guardrails: "auto", answers: "manual" } as const : modesManual, status === "goal" || status === "goal-auto" ? { text: "Finish task", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } : undefined) }, sessionStatus: status === "family-auto" ? { running: new Set(["ses_fixture"]), attention: new Set<string>(), outstanding: new Set<string>(), failed: new Set<string>(), lost: new Set<string>() } : undefined }) })
 Object.assign(window, { composerClearCatalogs: () => update({ ...state(), catalogs: {} }) })
 Object.assign(window, { composerFailCatalogs: () => update({ ...state(), catalogs: Object.fromEntries(Object.keys(state().catalogs).map((key) => [key, { ...catalog, status: "error", message: "Catalog could not be loaded" }])) }) })
 Object.assign(window, { composerSwitchSession: () => update({ ...state(), activeSessionID: "ses_other", view: createSessionView("ses_other") }) })
 Object.assign(window, { composerResolveCompact: (accepted = true) => resolveCompact?.(accepted), composerSetDraft: store.setDraft })
 Object.assign(window, { composerSetEffective: (change: Record<string, unknown>) => update({ ...state(), view: { ...state().view!, autonomy: { ...state().view!.autonomy!, effective: { ...state().view!.autonomy!.effective!, ...change } } } }) })
 Object.assign(window, { composerClearAutonomy: () => update({ ...state(), view: { ...state().view!, autonomy: undefined } }) })
-Object.assign(window, { composerSetHardReviewPolicy: (hardModelReviews: boolean) => update({ ...state(), view: { ...state().view!, autonomy: { ...state().view!.autonomy!, ...flagsOff, effective: { ...fixtureEffective(flagsOff), guardrailsEnabled: false, hardModelReviews } } } }) })
+Object.assign(window, { composerSetModes: (modes: AutonomyModes, inherited: EffectiveAutonomyView["inherited"] = {}, effective: AutonomyModes = modes) => update({ ...state(), view: { ...state().view!, autonomy: { ...state().view!.autonomy!, ...modes, effective: fixtureEffective(effective, inherited) } } }) })
+Object.assign(window, { composerSetAutonomyMutation: (status: "sending" | "unknown" | "failed") => update({ ...state(), mutations: [{ id: "autonomy_modes_fixture", kind: "autonomy", label: "Autonomous", state: status, sessionID: "ses_fixture", operation: "session.autonomy.set", input: { permissions: "auto" },
+  ...(status === "sending" ? {} : { detail: status === "unknown" ? "Outcome unknown: Request timed out. Retry only if you want to send it again." : "Denied by policy" }) }] }) })
 Object.assign(window, { composerSetWorkspaceLoading: (loading: boolean) => {
   if (!loading) return releaseWorkspaces?.()
   workspaceGate = new Promise<void>((resolve) => { releaseWorkspaces = () => { workspaceGate = undefined; resolve() } })
   void base.queryClient.refetchQueries({ queryKey: remoteKeys.workspaces({ deviceID: "dev_fixture", generation: 0 }), type: "all" })
 } })
-Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" | "stopped" | "exhausted" | null) => update({ ...state(), view: { ...state().view!, autonomy: fixtureAutonomy({ ...flagsOff, autoPermission: true, autoGuardrail: true }, status ? { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } : undefined) } }) })
+Object.assign(window, { composerSetGoalStatus: (status: "active" | "completed" | "stopped" | "exhausted" | null) => update({ ...state(), view: { ...state().view!, autonomy: fixtureAutonomy({ permissions: "auto", guardrails: "auto", answers: "manual" }, status ? { text: "Finish task", status, iteration: 2, noProgress: 0, maxNoProgress: 3 } : undefined) } }) })
 Object.assign(window, { composerSetGoalPending: (pending: boolean) => update({ ...state(), mutations: pending
   ? [{ id: "goal_fixture", kind: "goal", label: "Set goal", state: "sending", sessionID: "ses_fixture", operation: "session.goal.set", input: { goal: "Finish task" } }]
   : [] }) })

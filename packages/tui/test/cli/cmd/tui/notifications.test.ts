@@ -10,6 +10,7 @@ import { localAutonomyView, type AutonomyState } from "../../../../src/util/sess
 import type { TuiAttentionNotifyInput } from "../../../../src/plugin/host-api"
 import type { ExternalNotificationKind } from "../../../../src/util/coordination"
 import type { Context } from "@ycoding-ai/plugin/tui/context"
+import { autonomyState } from "../../../fixture/autonomy"
 import { createTuiPluginContext } from "../../../fixture/tui-plugin"
 
 type Session = NonNullable<ReturnType<Context["data"]["session"]["get"]>>
@@ -137,7 +138,7 @@ async function setup(options: {
           },
           autonomy: {
             get: async ({ sessionID }: { sessionID: string }) => {
-              const snapshot = localAutonomyView(autonomy.get(sessionID) ?? { mode: "normal", yolo: false })
+              const snapshot = localAutonomyView(autonomy.get(sessionID) ?? autonomyState())
               autonomySnapshots.push(new WeakRef(snapshot))
               return snapshot
             },
@@ -916,7 +917,7 @@ describe("internal notifications TUI plugin", () => {
   test("keeps active goal settlement silent and alerts once when the goal completes", async () => {
     const harness = await setup()
     const goal = { text: "Finish the task", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 2 }
-    harness.autonomy.set("session", { mode: "normal", yolo: false, goal })
+    harness.autonomy.set("session", autonomyState({ goal }))
     harness.emit(executionStarted("event-1"))
     harness.emit(executionSucceeded("event-2"))
     await settle()
@@ -924,7 +925,7 @@ describe("internal notifications TUI plugin", () => {
 
     harness.emit(executionStarted("event-3"))
     await settle()
-    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: { ...goal, status: "completed" } })
+    harness.autonomy.set("session", autonomyState({ goal: { ...goal, status: "completed" } }))
     harness.emit(executionSucceeded("event-4"))
     harness.emit(executionSucceeded("event-5"))
     await settle()
@@ -941,8 +942,7 @@ describe("internal notifications TUI plugin", () => {
   test("does not replay a retained exhausted goal alert for later ordinary work", async () => {
     const harness = await setup()
     harness.autonomy.set("session", {
-      mode: "normal",
-      yolo: false,
+      ...autonomyState(),
       goal: { text: "Earlier task", status: "exhausted", iteration: 2, noProgress: 2, maxNoProgress: 2 },
     })
     harness.emit(executionStarted("event-1"))
@@ -964,8 +964,7 @@ describe("internal notifications TUI plugin", () => {
     const idle = Promise.withResolvers<void>()
     harness.waits.set("session", idle)
     harness.autonomy.set("session", {
-      mode: "normal",
-      yolo: false,
+      ...autonomyState(),
       goal: {
         text: "Finish the migration",
         status: "active",
@@ -982,8 +981,7 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([])
 
     harness.autonomy.set("session", {
-      mode: "normal",
-      yolo: false,
+      ...autonomyState(),
       goal: {
         text: "Finish the migration",
         status: "completed",
@@ -1010,8 +1008,7 @@ describe("internal notifications TUI plugin", () => {
     const idle = Promise.withResolvers<void>()
     harness.waits.set("session", idle)
     harness.autonomy.set("session", {
-      mode: "normal",
-      yolo: false,
+      ...autonomyState(),
       goal: {
         text: "Finish the migration",
         status: "active",
@@ -1023,8 +1020,7 @@ describe("internal notifications TUI plugin", () => {
     harness.emit(executionStarted("event-1"))
     harness.emit(executionSucceeded("event-2"))
     harness.autonomy.set("session", {
-      mode: "normal",
-      yolo: false,
+      ...autonomyState(),
       goal: {
         text: "Finish the migration",
         status: "exhausted",
@@ -1157,7 +1153,7 @@ describe("internal notifications TUI plugin", () => {
 
   test("ignores auto-resolved question", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: false, autoAnswer: true })
+    harness.autonomy.set("session", autonomyState({ answers: "auto" }))
     harness.emit({ id: "asked", created: 0, type: "question.asked", data: question("question-1") })
     harness.emit({
       id: "answered",
@@ -1169,9 +1165,9 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([])
   })
 
-  test("alerts for hard guardrail with auto-guardrail on", async () => {
+  test("alerts for hard guardrail with guardrails auto", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: false, autoGuardrail: true })
+    harness.autonomy.set("session", autonomyState({ guardrails: "auto" }))
     harness.emit({
       id: "asked",
       created: 0,
@@ -1182,9 +1178,9 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([guardrailNotification])
   })
 
-  test("ignores an auto-approved ordinary guardrail with auto-guardrail on", async () => {
+  test("ignores an auto-approved ordinary guardrail with guardrails auto", async () => {
     const harness = await setup()
-    harness.autonomy.set("session", { mode: "normal", yolo: false, autoGuardrail: true })
+    harness.autonomy.set("session", autonomyState({ guardrails: "auto" }))
     harness.emit({ id: "asked", created: 0, type: "guardrail.asked", data: guardrail("ordinary-1") })
     harness.emit({
       id: "approved",

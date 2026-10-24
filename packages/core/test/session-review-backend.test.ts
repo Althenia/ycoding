@@ -52,6 +52,7 @@ it.effect("sleep entry converts questions, forms and permission asks across Loca
   yield* Effect.addFinalizer(() => stop)
   const form = yield* forms.ask({ sessionID: root.id, title: "Details", fields }).pipe(Effect.forkScoped)
   const question = yield* questions.ask({ sessionID: root.id, questions: [{ header: "Details", question: "Which details?", options: [] }] }).pipe(Effect.forkScoped)
+  yield* sessions.autonomy.set({ sessionID: child.id, permissions: "yolo" })
   const ask = yield* permission.assert({ sessionID: child.id, agent: Agent.ID.make("review-test"), action: "edit", resources: ["file"] }).pipe(Effect.forkScoped)
   yield* Deferred.await(ready)
   yield* sessions.autonomy.set({ sessionID: child.id, sleep: true })

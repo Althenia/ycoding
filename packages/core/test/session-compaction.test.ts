@@ -2023,7 +2023,7 @@ it.effect("refreshes protected state after generation without repeating the help
     responseForRequest = () => checkpoint(1)
     beforeResponse = db
       .update(SessionTable)
-      .set({ autonomy_revision: 1, autonomy: { mode: "normal", yolo: true }, orchestration_revision: 1 })
+      .set({ autonomy_revision: 1, autonomy: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo" }, orchestration_revision: 1 })
       .where(eq(SessionTable.id, sessionID))
       .run()
       .pipe(Effect.orDie, Effect.asVoid)
@@ -2039,8 +2039,8 @@ it.effect("refreshes protected state after generation without repeating the help
     })
     if ("_tag" in memory) throw memory
     const authority = memory.facts.find((fact) => fact.text.startsWith("Authoritative current Session state"))
-    expect(authority?.text).toContain('"yolo":true')
-    expect(authority?.text).not.toContain('"yolo":false')
+    expect(authority?.text).toContain('"answers":"yolo","guardrails":"yolo","mode":"normal","permissions":"yolo"')
+    expect(authority?.text).not.toContain('"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"')
     retainManifestGuardrail(sessionID, manifest)
     const context = yield* SessionContextState.Service
     yield* context.activate({ sessionID, manifest })
@@ -2074,7 +2074,7 @@ itMandatory.effect("supersedes stale authority relocated into every scalar on a 
       fact.text.startsWith("Authoritative current Session state"),
     )
     expect(firstAuthority).toHaveLength(1)
-    expect(firstAuthority[0]!.text).toContain('"yolo":false')
+    expect(firstAuthority[0]!.text).toContain('"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"')
     const staleAuthority = firstAuthority[0]!.text
     retainManifestGuardrail(sessionID, first)
     yield* context.activate({ sessionID, manifest: first })
@@ -2082,7 +2082,7 @@ itMandatory.effect("supersedes stale authority relocated into every scalar on a 
     // The Session's authoritative live state moves between compactions.
     yield* db
       .update(SessionTable)
-      .set({ autonomy_revision: 1, autonomy: { mode: "normal", yolo: true }, orchestration_revision: 1 })
+      .set({ autonomy_revision: 1, autonomy: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo" }, orchestration_revision: 1 })
       .where(eq(SessionTable.id, sessionID))
       .run()
       .pipe(Effect.orDie)
@@ -2117,8 +2117,8 @@ itMandatory.effect("supersedes stale authority relocated into every scalar on a 
     if ("_tag" in secondMemory) throw secondMemory
     const authority = authorityTexts(secondMemory)
     expect(authority).toHaveLength(1)
-    expect(authority[0]).toContain('"yolo":true')
-    expect(authority[0]).not.toContain('"yolo":false')
+    expect(authority[0]).toContain('"answers":"yolo","guardrails":"yolo","mode":"normal","permissions":"yolo"')
+    expect(authority[0]).not.toContain('"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"')
     expect(secondMemory.objective).not.toBe(staleAuthority)
     expect(secondMemory.current_state).not.toBe(staleAuthority)
     expect(secondMemory.continuation).not.toBe(staleAuthority)
@@ -2167,7 +2167,7 @@ itMandatory.effect("supersedes an authoritative fact routed into a categorized f
       .pipe(Effect.orDie)
     yield* db
       .update(SessionTable)
-      .set({ autonomy_revision: 1, autonomy: { mode: "normal", yolo: true } })
+      .set({ autonomy_revision: 1, autonomy: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo" } })
       .where(eq(SessionTable.id, sessionID))
       .run()
       .pipe(Effect.orDie)
@@ -2192,7 +2192,7 @@ itMandatory.effect("supersedes an authoritative fact routed into a categorized f
     const authority = authorityTexts(secondMemory)
     expect(authority).toHaveLength(1)
     expect(authority[0]).toContain('"status":"completed"')
-    expect(authority[0]).toContain('"yolo":true')
+    expect(authority[0]).toContain('"answers":"yolo","guardrails":"yolo","mode":"normal","permissions":"yolo"')
     expect(authority[0]).not.toContain('"status":"pending"')
   }),
 )

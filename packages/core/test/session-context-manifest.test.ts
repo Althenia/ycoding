@@ -1159,7 +1159,7 @@ describe("ContextManifest activation integration", () => {
           fixture.sessionID,
           fixture.db
             .update(SessionTable)
-            .set({ autonomy: { mode: "normal", yolo: true }, autonomy_revision: 1 })
+            .set({ autonomy: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo" }, autonomy_revision: 1 })
             .where(eq(SessionTable.id, fixture.sessionID))
             .run()
             .pipe(Effect.orDie, Effect.asVoid),

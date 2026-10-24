@@ -2,8 +2,10 @@ import { expect, test } from "bun:test"
 import type { SessionMessageAssistant, SessionMessageInfo } from "@ycoding-ai/client"
 import { messageBoundaryIDs, reduceSessionRows } from "../../../src/routes/session/rows"
 
+const chat: SessionMessageInfo = { type: "user", id: "chat", text: "Chat", time: { created: 0 } }
+
 test.each(["root", "child"])(
-  "places only %s review provenance chronologically and keeps family pending at the tail",
+  "places only %s rejections chronologically, omits automatic approvals, and keeps family pending at the tail",
   (sessionID) => {
     const messages: SessionMessageInfo[] = [
       { type: "user", id: "first", text: "Before reviews", time: { created: 10 } },
@@ -11,22 +13,11 @@ test.each(["root", "child"])(
     ]
     const rows = reduceSessionRows(messages, new Set(), false, {
       sessionID,
-      decisions: [{ sessionID: "root", created: 30, requestID: "decided-root", reply: "once", confidence: 0.9 }],
-      dismissals: [
-        {
-          sessionID: "root",
-          created: 20,
-          eventID: "dismissed-root",
-          ruleID: "standard.review.force-push",
-          confidence: 0.95,
-        },
-        {
-          sessionID: "child",
-          created: 40,
-          eventID: "dismissed-child",
-          ruleID: "standard.review.git-destructive",
-          confidence: 0.96,
-        },
+      decisions: [
+        { sessionID: "root", created: 20, requestID: "approved-root", reply: "once", choice: "allow", confidence: 0.9 },
+        { sessionID: "root", created: 25, requestID: "always-root", reply: "always", confidence: 1 },
+        { sessionID: "root", created: 30, requestID: "decided-root", reply: "reject", confidence: 0.9 },
+        { sessionID: "child", created: 40, requestID: "decided-child", reply: "reject", choice: "deny", confidence: 0.96 },
       ],
       pending: [
         {
@@ -45,8 +36,8 @@ test.each(["root", "child"])(
       rows.map((row) => (row.type === "guardrail" ? row.requestID : row.type === "message" ? row.messageID : row.type)),
     ).toEqual(
       sessionID === "root"
-        ? ["first", "dismissed-root", "decided-root", "last", "pending"]
-        : ["first", "dismissed-child", "last", "pending"],
+        ? ["first", "decided-root", "last", "pending"]
+        : ["first", "decided-child", "last", "pending"],
     )
     expect(rows.at(-1)).toMatchObject({ type: "guardrail", requestID: "pending" })
   },
@@ -83,7 +74,6 @@ test("guardrail provenance detail reads the linked resident tool call", () => {
         ruleIDs: ["standard.review.outside-repository"],
       },
     ],
-    dismissals: [],
     pending: [],
   })
   const row = rows.find((item) => item.type === "guardrail" && item.requestID === "decided-linked")
@@ -107,9 +97,9 @@ test("settled reviews precede untimed text after a completed tool on replay", ()
   const rows = reduceSessionRows([message], new Set(), false, {
     sessionID: "root",
     decisions: Array.from({ length: 5 }, (_, index) => ({
-      sessionID: "root", created: 5 + index, requestID: `settled-${index}`, reply: "once" as const,
+      sessionID: "root", created: 5 + index, requestID: `settled-${index}`, reply: "reject" as const,
     })),
-    dismissals: [], pending: [],
+    pending: [],
   })
   expect(rows.map((row) => row.type === "guardrail" ? row.requestID : row.type === "part" ? row.ref.partID : row.type))
     .toEqual(["group", "control", "settled-0", "settled-1", "settled-2", "settled-3", "settled-4", "text:0"])
@@ -117,7 +107,7 @@ test("settled reviews precede untimed text after a completed tool on replay", ()
 
 test("compaction replay omits covered audit history but keeps retained outcomes and pending family reviews", () => {
   const decisions = [
-    { sessionID: "root", created: 5, requestID: "covered", reply: "once" as const },
+    { sessionID: "root", created: 5, requestID: "covered", reply: "reject" as const },
     { sessionID: "root", created: 25, requestID: "retained", reply: "reject" as const },
   ]
   const rows = reduceSessionRows([
@@ -126,7 +116,6 @@ test("compaction replay omits covered audit history but keeps retained outcomes 
     { type: "user", id: "later-chat", text: "Later", time: { created: 50 } },
   ], new Set(), false, {
     sessionID: "root", decisions,
-    dismissals: [{ sessionID: "root", created: 6, eventID: "covered-dismissal", ruleID: "standard.review.outside-repo", confidence: 0.99 }],
     pending: [{ id: "pending-family", rootSessionID: "root", sessionID: "child", action: "shell", resources: ["fixture"], ruleIDs: [], reason: "Needs a decision", standard: false, hardReview: true }],
   })
   expect(rows.map((row) => row.type === "guardrail" ? row.requestID : row.type === "message" ? row.messageID : row.type))
@@ -144,75 +133,57 @@ test("guardrail provenance detail omits the tool line without a resident source"
         sessionID: "root",
         created: 30,
         requestID: "decided-unresident",
-        reply: "once",
+        reply: "reject",
         confidence: 0.85,
         source: { messageID: "missing", callID: "call-9" },
         ruleIDs: ["custom.review.deploy"],
       },
     ],
-    dismissals: [
-      {
-        sessionID: "root",
-        created: 20,
-        eventID: "dismissed-nosource",
-        ruleID: "standard.review.database-destructive",
-        confidence: 0.99,
-      },
-    ],
     pending: [],
   })
   const decided = rows.find((item) => item.type === "guardrail" && item.requestID === "decided-unresident")
-  const dismissed = rows.find((item) => item.type === "guardrail" && item.requestID === "dismissed-nosource")
   expect(decided?.type).toBe("guardrail")
-  expect(dismissed?.type).toBe("guardrail")
-  if (decided?.type !== "guardrail" || dismissed?.type !== "guardrail") return
+  if (decided?.type !== "guardrail") return
   expect(decided.detail).toEqual([
     { label: "rule", value: "custom.review.deploy" },
-    { label: "outcome", value: "decision model approved once · 0.85" },
-  ])
-  expect(dismissed.detail).toEqual([
-    { label: "rule", value: "standard.review.database-destructive" },
-    { label: "outcome", value: "match verifier · not a real match · 0.99" },
+    { label: "outcome", value: "decision model rejected · 0.85" },
   ])
 })
 
 test("guardrail grades retain every alternative, confidence and escaped evidence", () => {
-  const rows = reduceSessionRows([], new Set(), true, {
+  const rows = reduceSessionRows([chat], new Set(), true, {
     sessionID: "root",
     decisions: [
       {
         sessionID: "root",
         created: 30,
         requestID: "graded",
-        reply: "always",
-        choice: "approve_all",
+        reply: "reject",
+        choice: "deny",
         confidence: 1,
         grades: [
-          { choice: "approve_all", confidence: 1, evidence: "Scoped \u001b[31m change" },
-          { choice: "approve", confidence: 0.799999, evidence: "Below the approval threshold" },
-          { choice: "reject", confidence: 0, evidence: "No destructive effect" },
+          { choice: "deny", confidence: 1, evidence: "Destroys \u001b[31m history" },
+          { choice: "allow", confidence: 0.799999, evidence: "Below the approval threshold" },
           { choice: "escalate", confidence: 0.2, evidence: "No unresolved scope" },
         ],
       },
     ],
-    dismissals: [],
     pending: [],
   })
   const row = rows.find((item) => item.type === "guardrail")
   expect(row?.type).toBe("guardrail")
   if (row?.type !== "guardrail") return
-  expect(row.decided).toBe("decision model approved for this session · 1")
+  expect(row.decided).toBe("decision model rejected · 1")
   expect(row.detail).toEqual([
-    { label: "outcome", value: "decision model approved for this session · 1" },
-    { label: "grade approve all (selected)", value: "1 · Scoped \\u001b[31m change" },
-    { label: "grade approve", value: "0.799999 · Below the approval threshold" },
-    { label: "grade reject", value: "0 · No destructive effect" },
+    { label: "outcome", value: "decision model rejected · 1" },
+    { label: "grade deny (selected)", value: "1 · Destroys \\u001b[31m history" },
+    { label: "grade allow", value: "0.799999 · Below the approval threshold" },
     { label: "grade escalate", value: "0.2 · No unresolved scope" },
   ])
 })
 
 test("guardrail grades never infer a selected choice from confidence", () => {
-  const rows = reduceSessionRows([], new Set(), true, {
+  const rows = reduceSessionRows([chat], new Set(), true, {
     sessionID: "root",
     decisions: [
       {
@@ -223,7 +194,6 @@ test("guardrail grades never infer a selected choice from confidence", () => {
         grades: [{ choice: "approve_all", confidence: 1, evidence: "Reported grade without a selected choice" }],
       },
     ],
-    dismissals: [],
     pending: [],
   })
   const row = rows.find((item) => item.type === "guardrail")
@@ -542,47 +512,59 @@ function pending() {
   return { status: "streaming" as const, input: "" }
 }
 
-test("baseline allow and deny choices render their outcome and graded provenance", () => {
+test("automatic approvals render no row while rejections keep graded provenance", () => {
   const grades = [
-    { choice: "allow", confidence: 0.9, evidence: "Scoped to the repository" },
-    { choice: "deny", confidence: 0.05, evidence: "No destructive effect" },
+    { choice: "deny", confidence: 0.8, evidence: "Deletes shared history" },
+    { choice: "allow", confidence: 0.15, evidence: "Scoped to the repository" },
     { choice: "escalate", confidence: 0.05, evidence: "No ambiguity" },
   ] as const
-  const rows = reduceSessionRows([], new Set(), true, {
+  const rows = reduceSessionRows([chat], new Set(), true, {
     sessionID: "root",
     decisions: [
-      { sessionID: "root", created: 1, requestID: "baseline-allow", reply: "once", choice: "allow", confidence: 0.9, grades: [...grades] },
-      { sessionID: "root", created: 2, requestID: "baseline-deny", reply: "reject", choice: "deny", confidence: 0.8 },
+      { sessionID: "root", created: 1, requestID: "baseline-allow", reply: "once", choice: "allow", confidence: 0.9 },
+      { sessionID: "root", created: 2, requestID: "baseline-deny", reply: "reject", choice: "deny", confidence: 0.8, grades: [...grades] },
     ],
-    dismissals: [],
     pending: [],
   })
-  const allow = rows.find((item) => item.type === "guardrail" && item.requestID === "baseline-allow")
+  expect(rows.some((item) => item.type === "guardrail" && item.requestID === "baseline-allow")).toBe(false)
   const deny = rows.find((item) => item.type === "guardrail" && item.requestID === "baseline-deny")
-  if (allow?.type !== "guardrail" || deny?.type !== "guardrail") throw new Error("expected baseline guardrail rows")
-  expect(allow.detail).toEqual([
-    { label: "outcome", value: "decision model approved once · 0.9" },
-    { label: "grade allow (selected)", value: "0.9 · Scoped to the repository" },
-    { label: "grade deny", value: "0.05 · No destructive effect" },
+  if (deny?.type !== "guardrail") throw new Error("expected a rejection row")
+  expect(deny.detail).toEqual([
+    { label: "outcome", value: "decision model rejected · 0.8" },
+    { label: "grade deny (selected)", value: "0.8 · Deletes shared history" },
+    { label: "grade allow", value: "0.15 · Scoped to the repository" },
     { label: "grade escalate", value: "0.05 · No ambiguity" },
   ])
-  expect(deny.detail).toEqual([{ label: "outcome", value: "decision model rejected · 0.8" }])
 })
 
-test("guardrail decisions name their baseline or YOLO authority only when recorded", () => {
-  const rows = reduceSessionRows([], new Set(), true, {
+test("settled rejections wait for resident chat while pending reviews render", () => {
+  const rows = reduceSessionRows([], new Set(), false, {
+    sessionID: "root",
+    decisions: [{ sessionID: "root", created: 5, requestID: "settled", reply: "reject", choice: "deny", confidence: 0.9 }],
+    pending: [{ id: "pending", rootSessionID: "root", sessionID: "root", action: "shell", resources: [], ruleIDs: [], reason: "Needs you", standard: true }],
+  })
+  expect(rows).toEqual([{ type: "guardrail", requestID: "pending", reason: "Needs you" }])
+  expect(reduceSessionRows([{ type: "user", id: "later", text: "Later", time: { created: 9 } }], new Set(), false, {
+    sessionID: "root",
+    decisions: [{ sessionID: "root", created: 5, requestID: "older", reply: "reject", confidence: 0.9 }],
+    pending: [],
+  }).map((row) => row.type === "message" ? row.messageID : row.type)).toEqual(["later"])
+})
+
+test("guardrail rejections name their baseline or YOLO authority only when recorded", () => {
+  const rows = reduceSessionRows([chat], new Set(), true, {
     sessionID: "root",
     decisions: [
-      { sessionID: "root", created: 1, requestID: "baseline", reply: "once", authority: "baseline", choice: "allow", confidence: 0.9 },
+      { sessionID: "root", created: 1, requestID: "baseline", reply: "reject", authority: "baseline", choice: "deny", confidence: 0.9 },
       { sessionID: "root", created: 2, requestID: "yolo", reply: "reject", authority: "yolo", choice: "approve", confidence: 0.8 },
-      { sessionID: "root", created: 3, requestID: "historical", reply: "once", confidence: 0.85 },
+      { sessionID: "root", created: 3, requestID: "historical", reply: "reject", confidence: 0.85 },
+      { sessionID: "root", created: 4, requestID: "approved", reply: "once", authority: "yolo", choice: "allow", confidence: 0.95 },
     ],
-    dismissals: [],
     pending: [],
   })
   expect(rows.flatMap((row) => (row.type === "guardrail" ? [row.decided] : []))).toEqual([
-    "baseline decision model approved once · 0.9",
+    "baseline decision model rejected · 0.9",
     "YOLO decision model approve · 0.8 · rejected",
-    "decision model approved once · 0.85",
+    "decision model rejected · 0.85",
   ])
 })

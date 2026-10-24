@@ -20,7 +20,7 @@ test("a connector that never answers todo.list does not hold Session hydration o
       } }
       if (operation === "session.todo.list") return pending.promise
       if (operation === "notice.subscribe") return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
-      if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } } }
+      if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } } }
       return { status: "ok" as const, value: { data: [] } }
     },
   }) })

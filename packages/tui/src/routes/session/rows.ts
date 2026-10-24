@@ -93,9 +93,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
     const rows = reduceSessionRows(visible, inputs, data.session.status(sessionID()) === "idle", {
       sessionID: sessionID(),
       decisions: data.session.guardrail.decided(sessionID()),
-      dismissals: data.session.guardrail.dismissed(sessionID()),
       pending: data.session.guardrail.list(sessionID()),
-      compactionTime: data.session.compaction.list(sessionID()).findLast((item) => item.status === "completed")?.time.created,
     })
     if (showLifecycle) {
       const row: SessionRow = { type: "compaction", jobID: latestLifecycle.jobID }
@@ -159,11 +157,6 @@ export function createSessionRows(sessionID: Accessor<string>) {
         // The closing assistant footer depends on execution state, so idling must re-reduce.
         data.session.status(sessionID()),
         ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),
-        ...data.session.guardrail
-          .dismissed(sessionID())
-          .map(
-            (item) => `${item.eventID}:${item.confidence}:${item.source?.messageID ?? ""}:${item.source?.callID ?? ""}`,
-          ),
         ...data.session.guardrail
           .decided(sessionID())
           .map(
@@ -365,7 +358,6 @@ export function reduceSessionRows(
   idle = false,
   guardrails?: {
     sessionID: string
-    compactionTime?: number
     decisions: ReadonlyArray<
       NonNullable<GuardrailStatusOutput["decisions"]>[number] & {
         action?: string
@@ -373,61 +365,45 @@ export function reduceSessionRows(
         ruleIDs?: readonly string[]
       }
     >
-    dismissals: ReadonlyArray<
-      NonNullable<GuardrailStatusOutput["dismissals"]>[number] & { source?: GuardrailSourceRef }
-    >
     pending: GuardrailRequestListOutput
   },
 ) {
-  const checkpoint = messages.findLast(
-    (message) => isCompactionCheckpoint(message) || (message.type === "compaction" && message.status === "completed"),
-  )
-  const compactionTime = checkpoint?.time.created ?? guardrails?.compactionTime
-  const auditFloor = compactionTime === undefined ? 0
-    : messages.find((message) => message.type !== "compaction" && !isCompactionCheckpoint(message) && !inputs.has(message.id))?.time.created ?? compactionTime
-  const provenance = [
-    ...(guardrails?.decisions ?? [])
-      .filter((item) => item.sessionID === guardrails?.sessionID && item.created >= auditFloor)
-      .map((item) => {
-        const model = item.authority === "baseline" ? "baseline decision model" : item.authority === "yolo" ? "YOLO decision model" : "decision model"
-        const decided =
-          (item.choice === "approve" || item.choice === "approve_all" || item.choice === "allow") && item.reply === "reject"
-            ? `${model} ${item.choice.replaceAll("_", " ")} · ${item.confidence?.toString() ?? "unreported"} · rejected`
-            : `${model} ${item.reply === "reject" ? "rejected" : item.reply === "always" ? "approved for this session" : "approved once"} · ${item.confidence?.toString() ?? "confidence unreported"}`
-        return {
-          created: item.created,
-          row: {
-            type: "guardrail",
-            requestID: item.requestID,
-            reason: item.action ?? "guardrail review",
-            decided,
-            detail: guardrailRowDetail(messages, {
-              source: item.source,
-              rules: item.ruleIDs ?? [],
-              outcome: decided,
-              action: item.action,
-              grades: item.grades,
-              choice: item.choice,
-            }),
-          } satisfies SessionRow,
-        }
-      }),
-    ...(guardrails?.dismissals ?? [])
-      .filter((item) => item.sessionID === guardrails?.sessionID && item.created >= auditFloor)
-      .map((item) => {
-        const decided = `match verifier · not a real match · ${item.confidence.toString()}`
-        return {
-          created: item.created,
-          row: {
-            type: "guardrail",
-            requestID: item.eventID,
-            reason: item.ruleID,
-            decided,
-            detail: guardrailRowDetail(messages, { source: item.source, rules: [item.ruleID], outcome: decided }),
-          } satisfies SessionRow,
-        }
-      }),
-  ].sort((left, right) => left.created - right.created || left.row.requestID.localeCompare(right.row.requestID))
+  const chatStart = messages.find(
+    (message) => message.type !== "compaction" && !isCompactionCheckpoint(message) && !inputs.has(message.id),
+  )?.time.created
+  const provenance = (guardrails?.decisions ?? [])
+    .filter(
+      (item) =>
+        item.reply === "reject" &&
+        item.sessionID === guardrails?.sessionID &&
+        chatStart !== undefined &&
+        item.created >= chatStart,
+    )
+    .map((item) => {
+      const model = item.authority === "baseline" ? "baseline decision model" : item.authority === "yolo" ? "YOLO decision model" : "decision model"
+      const decided =
+        item.choice === "approve" || item.choice === "approve_all" || item.choice === "allow"
+          ? `${model} ${item.choice.replaceAll("_", " ")} · ${item.confidence?.toString() ?? "unreported"} · rejected`
+          : `${model} rejected · ${item.confidence?.toString() ?? "confidence unreported"}`
+      return {
+        created: item.created,
+        row: {
+          type: "guardrail",
+          requestID: item.requestID,
+          reason: item.action ?? "guardrail review",
+          decided,
+          detail: guardrailRowDetail(messages, {
+            source: item.source,
+            rules: item.ruleIDs ?? [],
+            outcome: decided,
+            action: item.action,
+            grades: item.grades,
+            choice: item.choice,
+          }),
+        } satisfies SessionRow,
+      }
+    })
+    .sort((left, right) => left.created - right.created || left.row.requestID.localeCompare(right.row.requestID))
   let nextProvenance = 0
   const insertThrough = (rows: SessionRow[], created: number) => {
     while (nextProvenance < provenance.length && provenance[nextProvenance]!.created <= created) {

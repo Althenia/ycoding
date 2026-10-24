@@ -217,7 +217,7 @@ async function boot(scenario: Scenario) {
   const events = await collectEvents(server)
   const json = { "content-type": "application/json" }
   if (scenario.yolo !== false) {
-    const response = await server.request(`/api/session/${sessionID}/autonomy`, { method: "PUT", headers: json, body: JSON.stringify({ yolo: true }) })
+    const response = await server.request(`/api/session/${sessionID}/autonomy`, { method: "PUT", headers: json, body: JSON.stringify({ permissions: "yolo", guardrails: "yolo", answers: "yolo" }) })
     expect(response.status, await response.clone().text()).toBe(200)
   }
   return {
@@ -229,7 +229,7 @@ async function boot(scenario: Scenario) {
     mainRequests,
     toolReturned: second.promise,
     setYolo: async (yolo: boolean) => {
-      const response = await server.request(`/api/session/${sessionID}/autonomy`, { method: "PUT", headers: json, body: JSON.stringify({ yolo }) })
+      const response = await server.request(`/api/session/${sessionID}/autonomy`, { method: "PUT", headers: json, body: JSON.stringify(yolo ? { permissions: "yolo", guardrails: "yolo", answers: "yolo" } : { permissions: "manual", guardrails: "manual", answers: "manual" }) })
       expect(response.status, await response.clone().text()).toBe(200)
     },
     prompt: async () => {
@@ -392,36 +392,27 @@ describe("decision recovery end to end through the real server, Permission, and 
     expect(existsSync(join(run.directory, "manual.txt"))).toBe(false)
   }, timeout)
 
-  test("baseline assessment with an unsupported decision pin neither hops to the eligible helper nor enables YOLO", async () => {
-    const run = await boot({ command: "touch baseline-pinned.txt", strict: () => allow(0.99), yolo: false, baseline: true, pinUnsupported: false, pinDecision: true })
-    await run.prompt()
-    const asked = await run.events.next("permission.asked", (event) => event.type === "permission.asked")
-    expect(asked.data).toMatchObject({ action: "shell", escalation: { authority: "baseline", reason: "unsupported-output" } })
-    expect(run.strict.calls).toEqual([])
-    expect(existsSync(join(run.directory, "baseline-pinned.txt"))).toBe(false)
-    expect(run.events.of("session.decision.audited").map((event) => event.data)).toEqual([
-      expect.objectContaining({ purpose: "permission", authority: "baseline", outcome: "failed", reason: "unsupported-output" }),
-    ])
-    const pending = await run.permissions()
-    expect(pending).toHaveLength(1)
-    await run.rejectPermission(pending[0]!.id)
-    await run.events.next("permission.replied", (event) => event.type === "permission.replied" && event.data.requestID === pending[0]!.id)
-  }, timeout)
-
-  test("baseline assessment on its own strict helper approves with baseline authority in one request while YOLO stays off", async () => {
-    const run = await boot({ command: "touch baseline-approved.txt", strict: () => allow(), yolo: false, baseline: true, pinUnsupported: false })
-    await run.prompt()
-    await deadline(run.toolReturned, "the shell call never settled")
-    expect(existsSync(join(run.directory, "baseline-approved.txt"))).toBe(true)
-    expect(run.strict.calls).toHaveLength(1)
-    expect(await run.permissions()).toEqual([])
-    expect(run.events.of("session.permission.assessed").map((event) => event.data)).toEqual([
-      expect.objectContaining({ outcome: "allow", via: "baseline", authority: "baseline" }),
-    ])
-    expect(run.events.of("session.decision.audited").map((event) => event.data)).toEqual([
-      expect.objectContaining({ authority: "baseline", agent: "decision", outcome: "succeeded" }),
-    ])
-  }, timeout)
+  for (const scenario of [
+    { name: "a pinned decision helper", file: "manual-pinned.txt", pinDecision: true },
+    { name: "an approving strict helper", file: "manual-approving.txt", pinDecision: false },
+  ]) {
+    test(`with guardrails.decide_reviews on and Manual permissions, ${scenario.name} is never called and the ask goes to the human`, async () => {
+      const run = await boot({ command: `touch ${scenario.file}`, strict: () => allow(0.99), yolo: false, baseline: true, pinUnsupported: false, pinDecision: scenario.pinDecision })
+      await run.prompt()
+      const asked = await run.events.next("permission.asked", (event) => event.type === "permission.asked")
+      expect(asked.data).toMatchObject({ sessionID: run.sessionID, action: "shell" })
+      expect(asked.data).not.toHaveProperty("escalation")
+      expect(run.strict.calls).toEqual([])
+      expect(run.events.of("session.permission.assessed")).toEqual([])
+      expect(run.events.of("session.decision.audited")).toEqual([])
+      expect(existsSync(join(run.directory, scenario.file))).toBe(false)
+      const pending = await run.permissions()
+      expect(pending).toHaveLength(1)
+      await run.rejectPermission(pending[0]!.id)
+      await run.events.next("permission.replied", (event) => event.type === "permission.replied" && event.data.requestID === pending[0]!.id)
+      expect(existsSync(join(run.directory, scenario.file))).toBe(false)
+    }, timeout)
+  }
 
   test("without a configured decision helper the helper inherits the unsupported Session model and escalates without any provider attempt", async () => {
     const run = await boot({ command: "touch inherited.txt", strict: () => allow(0.99), pinUnsupported: false, omitHelper: true })

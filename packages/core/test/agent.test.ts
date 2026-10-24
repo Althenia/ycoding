@@ -318,30 +318,35 @@ describe("Agent", () => {
       }
       expect(god.system).toContain("Denies remain denied.")
       expect(god.system).toContain(
-        "Four independent Session toggles: YOLO, autoPermission, autoGuardrail, and autoAnswer, each off by default; changing one rewrites none of the others",
+        "Permissions, guardrails, and answers each have an independent decision mode: Manual (the default), Auto, or YOLO; changing one rewrites none of the others",
       )
-      expect(god.system).toContain("autoPermission approves ask permissions by rule across the managed-task chain")
+      expect(god.system).toContain("permissions Auto approves ask permissions and is inherited across the managed-task chain")
       expect(god.system).toContain(
-        "awake autoGuardrail approves ordinary standard guardrail reviews, never hard or custom-rule reviews",
-      )
-      expect(god.system).toContain(
-        "autoAnswer supplies only an explicit valid default or a single option labelled (Recommended)",
+        "guardrails Auto, read from the root family, approves ordinary standard reviews while awake, never hard or custom-rule reviews",
       )
       expect(god.system).toContain(
-        "YOLO alone enables the hidden yolo-permission, yolo-guardrail, and yolo-answer evaluators",
+        "answers Auto supplies only a valid explicit default or exactly one option labelled (Recommended) and is Session-local",
       )
-      expect(god.system).toContain("only YOLO generates answers, including free text")
-      expect(god.system).toContain("guardrails.decide_reviews is on unless explicitly false")
-      expect(god.system).toContain("strict allow, deny, or escalate")
-      expect(god.system).toContain("never answers questions or forms")
-      expect(god.system).toContain("A hard review is never model-approved")
+      expect(god.system).toContain(
+        "YOLO enables only that category's hidden evaluator (yolo-permission, yolo-guardrail, or yolo-answer)",
+      )
+      expect(god.system).toContain("only the answer evaluator generates answers, including free text")
+      expect(god.system).toContain(
+        "The permission and guardrail evaluators assess with a strict allow, deny, or escalate outcome and never answer questions or forms",
+      )
+      expect(god.system).toContain(
+        "Manual is human-only: an unresolved request goes to a human with no model assessment or match verification",
+      )
+      expect(god.system).toContain("Auto applies only deterministic rules with no model fallback")
+      expect(god.system).toContain(
+        "Guardrail match verification runs only under guardrails YOLO while guardrails.decide_reviews is on, which it is unless explicitly false",
+      )
+      expect(god.system).toContain("A hard or custom-rule review is never model-approved: the evaluator can only deny or escalate")
       expect(god.system).toContain("Goals grant no permission, answer, or review authority")
-      expect(god.system).toContain(
-        "Enabled standard verification dismisses only a confident non-match at confidence ≥0.9",
-      )
+      expect(god.system).toContain("it dismisses only a confident non-match at confidence ≥0.9")
       expect(god.system).toContain("denies and custom rules are never verified")
       expect(god.system).toContain("asleep, it defers to the review box")
-      for (const stale of ["YOLO 1", "YOLO 2", "default false", "≥0.95", "Session's auto-answer toggle, default off"])
+      for (const stale of ["YOLO 1", "YOLO 2", "default false", "≥0.95", "Session's auto-answer toggle, default off", "autoPermission", "autoGuardrail", "autoAnswer"])
         expect(god.system).not.toContain(stale)
       expect(god.system).toContain("Implement or delegate as your role directs.")
       expect(god.system).toContain("launch every ready independent task in parallel")

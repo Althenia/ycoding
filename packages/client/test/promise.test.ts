@@ -49,7 +49,7 @@ test("preserves explicit default model selection alongside model metadata", asyn
 test("R7 sends explicit goal resume and preserves the returned objective", async () => {
   const requests: Request[] = []
   const state = {
-    mode: "normal", yolo: true,
+    mode: "normal", permissions: "manual", guardrails: "yolo", answers: "auto",
     goal: { text: "Verify the release", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 3 },
   }
   const client = YCoding.make({
@@ -59,11 +59,11 @@ test("R7 sends explicit goal resume and preserves the returned objective", async
       return Response.json({ data: state })
     },
   })
-  expect(await client.session.autonomy.set({ sessionID: "ses_goal_client", payload: { goal: true, yolo: true } })).toEqual(state)
+  expect(await client.session.autonomy.set({ sessionID: "ses_goal_client", payload: { goal: true } })).toEqual(state)
   expect(requests).toHaveLength(1)
   expect(requests[0]!.method).toBe("PUT")
   expect(new URL(requests[0]!.url).pathname).toBe("/api/session/ses_goal_client/autonomy")
-  expect(await requests[0]!.json()).toEqual({ goal: true, yolo: true })
+  expect(await requests[0]!.json()).toEqual({ goal: true })
 })
 
 test("outstanding reports lost shell notices through the generated Session client", async () => {

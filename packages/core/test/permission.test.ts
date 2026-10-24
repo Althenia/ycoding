@@ -150,8 +150,7 @@ describe("Permission", () => {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])
       const service = yield* Permission.Service
       const autonomy = yield* SessionAutonomy.Service
-      yield* autonomy.set({ sessionID: Session.ID.make("ses_test"), autoPermission: true })
-      yield* autonomy.setYolo({ sessionID: Session.ID.make("ses_test"), yolo: true })
+      yield* autonomy.set({ sessionID: Session.ID.make("ses_test"), permissions: "auto" })
       const value = assertion({ requireHuman: true, save: ["src/*"] })
       expect(yield* service.ask(value)).toEqual({ id: value.id, effect: "ask" })
       expect((yield* service.get(value.id))?.save).toBeUndefined()
@@ -194,17 +193,16 @@ describe("Permission", () => {
     }),
   )
 
-  it.effect("auto allows ask decisions only with the autoPermission rule flag and records the rule fact", () =>
+  it.effect("auto allows ask decisions only with permissions Auto and records the rule fact", () =>
     Effect.gen(function* () {
       yield* setup()
       const autonomy = yield* SessionAutonomy.Service
       const service = yield* Permission.Service
       const sessionID = Session.ID.make("ses_test")
-      yield* autonomy.setYolo({ sessionID, yolo: true })
+      yield* autonomy.set({ sessionID, permissions: "yolo" })
       expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "ask" })
       yield* service.reply({ requestID: Permission.ID.create("per_test"), reply: "once" })
-      yield* autonomy.setYolo({ sessionID, yolo: false })
-      yield* autonomy.set({ sessionID, autoPermission: true })
+      yield* autonomy.set({ sessionID, permissions: "auto" })
       expect(yield* service.ask(assertion())).toEqual({ id: Permission.ID.create("per_test"), effect: "allow" })
       yield* service.assert(assertion())
       expect(yield* service.list()).toEqual([])
@@ -219,7 +217,7 @@ describe("Permission", () => {
     }),
   )
 
-  it.effect("an active goal does not auto allow ask decisions at YOLO 0", () =>
+  it.effect("an active goal does not auto allow ask decisions under Manual permissions", () =>
     Effect.gen(function* () {
       yield* setup()
       const autonomy = yield* SessionAutonomy.Service
@@ -237,7 +235,7 @@ describe("Permission", () => {
       yield* setup([{ action: "read", resource: "*", effect: "deny" }])
       const autonomy = yield* SessionAutonomy.Service
       const service = yield* Permission.Service
-      yield* autonomy.setMode({ sessionID: Session.ID.make("ses_test"), mode: "yolo" })
+      yield* autonomy.set({ sessionID: Session.ID.make("ses_test"), permissions: "yolo" })
 
       expect(yield* service.ask(assertion())).toMatchObject({ effect: "deny" })
       expect(yield* service.assert(assertion()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)

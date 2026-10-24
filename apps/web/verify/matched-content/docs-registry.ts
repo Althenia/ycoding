@@ -100,7 +100,7 @@ export const DOC_PAGES: readonly DocPage[] = [
   gettingStarted,
   ...pages("Get started", [["installation", "Installation"], ["quickstart", "Quickstart"]]),
   ...pages("Use", [["usage", "Using YCoding"], ["usage/tui", "Working in the terminal"], ["usage/command-line", "Command line"], ["usage/remote", "Remote workspace"], ["usage/sessions", "Sessions"]]),
-  ...pages("Configuration", [["configuration", "Configuration"], ["configuration/agents", "Agents"], ["configuration/models", "Models"], ["configuration/providers", "Providers"], ["configuration/plugins", "Plugins"], ["configuration/mcp", "MCP"], ["configuration/goal", "Goal"], ["configuration/yolo", "YOLO mode"], ["configuration/guardrails", "Guardrails"], ["configuration/notifications", "Notifications"], ["configuration/permissions", "Permissions"], ["configuration/tools", "Tools"], ["configuration/appearance", "Appearance"]]),
+  ...pages("Configuration", [["configuration", "Configuration"], ["configuration/agents", "Agents"], ["configuration/models", "Models"], ["configuration/providers", "Providers"], ["configuration/plugins", "Plugins"], ["configuration/mcp", "MCP"], ["configuration/goal", "Goal"], ["configuration/autonomous", "Autonomous mode"], ["configuration/guardrails", "Guardrails"], ["configuration/notifications", "Notifications"], ["configuration/permissions", "Permissions"], ["configuration/tools", "Tools"], ["configuration/appearance", "Appearance"]]),
   ...pages("Help", [["troubleshooting", "Troubleshooting"]]),
 ]
 

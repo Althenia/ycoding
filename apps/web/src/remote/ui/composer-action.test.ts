@@ -13,14 +13,10 @@ const catalog: CatalogView = {
   references: [{ name: "guide", uri: "file:///work/guide" }], resources: [],
 }
 
-test("slash goal and YOLO use autonomy actions, server commands run, slash skills load, and unsupported local actions are refused", () => {
+test("slash goal and Autonomous use Session actions, server commands run, slash skills load, and unsupported local actions are refused", () => {
   expect(optionsForTrigger("/", "go", catalog, []).map((option) => option.label)).toContain("/goal")
-  expect(optionsForTrigger("/", "yo", catalog, []).map((option) => option.label)).toContain("/yolo")
+  expect(optionsForTrigger("/", "autonom", catalog, []).map((option) => option.label)).toContain("/autonomous")
   expect(submission("/goal keep progress. Ship this safely", [], catalog, "steer")).toEqual({ kind: "goal", input: { goal: "keep progress. Ship this safely" } })
-  expect(submission("/yolo on", [], catalog, "steer")).toEqual({ kind: "yolo", input: { enabled: true } })
-  expect(submission("/yolo off", [], catalog, "queue")).toEqual({ kind: "yolo", input: { enabled: false } })
-  expect(submission("/yolo", [], catalog, "steer")).toEqual({ kind: "yolo", input: {} })
-  for (const level of ["0", "1", "2", "3", "yes"]) expect(submission(`/yolo ${level}`, [], catalog, "steer")).toEqual({ kind: "invalid", message: "Use /yolo, /yolo on, or /yolo off." })
   expect(submission("/plan now", [], catalog, "queue")).toEqual({ kind: "command", input: { command: "plan", arguments: "now", delivery: "queue" } })
   expect(submission("/research", [], catalog, "steer")).toEqual({ kind: "skill", input: { skill: "research" } })
   expect(optionsForTrigger("/", "editor", catalog, [])).toEqual([])
@@ -42,30 +38,24 @@ test("sleep, wake, and keep-awake are Session actions that never become prompts"
   expect(optionsForTrigger("/", "guardrail-decision", catalog, [])).toEqual([])
 })
 
-test("auto-answer toggles only this Session and never becomes a prompt", () => {
-  expect(optionsForTrigger("/", "auto", catalog, []).map((option) => option.label)).toContain("/auto-answer")
-  expect(optionsForTrigger("/", "auto", catalog, [], false).map((option) => option.label)).not.toContain("/auto-answer")
-  expect(submission("/auto-answer", [], catalog, "steer")).toEqual({ kind: "autoAnswer", input: {} })
-  expect(submission("/auto-answer on", [], catalog, "steer")).toEqual({ kind: "autoAnswer", input: { enabled: true } })
-  expect(submission("/auto-answer off", [], catalog, "queue")).toEqual({ kind: "autoAnswer", input: { enabled: false } })
-  expect(submission("/auto-answer yes", [], catalog, "steer")).toEqual({ kind: "invalid", message: "Use /auto-answer, /auto-answer on, or /auto-answer off." })
-  const configured = { ...catalog, commands: [...catalog.commands, { name: "auto-answer" }] }
-  expect(submission("/auto-answer", [], configured, "steer")).toEqual({ kind: "autoAnswer", input: {} })
-  expect(optionsForTrigger("/", "auto-answer", configured, []).filter((option) => option.label === "/auto-answer")).toHaveLength(1)
+test("autonomous opens the Session control and never becomes a prompt", () => {
+  expect(optionsForTrigger("/", "autonomous", catalog, [])[0]).toEqual({ label: "/autonomous", description: "Open Autonomous controls", kind: "command", value: "autonomous" })
+  expect(optionsForTrigger("/", "autonomous", catalog, [], false)).toEqual([])
+  expect(submission("/autonomous", [], catalog, "steer")).toEqual({ kind: "autonomous" })
+  expect(submission("  /autonomous  ", [], catalog, "queue")).toEqual({ kind: "autonomous" })
+  for (const argument of ["on", "off", "auto", "yolo", "manual", "1"])
+    expect(submission(`/autonomous ${argument}`, [], catalog, "steer")).toEqual({ kind: "invalid", message: "Use /autonomous without arguments." })
+  const configured = { ...catalog, commands: [...catalog.commands, { name: "autonomous" }] }
+  expect(submission("/autonomous", [], configured, "steer")).toEqual({ kind: "autonomous" })
+  expect(optionsForTrigger("/", "autonomous", configured, []).filter((option) => option.label === "/autonomous")).toHaveLength(1)
 })
 
-test("auto-permission and auto-guardrail toggle only their own rule and never become prompts", () => {
-  for (const [command, kind] of [["auto-permission", "autoPermission"], ["auto-guardrail", "autoGuardrail"]] as const) {
-    expect(optionsForTrigger("/", command, catalog, []).map((option) => option.label)).toContain(`/${command}`)
-    expect(optionsForTrigger("/", command, catalog, [], false).map((option) => option.label)).not.toContain(`/${command}`)
-    expect(submission(`/${command}`, [], catalog, "steer")).toEqual({ kind, input: {} })
-    expect(submission(`/${command} on`, [], catalog, "steer")).toEqual({ kind, input: { enabled: true } })
-    expect(submission(`/${command} off`, [], catalog, "queue")).toEqual({ kind, input: { enabled: false } })
-    expect(submission(`/${command} 1`, [], catalog, "steer")).toEqual({ kind: "invalid", message: `Use /${command}, /${command} on, or /${command} off.` })
-    const configured = { ...catalog, commands: [...catalog.commands, { name: command }] }
-    expect(submission(`/${command}`, [], configured, "steer")).toEqual({ kind, input: {} })
-    expect(optionsForTrigger("/", command, configured, []).filter((option) => option.label === `/${command}`)).toHaveLength(1)
-  }
+test("the separate YOLO and auto commands are gone from the Session actions", () => {
+  const labels = optionsForTrigger("/", "", catalog, []).map((option) => option.label)
+  for (const name of ["/yolo", "/auto-permission", "/auto-guardrail", "/auto-answer"]) expect(labels).not.toContain(name)
+  for (const name of ["yolo", "auto-permission", "auto-guardrail", "auto-answer"]) expect(submission(`/${name}`, [], catalog, "steer")).toMatchObject({ kind: "prompt" })
+  const configured = { ...catalog, commands: [...catalog.commands, { name: "yolo" }] }
+  expect(submission("/yolo on", [], configured, "steer")).toMatchObject({ kind: "command", input: { command: "yolo", arguments: "on" } })
 })
 
 test("unmatched slash heads, including paths, remain complete ordinary prompts", () => {

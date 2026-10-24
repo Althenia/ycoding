@@ -75,6 +75,7 @@ const currentMigrations = [
   { id: "20261020120000_session-yolo-toggle" },
   { id: "20261023093249_coordination-groups" },
   { id: "20261023160000_projects-redesign" },
+  { id: "20261024120000_session-decision-modes" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

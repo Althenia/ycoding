@@ -3,23 +3,35 @@ import { applySessionEvent, createSessionView, type RemoteMessageView } from "..
 import type { GuardrailDecisionView } from "../decision-grades"
 import { transcriptRows } from "./transcript-rows"
 
-const decision = (requestID: string, created: number): GuardrailDecisionView => ({ sessionID: "ses_a", requestID, created, reply: "once" })
+const decision = (requestID: string, created: number, reply: GuardrailDecisionView["reply"] = "reject"): GuardrailDecisionView => ({ sessionID: "ses_a", requestID, created, reply })
 const user = (id: string, created: number): Extract<RemoteMessageView, { kind: "user" }> => ({ kind: "user", id, created, text: id, state: "consumed" })
 const keys = (messages: readonly RemoteMessageView[], decisions: readonly GuardrailDecisionView[]) => transcriptRows(messages, decisions).map((row) => row.id)
 
-test("places hydrated settlements before later messages and leaves queued input last", () => {
+test("places hydrated rejections before later messages and leaves queued input last", () => {
   expect(keys([user("before", 1), user("later", 9), { ...user("queued", 2), kind: "user", text: "queued", state: "pending" }], [decision("one", 3), decision("two", 4)]))
     .toEqual(["before", "guardrail:one", "guardrail:two", "later", "queued"])
 })
 
-test("renders retained settlements without a message snapshot", () => {
-  expect(keys([], [decision("retained", 3)])).toEqual(["guardrail:retained"])
+test("renders no settled row without resident chat, including while only pending input or a compaction is resident", () => {
+  expect(keys([], [decision("retained", 3)])).toEqual([])
+  expect(keys([{ ...user("queued", 2), state: "pending" }], [decision("retained", 3)])).toEqual(["queued"])
+  expect(keys([{ kind: "compaction", id: "compact", status: "running", created: 1 }], [decision("retained", 3)])).toEqual(["compact"])
+})
+
+test("approved decisions never render while a rejection interleaves chronologically", () => {
+  const decisions = [decision("once", 3, "once"), decision("blocked", 4), decision("always", 5, "always")]
+  expect(keys([user("before", 1), user("later", 9)], decisions)).toEqual(["before", "guardrail:blocked", "later"])
+  expect(keys([user("before", 1), user("later", 9)], [decision("once", 3, "once"), decision("always", 5, "always")])).toEqual(["before", "later"])
+})
+
+test("a rejection older than the first resident message is omitted and one at or after it renders", () => {
+  expect(keys([user("first", 10), user("second", 20)], [decision("older", 9), decision("at", 10), decision("between", 15)])).toEqual(["guardrail:at", "first", "guardrail:between", "second"])
 })
 
 test("live replied and durable decided events yield one row per request before later text", () => {
   let view = createSessionView("ses_a")
   for (const type of ["guardrail.replied", "session.guardrail.decided"]) view = applySessionEvent(view, { type, created: 3, data: { ...decision("one", 3), reviewSessionID: "ses_a", decidedBy: "decision-model" } }, 3)
-  expect(keys([user("later", 9)], view.guardrailDecisions ?? [])).toEqual(["guardrail:one", "later"])
+  expect(keys([user("early", 1), user("later", 9)], view.guardrailDecisions ?? [])).toEqual(["early", "guardrail:one", "later"])
   expect(view.guardrailDecisions).toHaveLength(1)
 })
 
@@ -43,7 +55,7 @@ test("overlapping tools preserve the latest completion before later untimed text
   expect(keys(messages, [decision("overlap", 25)])).toEqual(["assistant", "guardrail:overlap", "assistant:text:2"])
 })
 
-test("compaction hides covered settlements only in display, including snapshot checkpoints later than retained text", () => {
+test("settled rows start at the first resident chat message, so compacted history and checkpoints hide covered rejections only in display", () => {
   const decisions = [decision("covered", 3), decision("retained", 12)]
   const completed: RemoteMessageView = { kind: "compaction", id: "compact", status: "completed", boundaryMessageID: "covered", created: 20 }
   const checkpoint: RemoteMessageView = { kind: "synthetic", id: "checkpoint", text: "summary", metadata: { compactionCheckpoint: { through: 4 } }, created: 20 }
@@ -52,5 +64,5 @@ test("compaction hides covered settlements only in display, including snapshot c
     expect(keys([marker], decisions)).toEqual(marker.kind === "compaction" ? ["compact"] : [])
   }
   expect(decisions.map((item) => item.requestID)).toEqual(["covered", "retained"])
-  expect(keys([{ ...completed, status: "running" }, user("retained", 10)], decisions)).toContain("guardrail:covered")
+  expect(keys([{ ...completed, status: "running" }, user("retained", 10)], decisions)).toEqual(["compact", "retained", "guardrail:retained"])
 })

@@ -6,9 +6,18 @@ import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/rem
 import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
 
+const manualModes = { permissions: "manual", guardrails: "manual", answers: "manual" } as const
+
 const autonomyData = (state: Record<string, unknown>) => ({
   ...state,
-  effective: { yolo: state.yolo === true, permissionsAuto: state.autoPermission === true, permissionModelReviews: false, asleep: state.sleep !== undefined, guardrailsEnabled: true, ordinaryReviewsAuto: state.autoGuardrail === true && state.sleep === undefined, modelReviews: false, hardModelReviews: false },
+  effective: {
+    permissions: state.permissions ?? "manual",
+    guardrails: state.guardrails ?? "manual",
+    answers: state.answers ?? "manual",
+    inherited: {},
+    asleep: state.sleep !== undefined,
+    guardrailsEnabled: true,
+  },
 })
 
 type Harness = {
@@ -2296,7 +2305,7 @@ describe("remote store integration", () => {
   })
 
   test("sleep and wake set the Session's autonomy and follow Session-state notices", async () => {
-    let autonomy: Record<string, unknown> = { mode: "normal", yolo: false }
+    let autonomy: Record<string, unknown> = { mode: "normal", ...manualModes }
     const test = await harness({
       handler: (request) => {
         if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(autonomy) } }
@@ -2458,14 +2467,14 @@ describe("remote store integration", () => {
   })
 
   test("does not apply a superseded session's autonomy response to the current view", async () => {
-    let releaseYolo: (() => void) | undefined
-    const yolo = new Promise<void>((resolve) => {
-      releaseYolo = resolve
+    let releaseSet: (() => void) | undefined
+    const released = new Promise<void>((resolve) => {
+      releaseSet = resolve
     })
     const test = await harness({
       handler: async (request) => {
         if (request.operation === "session.autonomy.set") {
-          await yolo
+          await released
           return "default" as const
         }
         return "default" as const
@@ -2476,18 +2485,18 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
 
-      const pending = test.store.setYolo(true)
+      const pending = test.store.setAutonomous({ permissions: "yolo" })
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.autonomy.set"))
 
       // The user moves to another session while the reply is still in flight.
       await test.store.selectSession("ses_b")
-      await waitFor(() => test.store.state().view?.id === "ses_b" && test.store.state().view?.autonomy?.yolo === false)
+      await waitFor(() => test.store.state().view?.id === "ses_b" && test.store.state().view?.autonomy?.permissions === "manual")
 
-      releaseYolo?.()
+      releaseSet?.()
       await pending
 
       expect(test.store.state().view?.id).toBe("ses_b")
-      expect(test.store.state().view?.autonomy).toMatchObject({ yolo: false })
+      expect(test.store.state().view?.autonomy).toMatchObject({ permissions: "manual" })
     } finally {
       await test.stop()
     }
@@ -2932,16 +2941,16 @@ describe("remote store integration", () => {
     }
   })
 
-  test("sets YOLO, sets a goal, and stops it through the autonomy operations", async () => {
+  test("sets a category, sets a goal, and stops it through the autonomy operations", async () => {
     const test = await harness()
     try {
       await test.store.load()
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
-      await test.store.setYolo(true)
+      await test.store.setAutonomous({ permissions: "yolo" })
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.autonomy.set"))
-      expect(test.relay.requests.find((request) => request.operation === "session.autonomy.set")?.input).toEqual({ yolo: true })
-      expect(test.store.state().view?.autonomy).toMatchObject({ yolo: true, effective: { yolo: true } })
+      expect(test.relay.requests.find((request) => request.operation === "session.autonomy.set")?.input).toEqual({ permissions: "yolo" })
+      expect(test.store.state().view?.autonomy).toMatchObject({ permissions: "yolo", effective: { permissions: "yolo" } })
 
       expect(await test.store.setGoal("Ship the remote workspace")).toBe(true)
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.set"))
@@ -2949,7 +2958,7 @@ describe("remote store integration", () => {
         goal: "Ship the remote workspace",
       })
       await waitFor(() => test.store.state().view?.autonomy?.goal?.text === "Ship the remote workspace")
-      expect(test.store.state().view?.autonomy).toMatchObject({ mode: "normal", goal: { text: "Ship the remote workspace" } })
+      expect(test.store.state().view?.autonomy).toMatchObject({ mode: "normal", permissions: "yolo", goal: { text: "Ship the remote workspace" } })
 
       await test.store.stopGoal()
       await waitFor(() => test.relay.requests.some((request) => request.operation === "session.goal.stop"))
@@ -2959,32 +2968,7 @@ describe("remote store integration", () => {
     }
   })
 
-  test("sets auto-answer as a standalone Session-local autonomy payload", async () => {
-    const test = await harness()
-    try {
-      await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
-      await test.store.selectSession("ses_a")
-      await waitFor(() => test.store.state().view?.autonomy !== undefined)
-      expect(test.store.state().view?.autonomy).toMatchObject({ autoAnswer: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } })
-
-      expect(await test.store.setAutoAnswer(true)).toBe(true)
-      const sets = test.relay.requests.filter((request) => request.operation === "session.autonomy.set")
-      expect(sets).toHaveLength(1)
-      expect(sets[0]).toMatchObject({ sessionID: "ses_a", input: { autoAnswer: true } })
-      expect(Object.keys(sets[0]?.input ?? {})).toEqual(["autoAnswer"])
-      expect(test.store.state().view?.autonomy?.autoAnswer).toBe(true)
-      expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
-
-      await test.store.selectSession("ses_b")
-      await waitFor(() => test.store.state().view?.id === "ses_b" && test.store.state().view?.autonomy !== undefined)
-      expect(test.store.state().view?.autonomy?.autoAnswer).toBe(false)
-    } finally {
-      await test.stop()
-    }
-  })
-
-  test("sets YOLO, auto-permission, and auto-guardrail as independent single-field payloads that leave auto-answer unchanged", async () => {
+  test("changes one category per mutation and leaves the others unchanged", async () => {
     const test = await harness()
     try {
       await test.store.load()
@@ -2992,49 +2976,157 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       await waitFor(() => test.store.state().view?.autonomy !== undefined)
       const sets = () => test.relay.requests.filter((request) => request.operation === "session.autonomy.set")
-      const flags = () => {
+      const modes = () => {
         const autonomy = test.store.state().view?.autonomy
-        return { yolo: autonomy?.yolo, autoPermission: autonomy?.autoPermission, autoGuardrail: autonomy?.autoGuardrail, autoAnswer: autonomy?.autoAnswer }
+        return [autonomy?.permissions, autonomy?.guardrails, autonomy?.answers]
       }
-      expect(flags()).toEqual({ yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
+      expect(modes()).toEqual(["manual", "manual", "manual"])
 
-      expect(await test.store.setAutoPermission(true)).toBe(true)
-      expect(sets().at(-1)).toMatchObject({ sessionID: "ses_a", input: { autoPermission: true } })
-      expect(Object.keys(sets().at(-1)?.input ?? {})).toEqual(["autoPermission"])
-      expect(flags()).toEqual({ yolo: false, autoPermission: true, autoGuardrail: false, autoAnswer: false })
-      expect(test.store.state().view?.autonomy?.effective).toMatchObject({ yolo: false, permissionsAuto: true, ordinaryReviewsAuto: false })
+      expect(await test.store.setAutonomous({ answers: "auto" })).toBe(true)
+      expect(sets()).toHaveLength(1)
+      expect(sets()[0]).toMatchObject({ sessionID: "ses_a", input: { answers: "auto" } })
+      expect(Object.keys(sets()[0]?.input ?? {})).toEqual(["answers"])
+      expect(modes()).toEqual(["manual", "manual", "auto"])
 
-      expect(await test.store.setYolo(true)).toBe(true)
-      expect(sets().at(-1)?.input).toEqual({ yolo: true })
-      expect(flags()).toEqual({ yolo: true, autoPermission: true, autoGuardrail: false, autoAnswer: false })
+      expect(await test.store.setAutonomous({ guardrails: "yolo" })).toBe(true)
+      expect(sets().at(-1)?.input).toEqual({ guardrails: "yolo" })
+      expect(modes()).toEqual(["manual", "yolo", "auto"])
+      expect(test.store.state().view?.autonomy?.effective).toMatchObject({ permissions: "manual", guardrails: "yolo", answers: "auto", inherited: {} })
 
-      expect(await test.store.setAutoGuardrail(true)).toBe(true)
-      expect(sets().at(-1)?.input).toEqual({ autoGuardrail: true })
-      expect(flags()).toEqual({ yolo: true, autoPermission: true, autoGuardrail: true, autoAnswer: false })
-      expect(test.store.state().view?.autonomy?.effective).toMatchObject({ yolo: true, permissionsAuto: true, ordinaryReviewsAuto: true })
-
-      expect(await test.store.setYolo(false)).toBe(true)
-      expect(sets().at(-1)?.input).toEqual({ yolo: false })
-      expect(flags()).toEqual({ yolo: false, autoPermission: true, autoGuardrail: true, autoAnswer: false })
-
-      expect(await test.store.setAutoPermission(false)).toBe(true)
-      expect(await test.store.setAutoGuardrail(false)).toBe(true)
-      expect(flags()).toEqual({ yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
-      expect(sets()).toHaveLength(6)
+      expect(await test.store.setAutonomous({ permissions: "auto" })).toBe(true)
+      expect(modes()).toEqual(["auto", "yolo", "auto"])
+      expect(sets()).toHaveLength(3)
       expect(test.relay.requests.some((request) => request.operation === "session.prompt")).toBe(false)
 
       await test.store.selectSession("ses_b")
       await waitFor(() => test.store.state().view?.id === "ses_b" && test.store.state().view?.autonomy !== undefined)
-      expect(flags()).toEqual({ yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
+      expect(modes()).toEqual(["manual", "manual", "manual"])
     } finally {
       await test.stop()
     }
   })
 
-  test("a numeric YOLO answer or effective value leaves autonomy unreported", async () => {
+  test("set-all sends all three categories in one mutation", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+      expect(await test.store.setAutonomous({ permissions: "auto", guardrails: "auto", answers: "auto" })).toBe(true)
+      const sets = test.relay.requests.filter((request) => request.operation === "session.autonomy.set")
+      expect(sets).toHaveLength(1)
+      expect(sets[0]?.input).toEqual({ permissions: "auto", guardrails: "auto", answers: "auto" })
+      expect(test.store.state().view?.autonomy).toMatchObject({ permissions: "auto", guardrails: "auto", answers: "auto" })
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("an empty change or an unselected Session sends nothing", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      expect(await test.store.setAutonomous({ permissions: "auto" })).toBe(false)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+      expect(await test.store.setAutonomous({})).toBe(false)
+      expect(test.relay.requests.some((request) => request.operation === "session.autonomy.set")).toBe(false)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("refuses a second change while one is still sending and never queues it", async () => {
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const test = await harness({ handler: async (request) => {
+      if (request.operation !== "session.autonomy.set") return "default" as const
+      await gate
+      return "default" as const
+    } })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+      const first = test.store.setAutonomous({ permissions: "yolo" })
+      await waitFor(() => test.store.state().mutations.some((mutation) => mutation.operation === "session.autonomy.set" && mutation.state === "sending"))
+      expect(await test.store.setAutonomous({ guardrails: "auto" })).toBe(false)
+      release?.()
+      expect(await first).toBe(true)
+      expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.set").map((request) => request.input)).toEqual([{ permissions: "yolo" }])
+    } finally {
+      release?.()
+      await test.stop()
+    }
+  })
+
+  test("an unknown outcome is read back once and never replayed", async () => {
+    const test = await harness({ handler: (request) => request.operation === "session.autonomy.set"
+      ? { ok: false, code: "outcome_unknown", message: "Request timed out" } : "default" as const })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+      const reads = () => test.relay.requests.filter((request) => request.operation === "session.autonomy.get").length
+      const before = reads()
+      expect(await test.store.setAutonomous({ answers: "yolo" })).toBe(false)
+      await waitFor(() => reads() > before)
+      expect(test.relay.requests.filter((request) => request.operation === "session.autonomy.set")).toHaveLength(1)
+      expect(test.store.state().mutations.find((mutation) => mutation.operation === "session.autonomy.set")).toMatchObject({ state: "unknown", input: { answers: "yolo" } })
+      expect(test.store.state().mutationToasts?.at(-1)).toMatchObject({ label: "Autonomous", state: "unknown" })
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("a failed change stays visible until the next attempt replaces it", async () => {
+    let fail = true
+    const test = await harness({ handler: (request) => request.operation === "session.autonomy.set" && fail
+      ? { ok: false, code: "forbidden", message: "Denied by policy" } : "default" as const })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+      expect(await test.store.setAutonomous({ permissions: "auto" })).toBe(false)
+      expect(test.store.state().mutations.filter((mutation) => mutation.operation === "session.autonomy.set")).toMatchObject([{ state: "failed", detail: "Denied by policy" }])
+      expect(test.store.state().view?.autonomy?.permissions).toBe("manual")
+      fail = false
+      expect(await test.store.setAutonomous({ permissions: "auto" })).toBe(true)
+      expect(test.store.state().mutations.filter((mutation) => mutation.operation === "session.autonomy.set")).toEqual([])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("keeps the inherited source of an effective mode from the authoritative read", async () => {
+    const effective = { permissions: "auto", guardrails: "manual", answers: "yolo", inherited: { permissions: "ses_parent", answers: "ses_root" }, asleep: false, guardrailsEnabled: true }
+    const test = await harness({ handler: (request) => request.operation === "session.autonomy.get"
+      ? { ok: true, value: { data: { mode: "normal", ...manualModes, effective } } } : "default" as const })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      await waitFor(() => test.store.state().view?.autonomy !== undefined)
+      expect(test.store.state().view?.autonomy).toMatchObject({ ...manualModes, effective })
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("the removed YOLO flag shape and a response without effective modes leave autonomy unreported", async () => {
+    const modern = { permissions: "manual", guardrails: "manual", answers: "manual" }
+    const effective = { ...modern, inherited: {}, asleep: false, guardrailsEnabled: true }
     for (const data of [
-      { mode: "normal", yolo: 2, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
-      { mode: "normal", yolo: false, effective: { yolo: 1, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
+      { mode: "normal", yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } },
+      { mode: "normal", yolo: 2, effective },
+      { mode: "normal", ...modern, effective: { ...effective, permissions: true } },
+      { mode: "normal", ...modern },
+      { mode: "normal", permissions: "manual", guardrails: "manual", effective },
     ]) {
       const test = await harness({ handler: (request) => request.operation === "session.autonomy.get" ? { ok: true, value: { data } } : "default" as const })
       try {
@@ -3050,17 +3142,10 @@ describe("remote store integration", () => {
     }
   })
 
-  test("an autonomy answer without the required effective values stays unreported", async () => {
-    const test = await harness({ handler: (request) => request.operation === "session.autonomy.get"
-      ? { ok: true, value: { data: { mode: "normal", yolo: true, autoAnswer: true } } }
-      : "default" as const })
+  test("the removed single-flag setters are gone from the store", async () => {
+    const test = await harness()
     try {
-      await test.store.load()
-      await waitFor(() => test.store.state().sessions.length > 0)
-      await test.store.selectSession("ses_a")
-      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.autonomy.get"))
-      await test.flush()
-      expect(test.store.state().view?.autonomy).toBeUndefined()
+      for (const name of ["setYolo", "setAutoPermission", "setAutoGuardrail", "setAutoAnswer"]) expect(name in test.store).toBe(false)
     } finally {
       await test.stop()
     }
@@ -3070,7 +3155,7 @@ describe("remote store integration", () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") { goal = true; return { ok: false, code: "outcome_unknown", message: "Request timed out" } }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData({ mode: "normal", yolo: false,
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData({ mode: "normal", ...manualModes,
         ...(goal ? { goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } } : {}) }) } }
       return "default"
     } })
@@ -3092,7 +3177,7 @@ describe("remote store integration", () => {
     const test = await harness({ requestTimeoutMs: 30, handler: async (request) => {
       if (request.operation !== "session.goal.set") return "default"
       await Bun.sleep(65)
-      return { ok: true, value: { data: autonomyData({ mode: "normal", yolo: false,
+      return { ok: true, value: { data: autonomyData({ mode: "normal", ...manualModes,
         goal: { text: "Ship the workspace", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } }) } }
     } })
     try {
@@ -3122,9 +3207,9 @@ describe("remote store integration", () => {
     } finally { await test.stop() }
   })
 
-  const activeGoal = (text: string) => ({ mode: "normal", yolo: false, goal: { text, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } })
+  const activeGoal = (text: string) => ({ mode: "normal", ...manualModes, goal: { text, status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 } })
   const goalSteerAdmitted = { type: "session.input.admitted", data: { sessionID: "ses_a", inputID: "msg_goal_start",
-    input: { type: "synthetic", data: { text: "Continue", description: "Goal · steer", metadata: { autonomy: { yolo: false, goal: true, iteration: 0 } } }, delivery: "steer" } } }
+    input: { type: "synthetic", data: { text: "Continue", description: "Goal · steer", metadata: { autonomy: { goal: true, iteration: 0 } } }, delivery: "steer" } } }
 
   test("accepts a goal at once, keeps it in flight without blocking, and finishes it from the settled response", async () => {
     const calculation = Promise.withResolvers<void>()
@@ -3229,7 +3314,7 @@ describe("remote store integration", () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(goal ? activeGoal("Ship the workspace") : { mode: "normal", yolo: false }) } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(goal ? activeGoal("Ship the workspace") : { mode: "normal", ...manualModes }) } }
       return "default"
     } })
     try {
@@ -3271,7 +3356,7 @@ describe("remote store integration", () => {
     let goal = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") { goal = true; return "silent" }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(goal ? activeGoal("Ship the workspace") : { mode: "normal", yolo: false }) } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(goal ? activeGoal("Ship the workspace") : { mode: "normal", ...manualModes }) } }
       return "default"
     } })
     try {
@@ -3321,7 +3406,7 @@ describe("remote store integration", () => {
     const calculation = Promise.withResolvers<void>()
     let other = false
     const test = await harness({ handler: async (request) => {
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(other ? activeGoal("Other writer objective") : { mode: "normal", yolo: false }) } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(other ? activeGoal("Other writer objective") : { mode: "normal", ...manualModes }) } }
       if (request.operation !== "session.goal.set") return "default"
       await calculation.promise
       return { ok: true, value: { data: autonomyData(activeGoal("Requested objective")) } }
@@ -3350,7 +3435,7 @@ describe("remote store integration", () => {
     let other = false
     const test = await harness({ handler: (request) => {
       if (request.operation === "session.goal.set") return { ok: false, code: "outcome_unknown", message: "Request timed out" }
-      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(other ? activeGoal("Other writer objective") : { mode: "normal", yolo: false }) } }
+      if (request.operation === "session.autonomy.get") return { ok: true, value: { data: autonomyData(other ? activeGoal("Other writer objective") : { mode: "normal", ...manualModes }) } }
       return "default"
     } })
     try {
@@ -3410,7 +3495,7 @@ describe("remote store integration", () => {
       if (request.operation !== "session.autonomy.get") return "default"
       reads += 1
       if (reads > 1) await read.promise
-      return { ok: true, value: { data: autonomyData({ mode: "normal", yolo: false }) } }
+      return { ok: true, value: { data: autonomyData({ mode: "normal", ...manualModes }) } }
     } })
     try {
       await test.store.load()
@@ -3577,7 +3662,7 @@ describe("remote store integration", () => {
 
   test("seeds chips from the authoritative autonomy read and lists pending requests", async () => {
     const test = await harness({
-      autonomy: { mode: "normal", yolo: false, autoPermission: true, autoGuardrail: true, goal: { text: "Ship it", status: "active", iteration: 4, noProgress: 0, maxNoProgress: 5 } },
+      autonomy: { mode: "normal", permissions: "auto", guardrails: "auto", answers: "manual", goal: { text: "Ship it", status: "active", iteration: 4, noProgress: 0, maxNoProgress: 5 } },
       permissions: [{ id: "per_1", action: "edit", resources: ["src/**"] }],
       guardrailRequests: [
         { id: "grq_mine", sessionID: "ses_a", rootSessionID: "ses_a", action: "rm -rf build", resources: ["build"], reason: "Deletion", hardReview: false },
@@ -3598,7 +3683,7 @@ describe("remote store integration", () => {
       await waitFor(() => test.store.state().sessions.length > 0)
       await test.store.selectSession("ses_a")
       const view = test.store.state().view
-      expect(view?.autonomy).toMatchObject({ mode: "normal", yolo: false, autoPermission: true, autoGuardrail: true, goal: { iteration: 4 } })
+      expect(view?.autonomy).toMatchObject({ mode: "normal", permissions: "auto", guardrails: "auto", answers: "manual", goal: { iteration: 4 } })
       expect(view?.requests.map((request) => request.id)).toEqual(["per_1", "grq_mine", "grq_child", "frm_1"])
       const foreign = view?.requests.find((request) => request.id === "grq_child")
       expect(foreign && canReplyToRequest(foreign, "ses_a")).toBe(true)

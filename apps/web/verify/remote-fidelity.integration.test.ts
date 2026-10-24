@@ -72,7 +72,7 @@ describe("remote responsive state behavior", () => {
     }
   }, 20_000)
 
-  test("keeps YOLO and goal controls out of Settings at desktop and phone widths", async () => {
+  test("keeps Autonomous and goal controls out of Settings at desktop and phone widths", async () => {
     for (const width of [1440, 390] as const) {
       const page = await fixture(`scenario=autonomy-goal-notification-settings-${width}`, width, "Appearance")
       try {
@@ -450,10 +450,10 @@ describe("remote responsive state behavior", () => {
     for (const theme of ["light", "dark"] as const) {
       const page = await scenario("conversation-workspace", 390, "Token expiry refactor", theme)
       const status = await page.evaluate<{ readonly label: string; readonly visible: boolean }>(`(() => {
-        const control = document.querySelector('.composer .session-status__yolo-trigger');
-        return { label: control?.textContent?.trim().startsWith('YOLO off') ? 'YOLO off' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
+        const control = document.querySelector('.composer .session-status__autonomous-trigger');
+        return { label: control?.textContent?.trim().startsWith('Autonomous Manual') ? 'Autonomous Manual' : (control?.textContent?.trim() ?? ''), visible: control instanceof HTMLElement && control.getBoundingClientRect().height > 0 && getComputedStyle(control).display !== 'none' };
       })()`)
-      expect(status).toEqual({ label: "YOLO off", visible: true })
+      expect(status).toEqual({ label: "Autonomous Manual", visible: true })
       expect(await page.evaluate<boolean>(`document.querySelector('.conversation-breadcrumb') !== null && document.querySelector('.conversation-breadcrumb').textContent.includes('Running') === false`)).toBe(true)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       await page.close()

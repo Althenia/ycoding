@@ -274,7 +274,6 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const location = yield* Location.Service
     const decider = yield* Decision.Service
-    const baselineEnabled = Config.latest(yield* config.entries(), "guardrails")?.decide_reviews !== false
     const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
@@ -386,9 +385,9 @@ const layer = Layer.effect(
     )
 
     const autonomy = yield* SessionAutonomy.Service
-    const autonomousPermission = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+    const permissionMode = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
       return yield* autonomy
-        .canAutoPermission(sessionID)
+        .decisionMode(sessionID, "permissions")
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
     })
 
@@ -535,30 +534,22 @@ const layer = Layer.effect(
 
     const assess = Effect.fnUntraced(function* (
       input: AssertInput,
-      yolo: boolean,
       applicability: Effect.Success<ReturnType<typeof applicabilityOf>>,
     ) {
-      let last: SessionAssessment.Result | undefined
-      for (const policy of [
-        ...(baselineEnabled ? [SessionAssessment.policy("baseline", true)] : []),
-        ...(yolo ? [SessionAssessment.policy("yolo", true)] : []),
-      ]) {
-        const outcome = yield* DecisionChoice.grade(decider, {
-          sessionID: input.sessionID,
-          name: "permission",
-          instructions: assessmentInstructions,
-          state: { ...boundedEvidence(input), applicability },
-          choices: assessmentChoices,
-          purpose: "permission",
-          authority: policy.authority,
-          invocationKey: `permission:${Hash.sha256(
-            [policy.authority, fingerprintOf(input), input.source?.messageID ?? "", input.source?.callID ?? ""].join("\0"),
-          )}`,
-        })
-        last = SessionAssessment.interpret(outcome, policy)
-        if (last.type !== "escalate") return last
-      }
-      return last
+      const policy = SessionAssessment.policy("yolo", true)
+      const outcome = yield* DecisionChoice.grade(decider, {
+        sessionID: input.sessionID,
+        name: "permission",
+        instructions: assessmentInstructions,
+        state: { ...boundedEvidence(input), applicability },
+        choices: assessmentChoices,
+        purpose: "permission",
+        authority: policy.authority,
+        invocationKey: `permission:${Hash.sha256(
+          [policy.authority, fingerprintOf(input), input.source?.messageID ?? "", input.source?.callID ?? ""].join("\0"),
+        )}`,
+      })
+      return SessionAssessment.interpret(outcome, policy)
     })
 
     const autoPermissionAllow = Effect.fnUntraced(function* (value: Request) {
@@ -569,7 +560,7 @@ const layer = Layer.effect(
     const ask = Effect.fn("Permission.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
-      if (result.effect === "ask" && !input.requireHuman && (yield* autonomousPermission(input.sessionID)))
+      if (result.effect === "ask" && !input.requireHuman && (yield* permissionMode(input.sessionID)) === "auto")
         return yield* autoPermissionAllow(value)
       if (result.effect === "ask") {
         if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input))))
@@ -595,19 +586,19 @@ const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
-          if (!input.requireHuman && (yield* autonomousPermission(input.sessionID))) {
+          const authorization = yield* autonomy.snapshot(input.sessionID, { inherited: true }).pipe(
+            Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: input.sessionID })),
+          )
+          const mode = yield* permissionMode(input.sessionID)
+          if (!input.requireHuman && mode === "auto") {
             yield* autoPermissionAllow(request(input))
             return
           }
           if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input)))) return
-          const authorization = yield* autonomy.snapshot(input.sessionID, { inherited: true }).pipe(
-            Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: input.sessionID })),
-          )
-          const yolo = yield* DecisionChoice.yoloEnabled(autonomy, input.sessionID)
-          const modeled = !input.requireHuman && (baselineEnabled || yolo)
+          const modeled = !input.requireHuman && mode === "yolo"
           const applicability = modeled ? yield* applicabilityOf(input) : undefined
           const authority = modeled ? SessionDecisionContext.authorityDigest(yield* SessionDecisionContext.read(database.db, input.sessionID)) : undefined
-          const assessed = applicability === undefined ? undefined : yield* restore(assess(input, yolo, applicability))
+          const assessed = applicability === undefined ? undefined : yield* restore(assess(input, applicability))
           const current = assessed === undefined ? undefined : yield* evaluateInput(input)
           if (current?.effect === "deny") {
             return yield* new BlockedError({
@@ -724,6 +715,8 @@ const layer = Layer.effect(
                         if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
                         if (!(yield* input.validate(item.request)))
                           return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                        if ((yield* permissionMode(assertInput.sessionID)) === "manual")
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:manual-permissions" }
                         yield* publishAssessed(item.request, { outcome: "deny", via: "coordination", reply: "reject", coordination: input.source })
                         yield* publishReplied(item.request, "reject")
                         pending.delete(input.requestID)
@@ -765,7 +758,11 @@ const layer = Layer.effect(
                   if (initial.effect !== "ask") return yield* settleRules(initial.effect)
                   if (assertInput.requireHuman)
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:request" }
-                  if (yield* autonomousPermission(assertInput.sessionID)) {
+                  const authorization = yield* autonomy.snapshot(assertInput.sessionID, { inherited: true }).pipe(
+                    Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: assertInput.sessionID })),
+                  )
+                  const mode = yield* permissionMode(assertInput.sessionID)
+                  if (mode === "auto") {
                     return yield* exclusive(
                       Effect.gen(function* () {
                         if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
@@ -798,19 +795,13 @@ const layer = Layer.effect(
                     )
                   }
 
-                  const authorization = yield* autonomy.snapshot(assertInput.sessionID, { inherited: true }).pipe(
-                    Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: assertInput.sessionID })),
-                  )
-                  const yolo = yield* DecisionChoice.yoloEnabled(autonomy, assertInput.sessionID)
-                  if (!baselineEnabled && !yolo)
+                  if (mode !== "yolo")
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "native-assessment-unavailable" }
                   const applicability = yield* applicabilityOf(assertInput)
                   const authority = SessionDecisionContext.authorityDigest(
                     yield* SessionDecisionContext.read(database.db, assertInput.sessionID),
                   )
-                  const assessed = yield* restore(assess(assertInput, yolo, applicability))
-                  if (assessed === undefined)
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "native-assessment-unavailable" }
+                  const assessed = yield* restore(assess(assertInput, applicability))
                   const current = yield* evaluateInput(assertInput)
                   if (current.effect !== "ask") return yield* settleRules(current.effect)
                   const stale =

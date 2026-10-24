@@ -155,12 +155,13 @@ const reviewDecision: Schema = {
   ],
 }
 
+const autonomyMode = choice("manual", "yolo", "auto")
 const autonomy: Schema = {
   oneOf: [
-    object({ yolo: boolean }, ["yolo"]),
-    object({ autoPermission: boolean }, ["autoPermission"]),
-    object({ autoGuardrail: boolean }, ["autoGuardrail"]),
-    object({ autoAnswer: boolean }, ["autoAnswer"]),
+    {
+      ...object({ permissions: autonomyMode, guardrails: autonomyMode, answers: autonomyMode }),
+      minProperties: 1,
+    },
     object({ sleep: boolean }, ["sleep"]),
   ],
 }
@@ -349,15 +350,15 @@ const specs = {
     description: "Read a page of a shell's output. Pass the returned cursor to continue.",
     input: object({ shellID, cursor: integer(0, maxSafeInteger), limit: integer(1, 65_536) }, ["shellID"]),
   },
-  "session.autonomy.get": { description: "Read a Session's autonomy settings (YOLO evaluator, auto-permission, auto-guardrail, auto-answer, sleep, goal)." },
+  "session.autonomy.get": { description: "Read a Session's autonomy settings (permissions, guardrails, and answers modes with their effective and inherited values, sleep, goal)." },
   "session.autonomy.set": {
     description:
-      "Change one Session autonomy toggle per request: yolo is a separate evaluator and approves nothing by itself; autoPermission auto-approves ask-permission tools, autoGuardrail auto-approves ordinary guardrail reviews while awake (hard reviews still ask a human), autoAnswer answers eligible questions; sleep is a separate setting. Grants standing authority; send only what the user authorized.",
+      "Set Session autonomy: send any of permissions, guardrails, and answers in one request, each manual, yolo, or auto; or send sleep alone. manual leaves undecided asks to a human only; auto decides by rule (permissions and ordinary guardrail reviews while awake approve by rule, answers use exactly one Recommended or default option); yolo adds a hidden evaluator for free-text and unresolved requests. Denies and permission ceilings always apply, and hard or custom-rule reviews always need a human approval. Grants standing authority; send only what the user authorized.",
     input: autonomy,
   },
   "session.goal.set": {
     description: "Set a Session's goal and optionally its no-progress budget. The Session then continues autonomously toward the goal.",
-    input: object({ goal: text(8_192), maxNoProgress, yolo: boolean }, ["goal"]),
+    input: object({ goal: text(8_192), maxNoProgress }, ["goal"]),
   },
   "session.goal.stop": {
     description: "Stop a Session's goal.",

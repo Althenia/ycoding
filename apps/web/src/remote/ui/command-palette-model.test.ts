@@ -7,7 +7,7 @@ const base: PaletteContext = {
   canCreateSession: true,
   canSelectModel: true,
   canConnectProvider: true,
-  session: { id: "ses_a", running: false, managedChild: false, yolo: false, goalActive: false },
+  session: { id: "ses_a", running: false, managedChild: false, goalActive: false },
   commands: [
     { name: "review", description: "Review the working tree" },
     { name: "suggest", description: "Configured suggest" },
@@ -57,16 +57,14 @@ describe("palette availability", () => {
     expect(ids({ ...base, view: "/remote", session: { ...base.session!, managedChild: true } })).toContain("settings.model")
   })
 
-  test("a connected idle Session offers compaction, goal, the YOLO toggle, configured commands, and skills", () => {
+  test("a connected idle Session offers compaction, goal, configured commands, and skills", () => {
     expect(ids(base)).toEqual(expect.arrayContaining([
       "session.compact",
       "session.suggest",
       "session.goal",
-      "session.yolo",
       "command.review",
       "skill.tdd",
     ]))
-    expect(ids(base).filter((id) => id.startsWith("session.yolo"))).toEqual(["session.yolo"])
     expect(ids(base)).not.toContain("session.interrupt")
     expect(ids(base)).not.toContain("session.goal.stop")
   })
@@ -91,58 +89,27 @@ describe("palette availability", () => {
     expect(titles("/keep-awake")[0]).toBe("Toggle keep machine awake")
   })
 
-  test("YOLO is one evaluation toggle, never a level or an unconditional approval", () => {
-    const actions = paletteActions(base).filter((action) => action.id.startsWith("session.yolo"))
+  test("Autonomous is one control offered only when the Session's modes are reported", () => {
+    for (const id of ["session.yolo", "session.autoPermission", "session.autoGuardrail", "session.autoAnswer", "session.autonomous"]) expect(ids(base)).not.toContain(id)
+    const reported = { ...base, session: { ...base.session!, autonomous: { permissions: "manual", guardrails: "manual", answers: "manual" } as const } }
+    const actions = paletteActions(reported).filter((action) => /yolo|auto/i.test(action.id))
     expect(actions).toHaveLength(1)
     expect(actions[0]).toMatchObject({
-      title: "Turn on YOLO for this Session",
-      description: "YOLO evaluates requests it can settle; denies block and hard reviews still need your approval",
-      intent: { type: "yolo", enabled: true },
+      id: "session.autonomous",
+      title: "Open Autonomous controls",
+      description: "Autonomous Manual",
+      group: "Session",
+      intent: { type: "autonomous" },
     })
     expect(actions[0]?.title).not.toMatch(/[0-9]/)
-    expect(paletteActions({ ...base, session: { ...base.session!, yolo: true } }).find((action) => action.id === "session.yolo")).toMatchObject({
-      title: "Turn off YOLO for this Session",
-      intent: { type: "yolo", enabled: false },
-    })
-  })
-
-  test("auto-permission and auto-guardrail are independent toggles offered only when reported", () => {
-    expect(ids(base)).not.toContain("session.autoPermission")
-    expect(ids(base)).not.toContain("session.autoGuardrail")
-    const off = { ...base, session: { ...base.session!, autoPermission: false, autoGuardrail: false } }
-    expect(paletteActions(off).find((action) => action.id === "session.autoPermission")).toMatchObject({
-      title: "Turn on auto-permission for this Session",
-      description: "Auto-approve ask-level tool permissions; denies still block",
-      intent: { type: "autoPermission", enabled: true },
-    })
-    expect(paletteActions(off).find((action) => action.id === "session.autoGuardrail")).toMatchObject({
-      title: "Turn on auto-guardrail for this Session",
-      description: "Auto-approve routine guardrail reviews while awake; hard reviews still need your approval",
-      intent: { type: "autoGuardrail", enabled: true },
-    })
-    const on = { ...base, session: { ...base.session!, autoPermission: true, autoGuardrail: true } }
-    expect(paletteActions(on).find((action) => action.id === "session.autoPermission")?.intent).toEqual({ type: "autoPermission", enabled: false })
-    expect(paletteActions(on).find((action) => action.id === "session.autoGuardrail")?.intent).toEqual({ type: "autoGuardrail", enabled: false })
-    expect(ids({ ...off, session: { ...off.session, managedChild: true } })).not.toContain("session.autoPermission")
-    expect(filterPaletteActions(paletteActions(off), "/auto-permission").map((action) => action.id)).toContain("session.autoPermission")
-    expect(filterPaletteActions(paletteActions(off), "/auto-guardrail").map((action) => action.id)).toContain("session.autoGuardrail")
-  })
-
-  test("auto-answer is a Session-local toggle offered only when its state is reported", () => {
-    expect(ids(base)).not.toContain("session.autoAnswer")
-    const off = { ...base, session: { ...base.session!, autoAnswer: false } }
-    expect(paletteActions(off).find((action) => action.id === "session.autoAnswer")).toMatchObject({
-      title: "Turn on auto-answer for this Session",
-      description: "Answer new questions and forms for this Session; items already in Review stay yours",
-      intent: { type: "autoAnswer", enabled: true },
-    })
-    const on = { ...base, session: { ...base.session!, autoAnswer: true } }
-    expect(paletteActions(on).find((action) => action.id === "session.autoAnswer")).toMatchObject({
-      title: "Turn off auto-answer for this Session",
-      intent: { type: "autoAnswer", enabled: false },
-    })
-    expect(ids({ ...off, session: { ...off.session, managedChild: true } })).not.toContain("session.autoAnswer")
-    expect(filterPaletteActions(paletteActions(off), "/auto-answer").map((action) => action.id)).toContain("session.autoAnswer")
+    const mixed = { ...base, session: { ...base.session!, autonomous: { permissions: "auto", guardrails: "yolo", answers: "manual" } as const } }
+    expect(paletteActions(mixed).find((action) => action.id === "session.autonomous")?.description).toBe("Permissions Auto · Guardrails YOLO · Answers Manual")
+    expect(ids({ ...reported, session: { ...reported.session, managedChild: true } })).not.toContain("session.autonomous")
+    expect(ids({ ...reported, connected: false })).not.toContain("session.autonomous")
+    const titles = (query: string) => filterPaletteActions(paletteActions(reported), query).map((action) => action.title)
+    expect(titles("/autonomous")[0]).toBe("Open Autonomous controls")
+    expect(titles("manual yolo auto")).toEqual(["Open Autonomous controls"])
+    expect(titles("yolo")).toEqual(["Open Autonomous controls"])
   })
 
   test("sleep promises only that unsettled work waits in Review, never that a model settles it", () => {
@@ -155,7 +122,7 @@ describe("palette availability", () => {
     expect(ids(base)).not.toContain("command.compact")
     expect(ids(base)).not.toContain("command.goal")
     expect(ids(base)).not.toContain("command.suggest")
-    expect(ids({ ...base, commands: [...base.commands, { name: "auto-answer" }] })).not.toContain("command.auto-answer")
+    expect(ids({ ...base, commands: [...base.commands, { name: "autonomous" }] })).not.toContain("command.autonomous")
   })
 
   test("slash actions unavailable in the web composer are omitted from Commands", () => {
@@ -171,8 +138,8 @@ describe("palette availability", () => {
   })
 
   test("a running Session offers interrupt and an active goal offers stop", () => {
-    const running = ids({ ...base, session: { ...base.session!, running: true, goalActive: true, yolo: true } })
-    expect(running).toEqual(expect.arrayContaining(["session.interrupt", "session.goal.stop", "session.yolo"]))
+    const running = ids({ ...base, session: { ...base.session!, running: true, goalActive: true, autonomous: { permissions: "yolo", guardrails: "yolo", answers: "yolo" } } })
+    expect(running).toEqual(expect.arrayContaining(["session.interrupt", "session.goal.stop", "session.autonomous"]))
   })
 
   test("a managed subagent view offers only interrupt among Session actions", () => {
@@ -282,7 +249,7 @@ describe("palette search", () => {
     expect(titles("/goal")[0]).toBe("Set goal…")
     expect(titles("/suggest")[0]).toBe("Suggest next message")
     expect(titles("/prompt")[0]).toBe("Generate prompt")
-    expect(titles("/yolo")).toEqual(["Turn on YOLO for this Session"])
+    expect(titles("/yolo")).toEqual([])
     expect(titles("/review")[0]).toBe("/review")
   })
 
@@ -317,6 +284,6 @@ describe("palette search", () => {
 
   test("equal scores keep display order", () => {
     const result = filterPaletteActions(actions, "yolo")
-    expect(result.map((action) => action.title)).toEqual(["Turn on YOLO for this Session"])
+    expect(result.map((action) => action.title)).toEqual([])
   })
 })

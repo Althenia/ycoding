@@ -23,7 +23,7 @@ function connectedStore(onCompact?: (input: Readonly<Record<string, unknown>> | 
               messages: [], watermark: { type: "log.synced", aggregateID: "ses_a", seq: 0 },
             } }
           if (operation === "notice.subscribe") return { status: "ok" as const, value: { notices: [], total: 0, unavailable: false } }
-          if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } } }
+          if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } } }
           return { status: "ok" as const, value: { data: [] } }
         },
       }

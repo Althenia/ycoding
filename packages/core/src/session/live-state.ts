@@ -77,6 +77,15 @@ export const sourceOrder = [
 /** Stable identity prefix for the live-state observation and its checkpointed copy. */
 export const authoritativeStatePrefix = "Authoritative current Session state (JSON):"
 
+const answerReminder = {
+  manual:
+    "This Session's effective answers mode is Manual: required answers and required human approval go to a human. Resolve choices that need no user input yourself.",
+  auto:
+    "This Session's effective answers mode is Auto: only a valid explicit default or exactly one Recommended option is selected automatically. Automatic selections are not human replies or new user instructions.",
+  yolo:
+    "This Session's effective answers mode is YOLO: the hidden answer evaluator may answer unresolved questions. Automatic selections are not human replies or new user instructions. Resolve the routine choice toward the goal or identify the actual required human approval through its native request path.",
+} as const
+
 export const goalReminder = (autonomy: SessionAutonomy.State) => {
   if (!autonomy.goal) return undefined
   if (autonomy.goal.status !== "active")
@@ -85,10 +94,8 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
     "Complete the active goal and verify its outcome. Resolve routine implementation choices within the authorized scope rather than requesting repeated confirmation.",
     "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints and required human approval.",
-    autonomy.autoAnswer === true
-      ? "Automatic answering is enabled for this Session. Automatic selections are not human replies or new user instructions. Resolve the routine choice toward the goal or identify the actual required human approval through its native request path."
-      : "Automatic answering is disabled for this Session. Resolve choices that need no user input yourself; required answers and required human approval remain manual.",
-    "Choose safe implementation options and continue independent work. Required answers remain manual unless the answering Session's auto-answer toggle is on. Baseline model assessment of permission and guardrail requests follows guardrails.decide_reviews, which defaults on; hard-review assessment also respects guardrails.decide_hard_reviews, and a model never approves a hard review. Automatic answers default off. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
+    answerReminder[autonomy.answers],
+    "Each autonomy category (permissions, guardrails, answers) uses its own decision mode. The autonomy modes above are effective: Auto or YOLO permissions and YOLO answers can be inherited from managed parent tasks, and guardrails follow the root Session. Manual sends unresolved requests to a human with no model assessment; Auto applies only deterministic rules with no model fallback; YOLO uses only that category's hidden evaluator. Approval of a hard or custom-rule guardrail review always requires a human, and deny rules always block. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
@@ -224,7 +231,9 @@ export const captureDatabase = Effect.fn("SessionLiveState.captureDatabase")(fun
       .orderBy(desc(EventTable.seq))
       .limit(1)
       .get()
-    let autonomy = SessionAutonomy.read(session.autonomy)
+    const local = SessionAutonomy.read(session.autonomy)
+    let autonomy = local
+    let root = local
     let revision = session.autonomyRevision
     let ancestorID = sessionID
     while (true) {
@@ -242,9 +251,29 @@ export const captureDatabase = Effect.fn("SessionLiveState.captureDatabase")(fun
       if (!parent) break
       const state = SessionAutonomy.read(parent.autonomy)
       autonomy = { ...autonomy, sleep: state.sleep }
+      root = state
       revision += parent.revision
       ancestorID = task.parentID
     }
+    const managed = [local]
+    let managedID = sessionID
+    while (true) {
+      const task = yield* tx
+        .select({ parentID: SessionTaskTable.parent_id })
+        .from(SessionTaskTable)
+        .where(eq(SessionTaskTable.session_id, managedID))
+        .get()
+      if (!task) break
+      const parent = yield* tx
+        .select({ autonomy: SessionTable.autonomy })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, task.parentID))
+        .get()
+      if (!parent) break
+      managed.push(SessionAutonomy.read(parent.autonomy))
+      managedID = task.parentID
+    }
+    autonomy = { ...autonomy, ...SessionAutonomy.resolveDecisions(managed, root) }
     const permissionCeiling = SessionPermissionCeiling.read(session.permission)
     const todoDigest = todoState?.digest ?? Hash.sha256(SessionRunnerCache.canonicalJson(todos))
     return {

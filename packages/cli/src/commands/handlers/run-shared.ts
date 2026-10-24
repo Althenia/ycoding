@@ -21,10 +21,9 @@ export type RunInput = {
   readonly file: string[]
   readonly title?: string
   readonly thinking?: boolean
-  readonly yolo?: boolean
-  readonly autoPermission?: boolean
-  readonly autoGuardrail?: boolean
-  readonly autoAnswer?: boolean
+  readonly permissions?: "manual" | "yolo" | "auto"
+  readonly guardrails?: "manual" | "yolo" | "auto"
+  readonly answers?: "manual" | "yolo" | "auto"
 }
 
 export function runCommand(input: RunInput) {

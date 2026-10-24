@@ -40,9 +40,9 @@ Recognized catastrophic shell commands are denied before process creation, while
 
 ## Review Behavior
 
-Ordinary guardrail reviews auto-approve at effective yolo 2; yolo 0-1, including an active goal, keeps ordinary reviews enforced. Hard reviews require a fresh human decision at every level and cannot reuse an always approval.[^runtime-doc]
+The root family's guardrails mode determines review handling: Manual requires a human, Auto approves ordinary standard reviews only while awake, and YOLO enables the guardrail evaluator. Hard and custom-rule review approvals require a human in every mode; a goal grants no review authority, and hard reviews cannot reuse an Always approval.[^runtime-doc]
 
-Outside-repository ordinary reviews use deterministic rules and the normal review/effective YOLO path without helper-model classification. Deterministic denies, hard reviews, custom rules, disabled ordinary guardrails, and skipReview retain their gates. Historical risk fields remain valid for replay, but current evaluation neither produces them nor uses them to allow an action.[^spec-v2][^guardrail-core]
+Outside-repository ordinary reviews use deterministic matching followed by the root family's effective guardrails mode. Standard-match verification additionally requires YOLO and `guardrails.decide_reviews`; Manual and Auto have no model fallback. Explicit denies, hard and custom rules, concurrency caps, and `skipReview` retain their gates.[^spec-v2][^guardrail-core]
 
 Configuration recovery treats guardrails as one security unit: any invalid value, including an unknown property, becomes { "enabled": true } with default limits of 8 shells, 8 subagents, and 16 pending reviews. Invalid permission rules preserve valid order and append action-wide or all-action denies; diagnostics identify the rejected JSON path and failClosed: true without changing ordinary configuration-scope precedence.[^spec-v2]
 

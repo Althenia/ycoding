@@ -1156,7 +1156,7 @@ describe("SessionExecution lifecycle", () => {
           expect(drains).toBe(1)
           expect(yield* autonomy.get(parentID)).toMatchObject({
             mode: "normal",
-            yolo: false,
+            permissions: "manual", guardrails: "manual", answers: "manual",
             goal: { status: "active", iteration: 0 },
           })
           expect(yield* admittedInputs(database)).toEqual([])
@@ -1241,7 +1241,7 @@ describe("SessionExecution lifecycle", () => {
       yield* execution.resume(sessionID).pipe(Effect.exit)
       yield* execution.awaitIdle(sessionID)
 
-      expect(yield* autonomy.get(sessionID)).toMatchObject({ mode: "normal", yolo: false, goal: { status: "active", iteration: 0 } })
+      expect(yield* autonomy.get(sessionID)).toMatchObject({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { status: "active", iteration: 0 } })
       expect(yield* admittedInputs(database)).toEqual([])
       yield* Scope.close(scope, Exit.void)
     }),

@@ -179,7 +179,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/api/incident/guidance") return json({ data: { enabled: true } })
     if (url.pathname === "/api/provider/usage/forecast") return json({ data: { asOf: 0, localScope: "backend" } })
     if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname))
-      return json({ data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
+      return json({ data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } })
     if (/^\/api\/session\/[^/]+\/form$/.test(url.pathname)) return json({ data: [] })
     if (url.pathname === "/api/coordination") return json({ data: [] })
     if (url.pathname === "/api/coordination/settings") return json({ data: { enabled: true, categories: [] } })

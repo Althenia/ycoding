@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { SessionAutonomyView } from "@ycoding-ai/client"
+import { AutonomyFixture } from "../fixture/autonomy"
 import { json, sessionSnapshot } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
@@ -39,32 +40,17 @@ const reviewItem = {
   created: 2,
 }
 
-function autonomyView(yolo: boolean): SessionAutonomyView {
-  return {
-    mode: "normal",
-    yolo,
-    autoPermission: true,
-    autoGuardrail: true,
-    autoAnswer: true,
-    effective: {
-      yolo,
-      permissionsAuto: true,
-      permissionModelReviews: true,
-      asleep: false,
-      ordinaryReviewsAuto: true,
-      guardrailsEnabled: true,
-      modelReviews: false,
-      hardModelReviews: false,
-    },
-  }
+function autonomyView(modes: Partial<Pick<SessionAutonomyView, "permissions" | "guardrails" | "answers">> = {}): SessionAutonomyView {
+  return AutonomyFixture.autonomyView({ permissions: "auto", guardrails: "auto", answers: "auto", ...modes })
 }
 
 function fixture(goal = false) {
   const state = {
     autonomy: goal
-      ? { ...autonomyView(true), goal: { text: "Ship safely", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 } }
-      : autonomyView(true),
+      ? { ...autonomyView(), goal: { text: "Ship safely", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 } }
+      : autonomyView(),
     puts: [] as unknown[],
+    prompts: [] as unknown[],
   }
   const route = async (url: URL, request: Request) => {
     if (url.pathname === "/api/location") return json(location)
@@ -75,11 +61,15 @@ function fixture(goal = false) {
       return json({ data: [], summary: { total: 1, active: 1, running: 0, waiting: 1 }, cursor: {} })
     if (url.pathname === `/api/session/${sessionID}/autonomy`) {
       if (request.method === "PUT") {
-        const payload = (await request.json()) as { yolo?: boolean }
+        const payload = (await request.json()) as Partial<Pick<SessionAutonomyView, "permissions" | "guardrails" | "answers">>
         state.puts.push(payload)
-        if (typeof payload.yolo === "boolean") state.autonomy = autonomyView(payload.yolo)
+        state.autonomy = AutonomyFixture.autonomyView({ ...state.autonomy, ...payload }, state.autonomy.effective.inherited ? { inherited: state.autonomy.effective.inherited } : {})
       }
       return json({ location, data: state.autonomy })
+    }
+    if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
+      state.prompts.push(await request.json())
+      return new Response(null, { status: 500 })
     }
     if (url.pathname.endsWith("/guardrail"))
       return json({
@@ -133,7 +123,7 @@ for (const width of [60, 110, 200]) {
   }, 30_000)
 }
 
-test("the docked AUTONOMY section keeps its decider rows without a YOLO row and drops the header summary", async () => {
+test("the docked AUTONOMY section keeps its decider rows and drops the header summary", async () => {
   const { route } = fixture()
   const screen = await renderScreen({
     width: 200,
@@ -147,7 +137,7 @@ test("the docked AUTONOMY section keeps its decider rows without a YOLO row and 
     await waitFor(screen, () => /AUTONOMY/.test(screen.frame()) && /Permissions\s+auto/.test(screen.frame()), "autonomy rows")
     const row = screen.lines().find((line) => line.includes("AUTONOMY"))!
     expect(row.slice(row.indexOf("AUTONOMY")).trimEnd()).toBe("AUTONOMY")
-    for (const pattern of [/Permissions\s+auto/, /Guardrails\s+auto/, /Questions\s+auto/, /Review\s+1 waiting/])
+    for (const pattern of [/Permissions\s+auto/, /Guardrails\s+auto/, /Answers\s+auto/, /Review\s+1 waiting/])
       expect(screen.frame()).toMatch(pattern)
     expect(screen.frame()).not.toMatch(/YOLO\s+(on|off|unknown)/)
     expect(screen.frame()).not.toContain("then yolo")
@@ -156,8 +146,17 @@ test("the docked AUTONOMY section keeps its decider rows without a YOLO row and 
   }
 }, 30_000)
 
+async function openAutonomous(screen: Awaited<ReturnType<typeof renderScreen>>) {
+  screen.input.pressKey("p", { ctrl: true })
+  await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
+  await screen.input.typeText("Autonomous")
+  await waitFor(screen, () => screen.lines().some((line) => /^\s*Autonomous\b/.test(line)), "Autonomous palette row")
+  screen.input.pressEnter()
+  await waitFor(screen, () => screen.frame().includes("Permissions") && screen.frame().includes("1 all Manual"), "Autonomous dialog")
+}
+
 for (const width of [60, 200]) {
-  test(`/yolo off writes only the YOLO flag at ${width} columns`, async () => {
+  test(`the palette Autonomous dialog saves one category per cycle key at ${width} columns`, async () => {
     const { state, route } = fixture()
     const screen = await renderScreen({
       width,
@@ -168,17 +167,21 @@ for (const width of [60, 200]) {
       config: { animations: false },
     })
     try {
-      await screen.input.typeText("/yolo off")
-      screen.input.pressEnter()
-      await waitFor(screen, () => state.puts.length === 1, "autonomy write")
-      expect(state.puts).toEqual([{ yolo: false }])
-      await waitFor(screen, () => screen.frame().includes("YOLO off for this Session"), "settled toast")
+      await openAutonomous(screen)
+      screen.input.pressArrow("left")
+      await waitFor(screen, () => state.puts.length === 1, "permissions write")
+      screen.input.pressArrow("down")
+      screen.input.pressArrow("right")
+      await waitFor(screen, () => state.puts.length === 2, "guardrails write")
+      expect(state.puts).toEqual([{ permissions: "yolo" }, { guardrails: "manual" }])
+      await waitFor(screen, () => /Permissions\s+YOLO/.test(screen.frame()) && /Guardrails\s+Manual/.test(screen.frame()), "settled rows")
+      expect(state.prompts).toEqual([])
     } finally {
       await screen.dispose()
     }
   }, 30_000)
 
-  test(`the command palette toggles YOLO at ${width} columns`, async () => {
+  test(`set-all from the dialog is one request at ${width} columns`, async () => {
     const { state, route } = fixture()
     const screen = await renderScreen({
       width,
@@ -189,18 +192,72 @@ for (const width of [60, 200]) {
       config: { animations: false },
     })
     try {
-      screen.input.pressKey("p", { ctrl: true })
-      await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
-      await screen.input.typeText("YOLO")
-      await waitFor(screen, () => screen.frame().includes("Toggle YOLO: on"), "YOLO palette row")
-      screen.input.pressEnter()
-      await waitFor(screen, () => state.puts.length === 1, "autonomy write")
-      expect(state.puts).toEqual([{ yolo: false }])
+      await openAutonomous(screen)
+      screen.input.pressKey("2")
+      await waitFor(screen, () => state.puts.length === 1, "set-all write")
+      expect(state.puts).toEqual([{ permissions: "yolo", guardrails: "yolo", answers: "yolo" }])
     } finally {
       await screen.dispose()
     }
   }, 30_000)
 }
+
+test("/autonomous opens the dialog without admitting slash text", async () => {
+  const { state, route } = fixture()
+  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  try {
+    await screen.input.typeText("/autonomous")
+    screen.input.pressEnter()
+    await waitFor(screen, () => screen.frame().includes("Permissions") && screen.frame().includes("1 all Manual"), "Autonomous dialog")
+    expect(state.prompts).toEqual([])
+    expect(state.puts).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("the four former autonomy commands are gone from the slash menu", async () => {
+  const { route } = fixture()
+  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  try {
+    await screen.input.typeText("/auto")
+    await waitFor(screen, () => screen.frame().includes("/autonomous"), "slash menu")
+    for (const removed of ["/yolo", "/auto-permission", "/auto-guardrail", "/auto-answer"]) expect(screen.frame()).not.toContain(removed)
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("the four former autonomy toggles are gone from the palette", async () => {
+  const { route } = fixture()
+  const screen = await renderScreen({ width: 100, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
+    await screen.input.typeText("Toggle")
+    await waitFor(screen, () => screen.frame().includes("Toggle"), "palette filter")
+    for (const removed of ["Toggle YOLO", "Auto-permission", "Auto-guardrail", "Auto-answer"]) expect(screen.frame()).not.toContain(removed)
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("the palette lists exactly one Autonomous entry with its description in full at 80 columns", async () => {
+  const { route } = fixture()
+  const screen = await renderScreen({ width: 80, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
+    await screen.input.typeText("Autonomous")
+    await waitFor(screen, () => screen.lines().some((line) => /^\s*Autonomous\b/.test(line)), "Autonomous palette row")
+    const rows = screen.lines().filter((line) => line.includes("permissions, guardrails, and answers"))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatch(/^\s*Autonomous\b/)
+    expect(rows[0]).not.toContain("…")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
 
 test("the sidebar toggle command opens the AUTONOMY rows below the docked width", async () => {
   const { route } = fixture()
@@ -223,7 +280,7 @@ test("the sidebar toggle command opens the AUTONOMY rows below the docked width"
     const row = screen.lines().find((line) => line.includes("AUTONOMY"))!
     expect(row.slice(row.indexOf("AUTONOMY")).trimEnd()).toBe("AUTONOMY")
     expect(screen.frame()).toMatch(/Review\s+1 waiting/)
-    expect(screen.frame()).toMatch(/Questions\s+auto/)
+    expect(screen.frame()).toMatch(/Answers\s+auto/)
     expect(screen.frame()).not.toMatch(/YOLO\s+(on|off|unknown)/)
   } finally {
     await screen.dispose()
@@ -235,7 +292,7 @@ test("a sleeping Session keeps its distinct operational state in the header with
   state.autonomy = {
     ...state.autonomy,
     sleep: {},
-    effective: { ...autonomyView(true).effective, asleep: true },
+    effective: { ...autonomyView().effective, asleep: true },
   }
   const screen = await renderScreen({
     width: 60,
@@ -273,50 +330,20 @@ test("an active goal shows in the docked GOAL section and nowhere in the header 
   }
 }, 30_000)
 
-const toggleDescriptions = [
-  { filter: "YOLO", title: "Toggle YOLO", description: "evaluates unresolved requests" },
-  { filter: "auto-permission", title: "Toggle Auto-permission", description: "approves ask permissions" },
-  { filter: "auto-guardrail", title: "Toggle Auto-guardrail", description: "approves ordinary reviews while awake" },
-  { filter: "auto-answer", title: "Toggle Auto-answer", description: "uses explicit defaults" },
-]
-
-for (const toggle of toggleDescriptions) {
-  test(`the command palette row for ${toggle.filter} states its description in full at 80 columns`, async () => {
-    const { route } = fixture()
-    const screen = await renderScreen({
-      width: 80,
-      height: 50,
-      args: { sessionID },
-      route,
-      settle: "waiting · 1 subagent",
-      config: { animations: false },
-    })
-    try {
-      screen.input.pressKey("p", { ctrl: true })
-      await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
-      await screen.input.typeText(toggle.filter)
-      await waitFor(screen, () => screen.frame().includes(toggle.title), "toggle palette row")
-      const rows = screen.lines().filter((line) => line.includes(toggle.title))
-      expect(rows).toHaveLength(1)
-      expect(rows[0]).toContain(toggle.description)
-      expect(rows[0]).not.toContain("…")
-    } finally {
-      await screen.dispose()
-    }
-  }, 30_000)
-}
-
-test("an inherited guardrail setting remains fully explained in the narrow palette", async () => {
+test("an inherited effective mode shows its source in the AUTONOMY rows and the dialog", async () => {
   const { state, route } = fixture()
-  state.autonomy = { ...state.autonomy, autoGuardrail: false }
-  const screen = await renderScreen({ width: 80, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
+  state.autonomy = AutonomyFixture.autonomyView(
+    { permissions: "manual", guardrails: "manual", answers: "manual" },
+    { guardrails: "yolo", inherited: { guardrails: "ses_root" } },
+  )
+  const screen = await renderScreen({ width: 200, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
   try {
-    screen.input.pressKey("p", { ctrl: true })
-    await waitFor(screen, () => screen.frame().includes("Commands"), "palette")
-    await screen.input.typeText("auto-guardrail")
-    await waitFor(screen, () => screen.frame().includes("inherited on"), "inherited toggle")
-    expect(screen.frame()).toContain("approves ordinary reviews while awake")
-    expect(screen.lines().find((line) => line.includes("Auto-guardrail: inherited on"))).not.toContain("…")
+    await waitFor(screen, () => /Guardrails\s+yolo/.test(screen.frame()), "inherited guardrails row")
+    expect(screen.frame()).toContain("inherited from ses_root")
+    expect(screen.frame()).toMatch(/Permissions\s+manual/)
+    await openAutonomous(screen)
+    expect(screen.lines().find((line) => line.includes("Guardrails") && line.includes("YOLO · inherited"))).toBeDefined()
+    expect(screen.frame()).toContain("Inherited from ses_root")
   } finally {
     await screen.dispose()
   }

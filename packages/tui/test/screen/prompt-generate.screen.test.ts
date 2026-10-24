@@ -177,14 +177,16 @@ async function landingFixture() {
       if (createdID && url.pathname === `/api/session/${createdID}/autonomy` && request.method === "PUT") {
         const body: unknown = await request.json()
         autonomy.push(body)
-        const yolo = typeof body === "object" && body !== null ? Reflect.get(body, "yolo") : false
-        return json({ data: { mode: "normal", yolo: yolo === true } })
+        return json({ data: { mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo" } })
       }
       if (createdID && url.pathname === `/api/session/${createdID}`) return json({ data: info() })
       if (createdID && url.pathname === `/api/session/${createdID}/snapshot`) return sessionSnapshot(createdID, [], { session: info() })
       if (createdID && url.pathname === `/api/session/${createdID}/subagent`)
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
-      if (createdID && url.pathname === `/api/session/${createdID}/autonomy`) return json({ data: { mode: "normal", yolo: autonomy.length > 0, effective: { yolo: autonomy.length > 0, permissionsAuto: false, permissionModelReviews: false, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false } } })
+      if (createdID && url.pathname === `/api/session/${createdID}/autonomy`) {
+        const mode = autonomy.length > 0 ? "yolo" : "manual"
+        return json({ data: { mode: "normal", permissions: mode, guardrails: mode, answers: mode, effective: { permissions: mode, guardrails: mode, answers: mode, inherited: {}, asleep: false, guardrailsEnabled: true } } })
+      }
       if (createdID && url.pathname === `/api/session/${createdID}/guardrail`)
         return json({ data: { rootSessionID: createdID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
       if (createdID && url.pathname === `/api/session/${createdID}/diagnostics`)
@@ -398,12 +400,16 @@ test("a nonempty draft keeps its text and discards the generated prompt", async 
   }
 }, 30000)
 
-test("the landing screen creates a Session, keeps the YOLO draft, and fills the new composer", async () => {
+test("the landing screen creates a Session, keeps the Autonomous draft, and fills the new composer", async () => {
   const view = await landingFixture()
   try {
-    await view.screen.input.typeText("/yolo on ")
+    await view.screen.input.typeText("/autonomous")
     view.screen.input.pressEnter()
-    await view.wait(() => view.screen.frame().includes("YOLO on for this Session (landing)"))
+    await view.wait(() => view.screen.frame().includes("1 all Manual"))
+    view.screen.input.pressKey("2")
+    await view.wait(() => view.screen.frame().includes("permissions yolo"))
+    view.screen.input.pressEscape()
+    await view.wait(() => !view.screen.frame().includes("1 all Manual"))
     await view.screen.input.typeText("/prompt Draft the landing task ")
     view.screen.input.pressEnter()
     await view.wait(() => view.screen.frame().includes("Generate prompt") && !view.screen.frame().includes("Steer"))
@@ -411,7 +417,7 @@ test("the landing screen creates a Session, keeps the YOLO draft, and fills the 
     view.screen.input.pressEnter()
     await view.wait(() => view.creates.length === 1 && view.generates.length === 1)
     expect(view.creates[0]).toMatchObject({ agent: "build", model: { providerID: "openai", id: "fixture" } })
-    expect(view.autonomy).toEqual([{ yolo: true }])
+    expect(view.autonomy).toEqual([{ permissions: "yolo", guardrails: "yolo", answers: "yolo" }])
     expect(view.generates[0]?.body).toMatchObject({ mode: "start", intent: "Draft the landing task", memory: [] })
     expect(view.generates[0]?.path).toBe(`/api/session/${Reflect.get(view.creates[0] ?? {}, "id")}/prompt-generate`)
     view.release()

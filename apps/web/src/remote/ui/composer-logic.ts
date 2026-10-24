@@ -12,8 +12,9 @@ const autonomyActions = {
   sleep: { kind: "sleep", description: "Put this Session family to sleep" },
   wake: { kind: "wake", description: "Wake this Session family" },
   "keep-awake": { kind: "keepAwake", description: "Toggle keeping this machine awake" },
+  autonomous: { kind: "autonomous", description: "Open Autonomous controls" },
 } as const
-const localSessionActions = new Set(["goal", "yolo", "auto-permission", "auto-guardrail", "auto-answer", "suggest", ...Object.keys(autonomyActions)])
+const localSessionActions = new Set(["goal", "suggest", ...Object.keys(autonomyActions)])
 
 export type PromptGenerateMode = "start" | "steer" | "queue" | "goal"
 
@@ -195,7 +196,7 @@ export function optionsForTrigger(trigger: Trigger, query: string, catalog: Cata
   const resources: ComposerOption[] = [...catalog.references, ...catalog.resources]
     .map((resource) => ({ label: `@${resource.name}`, description: resource.description, kind: "file", value: resource.name, uri: resource.uri }))
   const candidates: ComposerOption[] = trigger === "/"
-    ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/yolo", description: "Toggle YOLO evaluation for this Session", kind: "command" as const, value: "yolo" }, { label: "/auto-permission", description: "Toggle automatic tool permission approval for this Session", kind: "command" as const, value: "auto-permission" }, { label: "/auto-guardrail", description: "Toggle automatic routine guardrail approval for this Session", kind: "command" as const, value: "auto-guardrail" }, { label: "/auto-answer", description: "Toggle automatic answers for this Session", kind: "command" as const, value: "auto-answer" }, { label: "/suggest", description: "Suggest your next message", kind: "command" as const, value: "suggest" }, ...Object.entries(autonomyActions).map(([name, action]) => ({ label: `/${name}`, description: action.description, kind: "command" as const, value: name }))] : []), { label: "/prompt", description: "Generate a prompt from a rough intent", kind: "command" as const, value: "prompt" }, ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && command.name !== "prompt" && (!sessionActions || !localSessionActions.has(command.name))).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
+    ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/suggest", description: "Suggest your next message", kind: "command" as const, value: "suggest" }, ...Object.entries(autonomyActions).map(([name, action]) => ({ label: `/${name}`, description: action.description, kind: "command" as const, value: name }))] : []), { label: "/prompt", description: "Generate a prompt from a rough intent", kind: "command" as const, value: "prompt" }, ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && command.name !== "prompt" && (!sessionActions || !localSessionActions.has(command.name))).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
     : trigger === "@" ? [...catalog.references.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...agents, ...catalog.resources.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...files.map((file) => ({ label: `@${file.path}`, kind: "file" as const, value: file.path, uri: file.uri }))]
       : trigger === "$" ? skills : [...skills.map((skill) => ({ ...skill, label: catalog.skills.find((item) => item.id === skill.value)?.name ?? skill.label })), ...agents.map((agent) => ({ ...agent, label: catalog.agents.find((item) => item.id === agent.value)?.name ?? agent.label }))]
   return candidates.map((option) => ({ option, score: Math.max(fuzzy(option.value, query), fuzzy(option.description ?? "", query) - 20) }))
@@ -242,18 +243,6 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
   if (command?.[1] === "goal") return command[2]?.trim()
     ? { kind: "goal" as const, input: { goal: command[2].trim() } }
     : { kind: "invalid" as const, message: "Enter goal text after /goal." }
-  const toggle = command?.[1] === "yolo" ? "yolo" as const
-    : command?.[1] === "auto-permission" ? "autoPermission" as const
-    : command?.[1] === "auto-guardrail" ? "autoGuardrail" as const
-    : command?.[1] === "auto-answer" ? "autoAnswer" as const
-    : undefined
-  if (toggle !== undefined && command) {
-    const arg = command[2]?.trim()
-    if (arg === undefined || arg === "") return { kind: toggle, input: {} }
-    if (arg === "on") return { kind: toggle, input: { enabled: true } }
-    if (arg === "off") return { kind: toggle, input: { enabled: false } }
-    return { kind: "invalid" as const, message: `Use /${command[1]}, /${command[1]} on, or /${command[1]} off.` }
-  }
   const autonomy = command && Object.hasOwn(autonomyActions, command[1]!) ? autonomyActions[command[1] as keyof typeof autonomyActions] : undefined
   if (autonomy) return command?.[2]?.trim()
     ? { kind: "invalid" as const, message: `Use /${command[1]} without arguments.` }

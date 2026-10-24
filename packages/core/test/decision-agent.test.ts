@@ -346,7 +346,7 @@ it.effect("the explicit decision tool sends recorded task context to the selecte
   const sessionID = yield* seed("ses_agent_tool_context")
   const database = yield* Database.Service
   yield* database.db.update(SessionTable).set({
-    autonomy: { mode: "normal", yolo: false, goal: {
+    autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: {
       text: "Validate the local candidate", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3,
     } },
     permission: [{ action: "shell", resource: "publish *", effect: "deny" }],

@@ -24,6 +24,7 @@ import { createEventStream, createFetch, json, type FetchHandler, sessionSnapsho
 import { saveScreenCapture } from "./fixture/screen-capture"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "./viewport"
 import { renderScreen } from "./screen/harness"
+import { autonomyState } from "./fixture/autonomy"
 
 const sessionID = "ses_transcript_live"
 const directory = "/tmp/ycoding/session-transcript-live"
@@ -70,7 +71,7 @@ const guardrailRequest = {
   standard: true,
 }
 
-const yoloGoal: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: true, goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } })
+const yoloGoal: SessionAutonomyView = localAutonomyView(autonomyState({ permissions: "yolo", guardrails: "yolo", answers: "yolo", goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } }))
 const yoloTodos: SessionTodoInfo[] = [{ content: "Yolo sidebar todo", status: "in_progress", priority: "medium" }]
 
 const transcript = [
@@ -644,7 +645,7 @@ function routeFor(
   messages: SessionMessageInfo[],
   guardrails: unknown[] = [],
   pending: SessionPendingInfo[] = [],
-  autonomy: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: false }),
+  autonomy: SessionAutonomyView = localAutonomyView(autonomyState()),
   todos: SessionTodoInfo[] = [],
 ) {
   return (url: URL) => {
@@ -755,7 +756,7 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
     width: 200, height: 50, args: { sessionID }, settle: "asleep",
     keepAwake: { get: () => read.promise, set: async () => ({ state: "off" }) },
     route: async (url) => url.pathname === `/api/session/${sessionID}/autonomy`
-      ? Response.json({ data: localAutonomyView({ mode: "normal", yolo: false, sleep: {} }) })
+      ? Response.json({ data: localAutonomyView(autonomyState({ sleep: {} })) })
       : base(url),
   })
   try {
@@ -770,7 +771,7 @@ test("sleeping header does not warn that the machine may sleep before its keep-a
   }
 })
 
-test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in timestamp order with pending family review last", async (viewID) => {
+test.each([sessionID, "ses_provenance_child"])("renders only %s rejections in timestamp order, hides automatic approvals and dismissals, with pending family review last", async (viewID) => {
   const messages: SessionMessageInfo[] = [
     { type: "user", id: "msg_before_provenance", text: "CHAT BEFORE REVIEWS", time: { created: 10 } },
     { type: "user", id: "msg_after_provenance", text: "CHAT AFTER REVIEWS", time: { created: 50 } },
@@ -784,7 +785,11 @@ test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in ti
       if (url.pathname === `/api/session/${viewID}/snapshot`) return sessionSnapshot(viewID, messages, { session: viewed })
       if (/\/guardrail$/.test(url.pathname)) return json({ data: {
         rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [],
-        decisions: [{ sessionID, created: 30, requestID: "grq_root_order", reply: "once", confidence: 0.87 }],
+        decisions: [
+          { sessionID, created: 30, requestID: "grq_root_order", reply: "once", confidence: 0.87 },
+          { sessionID, created: 35, requestID: "grq_root_reject", reply: "reject", choice: "deny", confidence: 0.88 },
+          { sessionID: "ses_provenance_child", created: 40, requestID: "grq_child_reject", reply: "reject", choice: "deny", confidence: 0.96 },
+        ],
         dismissals: [
           { sessionID, created: 20, eventID: "evt_root_order", ruleID: "standard.review.force-push", confidence: 0.94 },
           { sessionID: "ses_provenance_child", created: 40, eventID: "evt_child_order", ruleID: "standard.review.project-deletion", confidence: 0.96 },
@@ -797,7 +802,7 @@ test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in ti
     },
   })
   try {
-    const marker = viewID === sessionID ? "not a real match · 0.94" : "not a real match · 0.96"
+    const marker = viewID === sessionID ? "decision model rejected · 0.88" : "decision model rejected · 0.96"
     await waitForFrame(screen.frame, marker)
     const frame = screen.frame()
     expect(frame).toContain("CHAT BEFORE REVIEWS")
@@ -805,15 +810,9 @@ test.each([sessionID, "ses_provenance_child"])("renders only %s provenance in ti
     expect(frame.indexOf("CHAT BEFORE REVIEWS")).toBeLessThan(frame.indexOf(marker))
     expect(frame.indexOf(marker)).toBeLessThan(frame.indexOf("CHAT AFTER REVIEWS"))
     expect(frame.indexOf("CHAT AFTER REVIEWS")).toBeLessThan(frame.indexOf("FAMILY PENDING REVIEW"))
-    if (viewID === sessionID) {
-      expect(frame.indexOf(marker)).toBeLessThan(frame.indexOf("decision model approved once · 0.87"))
-      expect(frame.indexOf("decision model approved once · 0.87")).toBeLessThan(frame.indexOf("CHAT AFTER REVIEWS"))
-      expect(frame).not.toContain("not a real match · 0.96")
-    }
-    if (viewID !== sessionID) {
-      expect(frame).not.toContain("not a real match · 0.94")
-      expect(frame).not.toContain("decision model approved once · 0.87")
-    }
+    expect(frame).not.toContain("not a real match")
+    expect(frame).not.toContain("approved once")
+    expect(frame).not.toContain(viewID === sessionID ? "rejected · 0.96" : "rejected · 0.88")
   } finally {
     await screen.dispose()
   }
@@ -831,8 +830,9 @@ test.each([false, true])("settled audit order survives status hydration with com
     { type: "user", id: "msg_order_retained", text: "CHAT RETAINED AFTER COMPACTION", time: { created: 50 } },
   ]
   const decisions = [
-    { sessionID, created: 2, requestID: "grq_order_covered", reply: "once", confidence: 0.81 },
-    ...Array.from({ length: 5 }, (_, index) => ({ sessionID, created: 16 + index, requestID: `grq_order_${index}`, reply: "once", confidence: 0.91 + index / 100 })),
+    { sessionID, created: 2, requestID: "grq_order_covered", reply: "reject", confidence: 0.81 },
+    { sessionID, created: 16, requestID: "grq_order_approved", reply: "once", confidence: 0.99 },
+    ...Array.from({ length: 5 }, (_, index) => ({ sessionID, created: 16 + index, requestID: `grq_order_${index}`, reply: "reject", confidence: 0.91 + index / 100 })),
   ]
   const pending = { ...guardrailRequest, id: "grq_order_pending", reason: "CURRENT HARD REVIEW", hardReview: true }
   const base = routeFor(messages, [pending])
@@ -859,13 +859,14 @@ test.each([false, true])("settled audit order survives status hydration with com
     const frame = screen.frame()
     expect(frame).toContain("RESPONSE AFTER AUDITS")
     for (let index = 0; index < 5; index++) {
-      const outcome = `approved once · ${0.91 + index / 100}`
+      const outcome = `rejected · ${0.91 + index / 100}`
       expect(frame).toContain(outcome)
       expect(frame.indexOf(outcome)).toBeLessThan(frame.indexOf("RESPONSE AFTER AUDITS"))
     }
     expect(frame.indexOf("RESPONSE AFTER AUDITS")).toBeLessThan(frame.indexOf("CURRENT HARD REVIEW"))
-    expect(frame.includes("approved once · 0.81")).toBe(!compacted)
-    expect(data!.session.guardrail.decided(sessionID)).toHaveLength(6)
+    expect(frame).not.toContain("rejected · 0.81")
+    expect(frame).not.toContain("approved once")
+    expect(data!.session.guardrail.decided(sessionID)).toHaveLength(7)
     expect(data!.session.guardrail.list(sessionID)).toHaveLength(1)
     expect(mutations).toEqual([])
     if (!compacted) {
@@ -878,13 +879,13 @@ test.each([false, true])("settled audit order survives status hydration with com
       await pruned.promise
       await screen.renderOnce()
       expect(screen.frame()).toContain("CHAT RETAINED AFTER COMPACTION")
-      expect(screen.frame()).not.toContain("approved once")
+      expect(screen.frame()).not.toContain("rejected · 0.9")
       expect(screen.frame()).toContain("CURRENT HARD REVIEW")
       data!.session.guardrail.invalidate(sessionID)
       await data!.session.guardrail.sync(sessionID)
       await screen.renderOnce()
-      expect(screen.frame()).not.toContain("approved once")
-      expect(data!.session.guardrail.decided(sessionID)).toHaveLength(6)
+      expect(screen.frame()).not.toContain("rejected · 0.9")
+      expect(data!.session.guardrail.decided(sessionID)).toHaveLength(7)
       expect(data!.session.guardrail.list(sessionID)).toHaveLength(1)
       expect(mutations).toEqual([])
     }
@@ -921,7 +922,7 @@ test("restart retains the escalation notice without restoring a pending review, 
 })
 
 test("family slash commands update autonomy, rehydrate indicators, and render durable decision provenance", async () => {
-  let autonomy: SessionAutonomyView = localAutonomyView({ mode: "normal", yolo: false })
+  let autonomy: SessionAutonomyView = localAutonomyView(autonomyState())
   const writes: unknown[] = []
   const awakeWrites: boolean[] = []
   const dismissals: Array<{
@@ -954,7 +955,7 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     width: 200,
     height: 50,
     args: { sessionID },
-    settle: "decision model approved once",
+    settle: "decision model rejected · 0.85",
     keepAwake: {
       get: async () => ({
         state: autonomy.sleep ? "on" : "off",
@@ -989,13 +990,14 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
             counters: [],
             invalidFiles: [],
             decisions: [
-              { sessionID, created: 3, requestID: "grq_restored", reply: "once", choice: "approve", confidence: 0.85,
-                grades: [{ choice: "approve", confidence: 0.85, evidence: "A scoped release operation" }, { choice: "reject", confidence: 0.01, evidence: "No destructive effect" }],
+              { sessionID, created: 3, requestID: "grq_restored", reply: "reject", choice: "deny", confidence: 0.85,
+                grades: [{ choice: "deny", confidence: 0.85, evidence: "Rewrites shared history" }, { choice: "allow", confidence: 0.01, evidence: "No scoped authorization" }],
                 ruleIDs: ["custom.review.release", "standard.review.outside-repository"],
                 source: { messageID: "msg_restored_tool", callID: "call_restored" } },
               { sessionID, created: 4, requestID: "grq_low", reply: "reject", choice: "approve", confidence: 0.79 },
               { sessionID, created: 5, requestID: "grq_threshold", reply: "reject", choice: "approve", confidence: 0.799999 },
               { sessionID, created: 6, requestID: "grq_error", reply: "reject" },
+              { sessionID, created: 7, requestID: "grq_approved", reply: "once", choice: "allow", confidence: 0.93 },
             ],
             dismissals,
           },
@@ -1017,31 +1019,26 @@ test("family slash commands update autonomy, rehydrate indicators, and render du
     expect(screen.frame()).toContain("approve · 0.79 · rejected")
     expect(screen.frame()).toContain("approve · 0.799999 · rejected")
     expect(screen.frame()).toContain("confidence unreported")
-    expect(screen.frame()).toContain("match verifier · not a real match · 0.95")
-    expect(screen.frame()).toContain("standard.review.force-push")
+    expect(screen.frame()).not.toContain("not a real match")
+    expect(screen.frame()).not.toContain("approved once")
     expect(screen.frame()).not.toContain("command git push --force origin main")
-    expect(screen.frame()).not.toContain("A scoped release operation")
-    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model approved once")))
+    expect(screen.frame()).not.toContain("Rewrites shared history")
+    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model rejected · 0.85")))
     await frame("rule custom.review.release")
     expect(screen.frame()).toContain("rule standard.review.outside-repository")
-    expect(screen.frame()).toContain("command git push --force origin main")
-    expect(screen.frame()).toContain("grade approve (selected) 0.85 · A scoped release operation")
-    expect(screen.frame()).toContain("grade reject 0.01 · No destructive effect")
-    await saveScreenCapture("guardrail-provenance-200", screen)
-    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model approved once")))
-    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("match verifier · not a real match · 0.95")))
-    await frame("command git push --force origin main")
     expect(screen.frame()).toContain("tool shell")
-    expect(screen.frame()).toContain("rule standard.review.force-push")
-    expect(screen.frame()).toContain("outcome match verifier · not a real match · 0.95")
+    expect(screen.frame()).toContain("command git push --force origin main")
+    expect(screen.frame()).toContain("grade deny (selected) 0.85 · Rewrites shared history")
+    expect(screen.frame()).toContain("grade allow 0.01 · No scoped authorization")
+    await saveScreenCapture("guardrail-provenance-200", screen)
+    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("decision model rejected · 0.85")))
     await screen.mouse.click(3, screen.lines().findIndex((line) => line.includes("Message YCoding…")))
     await screen.waitForEventStream()
     const liveDismissal = { sessionID, created: 99, eventID: "evt_dismissed_live", ruleID: "standard.review.git-destructive", confidence: 0.91 }
     dismissals.push(liveDismissal)
     screen.events.emit({ id: liveDismissal.eventID, created: 99, type: "session.guardrail.dismissed", durable: { aggregateID: sessionID, seq: 99, version: 1 }, data: { sessionID, reviewSessionID: sessionID, ruleID: liveDismissal.ruleID, confidence: liveDismissal.confidence } } satisfies YCodingEvent)
-    await frame("match verifier · not a real match · 0.91")
-    expect(screen.colorOf("match verifier")).toBeDefined()
-    expect(screen.colorOf("match verifier")).toEqual(screen.colorOf("decision model approved once"))
+    await screen.renderOnce()
+    expect(screen.frame()).not.toContain("not a real match")
     await slash("/sleep")
     await frame("asleep")
     await frame("Configured automation applies; rest go to review box.")

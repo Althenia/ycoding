@@ -4,6 +4,7 @@ import { SessionPending } from "@ycoding-ai/schema/session-pending"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { AttachmentDigest, Base64 } from "@ycoding-ai/schema/prompt"
 import { Session } from "@ycoding-ai/schema/session"
+import { SessionAutonomy } from "@ycoding-ai/schema/session-autonomy"
 import { SessionCacheDiagnostics } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { InstructionEntry } from "@ycoding-ai/schema/instruction-entry"
 import { Project } from "@ycoding-ai/schema/project"
@@ -176,29 +177,25 @@ export const SessionAutonomyGoal = Schema.Struct({
   maxNoProgress: PositiveInt,
   lastProgressDigest: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyGoal" })
-export const SessionAutonomyYolo = Schema.Boolean.annotate({ identifier: "SessionAutonomyYolo" })
 export const SessionAutonomySleep = Schema.Struct({}).pipe(Schema.decodeTo(Schema.Struct({}), {
   decode: SchemaGetter.transform(() => ({})),
   encode: SchemaGetter.transform(() => ({})),
 })).annotate({ identifier: "SessionAutonomySleep" })
 export const SessionAutonomyState = Schema.Struct({
   mode: SessionAutonomyMode,
-  yolo: SessionAutonomyYolo,
-  autoPermission: Schema.Boolean.pipe(Schema.optional),
-  autoGuardrail: Schema.Boolean.pipe(Schema.optional),
-  autoAnswer: Schema.Boolean.pipe(Schema.optional),
+  ...SessionAutonomy.Decisions.fields,
   goal: SessionAutonomyGoal.pipe(Schema.optional),
   sleep: SessionAutonomySleep.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
 export const SessionAutonomyEffective = Schema.Struct({
-  yolo: SessionAutonomyYolo,
-  permissionsAuto: Schema.Boolean,
-  permissionModelReviews: Schema.Boolean,
+  ...SessionAutonomy.Decisions.fields,
+  inherited: Schema.Struct({
+    permissions: Session.ID.pipe(Schema.optional),
+    guardrails: Session.ID.pipe(Schema.optional),
+    answers: Session.ID.pipe(Schema.optional),
+  }),
   asleep: Schema.Boolean,
   guardrailsEnabled: Schema.Boolean,
-  ordinaryReviewsAuto: Schema.Boolean,
-  modelReviews: Schema.Boolean,
-  hardModelReviews: Schema.Boolean,
 }).annotate({ identifier: "SessionAutonomyEffective" })
 export const SessionAutonomyView = Schema.Struct({
   ...SessionAutonomyState.fields,
@@ -209,6 +206,9 @@ const AutonomyControlsAbsent = {
   autoPermission: Schema.Never.pipe(Schema.optional),
   autoGuardrail: Schema.Never.pipe(Schema.optional),
   autoAnswer: Schema.Never.pipe(Schema.optional),
+  permissions: Schema.Never.pipe(Schema.optional),
+  guardrails: Schema.Never.pipe(Schema.optional),
+  answers: Schema.Never.pipe(Schema.optional),
   sleep: Schema.Never.pipe(Schema.optional),
   goal: Schema.Never.pipe(Schema.optional),
   maxNoProgress: Schema.Never.pipe(Schema.optional),
@@ -216,13 +216,14 @@ const AutonomyControlsAbsent = {
 export const SessionAutonomySet = Schema.Union([
   Schema.Struct({
     ...AutonomyControlsAbsent,
-    yolo: SessionAutonomyYolo.pipe(Schema.optional),
     goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Literal(true), Schema.Null]),
     maxNoProgress: PositiveInt.pipe(Schema.optional),
   }),
   Schema.Struct({
     ...AutonomyControlsAbsent,
-    yolo: SessionAutonomyYolo,
+    permissions: SessionAutonomy.DecisionMode,
+    guardrails: SessionAutonomy.DecisionMode.pipe(Schema.optional),
+    answers: SessionAutonomy.DecisionMode.pipe(Schema.optional),
   }),
   Schema.Struct({
     ...AutonomyControlsAbsent,
@@ -230,15 +231,15 @@ export const SessionAutonomySet = Schema.Union([
   }),
   Schema.Struct({
     ...AutonomyControlsAbsent,
-    autoAnswer: Schema.Boolean,
+    permissions: SessionAutonomy.DecisionMode.pipe(Schema.optional),
+    guardrails: SessionAutonomy.DecisionMode,
+    answers: SessionAutonomy.DecisionMode.pipe(Schema.optional),
   }),
   Schema.Struct({
     ...AutonomyControlsAbsent,
-    autoPermission: Schema.Boolean,
-  }),
-  Schema.Struct({
-    ...AutonomyControlsAbsent,
-    autoGuardrail: Schema.Boolean,
+    permissions: SessionAutonomy.DecisionMode.pipe(Schema.optional),
+    guardrails: SessionAutonomy.DecisionMode.pipe(Schema.optional),
+    answers: SessionAutonomy.DecisionMode,
   }),
 ]).annotate({ identifier: "SessionAutonomySet" })
 

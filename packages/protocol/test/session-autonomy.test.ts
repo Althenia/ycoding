@@ -11,7 +11,7 @@ test("session autonomy state preserves active goal progress", () => {
   expect(
     Schema.decodeUnknownSync(SessionAutonomyState)({
       mode: "normal",
-      yolo: true,
+      permissions: "yolo", guardrails: "manual", answers: "auto",
       goal: {
         text: "Ship the release",
         status: "active",
@@ -23,7 +23,7 @@ test("session autonomy state preserves active goal progress", () => {
     }),
   ).toEqual({
     mode: "normal",
-    yolo: true,
+    permissions: "yolo", guardrails: "manual", answers: "auto",
     goal: {
       text: "Ship the release",
       status: "active",
@@ -35,22 +35,14 @@ test("session autonomy state preserves active goal progress", () => {
   })
 })
 
-test("session autonomy state preserves boolean YOLO and rejects numeric levels", () => {
-  expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: false })).toEqual({
-    mode: "normal",
-    yolo: false,
-  })
-  expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: true })).toEqual({
-    mode: "normal",
-    yolo: true,
-  })
-  for (const yolo of [0, 1, 2, 3])
+test("session autonomy state rejects obsolete Boolean and numeric controls", () => {
+  for (const yolo of [false, true, 0, 1, 2, 3])
     expect(() => Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo })).toThrow()
 })
 
 test("session autonomy set accepts modes and rejects empty goals", () => {
-  expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: true })).toEqual({ yolo: true })
-  expect(Schema.decodeUnknownSync(SessionAutonomySet)({ yolo: false })).toEqual({ yolo: false })
+  expect(Schema.decodeUnknownSync(SessionAutonomySet)({ permissions: "yolo" })).toEqual({ permissions: "yolo" })
+  expect(Schema.decodeUnknownSync(SessionAutonomySet)({ answers: "manual" })).toEqual({ answers: "manual" })
   for (const yolo of [0, 1, 2, 3]) expect(() => Schema.decodeUnknownSync(SessionAutonomySet)({ yolo })).toThrow()
   expect(
     Schema.decodeUnknownSync(SessionAutonomySet)({
@@ -65,7 +57,7 @@ test("R7 accepts explicit goal resume without replacing objective text", () => {
   const decode = Schema.decodeUnknownSync(SessionAutonomySet)
   expect(decode({ goal: true })).toEqual({ goal: true })
   for (const goal of [true, null, "New objective"] as const) {
-    expect(decode({ yolo: true, goal })).toEqual({ yolo: true, goal })
+    expect(decode({ goal })).toEqual({ goal })
   }
   expect(() => decode({ goal: false })).toThrow()
   expect(() => decode({ goal: {} })).toThrow()
@@ -87,19 +79,19 @@ test("family autonomy accepts explicit switches without accepting empty or inval
   const decode = Schema.decodeUnknownSync(SessionAutonomySet)
   expect(decode({ sleep: false })).toEqual({ sleep: false })
   expect(decode({ sleep: true })).toEqual({ sleep: true })
-  expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo: false, guardrailDecision: true,
-    sleep: { priorGuardrailDecision: false } })).toEqual({ mode: "normal", yolo: false, sleep: {} })
+  expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", guardrailDecision: true,
+    sleep: { priorGuardrailDecision: false } })).toEqual({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} })
   for (const value of [{}, { goal: false }, { goal: " " }, { sleep: "true" }, { guardrailDecision: true }])
     expect(() => decode(value)).toThrow()
 })
 
-test("auto-answer is an independent Session switch", () => {
+test("answer mode changes independently of permissions and guardrails", () => {
   const decode = Schema.decodeUnknownSync(SessionAutonomySet)
-  for (const autoAnswer of [false, true]) {
-    expect(decode({ autoAnswer })).toEqual({ autoAnswer })
-    for (const yolo of [false, true]) {
-      expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", yolo, autoAnswer }))
-        .toEqual({ mode: "normal", yolo, autoAnswer })
+  for (const answers of ["manual", "yolo", "auto"] as const) {
+    expect(decode({ answers })).toEqual({ answers })
+    for (const permissions of ["manual", "yolo", "auto"] as const) {
+      expect(Schema.decodeUnknownSync(SessionAutonomyState)({ mode: "normal", permissions, guardrails: "manual", answers }))
+        .toEqual({ mode: "normal", permissions, guardrails: "manual", answers })
     }
   }
   for (const input of [{ autoAnswer: "true" }, { autoAnswer: 1 }, { autoAnswer: null },
@@ -110,24 +102,22 @@ test("auto-answer is an independent Session switch", () => {
 
 test("autonomy responses publish effective policy separately from stored state", () => {
   const document = OpenApi.fromApi(HttpApi.make("autonomy-policy-test").add(makeSessionGroup(SessionLocationMiddleware)))
-  expect(document.components?.schemas?.SessionAutonomyYolo).toEqual({ type: "boolean" })
+  expect(document.components?.schemas?.SessionAutonomyYolo).toBeUndefined()
   expect(document.components?.schemas?.SessionAutonomyEffective).toMatchObject({
     type: "object",
-    required: ["yolo", "permissionsAuto", "permissionModelReviews", "asleep", "guardrailsEnabled", "ordinaryReviewsAuto", "modelReviews", "hardModelReviews"],
+    required: ["permissions", "guardrails", "answers", "inherited", "asleep", "guardrailsEnabled"],
     properties: {
-      yolo: { $ref: "#/components/schemas/SessionAutonomyYolo" },
-      permissionsAuto: { type: "boolean" },
-      permissionModelReviews: { type: "boolean" },
+      permissions: { $ref: "#/components/schemas/SessionAutonomy.DecisionMode" },
+      guardrails: { $ref: "#/components/schemas/SessionAutonomy.DecisionMode" },
+      answers: { $ref: "#/components/schemas/SessionAutonomy.DecisionMode" },
       asleep: { type: "boolean" },
       guardrailsEnabled: { type: "boolean" },
-      ordinaryReviewsAuto: { type: "boolean" },
-      modelReviews: { type: "boolean" },
-      hardModelReviews: { type: "boolean" },
+      inherited: { type: "object" },
     },
   })
   expect(document.components?.schemas?.SessionAutonomyView).toMatchObject({
     type: "object",
-    required: ["mode", "yolo", "effective"],
+    required: ["mode", "permissions", "guardrails", "answers", "effective"],
     properties: {
       effective: { $ref: "#/components/schemas/SessionAutonomyEffective" },
     },

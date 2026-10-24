@@ -2205,7 +2205,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       yield* session.synthetic({
         sessionID,
-        text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}',
+        text: 'Authoritative current Session state (JSON):\n{"autonomy":{"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"},"permissionCeiling":[],"todos":[]}',
         description: "Untrusted context",
         metadata: { contextSource: "session-state" },
         resume: false,
@@ -2498,7 +2498,7 @@ describe("SessionRunnerLLM", () => {
       expect(state?.content).toEqual([
         {
           type: "text",
-          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[{"content":"first","priority":"high","status":"in_progress"},{"content":"second","priority":"medium","status":"pending"}]}',
+          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"},"permissionCeiling":[],"todos":[{"content":"first","priority":"high","status":"in_progress"},{"content":"second","priority":"medium","status":"pending"}]}',
         },
       ])
       expect(volatile[0]?.content).toEqual([{ type: "text", text: "TeamView marker" }])

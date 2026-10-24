@@ -63,6 +63,7 @@ import {
   type TeamCue,
   type ShellOutputFetch,
 } from "./projection"
+import { autonomyCategories, type AutonomyModes } from "./autonomy"
 import type { ModelRefView } from "./projection"
 import { assertRemoteRequestSize, uploadAttachments } from "./attachment-upload"
 import type {
@@ -371,10 +372,7 @@ export type RemoteStore = {
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
   readonly cancelForm: (formID: string) => Promise<void>
-  readonly setYolo: (enabled: boolean) => Promise<boolean>
-  readonly setAutoPermission: (enabled: boolean) => Promise<boolean>
-  readonly setAutoGuardrail: (enabled: boolean) => Promise<boolean>
-  readonly setAutoAnswer: (enabled: boolean) => Promise<boolean>
+  readonly setAutonomous: (change: Partial<AutonomyModes>) => Promise<boolean>
   readonly setSleep: (sleep: boolean) => Promise<boolean>
   readonly setNotificationFilter: (filter: NotificationFilter) => boolean
   readonly reloadNotificationFilter: () => void
@@ -3933,80 +3931,23 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const outcome = await request({ id: `form_cancel_${formID}_${now()}`, kind: "form", label: "Cancel form", state: "sending", sessionID, operation: "session.form.cancel", input: { formID } }, { sessionID })
       if (token === selectionToken && container.state.activeSessionID === sessionID) settleRequest(formID, outcome)
     },
-    setYolo: async (enabled) => {
+    setAutonomous: async (change) => {
       const sessionID = container.state.activeSessionID
       const token = selectionToken
-      if (sessionID === undefined) return false
+      const owner = transport
+      if (sessionID === undefined || owner === undefined || Object.keys(change).length === 0) return false
+      const earlier = modeRequests(sessionID)
+      if (earlier.some((mutation) => mutation.state === "sending")) return false
+      setState({
+        mutations: container.state.mutations.filter((mutation) => !earlier.includes(mutation)),
+        mutationToasts: (container.state.mutationToasts ?? []).filter((toast) => !earlier.some((mutation) => mutation.id === toast.id)),
+      })
       const outcome = await request(
-        {
-          id: `autonomy_yolo_${now()}`,
-          kind: "autonomy",
-          label: enabled ? "YOLO on" : "YOLO off",
-          state: "sending",
-          sessionID,
-          operation: "session.autonomy.set",
-          input: { yolo: enabled },
-        },
+        { id: `autonomy_modes_${now()}`, kind: "autonomy", label: "Autonomous", state: "sending", sessionID, operation: "session.autonomy.set", input: change },
         { sessionID },
       )
       applyAutonomyResponse(outcome, sessionID)
-      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
-    },
-    setAutoPermission: async (enabled) => {
-      const sessionID = container.state.activeSessionID
-      const token = selectionToken
-      if (sessionID === undefined) return false
-      const outcome = await request(
-        {
-          id: `autonomy_auto_permission_${now()}`,
-          kind: "autonomy",
-          label: enabled ? "Auto-permission on" : "Auto-permission off",
-          state: "sending",
-          sessionID,
-          operation: "session.autonomy.set",
-          input: { autoPermission: enabled },
-        },
-        { sessionID },
-      )
-      applyAutonomyResponse(outcome, sessionID)
-      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
-    },
-    setAutoGuardrail: async (enabled) => {
-      const sessionID = container.state.activeSessionID
-      const token = selectionToken
-      if (sessionID === undefined) return false
-      const outcome = await request(
-        {
-          id: `autonomy_auto_guardrail_${now()}`,
-          kind: "autonomy",
-          label: enabled ? "Auto-guardrail on" : "Auto-guardrail off",
-          state: "sending",
-          sessionID,
-          operation: "session.autonomy.set",
-          input: { autoGuardrail: enabled },
-        },
-        { sessionID },
-      )
-      applyAutonomyResponse(outcome, sessionID)
-      return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
-    },
-    setAutoAnswer: async (enabled) => {
-      const sessionID = container.state.activeSessionID
-      const token = selectionToken
-      if (sessionID === undefined) return false
-      const outcome = await request(
-        {
-          id: `autonomy_auto_answer_${now()}`,
-          kind: "autonomy",
-          label: enabled ? "Auto-answer on" : "Auto-answer off",
-          state: "sending",
-          sessionID,
-          operation: "session.autonomy.set",
-          input: { autoAnswer: enabled },
-        },
-        { sessionID },
-      )
-      applyAutonomyResponse(outcome, sessionID)
+      if (outcome.status === "unknown") await refreshAutonomy(owner, sessionID, token)
       return outcome.status === "ok" && token === selectionToken && container.state.activeSessionID === sessionID
     },
     decideReview: async (itemID, decision) => {
@@ -4154,6 +4095,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     if (view === undefined || view.id !== sessionID) return
     setState({ view: { ...view, autonomy }, notice: undefined })
   }
+
+  const modeRequests = (sessionID: string) => container.state.mutations.filter((mutation) =>
+    mutation.kind === "autonomy" && mutation.operation === "session.autonomy.set" && mutation.sessionID === sessionID &&
+    autonomyCategories.some((category) => category in mutation.input))
 
   const goalRequests = (sessionID: string) => container.state.mutations.filter((mutation) =>
     mutation.kind === "goal" && mutation.operation === "session.goal.set" && mutation.sessionID === sessionID)

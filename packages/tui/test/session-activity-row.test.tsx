@@ -33,14 +33,14 @@ async function renderGuardrailRow() {
             <SessionActivityRow
               row={{
                 type: "guardrail",
-                requestID: "dismissed-1",
+                requestID: "rejected-1",
                 reason: "standard.review.database-destructive",
-                decided: "match verifier · not a real match · 0.99",
+                decided: "decision model rejected · 0.99",
                 detail: [
                   { label: "tool", value: "shell" },
                   { label: "command", value: "drop table users" },
                   { label: "rule", value: "standard.review.database-destructive" },
-                  { label: "outcome", value: "match verifier · not a real match · 0.99" },
+                  { label: "outcome", value: "decision model rejected · 0.99" },
                 ],
               }}
             />
@@ -51,7 +51,7 @@ async function renderGuardrailRow() {
     { width: 120, height: 10 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("match verifier"))
+  await app.waitForFrame((frame) => frame.includes("decision model rejected"))
   return app
 }
 
@@ -61,12 +61,12 @@ describe("guardrail provenance disclosure", () => {
     try {
       expect(app.captureCharFrame()).toContain("+")
       expect(app.captureCharFrame()).not.toContain("drop table users")
-      const row = app.captureCharFrame().split("\n").findIndex((line) => line.includes("match verifier"))
+      const row = app.captureCharFrame().split("\n").findIndex((line) => line.includes("decision model rejected"))
       await app.mockMouse.click(4, row)
       await app.waitForFrame((frame) => frame.includes("drop table users"))
       expect(app.captureCharFrame()).toContain("tool shell")
       expect(app.captureCharFrame()).toContain("rule standard.review.database-destructive")
-      expect(app.captureCharFrame()).toContain("outcome match verifier · not a real match · 0.99")
+      expect(app.captureCharFrame()).toContain("outcome decision model rejected · 0.99")
       await app.mockMouse.click(4, row)
       await app.waitForFrame((frame) => !frame.includes("drop table users"))
     } finally {

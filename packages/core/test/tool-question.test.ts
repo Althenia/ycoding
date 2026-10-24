@@ -203,22 +203,22 @@ describe("QuestionTool", () => {
     expect(capturedInput()?.fields[0]).toMatchObject({ options: [{ label: "Fast (Recommended)" }, { label: "Careful" }] })
   }))
 
-  autonomous.effect("autoAnswer alone selects only the explicit recommendation and never calls the helper", () => Effect.gen(function* () {
+  autonomous.effect("Auto answers select only the explicit recommendation and never calls the helper", () => Effect.gen(function* () {
     deny = false
-    decisionBehavior = () => Effect.die("autoAnswer alone must not request judgments")
+    decisionBehavior = () => Effect.die("Auto answers must not request judgments")
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
-    yield* autonomy.set({ sessionID, autoAnswer: true })
+    yield* autonomy.set({ sessionID, answers: "auto" })
     expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "recommended", name: "question", input: { questions: [recommendedPlan] } } })).output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer" })
   }))
 
-  autonomous.effect("YOLO alone answers through the evaluator and reports its model confidence", () => Effect.gen(function* () {
+  autonomous.effect("YOLO answers go through the evaluator and reports its model confidence", () => Effect.gen(function* () {
     deny = false
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
-    yield* autonomy.setYolo({ sessionID, yolo: true })
+    yield* autonomy.set({ sessionID, answers: "yolo" })
     decisionBehavior = decisionChoice("Careful", 0.9)
     expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "yolo", name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Careful"]], automatic: true, via: "yolo", confidence: 0.9 })
   }))
@@ -228,9 +228,9 @@ describe("QuestionTool", () => {
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
-    yield* autonomy.set({ sessionID, autoAnswer: true })
+    yield* autonomy.set({ sessionID, answers: "auto" })
     yield* autonomy.setGoal({ sessionID, text: "Choose safely" })
-    decisionBehavior = () => Effect.die("autoAnswer alone must not request judgments")
+    decisionBehavior = () => Effect.die("Auto answers must not request judgments")
     const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [recommendedPlan] } } })
     const text = `Answers were selected automatically, not provided or approved by the user: "${plan.question}"="Fast (Recommended)". Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
     expect(settled.result).toEqual({ type: "text", value: text })
@@ -244,7 +244,7 @@ describe("QuestionTool", () => {
     decisionBehavior = () => Effect.die("Questions must not request judgments")
     yield* seedSession
     const autonomy = yield* SessionAutonomy.Service
-    yield* autonomy.set({ sessionID, autoAnswer: true })
+    yield* autonomy.set({ sessionID, answers: "auto" })
     yield* autonomy.setGoal({ sessionID, text: "Choose safely" })
     const forms = yield* Form.Service
     const events = yield* EventRuntime.Service

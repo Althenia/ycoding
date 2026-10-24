@@ -79,7 +79,7 @@ it.effect("derives outstanding Sessions from pending input, active goal, tasks, 
     for (const id of [pending, goal, parent, shell, executing]) yield* sessions.create({ id, location })
     yield* sessions.create({ id: child, parentID: parent })
     yield* sessions.synthetic({ sessionID: pending, text: "queued", resume: false })
-    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", yolo: false, goal: {
+    yield* db.update(SessionTable).set({ autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: {
       text: "Finish", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3,
     } } }).where(eq(SessionTable.id, goal)).run()
     yield* events.publish(SessionEvent.Task.Updated, { sessionID: child, change: { type: "launched", parentID: parent,

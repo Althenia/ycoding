@@ -5,14 +5,13 @@ import { Session } from "@ycoding-ai/schema/session"
 import { YCoding } from "../src/promise/index"
 import { make } from "../src/effect/generated/client"
 
-const views = [false, true, false].map(autoAnswer => ({
+const views = (["manual", "yolo", "auto"] as const).map(answers => ({
   mode: "normal",
-  yolo: false,
-  autoAnswer,
-  effective: { yolo: true, permissionsAuto: false, permissionModelReviews: true, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: true, hardModelReviews: false },
+  permissions: "manual", guardrails: "manual", answers,
+  effective: { permissions: "yolo", guardrails: "manual", answers, inherited: { permissions: "ses_parent" }, asleep: false, guardrailsEnabled: true },
 }))
 
-test("Promise autonomy methods preserve effective policy and serialize Session-local answer switches", async () => {
+test("Promise autonomy methods preserve effective inheritance and serialize answer modes", async () => {
   const requests: Request[] = []
   const client = YCoding.make({
     baseUrl: "http://localhost:3000",
@@ -23,25 +22,23 @@ test("Promise autonomy methods preserve effective policy and serialize Session-l
     },
   })
   const values = [await client.session.autonomy.get({ sessionID: "ses_answers" })]
-  for (const autoAnswer of [true, false])
-    values.push(await client.session.autonomy.set({ sessionID: "ses_answers", payload: { autoAnswer } }))
+  for (const answers of ["yolo", "auto"] as const)
+    values.push(await client.session.autonomy.set({ sessionID: "ses_answers", payload: { answers } }))
   expect(values).toEqual(views)
   expect(requests.map(request => [request.method, new URL(request.url).pathname])).toEqual([
     ["GET", "/api/session/ses_answers/autonomy"],
     ["PUT", "/api/session/ses_answers/autonomy"],
     ["PUT", "/api/session/ses_answers/autonomy"],
   ])
-  expect(await requests[1]!.json()).toEqual({ autoAnswer: true })
-  expect(await requests[2]!.json()).toEqual({ autoAnswer: false })
+  expect(await requests[1]!.json()).toEqual({ answers: "yolo" })
+  expect(await requests[2]!.json()).toEqual({ answers: "auto" })
 })
 
-test("Promise and Effect clients serialize independent toggle values without coercion", async () => {
-  const payloads = [
-    { yolo: true }, { yolo: false },
-    { autoPermission: true }, { autoPermission: false },
-    { autoGuardrail: true }, { autoGuardrail: false },
-    { autoAnswer: true }, { autoAnswer: false },
-  ]
+test("Promise and Effect clients serialize category modes and atomic set-all without coercion", async () => {
+  const payloads = (["manual", "yolo", "auto"] as const).flatMap(mode => [
+    { permissions: mode }, { guardrails: mode }, { answers: mode },
+    { permissions: mode, guardrails: mode, answers: mode },
+  ])
   const promiseBodies: unknown[] = []
   const client = YCoding.make({
     baseUrl: "http://localhost:3000",
@@ -68,7 +65,7 @@ test("Promise and Effect clients serialize independent toggle values without coe
   expect(effectBodies).toEqual(payloads)
 })
 
-test("Effect autonomy methods decode effective policy and serialize the same answer switches", async () => {
+test("Effect autonomy methods decode effective inheritance and serialize the same answer modes", async () => {
   const requests: Array<{ method: string; url: string; body: unknown }> = []
   const httpClient = HttpClient.make(request => {
     requests.push({ method: request.method, url: request.url,
@@ -79,14 +76,14 @@ test("Effect autonomy methods decode effective policy and serialize the same ans
     const client = yield* make({ baseUrl: "http://localhost:3000" })
     const sessionID = Session.ID.make("ses_answers")
     const values = [yield* client.session.autonomy.get({ sessionID })]
-    for (const autoAnswer of [true, false])
-      values.push(yield* client.session.autonomy.set({ sessionID, payload: { autoAnswer } }))
+    for (const answers of ["yolo", "auto"] as const)
+      values.push(yield* client.session.autonomy.set({ sessionID, payload: { answers } }))
     return values
   }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
   expect(values).toEqual(views)
   expect(requests).toEqual([
     { method: "GET", url: "http://localhost:3000/api/session/ses_answers/autonomy", body: undefined },
-    { method: "PUT", url: "http://localhost:3000/api/session/ses_answers/autonomy", body: { autoAnswer: true } },
-    { method: "PUT", url: "http://localhost:3000/api/session/ses_answers/autonomy", body: { autoAnswer: false } },
+    { method: "PUT", url: "http://localhost:3000/api/session/ses_answers/autonomy", body: { answers: "yolo" } },
+    { method: "PUT", url: "http://localhost:3000/api/session/ses_answers/autonomy", body: { answers: "auto" } },
   ])
 })

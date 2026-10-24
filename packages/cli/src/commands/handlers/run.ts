@@ -5,21 +5,20 @@ import { runCommand } from "./run-shared"
 
 export default Runtime.handler(RunCommand, (input) => {
   const separator = process.argv.indexOf("--", 2)
-  const missingToggle = (
+  const missingMode = (
     [
-      ["--yolo", input.yolo],
-      ["--auto-permission", input.autoPermission],
-      ["--auto-guardrail", input.autoGuardrail],
-      ["--auto-answer", input.autoAnswer],
+      ["--permissions", input.permissions],
+      ["--guardrails", input.guardrails],
+      ["--answers", input.answers],
     ] as const
   ).find(
     ([flag, value]) =>
       process.argv.slice(2, separator === -1 ? undefined : separator).includes(flag) && Option.isNone(value),
   )
-  if (missingToggle)
+  if (missingMode)
     return Effect.sync(() => {
       process.exitCode = 1
-      process.stderr.write(`ycoding: ${missingToggle[0]} requires true or false\n`)
+      process.stderr.write(`ycoding: ${missingMode[0]} requires manual, yolo, or auto\n`)
     })
   return runCommand({
     server: Option.getOrUndefined(input.server),
@@ -36,9 +35,8 @@ export default Runtime.handler(RunCommand, (input) => {
     file: [...input.file],
     title: Option.getOrUndefined(input.title),
     thinking: input.thinking,
-    yolo: Option.getOrUndefined(input.yolo),
-    autoPermission: Option.getOrUndefined(input.autoPermission),
-    autoGuardrail: Option.getOrUndefined(input.autoGuardrail),
-    autoAnswer: Option.getOrUndefined(input.autoAnswer),
+    permissions: Option.getOrUndefined(input.permissions),
+    guardrails: Option.getOrUndefined(input.guardrails),
+    answers: Option.getOrUndefined(input.answers),
   })
 })

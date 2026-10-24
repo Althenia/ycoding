@@ -58,7 +58,7 @@ const seed = Effect.fnUntraced(function* (name: string, goal: string, reply: Rea
   const sessionID = SessionSchema.ID.make(`ses_questions_${name}`)
   yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: name }).run().pipe(Effect.orDie)
   const autonomy = yield* SessionAutonomy.Service
-  yield* autonomy.setYolo({ sessionID, yolo: true })
+  yield* autonomy.set({ sessionID, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
   yield* autonomy.set({ sessionID, sleep: true })
   yield* autonomy.setGoal({ sessionID, text: goal })
   const agents = yield* Agent.Service

@@ -9,23 +9,29 @@ test("summarizes Session state", () => {
   expect(
     noticeSummary(
       "session-state",
-      `${sessionPrefix}{"autonomy":{"mode":"normal","yolo":false},"todos":[{"content":"Task","status":"pending"}]}`,
+      `${sessionPrefix}{"autonomy":{"mode":"normal","permissions":"manual","guardrails":"manual","answers":"manual"},"todos":[{"content":"Task","status":"pending"}]}`,
     ),
-  ).toBe("Session state · YOLO off · 1 task")
+  ).toBe("Session state · manual · 1 task")
 })
 
 test("summarizes active autonomy modes", () => {
-  const autonomy = { mode: "normal", yolo: true, autoPermission: true, autoGuardrail: true, sleep: {}, autoAnswer: true, goal: { status: "active" } }
+  const autonomy = { mode: "normal", permissions: "auto", guardrails: "yolo", answers: "auto", sleep: {}, goal: { status: "active" } }
   expect(noticeSummary("session-state", `${sessionPrefix}${JSON.stringify({ autonomy, todos: [] })}`)).toBe(
-    "Session state · YOLO · permissions auto · guardrails auto · goal · asleep · answers auto · 0 tasks",
+    "Session state · permissions auto · guardrails yolo · answers auto · goal · asleep · 0 tasks",
   )
 })
 
-test("summarizes missing or numeric autonomy as unknown without inventing a state", () => {
+test("summarizes missing or malformed autonomy as unknown without inventing a state", () => {
   expect(noticeSummary("session-state", `${sessionPrefix}{"todos":[]}`)).toBe("Session state · autonomy unreported · 0 tasks")
-  expect(noticeSummary("session-state", `${sessionPrefix}{"autonomy":{"mode":"normal","yolo":2},"todos":[]}`)).toBe(
-    "Session state · unknown · 0 tasks",
-  )
+  for (const autonomy of [
+    '{"mode":"normal","yolo":2}',
+    '{"mode":"normal","yolo":true}',
+    '{"mode":"normal","permissions":"auto","guardrails":"auto"}',
+    '{"mode":"normal","permissions":"on","guardrails":"manual","answers":"manual"}',
+  ])
+    expect(noticeSummary("session-state", `${sessionPrefix}{"autonomy":${autonomy},"todos":[]}`)).toBe(
+      "Session state · unknown · 0 tasks",
+    )
 })
 
 test("summarizes TeamView states", () => {

@@ -23,6 +23,7 @@ import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
 import { renderScreen } from "./harness"
 import { localAutonomyView } from "../../src/util/session-autonomy"
+import { autonomyState } from "../fixture/autonomy"
 
 const sessionID = "ses_responsive_capture"
 const directory = "/tmp/ycoding/responsive-capture"
@@ -115,7 +116,7 @@ async function renderOverlayRail(width: number, height: number) {
                         <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
                           <PluginProvider packages={{ resolve: async () => undefined }}>
                             <box width={width} height={height} alignItems="flex-end">
-                              <Sidebar sessionID={sessionID} autonomy={localAutonomyView({ mode: "normal", yolo: false })} overlay />
+                              <Sidebar sessionID={sessionID} autonomy={localAutonomyView(autonomyState())} overlay />
                             </box>
                           </PluginProvider>
                         </ThemeProvider>

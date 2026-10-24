@@ -25,7 +25,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
     version: "0.11.0",
     date: "2026-10-23",
     title: "Projects and shared machine names",
-    tags: ["Added", "Changed"],
+    tags: ["Added", "Changed", "Fixed"],
     changes: [
       { tag: "Added", text: "Projects pair a Master chat with member Sessions across directories. The TUI Projects screen and the web client show a pinned Master with live member state; the web adds a desktop Sessions panel and a phone sheet. Create, add, remove or delete Sessions and edit Project settings from the same view." },
       { tag: "Added", text: "The Master directs its members, directly or through its own subagents, and member updates appear inline in the Master chat with links to their Sessions. Sending a message to the Master activates its Project; interruption or a backend restart pauses it." },
@@ -34,6 +34,9 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Added", text: "Opt-in ChatGPT and Claude account connectors use hosted MCP with existing OAuth profiles and per-connector policies. Actions ask by default; Claude organization and user-interaction approvals require fresh human decisions. Hosted-service access and upstream authorization are required, including Claude's user:mcp_servers grant. Live account entitlement and catalog access remain unverified." },
       { tag: "Changed", text: "Machine display names are account-owned aliases shared across browsers. Rename an owned machine inline in Settings, even while it is offline, without changing its hostname or identity. Browser-local names are not imported, and failed saves preserve the draft and confirmed name." },
       { tag: "Changed", text: "Messages the Master sends to members use the same first-person user-message presentation as typed instructions, without a separate sender persona. Authenticated origin stays in audit metadata; message text cannot settle native controls." },
+      { tag: "Changed", text: "Permissions, guardrails and answers each have their own autonomy mode: Manual (the default), YOLO or Auto, set from one Autonomous control in the TUI, web, command palette and ycoding run. Manual makes no model call, Auto applies fixed rules only, and YOLO lets that category's evaluator settle what the rules leave open; hard and custom-rule reviews always need you. Existing settings convert once." },
+      { tag: "Fixed", text: "Settled automatic guardrail approvals and match dismissals no longer fill the conversation, including while a Session loads. Model rejections appear in order within the loaded chat and pending reviews stay at the end." },
+      { tag: "Fixed", text: "This 0.11.0 build replaces the first 0.11.0 build. ycoding update treats an installed 0.11.0 as current, so reinstall with the install script and YCODING_VERSION=0.11.0, or replace the Windows files from the release archive." },
     ],
   },
   {

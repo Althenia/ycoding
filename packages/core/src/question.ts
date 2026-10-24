@@ -87,7 +87,7 @@ const RECOMMENDED = / \(Recommended\)$/
 
 export function recommendedLabels(question: Info): string[] | undefined {
   const marked = question.options.map((option) => option.label).filter((label) => RECOMMENDED.test(label))
-  if (marked.length === 0 || (question.multiple !== true && marked.length > 1)) return
+  if (marked.length !== 1) return
   return marked
 }
 
@@ -312,11 +312,12 @@ const layer = Layer.effect(
           const snapshot = yield* autonomy
             .snapshot(input.sessionID, { inherited: true })
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
-          const autoAnswer = snapshot ? SessionAutonomy.canAutoAnswer(snapshot.state) : false
+          const mode = snapshot ? yield* DecisionChoice.decisionMode(autonomy, input.sessionID, "answers") : "manual"
+          const autoAnswer = mode === "auto"
+          const yolo = mode === "yolo"
           const asleep = yield* autonomy
             .isAsleep(input.sessionID)
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-          const yolo = yield* DecisionChoice.yoloEnabled(autonomy, input.sessionID)
           const auto = autoAnswer || yolo
           if (asleep && !auto) {
             const item = yield* openReview(input, ID.ascending(), { reason: "disabled" })

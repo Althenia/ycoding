@@ -248,25 +248,31 @@ describe("sessionStateChips", () => {
     ...overrides,
   })
 
-  test("always reports YOLO on or off when autonomy is known and never invents a guardrail chip", () => {
-    const labels = sessionStateChips(session({})).map((chip) => chip.label)
-    expect(labels).toContain("YOLO off")
+  const manualAll = { permissions: "manual", guardrails: "manual", answers: "manual" } as const
+
+  test("always reports the Autonomous state when autonomy is known and never invents a guardrail chip", () => {
+    const labels = sessionStateChips(session(manualAll)).map((chip) => chip.label)
+    expect(labels).toContain("Autonomous Manual")
     expect(labels).not.toContain("goal")
     expect(labels.some((label) => label.startsWith("Guardrails"))).toBe(false)
   })
 
-  test("uses the TUI autonomy vocabulary in heading order", () => {
-    expect(sessionStateChips(session({ yolo: true, goalActive: true, asleep: true, autoPermission: true, autoGuardrail: true, autoAnswer: true })))
-      .toEqual([{ label: "YOLO on", tone: "attention" }, { label: "goal", tone: "neutral" }, { label: "asleep", tone: "success" }, { label: "auto-permission", tone: "neutral" }, { label: "auto-guardrail", tone: "neutral" }, { label: "auto-answer", tone: "neutral" }])
-    expect(sessionStateChips(session({ asleep: true })).map((chip) => chip.label)).toEqual(["YOLO off", "asleep"])
+  test("reports effective category modes in heading order before goal and sleep", () => {
+    expect(sessionStateChips(session({ permissions: "yolo", guardrails: "yolo", answers: "yolo", goalActive: true, asleep: true })))
+      .toEqual([{ label: "Autonomous YOLO", tone: "attention" }, { label: "goal", tone: "neutral" }, { label: "asleep", tone: "success" }])
+    expect(sessionStateChips(session({ permissions: "auto", guardrails: "auto", answers: "auto" }))).toEqual([{ label: "Autonomous Auto", tone: "neutral" }])
+    expect(sessionStateChips(session({ permissions: "auto", guardrails: "yolo", answers: "manual", asleep: true })))
+      .toEqual([{ label: "Permissions Auto", tone: "neutral" }, { label: "Guardrails YOLO", tone: "attention" }, { label: "Answers Manual", tone: "neutral" }, { label: "asleep", tone: "success" }])
+    expect(sessionStateChips(session({ ...manualAll, asleep: true })).map((chip) => chip.label)).toEqual(["Autonomous Manual", "asleep"])
     expect(sessionStateChips(session({ autonomy: undefined }))).toEqual([])
+    expect(sessionStateChips(session({}))).toEqual([])
   })
 
   test("keeps session state chips separate from agent and model metadata", () => {
     const labels = sessionStateChips(
-      session({ yolo: true, agent: "god", model: "openai/gpt-5", status: "running" }),
+      session({ permissions: "yolo", guardrails: "yolo", answers: "yolo", agent: "god", model: "openai/gpt-5", status: "running" }),
     ).map((chip) => chip.label)
-    expect(labels).toContain("YOLO on")
+    expect(labels).toContain("Autonomous YOLO")
     expect(labels).not.toContain("god")
     expect(labels).not.toContain("openai/gpt-5")
     expect(labels).toContain("Running")
@@ -280,9 +286,9 @@ describe("sessionStateChips", () => {
   })
 
   test("leads a failed Session with a neutral Failed chip", () => {
-    const chips = sessionStateChips(session({ status: "failed", goalActive: true }))
+    const chips = sessionStateChips(session({ ...manualAll, status: "failed", goalActive: true }))
     expect(chips[0]).toEqual({ label: "Failed", tone: "neutral" })
-    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "YOLO off", "goal"])
+    expect(chips.map((chip) => chip.label)).toEqual(["Failed", "Autonomous Manual", "goal"])
   })
 
   test("only attention roots outside the failed set make the Sessions navigation wait", () => {

@@ -2,28 +2,25 @@ import { expect, test } from "bun:test"
 import type { LocationRef, ModelDaybreak, ModelRef, YCodingClient } from "@ycoding-ai/client"
 import { establishLandingSession, landingAutonomyPayloads } from "../src/util/landing-session"
 
-test("landing autonomy sends one toggle per request and keeps flags independent", () => {
-  expect(landingAutonomyPayloads(undefined)).toEqual([])
-  expect(landingAutonomyPayloads({ yolo: false })).toEqual([])
-  expect(landingAutonomyPayloads({ yolo: true })).toEqual([{ yolo: true }])
-  expect(landingAutonomyPayloads({ yolo: false, autoPermission: true })).toEqual([{ autoPermission: true }])
-  expect(
-    landingAutonomyPayloads({ yolo: true, autoPermission: true, autoGuardrail: true, autoAnswer: true }),
-  ).toEqual([{ yolo: true }, { autoPermission: true }, { autoGuardrail: true }, { autoAnswer: true }])
-})
+const manual = { permissions: "manual", guardrails: "manual", answers: "manual" } as const
 
-test("landing goal carries only its optional yolo toggle in the goal request", () => {
-  expect(landingAutonomyPayloads({ yolo: false, goal: "ship" })).toEqual([{ goal: "ship" }])
-  expect(landingAutonomyPayloads({ yolo: true, goal: "ship", autoGuardrail: true })).toEqual([
-    { autoGuardrail: true },
-    { yolo: true, goal: "ship" },
+test("landing autonomy sends every category in one request and nothing while all are Manual", () => {
+  expect(landingAutonomyPayloads(undefined)).toEqual([])
+  expect(landingAutonomyPayloads(manual)).toEqual([])
+  expect(landingAutonomyPayloads({ ...manual, permissions: "auto" })).toEqual([
+    { permissions: "auto", guardrails: "manual", answers: "manual" },
+  ])
+  expect(landingAutonomyPayloads({ permissions: "yolo", guardrails: "auto", answers: "yolo" })).toEqual([
+    { permissions: "yolo", guardrails: "auto", answers: "yolo" },
   ])
 })
 
-test("landing goal activation follows every independent flag", () => {
-  expect(
-    landingAutonomyPayloads({ yolo: false, goal: "ship", autoPermission: true, autoGuardrail: true, autoAnswer: true }),
-  ).toEqual([{ autoPermission: true }, { autoGuardrail: true }, { autoAnswer: true }, { goal: "ship" }])
+test("landing goal is its own request after the category request", () => {
+  expect(landingAutonomyPayloads({ ...manual, goal: "ship" })).toEqual([{ goal: "ship" }])
+  expect(landingAutonomyPayloads({ ...manual, guardrails: "yolo", goal: "ship" })).toEqual([
+    { permissions: "manual", guardrails: "yolo", answers: "manual" },
+    { goal: "ship" },
+  ])
 })
 
 const location = { directory: "/repo" } as unknown as LocationRef
@@ -49,7 +46,7 @@ function recordingClient(failOn?: string) {
   return { api, calls }
 }
 
-test("establishing a landing goal Session persists flags and Daybreak before the goal admits work", async () => {
+test("establishing a landing goal Session persists categories and Daybreak before the goal admits work", async () => {
   const { api, calls } = recordingClient()
   await establishLandingSession({
     api,
@@ -58,13 +55,13 @@ test("establishing a landing goal Session persists flags and Daybreak before the
     agent: "build",
     model,
     daybreak,
-    autonomy: { yolo: true, goal: "ship", autoPermission: true, autoAnswer: true },
+    autonomy: { permissions: "auto", guardrails: "manual", answers: "yolo", goal: "ship" },
   })
-  expect(calls).toEqual(["create", "daybreak", "autoPermission", "autoAnswer", "yolo+goal"])
+  expect(calls).toEqual(["create", "daybreak", "permissions+guardrails+answers", "goal"])
 })
 
-test("a failed flag write stops the landing Session before the goal is requested", async () => {
-  const { api, calls } = recordingClient("autoGuardrail")
+test("a failed category write stops the landing Session before the goal is requested", async () => {
+  const { api, calls } = recordingClient("permissions+guardrails+answers")
   await expect(
     establishLandingSession({
       api,
@@ -72,10 +69,10 @@ test("a failed flag write stops the landing Session before the goal is requested
       location,
       agent: "build",
       model,
-      autonomy: { yolo: false, goal: "ship", autoGuardrail: true, autoAnswer: true },
+      autonomy: { permissions: "manual", guardrails: "auto", answers: "auto", goal: "ship" },
     }),
-  ).rejects.toThrow("autoGuardrail failed")
-  expect(calls).toEqual(["create", "autoGuardrail"])
+  ).rejects.toThrow("permissions+guardrails+answers failed")
+  expect(calls).toEqual(["create", "permissions+guardrails+answers"])
 })
 
 test("a failed Daybreak write stops the landing Session before any autonomy write", async () => {
@@ -88,7 +85,7 @@ test("a failed Daybreak write stops the landing Session before any autonomy writ
       agent: "build",
       model,
       daybreak,
-      autonomy: { yolo: false, goal: "ship" },
+      autonomy: { ...manual, guardrails: "auto", goal: "ship" },
     }),
   ).rejects.toThrow("daybreak failed")
   expect(calls).toEqual(["create", "daybreak"])

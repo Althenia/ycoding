@@ -51,8 +51,8 @@ const route: FetchHandler = (url) => {
   if (/^\/api\/session\/[^/]+\/(permission|form)$/.test(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/autonomy`)
     return json({
-      data: { mode: "normal", yolo: false, goal: { text: "Fix provider cache accounting", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
-        effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, ordinaryReviewsAuto: false, guardrailsEnabled: true, modelReviews: false, hardModelReviews: false },
+      data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal: { text: "Fix provider cache accounting", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
+        effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true },
       },
     })
   if (url.pathname === `/api/session/${sessionID}/todo`)

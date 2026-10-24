@@ -187,8 +187,6 @@ export type GuardrailDecisionMade = NonNullable<GuardrailStatusOutput["decisions
   action?: string
 }
 
-type GuardrailDismissal = NonNullable<GuardrailStatusOutput["dismissals"]>[number]
-
 type Store = {
   session: {
     info: Record<string, SessionInfo>
@@ -214,7 +212,6 @@ type Store = {
     permission: Record<string, PermissionRequest[]>
     guardrail: Record<string, GuardrailRequestListOutput>
     guardrailDecided: Record<string, GuardrailDecisionMade[]>
-    guardrailDismissed: Record<string, GuardrailDismissal[]>
     review: Record<string, SessionReviewItem[]>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
     form: Record<string, FormWithLocation[]>
@@ -702,7 +699,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         permission: {},
         guardrail: {},
         guardrailDecided: {},
-        guardrailDismissed: {},
         review: {},
         form: {},
       },
@@ -1221,7 +1217,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.permission[sessionID]
           delete draft.guardrail[sessionID]
           delete draft.guardrailDecided[sessionID]
-          delete draft.guardrailDismissed[sessionID]
           for (const [rootID, requests] of Object.entries(draft.guardrail)) {
             const next = requests.filter((request) => request.sessionID !== sessionID)
             if (next.length === 0) delete draft.guardrail[rootID]
@@ -2050,20 +2045,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ),
           )
           break
-        case "session.guardrail.dismissed": {
-          const dismissed = store.session.guardrailDismissed[event.data.sessionID] ?? []
-          const source = event.data.source
-          const existing = dismissed.find((item) => item.eventID === event.id)
-          if (!existing) setStore("session", "guardrailDismissed", event.data.sessionID,
-            [...dismissed, { sessionID: event.data.reviewSessionID, created: event.created, eventID: event.id, ruleID: event.data.ruleID, confidence: event.data.confidence, ...(source ? { source } : {}) }].slice(-100),
-          )
-          else if (source && !existing.source)
-            setStore("session", "guardrailDismissed", event.data.sessionID,
-              dismissed.map((item) => item.eventID === event.id ? { ...item, source } : item),
-            )
-          break
-        }
-
         case "guardrail.asked":
           if (store.session.guardrail[event.data.rootSessionID]?.some((request) => request.id === event.data.id)) break
           setStore("session", "guardrail", event.data.rootSessionID, [
@@ -2558,24 +2539,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           decided(sessionID: string) {
             return store.session.guardrailDecided[resolveRoot(sessionID)] ?? []
           },
-          dismissed(sessionID: string) {
-            return store.session.guardrailDismissed[resolveRoot(sessionID)] ?? []
-          },
           sync(sessionID: string) {
             return sync.run(`session.guardrail:${sessionID}`, async (current) => {
               const before = untrack(() => new Set((store.session.guardrailDecided[resolveRoot(sessionID)] ?? []).map((item) => item.requestID)))
-              const beforeDismissals = untrack(() => new Set((store.session.guardrailDismissed[resolveRoot(sessionID)] ?? []).map((item) => item.eventID)))
               const [requests, status] = await Promise.all([
                 client.api.guardrail.request.list({ sessionID }),
                 client.api.guardrail.status({ sessionID }),
               ])
               if (!current()) return
               const rootID = status.rootSessionID
-              const liveDismissals = (store.session.guardrailDismissed[rootID] ?? []).filter((item) => !beforeDismissals.has(item.eventID))
-              setStore("session", "guardrailDismissed", rootID, [
-                ...(status.dismissals ?? []).filter((item) => !liveDismissals.some((current) => current.eventID === item.eventID)),
-                ...liveDismissals,
-              ].slice(-100))
               setStore("session", "guardrail", rootID, reconcile(requests))
               const decisions = (store.session.guardrailDecided[rootID] ?? []).filter(
                 (item) => !before.has(item.requestID),

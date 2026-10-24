@@ -529,7 +529,7 @@ describe("MCP Google callback and final consent", () => {
     expect(flow.html).toContain('action="/api/mcp/oauth/consent"')
     expect(flow.html).toContain('value="allow"')
     expect(flow.html).toContain('value="deny"')
-    expect(flow.html).toContain("autonomy (YOLO)")
+    expect(flow.html).toContain("autonomy modes (Manual, YOLO, or Auto for permissions, guardrails, and answers)")
     expect(flow.consentCsrf.length).toBeGreaterThan(10)
     expect(flow.consentCsrf).not.toBe(flow.started.csrf)
     expect(h.deviceNames).toEqual([{ ownerID: h.owner, deviceID: "dev_1" }])

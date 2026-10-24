@@ -134,13 +134,11 @@ import { findMessageBoundary, messageNavigationSlack } from "./message-navigatio
 import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
+  autonomyAutomated,
   autonomyModeLabel,
-  autonomyToggleLabel,
-  autonomyToggleOn,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   goalToggleAction,
-  type AutonomyToggle,
   type SessionAutonomyResponse,
 } from "../../util/session-autonomy"
 import { useKeepAwake } from "../../keep-awake"
@@ -490,46 +488,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     setAutonomyResponse({ sessionID, state })
     return true
   }
-  const updateAutonomy = (input: {
-    yolo?: boolean
-    goal?: string | null
-    maxNoProgress?: number
-    autoPermission?: boolean
-    autoGuardrail?: boolean
-    autoAnswer?: boolean
-  }) => {
+  const updateAutonomy = (input: { goal: string | null; maxNoProgress?: number }) => {
     const sessionID = route.sessionID
     autonomyRefresh.invalidate()
-    const toggled: AutonomyToggle | undefined =
-      input.autoAnswer !== undefined
-        ? "autoAnswer"
-        : input.autoPermission !== undefined
-          ? "autoPermission"
-          : input.autoGuardrail !== undefined
-            ? "autoGuardrail"
-            : input.yolo !== undefined && input.goal === undefined
-              ? "yolo"
-              : undefined
-    const payload = (() => {
-      if (input.autoAnswer !== undefined) return { autoAnswer: input.autoAnswer } as const
-      if (input.autoPermission !== undefined) return { autoPermission: input.autoPermission } as const
-      if (input.autoGuardrail !== undefined) return { autoGuardrail: input.autoGuardrail } as const
-      if (input.yolo !== undefined && input.goal !== undefined)
-        return { yolo: input.yolo, goal: input.goal, ...(input.maxNoProgress !== undefined ? { maxNoProgress: input.maxNoProgress } : {}) } as const
-      if (input.yolo !== undefined) return { yolo: input.yolo } as const
-      if (input.goal !== undefined) return { goal: input.goal, ...(input.maxNoProgress !== undefined ? { maxNoProgress: input.maxNoProgress } : {}) } as const
-      return undefined
-    })()
-    if (!payload) return
     void client.api.session.autonomy
-      .set({ sessionID, payload } as never)
+      .set({ sessionID, payload: input })
       .then((state) => {
         if (!acceptAutonomy(sessionID, state)) return
         toast.show({
-          message:
-            toggled !== undefined
-              ? `${autonomyToggleLabel(toggled)} ${autonomyToggleOn(state, toggled) ? "on" : "off"} for this Session`
-              : `${autonomyModeLabel(state)} mode activated`,
+          message: `${autonomyModeLabel(state)} mode activated`,
           variant: "success",
           duration: 3000,
         })
@@ -638,10 +605,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const current = autonomy()
     return {
       type: "autonomy",
-      elevated:
-        current?.effective?.yolo === true ||
-        current?.effective?.permissionsAuto === true ||
-        current?.effective?.ordinaryReviewsAuto === true,
+      elevated: autonomyAutomated(current) === true,
       asleep: current?.effective?.asleep ?? false,
       machineAwake: keepAwake.status() === undefined ? undefined : keepAwake.status()?.state === "on",
       review: reviewItems().length,
@@ -2094,7 +2058,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 onFocusChange={setReviewFocused}
               />
               <Switch>
-                <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
+                <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} guardrailsMode={autonomy()?.effective?.guardrails} />}</Match>
                 <Match when={permissions().length > 0}>
                   <Show when={permissions()[0]?.id} keyed>
                     {(_) => {

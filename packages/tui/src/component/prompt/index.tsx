@@ -46,6 +46,7 @@ import { DialogSkill } from "../dialog-skill"
 import { DialogBtwExport } from "../dialog-btw-export"
 import { DialogSuggest } from "../dialog-suggest"
 import { DialogPromptGenerate } from "../dialog-prompt-generate"
+import { DialogAutonomous } from "../dialog-autonomous"
 import { DialogSessionGoal } from "../dialog-session-goal"
 import { useConfig } from "../../config"
 import { usePromptMove } from "./move"
@@ -58,28 +59,20 @@ import {
   confirmSessionCreation,
   createSessionID,
   goalToggleAction,
+  autonomyAutomated,
   isAsleep,
-  autoAnswerOn,
-  autoGuardrailOn,
-  autoPermissionOn,
-  autonomyToggleDescription,
-  autonomyToggleLabel,
-  autonomyToggleOn,
-  autonomyToggleTitle,
   parseGoalCommand,
-  parseToggleArg,
   restoreSessionSubmission,
   retainSessionSubmission,
-  yoloOn,
+  type AutonomyChange,
   type AutonomyState,
-  type AutonomyToggle,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
 import { useKeepAwake } from "../../keep-awake"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle, modelDaybreak } from "../../util/session-daybreak"
 import { modelVariantIDs } from "../../util/model"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
-import { establishLandingSession, landingAutonomyPayloads } from "../../util/landing-session"
+import { establishLandingSession, landingAutonomyOf, landingAutonomyPayloads } from "../../util/landing-session"
 import type { ModelDaybreak, ModelRef, SessionAutonomyView } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
@@ -91,10 +84,7 @@ export type PromptProps = {
   onOverlayChange?: (open: boolean) => void
   autonomy?: SessionAutonomyView
   onAutonomyUpdated?: (sessionID: string, state: SessionAutonomyView) => void
-  onLandingYoloToggle?: (next: boolean) => void
-  onLandingAutoPermissionToggle?: (next: boolean) => void
-  onLandingAutoGuardrailToggle?: (next: boolean) => void
-  onLandingAutoAnswerToggle?: (next: boolean) => void
+  onLandingAutonomyChange?: (change: AutonomyChange) => void
   onLandingGoalToggle?: (next: string | null) => void
   landingDaybreak?: ModelDaybreak
   onLandingDaybreakChange?: (next: ModelDaybreak | undefined) => void
@@ -135,22 +125,6 @@ export function PromptFooterIdentity(props: { branch?: string; sessionID?: strin
             {sessionID().length > 13 ? `${sessionID().slice(0, 13)}…` : sessionID()}
           </text>
         )}
-      </Show>
-    </>
-  )
-}
-
-export function PromptYoloHint() {
-  const { theme } = useTheme()
-  const interruptShortcut = Keymap.useShortcut("session.interrupt")
-  const disableYoloShortcut = Keymap.useShortcut("session.autonomy.normal")
-  return (
-    <>
-      <Show when={interruptShortcut()}>
-        {(shortcut) => <text fg={theme.text.subdued}>{formatShortcut(shortcut())} interrupt</text>}
-      </Show>
-      <Show when={disableYoloShortcut()}>
-        {(shortcut) => <text fg={theme.text.subdued}>{formatShortcut(shortcut())} yolo off</text>}
       </Show>
     </>
   )
@@ -315,69 +289,25 @@ export function Prompt(props: PromptProps) {
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = Keymap.use()
-  const yoloGoalActive = createMemo(
-    () => props.autonomy?.effective?.yolo === true || props.autonomy?.goal?.status === "active",
+  const automationOrGoalActive = createMemo(
+    () =>
+      props.autonomy?.goal?.status === "active" ||
+      (["permissions", "guardrails", "answers"] as const).some((category) => props.autonomy?.effective?.[category] === "yolo"),
   )
-  const applyAutonomyToggle = async (toggle: AutonomyToggle, input?: string, beforeApply?: () => void) => {
-    const label = autonomyToggleLabel(toggle)
-    const slash =
-      toggle === "yolo"
-        ? "yolo"
-        : toggle === "autoPermission"
-          ? "auto-permission"
-          : toggle === "autoGuardrail"
-            ? "auto-guardrail"
-            : "auto-answer"
-    const parsed = parseToggleArg(input?.trim().split(/\s+/)[0])
-    if (parsed === null) {
-      toast.show({ message: `Use /${slash}, /${slash} on, or /${slash} off`, variant: "error", duration: 3000 })
-      return
-    }
-    const current = autonomyToggleOn(props.autonomy, toggle)
-    if (parsed === undefined && current === undefined) {
-      toast.show({ message: `${label} state unknown; reloading`, variant: "info", duration: 3000 })
-      return
-    }
-    const nextValue = parsed ?? !current
+  const saveAutonomy = async (change: AutonomyChange) => {
     const sessionID = props.sessionID
-    if (!sessionID && landingTransferred) return
-    beforeApply?.()
-    if (sessionID) {
-      const payload =
-        toggle === "yolo"
-          ? { yolo: nextValue }
-          : toggle === "autoPermission"
-            ? { autoPermission: nextValue }
-            : toggle === "autoGuardrail"
-              ? { autoGuardrail: nextValue }
-              : { autoAnswer: nextValue }
-      try {
-        const result = await client.api.session.autonomy.set({ sessionID, payload })
-        props.onAutonomyUpdated?.(sessionID, result)
-        toast.show({
-          message: `${label} ${autonomyToggleOn(result, toggle) ? "on" : "off"} for this Session`,
-          variant: "success",
-          duration: 3000,
-        })
-      } catch (error) {
-        toast.show({ title: `Failed to set ${label.toLowerCase()}`, message: errorMessage(error), variant: "error" })
-      }
+    if (!sessionID) {
+      if (!landingTransferred) props.onLandingAutonomyChange?.(change)
       return
     }
-    const landingSetter =
-      toggle === "yolo"
-        ? props.onLandingYoloToggle
-        : toggle === "autoPermission"
-          ? props.onLandingAutoPermissionToggle
-          : toggle === "autoGuardrail"
-            ? props.onLandingAutoGuardrailToggle
-            : props.onLandingAutoAnswerToggle
-    landingSetter?.(nextValue)
-    toast.show({
-      message: `${label} ${nextValue ? "on" : "off"} for this Session (landing)`,
-      variant: "success",
-      duration: 2000,
-    })
+    const payload = change.permissions !== undefined
+      ? { permissions: change.permissions, guardrails: change.guardrails, answers: change.answers }
+      : change.guardrails !== undefined
+        ? { guardrails: change.guardrails, answers: change.answers }
+        : change.answers !== undefined ? { answers: change.answers } : undefined
+    if (!payload) return
+    const result = await client.api.session.autonomy.set({ sessionID, payload })
+    props.onAutonomyUpdated?.(sessionID, result)
   }
   const renderer = useRenderer()
   const exit = useExit()
@@ -734,7 +664,7 @@ export function Prompt(props: PromptProps) {
         title: "Interrupt session",
         name: "session.interrupt",
         category: "Session",
-        enabled: status() === "running" || yoloGoalActive(),
+        enabled: status() === "running" || automationOrGoalActive(),
         run: (_input: string | undefined, event?: KeyEvent) => {
           if (!event && props.sessionID) {
             void client.api.session
@@ -950,40 +880,15 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: autonomyToggleTitle(props.autonomy, "yolo"),
-        description: autonomyToggleDescription("yolo"),
-        name: "session.autonomy.yolo.toggle",
+        title: "Autonomous",
+        description: "permissions, guardrails, and answers",
+        name: "session.autonomy.dialog",
         category: "Session",
         palette: true,
-        slash: { name: "yolo" },
-        run: async (input?: string) => applyAutonomyToggle("yolo", input),
-      },
-      {
-        title: autonomyToggleTitle(props.autonomy, "autoPermission"),
-        description: autonomyToggleDescription("autoPermission"),
-        name: "session.autonomy.auto-permission.toggle",
-        category: "Session",
-        palette: true,
-        slash: { name: "auto-permission" },
-        run: async (input?: string) => applyAutonomyToggle("autoPermission", input),
-      },
-      {
-        title: autonomyToggleTitle(props.autonomy, "autoGuardrail"),
-        description: autonomyToggleDescription("autoGuardrail"),
-        name: "session.autonomy.auto-guardrail.toggle",
-        category: "Session",
-        palette: true,
-        slash: { name: "auto-guardrail" },
-        run: async (input?: string) => applyAutonomyToggle("autoGuardrail", input),
-      },
-      {
-        title: autonomyToggleTitle(props.autonomy, "autoAnswer"),
-        description: autonomyToggleDescription("autoAnswer"),
-        name: "session.autonomy.auto-answer.toggle",
-        category: "Session",
-        palette: true,
-        slash: { name: "auto-answer" },
-        run: async (input?: string) => applyAutonomyToggle("autoAnswer", input),
+        slash: { name: "autonomous" },
+        run: async () => {
+          dialog.replace(() => <DialogAutonomous autonomy={() => props.autonomy} save={saveAutonomy} />)
+        },
       },
       {
         title: "Sleep (configured automation, rest to review box)",
@@ -1819,13 +1724,7 @@ export function Prompt(props: PromptProps) {
         variant,
         ...(selectedModel.profile === undefined ? {} : { profile: selectedModel.profile }),
       },
-      autonomy: {
-        yolo: yoloOn(props.autonomy ?? { yolo: false }) ?? false,
-        ...(props.autonomy?.goal?.status === "active" ? { goal: props.autonomy.goal.text } : {}),
-        ...(autoPermissionOn(props.autonomy) ? { autoPermission: true } : {}),
-        ...(autoGuardrailOn(props.autonomy) ? { autoGuardrail: true } : {}),
-        ...(autoAnswerOn(props.autonomy) ? { autoAnswer: true } : {}),
-      },
+      autonomy: landingAutonomyOf(props.autonomy, true),
       daybreak: props.landingDaybreak,
     }
   }
@@ -1989,20 +1888,7 @@ export function Prompt(props: PromptProps) {
       await applyGoalCommand(normalized.slice(5).trim() || undefined)
       return true
     }
-    const autonomyToggleSlash = (
-      [
-        ["yolo", "yolo"],
-        ["auto-permission", "autoPermission"],
-        ["auto-guardrail", "autoGuardrail"],
-        ["auto-answer", "autoAnswer"],
-      ] as const
-    ).find(([name]) => normalized === `/${name}` || normalized.startsWith(`/${name} `) || normalized.startsWith(`/${name}\n`))
-    if (autonomyToggleSlash) {
-      const [name, toggle] = autonomyToggleSlash
-      await applyAutonomyToggle(toggle, normalized.slice(name.length + 1).trim(), () => clearPrompt())
-      return true
-    }
-    const autonomySlash = (["sleep", "wake"] as const).find((name) => normalized === `/${name}`)
+    const autonomySlash = (["sleep", "wake", "autonomous"] as const).find((name) => normalized === `/${name}`)
     if (autonomySlash) {
       clearPrompt()
       const command = keymapCommands().find((item) => item.slash?.name === autonomySlash)
@@ -2093,13 +1979,7 @@ export function Prompt(props: PromptProps) {
       mode: store.mode,
       agentID,
       daybreak: props.sessionID ? undefined : props.landingDaybreak,
-      autonomy: props.sessionID ? undefined : {
-        yolo: yoloOn(props.autonomy ?? { yolo: false }) ?? false,
-        ...(props.autonomy?.goal?.status === "active" ? { goal: props.autonomy.goal.text } : {}),
-        ...(autoPermissionOn(props.autonomy) ? { autoPermission: true } : {}),
-        ...(autoGuardrailOn(props.autonomy) ? { autoGuardrail: true } : {}),
-        ...(autoAnswerOn(props.autonomy) ? { autoAnswer: true } : {}),
-      },
+      autonomy: props.sessionID ? undefined : landingAutonomyOf(props.autonomy, true),
       model: {
         providerID: selectedModel.providerID,
         id: selectedModel.modelID,
@@ -2514,12 +2394,7 @@ export function Prompt(props: PromptProps) {
             agent: agentID,
             model: modelRef,
           })
-          for (const payload of landingAutonomyPayloads({
-            yolo: yoloOn(props.autonomy ?? { yolo: false }) ?? false,
-            ...(autoPermissionOn(props.autonomy) ? { autoPermission: true } : {}),
-            ...(autoGuardrailOn(props.autonomy) ? { autoGuardrail: true } : {}),
-            ...(autoAnswerOn(props.autonomy) ? { autoAnswer: true } : {}),
-          }))
+          for (const payload of landingAutonomyPayloads(landingAutonomyOf(props.autonomy, false)))
             await client.api.session.autonomy.set({ sessionID: created.id, payload })
           if (daybreak) await client.api.session.daybreak.set({ sessionID: created.id, daybreak })
           await client.api.session.autonomy.set({ sessionID: created.id, payload: { goal: candidate } })
@@ -2548,7 +2423,7 @@ export function Prompt(props: PromptProps) {
     }
     const action = candidate
       ? ({ type: "replace", text: candidate } as const)
-      : goalToggleAction(props.autonomy ?? ({ mode: "normal", yolo: false } as unknown as AutonomyState))
+      : goalToggleAction(props.autonomy ?? ({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" } satisfies AutonomyState))
     if (action.type === "request-objective") {
       clearPrompt()
       DialogSessionGoal.show(dialog, sessionID, undefined, (state) => props.onAutonomyUpdated?.(sessionID, state))
@@ -2642,7 +2517,7 @@ export function Prompt(props: PromptProps) {
               ? borderHighlight()
               : props.autonomy?.effective === undefined
                 ? theme.text.subdued
-                : props.autonomy.effective.yolo || props.autonomy.effective.permissionsAuto || props.autonomy.effective.ordinaryReviewsAuto
+                : autonomyAutomated(props.autonomy)
                   ? theme.text.feedback.error.default
                   : theme.text.feedback.success.default
           }

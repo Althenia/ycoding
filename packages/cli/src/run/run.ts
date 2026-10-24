@@ -24,10 +24,9 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
-  yolo?: boolean
-  autoPermission?: boolean
-  autoGuardrail?: boolean
-  autoAnswer?: boolean
+  permissions?: "manual" | "yolo" | "auto"
+  guardrails?: "manual" | "yolo" | "auto"
+  answers?: "manual" | "yolo" | "auto"
 }
 
 type FilePart = {
@@ -130,13 +129,8 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       title: input.title || prepared.message.slice(0, 50) + (prepared.message.length > 50 ? "..." : ""),
     })
   }
-  for (const payload of [
-    ...(input.yolo !== undefined ? [{ yolo: input.yolo } as const] : []),
-    ...(input.autoPermission !== undefined ? [{ autoPermission: input.autoPermission } as const] : []),
-    ...(input.autoGuardrail !== undefined ? [{ autoGuardrail: input.autoGuardrail } as const] : []),
-    ...(input.autoAnswer !== undefined ? [{ autoAnswer: input.autoAnswer } as const] : []),
-  ])
-    await client.session.autonomy.set({ sessionID: target.session.id, payload })
+  const modes = autonomyModes(input)
+  if (modes) await client.session.autonomy.set({ sessionID: target.session.id, payload: modes })
 
   await runNonInteractivePrompt({
     client,
@@ -275,4 +269,12 @@ function reportRunError(input: Pick<RunCommandInput, "format">, message: string,
 
 function fail(message: string): never {
   throw new Error(message)
+}
+
+function autonomyModes(input: Pick<RunCommandInput, "permissions" | "guardrails" | "answers">) {
+  if (input.permissions !== undefined)
+    return { permissions: input.permissions, guardrails: input.guardrails, answers: input.answers }
+  if (input.guardrails !== undefined) return { guardrails: input.guardrails, answers: input.answers }
+  if (input.answers !== undefined) return { answers: input.answers }
+  return undefined
 }

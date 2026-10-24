@@ -755,42 +755,46 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (!fallbackInput.includes("runtime-smoke-openai-continuation") || !fallbackInput.includes('"function_call_output"'))
       throw new Error("OpenAI fallback did not restore full canonical history")
 
-    phase = "yolo autonomy API"
-    const yoloSession = await client.session.create({
+    phase = "autonomy modes API"
+    const modeSession = await client.session.create({
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
-    const yoloSet = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { yolo: true } })
-    if (yoloSet.yolo !== true) throw new Error(`YOLO toggle was not persisted: ${yoloSet.yolo}`)
-    if (yoloSet.effective.permissionsAuto || yoloSet.effective.ordinaryReviewsAuto || yoloSet.autoAnswer === true)
-      throw new Error("The YOLO toggle changed a separate approval or answer setting")
-    const yoloRead = await client.session.autonomy.get({ sessionID: yoloSession.id })
-    if (yoloRead.yolo !== true) throw new Error(`YOLO toggle did not round-trip: ${yoloRead.yolo}`)
-    const permissionSet = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { autoPermission: true } })
-    if (!permissionSet.effective.permissionsAuto || permissionSet.effective.ordinaryReviewsAuto)
-      throw new Error("Auto-permission changed ordinary-review authority or was not persisted")
-    const permissionOff = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { autoPermission: false } })
-    if (permissionOff.effective.permissionsAuto) throw new Error("Auto-permission did not turn off")
-    const normal = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { yolo: false } })
-    if (normal.yolo !== false) throw new Error(`YOLO off was not restored: ${normal.yolo}`)
-    if (normal.autoAnswer === true || normal.effective.ordinaryReviewsAuto)
-      throw new Error("Manual approvals unexpectedly enabled automatic answers or ordinary reviews")
+    const yoloSet = await client.session.autonomy.set({ sessionID: modeSession.id, payload: { permissions: "yolo" } })
+    if (yoloSet.permissions !== "yolo") throw new Error(`YOLO permissions were not persisted: ${yoloSet.permissions}`)
+    if (yoloSet.guardrails !== "manual" || yoloSet.answers !== "manual")
+      throw new Error("The permissions mode changed a separate guardrails or answers setting")
+    const yoloRead = await client.session.autonomy.get({ sessionID: modeSession.id })
+    if (yoloRead.permissions !== "yolo") throw new Error(`YOLO permissions did not round-trip: ${yoloRead.permissions}`)
+    const permissionSet = await client.session.autonomy.set({ sessionID: modeSession.id, payload: { permissions: "auto" } })
+    if (permissionSet.effective.permissions !== "auto" || permissionSet.effective.guardrails !== "manual")
+      throw new Error("Auto permissions changed guardrails authority or were not persisted")
+    const normal = await client.session.autonomy.set({ sessionID: modeSession.id, payload: { permissions: "manual" } })
+    if (normal.permissions !== "manual") throw new Error(`Manual permissions were not restored: ${normal.permissions}`)
+    if (normal.answers !== "manual" || normal.effective.guardrails !== "manual")
+      throw new Error("Manual permissions unexpectedly enabled automatic answers or guardrail reviews")
 
-    phase = "Session-local automatic answer API"
-    const autoAnswer = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { autoAnswer: true } })
-    if (autoAnswer.autoAnswer !== true || autoAnswer.yolo !== false || autoAnswer.effective.ordinaryReviewsAuto)
-      throw new Error("The answer toggle changed approval authority or was not persisted")
-    if ((await client.session.autonomy.get({ sessionID: yoloSession.id })).autoAnswer !== true)
-      throw new Error("The answer toggle did not round-trip")
+    phase = "Session-local answers mode API"
+    const autoAnswer = await client.session.autonomy.set({ sessionID: modeSession.id, payload: { answers: "auto" } })
+    if (autoAnswer.answers !== "auto" || autoAnswer.permissions !== "manual" || autoAnswer.effective.guardrails !== "manual")
+      throw new Error("The answers mode changed approval authority or was not persisted")
+    if ((await client.session.autonomy.get({ sessionID: modeSession.id })).answers !== "auto")
+      throw new Error("The answers mode did not round-trip")
+    const combined = await client.session.autonomy.set({
+      sessionID: modeSession.id,
+      payload: { permissions: "yolo", guardrails: "auto", answers: "yolo" },
+    })
+    if (combined.permissions !== "yolo" || combined.guardrails !== "auto" || combined.answers !== "yolo")
+      throw new Error("A combined autonomy write did not persist every category")
 
     const goalSession = await client.session.create({
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
-    if ((await client.session.autonomy.get({ sessionID: goalSession.id })).autoAnswer === true)
+    if ((await client.session.autonomy.get({ sessionID: goalSession.id })).answers !== "manual")
       throw new Error("Automatic answers leaked into another Session")
-    if ((await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { autoAnswer: false } })).autoAnswer !== false)
-      throw new Error("The answer toggle did not turn off")
+    if ((await client.session.autonomy.set({ sessionID: modeSession.id, payload: { answers: "manual" } })).answers !== "manual")
+      throw new Error("The answers mode did not reset to manual")
 
     phase = "goal autonomous continuation"
     const goalText = "Choose the safest database default and finish the task"
@@ -878,7 +882,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         throw new Error(`Provider request ${request.pathname} did not contain the stored bearer credential`)
     }
 
-    summary = `Runtime smoke passed: auth, archive=round-trip, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`
+    summary = `Runtime smoke passed: auth, archive=round-trip, autonomy=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`
   } catch (error) {
     const probe = async (read: () => Promise<unknown>) =>
       read().then(

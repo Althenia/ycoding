@@ -703,40 +703,41 @@ try {
   checks.push("explicit skill selection crossed the browser, relay, and connector into the first provider request without a model tool decision")
 
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
-  for (const enabled of [true, false]) {
-    await store.setYolo(enabled)
-    const autonomy = await local.autonomyGet(createdID, { directory: openedWorkspace })
-    expect(isRecord(autonomy) && autonomy.yolo === enabled, `YOLO ${enabled} did not persist on the selected Session`)
-    expect(store.state().view?.autonomy.yolo === enabled, `YOLO ${enabled} did not reach the browser store`)
-    expect(autonomy.autoPermission !== true && autonomy.autoGuardrail !== true && autonomy.autoAnswer !== true,
-      "YOLO changed independent automation flags")
+  const readModes = async (sessionID: string, directory: string) => {
+    const autonomy = await local.autonomyGet(sessionID, { directory })
+    expect(isRecord(autonomy), "autonomy read failed")
+    return autonomy as Record<string, unknown>
   }
-  for (const enabled of [true, false]) {
-    expect(await store.setAutoAnswer(enabled), "Session auto-answer update failed")
-    const autonomy = await local.autonomyGet(createdID, { directory: openedWorkspace })
-    expect(isRecord(autonomy) && autonomy.autoAnswer === enabled, "Session auto-answer did not persist")
-    expect(store.state().view?.autonomy.autoAnswer === enabled, "Session auto-answer did not reach the browser store")
-    const unrelated = await local.autonomyGet(sessionID, { directory: workspace })
-    expect(isRecord(unrelated) && unrelated.autoAnswer !== true, "Session auto-answer propagated to another Session")
+  for (const category of ["permissions", "guardrails", "answers"] as const) {
+    for (const mode of ["yolo", "auto", "manual"] as const) {
+      expect(await store.setAutonomous({ [category]: mode }), `Session ${category} ${mode} update failed`)
+      const autonomy = await readModes(createdID, openedWorkspace)
+      expect(autonomy[category] === mode, `${category} ${mode} did not persist on the selected Session`)
+      expect(store.state().view?.autonomy[category] === mode, `${category} ${mode} did not reach the browser store`)
+      for (const other of ["permissions", "guardrails", "answers"] as const)
+        if (other !== category) expect(autonomy[other] === "manual", `${category} changed the independent ${other} mode`)
+      const unrelated = await readModes(sessionID, workspace)
+      expect(unrelated[category] === "manual", `Session ${category} mode propagated to another Session`)
+    }
   }
-  for (const enabled of [true, false]) {
-    expect(await store.setAutoGuardrail(enabled), "Session auto-guardrail update failed")
-    const autonomy = await local.autonomyGet(createdID, { directory: openedWorkspace })
-    expect(isRecord(autonomy) && autonomy.autoGuardrail === enabled, "Session auto-guardrail did not persist")
-    expect(autonomy.yolo === false && autonomy.autoPermission !== true && autonomy.autoAnswer === false,
-      "auto-guardrail changed another automation control")
-    expect(store.state().view?.autonomy.autoGuardrail === enabled, "Session auto-guardrail did not reach the browser store")
-  }
-  checks.push("boolean YOLO and Session-local auto-answer round-trip independently through the relay")
-  await store.setAutoPermission(true)
+  expect(await store.setAutonomous({ permissions: "yolo", guardrails: "auto", answers: "auto" }), "combined autonomy update failed")
+  const combined = await readModes(createdID, openedWorkspace)
+  expect(combined.permissions === "yolo" && combined.guardrails === "auto" && combined.answers === "auto",
+    "a combined autonomy write did not persist every category")
+  const combinedView = store.state().view?.autonomy
+  expect(combinedView?.permissions === "yolo" && combinedView.guardrails === "auto" && combinedView.answers === "auto",
+    "a combined autonomy write did not reach the browser store")
+  expect(await store.setAutonomous({ permissions: "manual", guardrails: "manual", answers: "manual" }), "autonomy reset failed")
+  checks.push("permissions, guardrails, and answers modes round-trip independently and atomically through the relay")
+  expect(await store.setAutonomous({ permissions: "auto" }), "Session auto permissions update failed")
   providerFollowUpText = "Reply after the rule-approved shell call."
-  providerTurn = { tool: { id: "call_flow_yolo", name: "shell", input: { command: "touch yolo-approved.txt" } }, text: "", prompt: "Run the harmless YOLO approval check" }
-  await store.sendPrompt({ text: "Run the harmless YOLO approval check", delivery: "steer" })
+  providerTurn = { tool: { id: "call_flow_yolo", name: "shell", input: { command: "touch yolo-approved.txt" } }, text: "", prompt: "Run the harmless auto-permission check" }
+  await store.sendPrompt({ text: "Run the harmless auto-permission check", delivery: "steer" })
   await waitFor(() => existsSync(join(openedWorkspace, "yolo-approved.txt")) ? true : undefined,
-    30_000, "auto-permission did not approve the ask-permission shell call with YOLO off")
+    30_000, "auto permissions did not approve the ask-permission shell call")
   await waitFor(async () => JSON.stringify(await local.messages(createdID, { directory: openedWorkspace })).includes(providerFollowUpText) ? true : undefined,
     30_000, "the rule-approved step did not settle")
-  await store.setAutoPermission(false)
+  expect(await store.setAutonomous({ permissions: "manual" }), "Session permissions reset failed")
   await store.setGoal("Finish the remote lifecycle verification")
   await waitFor(() => store.state().view?.autonomy.goal?.status === "active" ? true : undefined,
     30_000, "goal start did not reach the browser store")
@@ -748,7 +749,7 @@ try {
     const active = await local.activeSessions()
     return isRecord(active) && !(createdID in active) ? true : undefined
   }, 30_000, "the stopped goal Session did not become idle")
-  checks.push("auto-permission approved a real tool call independently of YOLO, and goal start/stop reached durable runtime state")
+  checks.push("auto permissions approved a real tool call, and goal start/stop reached durable runtime state")
   await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
   providerFollowUpText = providerText
   providerTurn = { text: providerText }

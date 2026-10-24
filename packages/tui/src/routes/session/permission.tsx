@@ -3,7 +3,7 @@ import { createEffect, createMemo, For, Match, on, onCleanup, Show, Switch } fro
 import { useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useTheme } from "../../context/theme"
-import type { PermissionRequest } from "@ycoding-ai/client"
+import type { PermissionRequest, SessionAutonomyDecisionMode } from "@ycoding-ai/client"
 import { useClient } from "../../context/client"
 import { SplitBorder } from "../../ui/border"
 import { useData } from "../../context/data"
@@ -409,6 +409,13 @@ function RejectPrompt(props: {
   )
 }
 
+export function guardrailHint(hardReview: boolean, mode: SessionAutonomyDecisionMode | undefined) {
+  if (hardReview) return "hard review · only you can approve"
+  if (mode === "auto") return "Auto didn't cover this · you decide"
+  if (mode === "yolo") return "YOLO escalated this · you decide"
+  return "you decide this review"
+}
+
 export function Prompt<const T extends Record<string, string>>(props: {
   title: string
   kind?: "permission" | "guardrail" | "recovery"
@@ -419,6 +426,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
   options: T
   defaultOption?: keyof T
   hardReview?: boolean
+  guardrailsMode?: SessionAutonomyDecisionMode
   escapeKey?: keyof T
   disabled?: boolean
   nonMutatingOptions?: readonly (keyof T)[]
@@ -437,9 +445,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
   const footer = () =>
     props.footer ??
     (kind === "guardrail" ? (
-      <text fg={theme.text.subdued}>
-        {props.hardReview ? "hard reviews: model checks, you approve" : "ordinary reviews auto-approve with auto-guardrail on while awake"}
-      </text>
+      <text fg={theme.text.subdued}>{guardrailHint(props.hardReview === true, props.guardrailsMode)}</text>
     ) : undefined)
   const compact = () => dimensions().height < 30
   const chromeHeight = () =>

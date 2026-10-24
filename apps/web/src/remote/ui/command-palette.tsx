@@ -15,6 +15,7 @@ import {
   type PaletteContext,
   type PaletteIntent,
 } from "./command-palette-model"
+import { requestAutonomousDialog } from "./autonomous-dialog"
 import { noticeCenterView } from "./notifications"
 import { connectionStripView, type RemoteView } from "./shell-model"
 import "./command-palette.css"
@@ -77,8 +78,7 @@ export function CommandPalette(props: {
         id: sessionID,
         running: state.view?.id === sessionID && state.view.status === "running",
         managedChild: props.managedChild,
-        yolo: state.view?.id === sessionID ? (state.view.autonomy?.effective?.yolo ?? state.view.autonomy?.yolo) === true : false,
-        ...(state.view?.id === sessionID && state.view.autonomy !== undefined ? { autoPermission: state.view.autonomy.autoPermission === true, autoGuardrail: state.view.autonomy.autoGuardrail === true, autoAnswer: state.view.autonomy.autoAnswer === true } : {}),
+        ...(state.view?.id === sessionID && state.view.autonomy !== undefined ? { autonomous: state.view.autonomy.effective ?? state.view.autonomy } : {}),
         goalActive: state.view?.id === sessionID && state.view.autonomy?.goal?.status === "active",
         ...(state.view?.id === sessionID && state.view.autonomy !== undefined
           ? { asleep: state.view.autonomy.effective?.asleep ?? state.view.autonomy.sleep !== undefined } : {}),
@@ -144,10 +144,7 @@ export function CommandPalette(props: {
       case "compact": void remote.store.compactSession(); return
       case "interrupt": void remote.store.interrupt(); return
       case "stopGoal": void remote.store.stopGoal(); return
-      case "yolo": void remote.store.setYolo(intent.enabled); return
-      case "autoPermission": void remote.store.setAutoPermission(intent.enabled); return
-      case "autoGuardrail": void remote.store.setAutoGuardrail(intent.enabled); return
-      case "autoAnswer": void remote.store.setAutoAnswer(intent.enabled); return
+      case "autonomous": requestAutonomousDialog(); return
       case "sleep": void remote.store.setSleep(intent.sleep); return
       case "keepAwake": {
         const scope = remote.scope()

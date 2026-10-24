@@ -26,6 +26,7 @@ import { SessionUsageAttribution } from "./usage-attribution"
 import { RetentionSettings } from "../retention-settings"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { SessionAutonomy } from "./autonomy"
+import type { DecisionMode } from "@ycoding-ai/schema/session-autonomy"
 import { SessionCompactionJob } from "./compaction-job"
 import { SessionCompactionExecution } from "./compaction-execution"
 import { SessionCompaction } from "./compaction"
@@ -189,15 +190,13 @@ type ForkInput = {
 
 type AutonomyInput = {
   sessionID: SessionSchema.ID
-  yolo?: boolean
+  permissions?: DecisionMode
+  guardrails?: DecisionMode
+  answers?: DecisionMode
   /** A string calculates and replaces the objective; true resumes the retained one; null stops it. */
   goal?: string | null | true
   maxNoProgress?: number
-  mode?: "normal" | "yolo" | "goal"
   sleep?: boolean
-  autoAnswer?: boolean
-  autoPermission?: boolean
-  autoGuardrail?: boolean
 }
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
@@ -1628,7 +1627,7 @@ const layer = Layer.effect(
         data: {
           text,
           description: "Goal · steer",
-          metadata: { autonomy: { yolo: state.yolo, goal: true, iteration: goal.iteration } },
+          metadata: { autonomy: { goal: true, iteration: goal.iteration } },
         },
         delivery: "steer",
       })
@@ -1737,10 +1736,10 @@ const layer = Layer.effect(
     })
 
     const staleQuestionReviews = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      const yolo = yield* autonomy
-        .canYolo(sessionID)
-        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-      if (!yolo) return undefined
+      const answers = yield* autonomy
+        .decisionMode(sessionID, "answers")
+        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed("manual" as const)))
+      if (answers !== "yolo") return undefined
       const folded = yield* SessionReviewFold.fold(db, [sessionID])
       return folded.filter((item) => SessionReviewFold.isOpen(item) && item.kind === "question").map((item) => item.itemID)
     })
@@ -2115,33 +2114,14 @@ const layer = Layer.effect(
                 Effect.fail(new NotFoundError({ sessionID: error.sessionID })),
               ),
             )
-          const yolo = yield* autonomy.canYolo(sessionID).pipe(notFound)
-          const permissionsAuto = yield* autonomy.canAutoPermission(sessionID).pipe(notFound)
+          const decisions = yield* autonomy.effectiveDecisions(sessionID).pipe(notFound)
           const asleep = yield* autonomy.isAsleep(sessionID).pipe(notFound)
-          const rootID = yield* rootSessionID(sessionID)
-          const rootYolo = rootID === sessionID ? yolo : yield* autonomy.canYolo(rootID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
-          const rootAutoGuardrail = yield* autonomy
-            .canAutoGuardrail(rootID)
-            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
           const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location)))
-          const policy = guardrail.reviewPolicy
-          return {
-            yolo,
-            permissionsAuto,
-            permissionModelReviews: policy.decideReviews,
-            asleep,
-            ordinaryReviewsAuto: rootAutoGuardrail && !asleep,
-            guardrailsEnabled: policy.enabled,
-            modelReviews: policy.enabled && policy.decideReviews,
-            hardModelReviews: (policy.decideReviews || rootYolo) && policy.decideHardReviews,
-          }
+          return { ...decisions, asleep, guardrailsEnabled: guardrail.reviewPolicy.enabled }
         }),
         set: Effect.fn("Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
-          let yolo = input.yolo
           const goal = input.goal
-          if (input.mode === "yolo") yolo = yolo ?? true
-          if (input.mode === "normal") yolo = yolo ?? false
           const notFound = <A, R>(effect: Effect.Effect<A, SessionAutonomy.NotFoundError, R>) =>
             effect.pipe(
               Effect.catchTag("SessionAutonomy.NotFound", (error) =>
@@ -2165,7 +2145,6 @@ const layer = Layer.effect(
               .setGoalIfCurrent({
                 sessionID: input.sessionID,
                 expectedSequence: snapshot.sequence,
-                yolo,
                 text: synthesized,
                 rawText,
                 maxNoProgress: input.maxNoProgress,
@@ -2184,33 +2163,32 @@ const layer = Layer.effect(
               phase: "start",
             })
             const resumed = yield* autonomy
-              .resumeGoalIfCurrent({ sessionID: input.sessionID, expectedSequence: snapshot.sequence, yolo })
+              .resumeGoalIfCurrent({ sessionID: input.sessionID, expectedSequence: snapshot.sequence })
               .pipe(notFound)
             if (!resumed.applied) return yield* new SessionGoal.Error({ code: "goal.stale_calculation" })
             return yield* admitGoalContinuation(input.sessionID, resumed.state, steer)
           }
-          const targetID =
-            input.sleep !== undefined
-              ? yield* rootSessionID(input.sessionID)
-              : input.sessionID
-          return yield* familyAutonomyLocks.withLock(targetID)(
-            Effect.gen(function* () {
-              const before = yield* autonomy.get(targetID).pipe(notFound)
-              const after = yield* autonomy
-                .set({
-                  sessionID: targetID,
-                  yolo,
-                  goal,
-                  maxNoProgress: input.maxNoProgress,
-                  sleep: input.sleep,
-                  autoAnswer: input.autoAnswer,
-                  autoPermission: input.autoPermission,
-                  autoGuardrail: input.autoGuardrail,
-                })
-                .pipe(notFound)
-              yield* applySleepTransition(targetID, before, after)
-              return targetID === input.sessionID ? after : yield* autonomy.get(input.sessionID).pipe(notFound)
-            }).pipe(Effect.uninterruptible),
+          if (input.sleep !== undefined) {
+            const rootID = yield* rootSessionID(input.sessionID)
+            yield* familyAutonomyLocks.withLock(rootID)(
+              Effect.gen(function* () {
+                const before = yield* autonomy.get(rootID).pipe(notFound)
+                const after = yield* autonomy.set({ sessionID: rootID, sleep: input.sleep }).pipe(notFound)
+                yield* applySleepTransition(rootID, before, after)
+              }).pipe(Effect.uninterruptible),
+            )
+          }
+          return yield* familyAutonomyLocks.withLock(input.sessionID)(
+            autonomy
+              .set({
+                sessionID: input.sessionID,
+                permissions: input.permissions,
+                guardrails: input.guardrails,
+                answers: input.answers,
+                goal,
+                maxNoProgress: input.maxNoProgress,
+              })
+              .pipe(Effect.andThen(autonomy.get(input.sessionID)), notFound, Effect.uninterruptible),
           )
         }),
       },

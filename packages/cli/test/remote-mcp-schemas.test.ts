@@ -63,20 +63,24 @@ describe("MCP catalog pattern interoperability", () => {
 })
 
 describe("MCP autonomy schema", () => {
-  test("session_autonomy_set offers one boolean toggle per branch and no numeric yolo", () => {
+  test("session_autonomy_set takes category modes, strict enums, and a separate sleep", () => {
     const tool = RemoteMcpSchemas.tools.find((tool) => tool.name === "session_autonomy_set")
     if (!tool) throw new Error("Missing tool session_autonomy_set")
     const serialized = JSON.stringify(tool.inputSchema)
-    for (const field of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer", "sleep"])
-      expect(serialized).toContain(`"${field}":{"type":"boolean"}`)
-    expect(serialized).not.toContain('"maximum":2')
-    expect(tool.description).toContain("approves nothing by itself")
-    expect(tool.description).toContain("hard reviews still ask a human")
+    for (const field of ["permissions", "guardrails", "answers"])
+      expect(serialized).toContain(`"${field}":{"type":"string","enum":["manual","yolo","auto"]}`)
+    expect(serialized).toContain('"sleep":{"type":"boolean"}')
+    expect(serialized).toContain('"minProperties":1')
+    for (const removed of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer"])
+      expect(serialized).not.toContain(`"${removed}":`)
+    expect(tool.description).toContain("manual")
+    expect(tool.description).toContain("hard or custom-rule reviews")
+    expect(tool.description).not.toContain("approves nothing by itself")
   })
 
-  test("session_goal_set keeps its optional boolean yolo beside the goal", () => {
+  test("session_goal_set takes no yolo field", () => {
     const tool = RemoteMcpSchemas.tools.find((tool) => tool.name === "session_goal_set")
     if (!tool) throw new Error("Missing tool session_goal_set")
-    expect(JSON.stringify(tool.inputSchema)).toContain('"yolo":{"type":"boolean"}')
+    expect(JSON.stringify(tool.inputSchema)).not.toContain("yolo")
   })
 })

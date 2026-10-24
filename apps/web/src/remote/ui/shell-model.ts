@@ -74,12 +74,11 @@ export function summarizeSession(session: SessionInfoView, view: SessionView | u
     agent: active?.agent ?? session.agent,
     model,
     autonomy: autonomy?.mode,
-    yolo: autonomy?.effective?.yolo ?? autonomy?.yolo,
+    permissions: autonomy === undefined ? undefined : (autonomy.effective ?? autonomy).permissions,
+    guardrails: autonomy === undefined ? undefined : (autonomy.effective ?? autonomy).guardrails,
+    answers: autonomy === undefined ? undefined : (autonomy.effective ?? autonomy).answers,
     goalActive: autonomy?.goal?.status === "active",
     asleep: autonomy?.effective?.asleep ?? (autonomy === undefined ? undefined : autonomy.sleep !== undefined),
-    autoPermission: autonomy?.autoPermission,
-    autoGuardrail: autonomy?.autoGuardrail,
-    autoAnswer: autonomy?.autoAnswer,
     updatedAt: session.updatedAt > 0 ? new Date(session.updatedAt).toISOString() : undefined,
   }
 }

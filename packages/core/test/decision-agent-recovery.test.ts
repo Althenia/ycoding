@@ -438,7 +438,7 @@ for (const purpose of ["answer", "permission", "guardrail", undefined] as const)
     const sessionID = yield* seed(`ses_context_${purpose}`)
     const database = yield* Database.Service
     yield* database.db.update(SessionTable).set({ autonomy: {
-      mode: "normal", yolo: true,
+      mode: "normal", permissions: "yolo", guardrails: "yolo", answers: "yolo",
       goal: { text: "Prepare an offline renewal bundle", status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
     } }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
     yield* database.db.insert(SessionMessageTable).values([

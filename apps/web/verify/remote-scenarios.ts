@@ -290,7 +290,7 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     permissions: [] as readonly WirePermission[],
     guardrails: [] as readonly WireGuardrail[],
     forms: [] as readonly WireForm[],
-    autonomy: { mode: "normal", yolo: false },
+    autonomy: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual" },
     expectedText: [] as readonly string[],
   }
 
@@ -412,9 +412,9 @@ function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): R
     view: "settings",
     autonomy: {
       mode: "normal",
-      yolo: false,
-      autoPermission: true,
-      ...(viewport === 768 ? {} : { autoGuardrail: true }),
+      permissions: "auto",
+      guardrails: viewport === 768 ? "manual" : "auto",
+      answers: "manual",
       goal: {
         text: viewport === 1440 ? "Refactor remote settings pane for responsive review board" : viewport === 768 ? "Refactor telemetry UI" : "Mobile refactor",
         status: "active",

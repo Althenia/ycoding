@@ -1,28 +1,26 @@
-import type { LocationRef, ModelDaybreak, ModelRef, YCodingClient } from "@ycoding-ai/client"
+import type { LocationRef, ModelDaybreak, ModelRef, SessionAutonomyView, YCodingClient } from "@ycoding-ai/client"
+import { autonomyMode, autonomyCategories, type AutonomyChange } from "./session-autonomy"
 
-export type LandingAutonomy = {
-  yolo: boolean
-  goal?: string
-  autoPermission?: boolean
-  autoGuardrail?: boolean
-  autoAnswer?: boolean
+export type LandingAutonomy = Required<AutonomyChange> & { goal?: string }
+
+export type LandingAutonomyPayload = Required<AutonomyChange> | { goal: string }
+
+export function landingAutonomyOf(view: SessionAutonomyView | undefined, includeGoal: boolean): LandingAutonomy {
+  const [permissions, guardrails, answers] = autonomyCategories.map((category) => autonomyMode(view?.[category]) ?? "manual")
+  return {
+    permissions: permissions!,
+    guardrails: guardrails!,
+    answers: answers!,
+    ...(includeGoal && view?.goal?.status === "active" ? { goal: view.goal.text } : {}),
+  }
 }
-
-export type LandingAutonomyPayload =
-  | { yolo: boolean; goal?: string }
-  | { goal: string }
-  | { autoPermission: boolean }
-  | { autoGuardrail: boolean }
-  | { autoAnswer: boolean }
 
 export function landingAutonomyPayloads(autonomy: LandingAutonomy | undefined): LandingAutonomyPayload[] {
   if (!autonomy) return []
+  const modes = { permissions: autonomy.permissions, guardrails: autonomy.guardrails, answers: autonomy.answers }
   return [
-    ...(autonomy.goal === undefined && autonomy.yolo ? [{ yolo: true } as const] : []),
-    ...(autonomy.autoPermission ? [{ autoPermission: true } as const] : []),
-    ...(autonomy.autoGuardrail ? [{ autoGuardrail: true } as const] : []),
-    ...(autonomy.autoAnswer ? [{ autoAnswer: true } as const] : []),
-    ...(autonomy.goal !== undefined ? [autonomy.yolo ? { yolo: true, goal: autonomy.goal } : { goal: autonomy.goal }] : []),
+    ...(Object.values(modes).some((mode) => mode !== "manual") ? [modes] : []),
+    ...(autonomy.goal !== undefined ? [{ goal: autonomy.goal }] : []),
   ]
 }
 

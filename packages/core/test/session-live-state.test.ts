@@ -16,7 +16,10 @@ import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
-import { InstructionStateTable, SessionPendingTable, SessionTable } from "@ycoding-ai/core/session/sql"
+import { InstructionStateTable, SessionPendingTable, SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
+import { Agent } from "@ycoding-ai/core/agent"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "./lib/effect"
 
 const sessionID = Session.ID.make("ses_live_state")
@@ -24,9 +27,11 @@ const sessionID = Session.ID.make("ses_live_state")
 testEffect(Layer.empty).effect("goal reminders resolve routine choices without manufacturing human approval or waiting loops", () => Effect.sync(() => {
   const goal = SessionAutonomy.makeGoal({ text: "Verify the local changes" })
   for (const autoAnswer of [true, false]) {
-    const text = SessionLiveState.goalReminder({ mode: "normal", yolo: false, goal, autoAnswer })
+    const text = SessionLiveState.goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", goal, answers: autoAnswer ? "auto" : "manual" })
     expect(text).toContain("Complete the active goal")
-    expect(text).toContain(autoAnswer ? "Automatic answering is enabled" : "Automatic answering is disabled")
+    expect(text).toContain(autoAnswer ? "This Session's effective answers mode is Auto" : "This Session's effective answers mode is Manual")
+    expect(text).toContain("Each autonomy category (permissions, guardrails, answers) uses its own decision mode.")
+    expect(text).toContain("The autonomy modes above are effective")
     expect(text).toContain("Do not repeat an automatic waiting answer")
     expect(text).toContain("required human approval")
     expect(text).toContain("Goals do not override these gates")
@@ -35,7 +40,7 @@ testEffect(Layer.empty).effect("goal reminders resolve routine choices without m
 
 testEffect(Layer.empty).effect("sleep state never claims lid control when only idle sleep is inhibited", () =>
   Effect.sync(() => {
-    const state = { mode: "normal", yolo: false, sleep: {} } as const
+    const state = { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", sleep: {} } as const
     expect(SessionLiveState.sleepReminder(state, true, false)).toContain(
       "lid-closed keep-awake is unavailable or unreported",
     )
@@ -110,7 +115,7 @@ it.effect("renders canonical protected state and returns every required content-
       content: [
         {
           type: "text",
-          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}',
+          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"answers":"manual","guardrails":"manual","mode":"normal","permissions":"manual"},"permissionCeiling":[],"todos":[]}',
         },
       ],
     })
@@ -354,6 +359,50 @@ it.effect("bounds latest protected-state sequence probes to one database row", (
       expect(query.sql).toContain('order by "event"."seq" desc limit ?')
       expect(query.params.at(-1)).toBe(1)
     }
+  }),
+)
+
+it.effect("model-facing autonomy reports inherited effective modes, not the child's local Manual", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const db = (yield* Database.Service).db
+    const childID = Session.ID.make("ses_live_state_child")
+    yield* db
+      .update(SessionTable)
+      .set({ autonomy: { mode: "normal", permissions: "auto", guardrails: "yolo", answers: "yolo" } })
+      .where(eq(SessionTable.id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTable)
+      .values({ id: childID, project_id: Project.ID.global, directory: "/project", title: "Child", parent_id: sessionID })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTaskTable)
+      .values({
+        session_id: childID,
+        parent_id: sessionID,
+        parent_assistant_message_id: SessionMessage.ID.make("msg_live_state_parent"),
+        tool_call_id: "call_live_state_child",
+        input_id: SessionMessage.ID.make("msg_live_state_input"),
+        description: "child",
+        agent: Agent.ID.make("build"),
+        model: CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("gpt-5.6") }),
+        prompt_digest: "digest",
+        background: true,
+        delivery: "steer",
+        state: "running",
+        revision: 1,
+        time_created: 1,
+        time_updated: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    const captured = yield* db.transaction((tx) => SessionLiveState.captureDatabase(tx, childID))
+    expect(captured.autonomy).toMatchObject({ permissions: "auto", guardrails: "yolo", answers: "yolo" })
+    const service = yield* SessionLiveState.Service
+    expect((yield* service.load(childID)).text).toContain('"answers":"yolo","guardrails":"yolo","mode":"normal","permissions":"auto"')
   }),
 )
 

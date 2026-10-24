@@ -191,7 +191,7 @@ function promptStore(
           return { status: "ok" as const, value: { data: { id, title: "Prompt", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: 1, updated: 1 } } } }
         }
         if (operation === "session.snapshot") return { status: "ok" as const, value: { sourceEpoch: "epoch_prompt", session: { id: request?.sessionID, title: "Prompt", time: { created: 1, updated: 1 } }, messages: [], watermark: { type: "log.synced", aggregateID: request?.sessionID ?? sessionID, seq: 0 } } }
-        if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", yolo: false, effective: { yolo: false, permissionsAuto: false, permissionModelReviews: false, asleep: false, guardrailsEnabled: true, ordinaryReviewsAuto: false, modelReviews: false, hardModelReviews: false } } } }
+        if (operation === "session.autonomy.get") return { status: "ok" as const, value: { data: { mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", effective: { permissions: "manual", guardrails: "manual", answers: "manual", inherited: {}, asleep: false, guardrailsEnabled: true } } } }
         return { status: "ok" as const, value: { data: [] } }
       },
     }),

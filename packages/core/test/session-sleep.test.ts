@@ -164,6 +164,7 @@ describe("Session sleep", () => {
   it.effect("sleep defers pending reviews across family Locations into the review box", () => Effect.gen(function* () {
     const session = yield* Session.Service
     const root = yield* session.create({ location: yield* tmpLocation })
+    yield* session.autonomy.set({ sessionID: root.id, guardrails: "yolo" })
     const child = yield* session.create({ parentID: root.id })
     const other = yield* session.create({ location: root.location })
     const events = yield* EventRuntime.Service
@@ -260,7 +261,7 @@ describe("Session sleep", () => {
       )
       yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
       yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
-      yield* sessions.autonomy.set({ sessionID: child.id, yolo: true })
+      yield* sessions.autonomy.set({ sessionID: child.id, answers: "yolo" })
       const orchestration = yield* SessionOrchestration.Service
       decisionConfidence = 0.9
       expect(
@@ -302,7 +303,7 @@ describe("Session sleep", () => {
       )
       yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
       yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
-      yield* sessions.autonomy.set({ sessionID: child.id, autoAnswer: true })
+      yield* sessions.autonomy.set({ sessionID: child.id, answers: "auto" })
       const orchestration = yield* SessionOrchestration.Service
       decisionCalls = 0
       expect(
@@ -377,8 +378,8 @@ describe("Session sleep", () => {
       const session = yield* Session.Service
       const root = yield* session.create({ location: yield* tmpLocation })
       const child = yield* session.create({ parentID: root.id })
-      yield* session.autonomy.set({ sessionID: child.id, yolo: true })
-      expect((yield* session.autonomy.get(child.id)).yolo).toBe(true)
+      yield* session.autonomy.set({ sessionID: child.id, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
+      expect(yield* session.autonomy.get(child.id)).toMatchObject({ permissions: "yolo", guardrails: "yolo", answers: "yolo" })
       yield* session.autonomy.set({ sessionID: child.id, sleep: true })
       expect(held).toEqual([root.id])
       expect((yield* session.autonomy.get(child.id)).sleep).toEqual({})

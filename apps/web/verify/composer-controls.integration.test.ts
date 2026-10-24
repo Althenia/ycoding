@@ -267,11 +267,11 @@ test("phone status shows the Session state, never the autonomy level shown besid
       await page.setViewport(390, 844)
       await page.setCoarsePointer(true)
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-      await wait(page, `document.querySelector('.mini-composer__mount .session-status__yolo-trigger') !== null`)
+      await wait(page, `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger') !== null`)
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__mobile') !== null`)
-      const shown = await page.evaluate<{ mobile: string; trigger: string }>(`(() => ({ mobile: document.querySelector('.mini-composer__mount .session-status__mobile')?.textContent ?? '', trigger: document.querySelector('.mini-composer__mount .session-status__yolo-trigger .session-status__yolo-full')?.textContent ?? '' }))()`)
-      expect(shown.trigger).toBe("YOLO off")
+      const shown = await page.evaluate<{ mobile: string; trigger: string }>(`(() => ({ mobile: document.querySelector('.mini-composer__mount .session-status__mobile')?.textContent ?? '', trigger: document.querySelector('.mini-composer__mount .session-status__autonomous-trigger .session-status__autonomous-full')?.textContent ?? '' }))()`)
+      expect(shown.trigger).toBe("Autonomous")
       expect(shown.mobile).toBe(expected)
     } finally { await page.close() }
   }
@@ -353,93 +353,163 @@ test("status stays inside a fixed-height composer and pending picks survive unre
   } finally { await page.close() }
 }, 30_000)
 
-test("Conversation status controls toggle this Session's four autonomy switches and goal at desktop and phone widths", async () => {
+const keys = {
+  left: ["ArrowLeft", "ArrowLeft", 37], up: ["ArrowUp", "ArrowUp", 38], right: ["ArrowRight", "ArrowRight", 39], down: ["ArrowDown", "ArrowDown", 40],
+  one: ["1", "Digit1", 49, "1"], two: ["2", "Digit2", 50, "2"], three: ["3", "Digit3", 51, "3"], tab: ["Tab", "Tab", 9],
+} as const
+const press = (page: { pressKey: (key: string, code: string, windowsVirtualKeyCode: number, text?: string) => Promise<void> }, key: (typeof keys)[keyof typeof keys]) => page.pressKey(key[0], key[1], key[2], key[3])
+
+test("the Autonomous dialog cycles one category, sets all three, contains focus, and returns it at desktop and phone widths", async () => {
   for (const [width, height] of [[1440, 900], [390, 844]]) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-      await wait(page, `document.querySelector('.mini-composer__mount .session-status__yolo-trigger') !== null`)
-      if (width === 390) expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.mini-composer__mount .session-status__yolo-trigger,.mini-composer__mount .session-status__goal-trigger')].every(button => { const rect=button.getBoundingClientRect(); return rect.width>=44 && rect.height>=44 })`)).toBe(true)
-      await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.click()`)
-      await wait(page, `document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]').length === 4`)
-      await page.evaluate(`Promise.all(document.querySelector('.session-status__yolo-popover').getAnimations().map(animation => animation.finished))`)
-      await Bun.write(new URL(`../../../.cache/tmp/composer-autonomy-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-      const popover = `document.querySelector('.session-status__yolo-popover')`
-      const switchState = `[...document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]')].map(input => input.checked)`
-      const deciders = `[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dt')?.textContent + '=' + row.querySelector('dd')?.textContent)`
-      const decider = (name: string) => `[...document.querySelectorAll('.session-status__decider')].find(row => row.querySelector('dt')?.textContent === ${JSON.stringify(name)})?.querySelector('dd')?.textContent`
-      const toggle = async (label: string) => page.evaluate(`[...document.querySelectorAll('.session-status__auto-answer')].find(row => row.querySelector('strong')?.textContent === ${JSON.stringify(label)})?.querySelector('input[type="checkbox"]')?.click()`)
+      const trigger = `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger')`
+      await wait(page, `${trigger} !== null`)
+      if (width === 390) expect(await page.evaluate<boolean>(`[${trigger}, document.querySelector('.mini-composer__mount .session-status__goal-trigger')].every(button => { const rect=button.getBoundingClientRect(); return rect.width>=44 && rect.height>=44 })`)).toBe(true)
+      expect(await page.evaluate<string>(`${trigger}.getAttribute('aria-label')`)).toBe("Autonomous: Autonomous Manual")
+      expect(await page.evaluate<string>(`${trigger}.innerText`)).toBe(width === 390 ? "Au·M" : "Autonomous Manual")
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .session-status__mode').length`)).toBe(0)
       const lastRequest = () => page.evaluate<unknown>(`window.composerRequests().at(-1)`)
-      expect(await page.evaluate<number>(`${popover}.querySelectorAll('[role="radio"], [role="radiogroup"]').length`)).toBe(0)
-      expect(await page.evaluate<string[]>(`[...${popover}.querySelectorAll('.session-status__auto-answer strong')].map(item => item.textContent)`)).toEqual(["YOLO", "Auto-permission", "Auto-guardrail", "Auto-answer"])
-      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, false, false, false])
-      expect(await page.evaluate<string[]>(deciders)).toEqual([
-        "YOLO=Off", "Auto-permission=Off", "Auto-guardrail=Off", "Tools=Ask you", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off",
-      ])
-      expect(await page.evaluate<string>(`${popover}.textContent`)).toContain("Hard reviews always need your approval")
-      expect(await page.evaluate<string>(`${popover}.textContent`)).not.toMatch(/Ask first|Allow tools|Tools \+ reviews/)
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.getAttribute('aria-label')`)).toBe("Autonomy: YOLO off")
-      await page.evaluate(`window.autonomyInputs = [...document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]')]; void 0`)
+      const value = (category: string) => `document.querySelector('#autonomous-row-${category} .autonomous__value')?.textContent`
 
-      await toggle("Auto-answer")
-      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
-      await wait(page, `document.querySelector('#session-status-auto-answer-detail') !== null && ${decider("Auto-answer")} === 'On · this Session'`)
-      expect(await page.evaluate<string>(`document.querySelector('#session-status-auto-answer-detail')?.textContent ?? ''`)).toContain("Off while asleep sends requests to Review")
-      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, false, false, true])
+      await page.evaluate(`${trigger}.focus(); ${trigger}.click()`)
+      await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
+      await page.evaluate(`Promise.all(document.querySelector('dialog.overlay--autonomous').getAnimations({ subtree: true }).map(animation => animation.finished))`)
+      await Bun.write(new URL(`../../../.cache/tmp/composer-autonomous-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      expect(await page.evaluate<string>(`document.querySelector('dialog.overlay--autonomous').getAttribute('aria-label')`)).toBe("Autonomous")
+      expect(await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).toBe("Autonomous settings")
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.autonomous__row .autonomous__title')].map(item => item.textContent)`)).toEqual(["Permissions", "Guardrails", "Answers"])
+      expect(await page.evaluate<string[]>(`['permissions','guardrails','answers'].map(category => document.querySelector('#autonomous-row-' + category + ' .autonomous__value')?.textContent)`)).toEqual(["Manual", "Manual", "Manual"])
+      expect(await page.evaluate<string>(`document.querySelector('.autonomous__note').textContent`)).toContain("hard and custom-rule reviews always need you")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth && (() => { const rect=document.querySelector('dialog.overlay--autonomous .overlay__surface').getBoundingClientRect(); return rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight })()`)).toBe(true)
 
-      await toggle("Auto-permission")
-      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { autoPermission: true } })
-      await wait(page, `${decider("Tools")} === 'Auto-approved'`)
-      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, true, false, true])
-      expect(await page.evaluate<string>(decider("Routine reviews"))).toBe("Ask you")
+      await press(page, keys.right)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "yolo" } })
+      await wait(page, `${value("permissions")} === 'YOLO'`)
+      await press(page, keys.down)
+      await wait(page, `document.querySelector('#autonomous-row-guardrails').getAttribute('aria-selected') === 'true'`)
+      await press(page, keys.left)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { guardrails: "auto" } })
+      await wait(page, `${value("guardrails")} === 'Auto'`)
+      await press(page, keys.down)
+      await press(page, keys.down)
+      await press(page, keys.right)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { answers: "yolo" } })
+      await wait(page, `${value("answers")} === 'YOLO'`)
+      await press(page, keys.up)
+      await press(page, keys.up)
+      await press(page, keys.left)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "manual" } })
+      expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(4)
+      expect(await page.evaluate<string>(`${trigger}.getAttribute('aria-label')`)).toBe("Autonomous: Permissions Manual, Guardrails Auto, Answers YOLO")
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-composer__mount .session-status__mode')].map(chip => chip.title)`)).toEqual(["Guardrails Auto", "Answers YOLO"])
 
-      await toggle("Auto-guardrail")
-      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { autoGuardrail: true } })
-      await wait(page, `${decider("Routine reviews")} === 'Auto-approved'`)
-      expect(await page.evaluate<string>(decider("Hard reviews"))).toBe("Ask you")
-      expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount [data-mode="auto-permission"]') !== null && document.querySelector('.mini-composer__mount [data-mode="auto-guardrail"]') !== null && document.querySelector('.mini-composer__mount [data-mode="auto-answer"]') !== null`)).toBe(true)
+      await press(page, keys.three)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "auto", guardrails: "auto", answers: "auto" } })
+      await wait(page, `['permissions','guardrails','answers'].every(category => document.querySelector('#autonomous-row-' + category + ' .autonomous__value')?.textContent === 'Auto')`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .session-status__mode').length`)).toBe(0)
+      expect(await page.evaluate<string>(`${trigger}.getAttribute('aria-label')`)).toBe("Autonomous: Autonomous Auto")
+      await press(page, keys.two)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "yolo", guardrails: "yolo", answers: "yolo" } })
+      await press(page, keys.one)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "manual", guardrails: "manual", answers: "manual" } })
+      await wait(page, `document.querySelector('.autonomous [role="status"]')?.textContent === "This Session's categories set to Manual"`)
+      expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(7)
 
-      await toggle("YOLO")
-      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
-      await wait(page, `${decider("YOLO")} === 'On · evaluates'`)
-      expect(await page.evaluate<boolean[]>(switchState)).toEqual([true, true, true, true])
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.getAttribute('aria-label')`)).toBe("Autonomy: YOLO on")
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.innerText`)).toBe(width === 390 ? "Y on" : "YOLO on")
-      expect(await page.evaluate<boolean>(`window.autonomyInputs.every(input => input.isConnected)`)).toBe(true)
+      await page.evaluate(`document.querySelector('#autonomous-row-answers').click()`)
+      await page.evaluate(`document.querySelector('[aria-label="Next Answers mode"]').click()`)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { answers: "yolo" } })
+      await page.evaluate(`document.querySelector('[aria-label="Set all to Auto"]').click()`)
+      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { permissions: "auto", guardrails: "auto", answers: "auto" } })
 
-      await toggle("YOLO")
-      expect(await lastRequest()).toEqual({ operation: "session.autonomy.set", input: { yolo: false } })
-      await wait(page, `${decider("YOLO")} === 'Off'`)
-      expect(await page.evaluate<boolean[]>(switchState)).toEqual([false, true, true, true])
-      expect(await page.evaluate<string[][]>(`window.composerRequests().slice(-5).map(item => Object.keys(item.input))`)).toEqual([["autoAnswer"], ["autoPermission"], ["autoGuardrail"], ["yolo"], ["yolo"]])
-
-      await page.evaluate(`window.composerSetHardReviewPolicy(false)`)
-      await page.evaluate(`window.composerSetEffective({ guardrailsEnabled: true, modelReviews: true, permissionModelReviews: true })`)
-      await wait(page, `${decider("Tools")} === 'Model assesses, then you'`)
-      expect(await page.evaluate<string>(decider("Routine reviews"))).toBe("Model assesses, then you")
-      expect(await page.evaluate<string>(decider("Hard reviews"))).toBe("Ask you")
-      for (const modeled of [false, true]) {
-        await page.evaluate(`window.composerSetHardReviewPolicy(${modeled})`)
-        await wait(page, `${decider("Hard reviews")} === ${JSON.stringify(modeled ? "Model assesses · you approve" : "Ask you")}`)
-        expect(await page.evaluate<string>(decider("Routine reviews"))).toBe("Off")
+      const inside = `document.querySelector('dialog.overlay--autonomous').contains(document.activeElement)`
+      for (let step = 0; step < 8; step += 1) {
+        await press(page, keys.tab)
+        expect(await page.evaluate<boolean>(inside)).toBe(true)
       }
       await page.pressEscape()
-      expect((await page.evaluate<string>(`document.activeElement?.getAttribute('aria-label')`)).startsWith("Autonomy: YOLO")).toBe(true)
+      await wait(page, `document.querySelector('dialog.overlay--autonomous') === null`)
+      expect(await page.evaluate<boolean>(`document.activeElement === ${trigger}`)).toBe(true)
+      expect(await page.evaluate<boolean>(`window.composerRequests().every(item => item.operation === 'session.autonomy.set') && window.composerRequests().length === 9`)).toBe(true)
+
       await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
       await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
-      await Bun.write(new URL(`../../../.cache/tmp/composer-goal-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       expect(await page.evaluate<boolean>(`(() => { const rect=document.querySelector('.session-status__goal-popover').getBoundingClientRect(); return rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight })()`)).toBe(true)
       await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship the next release")
       await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.goal.set", input: { goal: "Ship the next release" } })
+      expect(await lastRequest()).toEqual({ operation: "session.goal.set", input: { goal: "Ship the next release" } })
       await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
       expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent`)).toContain("Ship the next release")
       await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
-      expect(await page.evaluate<unknown>(`window.composerRequests().at(-1)`)).toEqual({ operation: "session.goal.stop", input: { goal: null } })
+      expect(await lastRequest()).toEqual({ operation: "session.goal.stop", input: { goal: null } })
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
     } finally { await page.close() }
   }
+}, 60_000)
+
+test("the Autonomous dialog shows inherited authority with its source and never reads Manual for it", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    const trigger = `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger')`
+    await wait(page, `${trigger} !== null`)
+    await page.evaluate(`window.composerSetModes({ permissions: 'manual', guardrails: 'manual', answers: 'manual' }, { permissions: 'ses_parent', answers: 'ses_root' }, { permissions: 'auto', guardrails: 'manual', answers: 'yolo' })`)
+    await wait(page, `${trigger}.getAttribute('aria-label') === 'Autonomous: Permissions Auto, Guardrails Manual, Answers YOLO'`)
+    await page.evaluate(`${trigger}.click()`)
+    await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
+    const rows = await page.evaluate<string[]>(`[...document.querySelectorAll('.autonomous__row')].map(row => row.getAttribute('aria-label') + '|' + row.querySelector('.autonomous__value').textContent + '|' + [...row.querySelectorAll('.autonomous__source')].map(item => item.textContent).join(';'))`)
+    expect(rows).toEqual([
+      "Permissions: Auto, inherited from ses_parent|Auto|Inherited from ses_parent;This Session: Manual",
+      "Guardrails: Manual|Manual|",
+      "Answers: YOLO, inherited from ses_root|YOLO|Inherited from ses_root;This Session: Manual",
+    ])
+    await press(page, keys.one)
+    await wait(page, `document.querySelector('.autonomous [role="status"]')?.textContent === "This Session's categories set to Manual; in effect Permissions Auto (inherited from ses_parent), Answers YOLO (inherited from ses_root)"`)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.autonomous__value')].map(item => item.textContent)`)).toEqual(["Auto", "Manual", "YOLO"])
+  } finally { await page.close() }
+}, 30_000)
+
+test("the Autonomous dialog locks while a change is sending, keeps a failed or unknown change visible, and locks offline", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    const trigger = `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger')`
+    await wait(page, `${trigger} !== null`)
+    await page.evaluate(`${trigger}.click()`)
+    await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
+    const locked = `[...document.querySelectorAll('dialog.overlay--autonomous .autonomous button')].every(button => button.disabled)`
+    const unlocked = `[...document.querySelectorAll('dialog.overlay--autonomous .autonomous button')].every(button => !button.disabled)`
+    expect(await page.evaluate<boolean>(unlocked)).toBe(true)
+    await page.evaluate(`window.composerSetAutonomyMutation('sending')`)
+    await wait(page, `document.querySelector('.autonomous').getAttribute('aria-busy') === 'true'`)
+    expect(await page.evaluate<boolean>(locked)).toBe(true)
+    await press(page, keys.three)
+    expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(0)
+    await page.evaluate(`window.composerSetAutonomyMutation('unknown')`)
+    await wait(page, `document.querySelector('.autonomous [role="alert"]')?.textContent === 'Outcome unknown: Request timed out. Retry only if you want to send it again.'`)
+    expect(await page.evaluate<boolean>(unlocked)).toBe(true)
+    await page.evaluate(`window.composerSetAutonomyMutation('failed')`)
+    await wait(page, `document.querySelector('.autonomous [role="alert"]')?.textContent === 'Denied by policy'`)
+    expect(await page.evaluate<number>(`window.composerRequests().length`)).toBe(0)
+    await page.evaluate(`window.composerPredictionTransport(false)`)
+    await wait(page, `document.querySelector('.autonomous__offline') !== null`)
+    expect(await page.evaluate<boolean>(locked)).toBe(true)
+    expect(await page.evaluate<string>(`document.querySelector('.autonomous__offline').textContent`)).toBe("Reconnect to change autonomy.")
+  } finally { await page.close() }
+}, 30_000)
+
+test("the Autonomous dialog closes when the Session changes", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
+    await wait(page, `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__autonomous-trigger').click()`)
+    await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
+    await page.evaluate(`window.composerSwitchSession()`)
+    await wait(page, `document.querySelector('dialog.overlay--autonomous') === null`)
+  } finally { await page.close() }
 }, 30_000)
 
 test("Goal is visibly off after completion and other terminal states while its control remains reachable", async () => {
@@ -452,20 +522,20 @@ test("Goal is visibly off after completion and other terminal states while its c
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetGoalStatus('active')`)
       await Bun.sleep(600)
       const settle = () => page.evaluate(`Promise.all(document.querySelector('.mini-composer__mount .session-status__goal-trigger').getAnimations().map(animation => animation.finished.catch(() => {})))`)
-      const measure = async () => { await settle(); return page.evaluate<{ name: string | null; color: string; background: string; yoloBackground: string; count: boolean; asymmetry: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), yolo=document.querySelector('.mini-composer__mount .session-status__yolo-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(), walker=document.createTreeWalker(button, NodeFilter.SHOW_TEXT), glyphs=[]; for (let node=walker.nextNode(); node; node=walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range=document.createRange(); range.selectNodeContents(node); glyphs.push(range.getBoundingClientRect()) } const left=Math.min(...glyphs.map(box => box.left)), right=Math.max(...glyphs.map(box => box.right)); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, yoloBackground:getComputedStyle(yolo).backgroundColor, count:button.querySelector('.session-status__goal-count') !== null, asymmetry:Math.abs((left - rect.left) - (rect.right - right)), height:rect.height, left:rect.left } })()`) }
+      const measure = async () => { await settle(); return page.evaluate<{ name: string | null; color: string; background: string; autonomousBackground: string; count: boolean; asymmetry: number; height: number; left: number }>(`(() => { const button=document.querySelector('.mini-composer__mount .session-status__goal-trigger'), autonomous=document.querySelector('.mini-composer__mount .session-status__autonomous-trigger'), style=getComputedStyle(button), rect=button.getBoundingClientRect(), walker=document.createTreeWalker(button, NodeFilter.SHOW_TEXT), glyphs=[]; for (let node=walker.nextNode(); node; node=walker.nextNode()) { if (!node.textContent.trim() || getComputedStyle(node.parentElement).visibility === 'hidden') continue; const range=document.createRange(); range.selectNodeContents(node); glyphs.push(range.getBoundingClientRect()) } const left=Math.min(...glyphs.map(box => box.left)), right=Math.max(...glyphs.map(box => box.right)); return { name:button.getAttribute('aria-label'), color:style.color, background:style.backgroundColor, autonomousBackground:getComputedStyle(autonomous).backgroundColor, count:button.querySelector('.session-status__goal-count') !== null, asymmetry:Math.abs((left - rect.left) - (rect.right - right)), height:rect.height, left:rect.left } })()`) }
       const active = await measure()
       expect(active.name).toBe("Goal active")
       expect(await page.evaluate<string>(`document.querySelector('.session-status__active-goal')?.textContent?.trim()`)).toBe("Goal active · Finish task")
       expect(active.count).toBe(true)
       expect(active.asymmetry).toBeLessThanOrEqual(1)
-      expect(active.background).toBe(active.yoloBackground)
+      expect(active.background).toBe(active.autonomousBackground)
       await Bun.write(new URL(`../../../.cache/tmp/composer-goal-active-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       for (const status of ["completed", "stopped", "exhausted", null] as const) {
         await page.evaluate(`window.composerSetGoalStatus(${JSON.stringify(status)})`)
         const off = await measure()
         expect(off.name).toBe("Goal off")
         expect(await page.evaluate<boolean>(`document.querySelector('.session-status__active-goal') === null`)).toBe(true)
-        expect(off.background).not.toBe(off.yoloBackground)
+        expect(off.background).not.toBe(off.autonomousBackground)
         expect(off.color).not.toBe(active.color)
         expect(off.count).toBe(false)
         expect(off.asymmetry).toBeLessThanOrEqual(1)
@@ -486,7 +556,7 @@ test("managed subagents keep a read-only context bar without autonomy actions", 
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&session_id=ses_child&device_id=dev_studio`)
     await wait(page, `document.querySelector('.subagent-bar') !== null`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar .session-status__yolo-trigger,.subagent-bar .session-status__goal-trigger') === null && [...document.querySelectorAll('.workspace__main .composer')].every((element) => element.getClientRects().length === 0 || element.closest('[inert]') !== null)`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar .session-status__autonomous-trigger,.subagent-bar .session-status__goal-trigger') === null && [...document.querySelectorAll('.workspace__main .composer')].every((element) => element.getClientRects().length === 0 || element.closest('[inert]') !== null)`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -503,13 +573,14 @@ test("a Session switch closes its autonomy picker without carrying a goal draft 
   } finally { await page.close() }
 }, 30_000)
 
-test("unreported Session autonomy does not appear as a level selection", async () => {
+test("unreported Session autonomy offers no Autonomous selection", async () => {
   const page = await browser!.openPage()
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
-    await wait(page, `document.querySelector('.mini-composer__mount .session-status__yolo-trigger') !== null`)
-    await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger')?.click(); window.composerClearAutonomy()`)
-    expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .session-status__yolo-trigger,.mini-composer__mount .session-status__goal-trigger,.session-status__popover') === null`)).toBe(true)
+    await wait(page, `document.querySelector('.mini-composer__mount .session-status__autonomous-trigger') !== null`)
+    await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__autonomous-trigger')?.click(); window.composerClearAutonomy()`)
+    await wait(page, `document.querySelector('dialog.overlay--autonomous') === null`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .session-status__autonomous-trigger,.mini-composer__mount .session-status__goal-trigger,.session-status__popover,dialog.overlay--autonomous') === null`)).toBe(true)
   } finally { await page.close() }
 }, 30_000)
 
@@ -521,9 +592,9 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
       const composer = ".workspace__main .mini-composer__mount"
-      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger')?.textContent?.includes('YOLO off') === true`)
+      await wait(page, `document.querySelector('${composer} .session-status__autonomous-trigger')?.getAttribute('aria-label') === 'Autonomous: Permissions Auto, Guardrails Auto, Answers Manual'`)
       expect(await page.evaluate<number>(`document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length`)).toBe(0)
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => chip.dataset.mode)`)).toEqual(["auto-permission", "auto-guardrail"])
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => chip.dataset.mode)`)).toEqual(["permissions", "guardrails"])
       await type(page, `${composer} textarea`, "/sle")
       await wait(page, `[...document.querySelectorAll('${composer} [role="option"]')].some(option => option.textContent.includes('/sleep'))`)
       const modes = () => page.evaluate<{ label: string; tone: string }[]>(`[...document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]')].map(chip => ({ label: chip.title, tone: [...chip.classList].find(name => name.startsWith('session-status__mode--')) ?? '' }))`)
@@ -539,14 +610,13 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       await wait(page, `document.querySelectorAll('${composer} .session-status__mode[data-mode="sleep"]').length === 1`)
       expect(await modes()).toEqual([{ label: "asleep", tone: "session-status__mode--on" }])
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('${composer} .session-status__mode')].every(chip => chip.getBoundingClientRect().right <= innerWidth)`)).toBe(true)
-      expect(await page.evaluate<string[]>(`(() => { const status = document.querySelector('${composer} .session-status'); const boxes = (selector, inside) => [...document.querySelectorAll(selector)].filter(el => status.contains(el) === inside && el.getClientRects().length > 0).map(el => [el, el.getBoundingClientRect()]); const others = boxes('${composer} :is(button,textarea,[role="slider"])', false); return boxes('${composer} :is(.session-status__mode,.session-status__yolo-trigger,.session-status__goal-trigger)', true).flatMap(([chip, a]) => others.filter(([, b]) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1).map(([other]) => (chip.title || chip.className) + ' overlaps ' + (other.getAttribute('aria-label') || other.className))) })()`)).toEqual([])
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => getComputedStyle(chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"})).display === 'none' ? '' : chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}).textContent)`)).toEqual(width === 390 ? ["AP", "AG", "Zz"] : ["auto-permission", "auto-guardrail", "asleep"])
+      expect(await page.evaluate<string[]>(`(() => { const status = document.querySelector('${composer} .session-status'); const boxes = (selector, inside) => [...document.querySelectorAll(selector)].filter(el => status.contains(el) === inside && el.getClientRects().length > 0).map(el => [el, el.getBoundingClientRect()]); const others = boxes('${composer} :is(button,textarea,[role="slider"])', false); return boxes('${composer} :is(.session-status__mode,.session-status__autonomous-trigger,.session-status__goal-trigger)', true).flatMap(([chip, a]) => others.filter(([, b]) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1).map(([other]) => (chip.title || chip.className) + ' overlaps ' + (other.getAttribute('aria-label') || other.className))) })()`)).toEqual([])
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => getComputedStyle(chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"})).display === 'none' ? '' : chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}).textContent)`)).toEqual(width === 390 ? ["P·A", "G·A", "Zz"] : ["Permissions Auto", "Guardrails Auto", "asleep"])
       await Bun.write(new URL(`../../../.cache/tmp/composer-asleep-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
-      await run("/auto-answer", "session.autonomy.set", { autoAnswer: true })
-      await wait(page, `document.querySelectorAll('${composer} .session-status__mode').length === 4`)
+      await wait(page, `document.querySelectorAll('${composer} .session-status__mode').length === 3`)
       if (width === 390) {
         const metadata = await page.evaluate<{ modes: string[]; readable: boolean; contained: boolean }>(`(() => { const root = document.querySelector('${composer}'), cluster = root.querySelector('.session-status__modes'), box = cluster.getBoundingClientRect(), goal = root.querySelector('.session-status__goal-trigger').getBoundingClientRect(), attach = root.querySelector('.composer__attach').getBoundingClientRect(), chips = [...cluster.querySelectorAll('.session-status__mode')]; return { modes: chips.map(chip => chip.dataset.mode), readable: chips.every(chip => { const range = document.createRange(); range.selectNodeContents(chip.querySelector('.session-status__mode-compact')); const text = range.getBoundingClientRect(), bounds = chip.getBoundingClientRect(); return text.width > 0 && text.left >= bounds.left - 0.5 && text.right <= bounds.right + 0.5 }), contained: box.left >= goal.right && box.right <= attach.left && box.height <= goal.height }; })()`)
-        expect(metadata).toEqual({ modes: ["auto-permission", "auto-guardrail", "auto-answer", "sleep"], readable: true, contained: true })
+        expect(metadata).toEqual({ modes: ["permissions", "guardrails", "sleep"], readable: true, contained: true })
       }
       await run("/keep-awake", "machine.keepAwake.set", { enabled: true })
       await run("/wake", "session.autonomy.set", { sleep: false })
@@ -556,10 +626,13 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       await page.evaluate(`document.querySelector('${composer} button[aria-label="Send prompt"]')?.click()`)
       await wait(page, `document.querySelector('${composer}')?.textContent?.includes('Use /sleep without arguments.') === true`)
       expect(await page.evaluate<boolean>(`window.remoteMutationReport().every(item => item.operation !== 'session.prompt')`)).toBe(true)
-      await page.evaluate(`document.querySelector('${composer} .session-status__yolo-trigger')?.click()`)
-      await page.evaluate(`[...document.querySelectorAll('.session-status__auto-answer')].find(row => row.querySelector('strong')?.textContent === 'YOLO')?.querySelector('input[type="checkbox"]')?.click()`)
-      await wait(page, `document.querySelector('${composer} .session-status__yolo-trigger .session-status__yolo-full')?.textContent === 'YOLO on'`)
-      expect(await page.evaluate<unknown>(`window.remoteMutationReport().filter(item => item.operation === 'session.autonomy.set').at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
+      await type(page, `${composer} textarea`, "/autonomous")
+      await page.evaluate(`document.querySelector('${composer} button[aria-label="Send prompt"]')?.click()`)
+      await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
+      await press(page, keys.two)
+      await wait(page, `document.querySelector('${composer} .session-status__autonomous-trigger .session-status__autonomous-full')?.textContent === 'Autonomous YOLO'`)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().filter(item => item.operation === 'session.autonomy.set').at(-1)`)).toEqual({ operation: "session.autonomy.set", input: { permissions: "yolo", guardrails: "yolo", answers: "yolo" } })
+      expect(await page.evaluate<boolean>(`window.remoteMutationReport().every(item => item.operation !== 'session.prompt')`)).toBe(true)
     } finally { await page.close() }
   }
 
@@ -573,37 +646,24 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
   } finally { await held.close() }
 }, 120_000)
 
-test("a Session with auto-guardrail on whose root lacks ordinary-review authority shows routine reviews asking", async () => {
-  const page = await browser!.openPage()
-  try {
-    await page.setViewport(390, 844)
-    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&ordinaryReviewsAuto=0`)
-    await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger')?.textContent?.includes('YOLO off') === true`)
-    await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
-    await wait(page, `document.querySelector('.session-status__decider') !== null`)
-    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.session-status__decider')].map(row => row.querySelector('dt')?.textContent + '=' + row.querySelector('dd')?.textContent)`))
-      .toEqual(["YOLO=Off", "Auto-permission=On", "Auto-guardrail=On", "Tools=Auto-approved", "Routine reviews=Ask you", "Hard reviews=Ask you", "Auto-answer=Off"])
-    expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
-  } finally { await page.close() }
-}, 30_000)
-
 test("Conversation autonomy controls issue Session-scoped relay operations", async () => {
   for (const width of [1440, 390]) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width, 844)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat`)
-      await wait(page, `document.querySelector('.workspace__main .session-status__yolo-trigger') !== null`)
-      await page.evaluate(`document.querySelector('.workspace__main .session-status__yolo-trigger')?.click()`)
-      const switchFor = (label: string) => `[...document.querySelectorAll('.session-status__auto-answer')].find(row => row.querySelector('strong')?.textContent === ${JSON.stringify(label)})?.querySelector('input[type="checkbox"]')`
-      await page.evaluate(`${switchFor("YOLO")}?.click()`)
+      await wait(page, `document.querySelector('.workspace__main .session-status__autonomous-trigger') !== null`)
+      await page.evaluate(`document.querySelector('.workspace__main .session-status__autonomous-trigger')?.click()`)
+      await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
+      await press(page, keys.right)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set')`)
-      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.autonomy.set')`)).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
-      await wait(page, `${switchFor("YOLO")}?.checked === true`)
-      expect(await page.evaluate<boolean[]>(`[...document.querySelectorAll('.session-status__yolo-popover input[type="checkbox"]')].map(input => input.checked)`)).toEqual([true, true, true, false])
-      await page.evaluate(`${switchFor("Auto-answer")}?.click()`)
-      await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set' && item.input?.autoAnswer === true)`)
-      await wait(page, `${switchFor("Auto-answer")}?.checked === true`)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(item => item.operation === 'session.autonomy.set')`)).toEqual({ operation: "session.autonomy.set", input: { permissions: "manual" } })
+      await wait(page, `document.querySelector('#autonomous-row-permissions .autonomous__value')?.textContent === 'Manual'`)
+      await press(page, keys.three)
+      await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.autonomy.set' && Object.keys(item.input).length === 3)`)
+      await wait(page, `['permissions','guardrails','answers'].every(category => document.querySelector('#autonomous-row-' + category + ' .autonomous__value')?.textContent === 'Auto')`)
+      await page.pressEscape()
+      await wait(page, `document.querySelector('dialog.overlay--autonomous') === null`)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
       await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
       await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship a reliable Session")
@@ -1200,32 +1260,16 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
     await wait(page, `window.composerRequests().length >= 9`)
     expect((await operations())[8]).toMatchObject({ operation: "session.prompt", input: { text: "/Users/me/file.ts explain" } })
 
-    await type(page, input, "/yolo on")
+    await type(page, input, "/autonomous")
     await send()
-    await wait(page, `window.composerRequests().length >= 10`)
-    expect((await operations())[9]).toEqual({ operation: "session.autonomy.set", input: { yolo: true } })
-    await type(page, input, "/yolo")
+    await wait(page, `document.querySelector('dialog.overlay--autonomous[open]') !== null`)
+    expect(await page.evaluate<string>(`document.querySelector(${JSON.stringify(input)})?.value`)).toBe("")
+    await page.pressEscape()
+    await wait(page, `document.querySelector('dialog.overlay--autonomous') === null`)
+    await type(page, input, "/autonomous now")
     await send()
-    await wait(page, `window.composerRequests().length >= 11`)
-    expect((await operations())[10]).toEqual({ operation: "session.autonomy.set", input: { yolo: false } })
-    for (const numeric of ["/yolo 2", "/yolo maybe"]) {
-      await type(page, input, numeric)
-      await send()
-      await wait(page, `document.querySelector('.mini-composer__mount')?.textContent?.includes('Use /yolo, /yolo on, or /yolo off.') === true`)
-      expect((await operations())).toHaveLength(11)
-    }
-    await type(page, input, "/auto-permission off")
-    await send()
-    await wait(page, `window.composerRequests().length >= 12`)
-    expect((await operations())[11]).toEqual({ operation: "session.autonomy.set", input: { autoPermission: false } })
-    await type(page, input, "/auto-guardrail")
-    await send()
-    await wait(page, `window.composerRequests().length >= 13`)
-    expect((await operations())[12]).toEqual({ operation: "session.autonomy.set", input: { autoGuardrail: true } })
-    await type(page, input, "/auto-answer")
-    await send()
-    await wait(page, `window.composerRequests().length >= 14`)
-    expect((await operations())[13]).toEqual({ operation: "session.autonomy.set", input: { autoAnswer: true } })
+    await wait(page, `document.querySelector('.mini-composer__mount')?.textContent?.includes('Use /autonomous without arguments.') === true`)
+    expect((await operations())).toHaveLength(9)
     expect((await operations()).filter((item) => item.operation === "session.prompt")).toHaveLength(6)
 
     await type(page, ".new-session-composer textarea", "/go")
@@ -1239,7 +1283,7 @@ test("selected slash, dollar, at and hash suggestions dispatch their TUI-equival
 
 test("setting a goal from the composer never blocks it and shows one stable, announced in-flight indicator", async () => {
   const mount = ".workspace__main .mini-composer__mount"
-  const stable = [".composer", ".composer__input", ".mini-composer__send", ".composer__attach", ".composer__delivery-toggle", ".session-status__yolo-trigger", ".session-status__goal-trigger"]
+  const stable = [".composer", ".composer__input", ".mini-composer__send", ".composer__attach", ".composer__delivery-toggle", ".session-status__autonomous-trigger", ".session-status__goal-trigger"]
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const reduced of [false, true]) {
     const page = await browser!.openPage()
     try {
@@ -1254,15 +1298,15 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       const modeBoxes = `[...document.querySelectorAll('${mount} .session-status__mode')].map(chip => { const box = chip.getBoundingClientRect(), span = chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}), range = document.createRange(); range.selectNodeContents(span); const text = ${width === 390 ? "range.getBoundingClientRect()" : "span.getBoundingClientRect()"}; return { mode: chip.dataset.mode, readable: ${width === 390 ? "text.width > 0" : "box.width >= 20"} && text.left >= box.left - 0.5 && text.right <= box.right + 0.5 } })`
       const idle = await geometry()
       expect(idle.every((box) => box !== null)).toBe(true)
-      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "auto-permission", readable: true }, { mode: "auto-guardrail", readable: true }])
+      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
       const send = `document.querySelector('${mount} button[aria-label="Send prompt"]')?.click()`
       await type(page, `${mount} textarea`, "/goal ship it safely")
       await page.evaluate(send)
       await wait(page, `window.remoteMutationReport().some(item => item.operation === 'session.goal.set')`)
       await wait(page, `document.querySelector('${mount} .session-status__goal-setting') !== null`)
 
-      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "auto-permission", readable: true }, { mode: "auto-guardrail", readable: true }])
-      const indicatorBounds = await page.evaluate<{ insideComposer: boolean; insideGoalTrigger: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${mount} ${chipSelector}'), composer = document.querySelector('${mount} .composer'), goal = document.querySelector('${mount} .session-status__goal-trigger'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), goalBox = goal.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__yolo-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, insideGoalTrigger: goal.contains(chip) && chipBox.left >= goalBox.left && chipBox.right <= goalBox.right && chipBox.top >= goalBox.top && chipBox.bottom <= goalBox.bottom, overlaps: controls.filter(selector => { const control = document.querySelector('${mount} ' + selector); if (control.contains(chip)) return false; const box = control.getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
+      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
+      const indicatorBounds = await page.evaluate<{ insideComposer: boolean; insideGoalTrigger: boolean; overlaps: string[] }>(`(() => { const chip = document.querySelector('${mount} ${chipSelector}'), composer = document.querySelector('${mount} .composer'), goal = document.querySelector('${mount} .session-status__goal-trigger'), chipBox = chip.getBoundingClientRect(), composerBox = composer.getBoundingClientRect(), goalBox = goal.getBoundingClientRect(), controls = ['.composer__attach', '.composer__delivery-toggle', '.mini-composer__send', '.session-status__autonomous-trigger', '.session-status__goal-trigger']; return { insideComposer: chipBox.left >= composerBox.left && chipBox.right <= composerBox.right && chipBox.top >= composerBox.top && chipBox.bottom <= composerBox.bottom, insideGoalTrigger: goal.contains(chip) && chipBox.left >= goalBox.left && chipBox.right <= goalBox.right && chipBox.top >= goalBox.top && chipBox.bottom <= goalBox.bottom, overlaps: controls.filter(selector => { const control = document.querySelector('${mount} ' + selector); if (control.contains(chip)) return false; const box = control.getBoundingClientRect(); return chipBox.left < box.right && chipBox.right > box.left && chipBox.top < box.bottom && chipBox.bottom > box.top }) } })()`)
       expect(indicatorBounds).toEqual({ insideComposer: true, insideGoalTrigger: width === 390, overlaps: [] })
 
       const pending = await page.evaluate<{ enabled: boolean; draft: string; busy: string | null; name: string | null; chip: string; chipHidden: string | null; dots: number; announced: string; dotAnimation: string; chipAnimation: string }>(`(() => { const chip = document.querySelector('${mount} ${chipSelector}'), trigger = document.querySelector('${mount} .session-status__goal-trigger'), field = document.querySelector('${mount} textarea'); return { enabled: !field.disabled, draft: field.value, busy: trigger.getAttribute('aria-busy'), name: trigger.getAttribute('aria-label'), chip: chip.innerText.trim(), chipHidden: chip.getAttribute('aria-hidden'), dots: chip.querySelectorAll('.transcript-dot-trail').length, announced: document.querySelector('${mount} .session-status__announce[role="status"]')?.textContent?.trim() ?? '', dotAnimation: chip.querySelector('.transcript-dot-trail span') ? getComputedStyle(chip.querySelector('.transcript-dot-trail span')).animationName : 'missing', chipAnimation: getComputedStyle(chip).animationName } })()`)
@@ -1270,7 +1314,7 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       expect(pending.dotAnimation === "none").toBe(reduced)
       expect(pending.chipAnimation === "none").toBe(reduced)
       expect(await geometry()).toEqual(idle)
-      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "auto-permission", readable: true }, { mode: "auto-guardrail", readable: true }])
+      expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
       if (!reduced) await Bun.sleep(300)
       if (!reduced) await Bun.write(new URL(`../../../.cache/tmp/composer-goal-setting-${width}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))

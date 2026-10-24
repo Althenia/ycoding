@@ -167,7 +167,7 @@ async function boot(options: { readonly hold?: Promise<void> } = {}) {
   const sessionID = "ses_yolo_continuation"
   await createSession(server, sessionID, directory, { providerID: standIn.providerID, id: standIn.modelID })
   const events = await collectEvents(server)
-  const autonomy = await server.request(`/api/session/${sessionID}/autonomy`, { method: "PUT", headers: json, body: JSON.stringify({ yolo: true }) })
+  const autonomy = await server.request(`/api/session/${sessionID}/autonomy`, { method: "PUT", headers: json, body: JSON.stringify({ permissions: "yolo", guardrails: "yolo", answers: "yolo" }) })
   expect(autonomy.status, await autonomy.clone().text()).toBe(200)
   const send = async (id: string, text: string, delivery?: "queue" | "steer") => {
     const response = await server.request(`/api/session/${sessionID}/prompt`, {

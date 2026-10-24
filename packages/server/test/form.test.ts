@@ -26,7 +26,7 @@ const it = testEffect(AppNodeBuilder.build(Form.node, [
     new Config.Document({ type: "document", info: new Config.Info({}) }),
   ]) })],
   [SessionAutonomy.node, Layer.mock(SessionAutonomy.Service, {
-    isAsleep: () => Effect.succeed(false), canAutoAnswer: () => Effect.succeed(false),
+    isAsleep: () => Effect.succeed(false), decisionMode: () => Effect.succeed("manual"),
   })],
   [Decision.node, Layer.mock(Decision.Service, { evaluate: () => Effect.die("Human forms do not use decisions") })],
 ]))

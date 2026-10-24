@@ -13,6 +13,7 @@ import { onMount } from "solid-js"
 import { ThemeProvider } from "../src/theme/theme-store"
 import { App } from "../src/app"
 import { pwaInstall } from "../src/pwa/install"
+import { readAutonomyMode, type AutonomyMode, type AutonomyModes } from "../src/remote/autonomy"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport } from "../src/remote/transport"
 import { OFFICE_PREFERENCES_KEY, WORKSPACE_PRESENTATION_KEY } from "../src/remote/office/storage"
@@ -706,10 +707,12 @@ function createFixtureStore(): Fixture {
     return { status: "failed", error: { code: "unknown_operation", message: "Unsupported coordination operation" } }
   }
   Object.assign(window, { coordinationBump: (groupID: string) => { const group = coordinationGroups.find((entry) => entry.id === groupID); if (group) group.revision += 1 } })
-  let currentYolo = remoteScenarioData?.autonomy.yolo === true
-  let currentAutoPermission = remoteScenarioData === undefined ? true : remoteScenarioData.autonomy.autoPermission === true
-  let currentAutoGuardrail = remoteScenarioData === undefined ? true : remoteScenarioData.autonomy.autoGuardrail === true
-  let currentAutoAnswer = accountParams.get("autoAnswer") === "1"
+  const readMode = (value: unknown, fallback: AutonomyMode) => readAutonomyMode(value) ?? fallback
+  let currentModes: AutonomyModes = {
+    permissions: readMode(remoteScenarioData?.autonomy.permissions, remoteScenarioData === undefined ? "auto" : "manual"),
+    guardrails: readMode(remoteScenarioData?.autonomy.guardrails, remoteScenarioData === undefined ? "auto" : "manual"),
+    answers: readMode(remoteScenarioData?.autonomy.answers, readMode(accountParams.get("answers"), "manual")),
+  }
   let sleep: Readonly<Record<string, never>> | undefined = accountParams.get("asleep") === "1" ? {} : undefined
   let keepAwakeManual = accountParams.get("keepAwake") === "on"
   let keepAwakeOverride: { state: "off" | "on" | "error" | "unsupported"; lid?: "off" | "on" | "held" | "error" | "unsupported"; sleepHold?: boolean; manual?: boolean; message?: string } | undefined
@@ -743,8 +746,7 @@ function createFixtureStore(): Fixture {
       payload: { type: "recovery", tools: [{ messageID: "msg_restart", callID: "call_<img src=x onerror=window.recoveryEscape=1>", name: "shell<b>" }, { messageID: "msg_restart", callID: "call_2", name: "edit" }] } },
   ] : []
   const autonomyExtras = () => sleep === undefined ? {} : { sleep }
-  const sessionFlags = () => ({ yolo: currentYolo, autoPermission: currentAutoPermission, autoGuardrail: currentAutoGuardrail, autoAnswer: currentAutoAnswer })
-  const autonomyResponse = (data: Record<string, unknown>, flags: ReturnType<typeof sessionFlags> = sessionFlags()): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, ...flags, effective: { yolo: flags.yolo, permissionsAuto: flags.autoPermission, permissionModelReviews: accountParams.get("permissionModelReviews") === "1", asleep: sleep !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off", ordinaryReviewsAuto: accountParams.has("ordinaryReviewsAuto") ? accountParams.get("ordinaryReviewsAuto") === "1" : flags.autoGuardrail && sleep === undefined && accountParams.get("guardrails") !== "off", modelReviews: accountParams.get("modelReviews") === "1", hardModelReviews: accountParams.get("hardModelReviews") === "1" } } } })
+  const autonomyResponse = (data: Record<string, unknown>, modes: AutonomyModes = currentModes): RemoteRequestOutcome => ({ status: "ok", value: { data: { ...data, ...modes, effective: { ...modes, inherited: {}, asleep: sleep !== undefined, guardrailsEnabled: accountParams.get("guardrails") !== "off" } } } })
   const operationCounts = new Map<string, number>()
   const workspaces = [
     { id: "workspace_fixture", projectID: "prj_remote", directory: "/workspace/ycoding", name: "YCoding" },
@@ -1091,7 +1093,7 @@ function createFixtureStore(): Fixture {
       }
     }
     if (operation === "session.autonomy.get") {
-      if (createdSessions.has(targetSessionID)) return autonomyResponse({ mode: "normal" }, { yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
+      if (createdSessions.has(targetSessionID)) return autonomyResponse({ mode: "normal" }, { permissions: "manual", guardrails: "manual", answers: "manual" })
       return autonomyResponse(remoteScenarioData?.autonomy ?? {
             mode: "normal",
             ...(accountParams.get("goal") === "none" ? {} : { goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 } }),
@@ -1103,8 +1105,8 @@ function createFixtureStore(): Fixture {
     if (operation === "session.guardrail.status") return { status: "ok", value: { data: {
       rootSessionID: sessionID, profile: "default", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [],
       decisions: accountParams.get("grades") === "1" ? [
-        { sessionID, requestID: "grq_graded", created: 4, reply: "always", choice: "approve_all", confidence: 0.934567, grades: fixtureGrades },
-        { sessionID, requestID: "grq_legacy", created: 5, reply: "reject", choice: "reject", confidence: 0.71 },
+        { sessionID, requestID: "grq_graded", created: ago(30), reply: "reject", choice: "approve_all", confidence: 0.934567, grades: fixtureGrades },
+        { sessionID, requestID: "grq_legacy", created: ago(29), reply: "reject", choice: "reject", confidence: 0.71 },
       ] : [],
     } } }
     if (operation === "session.form.list" && readingDecision && targetSessionID === sessionID) return { status: "ok", value: [readingForm] }
@@ -1150,10 +1152,7 @@ function createFixtureStore(): Fixture {
       : { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
     if (operation === "session.shell.output") return shellOutputPage(input)
     if (operation === "session.autonomy.set") {
-      if (typeof input?.yolo === "boolean") currentYolo = input.yolo
-      if (typeof input?.autoPermission === "boolean") currentAutoPermission = input.autoPermission
-      if (typeof input?.autoGuardrail === "boolean") currentAutoGuardrail = input.autoGuardrail
-      if (typeof input?.autoAnswer === "boolean") currentAutoAnswer = input.autoAnswer
+      currentModes = { permissions: readMode(input?.permissions, currentModes.permissions), guardrails: readMode(input?.guardrails, currentModes.guardrails), answers: readMode(input?.answers, currentModes.answers) }
       if (input?.sleep === true) sleep = {}
       if (input?.sleep === false) sleep = undefined
       return autonomyResponse({ mode: "normal", ...autonomyExtras() })
@@ -1217,7 +1216,7 @@ function createFixtureStore(): Fixture {
       { id: "msg_laptop_assistant", type: "assistant", agent: "god", model, content: [{ type: "text", text: "The laptop release build passed." }], time: { created: ago(18), completed: ago(17) } },
     ], watermark: { type: "log.synced", aggregateID: laptopSession.id, seq: 0 } } }
     if (operation === "session.subagent.list") return { status: "ok", value: { data: [], summary: { total: 0 }, cursor: {} } }
-    if (operation === "session.autonomy.get") return autonomyResponse({ mode: "normal" }, { yolo: false, autoPermission: false, autoGuardrail: false, autoAnswer: false })
+    if (operation === "session.autonomy.get") return autonomyResponse({ mode: "normal" }, { permissions: "manual", guardrails: "manual", answers: "manual" })
     if (targetSessionID !== undefined && operation.endsWith(".list")) return { status: "ok", value: { data: [], cursor: {} } }
     return outcome(operation, input, targetSessionID)
   }

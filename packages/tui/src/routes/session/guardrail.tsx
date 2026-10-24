@@ -1,4 +1,4 @@
-import type { GuardrailRequestListOutput } from "@ycoding-ai/client"
+import type { GuardrailRequestListOutput, SessionAutonomyDecisionMode } from "@ycoding-ai/client"
 import { createSignal, For, Show } from "solid-js"
 import { useClient } from "../../context/client"
 import { useTheme } from "../../context/theme"
@@ -29,7 +29,7 @@ export function guardrailPresentation(request: GuardrailRequest) {
   }
 }
 
-export function GuardrailPrompt(props: { request: GuardrailRequest }) {
+export function GuardrailPrompt(props: { request: GuardrailRequest; guardrailsMode?: SessionAutonomyDecisionMode }) {
   const client = useClient()
   const toast = useToast()
   const { theme } = useTheme().contextual("elevated")
@@ -56,6 +56,7 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
     <Prompt
       kind="guardrail"
       hardReview={props.request.hardReview}
+      guardrailsMode={props.guardrailsMode}
       title={presentation().title}
       semanticLabel={`guardrail · ${presentation().reason}`}
       instance={props.request.id}

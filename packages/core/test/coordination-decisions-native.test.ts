@@ -75,19 +75,18 @@ const setup = Effect.gen(function* () {
     .onConflictDoNothing()
     .run()
     .pipe(Effect.orDie)
-  yield* autonomy.setMode({ sessionID, mode: "normal" })
+  yield* autonomy.set({ sessionID, answers: "yolo" })
 })
 
 describe("native coordinator Form reconsideration", () => {
-  it.effect("settles a coordinator-selected valid answer with source and rationale while autonomy flags stay off", () =>
+  it.effect("settles a coordinator-selected valid answer under YOLO answers with source and rationale and unchanged autonomy", () =>
     Effect.gen(function* () {
       yield* setup
       const service = yield* Form.Service
       const autonomy = yield* SessionAutonomy.Service
       const events = yield* EventRuntime.Service
       const before = yield* autonomy.snapshot(sessionID)
-      expect(before.state.yolo).toBe(false)
-      expect(before.state.autoAnswer).toBeUndefined()
+      expect(before.state.answers).toBe("yolo")
       const replied: unknown[] = []
       const unsubscribe = yield* events.listen((event) =>
         Effect.sync(() => {
@@ -166,6 +165,8 @@ describe("native coordinator Form reconsideration", () => {
   it.effect("escalation hops append bounded reasons to the pending form, publish a refresh, and survive sleep deferral", () =>
     Effect.gen(function* () {
       yield* setup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, answers: "manual" })
       const service = yield* Form.Service
       const events = yield* EventRuntime.Service
       const refreshed: unknown[] = []
@@ -202,6 +203,84 @@ describe("native coordinator Form reconsideration", () => {
         outcome: "escalated", reason: "deferred-to-review-box", reviewItemID: deferred[0]!.itemID, coordinationEscalation: chain,
       })
       expect(refreshed).toHaveLength(2)
+    }),
+  )
+
+  const reconsiderForm = (id: Form.ID, answer?: Form.Answer) =>
+    Effect.gen(function* () {
+      const service = yield* Form.Service
+      const snapshot = yield* service.snapshot(id)
+      return yield* service.reconsider({
+        id,
+        fingerprint: snapshot!.fingerprint,
+        actor: "coordinator",
+        source: { coordinatorSessionID: "ses_coord", groupID: "cgrp_one", rationale: "Assigned branch in the task." },
+        ...(answer === undefined ? {} : { answer, confidence: 0.95 }),
+        validate: () => Effect.succeed(true),
+      })
+    })
+
+  it.effect("Manual answers keep a coordinator answer and native reconsideration human-only", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, answers: "manual" })
+      const service = yield* Form.Service
+      const recommended = {
+        ...form,
+        id: Form.ID.create("frm_coord_manual"),
+        fields: [{ key: "branch", type: "string", required: true, default: "safe", options: [{ value: "safe", label: "Safe (Recommended)" }] }],
+      } satisfies Form.CreateInput
+      yield* service.create(recommended)
+      expect(yield* reconsiderForm(recommended.id, { branch: "safe" })).toMatchObject({
+        outcome: "escalated",
+        settled: false,
+        reason: "human-only:manual-answers",
+      })
+      expect(yield* reconsiderForm(recommended.id)).toMatchObject({
+        outcome: "escalated",
+        settled: false,
+        reason: "human-only:manual-answers",
+      })
+      expect(yield* service.state(recommended.id)).toEqual({ status: "pending" })
+    }),
+  )
+
+  it.effect("Auto answers settle only the deterministic answer and reject coordinator-chosen values", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, answers: "auto" })
+      const service = yield* Form.Service
+      const text = { ...form, id: Form.ID.create("frm_coord_auto_text"), fields: [{ key: "note", type: "string", required: true }] } satisfies Form.CreateInput
+      yield* service.create(text)
+      expect(yield* reconsiderForm(text.id, { note: "coordinator text" })).toMatchObject({ outcome: "escalated", settled: false })
+      expect(yield* reconsiderForm(text.id)).toMatchObject({ outcome: "escalated", settled: false })
+      expect(yield* service.state(text.id)).toEqual({ status: "pending" })
+
+      const choice = {
+        ...form,
+        id: Form.ID.create("frm_coord_auto_choice"),
+        fields: [
+          {
+            key: "branch",
+            type: "string",
+            required: true,
+            options: [
+              { value: "safe", label: "Safe (Recommended)" },
+              { value: "fast", label: "Fast" },
+            ],
+          },
+        ],
+      } satisfies Form.CreateInput
+      yield* service.create(choice)
+      expect(yield* reconsiderForm(choice.id, { branch: "fast" })).toMatchObject({
+        outcome: "escalated",
+        settled: false,
+        reason: "answer-not-deterministic",
+      })
+      expect(yield* reconsiderForm(choice.id)).toMatchObject({ outcome: "allowed", settled: true, via: "auto-answer" })
+      expect(yield* service.state(choice.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
     }),
   )
 })
@@ -417,15 +496,14 @@ describe("native coordinator Permission reconsideration", () => {
     )
 
   const allowed = nativeHarness([{ escalate: 0.95 }, { allow: 0.95 }])
-  allowed.it.effect("settles a pending ask through the native assessment with coordinator attribution and unchanged autonomy", () =>
+  allowed.it.effect("settles a pending ask through the YOLO permission evaluator with coordinator attribution and unchanged autonomy", () =>
     Effect.gen(function* () {
       yield* nativeSetup
       const service = yield* Permission.Service
       const autonomy = yield* SessionAutonomy.Service
       const captured = yield* captureNativeEvents()
+      yield* autonomy.set({ sessionID: nativeSessionID, permissions: "yolo" })
       const before = yield* autonomy.snapshot(nativeSessionID)
-      expect(before.state.yolo).toBe(false)
-      expect(before.state.autoPermission).toBeUndefined()
 
       const running = yield* service
         .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"] })
@@ -456,7 +534,7 @@ describe("native coordinator Permission reconsideration", () => {
         source: coordinatorSource,
         validate: () => Effect.succeed(true),
       })
-      expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "baseline" })
+      expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "yolo" })
       expect(Exit.isSuccess(yield* Fiber.await(running))).toBe(true)
       expect(allowed.choices).toHaveLength(2)
       const allowEvents = captured.assessed.filter((event) => event.outcome === "allow")
@@ -464,7 +542,7 @@ describe("native coordinator Permission reconsideration", () => {
         expect.objectContaining({
           requestID: pending[0]!.id,
           outcome: "allow",
-          via: "baseline",
+          via: "yolo",
           reply: "once",
           choice: "allow",
           actor: "coordinator",
@@ -489,7 +567,7 @@ describe("native coordinator Permission reconsideration", () => {
   )
 
   const denied = nativeHarness([{ escalate: 0.95 }])
-  denied.it.effect("a deny rule current at reconsideration settles denied under the native lock without a second helper call", () =>
+  denied.it.effect("a deny rule current at reconsideration settles a Manual ask denied under the native lock without a helper call", () =>
     Effect.gen(function* () {
       yield* nativeSetup
       const service = yield* Permission.Service
@@ -521,7 +599,7 @@ describe("native coordinator Permission reconsideration", () => {
       })
       expect(result).toMatchObject({ outcome: "denied", settled: true, via: "permission-rules" })
       expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
-      expect(denied.choices).toHaveLength(1)
+      expect(denied.choices).toHaveLength(0)
       expect(captured.assessed.filter((event) => event.outcome === "deny")).toEqual([
         expect.objectContaining({
           requestID: pending[0]!.id,
@@ -540,17 +618,88 @@ describe("native coordinator Permission reconsideration", () => {
   )
 })
 
+describe("native coordinator reconsideration under Manual and Auto", () => {
+  for (const mode of ["manual", "auto"] as const) {
+    const permission = nativeHarness([{ allow: 0.99 }])
+    permission.it.effect(`a ${mode} permission ask never reaches a model at reconsideration`, () =>
+      Effect.gen(function* () {
+        yield* nativeSetup
+        const service = yield* Permission.Service
+        const running = yield* service
+          .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], ...(mode === "auto" ? { requireHuman: true } : {}) })
+          .pipe(Effect.forkScoped)
+        for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+          yield* Effect.yieldNow
+        const pending = yield* service.forSession(nativeSessionID)
+        expect(pending).toHaveLength(1)
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.set({ sessionID: nativeSessionID, permissions: mode })
+        const snapshot = yield* service.snapshot(pending[0]!.id)
+        const result = yield* service.reconsider({
+          requestID: pending[0]!.id,
+          fingerprint: snapshot!.fingerprint,
+          actor: "coordinator",
+          source: coordinatorSource,
+          validate: () => Effect.succeed(true),
+        })
+        expect(result).toMatchObject({
+          outcome: "escalated",
+          settled: false,
+          reason: mode === "manual" ? "native-assessment-unavailable" : "human-only:request",
+        })
+        expect(permission.choices).toHaveLength(0)
+        yield* service.reply({ requestID: pending[0]!.id, reply: "reject" })
+        expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+      }),
+    )
+
+    const review = nativeHarness([{ allow: 0.99 }])
+    review.it.effect(`a ${mode} ordinary review is ${mode === "auto" ? "approved by rule" : "kept human-only"} at reconsideration without a model`, () =>
+      Effect.gen(function* () {
+        yield* nativeSetup
+        const service = yield* SessionGuardrail.Service
+        const running = yield* service
+          .assert({ sessionID: nativeSessionID, action: "file_mutation", resources: ["/outside/notes/today.md"], metadata: { operation: "write" } })
+          .pipe(Effect.forkScoped)
+        for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+          yield* Effect.yieldNow
+        const pending = yield* service.forSession(nativeSessionID)
+        expect(pending).toHaveLength(1)
+        const autonomy = yield* SessionAutonomy.Service
+        yield* autonomy.set({ sessionID: nativeSessionID, guardrails: mode })
+        const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
+        const result = yield* service.reconsider({
+          sessionID: nativeSessionID,
+          requestID: pending[0]!.id,
+          fingerprint: snapshot!.fingerprint,
+          actor: "coordinator",
+          source: coordinatorSource,
+          validate: () => Effect.succeed(true),
+        })
+        expect(review.choices).toHaveLength(0)
+        if (mode === "auto") {
+          expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "auto-guardrail" })
+          yield* (yield* Fiber.join(running)).release
+          return
+        }
+        expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "native-assessment-unavailable" })
+        yield* service.reply({ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" })
+        expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+      }),
+    )
+  }
+})
+
 describe("native coordinator Guardrail reconsideration", () => {
   const allowed = nativeHarness([{ escalate: 0.95 }, { allow: 0.95 }])
-  allowed.it.effect("settles an ordinary pending review through the native assessment with coordinator attribution and unchanged autonomy", () =>
+  allowed.it.effect("settles an ordinary pending review through the YOLO guardrail evaluator with coordinator attribution and unchanged autonomy", () =>
     Effect.gen(function* () {
       yield* nativeSetup
       const service = yield* SessionGuardrail.Service
       const autonomy = yield* SessionAutonomy.Service
       const captured = yield* captureNativeEvents()
+      yield* autonomy.set({ sessionID: nativeSessionID, guardrails: "yolo" })
       const before = yield* autonomy.snapshot(nativeSessionID)
-      expect(before.state.yolo).toBe(false)
-      expect(before.state.autoGuardrail).toBeUndefined()
 
       const running = yield* service
         .assert({
@@ -590,14 +739,14 @@ describe("native coordinator Guardrail reconsideration", () => {
         source: coordinatorSource,
         validate: () => Effect.succeed(true),
       })
-      expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "baseline" })
+      expect(result).toMatchObject({ outcome: "allowed", settled: true, via: "yolo" })
       yield* (yield* Fiber.join(running)).release
       expect(allowed.choices).toHaveLength(2)
       expect(captured.guardrailDecided).toEqual([
         expect.objectContaining({
           requestID: pending[0]!.id,
           reply: "once",
-          authority: "baseline",
+          authority: "yolo",
           choice: "allow",
           actor: "coordinator",
           coordinatorSessionID: coordinatorSource.coordinatorSessionID,
@@ -693,6 +842,8 @@ describe("native coordinator Permission decline and escalation", () => {
   declined.it.effect("a decline rejects the pending ask natively with coordinator audit and the rationale as member feedback", () =>
     Effect.gen(function* () {
       yield* nativeSetup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID: nativeSessionID, permissions: "yolo" })
       const service = yield* Permission.Service
       const captured = yield* captureNativeEvents()
       const running = yield* service
@@ -718,6 +869,35 @@ describe("native coordinator Permission decline and escalation", () => {
         }),
       ])
       expect(yield* service.forSession(nativeSessionID)).toEqual([])
+      expect(captured.permissionReplied).toEqual([{ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" }])
+    }),
+  )
+
+  const manualDecline = nativeHarness([{ allow: 0.99 }])
+  manualDecline.it.effect("a coordinator decline under Manual permissions escalates to the human without settling or a helper call", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* Permission.Service
+      const captured = yield* captureNativeEvents()
+      const running = yield* service
+        .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"] })
+        .pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      expect(pending).toHaveLength(1)
+      const snapshot = yield* service.snapshot(pending[0]!.id)
+      const result = yield* service.reconsider({
+        requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator", source: coordinatorSource,
+        decision: "decline", validate: () => Effect.succeed(true),
+      })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:manual-permissions" })
+      expect(manualDecline.choices).toHaveLength(0)
+      expect(captured.assessed).toEqual([])
+      expect(captured.permissionReplied).toEqual([])
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+      yield* service.reply({ requestID: pending[0]!.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
       expect(captured.permissionReplied).toEqual([{ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" }])
     }),
   )
@@ -805,6 +985,8 @@ describe("native coordinator Guardrail decline and escalation", () => {
   declined.it.effect("a decline rejects an ordinary review natively with coordinator audit and no model-incident escalation", () =>
     Effect.gen(function* () {
       yield* nativeSetup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID: nativeSessionID, guardrails: "yolo" })
       const service = yield* SessionGuardrail.Service
       const captured = yield* captureNativeEvents()
       const chain = yield* captureEscalation()
@@ -834,6 +1016,33 @@ describe("native coordinator Guardrail decline and escalation", () => {
       expect(captured.guardrailReplied).toEqual([expect.objectContaining({ requestID: pending[0]!.id, reply: "reject" })])
       expect(captured.guardrailReplied[0]).not.toHaveProperty("decidedBy")
       expect(chain.guardrailEscalated).toHaveLength(escalatedBefore)
+    }),
+  )
+
+  const manualReviewDecline = nativeHarness([{ allow: 0.99 }])
+  manualReviewDecline.it.effect("a coordinator decline under Manual guardrails escalates to the human without settling or a helper call", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* SessionGuardrail.Service
+      const captured = yield* captureNativeEvents()
+      const running = yield* service.assert(outside).pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      expect(pending).toHaveLength(1)
+      const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
+      const result = yield* service.reconsider({
+        sessionID: nativeSessionID, requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator",
+        source: coordinatorSource, decision: "decline", validate: () => Effect.succeed(true),
+      })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:manual-guardrails" })
+      expect(manualReviewDecline.choices).toHaveLength(0)
+      expect(captured.guardrailDecided).toEqual([])
+      expect(captured.guardrailReplied).toEqual([])
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+      yield* service.reply({ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+      expect(captured.guardrailReplied).toEqual([expect.objectContaining({ requestID: pending[0]!.id, reply: "reject" })])
     }),
   )
 

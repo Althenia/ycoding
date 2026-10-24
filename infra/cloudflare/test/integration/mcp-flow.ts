@@ -697,24 +697,25 @@ try {
   }
   const settled = (text: string) => async () => JSON.stringify(await local.messages(createdID, location)).includes(text) ? true : undefined
 
-  for (const yolo of [true, false]) {
-    const result = await call("session_autonomy_set", { sessionID: createdID, input: { yolo } })
-    expect(!result.isError, `Boolean YOLO was refused: ${result.text}`)
+  for (const permissions of ["yolo", "manual"]) {
+    const result = await call("session_autonomy_set", { sessionID: createdID, input: { permissions } })
+    expect(!result.isError, `Permissions mode ${permissions} was refused: ${result.text}`)
   }
-  expect((await call("session_autonomy_set", { sessionID: createdID, input: { yolo: 2 } })).isError === true,
-    "numeric YOLO was accepted")
-  const permissionSet = await call("session_autonomy_set", { sessionID: createdID, input: { autoPermission: true } })
-  expect(!permissionSet.isError, `Auto-permission was refused: ${permissionSet.text}`)
+  for (const input of [{ permissions: true }, { permissions: 2 }, { yolo: true }, { autoPermission: true }, { permissions: "auto", sleep: true }])
+    expect((await call("session_autonomy_set", { sessionID: createdID, input })).isError === true,
+      `invalid autonomy input was accepted: ${JSON.stringify(input)}`)
+  const permissionSet = await call("session_autonomy_set", { sessionID: createdID, input: { permissions: "auto" } })
+  expect(!permissionSet.isError, `Auto permissions were refused: ${permissionSet.text}`)
   const autonomy = dataOf((await call("session_autonomy_get", { sessionID: createdID })).value)
-  expect(isRecord(autonomy) && autonomy.yolo === false && autonomy.autoPermission === true,
-    "auto-permission changed the independent YOLO control")
+  expect(isRecord(autonomy) && autonomy.permissions === "auto" && autonomy.guardrails === "manual" && autonomy.answers === "manual",
+    "auto permissions changed the independent guardrails or answers mode")
   await runShell("auto_permission", "touch mcp-auto-permission.txt", "Reply after the rule-approved shell call.")
   await waitFor(() => (existsSync(join(workspace, "mcp-auto-permission.txt")) ? true : undefined), 30_000,
     "auto-permission did not approve the ask-permission shell call")
   await waitFor(settled("Reply after the rule-approved shell call."), 30_000, "the rule-approved step did not settle")
-  expect((await call("session_autonomy_set", { sessionID: createdID, input: { autoPermission: false } })).isError === false,
-    "auto-permission could not be disabled")
-  checks.push("auto-permission set through MCP approved an ask-permission shell call independently of YOLO")
+  expect((await call("session_autonomy_set", { sessionID: createdID, input: { permissions: "manual" } })).isError === false,
+    "auto permissions could not be reset to manual")
+  checks.push("auto-permission set through MCP approved an ask-permission shell call independently of guardrails and answers")
 
   await runShell("always_one", "touch mcp-always.txt", "Reply after Always approval one.")
   const alwaysRequest = await waitFor(pendingPermission, 30_000, "no shell permission request was raised for the Always case")

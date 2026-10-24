@@ -1,42 +1,47 @@
-import type { SessionAutonomyView } from "@ycoding-ai/client"
+import type { SessionAutonomyDecisionMode, SessionAutonomyView } from "@ycoding-ai/client"
 
 export type AutonomyState = Omit<SessionAutonomyView, "effective">
+export type AutonomyCategory = "permissions" | "guardrails" | "answers"
+export type AutonomyChange = Partial<Record<AutonomyCategory, SessionAutonomyDecisionMode>>
 
-export function yoloOn(state: { yolo?: unknown }): boolean | undefined {
-  if (state.yolo === true) return true
-  if (state.yolo === false) return false
-  return undefined
+export const autonomyCategories = ["permissions", "guardrails", "answers"] as const
+const autonomyModes = ["manual", "yolo", "auto"] as const
+
+export function autonomyMode(value: unknown): SessionAutonomyDecisionMode | undefined {
+  return autonomyModes.find((mode) => mode === value)
 }
 
-export function yoloLabel(on: boolean) {
-  return on ? "YOLO" : "YOLO off"
+export function autonomyModeWord(mode: SessionAutonomyDecisionMode) {
+  if (mode === "yolo") return "YOLO"
+  return mode === "auto" ? "Auto" : "Manual"
 }
 
-export function parseToggleArg(token: string | undefined): boolean | undefined | null {
-  if (token === undefined || token === "") return undefined
-  if (token === "on") return true
-  if (token === "off") return false
-  return null
+export function cycleAutonomyMode(mode: SessionAutonomyDecisionMode, direction: 1 | -1) {
+  return autonomyModes[(autonomyModes.indexOf(mode) + direction + autonomyModes.length) % autonomyModes.length]!
 }
 
-export type AutonomyToggle = "yolo" | "autoPermission" | "autoGuardrail" | "autoAnswer"
-
-export function autoPermissionOn(state: { autoPermission?: unknown } | undefined): boolean {
-  return state?.autoPermission === true
+export function allAutonomyChange(mode: SessionAutonomyDecisionMode) {
+  return { permissions: mode, guardrails: mode, answers: mode }
 }
 
-export function autoGuardrailOn(state: { autoGuardrail?: unknown } | undefined): boolean {
-  return state?.autoGuardrail === true
+export function autonomyRows(view: SessionAutonomyView | undefined) {
+  return autonomyCategories.map((category) => {
+    const local = autonomyMode(view?.[category])
+    const effective = autonomyMode(view?.effective?.[category])
+    const source = view?.effective?.inherited?.[category]
+    return {
+      category,
+      title: autonomyCategoryTitle(category),
+      local,
+      effective,
+      inherited: typeof source === "string" && effective !== undefined ? source : undefined,
+    }
+  })
 }
 
-export function autoAnswerOn(state: { autoAnswer?: unknown } | undefined): boolean {
-  return state?.autoAnswer === true
-}
-
-export function autonomyToggleOn(state: AutonomyState | undefined, toggle: AutonomyToggle): boolean | undefined {
-  if (!state) return undefined
-  if (toggle === "yolo") return yoloOn(state)
-  return state[toggle] === true
+function autonomyCategoryTitle(category: AutonomyCategory) {
+  if (category === "permissions") return "Permissions"
+  return category === "guardrails" ? "Guardrails" : "Answers"
 }
 
 export function isAsleep(state: { sleep?: unknown }): boolean {
@@ -47,19 +52,17 @@ export function localAutonomyView(state: AutonomyState): SessionAutonomyView {
   return {
     ...state,
     effective: {
-      yolo: yoloOn(state) ?? false,
-      permissionsAuto: autoPermissionOn(state),
-      permissionModelReviews: true,
+      permissions: state.permissions,
+      guardrails: state.guardrails,
+      answers: state.answers,
+      inherited: {},
       asleep: isAsleep(state),
-      ordinaryReviewsAuto: autoGuardrailOn(state) && !isAsleep(state),
       guardrailsEnabled: false,
-      modelReviews: false,
-      hardModelReviews: false,
     },
   }
 }
 
-export type AutonomyAction = "permissions" | "guardrails" | "questions"
+export type AutonomyAction = AutonomyCategory
 export type AutonomyDecisionKind = "manual" | "automated" | "unknown"
 
 export function autonomyDecisionKind(view: SessionAutonomyView | undefined, action: AutonomyAction): AutonomyDecisionKind {
@@ -69,62 +72,35 @@ export function autonomyDecisionKind(view: SessionAutonomyView | undefined, acti
   return "automated"
 }
 
-export function autonomyToggleDescription(toggle: AutonomyToggle) {
-  if (toggle === "yolo") return "evaluates unresolved requests"
-  if (toggle === "autoPermission") return "approves ask permissions"
-  if (toggle === "autoGuardrail") return "approves ordinary reviews while awake"
-  return "uses explicit defaults"
-}
-
-export function autonomyToggleTitle(state: SessionAutonomyView | undefined, toggle: AutonomyToggle) {
-  const on = autonomyToggleOn(state, toggle)
-  if (on === false && inheritedOn(state, toggle)) return `${autonomyToggleLabel(toggle)}: inherited on`
-  return `Toggle ${autonomyToggleLabel(toggle)}: ${on === undefined ? "unknown" : on ? "on" : "off"}`
-}
-
-function inheritedOn(state: SessionAutonomyView | undefined, toggle: AutonomyToggle) {
-  if (toggle === "yolo") return state?.effective?.yolo === true
-  if (toggle === "autoPermission") return state?.effective?.permissionsAuto === true
-  if (toggle === "autoGuardrail") return state?.effective?.ordinaryReviewsAuto === true
-  return false
-}
-
-export function autonomyToggleLabel(toggle: AutonomyToggle) {
-  if (toggle === "yolo") return "YOLO"
-  if (toggle === "autoPermission") return "Auto-permission"
-  if (toggle === "autoGuardrail") return "Auto-guardrail"
-  return "Auto-answer"
+export function autonomyInheritance(view: SessionAutonomyView | undefined, action: AutonomyAction) {
+  return autonomyRows(view).find((row) => row.category === action)?.inherited
 }
 
 export function autonomyDecisionLabel(view: SessionAutonomyView | undefined, action: AutonomyAction) {
-  if (!view?.effective) return "unknown"
-  const effective = view.effective
-  const human = effective.asleep ? "review box" : "manual"
-  if (action === "guardrails") {
-    if (!effective.guardrailsEnabled) return "disabled"
-    if (effective.ordinaryReviewsAuto) return "auto"
-    if (effective.yolo) return "yolo"
-    return human
-  }
-  if (action === "permissions") {
-    if (effective.permissionsAuto) return "auto"
-    if (effective.yolo) return "yolo"
-    return human
-  }
-  if (autoAnswerOn(view)) return "auto"
-  if (effective.yolo) return "yolo"
-  return human
+  const mode = autonomyMode(view?.effective?.[action])
+  if (!mode || !view?.effective) return "unknown"
+  if (action === "guardrails" && !view.effective.guardrailsEnabled) return "disabled"
+  if (mode === "manual") return view.effective.asleep ? "review box" : "manual"
+  return mode
+}
+
+export function autonomyAutomated(view: SessionAutonomyView | undefined) {
+  const modes = autonomyCategories.map((category) => autonomyMode(view?.effective?.[category]))
+  if (modes.some((mode) => mode === undefined)) return undefined
+  return modes.some((mode) => mode !== "manual")
 }
 
 export function autonomyModeParts(view: SessionAutonomyView | undefined): readonly string[] {
-  if (!view?.effective) return ["unknown"] as const
+  const automated = autonomyAutomated(view)
+  if (automated === undefined || !view) return ["unknown"] as const
   return [
-    yoloLabel(view.effective.yolo === true),
-    ...(view.effective.permissionsAuto ? ["permissions auto"] : []),
-    ...(view.effective.ordinaryReviewsAuto ? ["guardrails auto"] : []),
+    ...(automated
+      ? autonomyRows(view).flatMap((row) =>
+          row.effective === "manual" ? [] : [`${row.category} ${row.effective}${row.inherited ? " (inherited)" : ""}`],
+        )
+      : ["manual"]),
     ...(view.goal?.status === "active" ? ["goal"] : []),
     ...(view.effective.asleep ? ["asleep"] : []),
-    ...(autoAnswerOn(view) ? ["answers auto"] : []),
   ] as const
 }
 
