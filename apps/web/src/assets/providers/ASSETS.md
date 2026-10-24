@@ -1,6 +1,6 @@
 # Account usage provider marks
 
-These transparent local vectors identify the eleven built-in account usage adapters in `packages/core/src/provider-usage.ts`. Unknown provider IDs have no mark. Consumers retain the visible provider/account name and distinguish API billing from subscription quotas.
+These transparent local vectors identify the twelve built-in account usage adapters in `packages/core/src/provider-usage.ts`. Unknown provider IDs have no mark. Consumers retain the visible provider/account name and distinguish API billing from subscription quotas.
 
 No backgrounds, app tiles, borders, shadows or raster backplates are included. Supplied colored paths retain their original colors. Neutral LobeHub vectors explicitly use `currentColor`; CSS uses their alpha geometry as a mask with semantic text ink for light/dark readability. This paints only the original glyph, not a backing shape. Cursor uses its two supplied transparent 2D cube originals without filtering or recoloring. No alpha extraction, redrawing or synthetic color variant is used.
 
@@ -16,6 +16,7 @@ No backgrounds, app tiles, borders, shadows or raster backplates are included. S
 | `grok.svg` | `xai` | [LobeHub Grok](https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/grok.svg) | Grok product glyph for the Grok/SuperGrok subscription adapter, not the corporate xAI wordmark. |
 | `zai.svg` | `zai`, `zai-coding-plan` | [LobeHub Z.AI](https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/zai.svg) | Shared transparent Z.AI glyph; provider/account identities stay separate. No app backplate or fabricated color edition. |
 | `opencode.svg` | `opencode-go` | [LobeHub OpenCode](https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/opencode.svg) | Shared transparent OpenCode terminal mark for Go, not a dedicated Go logo. Local-spend-only OpenCode Zen (`opencode`) has no mapping. |
+| `antigravity.svg` | `antigravity` | [LobeHub Antigravity color](https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/antigravity-color.svg) | Supplied colored Antigravity glyph for the Google subscription adapter, not the Gemini sparkle or Google corporate mark. |
 | `cursor-light.svg`, `cursor-dark.svg` | `cursor` | [Cursor brand resources](https://cursor.com/en-US/brand), [official asset archive](https://ptht05hbb1ssoooe.public.blob.vercel-storage.com/assets/brand/cursor-brand-assets.zip) | Exact `General Logos/Cube/SVG/CUBE_2D_LIGHT.svg` for light surfaces (`#26251e`) and `CUBE_2D_DARK.svg` for dark surfaces (`#edecec`). No favicon tile or 3D edition. |
 
 LobeHub source files are unmodified, except for their descriptive local filenames. The complete MIT notice is retained in `LICENSE.lobehub`. Collection source: [lobehub/lobe-icons](https://github.com/lobehub/lobe-icons). Trademark rights remain with each brand owner; the collection license does not transfer them.

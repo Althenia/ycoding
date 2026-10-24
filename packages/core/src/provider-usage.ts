@@ -16,6 +16,7 @@ import { InstallationVersion } from "./installation/version"
 import { createClaudeCodeCredentialStore } from "./plugin/provider/anthropic-claude-code-account"
 import { createManagedClaudeCodeCredentialSource } from "./plugin/provider/anthropic-claude-code-login"
 import { join } from "node:path"
+import { AntigravityUsage } from "./provider-usage/antigravity"
 import { CopilotUsage } from "./provider-usage/copilot"
 import { ClaudeUsage } from "./provider-usage/claude"
 import { CodexUsage } from "./provider-usage/codex"
@@ -440,6 +441,7 @@ function quotaSemantics(
         (snapshot.providerID === "xai" && window.id === "weekly") ||
         (["zai", "zai-coding-plan"].includes(snapshot.providerID) && ["session", "weekly"].includes(window.id)) ||
         (snapshot.providerID === "cursor" && window.id === "included") ||
+        snapshot.providerID === "antigravity" ||
         (snapshot.providerID === "opencode-go" && ["weekly", "monthly"].includes(window.id)))) ||
     (["zai", "zai-coding-plan"].includes(snapshot.providerID) &&
       window.id === "web-searches" &&
@@ -537,6 +539,7 @@ const layer = Layer.effect(
           zai: (input) => zai(http, input),
           "zai-coding-plan": (input) => zai(http, input),
           cursor: (input) => cursor(http, input),
+          antigravity: (input) => antigravity(http, input, integrations.connection),
           "opencode-go": (input) => goUsage(http, input),
         },
         ttlMs: { anthropic: 5 * minute },
@@ -754,6 +757,54 @@ export const cursor = (http: HttpClient.HttpClient, input: AdapterInput) =>
       usage,
       ...(plan._tag === "Some" ? { plan: plan.value } : {}),
     })
+  })
+
+export const antigravity = (
+  http: HttpClient.HttpClient,
+  input: AdapterInput,
+  connection: Pick<Integration.Interface["connection"], "snapshot">,
+) =>
+  Effect.gen(function* () {
+    if (input.credential.value.type !== "oauth")
+      return yield* Effect.fail(new Error("Antigravity usage requires an OAuth credential"))
+    const current = yield* connection
+      .snapshot({
+        type: "credential",
+        id: input.credential.id,
+        label: input.credential.label,
+        active: input.credential.active,
+      })
+      .pipe(Effect.catch(() => Effect.succeed(undefined)))
+    const credential =
+      current?.credential?.accountGeneration === input.credential.accountGeneration && current.value?.type === "oauth"
+        ? current.value
+        : input.credential.value
+    const { antigravityBaseURL, antigravityUserAgent } = yield* Effect.promise(
+      () => import("./plugin/provider/antigravity"),
+    )
+    const project = credential.metadata?.projectID
+    const response = yield* http
+      .execute(
+        HttpClientRequest.post(`${antigravityBaseURL}/v1internal:fetchAvailableModels`).pipe(
+          HttpClientRequest.acceptJson,
+          HttpClientRequest.bearerToken(credential.access),
+          HttpClientRequest.setHeader("User-Agent", antigravityUserAgent()),
+          HttpClientRequest.bodyText(
+            JSON.stringify(typeof project === "string" && project ? { project } : {}),
+            "application/json",
+          ),
+        ),
+      )
+      .pipe(Effect.mapError(() => new RequestError({})))
+    if (response.status < 200 || response.status >= 300)
+      return yield* new RequestError({
+        status: response.status,
+        retryAfter: retryAfter(response.headers["retry-after"]),
+      })
+    const payload = yield* response.json.pipe(Effect.mapError(() => new RequestError({ status: response.status })))
+    const snapshot = AntigravityUsage.normalize(payload, input.updatedAt)
+    if (!snapshot) return yield* new RequestError({ status: response.status })
+    return snapshot
   })
 
 const cursorRpc = Effect.fnUntraced(function* (http: HttpClient.HttpClient, method: string, token: string) {

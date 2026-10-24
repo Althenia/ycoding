@@ -1,6 +1,7 @@
 import { AlibabaPlugin } from "./provider/alibaba"
 import { AmazonBedrockPlugin } from "./provider/amazon-bedrock"
 import { AnthropicPlugin } from "./provider/anthropic"
+import { AntigravityPlugin } from "./provider/antigravity"
 import { AzureCognitiveServicesPlugin, AzurePlugin } from "./provider/azure"
 import { CerebrasPlugin } from "./provider/cerebras"
 import { CloudflareAIGatewayPlugin } from "./provider/cloudflare-ai-gateway"
@@ -38,6 +39,7 @@ export const ProviderPlugins: PluginInternal.InternalPlugin[] = [
   AlibabaPlugin,
   AmazonBedrockPlugin,
   AnthropicPlugin,
+  AntigravityPlugin,
   AzureCognitiveServicesPlugin,
   AzurePlugin,
   CerebrasPlugin,

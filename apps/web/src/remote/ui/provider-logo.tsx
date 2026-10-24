@@ -19,6 +19,7 @@ const logos = new Map<string, { readonly src: string; readonly dark?: string; re
     dark: new URL("../../assets/providers/cursor-dark.svg", import.meta.url).href,
   }],
   ["opencode-go", { src: new URL("../../assets/providers/opencode.svg", import.meta.url).href, monochrome: true }],
+  ["antigravity", { src: new URL("../../assets/providers/antigravity.svg", import.meta.url).href }],
 ])
 
 export function providerLogo(providerID: string) {

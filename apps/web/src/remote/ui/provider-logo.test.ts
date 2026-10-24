@@ -3,7 +3,7 @@ import { renderToString } from "solid-js/web"
 import { ProviderLogo, providerLogo } from "./provider-logo"
 import { declarationsWhere, parseStylesheet } from "../../styles/css-rules"
 
-const providers = ["anthropic", "openrouter", "openai", "meta", "muse", "github-copilot", "xai", "zai", "zai-coding-plan", "cursor", "opencode-go"]
+const providers = ["anthropic", "openrouter", "openai", "meta", "muse", "github-copilot", "xai", "zai", "zai-coding-plan", "cursor", "opencode-go", "antigravity"]
 
 test("provider marks cover exactly the built-in account usage adapters", async () => {
   const source = await Bun.file(new URL("../../../../../packages/core/src/provider-usage.ts", import.meta.url)).text()
