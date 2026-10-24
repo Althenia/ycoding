@@ -147,7 +147,7 @@ jobs:
 
       - name: Verify installer and web assets
         if: matrix.suite == 'web'
-        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"
+        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/release-publish.test.ts" "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"
 
       - name: Verify approved browser host
         if: matrix.suite == 'browser' || matrix.suite == 'extension'
@@ -437,7 +437,7 @@ jobs:
 
   release-tui:
     name: publish TUI release
-    needs: deploy-web
+    needs: [verify-source, package, isolated-browser-acceptance]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -462,7 +462,12 @@ jobs:
           name: release-assets-${{ env.RELEASE_VERSION }}
           path: release
 
-      - name: Create GitHub release
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -470,10 +475,6 @@ jobs:
           set -euo pipefail
           version="$RELEASE_VERSION"
           export RELEASE_TAG="v$version"
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 && {
-            echo "Release $RELEASE_TAG already exists"
-            exit 1
-          }
           prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != env.RELEASE_TAG and (.tagName | test("^v[0-9]"))) | .tagName] | first // empty' 2>/dev/null || true)"
           prev="${prev:-$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name != \"$RELEASE_TAG\" and .draft == false and (.tag_name | test(\"^v[0-9]\"))) | .tag_name] | first // empty" 2>/dev/null || true)}"
           range="${prev:+$prev...}$RELEASE_TAG"
@@ -482,11 +483,24 @@ jobs:
             echo ""
             echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
           } > release-notes.md
-          gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            bun script/release-publish.ts --repository "$GH_REPO" --tag "$RELEASE_TAG" --title "YCoding $version" --notes-file release-notes.md --run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"
+          else
+            gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md
+          fi
+
+      - name: Upload release publication manifest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-publish-manifest-${{ env.RELEASE_VERSION }}
+          path: release-publish-manifest.json
+          if-no-files-found: ignore
+          retention-days: 90
 
   deploy-web:
     name: deploy web (cloudflare)
-    needs: [verify-source, package, isolated-browser-acceptance]
+    needs: release-tui
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15

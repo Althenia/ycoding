@@ -250,7 +250,7 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   expect(verify).toContain("bun run build:cloudflare")
   expect(tui).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(tui).toContain('gh release create "v$version"')
-  expect(tui?.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"'])
+  expect(tui?.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"', '--title "YCoding $version"'])
   expect(tui).toContain('"docs/releases/v$version.md" --verify-tag')
   expect(tui).toContain('test("^v[0-9]")')
   expect(tui).toContain('test(\\"^v[0-9]\\")')
@@ -264,9 +264,9 @@ test("the first unified release has nonempty shared notes", async () => {
   expect((await notes.text()).trim()).toContain("# YCoding v0.6.5")
 })
 
-test("same v tag deploys web after the shared checks without GitHub write access", () => {
+test("same v tag deploys web after the GitHub release is published, without GitHub write access", () => {
   const deploy = workflow.split("\n  deploy-web:")[1]
-  expect(deploy).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
+  expect(deploy).toContain("needs: release-tui")
   expect(deploy).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(deploy).toContain("bun run build:web")
   expect(deploy).toContain("bun run deploy:cloudflare")
@@ -287,11 +287,25 @@ test("app preview Worker deploys only after the relay and only when the reposito
   expect(workflow.split("\n  deploy-web:")[0]).not.toContain("deploy:cloudflare-preview")
 })
 
-test("GitHub Release publication waits for successful web deployment", () => {
+test("GitHub Release publication waits for every check and web deployment waits for publication", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
-  expect(tui).toContain("needs: deploy-web")
+  expect(tui).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
   expect(tui).toContain("github.event_name == 'push'")
-  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
+  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: release-tui")
+})
+
+test("an existing release is replaced through staged, verified publication with a retained recovery manifest", () => {
+  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0] ?? ""
+  const publish = tui.split("- name: Publish GitHub release")[1]?.split("\n      - name:")[0] ?? ""
+  expect(publish).not.toContain("already exists")
+  expect(publish.indexOf('if gh release view "$RELEASE_TAG"')).toBeLessThan(publish.indexOf("bun script/release-publish.ts"))
+  expect(publish).toContain('--run "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --manifest release-publish-manifest.json release/* "docs/releases/v$version.md"')
+  expect(publish.indexOf("bun script/release-publish.ts")).toBeLessThan(publish.indexOf('gh release create "v$version"'))
+  expect(tui.indexOf("- name: Setup Bun")).toBeLessThan(tui.indexOf("- name: Publish GitHub release"))
+  const manifest = tui.split("- name: Upload release publication manifest")[1] ?? ""
+  expect(manifest).toContain("if: always()")
+  expect(manifest).toContain("path: release-publish-manifest.json")
+  expect(workflow).toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
 })
 
 test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
@@ -430,15 +444,15 @@ test("source verification legs start in parallel with the native builds", () => 
   )
 })
 
-test("packaging overlaps packaged-browser acceptance without bypassing either deployment gate", () => {
+test("packaging overlaps packaged-browser acceptance without bypassing the publication or deployment gate", () => {
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
   const dependencies = [
     ["verify-source", undefined],
     ["build", undefined],
     ["isolated-browser-acceptance", "build"],
     ["package", "build"],
-    ["deploy-web", "[verify-source, package, isolated-browser-acceptance]"],
-    ["release-tui", "deploy-web"],
+    ["release-tui", "[verify-source, package, isolated-browser-acceptance]"],
+    ["deploy-web", "release-tui"],
   ] as const
   expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
   for (const [name, needs] of dependencies) {
