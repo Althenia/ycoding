@@ -710,6 +710,7 @@ export function make(options: ClientOptions) {
             body: {
               id: input?.["id"],
               parentID: input?.["parentID"],
+              title: input?.["title"],
               agent: input?.["agent"],
               model: input?.["model"],
               location: input?.["location"],

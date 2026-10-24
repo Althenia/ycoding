@@ -36,7 +36,7 @@ import { VcsEvent } from "./vcs-event.js"
 import { WorkspaceEvent } from "./workspace-event.js"
 import { WorktreeEvent } from "./worktree-event.js"
 
-const coreDefinitions = Event.inventory(...SessionEvent.Definitions, ...Coordination.DurableDefinitions, Coordination.Event.Updated)
+const coreDefinitions = Event.inventory(...SessionEvent.Definitions, ...Coordination.DurableDefinitions, Coordination.Event.Updated, Coordination.Event.RequestEscalated)
 
 const foundationDefinitions = Event.inventory(
   ...ModelsDev.Event.Definitions,

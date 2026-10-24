@@ -30,6 +30,7 @@ import {
   type ProjectSessionChoice,
 } from "../../util/coordination"
 import { createRowList, type Row } from "./project-rows"
+import { SessionPickerDetail, sessionPickerRows } from "./project-session-picker"
 
 export function useProjectClock() {
   const [now, setNow] = createSignal(Date.now())
@@ -68,7 +69,7 @@ export function ProjectState(props: { state: MemberState; word?: boolean; select
   )
 }
 
-export function ProjectMeter(props: { project: ProjectView }) {
+export function ProjectMeter(props: { project: ProjectView; wrap?: boolean }) {
   const { theme } = useTheme()
   const value = () => concurrencyMeter(props.project)
   const bar = () =>
@@ -80,7 +81,7 @@ export function ProjectMeter(props: { project: ProjectView }) {
           Math.min(props.project.concurrency, 8),
         )
   return (
-    <text fg={theme.text.subdued} wrapMode="none" truncate>
+    <text fg={theme.text.subdued} wrapMode={props.wrap ? "word" : "none"} truncate={!props.wrap}>
       {bar() ? `${bar()} ${value().split(" ").slice(1).join(" ")}` : value()}
     </text>
   )
@@ -118,7 +119,7 @@ export function ProjectChips(props: {
 }) {
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
-  const layout = () => chipsRow(props.project, Math.max(18, dimensions().width - 20))
+  const layout = () => chipsRow(props.project, Math.max(18, dimensions().width - 13))
   return (
     <box height={1} flexDirection="row" flexShrink={0}>
       <For each={layout().chips}>
@@ -143,7 +144,7 @@ export function ProjectChips(props: {
       </Show>
       <box flexGrow={1} />
       <text fg={theme.text.subdued} onMouseUp={props.onFocus}>
-        ctrl+x p members
+        members ›
       </text>
     </box>
   )
@@ -262,32 +263,18 @@ export function ProjectMembers(props: {
   const rows = createMemo<Row[]>(() =>
     mode() === "add"
       ? [
-          {
-            key: "find",
-            kind: "item",
-            label: "Find",
-            value: search() || "Search Sessions…",
-            marker: "✎",
-            edit: { initial: search(), commit: setSearch },
-          },
-          ...props
-            .sessions()
-            .filter((session) => !session.projectName && session.title.toLowerCase().includes(search().toLowerCase()))
-            .map(
-              (session): Row => ({
-                key: session.sessionID,
-                kind: "item",
-                label: session.title,
-                value: path(session.directory),
-                marker: "›",
-                activate: () =>
-                  void run(
-                    "add Session",
-                    () => props.service.addMember(props.project.id, session.sessionID),
-                    () => setMode("members"),
-                  ),
-              }),
-            ),
+          ...sessionPickerRows({
+            sessions: props.sessions(),
+            query: search(),
+            setQuery: setSearch,
+            assigned: "hide",
+            choose: (session) =>
+              void run(
+                "add Session",
+                () => props.service.addMember(props.project.id, session.sessionID),
+                () => setMode("members"),
+              ),
+          }),
           {
             key: "cancel",
             kind: "item",
@@ -446,7 +433,11 @@ export function ProjectMembers(props: {
       <box flexDirection="row" flexShrink={0}>
         <text fg={props.focused ? theme.text.feedback.info.default : theme.text.subdued}>
           {props.focused ? "▸ " : "  "}
-          {mode() === "members" ? `MEMBERS ${members().length}` : mode() === "add" ? "ADD SESSION" : "NEW SESSION"}
+          {mode() === "members"
+            ? `MEMBERS ${props.project.members.length} + MASTER`
+            : mode() === "add"
+              ? "ADD SESSION"
+              : "NEW SESSION"}
         </text>
         <Show when={props.compact}>
           <box flexGrow={1} />
@@ -454,9 +445,21 @@ export function ProjectMembers(props: {
         </Show>
       </box>
       <Show when={!props.compact}>
-        <ProjectMeter project={props.project} />
+        <ProjectMeter project={props.project} wrap />
       </Show>
-      <Show when={mode() === "members"} fallback={<form.Rows />}>
+      <Show
+        when={mode() === "members"}
+        fallback={
+          <>
+            <form.Rows />
+            <Show when={mode() === "add"}>
+              <SessionPickerDetail
+                session={() => props.sessions().find((session) => session.sessionID === form.cursor()?.key)}
+              />
+            </Show>
+          </>
+        }
+      >
         <scrollbox
           ref={(value: ScrollBoxRenderable) => {
             memberScroll = value

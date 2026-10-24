@@ -37,6 +37,7 @@ export const layerWith = (getLocation: (location: Location.Ref) => Layer.Layer<P
     return CoordinationDecisions.Service.of({
       pending: (input) => inLocation(input, (service) => service.pending(input)),
       evaluate: (input) => inLocation(input, (service) => service.evaluate(input)),
+      escalate: (input) => inLocation(input, (service) => service.escalate(input)),
     })
   }))
 

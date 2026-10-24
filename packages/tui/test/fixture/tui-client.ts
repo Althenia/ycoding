@@ -147,7 +147,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/api/session/active") return json({ data: {} })
     if (/^\/api\/session\/[^/]+\/snapshot$/.test(url.pathname))
       return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
-    if (/^\/api\/session\/[^/]+\/(pending|skills)$/.test(url.pathname)) return json({ data: [] })
+    if (/^\/api\/session\/[^/]+\/(pending|skills|todo)$/.test(url.pathname)) return json({ data: [] })
     if (url.pathname === "/api/remote") return json({ data: { state: "off" } })
     if (url.pathname === "/api/remote/mcp") return json({ data: { state: "off" } })
     if (url.pathname === "/api/keep-awake") return json({ data: { state: "off" } })

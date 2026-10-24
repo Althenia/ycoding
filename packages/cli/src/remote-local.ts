@@ -112,7 +112,7 @@ export type LocalServer = {
   readonly projectList: () => Promise<readonly Project[]>
   readonly projectDirectories: (projectID: string) => Promise<readonly ProjectDirectory[]>
   readonly projectCurrent: (location: LocalLocation) => Promise<{ readonly id: string; readonly directory: string }>
-  readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<SessionInfo>
+  readonly createSession: (id: string, location: LocalLocation, agent?: string, model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }, title?: string) => Promise<SessionInfo>
   readonly getSession: (sessionID: string, location: LocalLocation, signal?: AbortSignal) => Promise<SessionInfo>
   /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
@@ -269,10 +269,10 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
         await requireDirectory(location)
         return client.project.current({}, request(location, timeoutMs))
       }),
-    createSession: (id, location, agent, model) =>
+    createSession: (id, location, agent, model, title) =>
       call(() =>
         client.session.create(
-          { id, location, ...(agent === undefined ? {} : { agent }), ...(model === undefined ? {} : { model }) } as Parameters<YCodingClient["session"]["create"]>[0],
+          { id, location, ...(agent === undefined ? {} : { agent }), ...(model === undefined ? {} : { model }), ...(title === undefined ? {} : { title }) } as Parameters<YCodingClient["session"]["create"]>[0],
           request(location, timeoutMs),
         ),
       ),

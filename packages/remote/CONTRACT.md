@@ -757,7 +757,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.autonomy.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | one control per call: `yolo` (boolean), `autoPermission`, `autoGuardrail`, `autoAnswer`, or `sleep` (each boolean); a numeric `yolo` is invalid |
 | `session.goal.set` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal` (non-empty string), `maxNoProgress?` |
 | `session.goal.stop` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
-| `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?` |
+| `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?`, `title?` |
 
 Coordination operations address the connected backend, never a frame `sessionID`, a directory, a workspace, or a caller-provided actor. Reads are `settings`, `list` and `get`; mutations are `create`, `update` and `delete`, ordered per Project by Relay MCP. The connector verifies supplied Master and member Session IDs against the backend inventory before creating or updating a Project. Locations and membership eligibility remain backend-owned. Each Project has one Master and up to 64 members. Updates require the expected non-negative `revision`; omitted fields are preserved, while `memberSessionIDs` and `settings` replace their whole values. Settings contain `concurrency` (positive integer or null) and optional `delegatedDecisions` narrowing. Names contain 1–120 characters and Project IDs use `cgrp_`. Successful reads, creates and updates return `{ data }`; deletion returns `{}` after the local 204 response. Owner authorization, native permission ceilings and uncertain-outcome handling are unchanged. Plain transport DTOs are `RemoteCoordinationSettings`, `RemoteCoordinationGroupSettings`, `RemoteCoordinationDelegatedDecisions`, `RemoteCoordinationMemberState`, `RemoteCoordinationPendingRequest`, `RemoteCoordinationParticipant`, `RemoteCoordinationGroup` and `RemoteCoordinationGroupSummary`. Participants carry backend-resolved Locations, live state, last activity, pending requests and optional `drivenBy`; Projects carry `active` and optional `pausedReason`.
 
@@ -871,18 +871,22 @@ agent switches, autonomy changes, and goal changes with `subagent_read_only`.
 BTW child Sessions remain promptable. Reads, interruption, permission/form/
 guardrail replies, and the owner's root Session are unaffected.
 
-`session.create` accepts `{ id, workspace, agent?, model? }`. `id` is a client-generated
+`session.create` accepts `{ id, workspace, agent?, model?, title? }`. `id` is a client-generated
 Session ID; `workspace` must match an ID in a freshly rederived backend inventory.
 Before creation, the backend checks that the directory exists and that
 `project.current` reports the inventory's project ID. A mismatch or unavailable
 workspace is rejected with `invalid_message` and refresh/reopen guidance. The
 Location is derived only from the matched backend inventory; no browser path,
-parent, title, URL, method, or header is accepted. `agent` is an explicit choice;
+parent, URL, method, or header is accepted. `agent` is an explicit choice;
 omitting it uses the runtime configured default. `model` is a validated
 `{ providerID, id, variant? }` reference; omitting it uses the runtime default.
+`title` is a string equal to its own trim, nonblank, at most 120 Unicode code points,
+and free of U+0000–U+001F, U+007F–U+009F, U+202A–U+202E, and U+2066–U+2069; any
+other value is rejected with `invalid_message`. A fresh Session is created with that
+title in the same create call; omitting it uses the runtime default title.
 Creation does not prompt or wake a model. A retry adopts an existing
-root Session only when its project and exact Location match; mismatched placement
-is rejected with `invalid_message`. The returned and re-read Session must match
+root Session only when its project and exact Location match and never changes its
+title; mismatched placement is rejected with `invalid_message`. The returned and re-read Session must match
 the requested ID, project, Location, and root status before success is returned.
 
 Catalog reads use only Location-scoped local reads and fail rather than return
@@ -1050,13 +1054,13 @@ an ID only to retry the original prompt in its original Session. Its first admis
 wins even if retry content or delivery differs; changing the input kind or Session
 with an admitted ID is a conflict.
 
-`session_create_in_directory` takes `{ input: { id, directory, agent?, model? } }`, the
+`session_create_in_directory` takes `{ input: { id, directory, agent?, model?, title? } }`, the
 only operation that selects a Location from caller input. `directory` must be an absolute
 path to an existing directory whose `realpath` is strictly below the `realpath` of the
 owner's home directory; the home directory itself, missing paths, paths outside home,
 and symlinks or traversal that escape it are rejected before any Session API call. The
 directory is never created. Git and non-Git directories and global project placement
-are allowed, creation reuses the `session.create` agent, model, and ID reconciliation,
+are allowed, creation reuses the `session.create` agent, model, title, and ID reconciliation,
 and the created Session joins the connector registry with its backend-reported Location.
 The browser `session.create` keeps its recorded-workspace rule.
 

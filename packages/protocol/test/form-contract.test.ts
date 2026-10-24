@@ -5,7 +5,7 @@ test("form outputs share one field identity with numeric bounds for input contro
   expect(generated.match(/^export type FormField\d* =/gm)).toEqual(["export type FormField ="])
   expect(generated.match(/^export type FormFields\d* =/gm)).toEqual(["export type FormFields ="])
   expect(generated).toContain("export type FormFields = [FormField, ...Array<FormField>]")
-  expect(generated).toMatch(/export type FormInfo = [^\n]*fields: FormFields[ ;}]/)
+  expect(generated.match(/export type FormInfo = \{[^}]+\}/)?.[0]).toMatch(/\bfields: FormFields[\s;}]/)
   for (const name of ["FormIntegerField", "FormNumberField"]) {
     const field = generated.match(new RegExp(`export type ${name} = \\{[^}]+\\}`))?.[0]
     expect(field).toContain("minimum?: number\n")

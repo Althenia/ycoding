@@ -804,7 +804,7 @@ describe("backend Session authorization", () => {
 })
 
 describe("workspace inventory and Session creation", () => {
-  test("passes explicit agent and model choices to the local Session create", async () => {
+  test("passes explicit agent, model, and title choices to the local Session create", async () => {
     const directory = process.cwd()
     const sessions = [sessionInfo("ses_seed", { updated: 1, directory })]
     const test = await harness({ sessions, results: {
@@ -819,9 +819,9 @@ describe("workspace inventory and Session creation", () => {
       sessions: test.registry, subscriptions: test.subscriptions }))).data)
     const model = { providerID: "test", id: "model", variant: "high", profile: "work" }
     const outcome = await executeRemoteOperation({ request: request("session.create", { id: "ses_chosen", workspace: recordOf(workspaces[0]).id,
-      agent: "build", model }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
+      agent: "build", model, title: "Release review" }), local: test.local, sessions: test.registry, subscriptions: test.subscriptions })
     expect(valueOf(outcome)).toMatchObject({ data: { id: "ses_chosen" } })
-    expect(test.calls.find((call) => call.method === "createSession")?.args).toEqual(["ses_chosen", { directory }, "build", model])
+    expect(test.calls.find((call) => call.method === "createSession")?.args).toEqual(["ses_chosen", { directory }, "build", model, "Release review"])
   })
 
   test("hides temporary and global creation workspaces while listing existing global Sessions read-only", async () => {
@@ -2515,6 +2515,9 @@ describe("strict validation and error mapping", () => {
       [request("workspace.list", { directory: "/etc" }), "invalid_message"],
       [request("session.create", { id: "invalid", workspace: "wsp_1" }), "invalid_message"],
       [request("session.create", { id: "ses_new", workspace: "wsp_1", directory: "/etc" }), "invalid_message"],
+      [request("session.create", { id: "ses_new", workspace: "wsp_1", title: " Padded" }), "invalid_message"],
+      [request("session.create", { id: "ses_new", workspace: "wsp_1", title: "x".repeat(121) }), "invalid_message"],
+      [request("session.create", { id: "ses_new", workspace: "wsp_1", title: "Bell\u0007" }), "invalid_message"],
       [request("session.switchModel", { model: { providerID: "test", id: "model", profile: "" } }), "invalid_message"],
       [request("session.get", { directory: "/etc" }), "invalid_message"],
       [request("session.active", { limit: 1 }), "invalid_message"],

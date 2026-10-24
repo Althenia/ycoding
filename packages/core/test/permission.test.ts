@@ -116,6 +116,25 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
 }
 
 describe("Permission", () => {
+  it.effect("system temp scope settles without an outside-directory ask while preserving explicit denies and ceilings", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "external_directory", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const input = assertion({ action: "external_directory", resources: ["/private/tmp/ycoding-scope/*"] })
+      expect(yield* service.ask(input)).toMatchObject({ effect: "allow" })
+      expect(yield* service.list()).toEqual([])
+      yield* setRules([{ action: "external_directory", resource: "*", effect: "deny" }])
+      expect(yield* service.ask(input)).toMatchObject({ effect: "deny" })
+      yield* setRules([{ action: "external_directory", resource: "*", effect: "ask" }])
+      const database = yield* Database.Service
+      yield* database.db.update(SessionTable).set({
+        permission: SessionPermissionCeiling.denyOnly([{ action: "external_directory", resource: "*", effect: "deny" }]),
+      }).where(eq(SessionTable.id, Session.ID.make("ses_test"))).run().pipe(Effect.orDie)
+      expect(yield* service.ask(input)).toMatchObject({ effect: "deny" })
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
   it.effect("assert waits for an explicit human reply when approval is mandatory", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])

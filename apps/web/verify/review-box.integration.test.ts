@@ -225,6 +225,7 @@ async function wait(page: Page, expression: string) {
   }
   throw new Error(`Timed out: ${expression}`)
 }
+const scrollTranscript = (page: Page, edge: "start" | "end") => page.evaluate(`(() => { const scroller = document.querySelector('.workspace__scroll'); scroller.scrollTop = ${edge === "start" ? "0" : "scroller.scrollHeight"} })()`)
 async function ready() { return fetch(`http://127.0.0.1:${port}/verify/remote.html`).then((response) => response.ok, () => false) }
 
 test("guardrail rows, review items, and decision tools show every grade with literal evidence in both themes and sizes", async () => {
@@ -235,6 +236,7 @@ test("guardrail rows, review items, and decision tools show every grade with lit
       await page.setCoarsePointer(width === 390)
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&review=1&grades=1`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await scrollTranscript(page, "start")
       await wait(page, `document.querySelectorAll('.guardrail-decisions [data-guardrail-request]').length === 2`)
       expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.guardrail-decisions details')].every(row => !row.open)`)).toBe(true)
       const row = '[data-guardrail-request="grq_graded"]'
@@ -247,6 +249,8 @@ test("guardrail rows, review items, and decision tools show every grade with lit
       expect(await page.evaluate<number>(`document.querySelectorAll('.decision-grades img, .decision-grades script').length`)).toBe(0)
       await page.evaluate(`document.querySelector('[data-guardrail-request="grq_legacy"] details').open = true`)
       expect(await page.evaluate<string>(`document.querySelector('[data-guardrail-request="grq_legacy"]').textContent`)).toContain("model choice reject · confidence 0.71")
+      await scrollTranscript(page, "end")
+      await wait(page, `document.querySelector('${item("rvw_hard")}') !== null && [...document.querySelectorAll('.transcript-tool__name')].some(name => name.textContent.includes('decision'))`)
       expect(await page.evaluate<string>(`document.querySelector('${item("rvw_hard")} .decision-grades [data-selected="true"]').textContent`)).toContain("Escalate")
       expect(await page.evaluate<number>(`document.querySelectorAll('${item("rvw_hard")} .decision-grades li').length`)).toBe(4)
       await page.evaluate(`(() => { const block = [...document.querySelectorAll('.transcript-tool')].find(block => block.querySelector('.transcript-tool__name').textContent.includes('decision')); window.gradedTool = block; block.querySelector('button').click() })()`)
@@ -256,6 +260,8 @@ test("guardrail rows, review items, and decision tools show every grade with lit
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('.decision-grades')].every(element => element.scrollWidth <= element.clientWidth)`)).toBe(true)
       expect(await decisions(page)).toEqual([])
       await page.evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})))`)
+      await scrollTranscript(page, "start")
+      await wait(page, `document.querySelector('${row}') !== null`)
       await page.evaluate(`document.querySelector('${row}').scrollIntoView({ block: 'start' })`)
       await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
       await Bun.write(new URL(`../../../.cache/tmp/guardrail-grades-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))

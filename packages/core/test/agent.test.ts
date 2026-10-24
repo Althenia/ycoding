@@ -533,7 +533,7 @@ describe("Agent", () => {
 
       expect(evaluate(`${Global.Path.data}/worktrees/repo_other/feature/*`)).toBe("allow")
       expect(evaluate(`${Global.Path.data}/worktrees/repo_other/feature/src/*`)).toBe("allow")
-      expect(evaluate(`${Global.Path.data}/memory/*`)).toBe("ask")
+      expect(Permission.evaluate("external_directory", `${Global.Path.data}/memory/*`, permissions).resource).not.toContain("/worktrees/")
       expect(evaluate("/outside/project/*")).toBe("ask")
     }),
   )

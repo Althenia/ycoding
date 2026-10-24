@@ -46,6 +46,7 @@ test("guardrail HTTP routes preserve family ownership, normalized output, and ty
     requestSnapshot: () => Effect.die("unused"),
     requestSnapshots: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),
+    escalate: () => Effect.die("unused"),
     snapshot,
     withSnapshot: (sessionID, use) => snapshot(sessionID).pipe(Effect.flatMap(use)),
     status: (sessionID) => sessionID === unrelatedID

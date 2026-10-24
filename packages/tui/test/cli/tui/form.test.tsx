@@ -16,7 +16,7 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createApi, createEventStream, createFetch } from "../../fixture/tui-client"
 
-async function mountForm(root: string, width = 80, bottomAnchored = false) {
+async function mountForm(root: string, width = 80, bottomAnchored = false, escalated = false) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
 
@@ -38,6 +38,16 @@ async function mountForm(root: string, width = 80, bottomAnchored = false) {
     id: "frm_test",
     sessionID: "ses_test",
     title: "Authorization required",
+    ...(escalated
+      ? {
+          coordinationEscalation: {
+            reasons: [
+              { sessionID: "ses_driver", reason: "The assignment leaves this choice open." },
+              { sessionID: "ses_master", reason: "Choose the desired result." },
+            ],
+          },
+        }
+      : {}),
     fields: [
       {
         key: "authorization",
@@ -72,10 +82,7 @@ async function mountForm(root: string, width = 80, bottomAnchored = false) {
               <ClientProvider api={createApi(transport.fetch)}>
                 <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
                   <ToastProvider>
-                    <Show
-                      when={bottomAnchored}
-                      fallback={<FormPrompt form={form} />}
-                    >
+                    <Show when={bottomAnchored} fallback={<FormPrompt form={form} />}>
                       <box height="100%" flexDirection="column">
                         <box flexGrow={1} />
                         <FormPrompt form={form} />
@@ -97,6 +104,19 @@ async function mountForm(root: string, width = 80, bottomAnchored = false) {
   await app.waitForFrame((frame) => frame.includes("Authorization required"))
   return { app, copied, replies }
 }
+
+test("Project escalation reasons appear above the native form without choosing an answer", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 120, false, true)
+  try {
+    expect(prompt.app.captureCharFrame()).toContain("Project escalation")
+    expect(prompt.app.captureCharFrame()).toContain("The assignment leaves this choice open.")
+    expect(prompt.app.captureCharFrame()).toContain("Choose the desired result.")
+    expect(prompt.replies).toEqual([])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
 
 test("requires explicit acknowledgement before submitting an external field", async () => {
   await using tmp = await tmpdir()

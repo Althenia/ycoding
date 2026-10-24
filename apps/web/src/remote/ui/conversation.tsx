@@ -26,6 +26,7 @@ import { parentAnswer, questionAnswerState, questionHistory } from "../question-
 import { FormRequest } from "./form-request"
 import { humanReviewText, readGradedAnswers } from "../decision-grades"
 import { DecisionGrades, DecisionProvenance } from "./decision-grades"
+import { ProjectEscalationNote } from "./project-escalation"
 import { guardrailHeading } from "./guardrail-label"
 import { Markdown } from "./markdown"
 import { DotTrail } from "./dot-trail"
@@ -40,7 +41,7 @@ type AssistantMessageView = Extract<RemoteMessageView, { kind: "assistant" }>
 function SyntheticNotice(props: { readonly notice: NonNullable<ReturnType<typeof classifySyntheticNotice>> }): JSX.Element {
   const remote = useRemote()
   const notice = props.notice
-  if (notice.kind === "member") return <div class="project-event" data-event={notice.event} role="group" aria-label={`Member update: ${notice.label}`}><span aria-hidden="true">{notice.event === "failed" ? "×" : notice.event === "completed" ? "✓" : "△"}</span><strong>{notice.label}</strong><span>{notice.event}</span><span class="project-event__excerpt">{notice.excerpt}</span><a class="button button--ghost button--small" href={`/remote/session?session_id=${encodeURIComponent(notice.memberSessionID)}${remote.state().activeDeviceID ? `&device_id=${encodeURIComponent(remote.state().activeDeviceID!)}` : ""}`} aria-label={`Open session ${notice.label}`} onClick={(event) => {
+  if (notice.kind === "member") return <div class="project-event" data-event={notice.event} role="group" aria-label={`Member update: ${notice.label}`}><span aria-hidden="true">{notice.event === "failed" ? "×" : notice.event === "completed" ? "✓" : "△"}</span><strong>{notice.label}</strong><span>{notice.event}<Show when={notice.escalatedBy}> by {notice.escalatedBy}</Show></span><span class="project-event__excerpt">{notice.excerpt}</span><a class="button button--ghost button--small" href={`/remote/session?session_id=${encodeURIComponent(notice.memberSessionID)}${remote.state().activeDeviceID ? `&device_id=${encodeURIComponent(remote.state().activeDeviceID!)}` : ""}`} aria-label={`Open session ${notice.label}`} onClick={(event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault()
     window.dispatchEvent(new CustomEvent("ycoding:open-session", { detail: { sessionID: notice.memberSessionID, deviceID: remote.state().activeDeviceID } }))
@@ -495,6 +496,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           </Show>
         </p>
         <Show when={permission()?.escalation}>{(escalation) => <><p class="request__note" role="status">{humanReviewText(escalation())}</p><Show when={escalation().grades?.length}><DecisionGrades grades={escalation().grades ?? []} selected={escalation().choice} /></Show></>}</Show>
+        <Show when={permission()?.projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show>
         <div class="request__actions">
           <button
             type="button"
@@ -533,6 +535,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <span> — {guardrailReason(props.request())}</span>
         </p>
         <Show when={review()?.escalation}>{(escalation) => <><p class="request__note" role="status">{humanReviewText(escalation())}</p><Show when={escalation().grades?.length}><DecisionGrades grades={escalation().grades ?? []} selected={escalation().choice} /></Show></>}</Show>
+        <Show when={review()?.projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show>
         <p class="request__note">Owning Session: <code>{review()?.sessionID}</code></p>
         <Show when={review()?.resources.length}><p class="request__body">Targets / command: <For each={review()?.resources}>{(resource) => <code>{resource}</code>}</For></p></Show>
         <Show when={review()?.metadata}><details class="request__body"><summary>Review details</summary><pre class="output">{JSON.stringify(review()?.metadata, null, 2)}</pre></details></Show>
@@ -572,7 +575,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
       </Show>
 
       <Show when={formOf(props.request())}>
-        {form => <FormRequest form={form} activeSessionID={props.activeSessionID} />}
+        {form => <><Show when={props.request().projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show><FormRequest form={form} activeSessionID={props.activeSessionID} /></>}
       </Show>
     </article>
   )

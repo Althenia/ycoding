@@ -672,14 +672,29 @@ function createFixtureStore(): Fixture {
       return { status: "ok", value: { data: { enabled: central !== "off", categories: ["question", "permission", "review"] } } }
     }
     if (operation === "coordination.get") return group === undefined ? missing : { status: "ok", value: { data: coordinationInfo(group) } }
+    const ineligible = (groupID: string | undefined, master: string, members: readonly string[]): RemoteRequestOutcome | undefined => {
+      const ids = [master, ...members]
+      const refuse = (message: string): RemoteRequestOutcome => ({ status: "failed", error: { code: "invalid_message", message } })
+      if (new Set(ids).size !== ids.length) return refuse("A Project lists each Session once, and the Master is not a member")
+      for (const id of ids) {
+        if (!createdSessions.has(id) && !sessions.some((entry) => entry.id === id)) return refuse(`Session ${id} does not exist`)
+        const owner = coordinationGroups.find((entry) => entry.id !== groupID && (entry.masterSessionID === id || entry.memberSessionIDs.includes(id)))
+        if (owner) return refuse(`Session ${id} already belongs to Project ${owner.id}`)
+      }
+      return undefined
+    }
     if (operation === "coordination.create") return mutate(() => {
-      const created: FixtureGroup = { id: `cgrp_new_${++coordinationSeq}`, name: String(input?.name), active: false, revision: 1, created: Date.now(), updated: Date.now(), settings: { concurrency: null }, masterSessionID: String(input?.masterSessionID), memberSessionIDs: structuredClone(input?.memberSessionIDs) as string[] }
+      const refused = ineligible(undefined, String(input?.masterSessionID), input?.memberSessionIDs as string[])
+      if (refused) return refused
+      const created: FixtureGroup = { id: `cgrp_new_${++coordinationSeq}`, name: String(input?.name), active: false, revision: 0, created: Date.now(), updated: Date.now(), settings: { concurrency: null }, masterSessionID: String(input?.masterSessionID), memberSessionIDs: structuredClone(input?.memberSessionIDs) as string[] }
       coordinationGroups = [...coordinationGroups, created]
       return { status: "ok", value: { data: coordinationInfo(created) } }
     })
     if (operation === "coordination.update") return mutate(() => {
       if (group === undefined) return missing
       if (stale()) return staleOutcome
+      const refused = ineligible(group.id, typeof input?.masterSessionID === "string" ? input.masterSessionID : group.masterSessionID, (input?.memberSessionIDs ?? group.memberSessionIDs) as string[])
+      if (refused) return refused
       if (typeof input?.name === "string") group.name = input.name
       if (input?.memberSessionIDs !== undefined) group.memberSessionIDs = structuredClone(input.memberSessionIDs) as string[]
       if (typeof input?.masterSessionID === "string") group.masterSessionID = input.masterSessionID
@@ -699,18 +714,22 @@ function createFixtureStore(): Fixture {
   let keepAwakeManual = accountParams.get("keepAwake") === "on"
   let keepAwakeOverride: { state: "off" | "on" | "error" | "unsupported"; lid?: "off" | "on" | "held" | "error" | "unsupported"; sleepHold?: boolean; manual?: boolean; message?: string } | undefined
   Object.assign(window, { remoteSetKeepAwake: (status: typeof keepAwakeOverride) => { keepAwakeOverride = status } })
+  const projectChain = accountParams.get("projectEscalation") === "1"
+    ? { reasons: [{ sessionID: "ses_driver_fixture", reason: "The driver has no authority to approve this." }, { sessionID, reason: "The Master cannot grant access outside the assigned worktree." }] }
+    : undefined
+  const withChain = <T extends object>(item: T) => projectChain === undefined ? item : { ...item, coordinationEscalation: projectChain }
   const reviewBase = { rootSessionID: sessionID, created: 1_000 }
   let reviewItems: Record<string, unknown>[] = accountParams.get("review") === "1" ? [
     { ...reviewBase, itemID: "rvw_question", sessionID, sessionTitle: "Stream remote output safely", kind: "question", reason: "free_text", origin: { messageID: "msg_review", callID: "call_review" },
-      payload: { type: "form", title: "Release", questionTool: true, fields: [{ key: "q0", type: "string", title: "Branch", description: "Which branch should ship?", options: [{ value: "main", label: "main" }, { value: "next", label: "next" }], custom: true }] } },
+      payload: withChain({ type: "form", title: "Release", questionTool: true, fields: [{ key: "q0", type: "string", title: "Branch", description: "Which branch should ship?", options: [{ value: "main", label: "main" }, { value: "next", label: "next" }], custom: true }] }) },
     { ...reviewBase, itemID: "rvw_child", sessionID: "ses_child", sessionTitle: "Child", kind: "subagent_question", reason: "low_confidence", choice: "main", confidence: 0.4237, origin: { questionID: "qst_review" },
       child: { agent: "general", description: "Prepare the release" }, payload: { type: "subagent_question", text: "Which changelog section?" } },
     { ...reviewBase, itemID: "rvw_hard", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "escalated", choice: "escalate", confidence: 0.61, ...(accountParams.get("grades") === "1" ? { grades: fixtureGrades } : {}), origin: { requestID: "grq_review" },
-      payload: { type: "guardrail", action: "shell", resources: ["rm -rf <build>"], ruleIDs: ["standard.hard.delete"], reason: "Deletes a project directory", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_review" } },
+      payload: withChain({ type: "guardrail", action: "shell", resources: ["rm -rf <build>"], ruleIDs: ["standard.hard.delete"], reason: "Deletes a project directory", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_review" }) },
     { ...reviewBase, itemID: "rvw_outside", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "sleep_entry", origin: { requestID: "grq_outside" },
-      payload: { type: "guardrail", action: "write", resources: ["/etc/hosts"], ruleIDs: ["standard.review.outside"], reason: "Writes outside the repository", hardReview: false, directories: ["/etc"], fingerprint: "b".repeat(64), requestID: "grq_outside" } },
+      payload: withChain({ type: "guardrail", action: "write", resources: ["/etc/hosts"], ruleIDs: ["standard.review.outside"], reason: "Writes outside the repository", hardReview: false, directories: ["/etc"], fingerprint: "b".repeat(64), requestID: "grq_outside" }) },
     { ...reviewBase, itemID: "rvw_permission", sessionID, sessionTitle: "Stream remote output safely", kind: "permission", reason: "refused", origin: { requestID: "per_review" },
-      payload: { type: "permission", action: "edit", resources: ["src/remote.ts"], fingerprint: "c".repeat(64), requestID: "per_review" } },
+      payload: withChain({ type: "permission", action: "edit", resources: ["src/remote.ts"], fingerprint: "c".repeat(64), requestID: "per_review" }) },
   ] : accountParams.get("review") === "disabled" ? [
     { ...reviewBase, itemID: "rvw_off_question", sessionID, sessionTitle: "Stream remote output safely", kind: "question", reason: "disabled", origin: { messageID: "msg_review", callID: "call_review" },
       payload: { type: "form", title: "Release", questionTool: true, fields: [{ key: "q0", type: "string", title: "Branch", description: "Which branch should ship?" }] } },
@@ -924,7 +943,7 @@ function createFixtureStore(): Fixture {
       if (!workspace || typeof input?.id !== "string") return { status: "failed", error: { code: "invalid_message", message: "Unknown workspace" } }
       if (accountParams.get("creation") === "failed") return { status: "failed", error: { code: "invalid_message", message: "Workspace directory is unavailable" } }
       const existing = createdSessions.get(input.id)
-      const created = existing ?? { id: input.id, title: "New session", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: Date.now(), updated: Date.now() },
+      const created = existing ?? { id: input.id, title: typeof input.title === "string" ? input.title : "New session", projectID: workspace.projectID, location: { directory: workspace.directory }, time: { created: Date.now(), updated: Date.now() },
         ...(typeof input.agent === "string" ? { agent: input.agent } : {}), ...(input.model === undefined ? {} : { model: input.model }) }
       createdSessions.set(created.id, created)
       if (existing === undefined) setTimeout(() => handlers?.onSessions?.(), 0)
@@ -1065,6 +1084,7 @@ function createFixtureStore(): Fixture {
             { id: "project_reply", type: "assistant", agent: "build", content: [{ type: "text", text: "I’ll split the work between the members and report their progress here." }], time: { created: ago(29), completed: ago(29) } },
             { id: "project_done", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_docs", title: "Docs worker", event: "completed", excerpt: "Rollout notes drafted." }, time: { created: ago(18) } },
             { id: "project_ask", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_tests", title: "Test runner", event: "question", requestID: "q_member", excerpt: "Which column should checkout read?" }, time: { created: ago(4) } },
+            ...(projectChain === undefined ? [] : [{ id: "project_escalated", type: "synthetic", text: "Project notification", description: "Project notification", metadata: { source: "project_notification", groupID: "cgrp_release", memberSessionID: "ses_api", title: "Update checkout API", event: "escalated", requestID: "per_api", kind: "permission", excerpt: "Needs production credentials.", escalatedBy: { sessionID: "ses_driver", title: "Migration agent" } }, time: { created: ago(2) } }]),
           ] : targetSessionID === sessionID ? structuredClone(messages) : targetSessionID === "ses_child" && accountParams.has("childTranscript") ? structuredClone(defaultMessages) : [],
           watermark: { type: "log.synced", aggregateID: targetSessionID, seq: targetSessionID === sessionID ? snapshotWatermark : 0 },
         },
@@ -1078,8 +1098,8 @@ function createFixtureStore(): Fixture {
             ...autonomyExtras(),
           })
     }
-    if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(permissions) : [] } }
-    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails).map((item) => accountParams.get("grades") === "1" ? { ...item, escalation: { choice: "escalate", confidence: 0.61, grades: fixtureGrades } } : item) : [] } }
+    if (operation === "session.permission.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(permissions).map(withChain) : [] } }
+    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: targetSessionID === sessionID && accountParams.get("team") !== "two" ? unreplied(guardrails).map((item) => withChain(accountParams.get("grades") === "1" ? { ...item, escalation: { choice: "escalate", confidence: 0.61, grades: fixtureGrades } } : item)) : [] } }
     if (operation === "session.guardrail.status") return { status: "ok", value: { data: {
       rootSessionID: sessionID, profile: "default", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [],
       decisions: accountParams.get("grades") === "1" ? [
@@ -1091,8 +1111,8 @@ function createFixtureStore(): Fixture {
     if (operation === "session.form.list") return {
       status: "ok",
       value: targetSessionID !== sessionID || accountParams.get("team") === "two" ? [] : remoteScenarioData === undefined
-        ? formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])
-        : unreplied(remoteScenarioData.forms),
+        ? (formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])).map(withChain)
+        : unreplied(remoteScenarioData.forms).map(withChain),
     }
     if (
       operation === "session.permission.reply" ||

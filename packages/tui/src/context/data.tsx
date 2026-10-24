@@ -2010,6 +2010,29 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             time: { created: event.created },
           })
           break
+        case "coordination.request.escalated": {
+          const change = event.data
+          if (change.kind === "permission") {
+            const requests = store.session.permission[change.sessionID]
+            if (requests) setStore("session", "permission", change.sessionID, requests.map((request) =>
+              request.id === change.requestID ? { ...request, coordinationEscalation: change.coordinationEscalation } : request,
+            ))
+          }
+          if (change.kind === "review") {
+            const rootID = change.rootSessionID ?? change.sessionID
+            const requests = store.session.guardrail[rootID]
+            if (requests) setStore("session", "guardrail", rootID, requests.map((request) =>
+              request.id === change.requestID ? { ...request, coordinationEscalation: change.coordinationEscalation } : request,
+            ))
+          }
+          if (change.kind === "question") {
+            const forms = store.session.form[change.sessionID]
+            if (forms) setStore("session", "form", change.sessionID, forms.map((form) =>
+              form.id === change.requestID ? { ...form, coordinationEscalation: change.coordinationEscalation } : form,
+            ))
+          }
+          break
+        }
         case "permission.asked":
           if (store.session.permission[event.data.sessionID]?.some((request) => request.id === event.data.id)) break
           setStore("session", "permission", event.data.sessionID, [

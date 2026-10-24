@@ -200,6 +200,15 @@ export function memberCounts(members: readonly Pick<ParticipantView, "state">[])
   return { running: of("running"), waiting: of("waiting"), idle: of("idle"), failed: of("failed") }
 }
 
+export function liveCounts(project: Pick<ProjectDetail, "master" | "members">): MemberCounts {
+  return memberCounts([project.master, ...project.members])
+}
+
+export function sessionsLabel(project: Pick<ProjectDetail, "master" | "members">) {
+  const total = project.members.length + 1
+  return `${total} ${total === 1 ? "Session" : "Sessions"}`
+}
+
 export function summaryLine(counts: MemberCounts) {
   return `${counts.running} running${counts.waiting > 0 ? ` · ${counts.waiting} waiting` : ""}${counts.failed > 0 ? ` · ${counts.failed} failed` : ""}`
 }
@@ -246,6 +255,13 @@ export function parseProjectName(input: string) {
   const name = input.trim()
   if (name.length === 0) return { error: "Project name is required" }
   return name.length <= 120 ? { value: name } : { error: "Project name is 1 to 120 characters" }
+}
+
+export function sessionTitle(input: string, fallback?: string): { readonly value: string | undefined } | { readonly error: string } {
+  const title = input.trim() || fallback
+  if (title === undefined) return { value: undefined }
+  if (/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(title)) return { error: "Session title cannot contain control or direction-override characters" }
+  return [...title].length <= 120 ? { value: title } : { error: "Session title is 1 to 120 characters" }
 }
 
 export function parseConcurrency(input: string) {

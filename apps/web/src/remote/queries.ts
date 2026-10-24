@@ -377,8 +377,8 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
   const deleteProjectSession = async (scope: QueryScope, sessionID: string): Promise<CoordinationChange> =>
     settleCoordination(scope, await link.request(scope, "session.delete", { sessionID }))
 
-  const createProjectSession = async (scope: QueryScope, workspaceID: string, id = `ses_${crypto.randomUUID().replaceAll("-", "")}`): Promise<{ readonly reached: true; readonly sessionID: string } | CoordinationFailure> => {
-    const outcome = await link.request(scope, "session.create", { input: { id, workspace: workspaceID } })
+  const createProjectSession = async (scope: QueryScope, workspaceID: string, id = `ses_${crypto.randomUUID().replaceAll("-", "")}`, title?: string): Promise<{ readonly reached: true; readonly sessionID: string } | CoordinationFailure> => {
+    const outcome = await link.request(scope, "session.create", { input: { id, workspace: workspaceID, ...(title === undefined ? {} : { title }) } })
     if (outcome.status === "ok") {
       const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
       const echoed = typeof data === "object" && data !== null ? Reflect.get(data, "id") : undefined

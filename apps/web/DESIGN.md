@@ -594,6 +594,14 @@ Read `../../DESIGN.md` and this file before UI changes. Add or revise a rule fir
 - Do compose from existing semantic colors and control geometry; check light/dark, coarse/fine, keyboard, loading, reduced motion, and route resize.
 - Don't copy generated Stitch colors, assume a token contrast check proves all rendered states, or hide native control behavior to get a custom look.
 
+## Project count scope (W75)
+
+Member counts exclude the separately labeled Master. Live summaries include the Master and identify that scope. Concurrency meters count only running members.
+
+New-Master creation offers an optional Session title using the existing `.field`, `.input` and `.field__hint` treatment. An empty title defaults to the Project name. New-member creation uses the same field and keeps the normal untitled default when empty. Invalid titles remain editable with an in-place error.
+
+Native permission, review and form prompts and deferred review items show the reported Project escalation reason chain in chronological order, using the existing request-note treatment. Keep native decision controls and distinguish Project handoff from model escalation; rendering a reason settles nothing.
+
 ## Exceptions
 
 | Rule | Scope | Reason | Approval | Review date |

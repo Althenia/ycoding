@@ -8,6 +8,7 @@ import { SessionID } from "./session-id.js"
 import { statics } from "./schema.js"
 import { SessionReviewID } from "./session-review-id.js"
 import { Guardrail } from "./guardrail.js"
+import { Coordination } from "./coordination.js"
 
 export const ID = Schema.String.check(Schema.isStartsWith("per")).pipe(
   Schema.brand("Permission.ID"),
@@ -32,6 +33,7 @@ const RequestFields = {
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
   source: Source.pipe(optional),
   escalation: Guardrail.Escalation.pipe(optional),
+  coordinationEscalation: Coordination.Escalation.pipe(optional),
 }
 
 export const Request = Schema.Struct({

@@ -1,6 +1,7 @@
 export * as SessionGuardrailStandard from "./guardrail-standard"
 
 import path from "path"
+import { TemporaryPath } from "../temporary-path"
 
 export interface Match {
   readonly id: string
@@ -75,10 +76,17 @@ export function match(action: string, resource: string, paths?: Paths, dismissed
   if (denied) return { ...denied, decision: "deny", hardReview: false }
   if (deletion?.decision === "deny") return deletion
   if (deletion) return deletion
-  const segments = shellSegments(resource).map((segment) => segment.rawTokens.join(" "))
-  const review = segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment) => rule.pattern.test(segment)))
+  const segments = shellSegments(resource).map((segment) => {
+    const git = segment.tokens.findIndex((token) => path.basename(token) === "git")
+    let index = git + 1
+    if (git >= 0) {
+      while (segment.tokens[index]?.startsWith("-")) index += gitValueOptions.has(segment.tokens[index]) ? 2 : 1
+    }
+    return { raw: segment.rawTokens.join(" "), command: git < 0 ? segment.rawTokens.join(" ") : [...segment.tokens.slice(0, git + 1), ...segment.tokens.slice(index)].join(" ") }
+  })
+  const review = segmentReviews.find((rule) => !dismissed?.has(rule.id) && segments.some((segment) => rule.pattern.test(segment.command)))
   if (review) {
-    const matchedSegment = segments.find((segment) => review.pattern.test(segment)) ?? command
+    const matchedSegment = segments.find((segment) => review.pattern.test(segment.command))?.raw ?? command
     return { ...review, decision: "ask", hardReview: true, evidence: { matchedSegment, resolvedTargets: [], confirmed: !inertGitOperation(matchedSegment) } }
   }
   const database = dismissed?.has(databaseReview.id) ? undefined : executableDatabaseMention(resource)
@@ -136,7 +144,7 @@ function executableDatabaseMention(resource: string) {
 function deletionMatch(command: string, paths?: Paths, dismissed?: ReadonlySet<string>): Match | undefined {
   const matches = rmOperations(command, paths).flatMap((operation): ReadonlyArray<Match> => {
     if (!operation.recursive) return []
-    const operands = operation.targets.filter((target) => !isTemporary(target, operation.workdir, paths))
+    const operands = operation.targets
     const targets = operands.map((target) => classifyTarget(target, operation.workdir, paths))
     const evidence = { matchedSegment: operation.matchedSegment, resolvedTargets: operands.map((target) => resolveTarget(wholeTarget(target), operation.workdir, paths)), confirmed: true }
     if (targets.includes("root"))
@@ -191,7 +199,6 @@ function deletionMatch(command: string, paths?: Paths, dismissed?: ReadonlySet<s
   return matches.find((match) => match.decision === "deny") ?? matches.find((match) => match.hardReview && !dismissed?.has(match.id))
 }
 
-const temporaryRoots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders"]
 const systemRoots = ["/System", "/Library", "/usr", "/etc", "/bin", "/sbin", "/opt", "/Applications", "/var"]
 
 export interface OutsideTarget {
@@ -296,9 +303,7 @@ function commandArguments(name: string, args: ReadonlyArray<string>) {
 
 function isTemporary(target: string, workdir: string, paths?: Paths) {
   const resolved = resolveTarget(wholeTarget(target), workdir, paths)
-  return [...temporaryRoots, ...(paths?.tmpdir ? [path.resolve(paths.tmpdir)] : [])].some(
-    (root) => resolved === root || resolved.startsWith(`${root}${path.sep}`),
-  )
+  return TemporaryPath.contains(resolved, paths?.tmpdir)
 }
 
 export function semanticResources(action: string, resources: ReadonlyArray<string>, paths: Paths) {
@@ -499,7 +504,7 @@ function readOnlyGitTag(args: ReadonlyArray<string>) {
 
 function isHomeChild(target: string, workdir: string, paths?: Paths) {
   if (!paths) return false
-  return path.dirname(resolveTarget(wholeTarget(target), workdir, paths)) === path.resolve(paths.home)
+  return path.dirname(resolveTarget(wholeTarget(target), workdir, paths)) === resolveTarget(paths.home, workdir, paths)
 }
 
 interface RmOperation {
@@ -761,10 +766,11 @@ function classifyTarget(target: string, workdir: string, paths?: Paths) {
     return literal === "/" ? "root" : "home"
   const resolved = resolveTarget(literal, workdir, paths)
   if (resolved === path.parse(resolved).root) return "root"
-  if ((paths && resolved === path.resolve(paths.home)) || /^\/(?:Users|home)\/[^/]+$/.test(resolved)) return "home"
-  if (systemRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) return "system"
+  if ((paths && resolved === resolveTarget(paths.home, workdir, paths)) || /^\/(?:Users|home)\/[^/]+$/.test(resolved)) return "home"
+  if (!isTemporary(target, workdir, paths) && systemRoots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`)))
+    return "system"
   if (!paths) return "narrow"
-  const relative = path.relative(resolved, path.resolve(paths.project))
+  const relative = path.relative(resolved, resolveTarget(paths.project, workdir, paths))
   if (relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)))
     return "project"
   return "narrow"
@@ -776,7 +782,7 @@ function wholeTarget(target: string) {
 
 function resolveTarget(target: string, workdir: string, paths?: Paths) {
   if (paths?.tmpdir && /^(?:\$TMPDIR|\$\{TMPDIR\})(?:\/|$)/.test(target))
-    return path.resolve(paths.tmpdir, target.replace(/^(?:\$TMPDIR|\$\{TMPDIR\})\/?/, ""))
+    return resolveTarget(`${paths.tmpdir}/${target.replace(/^(?:\$TMPDIR|\$\{TMPDIR\})\/?/, "")}`, workdir, paths)
   const expanded =
     target === "~" || target === "$HOME" || target === "${HOME}"
       ? (paths?.home ?? target)
@@ -793,5 +799,7 @@ function resolveTarget(target: string, workdir: string, paths?: Paths) {
                 : target.startsWith("${HOME}/")
                   ? path.join(paths?.home ?? "${HOME}", target.slice(8))
                   : target
-  return path.resolve(workdir, expanded)
+  const lexical = path.resolve(workdir, expanded)
+  if (!TemporaryPath.lexicallyContains(lexical, paths?.tmpdir)) return lexical
+  return TemporaryPath.canonical(path.isAbsolute(expanded) ? expanded : `${workdir}${path.sep}${expanded}`) ?? lexical
 }

@@ -107,6 +107,7 @@ const permission = Layer.succeed(
     snapshot: () => Effect.die("unused"),
     snapshots: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),
+    escalate: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
     list: () => Effect.die("unused"),
@@ -408,6 +409,7 @@ describe("project tool and model request materialization", () => {
       expect(names).toEqual(expect.arrayContaining(["shell", "patch", "edit", "mcp_fixture_update"]))
       expect(names).not.toContain("project")
       expect(JSON.stringify(requests[0])).not.toContain("Project notifications")
+      expect(JSON.stringify(requests[0]?.system)).not.toContain("Coordinate and supervise only")
       const rows = yield* providerRows(sessionID)
       expect(rows[0]?.model.id).toBe(CatalogModel.ID.make("fake-model"))
     }),
@@ -420,6 +422,7 @@ describe("project tool and model request materialization", () => {
       const names = toolNames(request)
       expect(names).toEqual(expect.arrayContaining(["project", "shell", "patch", "edit", "write", "read", "mcp_fixture_update"]))
       expect(JSON.stringify(request)).toContain("Project notifications")
+      expect(JSON.stringify(request?.system)).toContain("Coordinate and supervise only")
     }),
   )
 
@@ -430,9 +433,15 @@ describe("project tool and model request materialization", () => {
       const memberChild = Session.ID.make("ses_coord_member_child")
       yield* insertSession(masterChild, otherSessionID)
       yield* insertSession(memberChild, sessionID)
-      expect(toolNames(yield* requestFor(masterChild, "Drive the member"))).toContain("project")
-      expect(toolNames(yield* requestFor(sessionID, "Member work"))).not.toContain("project")
-      expect(toolNames(yield* requestFor(memberChild, "Member child work"))).not.toContain("project")
+      const masterRequest = yield* requestFor(masterChild, "Drive the member")
+      expect(toolNames(masterRequest)).toContain("project")
+      expect(JSON.stringify(masterRequest?.system)).toContain("Coordinate and supervise only")
+      const memberRequest = yield* requestFor(sessionID, "Member work")
+      expect(toolNames(memberRequest)).not.toContain("project")
+      expect(JSON.stringify(memberRequest?.system)).not.toContain("Coordinate and supervise only")
+      const childRequest = yield* requestFor(memberChild, "Member child work")
+      expect(toolNames(childRequest)).not.toContain("project")
+      expect(JSON.stringify(childRequest?.system)).not.toContain("Coordinate and supervise only")
       expect(toolNames(yield* requestFor(memberChild, "Again"))).toContain("shell")
     }),
   )

@@ -399,10 +399,12 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test.each(["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders/user/cache", "/scratch/temp", "$TMPDIR", "${TMPDIR}"])(
-    "excludes temp root %s even when it contains the project or is a home child", (root) => {
+    "exempts ordinary temp deletion at %s without exempting the project ancestor", (root) => {
       expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [`rm -rf ${root} ${root}/x`],
         paths: { workdir: "/scratch/temp/project", project: "/scratch/temp/project", home: "/scratch", tmpdir: "/scratch/temp" },
-      })).toMatchObject({ decision: "allow", hardReview: false, ruleIDs: [] })
+      })).toMatchObject(["/scratch/temp", "$TMPDIR", "${TMPDIR}"].includes(root)
+        ? { decision: "ask", hardReview: true, ruleIDs: ["standard.review.project-deletion"] }
+        : { decision: "allow", hardReview: false, ruleIDs: [] })
     },
   )
 
@@ -412,10 +414,10 @@ describe("SessionGuardrailMatch", () => {
   })
 
   test.each(["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/scratch/temp"])(
-    "temp %s overrides project and home deletion classification", (root) => {
+    "temp %s retains exact home deletion protection", (root) => {
       expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [`rm -rf ${root}`],
         paths: { workdir: `${root}/project`, project: `${root}/project`, home: root, tmpdir: "/scratch/temp" },
-      })).toMatchObject({ decision: "allow", ruleIDs: [] })
+      })).toMatchObject({ decision: "deny", ruleIDs: ["standard.catastrophic.rm-user-home"] })
     },
   )
 

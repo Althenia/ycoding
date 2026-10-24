@@ -17,6 +17,7 @@ import {
   filterSummary,
   freshnessLabel,
   isDefaultFilter,
+  liveCounts,
   liveLabel,
   maxMasterSelection,
   memberCounts,
@@ -34,6 +35,8 @@ import {
   relativeAge,
   removeMemberInput,
   renameInput,
+  sessionsLabel,
+  sessionTitle,
   setScope,
   settingsInput,
   statusLabel,
@@ -147,11 +150,26 @@ describe("project wording", () => {
     expect(ageLabel({ ...project.members[0]!, lastActivity: now + 5_000 }, now)).toBe("active now")
   })
 
-  test("counts and the summary line cover members only, never the master, and omit zero waiting and failed", () => {
+  test("live counts and the summary line cover the Master and every member, and omit zero waiting and failed", () => {
+    const project = detail()
+    const counts = liveCounts(project)
+    expect(counts).toEqual({ running: 2, waiting: 1, idle: 0, failed: 1 })
+    expect(counts.running + counts.waiting + counts.idle + counts.failed).toBe(project.members.length + 1)
+    expect(summaryLine(counts)).toBe("2 running · 1 waiting · 1 failed")
+    expect(liveCounts({ master: project.master, members: [] })).toEqual({ running: 1, waiting: 0, idle: 0, failed: 0 })
+    expect(summaryLine({ running: 0, waiting: 0, idle: 2, failed: 0 })).toBe("0 running")
+  })
+
+  test("member counts exclude the Master so the concurrency meter counts members only", () => {
     const project = detail()
     expect(memberCounts(project.members)).toEqual({ running: 1, waiting: 1, idle: 0, failed: 1 })
-    expect(summaryLine(memberCounts(project.members))).toBe("1 running · 1 waiting · 1 failed")
-    expect(summaryLine({ running: 0, waiting: 0, idle: 2, failed: 0 })).toBe("0 running")
+    expect(concurrencyMeter(3, memberCounts(project.members).running)).toMatchObject({ running: 1, text: "1 of 3 running" })
+  })
+
+  test("the Session total counts the Master beside the members and agrees with the live counts", () => {
+    const project = detail()
+    expect(sessionsLabel(project)).toBe("4 Sessions")
+    expect(sessionsLabel({ master: project.master, members: [] })).toBe("1 Session")
   })
 
   test("the meter shows discrete cells against a limit, saturates, and states no limit in words", () => {
@@ -198,6 +216,18 @@ describe("project input", () => {
     expect(parseProjectName("  Billing migration  ")).toEqual({ value: "Billing migration" })
     expect(parseProjectName("   ")).toEqual({ error: "Project name is required" })
     expect(parseProjectName("x".repeat(121))).toEqual({ error: "Project name is 1 to 120 characters" })
+  })
+
+  test("a new Session title is optional, trimmed, falls back to the given default and is bounded", () => {
+    expect(sessionTitle("  Release lead  ", "Billing migration")).toEqual({ value: "Release lead" })
+    expect(sessionTitle("   ", "Billing migration")).toEqual({ value: "Billing migration" })
+    expect(sessionTitle("")).toEqual({ value: undefined })
+    expect(sessionTitle("x".repeat(120))).toEqual({ value: "x".repeat(120) })
+    expect(sessionTitle("x".repeat(121))).toEqual({ error: "Session title is 1 to 120 characters" })
+    expect(sessionTitle("😀".repeat(120))).toEqual({ value: "😀".repeat(120) })
+    expect(sessionTitle("😀".repeat(121))).toEqual({ error: "Session title is 1 to 120 characters" })
+    expect(sessionTitle("", "x".repeat(121))).toEqual({ error: "Session title is 1 to 120 characters" })
+    for (const unsafe of ["a\tb", "a\u0085b", "a\u202eb", "a\u2067b", "a\u007fb"]) expect(sessionTitle(unsafe)).toEqual({ error: "Session title cannot contain control or direction-override characters" })
   })
 
   test("concurrency is a whole number of at least 1", () => {

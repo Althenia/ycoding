@@ -38,6 +38,19 @@ function harness(
   } = {},
 ) {
   const calls: string[] = []
+  const declines: string[] = []
+  const handoffs: Array<{ readonly kind: string; readonly handoff: boolean; readonly coordinatorSessionID: string; readonly rationale: string }> = []
+  const chains = new Map<string, Array<{ sessionID: string; reason: string }>>()
+  const escalate = (kind: string, requestID: string, input: { readonly fingerprint: string; readonly handoff: boolean; readonly source: { readonly coordinatorSessionID: string; readonly rationale: string } }) =>
+    Effect.sync(() => {
+      calls.push(`escalate:${kind}`)
+      if (!["per_one", "grq_one", "frm_one"].includes(requestID))
+        return { outcome: "stale" as const, requestID: requestID as never, fingerprint: input.fingerprint, settled: false as const }
+      handoffs.push({ kind, handoff: input.handoff, coordinatorSessionID: input.source.coordinatorSessionID, rationale: input.source.rationale })
+      const chain = [...(chains.get(requestID) ?? []), { sessionID: input.source.coordinatorSessionID, reason: input.source.rationale }]
+      chains.set(requestID, chain)
+      return { outcome: "escalated" as const, requestID: requestID as never, fingerprint: input.fingerprint, settled: false as const, coordinationEscalation: { reasons: chain } as never }
+    })
   const roles: Record<string, unknown> = overrides.roles ?? {
     [coordinatorSessionID]: role(),
     [targetSessionID]: role({ role: "worker", delegatedDecisions: undefined }),
@@ -67,9 +80,11 @@ function harness(
     permission: {
       snapshot: (requestID) => Effect.succeed(requestID === "per_one" ? { request: permissionRequest as never, fingerprint: "fp_per" } : undefined),
       snapshots: () => Effect.succeed([{ request: permissionRequest as never, fingerprint: "fp_per" }]),
+      escalate: (input) => escalate("permission", input.requestID, input),
       reconsider: (input) =>
         Effect.gen(function* () {
           calls.push("permission")
+          if (input.decision === "decline") declines.push("permission")
           const valid = yield* input.validate(permissionRequest as never)
           return valid
             ? { outcome: "allowed" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "baseline" as const }
@@ -80,9 +95,11 @@ function harness(
       requestSnapshot: (sessionID, requestID) =>
         Effect.succeed(sessionID === targetSessionID && requestID === "grq_one" ? { request: guardrailRequest as never, fingerprint: "fp_grq" } : undefined),
       requestSnapshots: () => Effect.succeed([{ request: guardrailRequest as never, fingerprint: "fp_grq" }]),
+      escalate: (input) => escalate("review", input.requestID, input),
       reconsider: (input) =>
         Effect.gen(function* () {
           calls.push("guardrail")
+          if (input.decision === "decline") declines.push("review")
           const valid = yield* input.validate(guardrailRequest as never)
           return valid
             ? { outcome: "denied" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "yolo" as const }
@@ -92,6 +109,7 @@ function harness(
     form: {
       snapshot: (id) => Effect.succeed(id === "frm_one" ? { form: form as never, fingerprint: "fp_frm", state: { status: "pending" as const } } : undefined),
       snapshots: () => Effect.succeed([{ form: form as never, fingerprint: "fp_frm", state: { status: "pending" as const } }]),
+      escalate: (input) => escalate("question", input.id, input),
       reconsider: (input) =>
         Effect.gen(function* () {
           calls.push("form")
@@ -115,7 +133,7 @@ function harness(
         }),
     },
   })
-  return { decisions, calls, roles, permissionRequest, guardrailRequest }
+  return { decisions, calls, roles, permissionRequest, guardrailRequest, declines, handoffs }
 }
 
 const evaluate = (decisions: ReturnType<typeof harness>["decisions"], input: Record<string, unknown>) =>
@@ -216,13 +234,14 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(observerDescendant.calls).toEqual([])
   })
 
-  test("an inactive Project escalates without native settlement", async () => {
-    const { decisions, calls } = harness({
+  test("an inactive Project pauses only sends; routine approve and decline still settle natively", async () => {
+    const { decisions, calls, declines } = harness({
       roles: { [coordinatorSessionID]: role({ active: false }) },
     })
-    const result = await evaluate(decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })
-    expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "delegation-inactive" })
-    expect(calls).toEqual([])
+    expect(await evaluate(decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({ outcome: "allowed", settled: true })
+    expect(await evaluate(decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ settled: true })
+    expect(calls).toEqual(["permission", "guardrail"])
+    expect(declines).toEqual(["review"])
   })
 
   test("final native validate re-reads delegation after revocation", async () => {
@@ -235,6 +254,7 @@ describe("CoordinationDecisions.evaluate", () => {
       permission: {
         snapshot: () => Effect.succeed({ request: { id: "per_one", sessionID: targetSessionID, action: "read", resources: ["src/run"] } as never, fingerprint: "fp_per" }),
         snapshots: () => Effect.die("unused"),
+        escalate: () => Effect.die("unused"),
         reconsider: (input) => {
           validate = input.validate as never
           return Effect.succeed({ outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: "delegation-invalid" })
@@ -243,11 +263,13 @@ describe("CoordinationDecisions.evaluate", () => {
       guardrail: {
         requestSnapshot: () => Effect.succeed(undefined),
         requestSnapshots: () => Effect.die("unused"),
+        escalate: () => Effect.die("unused"),
         reconsider: (input) => Effect.succeed({ outcome: "stale" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false }),
       },
       form: {
         snapshot: () => Effect.succeed(undefined),
         snapshots: () => Effect.die("unused"),
+        escalate: () => Effect.die("unused"),
         reconsider: (input) => Effect.succeed({ outcome: "stale" as const, requestID: input.id, fingerprint: input.fingerprint, settled: false }),
       },
     })
@@ -378,5 +400,85 @@ describe("CoordinationDecisions.evaluate", () => {
     expect(await evaluate(readDocs.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({
       outcome: "allowed",
     })
+  })
+})
+
+const escalateWith = (decisions: ReturnType<typeof harness>["decisions"], input: Record<string, unknown>) =>
+  Effect.runPromise(decisions.escalate({ groupID, coordinatorSessionID, targetSessionID, reason: "Needs the owner's call.", ...input } as never))
+
+describe("CoordinationDecisions decline", () => {
+  test("a routine permission or review decline settles only through native reconsideration with the decline decision", async () => {
+    const { decisions, calls, declines } = harness()
+    expect(await evaluate(decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ kind: "permission", actor: "coordinator", rationale: "Assigned routine work." })
+    expect(await evaluate(decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ kind: "review", actor: "coordinator" })
+    expect(calls).toEqual(["permission", "guardrail"])
+    expect(declines).toEqual(["permission", "review"])
+  })
+
+  test("hard, human-only, out-of-policy and question declines escalate without native settlement", async () => {
+    const hard = harness({
+      guardrailRequest: { id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "file_mutation", resources: ["src/a"], ruleIDs: ["standard.hard.delete"], reason: "hard", standard: true, hardReview: true },
+    })
+    expect(await evaluate(hard.decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:hard-review" })
+    const human = harness({ permissionRequest: { id: "per_one", sessionID: targetSessionID, action: "shell", resources: ["git push origin main"] } })
+    expect(await evaluate(human.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "human-only:publication" })
+    const revoked = harness({ policy: (() => Effect.succeed({ enabled: false, categories: ["permission"] as const })) as never })
+    expect(await evaluate(revoked.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "delegation-revoked" })
+    const question = harness()
+    expect(await evaluate(question.decisions, { kind: "question", requestID: "frm_one", fingerprint: "fp_frm", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "invalid-decision" })
+    for (const item of [hard, human, revoked, question]) expect(item.calls).toEqual([])
+  })
+})
+
+describe("CoordinationDecisions.escalate", () => {
+  const driverSessionID = "ses_driver"
+  const chainRoles = () => ({ [coordinatorSessionID]: role(), [driverSessionID]: role() })
+
+  test("a Master subagent escalation appends its reason to the live request and routes to the Master", async () => {
+    const { decisions, handoffs } = harness({ roles: chainRoles() })
+    const result = await escalateWith(decisions, { coordinatorSessionID: driverSessionID, kind: "permission", requestID: "per_one", fingerprint: "fp_per" })
+    expect(result).toMatchObject({
+      outcome: "escalated", to: "master", settled: false, actor: "coordinator", kind: "permission",
+      coordinationEscalation: { reasons: [{ sessionID: driverSessionID, reason: "Needs the owner's call." }] },
+    })
+    expect(handoffs).toEqual([{ kind: "permission", handoff: false, coordinatorSessionID: driverSessionID, rationale: "Needs the owner's call." }])
+  })
+
+  test("the Master's escalation hands the request to the human natively with the full chain", async () => {
+    const { decisions, handoffs } = harness({ roles: chainRoles() })
+    await escalateWith(decisions, { coordinatorSessionID: driverSessionID, kind: "review", requestID: "grq_one", fingerprint: "fp_grq" })
+    const result = await escalateWith(decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", reason: "Outside the assignment." })
+    expect(result).toMatchObject({
+      outcome: "escalated", to: "human",
+      coordinationEscalation: { reasons: [{ sessionID: driverSessionID, reason: "Needs the owner's call." }, { sessionID: coordinatorSessionID, reason: "Outside the assignment." }] },
+    })
+    expect(handoffs.map((item) => item.handoff)).toEqual([false, true])
+    const question = await escalateWith(decisions, { kind: "question", requestID: "frm_one", fingerprint: "fp_frm" })
+    expect(question).toMatchObject({ outcome: "escalated", to: "human", kind: "question" })
+  })
+
+  test("escalation is never blocked by an inactive Project, revoked policy, or human-only classification", async () => {
+    const inactive = harness({
+      roles: { [coordinatorSessionID]: role({ active: false }), [driverSessionID]: role({ active: false }) },
+      policy: (() => Effect.succeed({ enabled: false, categories: [] })) as never,
+      permissionRequest: { id: "per_one", sessionID: targetSessionID, action: "shell", resources: ["git push origin main"] },
+    })
+    expect(await escalateWith(inactive.decisions, { coordinatorSessionID: driverSessionID, kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({ outcome: "escalated", to: "master" })
+    expect(await escalateWith(inactive.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({ outcome: "escalated", to: "human" })
+  })
+
+  test("stale identity, missing reason, and out-of-scope targets never append", async () => {
+    const { decisions, calls } = harness({ roles: chainRoles() })
+    expect(await escalateWith(decisions, { kind: "permission", requestID: "per_one", fingerprint: "wrong" })).toMatchObject({ outcome: "stale", settled: false })
+    expect(await escalateWith(decisions, { kind: "permission", requestID: "per_missing", fingerprint: "fp_per" })).toMatchObject({ outcome: "stale" })
+    expect(calls).toEqual(["escalate:permission"])
+    calls.length = 0
+    const blank = await escalateWith(decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", reason: "  " })
+    expect(blank).toMatchObject({ outcome: "escalated", reason: "rationale-required" })
+    expect(blank.to).toBeUndefined()
+    const outside = await escalateWith(decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", targetSessionID: "ses_outsider" })
+    expect(outside).toMatchObject({ outcome: "escalated", reason: "delegation-out-of-scope" })
+    expect(outside.to).toBeUndefined()
+    expect(calls).toEqual([])
   })
 })

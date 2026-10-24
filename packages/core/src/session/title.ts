@@ -43,6 +43,8 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionTitle") {}
 
+const UNTITLED = /^New session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
 const truncate = (value: string) => (value.length <= MAX_LENGTH ? value : `${value.slice(0, MAX_LENGTH - 3)}...`)
 
 const make = (dependencies: Dependencies) => {
@@ -50,7 +52,7 @@ const make = (dependencies: Dependencies) => {
     db: Database.Interface["db"],
     session: SessionSchema.Info,
   ) {
-    if (session.parentID) return
+    if (session.parentID || !UNTITLED.test(session.title)) return
     const firstUser = yield* SessionHistory.firstUserMessageIfOnly(db, session.id)
     if (!firstUser) return
     const anchor = yield* SessionUsageAttribution.resolve(db, { sessionID: session.id, inputID: firstUser.id })
@@ -144,7 +146,7 @@ const make = (dependencies: Dependencies) => {
           providerOptions: cache.providerOptions,
           cache: cache.cache,
         })
-        const chunks: string[] = []
+        const blocks = new Map<string, { readonly chunks: string[]; commentary: boolean }>()
         let failed = false
         let usage: SessionUsage.Recorded | undefined
         let recordedCost: Money.USD | undefined
@@ -184,7 +186,12 @@ const make = (dependencies: Dependencies) => {
             }
             if ((LLMEvent.is.stepFinish(event) || LLMEvent.is.finish(event)) && event.reason === "content-filter")
               failed = true
-            if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
+            if (LLMEvent.is.textDelta(event) || LLMEvent.is.textEnd(event)) {
+              const block = blocks.get(event.id) ?? { chunks: [], commentary: false }
+              blocks.set(event.id, block)
+              if (event.providerMetadata?.openai?.phase === "commentary") block.commentary = true
+              if (LLMEvent.is.textDelta(event)) block.chunks.push(event.text)
+            }
             if (LLMEvent.is.stepFinish(event)) {
               timing = SessionUsage.timing(event.usage)
               const step = SessionUsage.record(event.usage, resolved.cost)
@@ -216,7 +223,9 @@ const make = (dependencies: Dependencies) => {
           })
           return
         }
-        const title = chunks
+        const title = [...blocks.values()]
+          .filter((block) => !block.commentary)
+          .flatMap((block) => block.chunks)
           .join("")
           .split("\n")
           .map((line) => line.trim())

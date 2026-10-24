@@ -10,8 +10,8 @@ import { browserPushPlatform, savePushCategories } from "../push"
 import {
   activityBuckets, addMemberInput, ageLabel, centralPolicyNote, changeMasterInput, concurrencyMeter, createProjectInput,
   delegatedCategories, delegationDraftIssue, effectiveDelegation, expiryAt, expiryChoices, externalKinds,
-  filterLabel, freshnessLabel, liveLabel, maxMembers, memberCounts, parseConcurrency, parseList, parseProjectName,
-  projectOf, pushFilterWire, removeMemberInput, renameInput, setScope, settingsInput, statusLabel, summaryLine, toggleCategory, toggleMaster,
+  filterLabel, freshnessLabel, liveCounts, liveLabel, maxMembers, memberCounts, parseConcurrency, parseList, parseProjectName,
+  projectOf, pushFilterWire, removeMemberInput, renameInput, sessionsLabel, sessionTitle, setScope, settingsInput, statusLabel, summaryLine, toggleCategory, toggleMaster,
   type DelegatedCategory, type ExpiryChoice, type ExternalKind, type ParticipantView, type ProjectDetail,
 } from "../coordination"
 import type { CoordinationChange, CoordinationOperation } from "../queries"
@@ -92,7 +92,7 @@ export function ProjectFreshness(props: { readonly data: ProjectsData }) {
 function Meter(props: { readonly project: ProjectDetail }) {
   const meter = () => concurrencyMeter(props.project.settings.concurrency, memberCounts(props.project.members).running)
   const cells = () => { const value = meter(); return value.kind === "limit" ? value.cells : [false, false, false] }
-  return <div class="project-meter"><div class="project-meter__label"><span>{props.project.settings.concurrency === null ? "Running" : "Concurrency limit"}</span><strong>{meter().text}</strong></div>
+  return <div class="project-meter"><div class="project-meter__label"><span>{props.project.settings.concurrency === null ? "Members running" : "Member concurrency limit"}</span><strong>{meter().text}</strong></div>
     <div class="project-meter__track" role={meter().kind === "limit" ? "meter" : undefined} aria-label="Running members against the concurrency limit" aria-valuemin={0} aria-valuemax={props.project.settings.concurrency ?? undefined} aria-valuenow={meter().running} aria-valuetext={meter().text}>
       <For each={cells()}>{(on) => <span data-on={on} data-unlimited={props.project.settings.concurrency === null} />}</For>
     </div></div>
@@ -111,7 +111,7 @@ function NewProjectButton(props: { readonly data: ProjectsData; readonly onNew: 
 export function ProjectsRail(props: { readonly data: ProjectsData; readonly onNew: () => void }) {
   const data = props.data
   return <section class="project-rail" aria-label="Projects"><div class="project-rail__head"><h2>Projects</h2><NewProjectButton data={data} onNew={props.onNew} /></div>
-    <ProjectState data={data}><ul class="project-list project-list--rail"><For each={data.groups()}>{(group) => <li><button type="button" class="project-item" aria-label={`Open project ${group.detail.name}`} aria-current={data.membership()?.detail.id === group.detail.id ? "true" : undefined} onClick={() => data.open(group.detail.master.sessionID)}><span class="project-item__name">{group.detail.name}<Icon name="chevron-right" size={16} /></span><ProjectStatus project={group.detail} /><span class="project-meta">{summaryLine(memberCounts(group.detail.members))}</span><Sparkline project={group.detail} now={data.now()} /></button></li>}</For></ul></ProjectState>
+    <ProjectState data={data}><ul class="project-list project-list--rail"><For each={data.groups()}>{(group) => <li><button type="button" class="project-item" aria-label={`Open project ${group.detail.name}`} aria-current={data.membership()?.detail.id === group.detail.id ? "true" : undefined} onClick={() => data.open(group.detail.master.sessionID)}><span class="project-item__name">{group.detail.name}<Icon name="chevron-right" size={16} /></span><ProjectStatus project={group.detail} /><span class="project-meta">{summaryLine(liveCounts(group.detail))}</span><Sparkline project={group.detail} now={data.now()} /></button></li>}</For></ul></ProjectState>
   </section>
 }
 
@@ -121,7 +121,7 @@ export function ProjectsPage(props: { readonly data: ProjectsData }) {
     <header class="project-pagehead"><div><h1>Projects</h1><p>Each Project is a master Session plus the Sessions it directs.</p></div><div class="project-actions"><ProjectFreshness data={data} /><button class="button button--ghost button--small" disabled={data.query().isFetching} onClick={data.refresh}><Icon name="refresh" size={16} />Refresh</button><NewProjectButton data={data} onNew={() => data.setCreating(true)} /></div></header>
     <Feedback data={data} />
     <ProjectState data={data}><Show when={data.groups().length > 0} fallback={<div class="project-empty"><h2>No projects</h2><p>A Project is one master Session plus the Sessions it directs.</p><NewProjectButton data={data} onNew={() => data.setCreating(true)} /></div>}>
-      <ul class="project-list"><For each={data.groups()}>{(group) => <li class="project-card"><div class="project-card__head"><h2>{group.detail.name}</h2><ProjectStatus project={group.detail} /></div><div class="project-actions"><span class="project-badge project-badge--master">Master</span><span>{group.detail.master.title}</span></div><p class="project-meta">{summaryLine(memberCounts(group.detail.members))} · {group.detail.members.length + 1} Sessions</p><Meter project={group.detail} /><Sparkline project={group.detail} now={data.now()} /><div class="project-actions"><button class="button button--primary" aria-label={`Open project ${group.detail.name}`} onClick={() => data.open(group.detail.master.sessionID)}>Open project<Icon name="chevron-right" size={16} /></button><button class="button button--danger button--small" aria-label={`Delete project ${group.detail.name}`} onClick={(event) => data.setDialog({ kind: "delete-project", project: group.detail, trigger: event.currentTarget })}>Delete…</button></div></li>}</For></ul>
+      <ul class="project-list"><For each={data.groups()}>{(group) => <li class="project-card"><div class="project-card__head"><h2>{group.detail.name}</h2><ProjectStatus project={group.detail} /></div><div class="project-actions"><span class="project-badge project-badge--master">Master</span><span>{group.detail.master.title}</span></div><p class="project-meta">{summaryLine(liveCounts(group.detail))} · {sessionsLabel(group.detail)}</p><Meter project={group.detail} /><Sparkline project={group.detail} now={data.now()} /><div class="project-actions"><button class="button button--primary" aria-label={`Open project ${group.detail.name}`} onClick={() => data.open(group.detail.master.sessionID)}>Open project<Icon name="chevron-right" size={16} /></button><button class="button button--danger button--small" aria-label={`Delete project ${group.detail.name}`} onClick={(event) => data.setDialog({ kind: "delete-project", project: group.detail, trigger: event.currentTarget })}>Delete…</button></div></li>}</For></ul>
     </Show></ProjectState>
   </Show></div>
 }
@@ -151,7 +151,11 @@ function SessionPicker(props: { readonly data: ProjectsData; readonly selected?:
 function DirectoryPicker(props: { readonly data: ProjectsData; readonly value: string; readonly onChange: (value: string) => void }) {
   const remote = props.data.remote
   const query = createRemoteQuery(remote.store.queryClient, () => remote.queries.workspaces(remote.scope(), props.data.connected()))
-  return <div class="field"><span class="field__label">Directory</span><CustomSelect label="Directory" placeholder="Choose a directory" value={props.value} options={(query().data ?? []).map((entry) => ({ value: entry.id, label: entry.directory }))} onChange={props.onChange} /><Show when={query().isError}><p role="alert">{query().error?.message}</p></Show><p class="field__hint">Choose a directory previously opened on this machine. The Session receives its title from its first conversation.</p></div>
+  return <div class="field"><span class="field__label">Directory</span><CustomSelect label="Directory" placeholder="Choose a directory" value={props.value} options={(query().data ?? []).map((entry) => ({ value: entry.id, label: entry.directory }))} onChange={props.onChange} /><Show when={query().isError}><p role="alert">{query().error?.message}</p></Show><p class="field__hint">Choose a directory previously opened on this machine.</p></div>
+}
+
+function TitleField(props: { readonly value: string; readonly onChange: (value: string) => void; readonly placeholder: string; readonly hint: string }) {
+  return <label class="field"><span class="field__label">Session title</span><input class="input" value={props.value} placeholder={props.placeholder} onInput={(event) => props.onChange(event.currentTarget.value)} /><span class="field__hint">{props.hint}</span></label>
 }
 
 function CreateProject(props: { readonly data: ProjectsData }) {
@@ -160,6 +164,7 @@ function CreateProject(props: { readonly data: ProjectsData }) {
   const [source, setSource] = createSignal<"existing" | "new">("existing")
   const [master, setMaster] = createSignal("")
   const [workspace, setWorkspace] = createSignal("")
+  const [title, setTitle] = createSignal("")
   const [created, setCreated] = createSignal<string>()
   const [unconfirmed, setUnconfirmed] = createSignal(false)
   const [error, setError] = createSignal("")
@@ -169,12 +174,14 @@ function CreateProject(props: { readonly data: ProjectsData }) {
     if ("error" in parsed) return setError(parsed.error ?? "Project name is required")
     if (source() === "existing" && !master()) return setError("Choose a master Session")
     if (source() === "new" && !workspace()) return setError("Choose a directory")
+    const sessionName = sessionTitle(title(), parsed.value)
+    if ("error" in sessionName) return setError(sessionName.error)
     let id = source() === "existing" ? master() : created()
     if (!id) {
       const scope = data.remote.scope()
       if (!scope || data.pending()) return
       data.setPending(true)
-      const result = await data.remote.queries.createProjectSession(scope, workspace())
+      const result = await data.remote.queries.createProjectSession(scope, workspace(), undefined, sessionName.value)
       data.setPending(false)
       if (data.remote.scope()?.deviceID !== scope.deviceID || data.remote.scope()?.generation !== scope.generation) return
       if (!result.reached) { setUnconfirmed(result.unconfirmed === true); data.report(result, ""); return }
@@ -186,7 +193,7 @@ function CreateProject(props: { readonly data: ProjectsData }) {
   }
   return <form class="project-create" onSubmit={(event) => void save(event)}><header class="project-pagehead"><div><h1>New project</h1><p>Name it, then choose the master. Add other Sessions afterwards.</p></div></header><Feedback data={data} />
     <section class="project-step"><h2><span>1</span>Name</h2><label class="field"><span class="field__label">Project name</span><input autofocus class="input" maxLength={120} value={name()} onInput={(event) => setName(event.currentTarget.value)} /></label></section>
-    <section class="project-step"><h2><span>2</span>Master</h2><p>The master is an ordinary chat Session. You talk to it; it directs the members.</p><Segmented label="Master source" value={source()} options={[{ id: "existing", label: "Use an existing Session" }, { id: "new", label: "Create a new Session" }]} onChange={setSource} /><Show when={source() === "existing"} fallback={<DirectoryPicker data={data} value={workspace()} onChange={setWorkspace} />}><SessionPicker data={data} selected={master()} onChoose={setMaster} label="Use as master" /></Show></section>
+    <section class="project-step"><h2><span>2</span>Master</h2><p>The master is an ordinary chat Session. You talk to it; it directs the members.</p><Segmented label="Master source" value={source()} options={[{ id: "existing", label: "Use an existing Session" }, { id: "new", label: "Create a new Session" }]} onChange={setSource} /><Show when={source() === "existing"} fallback={<><DirectoryPicker data={data} value={workspace()} onChange={setWorkspace} /><TitleField value={title()} onChange={setTitle} placeholder="Defaults to the Project name" hint="Optional. The Project name titles the new Master when this is blank." /></>}><SessionPicker data={data} selected={master()} onChoose={setMaster} label="Use as master" /></Show></section>
     <Show when={error()}><p class="projects__notice" data-tone="danger" role="alert">{error()}</p></Show><div class="project-actions project-actions--end"><button type="button" class="button button--ghost" onClick={() => data.setCreating(false)}>{unconfirmed() ? "Back to Projects" : "Cancel"}</button><button type="submit" class="button button--primary" disabled={data.pending() || unconfirmed()}>{data.pending() ? "Creating…" : "Create project"}</button></div>
   </form>
 }
@@ -199,7 +206,7 @@ export function ProjectPanel(props: { readonly data: ProjectsData; readonly proj
   const data = props.data
   const [tab, setTab] = createSignal<"sessions" | "settings">("sessions")
   const [removed, setRemoved] = createSignal<ParticipantView>()
-  const counts = () => memberCounts(props.project.members)
+  const counts = () => liveCounts(props.project)
   const manage = (kind: ProjectDialog["kind"], trigger: HTMLElement, session?: ParticipantView) => {
     const project = props.project
     const returnFocus = props.onManage?.() ?? trigger
@@ -250,7 +257,7 @@ function ProjectSettings(props: { readonly data: ProjectsData; readonly project:
   }
   return <div class="project-settings"><section class="project-setting"><h3>Name</h3><form onSubmit={(event) => { event.preventDefault(); const parsed = parseProjectName(name()); if ("error" in parsed) setError(parsed.error ?? "Invalid name"); else void data.run("coordination.update", renameInput(props.project, parsed.value!), "Project name updated.") }}><label class="field"><span class="field__label">Project name</span><input class="input" value={name()} maxLength={120} onInput={(event) => setName(event.currentTarget.value)} /></label><button class="button button--secondary button--small" disabled={data.pending() || name() === props.project.name}>Save name</button></form></section>
     <section class="project-setting"><h3>Master</h3><div class="project-actions"><span class="project-badge project-badge--master">Master</span><strong>{props.project.master.title}</strong></div><button class="button button--secondary button--small" onClick={(event) => props.onMaster(event.currentTarget)}>Change master…</button><p class="field__hint">Choosing another master keeps {props.project.master.title} as an ordinary member.</p></section>
-    <section class="project-setting"><h3>Members</h3><p>{props.project.members.length + 1} Sessions, including the Master.</p><button class="button button--secondary button--small" onClick={props.onMembers}>Manage Sessions</button></section>
+    <section class="project-setting"><h3>Members</h3><p>{sessionsLabel(props.project)}, including the Master.</p><button class="button button--secondary button--small" onClick={props.onMembers}>Manage Sessions</button></section>
     <section class="project-setting"><h3>Concurrency limit</h3><Segmented label="Concurrency limit" value={capped() ? "limit" : "none"} options={[{ id: "none", label: "No limit" }, { id: "limit", label: "Set a limit" }]} onChange={(value) => setCapped(value === "limit")} /><Show when={capped()}><label class="field"><span class="field__label">Members running at once</span><input class="input" inputMode="numeric" value={limit()} onInput={(event) => setLimit(event.currentTarget.value)} /></label></Show><p class="field__hint">When the limit is reached the master cannot message an idle member.</p><button class="button button--secondary button--small" disabled={data.pending()} onClick={saveLimit}>Save concurrency</button></section>
     <section class="project-setting"><h3>Delegated decisions</h3><p class="field__hint">{centralPolicyNote(data.ready()?.central)}</p><Segmented label="Delegation" value={narrow() ? "narrow" : "inherit"} disabled={!data.ready()?.central?.enabled} options={[{ id: "inherit", label: "Inherit central policy" }, { id: "narrow", label: "Narrow for this project" }]} onChange={(value) => setNarrow(value === "narrow")} /><Show when={narrow()}><div class="project-switches"><For each={delegatedCategories}>{(category) => <label class="switch"><input type="checkbox" checked={categories().includes(category)} disabled={!data.ready()?.central?.categories.includes(category)} onChange={() => setCategories(categories().includes(category) ? categories().filter((entry) => entry !== category) : [...categories(), category])} /><span>{category}</span></label>}</For></div><label class="field"><span class="field__label">Action patterns</span><textarea class="textarea" rows={2} value={actions()} onInput={(event) => setActions(event.currentTarget.value)} /></label><label class="field"><span class="field__label">Resource patterns</span><textarea class="textarea" rows={2} value={resources()} onInput={(event) => setResources(event.currentTarget.value)} /></label><CustomSelect label="Expires" placeholder="No expiry" value={expiry()} options={[...(current?.expiresAt === undefined ? [] : [{ value: "keep", label: "Keep current expiry" }]), ...expiryChoices.map((entry) => ({ value: entry.id, label: entry.label }))]} onChange={(value) => setExpiry(value as ExpiryChoice | "keep")} /></Show><p class="field__hint">Hard reviews always reach you. Effective categories: {effectiveDelegation(data.ready()?.central, props.project.settings.delegatedDecisions).categories.join(", ") || "none"}.</p><button class="button button--secondary button--small" disabled={data.pending() || !data.ready()?.central?.enabled} onClick={saveDelegation}>Save delegation</button></section>
     <NotificationFilter data={data} /><Show when={error()}><p class="projects__notice" data-tone="danger" role="alert">{error()}</p></Show>
@@ -278,6 +285,7 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
   return <Show when={data.dialog()} keyed>{(entry) => {
     let close: (() => void) | undefined
     const [workspace, setWorkspace] = createSignal("")
+    const [title, setTitle] = createSignal("")
     const [created, setCreated] = createSignal<string>()
     const [unconfirmed, setUnconfirmed] = createSignal(false)
     const [error, setError] = createSignal("")
@@ -290,12 +298,14 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
     }
     const create = async () => {
       if (!workspace()) return setError("Choose a directory")
+      const sessionName = sessionTitle(title())
+      if ("error" in sessionName) return setError(sessionName.error)
       let id = created()
       if (!id) {
         const scope = data.remote.scope()
         if (!scope || data.pending()) return
         data.setPending(true)
-        const result = await data.remote.queries.createProjectSession(scope, workspace())
+        const result = await data.remote.queries.createProjectSession(scope, workspace(), undefined, sessionName.value)
         data.setPending(false)
         if (data.remote.scope()?.deviceID !== scope.deviceID || data.remote.scope()?.generation !== scope.generation) return
         if (!result.reached) { setUnconfirmed(result.unconfirmed === true); data.report(result, ""); return }
@@ -315,7 +325,7 @@ export function ProjectsDialogs(props: { readonly data: ProjectsData }) {
     }
     return <Modal label={label} class="overlay--confirm project-dialog" returnFocus={entry.trigger} onClose={() => data.setDialog(undefined)} requestClose={(handler) => { close = handler }}><Feedback data={data} />
       <Show when={entry.kind === "add" || entry.kind === "master"}><SessionPicker data={data} allowProject={entry.kind === "master" ? entry.project.id : undefined} selected={entry.kind === "master" ? entry.project.master.sessionID : undefined} onChoose={(id) => void choose(id)} label={entry.kind === "master" ? "Use as master" : "Add"} /></Show>
-      <Show when={entry.kind === "new"}><DirectoryPicker data={data} value={workspace()} onChange={setWorkspace} /><p>Creates the Session and adds it as a member.</p></Show>
+      <Show when={entry.kind === "new"}><DirectoryPicker data={data} value={workspace()} onChange={setWorkspace} /><TitleField value={title()} onChange={setTitle} placeholder="Optional" hint="Optional. Left blank, the Session takes its title from its first conversation." /><p>Creates the Session and adds it as a member.</p></Show>
       <Show when={entry.kind === "delete-project"}><p>Delete <strong>{entry.project.name}</strong>? Its Master and member Sessions keep running and keep their histories.</p></Show>
       <Show when={entry.kind === "delete-session"}><p>Delete <strong>{entry.session?.title}</strong> permanently? This stops any running turn and deletes the Session and its history. It cannot be undone.</p></Show>
       <Show when={error()}><p class="projects__notice" data-tone="danger" role="alert">{error()}</p></Show><div class="project-actions project-actions--end"><button class="button button--secondary" onClick={() => close?.()}>Cancel</button><Show when={entry.kind === "new"}><button class="button button--primary" disabled={data.pending() || unconfirmed()} onClick={() => void create()}>{data.pending() ? "Creating…" : created() ? "Add created Session" : "Create and add"}</button></Show><Show when={entry.kind === "delete-project" || entry.kind === "delete-session"}><button class="button button--danger" disabled={data.pending()} onClick={() => void remove()}>{data.pending() ? "Deleting…" : label}</button></Show></div>

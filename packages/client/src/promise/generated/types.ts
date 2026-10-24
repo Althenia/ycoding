@@ -373,6 +373,8 @@ export type FormOption = { value: string; label: string; description?: string }
 
 export type FormExternalField = { key: string; type: "external"; url: string; title?: string; description?: string }
 
+export type CoordinationEscalationReason = { sessionID: string; reason: string }
+
 export type QuestionOption = { label: string; description: string }
 
 export type SessionReviewSubagentQuestionPayload = { type: "subagent_question"; text: string; data?: JsonValue }
@@ -2066,33 +2068,14 @@ export type FormMultiselectField = {
   default?: Array<string>
 }
 
+export type CoordinationEscalation = { reasons: Array<CoordinationEscalationReason> }
+
 export type QuestionInfo = {
   question: string
   header: string
   options: Array<QuestionOption>
   multiple?: boolean
   custom?: boolean
-}
-
-export type SessionReviewGuardrailPayload = {
-  type: "guardrail"
-  action: string
-  resources: Array<string>
-  ruleIDs: Array<string>
-  reason: string
-  hardReview: boolean
-  directories: Array<string>
-  fingerprint: SessionReviewFingerprint
-  requestID: string
-}
-
-export type SessionReviewPermissionPayload = {
-  type: "permission"
-  action: string
-  resources: Array<string>
-  save?: Array<string>
-  fingerprint: SessionReviewFingerprint
-  requestID: string
 }
 
 export type SessionReviewRecoveryPayload = { type: "recovery"; tools: Array<SessionReviewRecoveryTool> }
@@ -3014,6 +2997,45 @@ export type FormField =
   | FormMultiselectField
   | FormExternalField
 
+export type SessionReviewGuardrailPayload = {
+  type: "guardrail"
+  action: string
+  resources: Array<string>
+  ruleIDs: Array<string>
+  reason: string
+  hardReview: boolean
+  directories: Array<string>
+  fingerprint: SessionReviewFingerprint
+  requestID: string
+  coordinationEscalation?: CoordinationEscalation
+}
+
+export type SessionReviewPermissionPayload = {
+  type: "permission"
+  action: string
+  resources: Array<string>
+  save?: Array<string>
+  fingerprint: SessionReviewFingerprint
+  requestID: string
+  coordinationEscalation?: CoordinationEscalation
+}
+
+export type CoordinationEventRequestEscalated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "coordination.request.escalated"
+  location?: LocationRef
+  data: {
+    sessionID: string
+    rootSessionID?: string
+    kind: CoordinationRequestKind
+    requestID: string
+    coordinationEscalation: CoordinationEscalation
+  }
+}
+
 export type SessionReviewQuestionPayload = { type: "question"; questions: Array<QuestionInfo> }
 
 export type QuestionAsked = {
@@ -3398,6 +3420,7 @@ export type PermissionRequest = {
   metadata?: { [x: string]: JsonValue }
   source?: PermissionSource
   escalation?: GuardrailEscalation
+  coordinationEscalation?: CoordinationEscalation
 }
 
 export type PermissionAsked = {
@@ -3416,6 +3439,7 @@ export type PermissionAsked = {
     metadata?: { [x: string]: any }
     source?: PermissionSource
     escalation?: GuardrailEscalation
+    coordinationEscalation?: CoordinationEscalation
   }
 }
 
@@ -3438,6 +3462,7 @@ export type GuardrailAsked = {
     hardReview?: boolean
     risk?: GuardrailRisk
     escalation?: GuardrailEscalation
+    coordinationEscalation?: CoordinationEscalation
     metadata?: { [x: string]: JsonValue }
   }
 }
@@ -3594,11 +3619,31 @@ export type SessionMessageAssistant = {
   reroutes?: Array<SessionMessageAssistantReroute>
 }
 
-export type SessionReviewFormPayload = { type: "form"; title: string; fields: FormFields; questionTool?: true }
+export type SessionReviewFormPayload = {
+  type: "form"
+  title: string
+  fields: FormFields
+  questionTool?: true
+  coordinationEscalation?: CoordinationEscalation
+}
 
-export type FormInfo = { id: string; sessionID: string; title: string; metadata?: FormMetadata; fields: FormFields }
+export type FormInfo = {
+  id: string
+  sessionID: string
+  title: string
+  metadata?: FormMetadata
+  fields: FormFields
+  coordinationEscalation?: CoordinationEscalation
+}
 
-export type FormInfo1 = { id: string; sessionID: string; title: string; metadata?: FormMetadata1; fields: FormFields }
+export type FormInfo1 = {
+  id: string
+  sessionID: string
+  title: string
+  metadata?: FormMetadata1
+  fields: FormFields
+  coordinationEscalation?: CoordinationEscalation
+}
 
 export type IntegrationInfo = {
   id: string
@@ -4680,6 +4725,7 @@ export type ServerEvent =
   | CoordinationEventChanged
   | CoordinationEventDeleted
   | CoordinationEventUpdated
+  | CoordinationEventRequestEscalated
   | FilesystemChanged
   | ReferenceUpdated
   | PermissionAsked
@@ -5345,6 +5391,7 @@ export type SessionCreateInput = {
   readonly id?: {
     readonly id?: string | null
     readonly parentID?: string | null
+    readonly title?: string | null
     readonly agent?: string | null
     readonly model?: {
       readonly id: string
@@ -5357,6 +5404,7 @@ export type SessionCreateInput = {
   readonly parentID?: {
     readonly id?: string | null
     readonly parentID?: string | null
+    readonly title?: string | null
     readonly agent?: string | null
     readonly model?: {
       readonly id: string
@@ -5366,9 +5414,23 @@ export type SessionCreateInput = {
     } | null
     readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
   }["parentID"]
+  readonly title?: {
+    readonly id?: string | null
+    readonly parentID?: string | null
+    readonly title?: string | null
+    readonly agent?: string | null
+    readonly model?: {
+      readonly id: string
+      readonly providerID: string
+      readonly variant?: string
+      readonly profile?: string
+    } | null
+    readonly location?: { readonly directory: string; readonly workspaceID?: string } | null
+  }["title"]
   readonly agent?: {
     readonly id?: string | null
     readonly parentID?: string | null
+    readonly title?: string | null
     readonly agent?: string | null
     readonly model?: {
       readonly id: string
@@ -5381,6 +5443,7 @@ export type SessionCreateInput = {
   readonly model?: {
     readonly id?: string | null
     readonly parentID?: string | null
+    readonly title?: string | null
     readonly agent?: string | null
     readonly model?: {
       readonly id: string
@@ -5393,6 +5456,7 @@ export type SessionCreateInput = {
   readonly location?: {
     readonly id?: string | null
     readonly parentID?: string | null
+    readonly title?: string | null
     readonly agent?: string | null
     readonly model?: {
       readonly id: string
@@ -6929,6 +6993,7 @@ export type GuardrailRequestListOutput = {
     hardReview?: boolean
     risk?: GuardrailRisk
     escalation?: GuardrailEscalation
+    coordinationEscalation?: CoordinationEscalation
     metadata?: { [x: string]: JsonValue }
   }>
 }["data"]

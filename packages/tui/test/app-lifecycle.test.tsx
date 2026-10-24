@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -22,6 +22,13 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   const events = createEventStream()
   const calls = createFetch(undefined, events)
   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const warnings = process.listeners("warning").filter((listener) => listener.name === "onWarning")
+  const output: string[] = []
+  const logs: Array<{ level: string; message: string; tags: Readonly<Record<string, unknown>> }> = []
+  const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    output.push(String(chunk))
+    return true
+  })
   try {
     const { run } = await import("../src/app")
     const task = Effect.runPromise(
@@ -31,17 +38,30 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
         packages: { resolve: async () => undefined },
         args: {},
         terminalHandoff: async () => ({ renderer: setup.renderer, mode: null, complete: () => {} }),
-        log: () => {},
+        log: (level, message, tags) => {
+          logs.push({ level, message, tags })
+        },
       }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
     )
     await ready
+    const warning = new Error("Synthetic lifecycle warning")
+    warning.name = "MaxListenersExceededWarning"
+    process.emit("warning", warning)
+    expect(output.join("")).not.toContain("Synthetic lifecycle warning")
+    expect(logs).toContainEqual({
+      level: "warn",
+      message: "Node process warning",
+      tags: { name: warning.name, message: warning.message, stack: warning.stack },
+    })
     process.emit("SIGHUP")
     await task
 
     expect(setup.renderer.isDestroyed).toBe(true)
     expect(titles.at(-1)).toBe("")
     expect(process.listeners("SIGHUP").every((listener) => listeners.has(listener))).toBe(true)
+    expect(process.listeners("warning")).toEqual(warnings)
   } finally {
+    stderr.mockRestore()
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await server.stop()
   }
@@ -248,13 +268,15 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/ses_resume") return json({ data: session })
-    if (url.pathname === "/api/session/ses_resume/snapshot") return sessionSnapshot("ses_resume", [citation], { session })
+    if (url.pathname === "/api/session/ses_resume/snapshot")
+      return sessionSnapshot("ses_resume", [citation], { session })
     if (url.pathname === "/api/session/ses_resume/pending") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/permission") return json({ data: [] })
     if (url.pathname === "/api/vcs/branch") return json({ location, data: {} })
     // The rail docks from 120 columns, so this 120-column session also loads its rail sections.
     if (url.pathname === "/api/session/ses_resume/todo") return json({ data: [] })
-    if (url.pathname === "/api/session/ses_resume/subagent") return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
+    if (url.pathname === "/api/session/ses_resume/subagent")
+      return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (url.pathname === "/api/session/ses_resume/skills") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/guardrail/request") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/guardrail")

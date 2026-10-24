@@ -7,6 +7,7 @@ import { Global } from "@ycoding-ai/core/global"
 import { ClipboardProvider, useClipboard, type ClipboardService } from "./context/clipboard"
 import type { Plugin } from "@ycoding-ai/plugin/tui"
 import { LogProvider, useLog, type LogSink } from "./context/log"
+import { logProcessWarnings } from "./util/process-warnings"
 import { ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import * as Selection from "./util/selection"
@@ -207,6 +208,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
+      yield* Effect.acquireRelease(
+        Effect.sync(() => logProcessWarnings(log)),
+        (dispose) => Effect.sync(dispose),
+      )
       const options = {
         externalOutputMode: "passthrough",
         targetFps: 60,

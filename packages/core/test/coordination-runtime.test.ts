@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Fiber, Layer, Option, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { tmpdir } from "node:os"
 import { Form } from "@ycoding-ai/schema/form"
@@ -40,7 +40,17 @@ const it = testEffect(AppNodeBuilder.build(
 
 const pendingByTarget = new Map<SessionSchema.ID, ReadonlyArray<unknown>>()
 const evaluated: unknown[] = []
+type EscalationInput = { readonly groupID: string; readonly coordinatorSessionID: SessionSchema.ID; readonly targetSessionID: SessionSchema.ID; readonly kind: "question" | "permission" | "review"; readonly requestID: string; readonly fingerprint: string; readonly reason: string }
+const escalations: EscalationInput[] = []
+const escalationOutcome: { to?: "master" | "human" | "none" } = {}
 const decisions = {
+  escalate: (input: EscalationInput) =>
+    Effect.sync(() => {
+      escalations.push(input)
+      const base = { kind: input.kind, requestID: input.requestID, fingerprint: input.fingerprint, actor: "coordinator" as const, settled: false as const }
+      if (escalationOutcome.to === "none") return { ...base, outcome: "stale" as const }
+      return { ...base, outcome: "escalated" as const, to: escalationOutcome.to ?? "master", coordinationEscalation: { reasons: [{ sessionID: input.coordinatorSessionID, reason: input.reason }] } }
+    }),
   pending: (input: { readonly targetSessionID: SessionSchema.ID }) => Effect.succeed((pendingByTarget.get(input.targetSessionID) ?? []) as never),
   evaluate: (input: { readonly kind: "question" | "permission" | "review"; readonly requestID: string; readonly fingerprint: string }) =>
     Effect.sync(() => {
@@ -56,6 +66,8 @@ const setup = Effect.gen(function* () {
   woken.length = 0
   interrupted.length = 0
   evaluated.length = 0
+  escalations.length = 0
+  delete escalationOutcome.to
   pendingByTarget.clear()
   modelProblems.clear()
   const sessions = yield* Session.Service
@@ -113,6 +125,15 @@ describe("project activation", () => {
       expect(yield* active()).toBe(false)
       yield* activate(fixture)
       expect(yield* active()).toBe(true)
+    }))
+
+  it.effect("the input a real Master prompt admits activates the Project", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const admitted = yield* fixture.events.subscribe(SessionEvent.InputAdmitted).pipe(Stream.runHead, Effect.forkScoped({ startImmediately: true }))
+      yield* fixture.sessions.prompt({ sessionID: fixture.master.id, text: "Start the project", resume: false })
+      yield* fixture.runtime.handle(Option.getOrThrow(yield* Fiber.join(admitted)))
+      expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(true)
     }))
 
   it.effect("only a user interrupt of the Master pauses the Project", () =>
@@ -280,12 +301,12 @@ describe("project answer and interrupt", () => {
     Effect.gen(function* () {
       const fixture = yield* setup
       const result = yield* fixture.runtime.answer(fixture.subagent.id, {
-        sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9,
+        sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9, decision: "decline",
       })
       expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:hard-review", requestID: "per_one" })
       expect(evaluated).toEqual([{
         groupID: fixture.group.id, coordinatorSessionID: fixture.subagent.id, targetSessionID: fixture.alpha.id,
-        requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9,
+        requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9, decision: "decline",
       }])
     }))
 
@@ -366,13 +387,19 @@ describe("member notifications", () => {
       expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(6)
     }))
 
-  it.effect("holds notifications in the Master chat without waking while the Project is inactive, and a later user turn finds them", () =>
+  it.effect("while the Project is inactive, failures and decision requests wake the Master and settled outcomes wait in its chat", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
-      for (const kind of kinds(fixture.beta.id)) yield* emit(fixture, kind.definition, kind.data)
-      expect(woken).toEqual([])
-      const held = yield* noticesFor(fixture, fixture.master.id)
-      expect(held).toHaveLength(6)
+      for (const kind of kinds(fixture.beta.id)) {
+        woken.length = 0
+        yield* emit(fixture, kind.definition, kind.data)
+        expect([kind.event, woken]).toEqual([kind.event, ["completed", "interrupted"].includes(kind.event) ? [] : [fixture.master.id]])
+      }
+      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(6)
+      expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(false)
+      expect(yield* refusal(fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Start" })))
+        .toBe("Project is inactive; send a message in the master chat to resume")
+      woken.length = 0
       yield* activate(fixture)
       yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id })
       expect(woken).toEqual([fixture.master.id])
@@ -423,7 +450,7 @@ describe("member notifications", () => {
       expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
     }))
 
-  it.effect("an inactive Project holds notifications in the Master chat even with a running sender", () =>
+  it.effect("while the Project is inactive, failures and decision requests go to the running sender, and settled outcomes wait in the Master chat", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
       yield* activate(fixture)
@@ -434,11 +461,74 @@ describe("member notifications", () => {
       yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id })
       expect(woken).toEqual([])
       expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(0)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
+      for (const kind of kinds(fixture.alpha.id).filter((kind) => kind.event === "permission" || kind.event === "failed")) {
+        woken.length = 0
+        yield* emit(fixture, kind.definition, kind.data)
+        expect(woken).toEqual([fixture.subagent.id])
+      }
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(2)
       running.clear()
       woken.length = 0
-      yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "boom" } })
-      expect(woken).toEqual([])
+      const review = kinds(fixture.alpha.id).find((kind) => kind.event === "review")!
+      yield* emit(fixture, review.definition, review.data)
+      expect(woken).toEqual([fixture.master.id])
       expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(2)
+      expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(false)
+    }))
+
+  it.effect("an escalation from a Master subagent wakes the inactive Master once with the reason and caller, and never activates the Project", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const input = { sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission" as const, fingerprint: "fp_per", reason: "Deletes the release branch" }
+      const first = yield* fixture.runtime.escalate(fixture.subagent.id, input)
+      expect(first).toMatchObject({
+        sessionID: fixture.alpha.id, requestID: "per_one", delivered: true,
+        decision: { outcome: "escalated", to: "master", coordinationEscalation: { reasons: [{ sessionID: fixture.subagent.id, reason: "Deletes the release branch" }] } },
+      })
+      expect(escalations[0]).toEqual({
+        groupID: fixture.group.id, coordinatorSessionID: fixture.subagent.id, targetSessionID: fixture.alpha.id,
+        requestID: "per_one", kind: "permission", fingerprint: "fp_per", reason: "Deletes the release branch",
+      })
+      expect(woken).toEqual([fixture.master.id])
+      const [notice] = yield* noticesFor(fixture, fixture.master.id)
+      expect(notice).toMatchObject({ id: first.messageID, type: "synthetic", delivery: "steer" })
+      const data = notice?.data as { text: string; metadata: Record<string, unknown> }
+      expect(data.metadata).toEqual({
+        source: "project_notification", groupID: fixture.group.id, memberSessionID: fixture.alpha.id, title: "alpha", event: "escalated",
+        requestID: "per_one", kind: "permission", excerpt: "Deletes the release branch", escalatedBy: { sessionID: fixture.subagent.id, title: "master subagent" },
+      })
+      expect(data.text).toBe(`Project notification:\n${JSON.stringify(data.metadata)}`)
+      woken.length = 0
+      expect(yield* fixture.runtime.escalate(fixture.subagent.id, input)).toEqual(first)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
+      expect(woken).toEqual([])
+      expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(false)
+    }))
+
+  it.effect("a stale or unappended escalation from a Master subagent delivers nothing to the Master", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      escalationOutcome.to = "none"
+      const result = yield* fixture.runtime.escalate(fixture.subagent.id, { sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission", fingerprint: "old", reason: "Changed" })
+      expect(result).toMatchObject({ delivered: false, decision: { outcome: "stale" } })
+      expect(result.messageID).toBeUndefined()
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("an escalation by the Master itself hands off natively and admits nothing, and callers outside the Project are refused", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      escalationOutcome.to = "human"
+      const input = { sessionID: fixture.alpha.id, requestID: "frm_one", kind: "question" as const, fingerprint: "fp_frm", reason: "Needs a person" }
+      expect(yield* fixture.runtime.escalate(fixture.master.id, input)).toMatchObject({ requestID: "frm_one", delivered: false, decision: { to: "human" } })
+      expect(escalations.map((item) => item.coordinatorSessionID)).toEqual([fixture.master.id])
+      expect(yield* refusal(fixture.runtime.escalate(fixture.outsider.id, input))).toBe("The project tool is only available to a Project's Master and its subagents")
+      expect(yield* refusal(fixture.runtime.escalate(fixture.subagent.id, { ...input, sessionID: fixture.outsider.id }))).toBe(`Session ${fixture.outsider.id} is not a member of this Project`)
+      expect(escalations).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      expect(woken).toEqual([])
     }))
 
   it.effect("a deterministic notice identity survives a lookup after promotion", () =>

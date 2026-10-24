@@ -134,6 +134,8 @@ describe("inventory and discovery", () => {
     expect(schemas.get("session_prompt")?.properties?.input?.required).toEqual(["id", "text"])
     expect(schemas.get("session_create")?.required).toEqual(["input"])
     expect(schemas.get("session_create")?.properties?.input?.required).toEqual(["id", "workspace"])
+    for (const name of ["session_create", "session_create_in_directory"])
+      expect(schemas.get(name)?.properties?.input?.properties?.title).toMatchObject({ type: "string", minLength: 1, maxLength: 120 })
     expect(schemas.get("provider_auth_key")?.properties?.sessionID).toBeUndefined()
     expect(schemas.get("provider_auth_key")?.properties?.input?.properties?.target?.oneOf).toHaveLength(2)
     expect(schemas.get("incident_guidance")?.required).toEqual(["input"])

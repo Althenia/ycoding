@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { stringWidth } from "../../src/util/string-width"
 import {
   ageLabel,
   chipsRow,
@@ -6,6 +7,7 @@ import {
   concurrencyMeter,
   delegationSummary,
   externalNotificationAllowed,
+  filterSessions,
   liveSummary,
   masterChoices,
   masterSummary,
@@ -15,6 +17,11 @@ import {
   parseConcurrency,
   parseExpiry,
   parseList,
+  projectHint,
+  projectListHeader,
+  projectListLine,
+  projectNarrowHeader,
+  projectNarrowLine,
   projectOfSession,
   projectNotification,
   projectStatusLabel,
@@ -28,6 +35,7 @@ import {
   updatedLabel,
   type NotificationFilter,
   type ProjectMemberView,
+  type ProjectSessionChoice,
   type ProjectView,
 } from "../../src/util/coordination"
 
@@ -113,12 +121,13 @@ test("state glyphs and words follow the registry and always pair a glyph with it
   expect(stateGlyph("running", true)).toBe("⠋")
 })
 
-test("the concurrency meter counts running members except the master", () => {
+test("the concurrency meter counts running members except the master and says so", () => {
   expect(runningMembers(release)).toBe(2)
-  expect(concurrencyMeter(release)).toBe("██ 2/2 running · at limit")
-  expect(concurrencyMeter({ ...release, concurrency: 4 })).toBe("██░░ 2/4 running")
-  expect(concurrencyMeter({ ...release, concurrency: null })).toBe("2 running · no limit")
-  expect(concurrencyMeter(project("x", lead, [docs]))).toBe("0 running · no limit")
+  expect(concurrencyMeter(release)).toBe("██ 2/2 members running · at limit")
+  expect(concurrencyMeter({ ...release, concurrency: 4 })).toBe("██░░ 2/4 members running")
+  expect(concurrencyMeter({ ...release, concurrency: null })).toBe("2 members running · no limit")
+  expect(concurrencyMeter(project("x", lead, [docs]))).toBe("0 members running · no limit")
+  expect(concurrencyMeter(project("y", lead, [api]))).toBe("1 member running · no limit")
 })
 
 test("the live summary lists each non-empty state with its count, master included", () => {
@@ -136,8 +145,15 @@ test("the live summary lists each non-empty state with its count, master include
 test("project status words and the master summary read from active state and roster", () => {
   expect(projectStatusLabel(true)).toBe("● active")
   expect(projectStatusLabel(false)).toBe("○ paused")
-  expect(masterSummary(release)).toBe("5 members · 2 running · 1 waiting")
-  expect(masterSummary(project("solo", lead, []))).toBe("1 member · 0 running")
+  expect(masterSummary(release)).toBe("4 members + Master · 3 running · 1 waiting")
+  expect(masterSummary(project("solo", lead, []))).toBe("0 members + Master · 1 running")
+  expect(masterSummary(project("one", lead, [docs]))).toBe("1 member + Master · 1 running")
+  expect(masterSummary(project("idle", participant("p", "Planner", "master"), [docs]))).toBe(
+    "1 member + Master · 0 running",
+  )
+  expect(masterSummary(project("held", participant("w", "Waiter", "master", "waiting"), [docs]))).toBe(
+    "1 member + Master · 0 running · 1 waiting",
+  )
 })
 
 test("ages read as now, seconds, minutes, hours and the updated stamp", () => {
@@ -155,22 +171,22 @@ test("the strip names the role, Project, status and counts, and collapses in a f
   const master = { project: release, role: "master" as const, sessionID: "lead" }
   const wide = stripLine({ ...master, width: 120 })
   expect(wide).toBe(
-    "Projects › Release train   ·   Master of Release train   ·   ● active   ·   5 members · 2 running · 1 waiting",
+    "Projects › Release train   ·   Master of Release train   ·   ● active   ·   4 members + Master · 3 running · 1 waiting",
   )
   const narrow = stripLine({ ...master, width: 80 })
-  expect(narrow).toBe("Master of Release train · ● active · 2/2 running · ? 1")
+  expect(narrow).toBe("Master of Release train · ● active · 3 running · ? 1")
   const squeezed = stripLine({ ...master, width: 50 })
   expect(squeezed.length).toBeLessThanOrEqual(50)
   expect(squeezed).toContain("Master of Releas")
   expect(squeezed).toContain("…")
-  expect(squeezed).toContain("2/2 running")
+  expect(squeezed).toContain("3 running")
   expect(squeezed).toContain("● active")
   const member = stripLine({ project: release, role: "member", sessionID: "docs", width: 120 })
   expect(member).toBe(
-    "Projects › Release train   ·   Member of Release train · master: Lead   ·   ↑ Lead   ←→ member 1 of 4   ·   ○ idle",
+    "Projects › Release train   ·   Member of Release train · master: Lead   ·   member 1 of 4   ·   ○ idle",
   )
   expect(stripLine({ project: release, role: "member", sessionID: "docs", width: 80 })).toBe(
-    "Member of Release train · master: Lead · ↑ Lead · ○ idle",
+    "Member of Release train · master: Lead · ○ idle",
   )
 })
 
@@ -340,4 +356,85 @@ test("the filter label names the selection honestly, including an unavailable ma
   expect(notificationFilterLabel({ scope: "selected", sessionIDs: ["b"], categories: ["review"] }, choices)).toBe(
     "masters: Lead B · review",
   )
+})
+
+const columnOf = (text: string, needle: string) => stringWidth(text.slice(0, text.indexOf(needle)))
+
+test("the list header and every row start each column at one offset", () => {
+  const header = projectListHeader()
+  const line = projectListLine(release, false)
+  expect(columnOf(header, "STATUS")).toBe(columnOf(line, "● active"))
+  expect(columnOf(header, "MASTER")).toBe(columnOf(line, "Lead"))
+  expect(columnOf(header, "MEMBERS")).toBe(columnOf(line, "4 "))
+  expect(columnOf(header, "LIVE")).toBe(columnOf(line, "●3"))
+  const wide = project("w", lead, [docs], { name: "项目发布计划名称很长很长很长很长很长" })
+  const wideLine = projectListLine(wide, false)
+  expect(columnOf(header, "STATUS")).toBe(columnOf(wideLine, "● active"))
+  expect(columnOf(header, "LIVE")).toBe(columnOf(wideLine, "●1"))
+})
+
+test("the narrow list keeps the member count under its header and inside the pane", () => {
+  const header = projectNarrowHeader()
+  const line = projectNarrowLine(release)
+  expect(columnOf(header, "MEMBERS")).toBe(columnOf(line, "4"))
+  expect(header).not.toContain("…")
+  expect(stringWidth(header)).toBeLessThanOrEqual(26)
+  expect(stringWidth(line)).toBeLessThanOrEqual(26)
+})
+
+test("the Project hint row drops leading navigation hints before it truncates", () => {
+  expect(projectHint({ role: "member", width: 120 })).toBe(
+    "↑ master · ←→ member · ctrl+x p members · enter send · esc interrupt",
+  )
+  expect(projectHint({ role: "master", width: 120 })).toBe("ctrl+x p members · enter send · esc interrupt")
+  const narrow = projectHint({ role: "member", width: 60 })
+  expect(stringWidth(narrow)).toBeLessThanOrEqual(60)
+  expect(narrow).toBe("←→ member · ctrl+x p members · enter send · esc interrupt")
+  expect(projectHint({ role: "member", width: 20 })).toBe("ctrl+x p members · enter send · esc interrupt")
+})
+
+test("Session search matches every word against the title and the directory", () => {
+  const sessions: ProjectSessionChoice[] = [
+    { sessionID: "a", title: "Refactor auth", directory: "/home/dev/Workspace/ycoding", updated: 3 },
+    { sessionID: "b", title: "Refactor auth", directory: "/home/dev/Workspace/other", updated: 2 },
+    { sessionID: "c", title: "Docs", directory: "/home/dev/Workspace/ycoding", updated: 1 },
+  ]
+  const ids = (query: string) => filterSessions(sessions, query).map((session) => session.sessionID)
+  expect(ids("")).toEqual(["a", "b", "c"])
+  expect(ids("  ")).toEqual(["a", "b", "c"])
+  expect(ids("YCODING")).toEqual(["a", "c"])
+  expect(ids("refactor ycoding")).toEqual(["a"])
+  expect(ids("auth other")).toEqual(["b"])
+  expect(ids("missing")).toEqual([])
+})
+
+test("an escalated notification keeps its request kind, excerpt and escalating Session", () => {
+  const base = {
+    source: "project_notification",
+    memberSessionID: "ses_infra",
+    title: "Infra worker",
+    event: "escalated",
+    requestID: "perm_one",
+    kind: "permission",
+    excerpt: "Needs approval to install the toolchain.",
+    escalatedBy: { sessionID: "ses_owner", title: "Infra owner" },
+  }
+  expect(projectNotification(base)).toEqual({
+    sessionID: "ses_infra",
+    title: "Infra worker",
+    event: "escalated",
+    excerpt: "Needs approval to install the toolchain.",
+    kind: "permission",
+    escalatedBy: { sessionID: "ses_owner", title: "Infra owner" },
+  })
+  expect(projectNotification({ ...base, kind: "shell", escalatedBy: { sessionID: "owner", title: "x" } })).toEqual({
+    sessionID: "ses_infra",
+    title: "Infra worker",
+    event: "escalated",
+    excerpt: "Needs approval to install the toolchain.",
+  })
+  expect(projectNotification({ ...base, excerpt: "x".repeat(900), escalatedBy: { sessionID: "ses_o", title: "t".repeat(300) } })).toMatchObject({
+    excerpt: "x".repeat(500),
+    escalatedBy: { sessionID: "ses_o", title: "t".repeat(120) },
+  })
 })

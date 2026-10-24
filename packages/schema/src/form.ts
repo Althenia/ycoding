@@ -1,6 +1,7 @@
 export * as Form from "./form.js"
 
 import { Schema } from "effect"
+import { Coordination } from "./coordination.js"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
 import { NonNegativeInt, optional, PositiveInt, statics } from "./schema.js"
@@ -131,6 +132,7 @@ const InfoBase = {
 export const Info = Schema.Struct({
   ...InfoBase,
   fields: Fields,
+  coordinationEscalation: Coordination.Escalation.pipe(optional),
 }).annotate({ identifier: "Form.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 

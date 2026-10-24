@@ -35,6 +35,11 @@ const button = (name: string) => `[...document.querySelectorAll('button,a')].fil
 const click = (page: Page, name: string) => page.evaluate(`${button(name)}.click()`)
 const setField = (page: Page, label: string, value: string) => page.evaluate(`(()=>{const el=[...document.querySelectorAll('label')].find(e=>e.textContent.includes(${JSON.stringify(label)})).querySelector('input,textarea');el.value=${JSON.stringify(value)};el.dispatchEvent(new InputEvent('input',{bubbles:true}))})()`)
 const mutations = (page: Page, operation: string) => page.evaluate<{ input: Record<string, unknown> }[]>(`window.remoteMutationReport().filter(x=>x.operation===${JSON.stringify(operation)})`)
+const sessionCounts = (page: Page) => page.evaluate<{ tab: number; rows: number; live: Record<string, number> }>(`(()=>{
+  const root=document.querySelector('.project-desktop .project-panel')
+  const live=Object.fromEntries([...root.querySelectorAll('.project-summary .project-live')].map(e=>[e.dataset.state,Number(e.textContent.match(/\\d+/)[0])]))
+  return {tab:Number(root.querySelector('[role=tab]').textContent.match(/\\d+/)[0]),rows:root.querySelectorAll('.project-member').length,live}
+})()`)
 const panel = (width: number) => width < 1024 ? "dialog .project-panel" : ".project-desktop .project-panel"
 async function openProject(page: Page, width = 1440) {
   await until(page, `document.querySelectorAll('.project-card').length===2`)
@@ -97,6 +102,108 @@ describe("Projects", () => {
       expect(await mutations(page, "coordination.create")).toHaveLength(1)
     } finally { await page.close() }
   }, 30_000)
+
+  test("live counts include the Master everywhere while the concurrency meter counts members only", async () => {
+    const page = await open()
+    try {
+      await until(page, `document.querySelectorAll('.project-card').length===2`)
+      const card = await page.evaluate<string>(`[...document.querySelectorAll('.project-card')].find(e=>e.textContent.includes('Release train')).querySelector('.project-meta').textContent`)
+      expect(card).toBe("2 running · 1 waiting · 1 failed · 5 Sessions")
+      await openProject(page)
+      expect(await page.evaluate<string>(`document.querySelector('.project-rail [aria-current=true]').textContent`)).toContain("2 running · 1 waiting · 1 failed")
+      expect(await sessionCounts(page)).toEqual({ tab: 5, rows: 5, live: { running: 2, waiting: 1, idle: 1, failed: 1 } })
+      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} [role=meter]').getAttribute('aria-valuetext')`)).toBe("1 of 2 running")
+      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} .project-meter__label').textContent`)).toContain("Member concurrency limit")
+    } finally { await page.close() }
+  }, 30_000)
+
+  test("a new Master in a chosen directory carries through create project, add existing and create member with consistent counts", async () => {
+    const page = await open()
+    try {
+      await until(page, `document.querySelectorAll('.project-card').length===2`)
+      await click(page, "New project")
+      await setField(page, "Project name", "Fresh project")
+      await click(page, "Create a new Session")
+      await click(page, "Directory")
+      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await click(page, "Create project")
+      await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Fresh project')`)
+      const created = await mutations(page, "session.create")
+      expect(created).toHaveLength(1)
+      expect(created[0]?.input).toEqual({ id: expect.stringMatching(/^ses_/), workspace: "workspace_fixture", title: "Fresh project" })
+      expect((await mutations(page, "coordination.create"))[0]?.input).toEqual({ name: "Fresh project", masterSessionID: created[0]?.input.id, memberSessionIDs: [] })
+      await until(page, `document.querySelectorAll('${panel(1440)} .project-member').length===1`)
+      expect(await sessionCounts(page)).toEqual({ tab: 1, rows: 1, live: { running: 0, waiting: 0, idle: 1, failed: 0 } })
+      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} .project-meter__label').textContent`)).toContain("Members running")
+
+      await click(page, "Add session…")
+      await click(page, "Add Triage flaky tests")
+      await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===2`)
+      expect(await sessionCounts(page)).toEqual({ tab: 2, rows: 2, live: { running: 0, waiting: 0, idle: 2, failed: 0 } })
+
+      await click(page, "New session…")
+      await click(page, "Directory")
+      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await click(page, "Create and add")
+      await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===3`)
+      expect(await sessionCounts(page)).toEqual({ tab: 3, rows: 3, live: { running: 0, waiting: 0, idle: 3, failed: 0 } })
+      expect(await page.evaluate<string>(`document.querySelector('${panel(1440)} [role=meter]')?.getAttribute('aria-valuetext') ?? document.querySelector('${panel(1440)} .project-meter strong').textContent`)).toBe("0 · no limit")
+
+      const members = await mutations(page, "coordination.update")
+      expect(members.map((entry) => entry.input.memberSessionIDs)).toEqual([["ses_available"], ["ses_available", expect.stringMatching(/^ses_/)]])
+      expect(members.map((entry) => entry.input.revision)).toEqual([0, 1])
+      const sessionCreates = await mutations(page, "session.create")
+      expect(sessionCreates).toHaveLength(2)
+      expect(sessionCreates[1]?.input).not.toHaveProperty("title")
+
+      await page.evaluate(`document.querySelector('.project-heading .text-link').click()`)
+      await until(page, `[...document.querySelectorAll('.project-card')].some(e=>e.textContent.includes('Fresh project'))`)
+      expect(await page.evaluate<string>(`[...document.querySelectorAll('.project-card')].find(e=>e.textContent.includes('Fresh project')).querySelector('.project-meta').textContent`)).toBe("0 running · 3 Sessions")
+    } finally { await page.close() }
+  }, 60_000)
+
+  test("a new Master is titled with the Project name unless a title is typed, and the created Session shows it", async () => {
+    for (const typed of ["", "  Release lead  "]) {
+      const page = await open()
+      try {
+        await until(page, `document.querySelectorAll('.project-card').length===2`)
+        await click(page, "New project")
+        await setField(page, "Project name", "Billing migration")
+        await click(page, "Create a new Session")
+        expect(await page.evaluate<string>(`[...document.querySelectorAll('label')].find(e=>e.textContent.includes('Session title')).querySelector('input').placeholder`)).toBe("Defaults to the Project name")
+        if (typed) await setField(page, "Session title", typed)
+        await click(page, "Directory")
+        await page.evaluate(`document.querySelector('[role=option]').click()`)
+        await click(page, "Create project")
+        const expected = typed.trim() || "Billing migration"
+        await until(page, `document.querySelector('.project-context')?.textContent.includes('Master of Billing migration')`)
+        expect((await mutations(page, "session.create"))[0]?.input).toMatchObject({ workspace: "workspace_fixture", title: expected })
+        await until(page, `document.querySelector('${panel(1440)} .project-member strong')?.textContent===${JSON.stringify(expected)}`)
+      } finally { await page.close() }
+    }
+  }, 60_000)
+
+  test("a new member takes the typed title, and stays untitled when none is typed", async () => {
+    const page = await open()
+    try {
+      await openProject(page)
+      await click(page, "New session…")
+      await setField(page, "Session title", "Docs member")
+      await click(page, "Directory")
+      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await click(page, "Create and add")
+      await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===6`)
+      expect((await mutations(page, "session.create"))[0]?.input).toMatchObject({ title: "Docs member" })
+      expect(await page.evaluate<string>(`[...document.querySelectorAll('${panel(1440)} .project-member strong')].at(-1).textContent`)).toBe("Docs member")
+      await click(page, "New session…")
+      await click(page, "Directory")
+      await page.evaluate(`document.querySelector('[role=option]').click()`)
+      await click(page, "Create and add")
+      await until(page, `!document.querySelector('dialog[open]') && document.querySelectorAll('${panel(1440)} .project-member').length===7`)
+      expect((await mutations(page, "session.create"))[1]?.input).not.toHaveProperty("title")
+      expect(await page.evaluate<string>(`[...document.querySelectorAll('${panel(1440)} .project-member strong')].at(-1).textContent`)).toBe("New session")
+    } finally { await page.close() }
+  }, 60_000)
 
   test("adds, removes and deletes member Sessions through their distinct operations", async () => {
     const page = await open()

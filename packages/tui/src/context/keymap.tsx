@@ -10,12 +10,12 @@ import {
   registerManagedTextareaLayer,
 } from "@opentui/keymap/addons/opentui"
 import { formatCommandBindings, formatKeySequence } from "@opentui/keymap/extras"
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { KeymapProvider, useBindings, useKeymapSelector } from "@opentui/keymap/solid"
 import { useRenderer } from "@opentui/solid"
 import { createContext, onCleanup, useContext, type Accessor, type ParentProps } from "solid-js"
 import { useConfig } from "../config"
 import { TuiKeybind } from "../config/keybind"
+import { createKeymap } from "../util/keymap"
 
 declare module "@opentui/keymap" {
   interface Command {
@@ -59,7 +59,7 @@ function consumeEmptyNamedKey(context: KeyInputContext) {
 function Provider(props: ParentProps<{ config?: KeymapConfig }>) {
   const renderer = useRenderer()
   const config: KeymapConfig = props.config ?? useConfig().data
-  const keymap = createDefaultOpenTuiKeymap(renderer)
+  const keymap = createKeymap(renderer)
   const mode = createMode(keymap)
   let invocation: { readonly id: string; readonly input?: string } | undefined
   const dispatch = (id: string, input?: string) => {

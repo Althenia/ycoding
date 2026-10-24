@@ -18,7 +18,8 @@ export type Row = {
   shortcut?: { key: string; available: boolean }
   activate?: () => void
   step?: (direction: 1 | -1) => void
-  edit?: { initial: string; commit: (text: string) => void }
+  truncate?: "start"
+  edit?: { initial: string; commit: (text: string) => void; onInput?: (text: string) => void }
 }
 
 export function Panel(props: {
@@ -66,7 +67,7 @@ export function createRowList(input: {
   const { theme } = useTheme()
   const [cursorKey, setCursorKey] = createSignal<string>()
   const [lastIndex, setLastIndex] = createSignal(0)
-  const [editing, setEditing] = createSignal<{ key: string; draft: string }>()
+  const [editing, setEditing] = createSignal<{ key: string; draft: string; initial: string }>()
   const [editor, setEditor] = createSignal<InputRenderable>()
   let scroll: ScrollBoxRenderable | undefined
 
@@ -104,7 +105,7 @@ export function createRowList(input: {
 
   function startEdit(row: Row) {
     if (!row.edit || input.busy?.()) return
-    setEditing({ key: row.key, draft: row.edit.initial })
+    setEditing({ key: row.key, draft: row.edit.initial, initial: row.edit.initial })
   }
   function activate(row: Row | undefined) {
     if (!row) return
@@ -117,7 +118,12 @@ export function createRowList(input: {
     setEditing(undefined)
     if (current && row?.edit) row.edit.commit(current.draft)
   }
-  const cancel = () => setEditing(undefined)
+  const cancel = () => {
+    const current = editing()
+    const row = input.rows().find((item) => item.key === current?.key)
+    setEditing(undefined)
+    if (current && current.draft !== current.initial) row?.edit?.onInput?.(current.initial)
+  }
   Keymap.createLayer(() => ({
     priority: 20,
     target: editor,
@@ -160,11 +166,12 @@ export function createRowList(input: {
       const text = Locale.truncateWidth(rowText(row()), row().value === undefined ? input.contentWidth() - 2 : column())
       return row().value === undefined ? text : text + " ".repeat(Math.max(0, column() - stringWidth(text)))
     }
-    const valueText = () =>
-      Locale.truncateWidth(
-        `${row().marker ? row().marker + " " : ""}${row().value ?? ""}`,
-        Math.max(1, input.contentWidth() - 2 - column() - 1),
-      )
+    const valueText = () => {
+      const width = Math.max(1, input.contentWidth() - 2 - column() - 2)
+      const marker = row().marker ? row().marker + " " : ""
+      if (row().truncate === "start") return marker + Locale.truncateLeft(row().value ?? "", Math.max(1, width - marker.length))
+      return Locale.truncateWidth(`${marker}${row().value ?? ""}`, width)
+    }
     return (
       <Show
         when={row().kind !== "heading"}
@@ -224,7 +231,10 @@ export function createRowList(input: {
                 }, 1)
               }}
               value={editing()?.draft ?? ""}
-              onInput={(text: string) => setEditing((current) => (current ? { ...current, draft: text } : current))}
+              onInput={(text: string) => {
+                setEditing((current) => (current ? { ...current, draft: text } : current))
+                row().edit?.onInput?.(text)
+              }}
               onSubmit={commit}
               onKeyDown={(event: { name: string; preventDefault(): void }) => {
                 if (event.name !== "escape") return
@@ -233,8 +243,9 @@ export function createRowList(input: {
               }}
               flexGrow={1}
               focusedBackgroundColor="transparent"
-              focusedTextColor={theme.text.default}
-              cursorColor={theme.text.feedback.info.default}
+              textColor={foreground()}
+              focusedTextColor={foreground()}
+              cursorColor={foreground()}
             />
           </Show>
         </box>

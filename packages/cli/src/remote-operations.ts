@@ -20,6 +20,7 @@ import {
   isRemoteLatencySample,
   isRemoteReviewItemID,
   isSessionID,
+  isSessionTitle,
   remoteError,
   remoteRecoveryChoices,
   parseProviderAuthInput,
@@ -684,6 +685,11 @@ async function requireAgentMentions(local: LocalServer, location: LocalLocation,
     throw new OperationError("invalid_message", "Agent mention is unavailable at the Session Location")
 }
 
+function sessionTitle(value: unknown) {
+  if (!isSessionTitle(value)) throw new OperationError("invalid_message", `Title must be trimmed, nonblank, at most ${RemoteLimits.maxSessionTitleChars} characters, and free of control characters`)
+  return value
+}
+
 function modelSelection(value: unknown): ModelSelection {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new OperationError("invalid_message", "Invalid model")
   if (Object.keys(value).some((key) => !["providerID", "id", "variant", "profile"].includes(key))) throw new OperationError("invalid_message", "Invalid model")
@@ -696,7 +702,9 @@ function modelSelection(value: unknown): ModelSelection {
     ...(profile === undefined ? {} : { profile: requireString(profile, "profile", 128) }) }
 }
 
-async function createRootSession(input: OperationInput, id: string, workspaceID: string, agent?: string, model?: ModelSelection): Promise<SessionInfo> {
+type RootChoices = { readonly agent?: string; readonly model?: ModelSelection; readonly title?: string }
+
+async function createRootSession(input: OperationInput, id: string, workspaceID: string, choices: RootChoices): Promise<SessionInfo> {
   const candidate = (await workspaceInventory(input)).find((item) => item.info.id === workspaceID)
   if (candidate === undefined) throw new OperationError("invalid_message", "Workspace is unavailable; refresh the workspace list and reopen it")
   if (!(await stat(candidate.location.directory).then((value) => value.isDirectory(), () => false)))
@@ -704,10 +712,10 @@ async function createRootSession(input: OperationInput, id: string, workspaceID:
   const currentProject = await input.local.projectCurrent(candidate.location)
   if (currentProject.id !== candidate.info.projectID)
     throw new OperationError("invalid_message", "Workspace project changed; refresh the workspace list and reopen it")
-  return adoptOrCreateRoot(input, id, candidate, agent, model)
+  return adoptOrCreateRoot(input, id, candidate, choices)
 }
 
-async function adoptOrCreateRoot(input: Pick<OperationInput, "local" | "sessions" | "signal">, id: string, candidate: WorkspaceCandidate, agent?: string, model?: ModelSelection): Promise<SessionInfo> {
+async function adoptOrCreateRoot(input: Pick<OperationInput, "local" | "sessions" | "signal">, id: string, candidate: WorkspaceCandidate, choices: RootChoices): Promise<SessionInfo> {
   const existing = input.sessions.snapshot().find((session) => session.id === id) ?? await findSession(input.local, id)
   if (existing !== undefined) {
     assertRootPlacement(existing, id, candidate)
@@ -717,7 +725,7 @@ async function adoptOrCreateRoot(input: Pick<OperationInput, "local" | "sessions
     return current
   }
 
-  const created = await input.local.createSession(id, candidate.location, agent, model)
+  const created = await input.local.createSession(id, candidate.location, choices.agent, choices.model, choices.title)
   assertRootPlacement(created, id, candidate)
   await input.sessions.add(id, locationInfo(created))
   const verified = await input.sessions.verify(id, input.signal)
@@ -789,18 +797,19 @@ export type DirectorySessionInput = Omit<OperationInput, "request" | "uploads" |
 export async function executeRemoteDirectorySession(input: DirectorySessionInput): Promise<readonly RemoteResponse[]> {
   return settle({ type: "request", id: input.id, operation: "session.create" }, async () => {
     for (const key of Object.keys(input.input))
-      if (!["id", "directory", "agent", "model"].includes(key)) throw new OperationError("invalid_message", `Unknown input field "${key}"`)
+      if (!["id", "directory", "agent", "model", "title"].includes(key)) throw new OperationError("invalid_message", `Unknown input field "${key}"`)
     const id = sessionID(input.input.id, "id")
     const directory = requireString(input.input.directory, "directory", 4_096)
     const agent = input.input.agent === undefined ? undefined : requireString(input.input.agent, "agent", 128)
     const model = input.input.model === undefined ? undefined : modelSelection(input.input.model)
+    const title = input.input.title === undefined ? undefined : sessionTitle(input.input.title)
     const location = { directory: await homeDescendant(input.home, directory) }
     const current = await input.local.projectCurrent(location)
     const candidate: WorkspaceCandidate = {
       location,
       info: { id: workspaceKey(current.id, location.directory), projectID: current.id, directory: location.directory, name: basename(location.directory) },
     }
-    return { data: await adoptOrCreateRoot(input, id, candidate, agent, model) }
+    return { data: await adoptOrCreateRoot(input, id, candidate, { agent, model, title }) }
   })
 }
 
@@ -873,7 +882,7 @@ async function run(input: OperationInput) {
     return validated.kind === "workspace.catalog" ? catalog(input.local, candidate.location) : findFiles(input.local, candidate.location, validated.query, validated.limit)
   }
   if (validated.kind === "session.create")
-    return { data: await createRootSession(input, validated.id, validated.workspace, validated.agent, validated.model) }
+    return { data: await createRootSession(input, validated.id, validated.workspace, { agent: validated.agent, model: validated.model, title: validated.title }) }
   if (validated.kind === "list") {
     const sessions = input.sessions.snapshot()
     if (validated.query.status === undefined && validated.query.order !== "active") return listPage(sessions, validated.query)
@@ -1224,7 +1233,7 @@ type Validated =
   | { readonly kind: "incident.report"; readonly input: RemoteIncidentReportInput }
   | { readonly kind: "incident.recent"; readonly input: RemoteIncidentRecentInput }
   | { readonly kind: "incident.guidance" | "incident.guidance.clear"; readonly input: RemoteIncidentGuidanceInput }
-  | { readonly kind: "session.create"; readonly id: string; readonly workspace: string; readonly agent?: string; readonly model?: ModelSelection }
+  | { readonly kind: "session.create"; readonly id: string; readonly workspace: string; readonly agent?: string; readonly model?: ModelSelection; readonly title?: string }
   | { readonly kind: "workspace.catalog"; readonly workspace: string }
   | { readonly kind: "workspace.file.find"; readonly workspace: string; readonly query: string; readonly limit: number }
   | { readonly kind: "catalog" }
@@ -1550,6 +1559,7 @@ function validate(request: RemoteRequest): Validated {
       workspace: requireString(fields.workspace, "workspace", 128),
       ...(fields.agent === undefined ? {} : { agent: requireString(fields.agent, "agent", 128) }),
       ...(fields.model === undefined ? {} : { model: modelSelection(fields.model) }),
+      ...(fields.title === undefined ? {} : { title: sessionTitle(fields.title) }),
     }
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
@@ -2276,7 +2286,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.autonomy.set": ["yolo", "autoPermission", "autoGuardrail", "autoAnswer", "sleep"],
   "session.goal.set": ["goal", "maxNoProgress", "yolo"],
   "session.goal.stop": ["goal"],
-  "session.create": ["id", "workspace", "agent", "model"],
+  "session.create": ["id", "workspace", "agent", "model", "title"],
 }
 
 function validateFields(request: RemoteRequest): Readonly<Record<string, unknown>> {

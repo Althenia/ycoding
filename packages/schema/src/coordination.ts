@@ -32,6 +32,19 @@ export const RequestKind = Schema.Literals(["question", "permission", "review"])
 })
 export type RequestKind = typeof RequestKind.Type
 
+export const maxEscalationReasons = 4
+
+export interface EscalationReason extends Schema.Schema.Type<typeof EscalationReason> {}
+export const EscalationReason = Schema.Struct({
+  sessionID: SessionID,
+  reason: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500), Schema.isPattern(/\S/)),
+}).annotate({ identifier: "Coordination.EscalationReason" })
+
+export interface Escalation extends Schema.Schema.Type<typeof Escalation> {}
+export const Escalation = Schema.Struct({
+  reasons: Schema.Array(EscalationReason).check(Schema.isMinLength(1), Schema.isMaxLength(maxEscalationReasons)),
+}).annotate({ identifier: "Coordination.Escalation" })
+
 export const MemberState = Schema.Literals(["idle", "running", "waiting", "failed"]).annotate({
   identifier: "Coordination.MemberState",
 })
@@ -146,6 +159,19 @@ export namespace Event {
     schema: { groupID: GroupID, revision: Revision },
   })
   export type Updated = typeof Updated.Type
+
+  export const RequestEscalated = ephemeral({
+    type: "coordination.request.escalated",
+    identifier: "Coordination.Event.RequestEscalated",
+    schema: {
+      sessionID: SessionID,
+      rootSessionID: SessionID.pipe(optional),
+      kind: RequestKind,
+      requestID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+      coordinationEscalation: Escalation,
+    },
+  })
+  export type RequestEscalated = typeof RequestEscalated.Type
 
   export const Created = durable({
     type: "coordination.group.created",

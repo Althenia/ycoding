@@ -371,6 +371,7 @@ export const RemoteLimits = {
   maxCompletionBatch: 200,
   maxStatusSessions: 500,
   maxAlertTitleChars: 120,
+  maxSessionTitleChars: 120,
   maxFamilyMembers: 16,
   maxCompactionHistory: 100,
   maxSubscriptionsPerClient: 64,
@@ -983,10 +984,11 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     !isSessionID(input.id) ||
     !validWorkspace(input.workspace) ||
     (input.agent !== undefined && !validName(input.agent)) ||
-    (input.model !== undefined && !validModel(input.model))
+    (input.model !== undefined && !validModel(input.model)) ||
+    (input.title !== undefined && !isSessionTitle(input.title))
   )
     return false
-  return Object.keys(input).every((key) => key === "id" || key === "workspace" || key === "agent" || key === "model")
+  return Object.keys(input).every((key) => key === "id" || key === "workspace" || key === "agent" || key === "model" || key === "title")
 }
 
 function coordinationKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -1228,8 +1230,16 @@ function isAttentionNeed(value: unknown): value is RemoteAttentionNeed {
 }
 
 export function isAlertTitle(value: unknown): value is string {
+  return boundedTitle(value, RemoteLimits.maxAlertTitleChars)
+}
+
+export function isSessionTitle(value: unknown): value is string {
+  return boundedTitle(value, RemoteLimits.maxSessionTitleChars)
+}
+
+function boundedTitle(value: unknown, maxChars: number): value is string {
   return typeof value === "string" && value.trim() === value && value.length > 0 &&
-    Array.from(value).length <= RemoteLimits.maxAlertTitleChars && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(value)
+    Array.from(value).length <= maxChars && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(value)
 }
 
 export function alertTitle(value: string): string | undefined {

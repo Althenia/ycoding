@@ -1,6 +1,7 @@
 export * as SessionGuardrail from "./guardrail"
 
 import path from "path"
+import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Session } from "@ycoding-ai/schema/session"
 import { and, asc, desc, eq, sql } from "drizzle-orm"
@@ -30,6 +31,7 @@ import { SessionGuardrailMatch } from "./guardrail-match"
 import { SessionGuardrailStandard } from "./guardrail-standard"
 import { SessionReviewFold } from "./review-fold"
 import { SessionAssessment } from "./assessment"
+import { CoordinationEscalation } from "./coordination-escalation"
 import { SessionDecisionContext } from "./decision-context"
 import { ModelIncident } from "../model-incident/index"
 
@@ -82,15 +84,23 @@ export interface ReconsiderInput {
   readonly fingerprint: string
   readonly actor: "coordinator"
   readonly source: { readonly coordinatorSessionID: Session.ID; readonly groupID: string; readonly rationale: string }
+  readonly decision?: "approve" | "decline"
   readonly validate: (snapshot: Guardrail.Request) => Effect.Effect<boolean>
 }
+
+export interface EscalateInput extends CoordinationEscalation.Input {
+  readonly sessionID: Session.ID
+  readonly requestID: Guardrail.RequestID
+}
+
+export type EscalateResult = CoordinationEscalation.Result<Guardrail.RequestID>
 
 export interface ReconsiderResult {
   readonly outcome: "allowed" | "denied" | "escalated" | "stale"
   readonly requestID: Guardrail.RequestID
   readonly fingerprint: string
   readonly settled: boolean
-  readonly via?: "auto-guardrail" | "baseline" | "yolo" | "guardrail-rules"
+  readonly via?: "auto-guardrail" | "baseline" | "yolo" | "guardrail-rules" | "coordination"
   readonly reason?: string
 }
 
@@ -150,6 +160,7 @@ export interface Interface {
     requestID: Guardrail.RequestID,
   ) => Effect.Effect<RequestSnapshot | undefined, SessionErrors.NotFoundError>
   readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult, SessionErrors.NotFoundError>
+  readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult, SessionErrors.NotFoundError>
   readonly requestSnapshots: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<RequestSnapshot>, SessionErrors.NotFoundError>
   readonly deferPending: (sessionID: Session.ID) => Effect.Effect<void, SessionErrors.NotFoundError>
   readonly forSession: (
@@ -166,7 +177,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionGuardrail") {}
 
 interface Pending {
-  readonly request: Guardrail.Request
+  request: Guardrail.Request
   readonly deferred: Deferred.Deferred<void, DeclinedError | DeferredError>
   readonly review: ManagedReservation
   readonly directories: ReadonlyArray<string>
@@ -613,6 +624,7 @@ export const layer = Layer.effect(
           directories: [...item.directories],
           fingerprint: requestFingerprint(item.request),
           requestID: item.request.id,
+          ...CoordinationEscalation.redacted(item.request.coordinationEscalation),
         },
         limit: settings?.max_pending_reviews ?? 16,
         conversion,
@@ -1119,6 +1131,41 @@ export const layer = Layer.effect(
                       metadata: item.request.metadata,
                       ...(item.source ? { source: item.source } : {}),
                     }
+                    if (input.decision === "decline")
+                      return yield* withRootLock(
+                        rootSessionID,
+                        Effect.gen(function* () {
+                          if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
+                          if (!(yield* input.validate(item.request)))
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                          if ((yield* classify(evaluateInput)).evaluation.hardReview)
+                            return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:hard-review" }
+                          removePendingUnlocked(input.requestID)
+                          yield* events.publish(Guardrail.Event.Replied, {
+                            rootSessionID,
+                            sessionID: item.request.sessionID,
+                            requestID: item.request.id,
+                            reply: "reject",
+                          })
+                          yield* events.publish(SessionEvent.GuardrailDecided, {
+                            sessionID: rootSessionID,
+                            reviewSessionID: item.request.sessionID,
+                            requestID: item.request.id,
+                            reply: "reject",
+                            ruleIDs: [...item.request.ruleIDs],
+                            ...(item.source ? { source: item.source } : {}),
+                            actor: "coordinator",
+                            coordinatorSessionID: input.source.coordinatorSessionID,
+                            groupID: input.source.groupID,
+                            rationale: input.source.rationale,
+                          })
+                          yield* Deferred.fail(item.deferred, new DeclinedError({
+                            requestID: item.request.id,
+                            message: Permission.coordinationDeclineFeedback("guardrail", input.source.rationale),
+                          }))
+                          return { ...base, outcome: "denied" as const, settled: true, via: "coordination" as const }
+                        }),
+                      )
                     const settleRules = (evaluation: Evaluation) =>
                       withRootLock(
                         rootSessionID,
@@ -1326,6 +1373,40 @@ export const layer = Layer.effect(
       }),
     )
 
+    const escalate = Effect.fn("SessionGuardrail.escalate")(function* (input: EscalateInput) {
+      const rootSessionID = yield* root(input.sessionID)
+      return yield* withRootLock(
+        rootSessionID,
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const item = pending.get(input.requestID)
+            if (item === undefined) {
+              const review = yield* CoordinationEscalation.deferredItem(database.db, { ...input, type: "guardrail" })
+              if (review === undefined || review.payload.type !== "guardrail") return CoordinationEscalation.result(input.requestID, input)
+              return CoordinationEscalation.deferred(input.requestID, input, { itemID: review.itemID, coordinationEscalation: review.payload.coordinationEscalation })
+            }
+            if (
+              item.request.rootSessionID !== rootSessionID ||
+              item.request.sessionID !== input.sessionID ||
+              requestFingerprint(item.request) !== input.fingerprint
+            )
+              return CoordinationEscalation.result(input.requestID, input)
+            const appended = CoordinationEscalation.append(item.request.coordinationEscalation, input.source)
+            if (appended.type !== "appended") return CoordinationEscalation.result(input.requestID, input, appended)
+            item.request = new Guardrail.Request({ ...item.request, coordinationEscalation: appended.value })
+            yield* events.publish(Coordination.Event.RequestEscalated, {
+              sessionID: item.request.sessionID,
+              rootSessionID,
+              kind: "review",
+              requestID: item.request.id,
+              coordinationEscalation: appended.value,
+            })
+            return CoordinationEscalation.result(input.requestID, input, appended)
+          }),
+        ),
+      )
+    })
+
     const forSession = Effect.fn("SessionGuardrail.forSession")(function* (sessionID: Session.ID) {
       const rootSessionID = yield* root(sessionID)
       return yield* withRootLock(
@@ -1476,7 +1557,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), requestSnapshot, reconsider, requestSnapshots, deferPending, forSession, status, snapshot, withSnapshot })
+    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), requestSnapshot, reconsider, escalate, requestSnapshots, deferPending, forSession, status, snapshot, withSnapshot })
   }),
 )
 

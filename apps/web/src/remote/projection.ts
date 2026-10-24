@@ -9,6 +9,7 @@
 import type { Form } from "../../../../packages/schema/src/form"
 import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { parseUnifiedPatch } from "./file-change-diff"
+import { readProjectEscalation, readProjectEscalationEvent, type ProjectEscalationView } from "./project-escalation"
 import { escalationText, readGuardrailProvenance, readGuardrailDecisions, mergeGuardrailDecisions, type DecisionProvenanceView, type GradeView, type GuardrailDecisionView } from "./decision-grades"
 
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
@@ -288,6 +289,7 @@ export type PendingRequestView =
       readonly action: string
       readonly resources: readonly string[]
       readonly escalation?: DecisionProvenanceView
+      readonly projectEscalation?: ProjectEscalationView
       readonly askedAt: number
     }
   | {
@@ -300,6 +302,7 @@ export type PendingRequestView =
       readonly reason: string
       readonly hardReview: boolean
       readonly escalation?: DecisionProvenanceView
+      readonly projectEscalation?: ProjectEscalationView
       readonly metadata?: Readonly<Record<string, unknown>>
       readonly askedAt: number
     }
@@ -307,6 +310,7 @@ export type PendingRequestView =
       readonly kind: "form"
       readonly id: string
       readonly form: FormView
+      readonly projectEscalation?: ProjectEscalationView
       readonly askedAt: number
     }
 
@@ -320,6 +324,7 @@ export type ReviewItemView = {
   readonly choice?: string
   readonly confidence?: number
   readonly grades?: readonly GradeView[]
+  readonly projectEscalation?: ProjectEscalationView
   readonly child?: { readonly agent: string; readonly description: string }
 } & (
   | { readonly kind: "question"; readonly form: FormView; readonly answers: "form" | "questions" }
@@ -421,6 +426,7 @@ export type SessionView = {
   readonly messages: readonly RemoteMessageView[]
   readonly compactionHistory?: RemoteCompactionHistory
   readonly requests: readonly PendingRequestView[]
+  readonly projectEscalations?: Readonly<Record<string, ProjectEscalationView>>
   readonly capturedChanges?: RemoteCapturedChangesPage["data"]
   readonly review?: { readonly status: "ready" | "unsupported" | "error"; readonly items: readonly ReviewItemView[] }
   readonly guardrailDecisions?: readonly GuardrailDecisionView[]
@@ -471,7 +477,7 @@ export function isGoalSteerAdmission(payload: unknown): boolean {
 
 export function changesReviewItems(payload: unknown): boolean {
   if (!isRecord(payload) || typeof payload.type !== "string") return false
-  return payload.type.startsWith("session.review.") || payload.type === "session.task.updated" || isSessionStateNotice(payload) ||
+  return payload.type.startsWith("session.review.") || payload.type === "coordination.request.escalated" || payload.type === "session.task.updated" || isSessionStateNotice(payload) ||
     ["form.deferred", "question.deferred", "guardrail.deferred", "permission.deferred"].includes(payload.type)
 }
 
@@ -643,14 +649,14 @@ export function reconcilePendingInputs(view: SessionView, pending: readonly Remo
   return { ...view, messages: visibleTranscript([...retained.filter((message) => !admitted.some((item) => item.id === message.id)), ...admitted]) }
 }
 
-const memberEventKinds = ["completed", "failed", "interrupted", "question", "permission", "review"] as const
+const memberEventKinds = ["completed", "failed", "interrupted", "question", "permission", "review", "escalated"] as const
 export type MemberEventKind = (typeof memberEventKinds)[number]
 
 export function classifySyntheticNotice(message: RemoteMessageView):
   | { readonly kind: "subagent"; readonly label: string; readonly status: "completed" | "failed" | "waiting" | "updated"; readonly excerpt?: string }
   | { readonly kind: "completion"; readonly label: string; readonly status: string; readonly description: string }
   | { readonly kind: "goal"; readonly text: string }
-  | { readonly kind: "member"; readonly label: string; readonly event: MemberEventKind; readonly memberSessionID: string; readonly requestID?: string; readonly excerpt?: string }
+  | { readonly kind: "member"; readonly label: string; readonly event: MemberEventKind; readonly memberSessionID: string; readonly requestID?: string; readonly excerpt?: string; readonly escalatedBy?: string }
   | undefined {
   if (message.kind !== "synthetic") return undefined
   const metadata = message.metadata
@@ -660,7 +666,9 @@ export function classifySyntheticNotice(message: RemoteMessageView):
     const label = typeof metadata.title === "string" && metadata.title.length > 0 ? metadata.title : metadata.memberSessionID
     return { kind: "member", label, event, memberSessionID: metadata.memberSessionID,
       ...(typeof metadata.requestID === "string" && metadata.requestID.length > 0 ? { requestID: metadata.requestID } : {}),
-      ...(typeof metadata.excerpt === "string" && metadata.excerpt.trim() ? { excerpt: metadata.excerpt } : {}) }
+      ...(typeof metadata.excerpt === "string" && metadata.excerpt.trim() ? { excerpt: metadata.excerpt } : {}),
+      ...(event === "escalated" && isRecord(metadata.escalatedBy) && typeof metadata.escalatedBy.sessionID === "string" && metadata.escalatedBy.sessionID.length > 0
+        ? { escalatedBy: typeof metadata.escalatedBy.title === "string" && metadata.escalatedBy.title.length > 0 ? metadata.escalatedBy.title : metadata.escalatedBy.sessionID } : {}) }
   }
   if (metadata?.source === "subagent_notification") {
     const type = metadata.type
@@ -1207,8 +1215,11 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         action: stringField(data.action) ?? "unknown action",
         resources: stringList(data.resources),
         ...(readGuardrailProvenance(data.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(data.escalation) }),
+        ...projectEscalationOf(data),
         askedAt: now,
       })
+    case "coordination.request.escalated":
+      return attachProjectEscalation(view, data)
     case "permission.replied":
     case "permission.deferred":
     case "guardrail.deferred":
@@ -1225,6 +1236,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         hardReview: data.hardReview === true,
         ...(readGuardrailProvenance(data.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(data.escalation) }),
         ...(isRecord(data.metadata) ? { metadata: data.metadata } : {}),
+        ...projectEscalationOf(data),
         askedAt: now,
       })
     case "guardrail.replied":
@@ -1234,7 +1246,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
     case "form.created": {
       const form = readForms([data.form])[0]
       if (form === undefined || form.sessionID !== view.id) return view
-      return pushRequest(view, { kind: "form", id: form.id, form, askedAt: now })
+      return pushRequest(view, { kind: "form", id: form.id, form, ...(isRecord(data.form) ? projectEscalationOf(data.form) : {}), askedAt: now })
     }
     case "form.replied":
     case "form.cancelled":
@@ -1335,6 +1347,7 @@ export function readReviewItems(payload: unknown): readonly ReviewItemView[] | u
       ...(typeof value.choice === "string" ? { choice: value.choice } : {}),
       ...(typeof value.confidence === "number" && Number.isFinite(value.confidence) ? { confidence: value.confidence } : {}),
       ...(value.kind === "guardrail" ? readGuardrailProvenance(value) : {}),
+      ...(value.payload.type === "question" ? {} : projectEscalationOf(value.payload)),
       ...(child === undefined ? {} : { child }) }
     const payload = value.payload
     const strings = (list: unknown) => Array.isArray(list) && list.every((item) => typeof item === "string") ? list as readonly string[] : undefined
@@ -1767,12 +1780,32 @@ function replaceMessage(view: SessionView, message: RemoteMessageView): SessionV
 }
 
 function pushRequest(view: SessionView, request: PendingRequestView): SessionView {
-  return { ...view, requests: [...view.requests.filter((existing) => existing.id !== request.id), request] }
+  const projectEscalation = request.projectEscalation ?? view.projectEscalations?.[request.id]
+  const next = projectEscalation === undefined ? request : { ...request, projectEscalation }
+  return { ...view, requests: [...view.requests.filter((existing) => existing.id !== request.id), next] }
 }
 
 function removeRequest(view: SessionView, requestID: string | undefined): SessionView {
   if (requestID === undefined) return bump(view)
-  return { ...view, requests: view.requests.filter((request) => request.id !== requestID) }
+  const { [requestID]: _settled, ...escalations } = view.projectEscalations ?? {}
+  return { ...view, requests: view.requests.filter((request) => request.id !== requestID), projectEscalations: escalations }
+}
+
+const escalatedRequestKind = { question: "form", permission: "permission", review: "guardrail" } as const
+
+function attachProjectEscalation(view: SessionView, data: Record<string, unknown>): SessionView {
+  const escalated = readProjectEscalationEvent(data)
+  if (escalated === undefined) return view
+  return {
+    ...view,
+    projectEscalations: { ...view.projectEscalations, [escalated.requestID]: escalated.projectEscalation },
+    requests: view.requests.map((request) => request.id === escalated.requestID && request.kind === escalatedRequestKind[escalated.kind] ? { ...request, projectEscalation: escalated.projectEscalation } : request),
+  }
+}
+
+const projectEscalationOf = (value: Record<string, unknown>) => {
+  const projectEscalation = readProjectEscalation(value.coordinationEscalation)
+  return projectEscalation === undefined ? {} : { projectEscalation }
 }
 
 export function readProjectedMessage(value: unknown): RemoteMessageView | undefined {
@@ -2088,6 +2121,7 @@ export function readPermissionRequests(payload: unknown, now: number): readonly 
         action: stringField(item.action) ?? "unknown action",
         resources: stringList(item.resources),
         ...(readGuardrailProvenance(item.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(item.escalation) }),
+        ...projectEscalationOf(item),
         askedAt: now,
       },
     ]
@@ -2112,6 +2146,7 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
         hardReview: item.hardReview === true,
         ...(readGuardrailProvenance(item.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(item.escalation) }),
         ...(isRecord(item.metadata) ? { metadata: item.metadata } : {}),
+        ...projectEscalationOf(item),
         askedAt: now,
       },
     ]
@@ -2119,7 +2154,11 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
 }
 
 export function readFormRequests(payload: unknown, now: number): readonly Extract<PendingRequestView, { kind: "form" }>[] {
-  return readForms(payload).map((form) => ({ kind: "form", id: form.id, form, askedAt: now }))
+  const raw = Array.isArray(payload) ? payload : []
+  return readForms(payload).map((form) => {
+    const source = raw.find((item) => isRecord(item) && item.id === form.id)
+    return { kind: "form", id: form.id, form, ...(isRecord(source) ? projectEscalationOf(source) : {}), askedAt: now }
+  })
 }
 
 export function readCapturedChangesPage(value: unknown): RemoteCapturedChangesPage | undefined {

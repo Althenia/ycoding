@@ -96,10 +96,10 @@ const created = (calls: { method: string; args: readonly unknown[] }[]) => calls
 describe("session_create_in_directory", () => {
   test("creates a root Session in an existing directory below home at its canonical path and registers it", async () => {
     const { create, calls, run } = await fixture()
-    const result = await create("ses_dir_1", project, { agent: "build", model: { providerID: "test", id: "model" } })
+    const result = await create("ses_dir_1", project, { agent: "build", model: { providerID: "test", id: "model" }, title: "Release review" })
     expect(result.isError).toBeUndefined()
     expect(result.structuredContent).toMatchObject({ data: { id: "ses_dir_1", projectID: "prj_dir", location: { directory: project } } })
-    expect(created(calls).map((call) => call.args)).toEqual([["ses_dir_1", { directory: project }, "build", { providerID: "test", id: "model" }]])
+    expect(created(calls).map((call) => call.args)).toEqual([["ses_dir_1", { directory: project }, "build", { providerID: "test", id: "model" }, "Release review"]])
     expect((await run("session_get", { sessionID: "ses_dir_1" })).structuredContent).toMatchObject({ data: { id: "ses_dir_1" } })
   })
 
@@ -161,6 +161,8 @@ describe("session_create_in_directory", () => {
     const { run, calls } = await fixture()
     expect((await run("session_create_in_directory", { input: { directory: project } })).isError).toBe(true)
     expect((await run("session_create_in_directory", { input: { id: "ses_x", directory: project, workspace: "wsp" } })).isError).toBe(true)
+    for (const title of ["", " Leading", "Trailing ", "Tab\tinside", "x".repeat(121)])
+      expect((await run("session_create_in_directory", { input: { id: "ses_x", directory: project, title } })).isError).toBe(true)
     expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
@@ -183,6 +185,10 @@ describe("entry separation", () => {
       { id: "bad id", directory: project },
       { id: "ses_a", directory: 1 },
       { id: "ses_a", directory: project, model: { providerID: "test" } },
+      { id: "ses_a", directory: project, title: "" },
+      { id: "ses_a", directory: project, title: "Trailing " },
+      { id: "ses_a", directory: project, title: "x".repeat(121) },
+      { id: "ses_a", directory: project, title: "Bidi\u2066flip" },
     ]) {
       const frames = await direct(input)
       expect(frames[0]).toMatchObject({ ok: false, error: { code: "invalid_message" } })

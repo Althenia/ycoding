@@ -1,5 +1,6 @@
 export * as Form from "./form"
 
+import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Form } from "@ycoding-ai/schema/form"
 import { Cache, Context, Deferred, Duration, Effect, Exit, Layer, Option, Schema, Semaphore } from "effect"
 import { Config } from "./config"
@@ -9,6 +10,7 @@ import { DecisionChoice } from "./decision-choice"
 import { makeLocationNode } from "./effect/app-node"
 import { EventRuntime } from "./event"
 import { SessionAutonomy } from "./session/autonomy"
+import { CoordinationEscalation } from "./session/coordination-escalation"
 import { SessionMessage } from "./session/message"
 import { SessionReviewFold } from "./session/review-fold"
 import { SessionSchema } from "./session/schema"
@@ -64,6 +66,12 @@ export interface ReconsiderInput {
   readonly confidence?: number
   readonly validate: (snapshot: Info) => Effect.Effect<boolean>
 }
+
+export interface EscalateInput extends CoordinationEscalation.Input {
+  readonly id: ID
+}
+
+export type EscalateResult = CoordinationEscalation.Result<ID>
 
 export interface ReconsiderResult {
   readonly outcome: "allowed" | "denied" | "escalated" | "stale"
@@ -134,6 +142,7 @@ export interface Interface {
   readonly snapshot: (id: ID) => Effect.Effect<Snapshot | undefined>
   readonly snapshots: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Snapshot>>
   readonly reconsider: (input: ReconsiderInput) => Effect.Effect<ReconsiderResult>
+  readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
   readonly cancel: (id: ID) => Effect.Effect<void, AlreadySettledError | NotFoundError>
   readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
@@ -265,6 +274,7 @@ export const layer = Layer.effect(
           title: form.title,
           fields: form.fields,
           ...(form.metadata?.kind === "question" ? { questionTool: true as const } : {}),
+          ...CoordinationEscalation.redacted(form.coordinationEscalation),
         },
         limit: yield* reviewLimit(),
         conversion,
@@ -545,6 +555,33 @@ export const layer = Layer.effect(
       ),
     )
 
+    const escalate = Effect.fn("Form.escalate")((input: EscalateInput) =>
+      exclusive(
+        Effect.gen(function* () {
+          const entry = yield* find(input.id).pipe(Effect.catchTag("Form.NotFoundError", () => Effect.succeed(undefined)))
+          const sessionID = entry?.form.sessionID
+          if (entry === undefined || fingerprint(entry.form) !== input.fingerprint || !Schema.is(SessionSchema.ID)(sessionID))
+            return CoordinationEscalation.result(input.id, input)
+          if (entry.state.status === "deferred")
+            return CoordinationEscalation.deferred(input.id, input, {
+              itemID: entry.state.itemID,
+              ...(entry.form.coordinationEscalation === undefined ? {} : { coordinationEscalation: entry.form.coordinationEscalation }),
+            })
+          if (entry.state.status !== "pending") return CoordinationEscalation.result(input.id, input)
+          const appended = CoordinationEscalation.append(entry.form.coordinationEscalation, input.source)
+          if (appended.type !== "appended") return CoordinationEscalation.result(input.id, input, appended)
+          yield* Cache.set(forms, input.id, { ...entry, form: { ...entry.form, coordinationEscalation: appended.value } })
+          yield* events.publish(Coordination.Event.RequestEscalated, {
+            sessionID,
+            kind: "question",
+            requestID: input.id,
+            coordinationEscalation: appended.value,
+          })
+          return CoordinationEscalation.result(input.id, input, appended)
+        }),
+      ),
+    )
+
     const reply = Effect.fn("Form.reply")((input: ReplyInput) =>
       exclusive(
         Effect.gen(function* () {
@@ -579,7 +616,7 @@ export const layer = Layer.effect(
       ),
     )
 
-    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, reply, cancel, cancelPending })
+    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, escalate, reply, cancel, cancelPending })
   }),
 )
 

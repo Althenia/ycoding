@@ -15,6 +15,7 @@ import { Keymap } from "../../context/keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { SimulationSemantics } from "../../simulation/semantics"
 import { GuardrailEscalation } from "../../guardrail-escalation"
+import { ProjectEscalation } from "./project-escalation"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -215,6 +216,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               instance={props.request.id}
               body={
                 <box flexDirection="column">
+                  <box paddingLeft={3} paddingRight={3}><ProjectEscalation value={props.request.coordinationEscalation} /></box>
                   <Show when={props.request.escalation}>
                     {(escalation) => (
                       <box paddingLeft={3} paddingRight={3}>

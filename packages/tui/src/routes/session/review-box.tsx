@@ -12,6 +12,7 @@ import { escapeTerminalText } from "../../util/terminal-text"
 import { FormPrompt } from "./form"
 import { Prompt } from "./permission"
 import { guardrailGradeDetails } from "./guardrail-grades"
+import { ProjectEscalation } from "./project-escalation"
 
 export function reviewReasonLabel(reason: SessionReview.Reason) {
   switch (reason) {
@@ -319,6 +320,7 @@ function ReviewItemRow(props: {
       <text fg={theme.text.subdued} wrapMode="word">
         {reviewProvenance(props.item)}
       </text>
+      <ProjectEscalation value={"coordinationEscalation" in props.item.payload ? props.item.payload.coordinationEscalation : undefined} />
       <Show when={target()}>
         {(value) => (
           <text fg={theme.text.subdued} wrapMode="word">
@@ -501,6 +503,7 @@ function ReviewGuardrailEditor(props: {
       }}
       body={
         <box flexDirection="column">
+          <box paddingLeft={3} paddingRight={3}><ProjectEscalation value={payload().coordinationEscalation} /></box>
           <box paddingLeft={3} paddingRight={3}>
             <text fg={theme.text.feedback.info.default}>{escapeTerminalText(payload().reason)}</text>
           </box>
@@ -554,6 +557,7 @@ function ReviewPermissionEditor(props: {
       }}
       body={
         <box flexDirection="column" paddingLeft={3} paddingRight={3}>
+          <ProjectEscalation value={payload().coordinationEscalation} />
           <text fg={theme.text.subdued}>{reviewProvenance(props.item)}</text>
           <text fg={theme.text.subdued}>Action: {escapeTerminalText(payload().action)}</text>
           <For each={payload().resources}>
@@ -617,7 +621,7 @@ function ReviewQuestionEditor(props: {
   const form = createMemo((): FormInfo => {
     const payload = props.item.payload
     if (payload.type === "form")
-      return { id: props.item.itemID, sessionID: props.item.sessionID, title: payload.title, fields: payload.fields }
+      return { id: props.item.itemID, sessionID: props.item.sessionID, title: payload.title, fields: payload.fields, coordinationEscalation: payload.coordinationEscalation }
     return {
       id: props.item.itemID,
       sessionID: props.item.sessionID,

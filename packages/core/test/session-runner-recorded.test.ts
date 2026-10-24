@@ -69,7 +69,7 @@ const expectedPromptCacheKey = (system: string) =>
       providerID: model.provider,
       modelID: model.id,
       policyRevision: CACHE_POLICY_REVISION,
-      permissions: declaredPermissions,
+      permissions: [...declaredPermissions, { action: "project", resource: "*", effect: "deny" }],
       system: [SystemPart.make(system)],
       tools: [],
     }),
@@ -110,6 +110,7 @@ const permission = Layer.succeed(
     snapshot: () => Effect.die("unused"),
     snapshots: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),
+    escalate: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
     forSession: () => Effect.die("unused"),
     list: () => Effect.die("unused"),
@@ -257,7 +258,7 @@ describe("SessionRunnerLLM recorded", () => {
           id: sessionID,
           project_id: Project.ID.global,
           directory: "/project",
-          title: "test",
+          title: "New session - 2026-01-01T00:00:00.000Z",
         })
         .onConflictDoNothing()
         .run()

@@ -1,10 +1,58 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import { KeyEvent } from "@opentui/core"
+import { InputRenderable, KeyEvent } from "@opentui/core"
+import { createSignal, Show } from "solid-js"
 import { expect, spyOn, test } from "bun:test"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+
+test("layers share one target destruction subscription across reactive updates and release it on unmount", async () => {
+  const [version, update] = createSignal(0)
+  const [visible, show] = createSignal(true)
+  let target: InputRenderable | undefined
+  function Layers() {
+    const [input, setInput] = createSignal<InputRenderable>()
+    for (let index = 0; index < 12; index++) {
+      Keymap.createLayer(() => ({
+        target: input,
+        enabled: version() % 2 === 0,
+        commands: [{ bind: "ctrl+a", run() {} }],
+      }))
+    }
+    return (
+      <input
+        ref={(value) => {
+          target = value
+          setInput(value)
+        }}
+      />
+    )
+  }
+  const app = await testRender(() => (
+    <ConfigProvider config={createTuiResolvedConfig()}>
+      <Keymap.Provider>
+        <Show when={visible()}>
+          <Layers />
+        </Show>
+      </Keymap.Provider>
+    </ConfigProvider>
+  ))
+  try {
+    await app.renderOnce()
+    expect(target?.listenerCount("destroyed")).toBe(1)
+    for (let index = 1; index <= 20; index++) {
+      update(index)
+      await app.renderOnce()
+      expect(target?.listenerCount("destroyed")).toBe(1)
+    }
+    show(false)
+    await app.renderOnce()
+    expect(target?.listenerCount("destroyed")).toBe(0)
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("drops key events with an empty name instead of erroring in the resolver", async () => {
   const app = await testRender(() => (

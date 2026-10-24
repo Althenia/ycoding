@@ -61,6 +61,7 @@ export interface AnswerInput {
   readonly rationale: string
   readonly confidence?: number
   readonly answer?: Form.Answer
+  readonly decision?: CoordinationDecisions.Decision
 }
 
 export interface Roster {
@@ -68,7 +69,36 @@ export interface Roster {
   readonly members: ReadonlyArray<Coordination.Participant>
 }
 
-export type NotificationEvent = "completed" | "failed" | "interrupted" | "question" | "permission" | "review"
+export interface EscalateInput {
+  readonly sessionID: SessionSchema.ID
+  readonly requestID: string
+  readonly kind: Coordination.RequestKind
+  readonly fingerprint: string
+  readonly reason: string
+}
+
+export interface EscalateResult {
+  readonly sessionID: SessionSchema.ID
+  readonly requestID: string
+  readonly messageID?: SessionMessage.ID
+  readonly delivered: boolean
+  readonly decision: CoordinationDecisions.EscalateResult
+}
+
+export type NotificationEvent = "completed" | "failed" | "interrupted" | "question" | "permission" | "review" | "escalated"
+
+const urgentEvents: ReadonlySet<NotificationEvent> = new Set(["failed", "question", "permission", "review", "escalated"])
+
+const handledEvents = [
+  SessionEvent.InputAdmitted,
+  SessionEvent.Execution.Interrupted,
+  SessionEvent.Execution.Succeeded,
+  SessionEvent.Execution.Failed,
+  Form.Event.Created,
+  Permission.Event.Asked,
+  Guardrail.Event.Asked,
+] as const
+type HandledEvent = EventRuntime.SubscribePayload<typeof handledEvents>
 
 export interface Interface {
   readonly get: (groupID: Coordination.GroupID) => Effect.Effect<Coordination.Info, CoordinationService.NotFoundError>
@@ -77,13 +107,14 @@ export interface Interface {
   readonly send: (caller: SessionSchema.ID, input: SendInput) => Effect.Effect<SendResult, RefusedError>
   readonly answer: (caller: SessionSchema.ID, input: AnswerInput) => Effect.Effect<CoordinationDecisions.Result, RefusedError>
   readonly interrupt: (caller: SessionSchema.ID, input: { readonly sessionID: SessionSchema.ID }) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly state: Coordination.MemberState }, RefusedError>
+  readonly escalate: (caller: SessionSchema.ID, input: EscalateInput) => Effect.Effect<EscalateResult, RefusedError>
 }
 
 export interface Options {
   readonly db: Database.Interface["db"]
   readonly events: EventRuntime.Interface
   readonly coordination: Pick<CoordinationService.Interface, "get" | "list" | "scopeOf" | "memberOf" | "activate" | "pause">
-  readonly decisions: Pick<CoordinationDecisions.Interface, "pending" | "evaluate">
+  readonly decisions: Pick<CoordinationDecisions.Interface, "pending" | "evaluate" | "escalate">
   readonly execution: Pick<SessionExecution.Interface, "active" | "wake" | "interrupt">
   readonly sessions: Pick<Session.Interface, "synthetic">
   readonly validateModel: (sessionID: SessionSchema.ID, model: Model.Ref) => Effect.Effect<void, RefusedError>
@@ -101,7 +132,7 @@ const refuse = (message: string) => new RefusedError({ message })
 
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
-export function make(options: Options): Interface & { readonly handle: (event: EventRuntime.Payload) => Effect.Effect<void> } {
+export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void> } {
   const { db, events, coordination, decisions, execution, sessions } = options
   const senders = new Map<SessionSchema.ID, SessionSchema.ID>()
   const sendLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
@@ -282,6 +313,7 @@ export function make(options: Options): Interface & { readonly handle: (event: E
       rationale: input.rationale,
       ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
       ...(input.answer === undefined ? {} : { answer: input.answer }),
+      ...(input.decision === undefined ? {} : { decision: input.decision }),
     })
   })
 
@@ -301,6 +333,48 @@ export function make(options: Options): Interface & { readonly handle: (event: E
     return text.length > 0 ? clip(text) : undefined
   })
 
+  const titleOf = (sessionID: SessionSchema.ID) =>
+    db.select({ title: SessionTable.title }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie, Effect.map((row) => row?.title ?? ""))
+
+  const deliver = Effect.fnUntraced(function* (input: {
+    readonly scope: CoordinationService.Scope
+    readonly member: SessionSchema.ID
+    readonly event: NotificationEvent
+    readonly identity: string
+    readonly receiver: SessionSchema.ID
+    readonly resume: boolean
+    readonly detail: Record<string, unknown>
+  }) {
+    const data = {
+      source: notice,
+      groupID: input.scope.groupID,
+      memberSessionID: input.member,
+      title: yield* titleOf(input.member),
+      event: input.event,
+      ...input.detail,
+    }
+    const id = SessionMessage.ID.make(`msg_project_notice_${Hash.sha256(`${input.scope.groupID}\0${input.member}\0${input.event}\0${input.identity}`).slice(0, 24)}`)
+    const delivered = yield* SessionPending.lookup(db, input.receiver, id).pipe(Effect.catchDefect((defect) =>
+      defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(true as const) : Effect.die(defect),
+    ))
+    if (delivered !== undefined) return id
+    yield* sessions
+      .synthetic({
+        id,
+        sessionID: input.receiver,
+        text: `Project notification:\n${JSON.stringify(data)}`,
+        description: "Project notification",
+        metadata: data,
+        delivery: "steer",
+        resume: input.resume,
+      })
+      .pipe(
+        Effect.catchTag("Session.NotFoundError", () => Effect.void),
+        Effect.catchTag("Session.SyntheticConflictError", () => Effect.void),
+      )
+    return id
+  })
+
   const notify = Effect.fnUntraced(function* (
     scope: CoordinationService.Scope,
     member: SessionSchema.ID,
@@ -308,39 +382,33 @@ export function make(options: Options): Interface & { readonly handle: (event: E
     identity: string,
     detail: { readonly requestID?: string; readonly excerpt?: string },
   ) {
-    const running = yield* execution.active
-    const sender = scope.active ? yield* runningSender(scope, member, running) : undefined
-    const toSender = sender !== undefined
-    const receiver = toSender ? sender : scope.masterSessionID
-    const row = yield* db.select({ title: SessionTable.title }).from(SessionTable).where(eq(SessionTable.id, member)).get().pipe(Effect.orDie)
-    const data = {
-      source: notice,
+    const routed = scope.active || urgentEvents.has(event)
+    const sender = routed ? yield* runningSender(scope, member, yield* execution.active) : undefined
+    yield* deliver({ scope, member, event, identity, receiver: sender ?? scope.masterSessionID, resume: routed, detail })
+  })
+
+  const escalate: Interface["escalate"] = Effect.fn("CoordinationRuntime.escalate")(function* (caller, input) {
+    const scope = yield* memberScope(caller, input.sessionID)
+    const decision = yield* decisions.escalate({
       groupID: scope.groupID,
-      memberSessionID: member,
-      title: row?.title ?? "",
-      event,
-      ...(detail.requestID === undefined ? {} : { requestID: detail.requestID }),
-      ...(detail.excerpt === undefined ? {} : { excerpt: detail.excerpt }),
-    }
-    const id = SessionMessage.ID.make(`msg_project_notice_${Hash.sha256(`${scope.groupID}\0${member}\0${event}\0${identity}`).slice(0, 24)}`)
-    const delivered = yield* SessionPending.lookup(db, receiver, id).pipe(Effect.catchDefect((defect) =>
-      defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(true as const) : Effect.die(defect),
-    ))
-    if (delivered !== undefined) return
-    yield* sessions
-      .synthetic({
-        id,
-        sessionID: receiver,
-        text: `Project notification:\n${JSON.stringify(data)}`,
-        description: "Project notification",
-        metadata: data,
-        delivery: "steer",
-        resume: toSender || scope.active,
-      })
-      .pipe(
-        Effect.catchTag("Session.NotFoundError", () => Effect.void),
-        Effect.catchTag("Session.SyntheticConflictError", () => Effect.void),
-      )
+      coordinatorSessionID: caller,
+      targetSessionID: input.sessionID,
+      requestID: input.requestID,
+      kind: input.kind,
+      fingerprint: input.fingerprint,
+      reason: input.reason,
+    })
+    if (decision.to !== "master") return { sessionID: input.sessionID, requestID: input.requestID, delivered: false, decision }
+    const messageID = yield* deliver({
+      scope,
+      member: input.sessionID,
+      event: "escalated",
+      identity: `${input.requestID}\0${caller}`,
+      receiver: scope.masterSessionID,
+      resume: true,
+      detail: { requestID: input.requestID, kind: input.kind, excerpt: clip(input.reason), escalatedBy: { sessionID: caller, title: yield* titleOf(caller) } },
+    })
+    return { sessionID: input.sessionID, requestID: input.requestID, messageID, delivered: true, decision }
   })
 
   const memberEvent = Effect.fnUntraced(function* (
@@ -360,45 +428,42 @@ export function make(options: Options): Interface & { readonly handle: (event: E
     return scope !== undefined && scope.masterSessionID === sessionID ? scope : undefined
   })
 
-  const handle = Effect.fnUntraced(function* (event: EventRuntime.Payload) {
+  const handle = Effect.fnUntraced(function* (event: HandledEvent) {
     if (event.type === SessionEvent.InputAdmitted.type) {
-      const data = Schema.decodeUnknownSync(SessionEvent.InputAdmitted.data)(event.data)
+      const data = event.data
       if (data.input.type !== "user" || data.input.data.metadata?.inputOrigin !== "human") return
       const scope = yield* masterOf(data.sessionID)
       if (scope !== undefined) yield* coordination.activate(scope.groupID)
       return
     }
     if (event.type === SessionEvent.Execution.Interrupted.type) {
-      const data = Schema.decodeUnknownSync(SessionEvent.Execution.Interrupted.data)(event.data)
+      const data = event.data
       const scope = yield* masterOf(data.sessionID)
       if (scope !== undefined && data.reason === "user") yield* coordination.pause(scope.groupID)
       yield* memberEvent(data.sessionID, "interrupted", event.id, { excerpt: `Interrupted (${data.reason})` })
       return
     }
     if (event.type === SessionEvent.Execution.Succeeded.type) {
-      const data = Schema.decodeUnknownSync(SessionEvent.Execution.Succeeded.data)(event.data)
-      yield* memberEvent(data.sessionID, "completed", event.id, () => excerptOf(data.sessionID).pipe(Effect.map((excerpt) => (excerpt === undefined ? {} : { excerpt }))))
+      const sessionID = event.data.sessionID
+      yield* memberEvent(sessionID, "completed", event.id, () => excerptOf(sessionID).pipe(Effect.map((excerpt) => (excerpt === undefined ? {} : { excerpt }))))
       return
     }
     if (event.type === SessionEvent.Execution.Failed.type) {
-      const data = Schema.decodeUnknownSync(SessionEvent.Execution.Failed.data)(event.data)
-      yield* memberEvent(data.sessionID, "failed", event.id, { excerpt: clip(data.error.message) })
+      yield* memberEvent(event.data.sessionID, "failed", event.id, { excerpt: clip(event.data.error.message) })
       return
     }
     if (event.type === Form.Event.Created.type) {
-      const data = Schema.decodeUnknownSync(Form.Event.Created.data)(event.data)
-      yield* memberEvent(data.form.sessionID, "question", data.form.id, { requestID: data.form.id, excerpt: clip(data.form.title) })
+      const form = event.data.form
+      yield* memberEvent(form.sessionID, "question", form.id, { requestID: form.id, excerpt: clip(form.title) })
       return
     }
     if (event.type === Permission.Event.Asked.type) {
-      const data = Schema.decodeUnknownSync(Permission.Event.Asked.data)(event.data)
+      const data = event.data
       yield* memberEvent(data.sessionID, "permission", data.id, { requestID: data.id, excerpt: clip([data.action, ...data.resources].join(" ")) })
       return
     }
-    if (event.type === Guardrail.Event.Asked.type) {
-      const data = Schema.decodeUnknownSync(Guardrail.Event.Asked.data)(event.data)
-      yield* memberEvent(data.sessionID, "review", data.id, { requestID: data.id, excerpt: clip(`${data.action} ${data.resources.join(" ")}: ${data.reason}`) })
-    }
+    const data = event.data
+    yield* memberEvent(data.sessionID, "review", data.id, { requestID: data.id, excerpt: clip(`${data.action} ${data.resources.join(" ")}: ${data.reason}`) })
   })
 
   return {
@@ -408,6 +473,7 @@ export function make(options: Options): Interface & { readonly handle: (event: E
     send,
     answer,
     interrupt,
+    escalate,
     handle: (event) =>
       handle(event).pipe(
         Effect.catchCause((cause) =>
@@ -457,7 +523,7 @@ const layer: Layer.Layer<
       )
     })
     const runtime = make({ db: database.db, events, coordination, decisions, execution, sessions, validateModel })
-    yield* events.subscribe().pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
+    yield* events.subscribe(handledEvents).pipe(Stream.runForEach(runtime.handle), Effect.forkScoped({ startImmediately: true }))
     return Service.of(runtime)
   }),
 )

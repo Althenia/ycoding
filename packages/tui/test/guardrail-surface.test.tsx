@@ -67,7 +67,9 @@ async function route(url: URL, init?: Request) {
   if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (url.pathname === `/api/session/${childID}`) return json({ data: child })
   if (url.pathname === `/api/session/${parentID}/snapshot` || url.pathname === `/api/session/${childID}/snapshot`)
-    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], { session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent })
+    return sessionSnapshot(url.pathname === `/api/session/${childID}/snapshot` ? childID : parentID, [], {
+      session: url.pathname === `/api/session/${childID}/snapshot` ? child : parent,
+    })
   if (url.pathname === `/api/session/${childID}/guardrail/request`) return json({ data: listed })
   if (url.pathname === `/api/session/${parentID}/guardrail/request`) return json({ data: listed })
   if (
@@ -179,6 +181,29 @@ const asked = (data: typeof request, id: string) =>
     created: 3,
     data,
   }) satisfies YCodingEvent
+
+test("Project escalation reasons reach the live review prompt without submitting a reply", async () => {
+  const pending = {
+    ...request,
+    coordinationEscalation: {
+      reasons: [
+        { sessionID: "ses_driver", reason: "The proposed operation exceeds the assignment." },
+        { sessionID: "ses_master", reason: "Confirm the expanded scope before proceeding." },
+      ],
+    },
+  }
+  listed = [pending]
+  replies.length = 0
+  const screen = await settle("Guardrail blocked", parentID)
+  try {
+    expect(screen.frame()).toContain("Project escalation")
+    expect(screen.frame()).toContain(pending.coordinationEscalation.reasons[0]!.reason)
+    expect(screen.frame()).toContain(pending.coordinationEscalation.reasons[1]!.reason)
+    expect(replies).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
 
 test("surfaces a pending root guardrail review from the durable list", async () => {
   listed = [request]

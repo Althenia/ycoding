@@ -134,6 +134,7 @@ describe("SkillTool", () => {
               snapshot: () => Effect.die("unused"),
               snapshots: () => Effect.die("unused"),
               reconsider: () => Effect.die("unused"),
+              escalate: () => Effect.die("unused"),
               get: () => Effect.die("unused"),
               forSession: () => Effect.die("unused"),
               list: () => Effect.die("unused"),

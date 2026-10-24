@@ -7,6 +7,7 @@ import { FormRequest } from "./form-request"
 import { TeamAnswerForm } from "./subagent-bar"
 import { DecisionProvenance } from "./decision-grades"
 import { escalationText } from "../decision-grades"
+import { ProjectEscalationNote } from "./project-escalation"
 
 export function ReviewBox(props: { readonly onOpenSession: (sessionID: string) => void }): JSX.Element {
   const remote = useRemote()
@@ -44,6 +45,7 @@ function ReviewItemCard(props: { readonly item: () => ReviewItemView; readonly o
     </header>
     <p class="request__note">From <button type="button" class="button button--ghost button--small" onClick={() => props.onOpenSession(props.item().sessionID)}>{attribution(props.item())}</button></p>
     <p class="request__note">{reasonLabel[props.item().reason]}<Show when={props.item().kind !== "guardrail" && props.item().choice !== undefined}> · model choice {props.item().choice}</Show><Show when={props.item().kind !== "guardrail" && props.item().confidence !== undefined}> · confidence {String(props.item().confidence)}</Show></p>
+    <Show when={props.item().projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show>
     <Show when={question()}>{(item) => <FormRequest form={() => item().form} review={{
       get busy() { return busy() },
       submit: (value) => decide({ kind: "question", answers: item().answers === "form" ? value : questionAnswers(item().form.fields.length, value) }),

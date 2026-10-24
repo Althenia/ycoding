@@ -161,7 +161,15 @@ Both all-master and selected-master delivery MUST require the source Session to 
 
 ### Project concurrency (T54)
 
-Count running member Sessions, excluding the Master. A positive configured limit MUST display `<running>/<limit> running`, filled progress cells and `at limit` when reached. A null limit MUST display `<running> running · no limit`; do not infer or request a separate runtime capacity. Live list counts include the Master; member position counts exclude it. Enforce with `test/util/coordination.test.ts` and `test/cli/tui/projects-layout.test.tsx`.
+Count running member Sessions, excluding the Master. A positive configured limit MUST display `<running>/<limit> members running`, filled progress cells and `at limit` when reached. A null limit MUST display `<running> members running · no limit`, with singular `member` for one; do not infer or request a separate runtime capacity. Let the narrow pane meter wrap instead of losing its count scope. Live list and chat-header counts include the Master; member position counts exclude it. Header member totals name the Master separately as `<members> members + Master`. Enforce with `test/util/coordination.test.ts` and `test/cli/tui/projects-layout.test.tsx`.
+
+### Project Session pickers (T54)
+
+Use one in-place picker for an existing Master and for Add session. Find MUST filter titles and directories as text is entered. Keep rows inside the scrollable pane, retain typed text and the editing cursor, and preserve the distinguishing directory tail when truncation is necessary. Member counts MUST exclude the separately labeled Master; live summaries MUST include it and identify that scope. Use the existing row, input, selection and focus treatments without changing the screen layout.
+
+### Project decision escalation (T54)
+
+Native permission, review and form prompts and deferred review items MUST show every reported Project escalation reason in order. Label the chain `Project escalation`, use warning ink for the label and subdued wrapping text for escaped reasons, and retain the native answer and rejection controls. A Project handoff MUST NOT be labeled as a model decision or settle a request automatically.
 
 ### Operational sleep state (T28)
 

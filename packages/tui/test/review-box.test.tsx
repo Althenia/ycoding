@@ -20,7 +20,14 @@ test("review reasons label decision failures with their recorded diagnostic, nev
   expect(reviewReasonLabel("unsupported-output")).toContain("Decision unavailable")
   expect(reviewReasonLabel("unsupported-output")).toContain("does not support strict structured")
   expect(reviewReasonLabel("conflicting_grades")).toContain("conflicting")
-  for (const reason of ["unavailable", "invalid-request", "provider-failed", "input-too-large", "invalid-output", "truncated-output"] as const) {
+  for (const reason of [
+    "unavailable",
+    "invalid-request",
+    "provider-failed",
+    "input-too-large",
+    "invalid-output",
+    "truncated-output",
+  ] as const) {
     expect(reviewReasonLabel(reason)).toContain("Decision unavailable")
     expect(reviewReasonLabel(reason)).not.toContain("model escalated")
   }
@@ -152,6 +159,43 @@ async function mount(body: () => JSX.Element, settle: string, height = 30, mode:
   await app.waitForFrame((frame) => frame.includes(settle))
   return app
 }
+
+test("Project escalation preserves the whole reason chain in the human review box", async () => {
+  const item = {
+    ...permissionItem,
+    payload: {
+      ...permissionItem.payload,
+      coordinationEscalation: {
+        reasons: [
+          { sessionID: "ses_driver", reason: "The target is outside the assignment." },
+          { sessionID: "ses_master", reason: "Confirm this additional target." },
+        ],
+      },
+    },
+  }
+  const app = await mount(
+    () => (
+      <ReviewBox
+        items={[item]}
+        currentSessionID="ses_root"
+        asleep={false}
+        failed={{}}
+        onOpen={() => {}}
+        onJump={() => {}}
+        onDismiss={() => {}}
+      />
+    ),
+    "Review · 1 waiting",
+    40,
+  )
+  try {
+    expect(app.captureCharFrame()).toContain("Project escalation")
+    expect(app.captureCharFrame()).toContain("The target is outside the assignment.")
+    expect(app.captureCharFrame()).toContain("Confirm this additional target.")
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 for (const mode of ["dark", "light"] as const) {
   test(`review grades stay informational and escaped in ${mode} mode`, async () => {
@@ -727,7 +771,13 @@ test("a disabled review reads as configuration, not as a decision model outcome,
     50,
   )
   try {
-    await app.mockMouse.click(4, app.captureCharFrame().split("\n").findIndex((line) => line.includes("Review · 1 waiting")))
+    await app.mockMouse.click(
+      4,
+      app
+        .captureCharFrame()
+        .split("\n")
+        .findIndex((line) => line.includes("Review · 1 waiting")),
+    )
     await app.waitForFrame((frame) => frame.includes("Guardrail review"))
     const frame = app.captureCharFrame()
     expect(frame.match(/automatic decisions are disabled/g)).toHaveLength(2)

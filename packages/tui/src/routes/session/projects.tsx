@@ -10,19 +10,22 @@ import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useDialog } from "../../ui/dialog"
 import { errorMessage } from "../../util/error"
-import { Locale } from "../../util/locale"
 import {
   concurrencyMeter,
   delegatedCategories,
   delegationSummary,
   externalNotificationKinds,
-  liveSummary,
   masterChoices,
   narrowingError,
   notificationFilterLabel,
   parseConcurrency,
   parseExpiry,
   parseList,
+  projectListColumns,
+  projectListHeader,
+  projectListLine,
+  projectNarrowHeader,
+  projectNarrowLine,
   projectStatusLabel,
   recentDirectories,
   roster,
@@ -37,6 +40,7 @@ import {
   type ProjectSessionChoice,
 } from "../../util/coordination"
 import { createRowList, Panel, type Row } from "./project-rows"
+import { SessionPickerDetail, sessionPickerRows } from "./project-session-picker"
 import { ProjectMembers, ProjectMeter, ProjectState, useProjectClock } from "./project-members"
 
 export function ProjectsScreen() {
@@ -102,6 +106,7 @@ export function ProjectsScreenContent(props: {
     props.projects()?.find((item) => item.id === props.initialSettings) ??
     props.projects()?.[Math.min(cursor(), (props.projects()?.length ?? 1) - 1)]
   const wide = () => dimensions().width >= 120
+  const listColumns = () => projectListColumns(dimensions().width - 11 - (wide() ? 44 : 0))
   const formWidth = () => Math.max(20, dimensions().width - (dimensions().width >= 100 ? 40 : 6))
   const run = async (action: string, call: () => Promise<unknown>, done?: () => void) => {
     if (busy()) return
@@ -213,27 +218,14 @@ export function ProjectsScreenContent(props: {
           activate: () => setSource((current) => (current === "existing" ? "new" : "existing")),
         },
         ...(source() === "existing"
-          ? [
-              editRow("find", "Find", search(), setSearch),
-              ...props
-                .sessions()
-                .filter((session) => session.title.toLowerCase().includes(search().toLowerCase()))
-                .map(
-                  (session): Row => ({
-                    key: session.sessionID,
-                    kind: "item",
-                    label: session.title,
-                    value: session.projectName
-                      ? `in ${session.projectName}`
-                      : `${masterID() === session.sessionID ? "● " : ""}${session.directory}`,
-                    marker: "›",
-                    tone: session.projectName ? "subdued" : undefined,
-                    activate: () => {
-                      if (!session.projectName) setMasterID(session.sessionID)
-                    },
-                  }),
-                ),
-            ]
+          ? sessionPickerRows({
+              sessions: props.sessions(),
+              query: search(),
+              setQuery: setSearch,
+              assigned: "show",
+              chosen: masterID(),
+              choose: (session) => setMasterID(session.sessionID),
+            })
           : [
               {
                 ...editRow("directory", "Directory", directory(), setDirectory),
@@ -515,9 +507,8 @@ export function ProjectsScreenContent(props: {
     return (
       <Panel title={`PROJECTS ${props.projects()?.length ?? 0}`} active={view() === "list"} flexGrow={1}>
         <text fg={theme.text.subdued} height={1} wrapMode="none" truncate>
-          {view() !== "list"
-            ? "PROJECT                   MEMBERS"
-            : "PROJECT              STATUS    MASTER      MEMBERS LIVE"}
+          {"  "}
+          {view() !== "list" ? projectNarrowHeader() : projectListHeader(listColumns())}
         </text>
         <scrollbox flexGrow={1} minHeight={0}>
           <Show when={props.error?.()}>
@@ -551,22 +542,9 @@ export function ProjectsScreenContent(props: {
                 >
                   {cursor() === index() ? "▸ " : "  "}
                   {view() !== "list"
-                    ? `${Locale.truncateWidth(item.name, 22).padEnd(22)} ${roster(item).length}`
-                    : `${Locale.truncateWidth(item.name, 16).padEnd(16)} ${projectStatusLabel(item.active).padEnd(9)} ${Locale.truncateWidth(item.master.title, 8).padEnd(8)} ${String(roster(item).length).padEnd(3)} ${liveSummary(item, config.data.animations !== false)} ›`}
+                    ? projectNarrowLine(item)
+                    : projectListLine(item, config.data.animations !== false, listColumns())}
                 </text>
-                <Show when={view() === "list" && cursor() === index()}>
-                  <text
-                    flexShrink={0}
-                    fg={theme.text.action.primary.focused}
-                    onMouseUp={(event) => {
-                      event.stopPropagation()
-                      removeProject()
-                    }}
-                  >
-                    {" "}
-                    [D] Delete
-                  </text>
-                </Show>
               </box>
             )}
           </For>
@@ -627,6 +605,7 @@ export function ProjectsScreenContent(props: {
                 <text>STATUS ● active ○ paused</text>
                 <text>[k] action · (k) unavailable · › opens · ✎ editable</text>
                 <text>▸ filled band = cursor · ● = this Session</text>
+                <text>MEMBERS excludes the Master · LIVE includes it</text>
               </Panel>
             </box>
             <Show when={wide() && project()}>
@@ -640,7 +619,7 @@ export function ProjectsScreenContent(props: {
                   <text>Status {projectStatusLabel(selected().active)}</text>
                   <ProjectMeter project={selected()} />
                   <text> </text>
-                  <text>MEMBERS {roster(selected()).length}</text>
+                  <text>MEMBERS {selected().members.length} + MASTER</text>
                   <For each={roster(selected())}>
                     {(member) => (
                       <box marginTop={1}>
@@ -698,7 +677,19 @@ export function ProjectsScreenContent(props: {
               </box>
             </Show>
             <Panel title={view() === "new" ? "NEW PROJECT" : sections[section()]!.toUpperCase()} active flexGrow={1}>
-              <Show when={view() === "settings" && section() === 1 && project()} fallback={<form.Rows />}>
+              <Show
+                when={view() === "settings" && section() === 1 && project()}
+                fallback={
+                  <>
+                    <form.Rows />
+                    <Show when={view() === "new" && source() === "existing"}>
+                      <SessionPickerDetail
+                        session={() => props.sessions().find((session) => session.sessionID === form.cursor()?.key)}
+                      />
+                    </Show>
+                  </>
+                }
+              >
                 {(current) => (
                   <ProjectMembers
                     project={current()}

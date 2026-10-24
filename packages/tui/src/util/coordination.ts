@@ -1,5 +1,6 @@
 import { Locale } from "./locale"
 import { stringWidth } from "./string-width"
+import { escapeTerminalText } from "./terminal-text"
 
 export type MemberState = "idle" | "running" | "waiting" | "failed"
 export type ProjectRole = "master" | "member"
@@ -93,7 +94,7 @@ export function projectNotification(metadata: unknown) {
   if (
     !("event" in metadata) ||
     typeof metadata.event !== "string" ||
-    !["completed", "failed", "interrupted", "question", "permission", "review"].includes(metadata.event)
+    !["completed", "failed", "interrupted", "question", "permission", "review", "escalated"].includes(metadata.event)
   )
     return
   return {
@@ -101,7 +102,39 @@ export function projectNotification(metadata: unknown) {
     title: metadata.title.slice(0, 120),
     event: metadata.event,
     excerpt: "excerpt" in metadata && typeof metadata.excerpt === "string" ? metadata.excerpt.slice(0, 500) : "",
+    ...escalationDetail(metadata),
   }
+}
+
+function escalationDetail(metadata: object): {
+  kind?: DelegatedCategory
+  escalatedBy?: { sessionID: string; title: string }
+} {
+  if (!("event" in metadata) || metadata.event !== "escalated") return {}
+  const kind =
+    "kind" in metadata && typeof metadata.kind === "string"
+      ? delegatedCategories.find((category) => category === metadata.kind)
+      : undefined
+  const by = "escalatedBy" in metadata ? metadata.escalatedBy : undefined
+  const escalatedBy =
+    by !== null &&
+    typeof by === "object" &&
+    "sessionID" in by &&
+    typeof by.sessionID === "string" &&
+    by.sessionID.startsWith("ses_") &&
+    "title" in by &&
+    typeof by.title === "string"
+      ? { sessionID: by.sessionID, title: by.title.slice(0, 120) }
+      : undefined
+  return { ...(kind === undefined ? {} : { kind }), ...(escalatedBy === undefined ? {} : { escalatedBy }) }
+}
+
+export function projectNoticeLabel(notice: NonNullable<ReturnType<typeof projectNotification>>) {
+  if (notice.event === "completed") return "finished"
+  if (notice.event === "question") return "asks a question"
+  if (notice.event !== "escalated") return notice.event
+  const via = notice.escalatedBy ? ` via ${escapeTerminalText(notice.escalatedBy.title)}` : ""
+  return `escalates a ${notice.kind ?? "pending"} request${via}`
 }
 
 export function roster(project: ProjectView): ReadonlyArray<ProjectMemberView> {
@@ -135,13 +168,17 @@ export function runningMembers(project: ProjectView) {
   return project.members.filter((member) => member.state === "running").length
 }
 
+function rosterCount(project: ProjectView, state: MemberState) {
+  return roster(project).filter((member) => member.state === state).length
+}
+
 export function concurrencyMeter(project: ProjectView) {
   const running = runningMembers(project)
-  if (project.concurrency === null) return `${running} running · no limit`
+  if (project.concurrency === null) return `${running} ${running === 1 ? "member" : "members"} running · no limit`
   const cells = Math.min(project.concurrency, 8)
   const filled = Math.min(cells, Math.round((running / project.concurrency) * cells))
   const bar = `${"█".repeat(filled)}${"░".repeat(cells - filled)}`
-  return `${bar} ${running}/${project.concurrency} running${running >= project.concurrency ? " · at limit" : ""}`
+  return `${bar} ${running}/${project.concurrency} members running${running >= project.concurrency ? " · at limit" : ""}`
 }
 
 export function liveSummary(project: ProjectView, animated: boolean) {
@@ -159,22 +196,18 @@ export function projectStatusLabel(active: boolean) {
 }
 
 export function masterSummary(project: ProjectView) {
-  const count = roster(project).length
-  const waiting = project.members.filter((member) => member.state === "waiting").length
+  const count = project.members.length
+  const waiting = rosterCount(project, "waiting")
   return [
-    `${count} member${count === 1 ? "" : "s"}`,
-    `${runningMembers(project)} running`,
+    `${count} member${count === 1 ? "" : "s"} + Master`,
+    `${rosterCount(project, "running")} running`,
     ...(waiting === 0 ? [] : [`${waiting} waiting`]),
   ].join(" · ")
 }
 
 function compactCounts(project: ProjectView) {
-  const waiting = project.members.filter((member) => member.state === "waiting").length
-  const running = runningMembers(project)
-  return [
-    project.concurrency === null ? `${running} running` : `${running}/${project.concurrency} running`,
-    ...(waiting === 0 ? [] : [`? ${waiting}`]),
-  ].join(" · ")
+  const waiting = rosterCount(project, "waiting")
+  return [`${rosterCount(project, "running")} running`, ...(waiting === 0 ? [] : [`? ${waiting}`])].join(" · ")
 }
 
 export function ageLabel(elapsed: number) {
@@ -222,11 +255,7 @@ export function stripLine(input: { project: ProjectView; role: ProjectRole; sess
     const member = roster(input.project).find((item) => item.sessionID === input.sessionID)
     const position = memberPosition(input.project, input.sessionID)
     parts.push(`Member of ${name} · master: ${input.project.master.title}`)
-    parts.push(
-      level.breadcrumb && position
-        ? `↑ ${input.project.master.title}   ←→ member ${position.index} of ${position.total}`
-        : `↑ ${input.project.master.title}`,
-    )
+    if (level.breadcrumb && position) parts.push(`member ${position.index} of ${position.total}`)
     if (member) parts.push(`${stateGlyph(member.state, false)} ${stateWord(member.state)}`)
     return parts.join(separator)
   }
@@ -235,6 +264,71 @@ export function stripLine(input: { project: ProjectView; role: ProjectRole; sess
   if (overflow <= 0) return full
   const nameWidth = Math.max(4, stringWidth(input.project.name) - overflow)
   return Locale.truncateWidth(compose(Locale.truncateWidth(input.project.name, nameWidth)), input.width)
+}
+
+const listColumns = { name: 16, status: 9, master: 8, members: 7 }
+const narrowNameColumn = 17
+
+function cell(text: string, width: number) {
+  const fitted = Locale.truncateWidth(text, width)
+  return fitted + " ".repeat(Math.max(0, width - stringWidth(fitted)))
+}
+
+export type ProjectListColumns = { readonly status: boolean; readonly master: boolean }
+
+export function projectListColumns(available: number): ProjectListColumns {
+  return { status: available >= 53, master: available >= 63 }
+}
+
+export function projectListHeader(columns: ProjectListColumns = { status: true, master: true }) {
+  return [
+    cell("PROJECT", listColumns.name),
+    ...(columns.status ? [cell("STATUS", listColumns.status)] : []),
+    ...(columns.master ? [cell("MASTER", listColumns.master)] : []),
+    cell("MEMBERS", listColumns.members),
+    "LIVE",
+  ].join(" ")
+}
+
+export function projectListLine(
+  project: ProjectView,
+  animated: boolean,
+  columns: ProjectListColumns = { status: true, master: true },
+) {
+  return [
+    cell(project.name, listColumns.name),
+    ...(columns.status ? [cell(projectStatusLabel(project.active), listColumns.status)] : []),
+    ...(columns.master ? [cell(project.master.title, listColumns.master)] : []),
+    cell(String(project.members.length), listColumns.members),
+    `${liveSummary(project, animated)} ›`,
+  ].join(" ")
+}
+
+export function projectNarrowHeader() {
+  return `${cell("PROJECT", narrowNameColumn)} MEMBERS`
+}
+
+export function projectNarrowLine(project: ProjectView) {
+  return `${cell(project.name, narrowNameColumn)} ${project.members.length}`
+}
+
+export function projectHint(input: { role: ProjectRole; width: number }) {
+  const parts = [
+    ...(input.role === "member" ? ["↑ master", "←→ member"] : []),
+    "ctrl+x p members",
+    "enter send",
+    "esc interrupt",
+  ]
+  const fitted = parts.findIndex((_, index) => stringWidth(parts.slice(index).join(" · ")) <= input.width)
+  return parts.slice(fitted < 0 ? parts.length - 3 : Math.min(fitted, parts.length - 3)).join(" · ")
+}
+
+export function filterSessions(sessions: ReadonlyArray<ProjectSessionChoice>, query: string) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return sessions.filter((session) => {
+    const haystack = `${session.title} ${session.directory}`.toLowerCase()
+    return words.every((word) => haystack.includes(word))
+  })
 }
 
 function firstWord(title: string) {

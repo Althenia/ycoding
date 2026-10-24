@@ -2,6 +2,13 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-24: Carry Project escalation reasons on native requests
+
+- Add `Coordination.EscalationReason { sessionID, reason }` (reason 1–500 characters) and `Coordination.Escalation { reasons }` (1–4 entries).
+- Add optional `coordinationEscalation` to `Permission.Request`, `Guardrail.Request`, `Form.Info`, and the review-box `permission`, `guardrail`, and `form` payloads, including `session.review.deferred.1`.
+- Add the public ephemeral event `coordination.request.escalated` with `{ sessionID, rootSessionID?, kind, requestID, coordinationEscalation }`.
+- Additive; stored events and rows are unchanged, payloads without the field decode as before, and a runtime that predates it omits the field and event. Regenerate Promise and Effect clients from Protocol and Schema.
+
 ## 2026-10-21: Report system sleep hold in keep-awake status
 
 - Add optional `system` to `KeepAwake.Status`: `off`, `on`, `held`, `setup`, `unsupported`, or `error`. It reports the root `pmset` system-sleep hold that accompanies effective keep-awake on macOS; `held` mirrors lid `held` for a non-owning process and `setup` means the one-time sudoers rule is absent.

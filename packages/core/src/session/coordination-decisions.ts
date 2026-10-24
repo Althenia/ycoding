@@ -6,6 +6,7 @@ import { ConfigCoordination } from "../config/coordination"
 import type { CoordinationService } from "../coordination/index"
 import type { Form } from "../form"
 import type { Permission } from "../permission"
+import { CoordinationEscalation } from "./coordination-escalation"
 import type { SessionGuardrail } from "./guardrail"
 import type { SessionSchema } from "./schema"
 
@@ -21,6 +22,32 @@ export interface EvaluateInput {
   readonly rationale: string
   readonly confidence?: number
   readonly answer?: Form.Answer
+  readonly decision?: Decision
+}
+
+export type Decision = "approve" | "decline"
+
+export interface EscalateInput {
+  readonly groupID: Coordination.GroupID
+  readonly coordinatorSessionID: SessionSchema.ID
+  readonly targetSessionID: SessionSchema.ID
+  readonly requestID: string
+  readonly kind: Kind
+  readonly fingerprint: string
+  readonly reason: string
+}
+
+export interface EscalateResult {
+  readonly outcome: "escalated" | "stale"
+  readonly kind: Kind
+  readonly requestID: string
+  readonly fingerprint: string
+  readonly actor: "coordinator"
+  readonly settled: false
+  readonly to?: "master" | "human"
+  readonly coordinationEscalation?: Coordination.Escalation
+  readonly reason?: string
+  readonly reviewItemID?: string
 }
 
 export interface Result {
@@ -40,9 +67,9 @@ export interface Result {
 export interface Dependencies {
   readonly policy: () => Effect.Effect<ConfigCoordination.Resolved>
   readonly scopeOf: (sessionID: SessionSchema.ID) => Effect.Effect<CoordinationService.Scope | undefined>
-  readonly permission: Pick<Permission.Interface, "snapshot" | "snapshots" | "reconsider">
-  readonly form: Pick<Form.Interface, "snapshot" | "snapshots" | "reconsider">
-  readonly guardrail: Pick<SessionGuardrail.Interface, "requestSnapshot" | "requestSnapshots" | "reconsider">
+  readonly permission: Pick<Permission.Interface, "snapshot" | "snapshots" | "reconsider" | "escalate">
+  readonly form: Pick<Form.Interface, "snapshot" | "snapshots" | "reconsider" | "escalate">
+  readonly guardrail: Pick<SessionGuardrail.Interface, "requestSnapshot" | "requestSnapshots" | "reconsider" | "escalate">
   readonly now?: Effect.Effect<number>
 }
 
@@ -61,6 +88,7 @@ export type PendingSnapshot =
 export interface Interface {
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Result>
   readonly pending: (input: PendingInput) => Effect.Effect<ReadonlyArray<PendingSnapshot>>
+  readonly escalate: (input: EscalateInput) => Effect.Effect<EscalateResult>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/CoordinationDecisions") {}
@@ -151,7 +179,6 @@ export function make(deps: Dependencies): Interface {
     Effect.gen(function* () {
       const authorized = yield* authorize(input)
       if (!authorized.ok) return authorized
-      if (!authorized.scope.active) return { ok: false as const, reason: "delegation-inactive" }
       const policy = yield* deps.policy()
       if (!policy.enabled) return { ok: false as const, reason: "delegation-revoked" }
       const now = yield* (deps.now ?? Effect.sync(() => Date.now()))
@@ -192,6 +219,9 @@ export function make(deps: Dependencies): Interface {
       return { ...base, outcome: "escalated" as const, settled: false, reason: "rationale-required" }
     if (input.answer !== undefined && input.kind !== "question")
       return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-answer" }
+    if (input.decision !== undefined && input.kind === "question")
+      return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-decision" }
+    const decision = input.decision === undefined ? {} : { decision: input.decision }
     if (
       input.kind === "question" &&
       input.answer !== undefined &&
@@ -221,6 +251,7 @@ export function make(deps: Dependencies): Interface {
         fingerprint: input.fingerprint,
         actor: "coordinator",
         source,
+        ...decision,
         validate: (request) =>
           validate(input, request.action, request.resources).pipe(
             Effect.map(
@@ -260,6 +291,7 @@ export function make(deps: Dependencies): Interface {
           fingerprint: input.fingerprint,
           actor: "coordinator",
           source,
+          ...decision,
           validate: (request) =>
             validate(input, request.action, request.resources).pipe(
               Effect.map(
@@ -330,7 +362,71 @@ export function make(deps: Dependencies): Interface {
     return { ...base, ...result }
   })
 
-  return { evaluate, pending }
+  const escalate = Effect.fn("CoordinationDecisions.escalate")(function* (input: EscalateInput) {
+    const base = {
+      kind: input.kind,
+      requestID: input.requestID,
+      fingerprint: input.fingerprint,
+      actor: "coordinator" as const,
+      settled: false as const,
+    }
+    const reason = input.reason.trim()
+    if (reason.length === 0 || reason.length > 500) return { ...base, outcome: "escalated" as const, reason: "rationale-required" }
+    const authorized = yield* authorize(input)
+    if (!authorized.ok) return { ...base, outcome: "escalated" as const, reason: authorized.reason }
+    const handoff = input.coordinatorSessionID === authorized.scope.masterSessionID
+    const native = {
+      fingerprint: input.fingerprint,
+      source: { coordinatorSessionID: input.coordinatorSessionID, groupID: input.groupID, rationale: reason },
+      handoff,
+    }
+    const result = yield* nativeEscalation(input, native)
+    if (result.outcome === "stale") return { ...base, outcome: "stale" as const }
+    return {
+      ...base,
+      outcome: "escalated" as const,
+      ...(result.reason === undefined ? { to: handoff ? ("human" as const) : ("master" as const) } : {}),
+      ...(result.coordinationEscalation === undefined ? {} : { coordinationEscalation: result.coordinationEscalation }),
+      ...(result.reason === undefined ? {} : { reason: result.reason }),
+      ...(result.reviewItemID === undefined ? {} : { reviewItemID: result.reviewItemID }),
+    }
+  })
+
+  const nativeEscalation = (input: EscalateInput, native: CoordinationEscalation.Input) => {
+    const stale = Effect.succeed(CoordinationEscalation.result(input.requestID, native))
+    if (input.kind === "permission")
+      return deps.permission.snapshot(input.requestID as Permission.ID).pipe(
+        Effect.flatMap((snapshot) =>
+          snapshot === undefined || (snapshot.request.sessionID === input.targetSessionID && snapshot.fingerprint === input.fingerprint)
+            ? deps.permission.escalate({ ...native, sessionID: input.targetSessionID, requestID: input.requestID as Permission.ID })
+            : stale,
+        ),
+      )
+    if (input.kind === "review")
+      return deps.guardrail
+        .requestSnapshot(input.targetSessionID, input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"])
+        .pipe(
+          Effect.flatMap((snapshot) =>
+            snapshot === undefined || snapshot.fingerprint === input.fingerprint
+              ? deps.guardrail.escalate({
+                  ...native,
+                  sessionID: input.targetSessionID,
+                  requestID: input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"],
+                })
+              : stale,
+          ),
+          Effect.catchTag("Session.NotFoundError", () => stale),
+        )
+    return deps.form.snapshot(input.requestID as Form.ID).pipe(
+      Effect.flatMap((snapshot) =>
+        snapshot?.form.sessionID === input.targetSessionID && snapshot.fingerprint === input.fingerprint
+          ? deps.form.escalate({ ...native, id: snapshot.form.id })
+          : stale,
+      ),
+    )
+  }
+
+  return { evaluate, pending, escalate }
 }
 
 export const layer = (deps: Dependencies) => Layer.succeed(Service, make(deps))

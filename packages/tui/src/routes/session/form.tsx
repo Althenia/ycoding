@@ -25,6 +25,7 @@ import {
   isFormAnswerField,
 } from "../../util/form"
 import type { FormAnswerField } from "../../util/form"
+import { ProjectEscalation } from "./project-escalation"
 
 const FORM_MODE = "form"
 
@@ -646,6 +647,7 @@ export function FormPrompt(props: {
         <box paddingLeft={1}>
           <text fg={theme.text.subdued}>{props.form.title}</text>
         </box>
+        <box paddingLeft={1}><ProjectEscalation value={props.form.coordinationEscalation} /></box>
         <Show when={message()}>
           <box paddingLeft={1}>
             <text fg={theme.text.default}>{message()}</text>

@@ -27,17 +27,18 @@ The CLI operation set is `ycoding coordination list|get|create|update|delete`. R
 
 A human user message in the Master chat activates the Project. Interrupting the Master, including while idle, pauses it. A backend restart leaves Projects inactive. `pausedReason`, when present on an inactive Project, is `interrupted` or `restart`; activation clears it. Newly created inactive Projects omit it.
 
-While inactive, `send` fails with `Project is inactive; send a message in the master chat to resume`. Notifications remain pending in the Master chat without starting a turn until another user message. There are no separate arm, stop, complete, lease, or dispatch-queue controls.
+While inactive, `send` fails with `Project is inactive; send a message in the master chat to resume`; `answer`, `escalate`, and `interrupt` remain available. Completed and interrupted notifications remain pending in the Master chat without starting a turn until another user message; failures, decision requests, and escalations still wake their receiver. There are no separate arm, stop, complete, lease, or dispatch-queue controls.
 
 ## Master tool: `project`
 
-The Master and its subagent descendants receive the `project` tool, scoped to that Master's Project. Other Sessions cannot use it. Masters remain ordinary chat Sessions with their configured tools. They may drive members directly or launch subagents to drive members and report back.
+The Master and its subagent descendants receive the `project` tool, scoped to that Master's Project. Other Sessions cannot use it. Masters remain ordinary chat Sessions with their configured tools. Their instructions assign the Master and its supervising subagents a coordination-only role: delegate implementation, code reads and edits, checks and commits to members; react to member events, verify reported evidence, and carry undecidable requests upward with reasons. The Master may direct members itself or assign one or more members to each supervising subagent.
 
 | Action | Input | Output |
 | --- | --- | --- |
 | `list` | — | Project identity, active state, optional pause reason, concurrency, and members |
 | `send` | `sessionID`, `text`, optional `delivery`, `messageID`, `model` | Admitted message ID, member state, and whether an existing admission reconciled |
-| `answer` | `sessionID`, `requestID`, `kind`, `fingerprint`, `rationale`, optional native `answer` and `confidence` | Native settlement result or visible escalation reason |
+| `answer` | `sessionID`, `requestID`, `kind`, `fingerprint`, `rationale`, optional native `answer` and `confidence`, optional `decision` (`approve` default, or `decline`) | Native settlement result or visible escalation reason |
+| `escalate` | `sessionID`, `requestID`, `kind`, `fingerprint`, `reason` (1–500 characters) | `delivered`, optional notice `messageID`, and `decision` (`outcome`, optional `to: master \| human`, `coordinationEscalation`, `reason`, `reviewItemID`) |
 | `interrupt` | `sessionID` | Interrupt result and member state |
 
 `list` returns member titles, recorded Locations, `lastActivity`, live state (`idle`, `running`, `waiting`, `failed`), and pending native request summaries with IDs and fingerprints. `waiting` indicates a question/form, permission request, or review. Optional `drivenBy: { sessionID, title }` identifies the Master subagent that last sent to that member while the subagent is still running.
@@ -56,15 +57,15 @@ The backend admits `inputOrigin: coordination` with Project, Master, sender Sess
 
 Member turn success, failure, interruption, question/form creation, permission asks, and guardrail reviews create compact synthetic notifications using the existing Session notification mechanism. Token deltas and tool progress do not notify. A deterministic message identity prevents duplicate delivery of the same event.
 
-While active, notifications go to the Session that last sent to that member if it is a running Master subagent; otherwise they go to the Master. While inactive they are held in the Master chat without waking it. Notification text starts with `Project notification:` and carries JSON metadata:
+Notifications go to the Session that last sent to that member if it is a running Master subagent; otherwise they go to the Master. Failure, question/form, permission, review, and escalation notices wake that receiver even while the Project is inactive, without activating it; completed and interrupted notices wake the receiver only while the Project is active and otherwise wait in the Master chat. Notification text starts with `Project notification:` and carries JSON metadata:
 
 ```text
 { source: "project_notification", groupID, memberSessionID, title,
-  event: "completed" | "failed" | "interrupted" | "question" | "permission" | "review",
-  requestID?, excerpt? }
+  event: "completed" | "failed" | "interrupted" | "question" | "permission" | "review" | "escalated",
+  requestID?, excerpt?, kind?, escalatedBy?: { sessionID, title } }
 ```
 
-The excerpt is at most 500 characters. Notifications contain observations, not authority. The receiver rereads current member state and pending native requests before acting.
+The excerpt is at most 500 characters. An `escalated` notice carries the request `kind`, the escalating subagent as `escalatedBy`, and its reason as the excerpt. Notifications contain observations, not authority. The receiver rereads current member state and pending native requests before acting.
 
 ## Delegated routine decisions
 
@@ -74,9 +75,17 @@ Default routine classes are owner questions/forms answerable from the assignment
 
 Hard reviews, destructive or irreversible actions, external writes, publication, deployment, releases, purchases, paid spending, credential/account changes, dependency installs/downloads, production migrations, CI/CD changes, public-contract breaks, scope expansion, and low-confidence or conflicting cases always escalate to the human. The policy removes no deny, permission ceiling, or human-only review boundary.
 
-Revalidate global policy, Project narrowing, membership, active state, expiry, request state, queues, and deny/ceiling rules immediately before settlement. Use native decision and validation paths and record the rationale and originating Session in their audit records. Native audit fields retain the `coordinator` actor name. Delegation does not enable YOLO, rewrite independent auto flags, or create another evaluator.
+Revalidate global policy, Project narrowing, membership, expiry, request state, queues, and deny/ceiling rules immediately before settlement. Project active state gates only `send`; `answer` (approve or decline), `escalate`, and `interrupt` work while the Project is inactive. Use native decision and validation paths and record the rationale and originating Session in their audit records. Every coordinated permission settlement publishes `permission.replied` with its reply, so clients remove the pending prompt. Native audit fields retain the `coordinator` actor name. Delegation does not enable YOLO, rewrite independent auto flags, or create another evaluator.
+
+`decision: decline` applies to permission asks and ordinary reviews, not questions (`invalid-decision`). It passes the same policy, membership, live-identity, and human-only checks as an approval, then rejects through the native path: the permission records `session.permission.assessed` with outcome `deny`, via `coordination`, reply `reject`, and the coordinator fields, and publishes `permission.replied` with reply `reject`; the review records `guardrail.replied` with reply `reject` and `session.guardrail.decided` with reply `reject` and the coordinator fields. The member receives the rationale as feedback. A decline never rejects a hard review or a human-only request; those return the escalation reason.
 
 Exact repeated decisions reconcile existing settlement; conflicting or stale requests fail. Denies remain denied. Hard reviews and human-only review-box items remain human-owned. Invalid policy, unavailable evaluators, uncertain results, unsupported requests, and new approval boundaries produce a visible escalation reason rather than automatic approval.
+
+## Escalation chain
+
+`escalate` passes a pending member request up one hop with a reason. It requires current Project membership and the live request identity and fingerprint, and it is never blocked by inactive state, delegation policy, or human-only classification. From a Master subagent it goes to the Master as an `escalated` Project notification that wakes the Master even while the Project is inactive, without activating outbound sends; a repeated escalation of the same request by the same caller reuses the notice. From the Master it hands the request to the human: the pending native prompt (permission, review, or question/form) stays open for the human, and a permission handoff also records `session.permission.assessed` with outcome `escalate`, via `coordination`, reason `escalated`, and the Master's reason as rationale. Review and question handoffs record no model-incident or guardrail-escalation event.
+
+Each hop appends `{ sessionID, reason }` to the request's optional `coordinationEscalation.reasons`, in order, at most four; an identical reason from the same Session reconciles, and a fifth reason returns `escalation-chain-full` without changing the chain, a `to` hop, a notice, or a handoff audit. The field appears on `Permission.Request`, `Guardrail.Request`, and `Form.Info`, does not change the request fingerprint, and is published to clients by the ephemeral `coordination.request.escalated` event `{ sessionID, rootSessionID?, kind, requestID, coordinationEscalation }`. Entering sleep defers the pending request to the review box with the chain on its `permission`, `guardrail`, or `form` payload, with reasons redacted like other payload text. When the request was already deferred to the review box, `escalate` appends nothing and returns `outcome: escalated`, reason `deferred-to-review-box`, the open item's `reviewItemID`, and the chain recorded on its payload, without a `to` hop or notice; the human decides that item through `session.review.decide`, and no coordination path settles it. A stale identity returns `stale` and appends nothing.
 
 ## Notification filtering
 

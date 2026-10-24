@@ -1,6 +1,7 @@
 export * as Guardrail from "./guardrail.js"
 
 import { Schema } from "effect"
+import { Coordination } from "./coordination.js"
 import { DecisionFailure } from "./decision-failure.js"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
@@ -122,6 +123,7 @@ export class Request extends Schema.Class<Request>("Guardrail.Request")({
   hardReview: Schema.Boolean.pipe(optional),
   risk: Risk.pipe(optional),
   escalation: Escalation.pipe(optional),
+  coordinationEscalation: Coordination.Escalation.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Json).pipe(optional),
 }) {}
 

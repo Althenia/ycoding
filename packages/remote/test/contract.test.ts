@@ -473,6 +473,8 @@ describe("remote envelope: request", () => {
       ["session.skill", { skill: "test", resume: false }, "ses_1"],
       ["session.create", { id: "ses_new", workspace: "wsp_1", agent: "build", model: { providerID: "openai", id: "gpt" } }],
       ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "openai", id: "gpt", profile: "work" } }],
+      ["session.create", { id: "ses_new", workspace: "wsp_1", title: "Release review" }],
+      ["session.create", { id: "ses_new", workspace: "wsp_1", title: "😀".repeat(120) }],
       ["session.prompt", { text: "test", files: [{ uri: "file:///work/a.ts" }], agents: [{ name: "build" }], resume: false }, "ses_1"],
     ] as const) {
       const request = { type: "request", id: "a", operation, ...(sessionID === undefined ? {} : { sessionID }), ...(input === undefined ? {} : { input }) }
@@ -484,6 +486,10 @@ describe("remote envelope: request", () => {
       ["workspace.file.find", { workspace: "wsp_1", query: "" }],
       ["workspace.file.find", { workspace: "wsp_1", query: "x", limit: 51 }],
       ["session.create", { id: "ses_new", workspace: "wsp_1", model: { providerID: "a", id: "b", secret: "x" } }],
+      ...["", " ", " Padded", "Padded ", "Bell\u0007", "Line\nbreak", "Bidi\u202eflip", "x".repeat(121), "😀".repeat(121)]
+        .map((title) => ["session.create", { id: "ses_new", workspace: "wsp_1", title }] as const),
+      ["session.create", { id: "ses_new", workspace: "wsp_1", title: 42 }],
+      ["session.create", { id: "ses_new", workspace: "wsp_1", title: null }],
     ] as const) expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation, input }))).toMatchObject({ ok: false, error: { code: "invalid_message" } })
     expect(parseClientMessage(JSON.stringify({ type: "request", id: "a", operation: "session.switchModel", sessionID: "ses_1", input: { model: { providerID: "a", id: "b", profile: "" } } })))
       .toMatchObject({ ok: false, error: { code: "invalid_message" } })

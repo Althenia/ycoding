@@ -1,7 +1,8 @@
 import path from "path"
 import { describe, expect } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
-import { Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
@@ -159,6 +160,48 @@ describe("native coordinator Form reconsideration", () => {
       })
       expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "invalid-answer" })
       expect(yield* service.state(invalidForm.id)).toEqual({ status: "pending" })
+    }),
+  )
+
+  it.effect("escalation hops append bounded reasons to the pending form, publish a refresh, and survive sleep deferral", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* Form.Service
+      const events = yield* EventRuntime.Service
+      const refreshed: unknown[] = []
+      const deferred: Array<Record<string, unknown>> = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if (event.type === Coordination.Event.RequestEscalated.type) refreshed.push(event.data)
+          if (event.type === SessionEvent.Review.Deferred.type) deferred.push(event.data as Record<string, unknown>)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const asked = { ...form, id: Form.ID.create("frm_coord_escalate") }
+      const waiting = yield* service.ask(asked).pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.snapshot(asked.id)) === undefined; attempt++) yield* Effect.yieldNow
+      const snapshot = yield* service.snapshot(asked.id)
+      const driver = { coordinatorSessionID: SessionSchema.ID.make("ses_driver"), groupID: "cgrp_one", rationale: "The branch is the owner's call." }
+      const master = { coordinatorSessionID: SessionSchema.ID.make("ses_coord"), groupID: "cgrp_one", rationale: "No recorded instruction names a branch." }
+      expect(yield* service.escalate({ id: asked.id, fingerprint: "stale", source: driver, handoff: false })).toMatchObject({ outcome: "stale", settled: false })
+      expect(yield* service.escalate({ id: asked.id, fingerprint: snapshot!.fingerprint, source: driver, handoff: false })).toMatchObject({ outcome: "escalated", settled: false })
+      const chain = { reasons: [{ sessionID: driver.coordinatorSessionID, reason: driver.rationale }, { sessionID: master.coordinatorSessionID, reason: master.rationale }] }
+      expect(yield* service.escalate({ id: asked.id, fingerprint: snapshot!.fingerprint, source: master, handoff: true })).toMatchObject({ outcome: "escalated", coordinationEscalation: chain })
+      expect(yield* service.escalate({ id: asked.id, fingerprint: snapshot!.fingerprint, source: master, handoff: true })).toMatchObject({ outcome: "escalated", coordinationEscalation: chain })
+      expect((yield* service.get(asked.id)).coordinationEscalation).toEqual(chain)
+      expect((yield* service.snapshot(asked.id))!.fingerprint).toBe(snapshot!.fingerprint)
+      expect(refreshed).toEqual([
+        { sessionID, kind: "question", requestID: asked.id, coordinationEscalation: { reasons: [chain.reasons[0]] } },
+        { sessionID, kind: "question", requestID: asked.id, coordinationEscalation: chain },
+      ])
+      yield* service.deferPending(sessionID)
+      expect(yield* Fiber.join(waiting)).toMatchObject({ status: "deferred" })
+      expect(deferred).toHaveLength(1)
+      expect(deferred[0]!.payload).toMatchObject({ type: "form", coordinationEscalation: chain })
+      expect(yield* service.escalate({ id: asked.id, fingerprint: snapshot!.fingerprint, source: { ...master, rationale: "After sleep." }, handoff: true })).toMatchObject({
+        outcome: "escalated", reason: "deferred-to-review-box", reviewItemID: deferred[0]!.itemID, coordinationEscalation: chain,
+      })
+      expect(refreshed).toHaveLength(2)
     }),
   )
 })
@@ -430,7 +473,7 @@ describe("native coordinator Permission reconsideration", () => {
           rationale: "Assigned routine work.",
         }),
       ])
-      expect(captured.permissionReplied).toEqual([])
+      expect(captured.permissionReplied).toEqual([{ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "once" }])
       expect((yield* autonomy.snapshot(nativeSessionID)).state).toEqual(before.state)
 
       const second = yield* service.reconsider({
@@ -491,7 +534,7 @@ describe("native coordinator Permission reconsideration", () => {
           rationale: "Assigned routine work.",
         }),
       ])
-      expect(captured.permissionReplied).toEqual([])
+      expect(captured.permissionReplied).toEqual([{ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" }])
       expect((yield* autonomy.snapshot(nativeSessionID)).state).toEqual(before.state)
     }),
   )
@@ -618,6 +661,310 @@ describe("native coordinator Guardrail reconsideration", () => {
 
       yield* service.reply({ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" })
       expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
+    }),
+  )
+})
+
+function captureEscalation() {
+  return Effect.gen(function* () {
+    const events = yield* EventRuntime.Service
+    const refreshed: Array<Record<string, unknown>> = []
+    const deferred: Array<SessionEvent.Review.Deferred["data"]> = []
+    const guardrailEscalated: unknown[] = []
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.sync(() => {
+        const data = event.data as Record<string, unknown>
+        if (event.type === Coordination.Event.RequestEscalated.type) refreshed.push(data)
+        if (event.type === SessionEvent.Review.Deferred.type) deferred.push(event.data as SessionEvent.Review.Deferred["data"])
+        if (event.type === SessionEvent.GuardrailEscalated.type) guardrailEscalated.push(data)
+      }),
+    )
+    yield* Effect.addFinalizer(() => unsubscribe)
+    return { refreshed, deferred, guardrailEscalated }
+  })
+}
+
+const driverSource = { coordinatorSessionID: SessionSchema.ID.make("ses_driver"), groupID: "cgrp_one", rationale: "Needs the owner's call." }
+const masterSource = { coordinatorSessionID: SessionSchema.ID.make("ses_coord"), groupID: "cgrp_one", rationale: "Outside the recorded assignment." }
+const fullChain = { reasons: [{ sessionID: driverSource.coordinatorSessionID, reason: driverSource.rationale }, { sessionID: masterSource.coordinatorSessionID, reason: masterSource.rationale }] }
+
+describe("native coordinator Permission decline and escalation", () => {
+  const declined = nativeHarness([{ escalate: 0.95 }])
+  declined.it.effect("a decline rejects the pending ask natively with coordinator audit and the rationale as member feedback", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* Permission.Service
+      const captured = yield* captureNativeEvents()
+      const running = yield* service
+        .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"] })
+        .pipe(Effect.flip, Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.snapshot(pending[0]!.id)
+      const result = yield* service.reconsider({
+        requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator", source: coordinatorSource,
+        decision: "decline", validate: () => Effect.succeed(true),
+      })
+      expect(result).toMatchObject({ outcome: "denied", settled: true, via: "coordination" })
+      const error = yield* Fiber.join(running)
+      expect(error).toBeInstanceOf(Permission.CorrectedError)
+      expect((error as Permission.CorrectedError).feedback).toContain("Assigned routine work.")
+      expect(declined.choices).toHaveLength(1)
+      expect(captured.assessed.filter((event) => event.outcome === "deny")).toEqual([
+        expect.objectContaining({
+          requestID: pending[0]!.id, outcome: "deny", via: "coordination", reply: "reject", actor: "coordinator",
+          coordinatorSessionID: coordinatorSource.coordinatorSessionID, groupID: "cgrp_one", rationale: "Assigned routine work.",
+        }),
+      ])
+      expect(yield* service.forSession(nativeSessionID)).toEqual([])
+      expect(captured.permissionReplied).toEqual([{ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" }])
+    }),
+  )
+
+  const human = nativeHarness([{ escalate: 0.95 }])
+  human.it.effect("a decline never rejects a human-only ask or one the delegation no longer covers", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* Permission.Service
+      const captured = yield* captureNativeEvents()
+      yield* service.assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], requireHuman: true }).pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.snapshot(pending[0]!.id)
+      const decline = (valid: boolean) => service.reconsider({
+        requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator", source: coordinatorSource,
+        decision: "decline", validate: () => Effect.succeed(valid),
+      })
+      expect(yield* decline(false)).toMatchObject({ outcome: "escalated", settled: false, reason: "delegation-invalid" })
+      expect(yield* decline(true)).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:request" })
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+      expect(captured.assessed.filter((event) => event.via === "coordination")).toEqual([])
+    }),
+  )
+
+  const escalated = nativeHarness([{ escalate: 0.95 }])
+  escalated.it.effect("driver and Master hops attach the full reason chain, audit the human handoff, and carry it into the review box", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* Permission.Service
+      const captured = yield* captureNativeEvents()
+      const chain = yield* captureEscalation()
+      const running = yield* service
+        .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"] })
+        .pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.snapshot(pending[0]!.id)
+      const escalate = (source: typeof driverSource, handoff: boolean, fingerprint = snapshot!.fingerprint) =>
+        service.escalate({ sessionID: nativeSessionID, requestID: pending[0]!.id, fingerprint, source, handoff })
+      expect(yield* escalate(driverSource, false, "stale")).toMatchObject({ outcome: "stale", settled: false })
+      expect(yield* escalate(driverSource, false)).toMatchObject({ outcome: "escalated", settled: false, coordinationEscalation: { reasons: [fullChain.reasons[0]] } })
+      expect(captured.assessed.filter((event) => event.via === "coordination")).toEqual([])
+      expect(yield* escalate(masterSource, true)).toMatchObject({ outcome: "escalated", coordinationEscalation: fullChain })
+      expect(yield* escalate(masterSource, true)).toMatchObject({ outcome: "escalated", coordinationEscalation: fullChain })
+      expect((yield* service.forSession(nativeSessionID))[0]!.coordinationEscalation).toEqual(fullChain)
+      expect((yield* service.snapshot(pending[0]!.id))!.fingerprint).toBe(snapshot!.fingerprint)
+      expect(chain.refreshed).toEqual([
+        { sessionID: nativeSessionID, kind: "permission", requestID: pending[0]!.id, coordinationEscalation: { reasons: [fullChain.reasons[0]] } },
+        { sessionID: nativeSessionID, kind: "permission", requestID: pending[0]!.id, coordinationEscalation: fullChain },
+      ])
+      expect(captured.assessed.filter((event) => event.via === "coordination")).toEqual([
+        expect.objectContaining({
+          requestID: pending[0]!.id, outcome: "escalate", via: "coordination", reason: "escalated", actor: "coordinator",
+          coordinatorSessionID: masterSource.coordinatorSessionID, groupID: "cgrp_one", rationale: masterSource.rationale,
+        }),
+      ])
+      for (const extra of ["Third hop.", "Fourth hop."])
+        expect(yield* escalate({ ...masterSource, rationale: extra }, true)).toMatchObject({ outcome: "escalated" })
+      const full = yield* escalate({ ...masterSource, rationale: "Fifth hop." }, true)
+      expect(full).toMatchObject({ outcome: "escalated", reason: "escalation-chain-full" })
+      expect(full.coordinationEscalation?.reasons).toHaveLength(4)
+      const final = (yield* service.forSession(nativeSessionID))[0]!.coordinationEscalation!
+      yield* service.deferPending(nativeSessionID)
+      const exit = yield* Fiber.await(running)
+      expect(Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined).toBeInstanceOf(Permission.DeferredError)
+      expect(chain.deferred).toHaveLength(1)
+      expect(chain.deferred[0]!.payload).toMatchObject({ type: "permission", coordinationEscalation: final })
+      const refreshes = chain.refreshed.length
+      expect(yield* escalate({ ...masterSource, rationale: "After sleep." }, true)).toEqual({
+        outcome: "escalated", requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, settled: false,
+        reason: "deferred-to-review-box", reviewItemID: chain.deferred[0]!.itemID, coordinationEscalation: final,
+      })
+      expect(chain.refreshed).toHaveLength(refreshes)
+    }),
+  )
+})
+
+describe("native coordinator Guardrail decline and escalation", () => {
+  const outside = { sessionID: nativeSessionID, action: "file_mutation", resources: ["/outside/notes/today.md"], metadata: { operation: "write" } }
+
+  const declined = nativeHarness([{ escalate: 0.95 }])
+  declined.it.effect("a decline rejects an ordinary review natively with coordinator audit and no model-incident escalation", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* SessionGuardrail.Service
+      const captured = yield* captureNativeEvents()
+      const chain = yield* captureEscalation()
+      const running = yield* service.assert(outside).pipe(Effect.flip, Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
+      const choicesBefore = declined.choices.length
+      const escalatedBefore = chain.guardrailEscalated.length
+      const result = yield* service.reconsider({
+        sessionID: nativeSessionID, requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator",
+        source: coordinatorSource, decision: "decline", validate: () => Effect.succeed(true),
+      })
+      expect(result).toMatchObject({ outcome: "denied", settled: true, via: "coordination" })
+      const error = yield* Fiber.join(running)
+      expect(error).toBeInstanceOf(SessionGuardrail.DeclinedError)
+      expect((error as SessionGuardrail.DeclinedError).message).toContain("Assigned routine work.")
+      expect(declined.choices).toHaveLength(choicesBefore)
+      expect(captured.guardrailDecided).toEqual([
+        expect.objectContaining({
+          requestID: pending[0]!.id, reply: "reject", actor: "coordinator",
+          coordinatorSessionID: coordinatorSource.coordinatorSessionID, groupID: "cgrp_one", rationale: "Assigned routine work.",
+        }),
+      ])
+      expect(captured.guardrailDecided[0]).not.toHaveProperty("authority")
+      expect(captured.guardrailReplied).toEqual([expect.objectContaining({ requestID: pending[0]!.id, reply: "reject" })])
+      expect(captured.guardrailReplied[0]).not.toHaveProperty("decidedBy")
+      expect(chain.guardrailEscalated).toHaveLength(escalatedBefore)
+    }),
+  )
+
+  const hard = nativeHarness([{ allow: 0.99 }])
+  hard.it.effect("a decline never rejects a hard review", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* SessionGuardrail.Service
+      const captured = yield* captureNativeEvents()
+      yield* service.assert({ sessionID: nativeSessionID, action: "shell", resources: ["git push --force origin main"], metadata: { workdir: nativeProject } }).pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
+      const result = yield* service.reconsider({
+        sessionID: nativeSessionID, requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator",
+        source: coordinatorSource, decision: "decline", validate: () => Effect.succeed(true),
+      })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:hard-review" })
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+      expect(captured.guardrailDecided).toEqual([])
+    }),
+  )
+
+  const escalated = nativeHarness([{ escalate: 0.95 }])
+  escalated.it.effect("driver and Master hops attach the full reason chain without model-incident events and carry it into the review box", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* SessionGuardrail.Service
+      const chain = yield* captureEscalation()
+      const running = yield* service.assert(outside).pipe(Effect.flip, Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
+      const escalatedBefore = chain.guardrailEscalated.length
+      const escalate = (source: typeof driverSource, handoff: boolean, fingerprint = snapshot!.fingerprint) =>
+        service.escalate({ sessionID: nativeSessionID, requestID: pending[0]!.id, fingerprint, source, handoff })
+      expect(yield* escalate(driverSource, false, "stale")).toMatchObject({ outcome: "stale", settled: false })
+      expect(yield* escalate(driverSource, false)).toMatchObject({ outcome: "escalated" })
+      expect(yield* escalate(masterSource, true)).toMatchObject({ outcome: "escalated", coordinationEscalation: fullChain })
+      expect((yield* service.forSession(nativeSessionID))[0]!.coordinationEscalation).toEqual(fullChain)
+      expect((yield* service.requestSnapshot(nativeSessionID, pending[0]!.id))!.fingerprint).toBe(snapshot!.fingerprint)
+      expect(chain.refreshed.at(-1)).toEqual({
+        sessionID: nativeSessionID, rootSessionID: nativeSessionID, kind: "review", requestID: pending[0]!.id, coordinationEscalation: fullChain,
+      })
+      expect(chain.refreshed).toHaveLength(2)
+      expect(chain.guardrailEscalated).toHaveLength(escalatedBefore)
+      yield* service.deferPending(nativeSessionID)
+      expect(yield* Fiber.join(running)).toBeInstanceOf(SessionGuardrail.DeferredError)
+      expect(chain.deferred).toHaveLength(1)
+      expect(chain.deferred[0]!.payload).toMatchObject({ type: "guardrail", coordinationEscalation: fullChain })
+      expect(yield* escalate({ ...masterSource, rationale: "After sleep." }, true)).toMatchObject({
+        outcome: "escalated", reason: "deferred-to-review-box", reviewItemID: chain.deferred[0]!.itemID, coordinationEscalation: fullChain,
+      })
+      expect(chain.refreshed).toHaveLength(2)
+    }),
+  )
+})
+
+describe("native escalation chain through CoordinationDecisions", () => {
+  const chainHarness = nativeHarness([{ escalate: 0.95 }])
+  const scope = {
+    groupID: "cgrp_one", masterSessionID: masterSource.coordinatorSessionID, memberSessionIDs: [nativeSessionID],
+    active: false, settings: { concurrency: null },
+  }
+  const decisionsOver = Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const guardrail = yield* SessionGuardrail.Service
+    return CoordinationDecisions.make({
+      policy: () => Effect.succeed({ enabled: false, categories: [] }) as never,
+      scopeOf: (sessionID) => Effect.succeed(sessionID === masterSource.coordinatorSessionID || sessionID === driverSource.coordinatorSessionID ? (scope as never) : undefined),
+      permission,
+      guardrail,
+      form: { snapshot: () => Effect.succeed(undefined), snapshots: () => Effect.succeed([]), reconsider: () => Effect.die("unused"), escalate: () => Effect.die("unused") },
+    })
+  })
+  const input = (coordinatorSessionID: SessionSchema.ID, kind: "permission" | "review", requestID: string, fingerprint: string, reason: string) =>
+    ({ groupID: Coordination.GroupID.make("cgrp_one"), coordinatorSessionID, targetSessionID: nativeSessionID, requestID, kind, fingerprint, reason })
+
+  chainHarness.it.effect("a driver hop reaches the Master, the Master hop reaches the human, and an inactive revoked Project blocks neither", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* Permission.Service
+      const decisions = yield* decisionsOver
+      const captured = yield* captureNativeEvents()
+      yield* service.assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"] }).pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.snapshot(pending[0]!.id)
+      const driver = yield* decisions.escalate(input(driverSource.coordinatorSessionID, "permission", pending[0]!.id, snapshot!.fingerprint, driverSource.rationale))
+      expect(driver).toMatchObject({ outcome: "escalated", to: "master", coordinationEscalation: { reasons: [fullChain.reasons[0]] } })
+      const master = yield* decisions.escalate(input(masterSource.coordinatorSessionID, "permission", pending[0]!.id, snapshot!.fingerprint, masterSource.rationale))
+      expect(master).toMatchObject({ outcome: "escalated", to: "human", coordinationEscalation: fullChain })
+      expect((yield* service.forSession(nativeSessionID))[0]!.coordinationEscalation).toEqual(fullChain)
+      expect(captured.assessed.filter((event) => event.via === "coordination" && event.outcome === "escalate")).toHaveLength(1)
+      expect(captured.permissionReplied).toEqual([])
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+      for (const reason of ["Third hop.", "Fourth hop."])
+        yield* decisions.escalate(input(driverSource.coordinatorSessionID, "permission", pending[0]!.id, snapshot!.fingerprint, reason))
+      const full = yield* decisions.escalate(input(driverSource.coordinatorSessionID, "permission", pending[0]!.id, snapshot!.fingerprint, "Fifth hop."))
+      expect(full).toMatchObject({ outcome: "escalated", reason: "escalation-chain-full" })
+      expect(full.to).toBeUndefined()
+      expect(full.coordinationEscalation?.reasons.map((item) => item.reason)).not.toContain("Fifth hop.")
+      const fullHandoff = yield* decisions.escalate(input(masterSource.coordinatorSessionID, "permission", pending[0]!.id, snapshot!.fingerprint, "Fifth hop."))
+      expect(fullHandoff.to).toBeUndefined()
+      expect(captured.assessed.filter((event) => event.via === "coordination" && event.outcome === "escalate")).toHaveLength(1)
+    }),
+  )
+
+  const direct = nativeHarness([{ escalate: 0.95 }])
+  direct.it.effect("with no driver the Master hands a review straight to the human, and a deferred review reports its review-box item", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* SessionGuardrail.Service
+      const decisions = yield* decisionsOver
+      const chain = yield* captureEscalation()
+      yield* service.assert({ sessionID: nativeSessionID, action: "file_mutation", resources: ["/outside/notes/today.md"], metadata: { operation: "write" } }).pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
+      const master = yield* decisions.escalate(input(masterSource.coordinatorSessionID, "review", pending[0]!.id, snapshot!.fingerprint, masterSource.rationale))
+      expect(master).toMatchObject({ outcome: "escalated", to: "human", coordinationEscalation: { reasons: [fullChain.reasons[1]] } })
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+      yield* service.deferPending(nativeSessionID)
+      const after = yield* decisions.escalate(input(driverSource.coordinatorSessionID, "review", pending[0]!.id, snapshot!.fingerprint, driverSource.rationale))
+      expect(after).toMatchObject({ outcome: "escalated", reason: "deferred-to-review-box", reviewItemID: chain.deferred[0]!.itemID, coordinationEscalation: { reasons: [fullChain.reasons[1]] } })
+      expect(after.to).toBeUndefined()
+      expect(yield* decisions.escalate(input(masterSource.coordinatorSessionID, "review", pending[0]!.id, "stale", masterSource.rationale))).toMatchObject({ outcome: "stale" })
     }),
   )
 })

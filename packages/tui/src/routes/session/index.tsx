@@ -19,7 +19,8 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { useRoute, useRouteData } from "../../context/route"
 import { useCoordinationOptional } from "../../context/coordination"
 import { ProjectChips, ProjectMembers, ProjectStrip, useProjectClock } from "./project-members"
-import { projectNotification } from "../../util/coordination"
+import { escapeTerminalText } from "../../util/terminal-text"
+import { projectHint, projectNoticeLabel, projectNotification } from "../../util/coordination"
 import { createStore } from "solid-js/store"
 import {
   sessionMemoryLines,
@@ -863,6 +864,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   createEffect(() => {
     if (client.connection.status() !== "connected") return
     const sessionID = route.sessionID
+    void data.session.todo.sync(sessionID).catch(() => undefined)
+    void data.session.usage.sync(sessionID).catch(() => undefined)
     void (async () => {
       await Promise.all([
         data.session.message.sync(sessionID),
@@ -2181,7 +2184,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Match when={subagent()}><SubagentFooter reviewing={disabled()} /></Match>
         <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} project={!!projectOwner()} /></Match>
       </Switch>
-      <Show when={projectOwner()}><text fg={theme.text.subdued} wrapMode="none" truncate>{membersFocused() ? "↑↓ member · o open · a add · n new session · x remove · D delete · s settings · ? keys · esc chat" : `${projectOwner()?.role === "member" ? "↑ master · ←→ member · " : ""}ctrl+x p members · enter send · esc interrupt`}</text></Show>
+      <Show when={projectOwner()}>
+        {(owner) => (
+          <text fg={theme.text.subdued} height={1} flexShrink={0} wrapMode="none" truncate>
+            {membersFocused()
+              ? "↑↓ member · o open · a add · n new session · x remove · D delete · s settings · ? keys · esc chat"
+              : projectHint({ role: owner().role, width: dimensions().width })}
+          </text>
+        )}
+      </Show>
     </context.Provider>
   )
 
@@ -2845,8 +2856,8 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   return (
     <Switch>
       <Match when={projectNotice()}>{(notice) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
-        <box flexDirection="row"><text fg={notice().event === "failed" ? theme.text.feedback.error.default : theme.text.subdued} wrapMode="none" truncate flexGrow={1}>{notice().title} {notice().event === "completed" ? "finished" : notice().event === "question" ? "asks a question" : notice().event}</text><text fg={theme.text.feedback.info.default} onMouseUp={() => route.navigate({ type: "session", sessionID: notice().sessionID })}>[o] Open</text></box>
-        <Show when={notice().excerpt}><text fg={theme.text.subdued}>{notice().excerpt}</text></Show>
+        <box flexDirection="row"><text fg={notice().event === "failed" ? theme.text.feedback.error.default : notice().event === "escalated" ? theme.text.feedback.warning.default : theme.text.subdued} wrapMode="none" truncate flexGrow={1}>{escapeTerminalText(notice().title)} {projectNoticeLabel(notice())}</text><text fg={theme.text.feedback.info.default} onMouseUp={() => route.navigate({ type: "session", sessionID: notice().sessionID })}>[o] Open</text></box>
+        <Show when={notice().excerpt}><text fg={theme.text.subdued} wrapMode="word">{escapeTerminalText(notice().excerpt)}</text></Show>
       </box>}</Match>
       <Match when={goalSteer()}>
         <box paddingLeft={1} paddingRight={1} paddingBottom={1} border={["top"]} borderColor={theme.border.default}>

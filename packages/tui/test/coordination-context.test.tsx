@@ -195,8 +195,7 @@ test("creating with a new master creates the Session in the directory, titles it
     })
     expect(masterID).toStartWith("ses_new")
     expect(writes(server)).toEqual([
-      ["POST", "/api/session", { location: { directory: "/home/dev/Workspace/infra" } }],
-      ["POST", `/api/session/${masterID}/rename`, { title: "Infra move" }],
+      ["POST", "/api/session", { location: { directory: "/home/dev/Workspace/infra" }, title: "Infra move" }],
       ["POST", "/api/coordination", { name: "Infra move", masterSessionID: masterID, memberSessionIDs: [] }],
     ])
   } finally {
@@ -209,7 +208,8 @@ test("a new master takes an explicit title over the Project name", async () => {
   const { app, coordination } = await mount(server)
   try {
     await coordination().service.create({ name: "Infra move", master: { directory: "/x", title: "Ops lead" } })
-    expect(server.state.writes[1]!.body).toEqual({ title: "Ops lead" })
+    expect(server.state.writes[0]!.body).toEqual({ location: { directory: "/x" }, title: "Ops lead" })
+    expect(server.state.writes.some((write) => write.path.endsWith("/rename"))).toBe(false)
   } finally {
     app.renderer.destroy()
   }
@@ -343,6 +343,52 @@ test("a stale revision surfaces the backend reason and a refresh recovers", asyn
     await coordination().service.rename(groupID, "Late")
     expect(server.state.projects[0]!.name).toBe("Late")
   } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a mutation waits for the latest overlapping Project refresh before the next write", async () => {
+  const server = backend()
+  const initialRoute = server.route
+  const gates = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
+  const started = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
+  let read = 0
+  let holding = false
+  server.route = async (url, request) => {
+    if (holding && request.method === "GET" && url.pathname === "/api/coordination" && read < 2) {
+      const index = read++
+      started[index]!.resolve()
+      await gates[index]!.promise
+    }
+    return initialRoute(url, request)
+  }
+  const { app, coordination } = await mount(server)
+  try {
+    holding = true
+    let settled = false
+    const mutation = coordination()
+      .service.rename(groupID, "Renamed project")
+      .then(() => {
+        settled = true
+      })
+    await started[0]!.promise
+    const refresh = coordination().refresh()
+    await started[1]!.promise
+    gates[0]!.resolve()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const settledBeforeLatestRead = settled
+    gates[1]!.resolve()
+    await Promise.all([mutation, refresh])
+    expect(settledBeforeLatestRead).toBe(false)
+    await coordination().service.addMember(groupID, scratchID)
+    expect(server.state.writes.at(-1)?.body).toMatchObject({ revision: 8 })
+    expect(
+      coordination()
+        .projects()![0]!
+        .members.some((member) => member.sessionID === scratchID),
+    ).toBe(true)
+  } finally {
+    gates.forEach((gate) => gate.resolve())
     app.renderer.destroy()
   }
 })

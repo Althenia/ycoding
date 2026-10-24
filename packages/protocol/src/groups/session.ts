@@ -350,6 +350,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         payload: Schema.Struct({
           id: Session.ID.pipe(Schema.optional),
           parentID: Session.ID.pipe(Schema.optional),
+          title: Schema.String.pipe(Schema.optional),
           agent: Agent.ID.pipe(Schema.optional),
           model: Model.Ref.pipe(Schema.optional),
           location: Location.Ref.pipe(Schema.optional),

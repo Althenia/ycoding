@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Coordination } from "../src/coordination.js"
+import { EventManifest } from "../src/event-manifest.js"
+import { Form } from "../src/form.js"
+import { Guardrail } from "../src/guardrail.js"
+import { Permission } from "../src/permission.js"
+import { SessionReview } from "../src/session-review.js"
 
 const create = { name: "Project", masterSessionID: "ses_master", memberSessionIDs: ["ses_member"] }
 const decodeCreate = Schema.decodeUnknownSync(Coordination.CreateInput, { onExcessProperty: "error" })
@@ -47,6 +52,43 @@ test("participants expose live state, pending native identity, and an optional r
   expect(Schema.decodeUnknownSync(Coordination.PausedReason)("interrupted")).toBe("interrupted")
   expect(Schema.decodeUnknownSync(Coordination.PausedReason)("restart")).toBe("restart")
   expect(() => Schema.decodeUnknownSync(Coordination.PausedReason)("stopped")).toThrow()
+})
+
+test("escalation chains carry one to four bounded per-Session reasons on live requests, review payloads, and the refresh event", () => {
+  const chain = { reasons: [{ sessionID: "ses_driver", reason: "Needs the owner's choice." }, { sessionID: "ses_master", reason: "Outside the assignment." }] }
+  const decode = Schema.decodeUnknownSync(Coordination.Escalation, { onExcessProperty: "error" })
+  expect(decode(chain)).toEqual(chain as never)
+  for (const invalid of [
+    { reasons: [] },
+    { reasons: Array(5).fill(chain.reasons[0]) },
+    { reasons: [{ sessionID: "ses_driver", reason: " " }] },
+    { reasons: [{ sessionID: "ses_driver", reason: "x".repeat(501) }] },
+    { reasons: [{ sessionID: "per_one", reason: "Not a Session" }] },
+  ]) expect(() => decode(invalid)).toThrow()
+
+  const permission = { id: "per_one", sessionID: "ses_member", action: "read", resources: ["src/a"] }
+  expect(Schema.decodeUnknownSync(Permission.Request)(permission)).toEqual(permission as never)
+  expect(Schema.decodeUnknownSync(Permission.Request)({ ...permission, coordinationEscalation: chain }).coordinationEscalation).toEqual(chain as never)
+  const review = { id: "grq_one", rootSessionID: "ses_member", sessionID: "ses_member", action: "edit", resources: [], ruleIDs: [], reason: "r", standard: true }
+  expect(Schema.decodeUnknownSync(Guardrail.Request)({ ...review, coordinationEscalation: chain }).coordinationEscalation).toEqual(chain as never)
+  const form = { id: "frm_one", sessionID: "ses_member", title: "Pick", fields: [{ key: "choice", type: "string" }] }
+  expect(Schema.decodeUnknownSync(Form.Info)({ ...form, coordinationEscalation: chain }).coordinationEscalation).toEqual(chain as never)
+  expect(Schema.encodeSync(Form.Info)(Schema.decodeUnknownSync(Form.Info)(form))).not.toHaveProperty("coordinationEscalation")
+
+  const fingerprint = "a".repeat(64)
+  for (const payload of [
+    { type: "permission", action: "read", resources: [], fingerprint, requestID: "per_one" },
+    { type: "guardrail", action: "edit", resources: [], ruleIDs: [], reason: "r", hardReview: false, directories: [], fingerprint, requestID: "grq_one" },
+    { type: "form", title: "Pick", fields: form.fields },
+  ]) {
+    expect(Schema.decodeUnknownSync(SessionReview.Payload)(payload)).toEqual(payload as never)
+    expect(Schema.decodeUnknownSync(SessionReview.Payload)({ ...payload, coordinationEscalation: chain })).toMatchObject({ coordinationEscalation: chain })
+  }
+
+  const refresh = { sessionID: "ses_member", kind: "permission", requestID: "per_one", coordinationEscalation: chain }
+  expect(Schema.decodeUnknownSync(Coordination.Event.RequestEscalated.data)(refresh)).toEqual(refresh as never)
+  expect(EventManifest.Server.get("coordination.request.escalated")).toBe(Coordination.Event.RequestEscalated)
+  expect(EventManifest.Durable.has("coordination.request.escalated.1")).toBe(false)
 })
 
 test("Project IDs retain cgrp_ and only Project lifecycle facts remain in the event inventory", () => {

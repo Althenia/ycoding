@@ -2,6 +2,7 @@ export * as SessionReview from "./session-review.js"
 
 import { Schema } from "effect"
 import { Agent } from "./agent.js"
+import { Coordination } from "./coordination.js"
 import { DecisionFailure } from "./decision-failure.js"
 import { Form } from "./form.js"
 import { Guardrail } from "./guardrail.js"
@@ -44,6 +45,7 @@ export const FormPayload = Schema.Struct({
   title: Schema.String,
   fields: Form.Fields,
   questionTool: Schema.Literal(true).pipe(optional),
+  coordinationEscalation: Coordination.Escalation.pipe(optional),
 }).annotate({ identifier: "SessionReview.FormPayload" })
 export interface FormPayload extends Schema.Schema.Type<typeof FormPayload> {}
 
@@ -70,6 +72,7 @@ export const GuardrailPayload = Schema.Struct({
   directories: Schema.Array(Schema.String),
   fingerprint: Fingerprint,
   requestID: Guardrail.RequestID,
+  coordinationEscalation: Coordination.Escalation.pipe(optional),
 }).annotate({ identifier: "SessionReview.GuardrailPayload" })
 export interface GuardrailPayload extends Schema.Schema.Type<typeof GuardrailPayload> {}
 
@@ -80,6 +83,7 @@ export const PermissionPayload = Schema.Struct({
   save: Schema.Array(Schema.String).pipe(optional),
   fingerprint: Fingerprint,
   requestID: Permission.ID,
+  coordinationEscalation: Coordination.Escalation.pipe(optional),
 }).annotate({ identifier: "SessionReview.PermissionPayload" })
 export interface PermissionPayload extends Schema.Schema.Type<typeof PermissionPayload> {}
 

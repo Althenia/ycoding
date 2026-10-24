@@ -1,6 +1,6 @@
 export * as RemoteMcpSchemas from "./remote-mcp-schemas"
 
-import { remoteOperationAccess, requireSession, type RemoteOperation } from "@ycoding-ai/remote"
+import { RemoteLimits, remoteOperationAccess, requireSession, type RemoteOperation } from "@ycoding-ai/remote"
 import { RemoteMcpApps } from "./remote-mcp-apps"
 
 type Schema = { [key: string]: unknown }
@@ -44,6 +44,13 @@ const line = (maxLength: number): Schema => ({
   maxLength,
   pattern: "^[^\\u0000\\r\\n]*\\S[^\\u0000\\r\\n]*$",
 })
+const titleCharacter = "\\u0000-\\u001f\\u007f-\\u009f\\u202a-\\u202e\\u2066-\\u2069"
+const sessionTitle: Schema = {
+  type: "string",
+  minLength: 1,
+  maxLength: RemoteLimits.maxSessionTitleChars,
+  pattern: `^[^\\s${titleCharacter}](?:[^${titleCharacter}]*[^\\s${titleCharacter}])?$`,
+}
 const prefixed = (pattern: string, maxLength: number): Schema => ({ type: "string", minLength: 1, maxLength, pattern })
 const integer = (minimum: number, maximum: number): Schema => ({ type: "integer", minimum, maximum })
 const boolean: Schema = { type: "boolean" }
@@ -360,7 +367,7 @@ const specs = {
   "session.create": {
     description:
       "Create a root Session in a recorded workspace from workspace_list. The client must supply input.id; retry an uncertain create with the same id and workspace.",
-    input: object({ id: sessionID, workspace: text(128), agent: text(128), model }, ["id", "workspace"]),
+    input: object({ id: sessionID, workspace: text(128), agent: text(128), model, title: sessionTitle }, ["id", "workspace"]),
   },
   "session.status": { description: "Read which root Sessions are running, need attention, or failed." },
   "session.catalog": { description: "List the agents, models, commands, skills, references and resources available to a Session." },
@@ -449,7 +456,7 @@ const specs = {
   "session.createInDirectory": {
     description:
       "Create a root Session in an existing directory strictly below the machine owner's home directory, given as an absolute path. The client must supply input.id; retry an uncertain create with the same id and directory. Missing paths, the home directory itself, and paths outside home (including via symlinks) are refused; no directory is created.",
-    input: object({ id: sessionID, directory: text(4_096), agent: text(128), model }, ["id", "directory"]),
+    input: object({ id: sessionID, directory: text(4_096), agent: text(128), model, title: sessionTitle }, ["id", "directory"]),
   },
 } as const satisfies Record<Exclude<ToolOperation, RemoteMcpApps.Operation>, Spec>
 

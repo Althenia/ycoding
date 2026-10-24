@@ -11,6 +11,17 @@ test("Project instructions describe member messaging and native decisions", () =
   expect(CoordinationInstructions.content).not.toContain("dispatch receipt")
 })
 
+test("Master instructions require supervision, evidence review and reasoned escalation", () => {
+  for (const instruction of [
+    "Coordinate and supervise only",
+    "Do not read or edit code, run checks, or create commits",
+    "concrete outcome, actions and checks, exclusions, and a stop condition",
+    "Verify reported evidence before accepting work",
+    "owning subagent → Master → human",
+    "Bring the human only decisions and approvals",
+  ]) expect(CoordinationInstructions.content).toContain(instruction)
+})
+
 test("the voice source is present only for a scoped Session", async () => {
   const active = await Effect.runPromise(Instructions.read(Instructions.when(true, CoordinationInstructions.make())))
   const inactive = await Effect.runPromise(Instructions.read(Instructions.when(false, CoordinationInstructions.make())))

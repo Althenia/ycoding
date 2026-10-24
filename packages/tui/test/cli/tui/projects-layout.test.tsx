@@ -10,7 +10,7 @@ import { ProjectsScreenContent } from "../../../src/routes/session/projects"
 import { ProjectMembers } from "../../../src/routes/session/project-members"
 import { DialogProvider } from "../../../src/ui/dialog"
 import { ToastProvider } from "../../../src/ui/toast"
-import type { ProjectView, ProjectService } from "../../../src/util/coordination"
+import type { ProjectView, ProjectService, ProjectSessionChoice } from "../../../src/util/coordination"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
@@ -44,6 +44,7 @@ async function mount(
     settings?: boolean
     mode?: "dark" | "light"
     service?: Partial<ProjectService>
+    sessions?: ProjectSessionChoice[]
   } = {},
 ) {
   const calls: Array<[string, ...unknown[]]> = []
@@ -72,10 +73,11 @@ async function mount(
   }
   Object.assign(service, input.service)
   const [focused, focus] = createSignal(true)
-  const sessions = () => [
-    { sessionID: "ses_lead", title: "Lead", directory: "/repo/api", updated: 1, projectName: "Release train" },
-    { sessionID: "ses_spare", title: "Spare", directory: "/repo/docs", updated: 2 },
-  ]
+  const sessions = () =>
+    input.sessions ?? [
+      { sessionID: "ses_lead", title: "Lead", directory: "/repo/api", updated: 1, projectName: "Release train" },
+      { sessionID: "ses_spare", title: "Spare", directory: "/repo/docs", updated: 2 },
+    ]
   const app = await testRender(
     () => (
       <TestTuiContexts>
@@ -128,7 +130,7 @@ async function mount(
     { width: input.width ?? 120, height: 40, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes(input.members ? "MEMBERS 4" : "Projects"))
+  await app.waitForFrame((frame) => frame.includes(input.members ? "MEMBERS 3" : "Projects"))
   return { app, calls }
 }
 type App = Awaited<ReturnType<typeof mount>>["app"]
@@ -185,7 +187,7 @@ test("Projects list shows master preview, meter and opens the master", async () 
   try {
     expect(app.captureCharFrame()).toContain("MASTER")
     expect(app.captureCharFrame()).toContain("Migration agent")
-    expect(app.captureCharFrame()).toContain("1/2 running")
+    expect(app.captureCharFrame()).toContain("1/2 members running")
     app.mockInput.pressEnter()
     await app.renderOnce()
     expect(calls).toContainEqual(["open", "ses_lead"])
@@ -326,7 +328,7 @@ test("narrow members retain state and open actions, dropping directory below 80"
   const { app } = await mount({ members: true, width: 60 })
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("MEMBERS 4")
+    expect(frame).toContain("MEMBERS 3")
     expect(frame).toContain("MASTER")
     expect(frame).toContain("running")
     expect(frame).not.toContain("/repo/")
@@ -426,3 +428,193 @@ for (const mode of ["dark", "light"] as const)
       }
     })
   }
+
+const luminance = ([red, green, blue]: number[]) => {
+  const channel = (value: number) => {
+    const unit = value / 255
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(red!) + 0.7152 * channel(green!) + 0.0722 * channel(blue!)
+}
+const contrast = (first: number[], second: number[]) => {
+  const [light, dark] = [luminance(first), luminance(second)].sort((a, b) => b - a)
+  return (light! + 0.05) / (dark! + 0.05)
+}
+const lineOf = (frame: string, ...needles: string[]) =>
+  frame.split("\n").find((line) => needles.every((needle) => line.includes(needle))) ?? ""
+
+for (const width of [80, 100, 120]) {
+  test(`list header cells sit over their row cells at ${width} columns`, async () => {
+    const { app } = await mount({ projects: [release], width })
+    try {
+      const frame = app.captureCharFrame()
+      const header = lineOf(frame, "PROJECT", "STATUS")
+      const row = lineOf(frame, "Release train", "● active")
+      expect(header.indexOf("STATUS")).toBe(row.indexOf("● active"))
+      expect(header.indexOf("MASTER")).toBe(row.indexOf("Lead"))
+      expect(header.indexOf("MEMBERS")).toBe(row.indexOf("Lead") + 9)
+      expect(row.slice(header.indexOf("MEMBERS"), header.indexOf("LIVE")).trim()).toBe("3")
+      expect(row.indexOf("●2")).toBe(header.indexOf("LIVE"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+}
+
+test("member counts leave the Master out and name it separately", async () => {
+  const { app } = await mount({ projects: [release] })
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("MEMBERS 3 + MASTER")
+    expect(frame).toContain("MEMBERS excludes the Master · LIVE includes it")
+    expect(lineOf(frame, "Release train", "● active")).toContain("●2 ?1 ○1")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("the members pane counts members without the Master and labels the Master apart", async () => {
+  const { app } = await mount({ members: true })
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("MEMBERS 3 + MASTER")
+    expect(frame).not.toContain("MEMBERS 4")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("the Name field draws typed text and its cursor with readable contrast", async () => {
+  const { app } = await mount({ projects: [release] })
+  try {
+    await key(app, "n")
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+    await app.mockInput.typeText("Q4 planning")
+    await app.renderOnce()
+    const span = app
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((item) => item.text.includes("Q4 planning"))!
+    expect(contrast(span.fg.toInts(), span.bg.toInts())).toBeGreaterThanOrEqual(4.5)
+    const editor = app.renderer.currentFocusedEditor as InputRenderable
+    expect(contrast(editor.cursorColor.toInts(), span.bg.toInts())).toBeGreaterThanOrEqual(3)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+const ycodingDirectory = "/home/dev/Workspace/clients/acme-corp/services/platform/ycoding"
+const otherDirectory = "/home/dev/Workspace/clients/acme-corp/services/platform/other-tool"
+const longTitle = "Refactor the authentication middleware for the session gateway"
+const pickerSessions: ProjectSessionChoice[] = [
+  { sessionID: "ses_a", title: longTitle, directory: ycodingDirectory, updated: 200 },
+  { sessionID: "ses_b", title: longTitle, directory: otherDirectory, updated: 199 },
+  { sessionID: "ses_held", title: "Held elsewhere", directory: "/home/dev/held", updated: 198, projectName: "Release train" },
+  ...Array.from({ length: 70 }, (_, index) => ({
+    sessionID: `ses_n${index}`,
+    title: `Task ${String(index).padStart(2, "0")}`,
+    directory: `/repo/svc-${String(index).padStart(2, "0")}`,
+    updated: index,
+  })),
+]
+
+test("new Project picker narrows as the query is typed and keeps the path tail and full title", async () => {
+  const { app } = await mount({ projects: [release], sessions: pickerSessions })
+  try {
+    await key(app, "n")
+    await edit(app, "Q4 planning")
+    await focus(app, "Find")
+    app.mockInput.pressEnter()
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+    await app.mockInput.typeText("ycoding")
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(lineOf(frame, "Find", "ycoding")).not.toBe("")
+    expect(frame).not.toContain("Task 05")
+    expect(frame).not.toContain("other-tool")
+    expect(frame).not.toContain("Held elsewhere")
+    const row = lineOf(frame, "Refactor the")
+    expect(row).toContain("…")
+    expect(row).toContain("platform/ycoding")
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    await key(app, "DOWN")
+    expect(app.captureCharFrame()).toContain(longTitle)
+    expect(app.captureCharFrame()).toContain(ycodingDirectory)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("new Project picker bounds a long Session list and keeps the form actions reachable", async () => {
+  const { app } = await mount({ projects: [release], sessions: pickerSessions })
+  try {
+    await key(app, "n")
+    await edit(app, "Q4 planning")
+    const frame = app.captureCharFrame()
+    expect(frame).not.toContain("Task 60")
+    expect(frame.split("\n").every((line) => line.length <= 120)).toBe(true)
+    await key(app, "END")
+    expect(app.captureCharFrame()).toContain("23 more · type to narrow")
+    expect(app.captureCharFrame()).toContain("▸ [esc] Cancel")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("new Project picker names an empty result", async () => {
+  const { app } = await mount({ projects: [release], sessions: pickerSessions })
+  try {
+    await key(app, "n")
+    await edit(app, "Q4 planning")
+    await focus(app, "Find")
+    app.mockInput.pressEnter()
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+    await app.mockInput.typeText("zzzz")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("No matching Sessions")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("add-member picker narrows as the query is typed and keeps the path tail and full title", async () => {
+  const { app, calls } = await mount({ members: true, sessions: pickerSessions })
+  try {
+    await key(app, "a")
+    app.mockInput.pressEnter()
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+    await app.mockInput.typeText("ycoding")
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(lineOf(frame, "Find", "ycoding")).not.toBe("")
+    expect(frame).not.toContain("Task 05")
+    expect(frame).not.toContain("other-tool")
+    expect(frame).not.toContain("Held elsewhere")
+    expect(lineOf(frame, "Refactor")).toContain("…")
+    expect(lineOf(frame, "Refactor")).toContain("/ycoding")
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    await key(app, "DOWN")
+    expect(app.captureCharFrame()).toContain("authentication")
+    expect(app.captureCharFrame()).toContain("gateway")
+    app.mockInput.pressEnter()
+    await app.waitFor(() => calls.some(([name]) => name === "add"))
+    expect(calls).toContainEqual(["add", release.id, "ses_a"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("add-member picker bounds a long Session list", async () => {
+  const { app } = await mount({ members: true, sessions: pickerSessions })
+  try {
+    await key(app, "a")
+    expect(app.captureCharFrame()).not.toContain("Task 60")
+    await key(app, "END")
+    expect(app.captureCharFrame()).toContain("22 more · type to narrow")
+    expect(app.captureCharFrame()).toContain("▸ [esc] Cancel")
+  } finally {
+    app.renderer.destroy()
+  }
+})

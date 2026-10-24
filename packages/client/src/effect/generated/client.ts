@@ -115,6 +115,7 @@ type Endpoint5_1Request = Parameters<RawClient["server.session"]["session.create
 type Endpoint5_1Input = {
   readonly id?: Endpoint5_1Request["payload"]["id"]
   readonly parentID?: Endpoint5_1Request["payload"]["parentID"]
+  readonly title?: Endpoint5_1Request["payload"]["title"]
   readonly agent?: Endpoint5_1Request["payload"]["agent"]
   readonly model?: Endpoint5_1Request["payload"]["model"]
   readonly location?: Endpoint5_1Request["payload"]["location"]
@@ -124,6 +125,7 @@ const Endpoint5_1 = (raw: RawClient["server.session"]) => (input?: Endpoint5_1In
     payload: {
       id: input?.["id"],
       parentID: input?.["parentID"],
+      title: input?.["title"],
       agent: input?.["agent"],
       model: input?.["model"],
       location: input?.["location"],

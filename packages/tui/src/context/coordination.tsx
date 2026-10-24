@@ -71,8 +71,9 @@ function createCoordination() {
   let rootGeneration = 0
   let disposed = false
   let scheduled: ReturnType<typeof setTimeout> | undefined
+  let projectRefresh: Promise<void> | undefined
 
-  async function refreshProjects() {
+  async function loadProjects() {
     const token = ++generation
     try {
       const [list, settings] = await Promise.all([
@@ -92,6 +93,14 @@ function createCoordination() {
     } catch (cause) {
       if (!disposed && token === generation) setError(errorMessage(cause))
     }
+  }
+
+  function refreshProjects(): Promise<void> {
+    const pending = loadProjects().then(async () => {
+      if (!disposed && projectRefresh !== pending) await projectRefresh
+    })
+    projectRefresh = pending
+    return pending
   }
 
   async function refreshRoots() {
@@ -159,9 +168,10 @@ function createCoordination() {
       client.api.coordination.update({ groupID: projectID, revision: record(projectID).revision, ...change }),
     )
   const createSession = async (directory: string, title?: string) => {
-    const created = await client.api.session.create({ location: { directory } })
-    if (title !== undefined && title.trim() !== "")
-      await client.api.session.rename({ sessionID: created.id, title: title.trim() })
+    const created = await client.api.session.create({
+      location: { directory },
+      ...(title?.trim() ? { title: title.trim() } : {}),
+    })
     return created.id
   }
 

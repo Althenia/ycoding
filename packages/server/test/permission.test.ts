@@ -29,6 +29,7 @@ test("request-only permission rejection preserves ownership, feedback, and missi
     snapshot: () => Effect.die("unused"),
     snapshots: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),
+    escalate: () => Effect.die("unused"),
     get: (id) => Effect.succeed(id === request.id ? request : undefined),
     list: () => Effect.succeed([request]),
     forSession: (id) => Effect.succeed(id === request.sessionID ? [request] : []),

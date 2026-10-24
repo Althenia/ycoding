@@ -39,6 +39,20 @@ test("missing Sessions retain HTTP 404 during creation and agent switching", asy
   }
 })
 
+test("creation forwards an explicit title for root and child Sessions", async () => {
+  const inputs: unknown[] = []
+  await using http = sessionHttp({
+    create: (input: unknown) => Effect.sync(() => inputs.push(input)).pipe(Effect.andThen(Effect.fail(new Session.NotFoundError({ sessionID: parentID })))),
+  })
+  for (const body of [{ id: otherID, title: "Release review", location: { directory: "/work" } }, { parentID, title: "Child review" }, { id: otherID, location: { directory: "/work" } }])
+    expect((await http.json("/api/session", "POST", body)).status).toBe(404)
+  expect(inputs).toEqual([
+    { id: otherID, title: "Release review", location: { directory: "/work" } },
+    { parentID, title: "Child review" },
+    { id: otherID, location: { directory: "/work" } },
+  ])
+})
+
 test("subagent list rejects malformed and cross-parent cursors before the paged read", async () => {
   const pages: unknown[] = []
   await using http = sessionHttp(

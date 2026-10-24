@@ -351,6 +351,8 @@ describe("Projects reads and changes", () => {
     const { calls, queries } = incidents(created)
     expect(await queries.createProjectSession(scope, "wsp_web", "ses_new")).toEqual({ reached: true, sessionID: "ses_new" })
     expect(calls.filter((call) => call.operation === "session.create").map((call) => call.request?.input)).toEqual([{ id: "ses_new", workspace: "wsp_web" }])
+    expect(await queries.createProjectSession(scope, "wsp_web", "ses_new", "Release train")).toEqual({ reached: true, sessionID: "ses_new" })
+    expect(calls.filter((call) => call.operation === "session.create").map((call) => call.request?.input)).toEqual([{ id: "ses_new", workspace: "wsp_web" }, { id: "ses_new", workspace: "wsp_web", title: "Release train" }])
     const mismatch = incidents(answers({ "session.create": { status: "ok", value: { data: { id: "ses_other" } } } }))
     expect(await mismatch.queries.createProjectSession(scope, "wsp_web", "ses_new")).toEqual({ reached: false, message: "The device returned a different Session than the one requested. Check Sessions before trying again." })
     const unknown = incidents(answers({ "session.create": { status: "unknown", error: { code: "outcome_unknown", message: "Request timed out" } } }))

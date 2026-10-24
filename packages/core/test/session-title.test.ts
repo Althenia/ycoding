@@ -130,7 +130,9 @@ const it = testEffect(
   ),
 )
 
-const insertSession = (id: Session.ID) =>
+const defaultTitle = "New session - 2026-10-24T00:00:00.000Z"
+
+const insertSession = (id: Session.ID, title = defaultTitle) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -145,7 +147,7 @@ const insertSession = (id: Session.ID) =>
         id,
         project_id: Project.ID.global,
         directory: "/project",
-        title: "New session - fake",
+        title,
       })
       .onConflictDoNothing()
       .run()
@@ -260,7 +262,7 @@ it.effect("leaves the generated title unchanged when title generation is off", (
     yield* (yield* SessionTitle.Service).generateForFirstPrompt(session)
 
     expect(requests).toHaveLength(0)
-    expect((yield* store.get(sessionID))?.title).toBe("New session - fake")
+    expect((yield* store.get(sessionID))?.title).toBe(defaultTitle)
   }),
 )
 
@@ -319,7 +321,7 @@ it.effect("does not generate once a second user message exists", () =>
 
     expect(requests).toHaveLength(0)
     const untouched = yield* store.get(sessionID)
-    expect(untouched?.title).toBe("New session - fake")
+    expect(untouched?.title).toBe(defaultTitle)
   }),
 )
 
@@ -389,19 +391,22 @@ it.effect("falls back to local title in model mode when the title agent is remov
   }),
 )
 
-const generateModelTitle = Effect.gen(function* () {
-  requests = []
-  titleMode = "model"
-  const agents = yield* Agent.Service
-  yield* agents.transform((editor) => {
-    editor.update(Agent.ID.make("title"), (agent) => {
-      agent.mode = "primary"
-      agent.hidden = true
-      agent.system = "Output only a conversation title."
-    })
+const generateModelTitle = generateTitleFor(defaultTitle)
+
+function generateTitleFor(initialTitle: string, mode: SessionHelperPolicy.TitleMode = "model") {
+  return Effect.gen(function* () {
+    requests = []
+    titleMode = mode
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) => {
+      editor.update(Agent.ID.make("title"), (agent) => {
+        agent.mode = "primary"
+        agent.hidden = true
+        agent.system = "Output only a conversation title."
+      })
   })
   const sessionID = Session.ID.create()
-  yield* insertSession(sessionID)
+  yield* insertSession(sessionID, initialTitle)
   yield* prompt(sessionID, "# Help me debug the failing build\nKeep the details private")
   const store = yield* SessionStore.Service
   const session = yield* store.get(sessionID)
@@ -409,7 +414,8 @@ const generateModelTitle = Effect.gen(function* () {
   const title = yield* SessionTitle.Service
   yield* title.generateForFirstPrompt(session)
   return (yield* store.get(sessionID))!
-})
+  })
+}
 
 const titleOutput = (text: string, stepReason: "stop" | "content-filter" = "stop", finishReason = stepReason) =>
   Stream.make(
@@ -599,5 +605,114 @@ for (const scenario of [
       expect(session.title).toBe("Help me debug the failing build")
       expect(logs.join("\n")).toContain("Synthetic title provider unavailable")
       expect(requests).toHaveLength(1)
+    }),
+  )
+
+const responsesStream = (body: ReadonlyArray<unknown>) => (request: LLMRequest) =>
+  LLMClient.stream(LLMRequest.update(request, { model: OpenAIResponses.route.model({ id: "gpt-title" }) })).pipe(
+    Stream.provide(
+      LLMClient.layer.pipe(
+        Layer.provide(
+          Layer.succeed(RequestExecutor.Service, {
+            execute: (request) =>
+              Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response(body.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n", {
+                    headers: { "content-type": "text/event-stream" },
+                  }),
+                ),
+              ),
+          }),
+        ),
+      ),
+    ),
+  )
+
+const responsesCompleted = {
+  type: "response.completed",
+  response: { id: "resp_title", output: [], usage: { input_tokens: 10, output_tokens: 5 } },
+}
+
+const commentary = "Inspecting source files before selecting a concise session label."
+
+for (const scenario of [
+  {
+    name: "a commentary message before the final answer",
+    expected: "Debug failing build",
+    body: [
+      { type: "response.output_item.added", item: { type: "message", id: "msg_commentary", phase: "commentary" } },
+      { type: "response.output_text.delta", item_id: "msg_commentary", content_index: 0, delta: commentary },
+      {
+        type: "response.output_item.done",
+        item: {
+          type: "message",
+          id: "msg_commentary",
+          phase: "commentary",
+          content: [{ type: "output_text", text: commentary }],
+        },
+      },
+      { type: "response.output_item.added", item: { type: "message", id: "msg_final", phase: "final_answer" } },
+      { type: "response.output_text.delta", item_id: "msg_final", content_index: 0, delta: "Debug failing " },
+      { type: "response.output_text.delta", item_id: "msg_final", content_index: 0, delta: "build" },
+      responsesCompleted,
+    ],
+  },
+  {
+    name: "a commentary phase that is first reported when the message completes",
+    expected: "Debug failing build",
+    body: [
+      { type: "response.output_text.delta", item_id: "msg_commentary", content_index: 0, delta: commentary },
+      {
+        type: "response.output_item.done",
+        item: {
+          type: "message",
+          id: "msg_commentary",
+          phase: "commentary",
+          content: [{ type: "output_text", text: commentary }],
+        },
+      },
+      { type: "response.output_text.delta", item_id: "msg_final", content_index: 0, delta: "Debug failing build" },
+      responsesCompleted,
+    ],
+  },
+  {
+    name: "only a commentary message",
+    expected: "Help me debug the failing build",
+    body: [
+      { type: "response.output_item.added", item: { type: "message", id: "msg_commentary", phase: "commentary" } },
+      { type: "response.output_text.delta", item_id: "msg_commentary", content_index: 0, delta: commentary },
+      responsesCompleted,
+    ],
+  },
+  {
+    name: "reasoning summaries before the final answer",
+    expected: "Debug failing build",
+    body: [
+      { type: "response.output_item.added", item: { type: "reasoning", id: "rs_title" } },
+      { type: "response.reasoning_summary_part.added", item_id: "rs_title", summary_index: 0 },
+      { type: "response.reasoning_summary_text.delta", item_id: "rs_title", summary_index: 0, delta: commentary },
+      { type: "response.output_item.done", item: { type: "reasoning", id: "rs_title" } },
+      { type: "response.output_text.delta", item_id: "msg_final", content_index: 0, delta: "Debug failing build" },
+      responsesCompleted,
+    ],
+  },
+])
+  it.effect(`derives the title from the OpenAI Responses answer for ${scenario.name}`, () =>
+    Effect.gen(function* () {
+      response = responsesStream(scenario.body)
+      const session = yield* generateModelTitle
+      expect(session.title).toBe(scenario.expected)
+      expect(requests).toHaveLength(1)
+      expect(session.tokens).toEqual({ input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } })
+    }),
+  )
+
+for (const mode of ["model", "local"] as const)
+  it.effect(`keeps an explicit session title in ${mode} mode`, () =>
+    Effect.gen(function* () {
+      const session = yield* generateTitleFor("Quarterly planning", mode)
+      expect(session.title).toBe("Quarterly planning")
+      expect(requests).toHaveLength(0)
     }),
   )

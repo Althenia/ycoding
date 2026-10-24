@@ -190,7 +190,9 @@ test("exposes every standard HTTP API group", () => {
     "config",
     "review",
     "mcpEvents",
+    "coordination",
   ])
+  expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete"])
   expect(Object.keys(client.mcpEvents)).toEqual(["status", "list", "subscribe", "unsubscribe"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])

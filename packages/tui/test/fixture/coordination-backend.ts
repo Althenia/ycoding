@@ -212,7 +212,7 @@ export function backend(overrides: { projects?: FixtureProject[]; sessions?: Rec
       record(request, url, body)
       const id = `ses_new${String(++state.created).padStart(8, "0")}`
       state.sessions[id] = {
-        title: "New session",
+        title: body.title ?? "New session",
         directory: body.location.directory,
         state: "idle",
         lastActivity: Date.now(),
