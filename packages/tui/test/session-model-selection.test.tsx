@@ -787,27 +787,33 @@ test("selecting a model restores its valid stored variant without another varian
   }
 }, 30_000)
 
-test("selecting an Antigravity effort model finishes without a second effort dialog", async () => {
+test("selecting an Antigravity model offers its effort variants in the variant dialog", async () => {
   switches.length = 0
   const screen = await renderPicker({
-    stateDir: "antigravity-fixed-effort",
+    stateDir: "antigravity-effort-variants",
     catalog: [
       model({
-        id: "gemini-3.8-flash-medium",
+        id: "gemini-3.8-flash",
         providerID: "antigravity",
-        name: "Gemini 3.8 Flash (Medium)",
+        name: "Gemini 3.8 Flash",
         context: 1_048_576,
-        variants: [],
+        variants: ["low", "medium", "high"],
       }),
     ],
   })
   try {
-    expect(screen.app.captureCharFrame()).toContain("Gemini 3.8 Flash (Medium)")
+    const frame = screen.app.captureCharFrame()
+    expect(frame.split("\n").filter((row) => row.includes("Gemini 3.8 Flash"))).toHaveLength(1)
+    expect(frame).not.toContain("Gemini 3.8 Flash (Low)")
+    expect(frame).not.toContain("Gemini 3.8 Flash (Medium)")
+    expect(frame).not.toContain("Gemini 3.8 Flash (High)")
     screen.app.mockInput.pressEnter()
-    await waitFor(() => screen.pendingTarget()?.modelID === "gemini-3.8-flash-medium", "the effort model selection")
-    expect(screen.pendingTarget()).toEqual({ providerID: "antigravity", modelID: "gemini-3.8-flash-medium" })
-    expect(screen.variant()).toBeUndefined()
-    expect(screen.app.captureCharFrame()).not.toContain("Select variant")
+    await screen.app.waitForFrame((next) => next.includes("Select variant"))
+    await screen.app.mockInput.typeText("high")
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.variant === "high", "the high effort variant")
+    expect(screen.pendingTarget()).toEqual({ providerID: "antigravity", modelID: "gemini-3.8-flash", variant: "high" })
+    expect(screen.variant()).toBe("high")
     expect(switches).toEqual([])
   } finally {
     await screen.dispose()

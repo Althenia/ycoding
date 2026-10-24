@@ -5,6 +5,7 @@ import { LLMClient } from "@ycoding-ai/ai/route"
 import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
+import { CatalogModel } from "@ycoding-ai/core/model"
 import { ProviderPlugins } from "@ycoding-ai/core/plugin/provider"
 import {
   AntigravityPlugin,
@@ -132,13 +133,18 @@ describe("AntigravityPlugin", () => {
               maxOutputTokens: 65_536,
               supportsImages: true,
               supportsThinking: true,
+              supportsVideo: true,
+              supportsPdf: true,
               quotaInfo: { remainingFraction: 0.5 },
             },
             "claude-fixture": { displayName: "Claude Fixture", maxTokens: 200_000, supportsImages: false },
             "disabled-fixture": { displayName: "Off", maxTokens: 1000, disabled: true },
+            "internal-fixture": { displayName: "Internal", maxTokens: 1000, isInternal: true },
+            "old-fixture": { displayName: "Old", maxTokens: 1000 },
             "unlimited-fixture": { displayName: "No limit reported" },
             "gemini-image-fixture": { displayName: "Gemini Image Fixture", maxTokens: 32_000, supportsImages: true },
           },
+          deprecatedModelIds: { "old-fixture": { newModelId: "gemini-fixture" } },
         })
       })
       const models = yield* discoverAntigravityModels(client, "google-access", "project-1")
@@ -154,7 +160,7 @@ describe("AntigravityPlugin", () => {
       expect(gemini.name).toBe("Gemini Fixture")
       expect(gemini.package).toBe(Provider.aisdk("@ai-sdk/google"))
       expect(gemini.limit).toEqual({ context: 1_000_000, output: 65_536 })
-      expect(gemini.capabilities.input).toContain("image")
+      expect(gemini.capabilities.input).toEqual(["text", "image", "video", "pdf"])
       expect(gemini.variants).toEqual([])
       expect(gemini.settings).toEqual({ thinkingConfig: { includeThoughts: true } })
       const claude = models.find((model) => model.id === "claude-fixture")!
@@ -169,14 +175,18 @@ describe("AntigravityPlugin", () => {
     }),
   )
 
-  it.effect("keeps advertised effort models fixed to their catalog thinking configuration", () =>
+  it.effect("pivots advertised effort models into one catalog model with effort variants", () =>
     Effect.gen(function* () {
       const entries = {
+        "gemini-4-argon-low": { displayName: "Gemini 4 Argon (Low)", thinkingLevel: 1 },
         "gemini-4-argon-medium": { displayName: "Gemini 4 Argon (Medium)", thinkingLevel: 2, thinkingBudget: -1 },
+        "gemini-4-argon-high": { displayName: "Gemini 4 Argon (High)", thinkingLevel: 3 },
         "gemini-3.8-flash-low": { displayName: "Gemini 3.8 Flash (Low)", thinkingBudget: 1000 },
         "gemini-3.8-flash-medium": { displayName: "Gemini 3.8 Flash (Medium)", thinkingBudget: 4000 },
         "gemini-3.8-flash-high": { displayName: "Gemini 3.8 Flash (High)", thinkingBudget: -1 },
-        "claude-sonnet-5-5-high": { displayName: "Claude Sonnet 5.5 (High)", thinkingLevel: 3 },
+        "claude-sonnet-5-5-low": { displayName: "Claude Sonnet 5.5 (Low)", thinkingLevel: 1 },
+        "claude-sonnet-5-5-max": { displayName: "Claude Sonnet 5.5 (Max)", thinkingLevel: 3 },
+        "gemini-3.1-pro-high": { displayName: "Gemini 3.1 Pro (High)", thinkingLevel: 3 },
         "gemini-2.5-pro": { displayName: "Gemini 2.5 Pro", thinkingBudget: 1024 },
       }
       const models = yield* discoverAntigravityModels(
@@ -190,23 +200,54 @@ describe("AntigravityPlugin", () => {
         "google-access",
         "project-1",
       )
-      expect(models.map((model) => String(model.id))).toEqual(Object.keys(entries).toSorted())
-      for (const model of models) expect(model.variants).toEqual([])
-      expect(models.find((model) => model.id === "gemini-4-argon-medium")?.settings).toEqual({
-        thinkingConfig: { includeThoughts: true, thinkingLevel: "medium" },
-      })
-      expect(models.find((model) => model.id === "claude-sonnet-5-5-high")?.settings).toEqual({
+      expect(models.map((model) => String(model.id))).toEqual([
+        "claude-sonnet-5-5",
+        "gemini-2.5-pro",
+        "gemini-3.1-pro-high",
+        "gemini-3.8-flash",
+        "gemini-4-argon",
+      ])
+      const argon = models.find((model) => model.id === "gemini-4-argon")!
+      expect(argon.name).toBe("Gemini 4 Argon")
+      expect(String(argon.modelID)).toBe("gemini-4-argon-medium")
+      expect(argon.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingLevel: "medium" } })
+      expect(argon.variants?.map((variant) => String(variant.id))).toEqual(["low", "medium", "high"])
+      expect(argon.variants?.find((variant) => variant.id === "high")?.settings).toEqual({
         thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
+        antigravityModelID: "gemini-4-argon-high",
       })
-      for (const [id, budget] of [
-        ["gemini-3.8-flash-low", 1000],
-        ["gemini-3.8-flash-medium", 4000],
-        ["gemini-3.8-flash-high", -1],
-        ["gemini-2.5-pro", 1024],
+      expect(argon.variants?.find((variant) => variant.id === "low")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "low" },
+        antigravityModelID: "gemini-4-argon-low",
+      })
+      const flash = models.find((model) => model.id === "gemini-3.8-flash")!
+      expect(flash.name).toBe("Gemini 3.8 Flash")
+      expect(String(flash.modelID)).toBe("gemini-3.8-flash-medium")
+      expect(flash.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingBudget: 4000 } })
+      for (const [variant, budget, gateway] of [
+        ["low", 1000, "gemini-3.8-flash-low"],
+        ["medium", 4000, "gemini-3.8-flash-medium"],
+        ["high", -1, "gemini-3.8-flash-high"],
       ] as const)
-        expect(models.find((model) => model.id === id)?.settings).toEqual({
+        expect(flash.variants?.find((item) => item.id === variant)?.settings).toEqual({
           thinkingConfig: { includeThoughts: true, thinkingBudget: budget },
+          antigravityModelID: gateway,
         })
+      const sonnet = models.find((model) => model.id === "claude-sonnet-5-5")!
+      expect(sonnet.name).toBe("Claude Sonnet 5.5")
+      expect(String(sonnet.modelID)).toBe("claude-sonnet-5-5-low")
+      expect(sonnet.variants?.map((variant) => String(variant.id))).toEqual(["low", "max"])
+      expect(sonnet.variants?.find((variant) => variant.id === "max")?.settings).toEqual({
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
+        antigravityModelID: "claude-sonnet-5-5-max",
+      })
+      const single = models.find((model) => model.id === "gemini-3.1-pro-high")!
+      expect(single.name).toBe("Gemini 3.1 Pro (High)")
+      expect(single.variants).toEqual([])
+      expect(single.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingLevel: "high" } })
+      const pro = models.find((model) => model.id === "gemini-2.5-pro")!
+      expect(pro.variants).toEqual([])
+      expect(pro.settings).toEqual({ thinkingConfig: { includeThoughts: true, thinkingBudget: 1024 } })
     }),
   )
 
@@ -217,7 +258,21 @@ describe("AntigravityPlugin", () => {
         http(() =>
           Response.json({
             models: {
-              "gemini-3.8-flash-medium": { supportsThinking: true, thinkingBudget: 4000 },
+              "gemini-3.8-flash-low": {
+                displayName: "Gemini 3.8 Flash (Low)",
+                supportsThinking: true,
+                thinkingBudget: 1000,
+              },
+              "gemini-3.8-flash-medium": {
+                displayName: "Gemini 3.8 Flash (Medium)",
+                supportsThinking: true,
+                thinkingBudget: 4000,
+              },
+              "gemini-3.8-flash-high": {
+                displayName: "Gemini 3.8 Flash (High)",
+                supportsThinking: true,
+                thinkingBudget: -1,
+              },
             },
           }),
         ),
@@ -294,7 +349,7 @@ describe("AntigravityPlugin", () => {
         )
       }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer)),
     )
-    const result = await sdk.languageModel(models[0].id).doStream(prepared.body)
+    const result = await sdk.languageModel(models[0].modelID ?? models[0].id).doStream(prepared.body)
     const events = await Array.fromAsync(result.stream)
     expect(sent).toHaveLength(1)
     expect(sent[0]?.model).toBe("gemini-3.8-flash-medium")
@@ -322,6 +377,101 @@ describe("AntigravityPlugin", () => {
         },
       }),
     )
+  })
+
+  test("variant settings reach the SDK wire and the fetch wrap routes the variant gateway model", async () => {
+    const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+    const models = await Effect.runPromise(
+      discoverAntigravityModels(
+        http(() =>
+          Response.json({
+            models: {
+              "gemini-3.8-flash-low": {
+                displayName: "Gemini 3.8 Flash (Low)",
+                supportsThinking: true,
+                thinkingBudget: 1000,
+              },
+              "gemini-3.8-flash-medium": {
+                displayName: "Gemini 3.8 Flash (Medium)",
+                supportsThinking: true,
+                thinkingBudget: 4000,
+              },
+              "gemini-3.8-flash-high": {
+                displayName: "Gemini 3.8 Flash (High)",
+                supportsThinking: true,
+                thinkingBudget: -1,
+              },
+            },
+          }),
+        ),
+        "google-access",
+        "project-1",
+      ),
+    )
+    const selected = await Effect.runPromise(
+      SessionRunnerModel.withVariant(models[0], CatalogModel.VariantID.make("low")),
+    )
+    const gatewayModel = selected.settings?.antigravityModelID
+    expect(gatewayModel).toBe("gemini-3.8-flash-low")
+    const sent: Record<string, unknown>[] = []
+    const sdk = createGoogleGenerativeAI({
+      apiKey: "placeholder",
+      fetch: Object.assign(
+        createAntigravityFetch(
+          async (_input, init) => {
+            if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+            sent.push(JSON.parse(init.body))
+            return new Response(
+              `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: [{ text: "Ready" }] }, finishReason: "STOP" }] } })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          },
+          { access: "google-access", project: "project-1", model: String(gatewayModel) },
+        ),
+        { preconnect: fetch.preconnect },
+      ),
+    })
+    const prepared = await Effect.runPromise(
+      Effect.gen(function* () {
+        const aisdk = yield* AISDK.Service
+        yield* aisdk.hook.sdk((event) => {
+          event.sdk = sdk
+        })
+        const model = yield* SessionRunnerModel.fromCatalogModel(selected, undefined, { loadAISDK: aisdk.model })
+        return yield* LLMClient.prepare<LanguageModelV3CallOptions>(LLM.request({ model, prompt: "Hello" }))
+      }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer)),
+    )
+    const result = await sdk.languageModel(selected.modelID ?? selected.id).doStream(prepared.body)
+    const events = await Array.fromAsync(result.stream)
+    expect(events).toContainEqual(expect.objectContaining({ type: "text-delta", delta: "Ready" }))
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.model).toBe("gemini-3.8-flash-low")
+    expect(sent[0]?.request).toMatchObject({
+      contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+      generationConfig: { thinkingConfig: { includeThoughts: true, thinkingBudget: 1000 } },
+    })
+    expect(JSON.stringify(sent[0]?.request)).not.toContain("antigravityModelID")
+  })
+
+  test("fetch wrap strips trailing model contents before the gateway envelope", async () => {
+    let sent: Record<string, unknown> | undefined
+    const wrapped = createAntigravityFetch(
+      async (_input, init) => {
+        sent = JSON.parse(String(init?.body))
+        return Response.json({ response: { candidates: [] } })
+      },
+      { access: "google-access", project: "project-1" },
+    )
+    await wrapped("https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:generateContent", {
+      method: "POST",
+      body: JSON.stringify({
+        contents: [
+          { role: "user", parts: [{ text: "Hello" }] },
+          { role: "model", parts: [{ text: "Draft" }] },
+        ],
+      }),
+    })
+    expect(sent?.request).toEqual({ contents: [{ role: "user", parts: [{ text: "Hello" }] }] })
   })
 
   test("fetch wrap rewrites the Gemini request into the Antigravity envelope and unwraps SSE", async () => {

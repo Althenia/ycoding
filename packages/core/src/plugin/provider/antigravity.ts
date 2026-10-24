@@ -72,10 +72,83 @@ const ModelEntry = Schema.Struct({
   supportsThinking: Schema.optional(Schema.Boolean),
   thinkingLevel: Schema.optional(Schema.Number),
   thinkingBudget: Schema.optional(Schema.Number),
+  supportsVideo: Schema.optional(Schema.Boolean),
+  supportsPdf: Schema.optional(Schema.Boolean),
+  isInternal: Schema.optional(Schema.Boolean),
   disabled: Schema.optional(Schema.Boolean),
 })
 const decodeEntry = Schema.decodeUnknownOption(ModelEntry)
 const decodeBody = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+const gatewayModelSettingsKey = "antigravityModelID"
+const efforts = ["minimal", "low", "medium", "high", "max"] as const
+type Effort = (typeof efforts)[number]
+type ModelRow = { id: string; entry: typeof ModelEntry.Type }
+type EffortRow = ModelRow & { effort: Effort; name: string }
+
+function thinkingSettings(entry: typeof ModelEntry.Type) {
+  if (entry.supportsThinking !== true) return undefined
+  const level =
+    entry.thinkingLevel === 1
+      ? "low"
+      : entry.thinkingLevel === 2
+        ? "medium"
+        : entry.thinkingLevel === 3
+          ? "high"
+          : entry.thinkingLevel === 4
+            ? "minimal"
+            : undefined
+  return {
+    thinkingConfig: {
+      includeThoughts: true,
+      ...(level !== undefined
+        ? { thinkingLevel: level }
+        : entry.thinkingBudget !== undefined
+          ? { thinkingBudget: entry.thinkingBudget }
+          : {}),
+    },
+  }
+}
+
+function effortRow(row: ModelRow): (EffortRow & { base: string }) | undefined {
+  const match = /-(minimal|low|medium|high|max)$/.exec(row.id)
+  const effort = efforts.find((item) => item === match?.[1])
+  if (!match || !effort) return undefined
+  const displayName = row.entry.displayName
+  if (displayName !== undefined) {
+    const name = /^(.*)\s\((Minimal|Low|Medium|High|Max)\)$/.exec(displayName)
+    if (!name || name[2].toLowerCase() !== effort) return undefined
+    return { ...row, effort, name: name[1], base: row.id.slice(0, -match[0].length) }
+  }
+  const base = row.id.slice(0, -match[0].length)
+  return { ...row, effort, name: base, base }
+}
+
+function catalogModel(id: string, row: ModelRow, extra: Partial<CatalogModel.Info> = {}) {
+  const entry = row.entry
+  const image = id.includes("image")
+  return CatalogModel.Info.make({
+    ...CatalogModel.Info.empty(providerID, CatalogModel.ID.make(id)),
+    name: entry.displayName ?? id,
+    package: Provider.aisdk("@ai-sdk/google"),
+    settings: thinkingSettings(entry),
+    capabilities: {
+      tools: !image,
+      input: [
+        "text",
+        ...(entry.supportsImages ? ["image"] : []),
+        ...(entry.supportsVideo ? ["video"] : []),
+        ...(entry.supportsPdf ? ["pdf"] : []),
+      ],
+      output: image ? ["text", "image"] : ["text"],
+    },
+    limit: {
+      context:
+        entry.maxTokens !== undefined && Number.isInteger(entry.maxTokens) && entry.maxTokens > 0 ? entry.maxTokens : 0,
+      output: entry.maxOutputTokens ?? 8192,
+    },
+    ...extra,
+  })
+}
 type Fetch = (input: Parameters<typeof fetch>[0], init?: RequestInit) => Promise<Response>
 type Pkce = { verifier: string; challenge: string }
 
@@ -212,69 +285,69 @@ export const discoverAntigravityModels = Effect.fn("Antigravity.discoverModels")
   ).pipe(
     Effect.flatMap(
       HttpClientResponse.schemaBodyJson(
-        Schema.Struct({ models: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)) }),
+        Schema.Struct({
+          models: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+          deprecatedModelIds: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+        }),
       ),
     ),
   )
-  return Object.entries(response.models ?? {})
+  const deprecated = new Set(Object.keys(response.deprecatedModelIds ?? {}))
+  const rows = Object.entries(response.models ?? {})
     .toSorted(([left], [right]) => left.localeCompare(right))
     .flatMap(([id, row]) => {
       const entry = Option.getOrUndefined(decodeEntry(row))
-      if (!entry || entry.disabled === true) return []
-      const image = id.includes("image")
-      const level =
-        entry.thinkingLevel === 1
-          ? "low"
-          : entry.thinkingLevel === 2
-            ? "medium"
-            : entry.thinkingLevel === 3
-              ? "high"
-              : entry.thinkingLevel === 4
-                ? "minimal"
-                : undefined
+      if (!entry || entry.disabled === true || entry.isInternal === true || deprecated.has(id)) return []
+      return [{ id, entry }]
+    })
+  const groups = new Map<string, { base?: ModelRow; efforts: EffortRow[] }>()
+  for (const row of rows) {
+    const parsed = effortRow(row)
+    const key = parsed?.base ?? row.id
+    const group = groups.get(key) ?? { efforts: [] }
+    if (parsed) group.efforts.push(parsed)
+    if (!parsed) group.base = row
+    groups.set(key, group)
+  }
+  return [...groups.entries()]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .flatMap(([base, group]) => {
+      if (group.efforts.length === 0 && group.base) return [catalogModel(base, group.base)]
+      const [first] = group.efforts
+      if (group.base === undefined && group.efforts.length === 1 && first) return [catalogModel(first.id, first)]
+      const preferred = (["medium", "high", "low", "max", "minimal"] as const).flatMap(
+        (effort) => group.efforts.find((row) => row.effort === effort) ?? [],
+      )[0]
+      const pick = group.base ?? preferred ?? first
+      if (!pick) return []
+      const variants = group.efforts
+        .toSorted((left, right) => efforts.indexOf(left.effort) - efforts.indexOf(right.effort))
+        .map((row) => ({
+          id: CatalogModel.VariantID.make(row.effort),
+          settings: { ...thinkingSettings(row.entry), [gatewayModelSettingsKey]: row.id },
+        }))
       return [
-        CatalogModel.Info.make({
-          ...CatalogModel.Info.empty(providerID, CatalogModel.ID.make(id)),
-          name: entry.displayName ?? id,
-          package: Provider.aisdk("@ai-sdk/google"),
-          settings:
-            entry.supportsThinking === true
-              ? {
-                  thinkingConfig: {
-                    includeThoughts: true,
-                    ...(level !== undefined
-                      ? { thinkingLevel: level }
-                      : entry.thinkingBudget !== undefined
-                        ? { thinkingBudget: entry.thinkingBudget }
-                        : {}),
-                  },
-                }
-              : undefined,
-          capabilities: {
-            tools: !image,
-            input: ["text", ...(entry.supportsImages ? ["image"] : [])],
-            output: image ? ["text", "image"] : ["text"],
-          },
-          limit: {
-            context:
-              entry.maxTokens !== undefined && Number.isInteger(entry.maxTokens) && entry.maxTokens > 0
-                ? entry.maxTokens
-                : 0,
-            output: entry.maxOutputTokens ?? 8192,
-          },
+        catalogModel(base, pick, {
+          modelID: CatalogModel.ID.make(pick.id),
+          name: group.base ? (pick.entry.displayName ?? base) : ((preferred ?? first)?.name ?? base),
+          variants,
         }),
       ]
     })
 })
 
-export function createAntigravityFetch(send: Fetch, session: { access: string; project?: string }): Fetch {
+export function createAntigravityFetch(
+  send: Fetch,
+  session: { access: string; project?: string; model?: string },
+): Fetch {
   const wrapped: Fetch = async (input, init) => {
     const url = new URL(input instanceof URL ? input.href : typeof input === "string" ? input : input.url)
     const match = url.pathname.match(/\/models\/([^/:]+):(streamGenerateContent|generateContent)$/)
     if (!match) return send(input, init)
-    const model = decodeURIComponent(match[1]!)
+    const model = session.model ?? decodeURIComponent(match[1]!)
     const action = match[2]!
     const body = typeof init?.body === "string" ? Option.getOrUndefined(decodeBody(init.body)) : undefined
+    const request = stripTrailingModelContents(body)
     const headers = new Headers(init?.headers)
     headers.delete("x-goog-api-key")
     headers.set("authorization", `Bearer ${session.access}`)
@@ -289,7 +362,7 @@ export function createAntigravityFetch(send: Fetch, session: { access: string; p
         userAgent: "antigravity",
         requestType: "agent",
         requestId: `agent-${crypto.randomUUID()}`,
-        request: body ?? {},
+        request: request ?? {},
       }),
     })
     if (!response.ok || !response.body) return response
@@ -305,6 +378,17 @@ export function createAntigravityFetch(send: Fetch, session: { access: string; p
     })
   }
   return wrapped
+}
+
+function stripTrailingModelContents(body: unknown) {
+  if (!body || typeof body !== "object" || !("contents" in body) || !Array.isArray(body.contents)) return body
+  const contents = [...body.contents]
+  while (contents.length > 0) {
+    const last = contents[contents.length - 1]
+    if (!last || typeof last !== "object" || !("role" in last) || last.role !== "model") break
+    contents.pop()
+  }
+  return contents.length === body.contents.length ? body : { ...body, contents }
 }
 
 function unwrapStream(response: Response) {
@@ -364,17 +448,23 @@ export function antigravityOAuth(http: HttpClient.HttpClient) {
           const value = url.searchParams.get("code")
           if (error) {
             Effect.runFork(Deferred.fail(code, new Error(error)))
-            response.writeHead(400, { "Content-Type": "text/html" }).end(OauthCallbackPage.error(error, { provider: "Antigravity" }))
+            response
+              .writeHead(400, { "Content-Type": "text/html" })
+              .end(OauthCallbackPage.error(error, { provider: "Antigravity" }))
             return
           }
           if (!value || url.searchParams.get("state") !== state) {
             const message = value ? "Invalid OAuth state" : "Missing authorization code"
             Effect.runFork(Deferred.fail(code, new Error(message)))
-            response.writeHead(400, { "Content-Type": "text/html" }).end(OauthCallbackPage.error(message, { provider: "Antigravity" }))
+            response
+              .writeHead(400, { "Content-Type": "text/html" })
+              .end(OauthCallbackPage.error(message, { provider: "Antigravity" }))
             return
           }
           Effect.runFork(Deferred.succeed(code, value))
-          response.writeHead(200, { "Content-Type": "text/html" }).end(OauthCallbackPage.success({ provider: "Antigravity" }))
+          response
+            .writeHead(200, { "Content-Type": "text/html" })
+            .end(OauthCallbackPage.success({ provider: "Antigravity" }))
         })
         yield* Effect.callback<void, Error>((resume) => {
           server.once("error", (error) => resume(Effect.fail(error)))
@@ -461,14 +551,14 @@ export const AntigravityPlugin = define({
                 account.snapshot.credential?.id === snapshot.credential?.id &&
                 account.snapshot.credential?.accountGeneration === snapshot.credential?.accountGeneration,
             )
-            const project = yield* (storedProject(snapshot)
-              ? Effect.succeed(storedProject(snapshot))
-              : discoverAntigravityProject(http, snapshot.value.access)).pipe(
+            const project = yield* (
+              storedProject(snapshot)
+                ? Effect.succeed(storedProject(snapshot))
+                : discoverAntigravityProject(http, snapshot.value.access)
+            ).pipe(
               Effect.timeout("60 seconds"),
               Effect.catch(() =>
-                Effect.logWarning("failed to discover the Antigravity project").pipe(
-                  Effect.as(retained?.project),
-                ),
+                Effect.logWarning("failed to discover the Antigravity project").pipe(Effect.as(retained?.project)),
               ),
             )
             const models = yield* discoverAntigravityModels(http, snapshot.value.access, project).pipe(
@@ -530,12 +620,13 @@ export const AntigravityPlugin = define({
         if (!snapshot || snapshot.value?.type !== "oauth") {
           evt.options.fetch = () => Promise.reject(new Error("Run ycoding, then /connect and choose Antigravity."))
         } else {
-          const account = loaded.accounts.find(
-            (item) => item.snapshot.credential?.id === snapshot.credential?.id,
-          )
+          const account = loaded.accounts.find((item) => item.snapshot.credential?.id === snapshot.credential?.id)
+          const gatewayModel = evt.model.settings?.[gatewayModelSettingsKey]
+          delete evt.options[gatewayModelSettingsKey]
           evt.options.fetch = createAntigravityFetch(send, {
             access: snapshot.value.access,
             project: account?.project ?? storedProject(snapshot),
+            ...(typeof gatewayModel === "string" ? { model: gatewayModel } : {}),
           })
         }
         evt.options.apiKey = "antigravity"

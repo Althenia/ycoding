@@ -631,7 +631,7 @@ Direct GPT-5.6 Responses requests enable server-side context management with a `
 
 OpenAI-hosted web search URL citations enter the normal assistant text lifecycle as a `Source: <title>` line followed by the URL. The same text is returned by the native AI call, stored in durable Session history, and rendered by the TUI transcript.
 
-Antigravity effort-specific catalog entries use their advertised thinking level or budget as request defaults and expose no generated effort variants. Prompt-prefix reuse and retention belong to the gateway; YCoding adds no provider-specific cache controls and preserves reported cached input counts. Empty replies remain subject to terminal-response validation regardless of reported cache reuse.
+Antigravity effort-specific gateway entries pivot into one catalog model per base model; each effort variant sends its own gateway model ID with its advertised thinking level or budget, and the model without a variant runs the advertised medium entry (or the nearest advertised entry) as its request default. Prompt-prefix reuse and retention belong to the gateway; YCoding adds no provider-specific cache controls and preserves reported cached input counts. Empty replies remain subject to terminal-response validation regardless of reported cache reuse.
 
 ### Prompt delivery
 
