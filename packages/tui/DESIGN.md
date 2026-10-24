@@ -155,6 +155,14 @@ Each rule describes current TUI behavior and names its enforcing test or review 
 
 T1 and T2 separate complete durable projection from resident row rendering. T3 applies to the captured-change diff, not every inline tool diff; the tested `diffs.view` cases and threshold are specified in `docs/runtime.md`. T7 keeps the segment summary as the only completed-edit presentation; child edits join the segment whose `subagent` or `subagent_control` call dispatched them, and a child segment ends at the child's next `user` input or answer.
 
+### Transcript chronology (T2)
+
+Recorded notice identities and UTF-16 offsets own within-part order. Clock values and message-ID sorting MUST NOT override an anchor, including consecutive notices at the same offset and notices whose timestamps fall outside the Step.
+
+The transcript tail owns one `session-live-tail` activity row while execution is running and chat is enabled, hidden behind a blocking question. Reuse `Spinner` with `DOT_TRAIL_FRAMES`, a 160ms interval, subdued ink, one-column left padding and one-row top margin. Label an open text part `Typing`; label other running work `Working`. Settled execution removes the row.
+
+Visible notices MUST retain their position between streamed text slices through settlement, reconnect and replay. Use recorded text-event times and delivery boundaries; preserve one canonical provider text value and keep the typing treatment on its live tail only. Missing legacy timing MUST remain unknown. Without text timing or boundaries, retain stored message and part order, including the completion footer, as a deterministic display fallback rather than inferred chronology. Hidden Session-state and TeamView observations MUST NOT split visible text. Enforce with `test/screen/transcript-chronology.screen.test.tsx` and `test/cli/tui/session-rows-chronology.test.tsx`.
+
 ### Master notification filtering (T54)
 
 Both all-master and selected-master delivery MUST require the source Session to be a current Project Master. Stored IDs MUST NOT grant that identity to members or unknown Sessions. Preserve the saved filter while the list is unavailable and withhold restricted external delivery. Gate only external notification and sound delivery by Session and category; keep pending controls, in-app feedback and Session-less quota alerts visible. Absent categories mean all; empty categories or an empty selected-master list mean none. The persisted `coordinators` scope denotes masters and retains its storage spelling.

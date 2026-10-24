@@ -186,10 +186,21 @@ export const AssistantTool = Schema.Struct({
 }).annotate({ identifier: "Session.Message.Assistant.Tool" })
 
 export interface AssistantText extends Schema.Schema.Type<typeof AssistantText> {}
+export interface TextBreak extends Schema.Schema.Type<typeof TextBreak> {}
+export const TextBreak = Schema.Struct({
+  offset: NonNegativeInt,
+  after: ID,
+}).annotate({ identifier: "Session.Message.Assistant.TextBreak" })
+
 export const AssistantText = Schema.Struct({
   type: Schema.tag("text"),
   text: Schema.String,
   phase: Schema.Literals(["commentary", "final_answer"]).pipe(optional),
+  breaks: Schema.Array(TextBreak).pipe(optional),
+  time: Schema.Struct({
+    created: DateTimeUtcFromMillis,
+    completed: DateTimeUtcFromMillis.pipe(optional),
+  }).pipe(optional),
 }).annotate({ identifier: "Session.Message.Assistant.Text" })
 
 export interface AssistantReasoning extends Schema.Schema.Type<typeof AssistantReasoning> {}

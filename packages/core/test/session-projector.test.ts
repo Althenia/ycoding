@@ -34,6 +34,8 @@ import {
 } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
+import { LLMEvent } from "@ycoding-ai/ai"
+import { createLLMEventPublisher } from "@ycoding-ai/core/session/runner/publish-llm-event"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])))
 const sessionsLayer = AppNodeBuilder.build(Session.node, [[SessionExecution.node, SessionExecution.noopLayer]])
@@ -61,6 +63,98 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("legacy text settlement never substitutes its end time for an unknown start", () => Effect.gen(function* () {
+    const assistantMessageID = SessionMessage.ID.make("msg_legacy_text")
+    const state: SessionMessageUpdater.MemoryState = {
+      messages: [SessionMessage.Assistant.make({
+        id: assistantMessageID, type: "assistant", agent: build, model,
+        content: [{ type: "text", text: "Legacy" }], time: { created },
+      })],
+    }
+    yield* SessionMessageUpdater.update(SessionMessageUpdater.memory(state), SessionEvent.Text.Ended.make({
+      id: EventRuntime.ID.make("evt_legacy_text_end"), type: "session.text.ended", created: DateTime.makeUnsafe(1040),
+      durable: { aggregateID: sessionID, seq: EventRuntime.Seq.make(1), version: EventRuntime.Version.make(1) },
+      data: { sessionID, assistantMessageID, ordinal: 0, text: "Legacy settled" },
+    }))
+    const message = encodeMessage(state.messages[0]!)
+    expect(message).toMatchObject({ content: [{ type: "text", text: "Legacy settled" }] })
+    if (message.type !== "assistant") throw new Error("Expected an assistant message")
+    expect(message.content[0]).not.toHaveProperty("time")
+    expect(message.content[0]).not.toHaveProperty("breaks")
+  }))
+
+  it.effect("text boundaries retain their event times for chronological transcript replay", () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run()
+    yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "test" }).run()
+    const events = yield* EventRuntime.Service
+    const assistantMessageID = SessionMessage.ID.make("msg_text_timeline")
+    yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: build, model })
+    const start = yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID, ordinal: 0 })
+    const end = yield* events.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID, ordinal: 0, text: "Verified boundary" })
+    const row = yield* database.db.select().from(SessionMessageTable).where(eq(SessionMessageTable.id, assistantMessageID)).get()
+    const message = Schema.decodeUnknownSync(SessionMessage.Info)({ ...row!.data, id: row!.id, type: row!.type })
+    expect(message).toMatchObject({ content: [{ type: "text", text: "Verified boundary", time: { created: start.created, completed: end.created } }] })
+  }))
+
+  it.effect("real notice publication persists exact UTF-16 text anchors through event serialization and canonical reload", () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run()
+    yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "test" }).run()
+    const events = yield* EventRuntime.Service
+    const publisher = createLLMEventPublisher(events, { sessionID, agent: build, model, providerMetadataKey: "fixture" })
+    yield* Effect.acquireRelease(events.listen(publisher.observe), (unsubscribe) => unsubscribe)
+    yield* publisher.publish(LLMEvent.textStart({ id: "anchored-text" }))
+    yield* publisher.publish(LLMEvent.textDelta({ id: "anchored-text", text: "Alpha 🌿" }))
+    const notice = yield* events.publish(SessionEvent.Synthetic, { sessionID, text: "Work finished", description: "Subagent completed" })
+    yield* publisher.publish(LLMEvent.textDelta({ id: "anchored-text", text: "Bravo" }))
+    yield* publisher.publish(LLMEvent.textEnd({ id: "anchored-text" }))
+    const boundaries = [{ offset: 8, after: SessionMessage.ID.fromEvent(notice.id) }]
+    const durable = yield* database.db.select().from(EventTable).where(eq(EventTable.type, "session.text.ended.1")).get()
+    expect(durable?.data).toMatchObject({ text: "Alpha 🌿Bravo", breaks: boundaries })
+    const row = yield* database.db.select().from(SessionMessageTable).where(eq(SessionMessageTable.id, publisher.currentMessageID()!)).get()
+    const message = Schema.decodeUnknownSync(SessionMessage.Info)({ ...row!.data, id: row!.id, type: row!.type })
+    const wire = encodeMessage(message)
+    expect(wire).toMatchObject({ content: [{ type: "text", text: "Alpha 🌿Bravo", breaks: boundaries }] })
+    expect(Schema.decodeUnknownSync(SessionMessage.Info)(JSON.parse(JSON.stringify(wire)))).toEqual(message)
+  }).pipe(Effect.scoped))
+
+  for (const preceding of [false, true]) it.effect(`forked text anchors retain ${preceding ? "preceding" : "following"} notice identity across copy batches`, () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run()
+    yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "test" }).run()
+    const events = yield* EventRuntime.Service
+    const publisher = createLLMEventPublisher(events, { sessionID, agent: build, model, providerMetadataKey: "fixture" })
+    yield* Effect.acquireRelease(events.listen(publisher.observe), (unsubscribe) => unsubscribe)
+    const publishNotice = events.publish(SessionEvent.Synthetic, { sessionID, text: "Anchor notice", description: "Anchor notice" })
+    const padding = Effect.forEach(Array.from({ length: 500 }, (_, index) => index), (index) => events.publish(SessionEvent.Synthetic, { sessionID, text: `Hidden fixture ${index}` }), { discard: true })
+    const earlier = preceding ? yield* publishNotice : undefined
+    if (preceding) yield* padding
+    yield* publisher.publish(LLMEvent.textStart({ id: "fork-text" }))
+    yield* publisher.publish(LLMEvent.textDelta({ id: "fork-text", text: "Alpha 🌿" }))
+    if (!preceding) yield* padding
+    const notice = earlier ?? (yield* publishNotice)
+    yield* publisher.publish(LLMEvent.textDelta({ id: "fork-text", text: "Bravo" }))
+    yield* publisher.publish(LLMEvent.textEnd({ id: "fork-text" }))
+    const forkID = Session.ID.make("ses_anchor_fork")
+    yield* events.publish(SessionEvent.Forked, { sessionID: forkID, parentID: sessionID, parentSeq: yield* EventRuntime.latestSequence(database.db, sessionID) })
+    const rows = yield* database.db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, forkID)).all()
+    const messages = rows.map((row) => Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type }))
+    const forkedNotice = messages.find((message) => message.type === "synthetic" && message.description === "Anchor notice")
+    const assistant = messages.find((message) => message.type === "assistant")
+    expect(forkedNotice).toBeDefined()
+    expect(forkedNotice?.id).not.toBe(SessionMessage.ID.fromEvent(notice.id))
+    expect(assistant).toMatchObject({ content: [{ type: "text", text: "Alpha 🌿Bravo", breaks: [{ offset: preceding ? 0 : 8, after: forkedNotice!.id }] }] })
+    if (!preceding) {
+      const truncatedID = Session.ID.make("ses_anchor_truncated")
+      yield* events.publish(SessionEvent.Forked, { sessionID: truncatedID, parentID: sessionID, parentSeq: notice.durable!.seq - 1, from: SessionMessage.ID.fromEvent(notice.id) })
+      const truncated = yield* database.db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, truncatedID)).all()
+      expect(truncated.some((row) => row.type === "synthetic" && "description" in row.data && row.data.description === "Anchor notice")).toBe(false)
+      const text = truncated.find((row) => row.type === "assistant")
+      expect(text?.data).toMatchObject({ content: [{ type: "text", text: "Alpha 🌿Bravo", breaks: [] }] })
+    }
+  }).pipe(Effect.scoped))
+
   it.effect("persists the escalation notice as canonical transcript history from its minimal event", () => Effect.gen(function* () {
     const database = yield* Database.Service
     yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run()
@@ -994,7 +1088,7 @@ describe("SessionProjector", () => {
         .pipe(Effect.orDie)
 
       const service = yield* EventRuntime.Service
-      yield* service.publish(SessionEvent.Text.Started, {
+      const textStart = yield* service.publish(SessionEvent.Text.Started, {
         sessionID,
         assistantMessageID: SessionMessage.ID.make("msg_assistant_completed"),
         ordinal: 0,
@@ -1017,7 +1111,7 @@ describe("SessionProjector", () => {
           type: "assistant",
           agent: build,
           model,
-          content: [SessionMessage.AssistantText.make({ type: "text", text: "", phase: "commentary" })],
+          content: [SessionMessage.AssistantText.make({ type: "text", text: "", phase: "commentary", time: { created: textStart.created } })],
           time: { created: DateTime.makeUnsafe(1), completed: DateTime.makeUnsafe(2) },
         }),
         SessionMessage.Assistant.make({

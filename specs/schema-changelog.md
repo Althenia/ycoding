@@ -2,6 +2,12 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-25: Retain text delivery boundaries in transcript projections
+
+- Add optional `time: { created, completed? }` and `breaks: { offset, after }[]` to `Session.Message.Assistant.Text`, and optional `breaks` to `session.text.ended.1`.
+- Preserve one canonical text value. Delivery offsets use UTF-16 indices and identify the intervening transcript message; timestamps use existing text events. Historical payloads remain valid without timing or boundaries.
+- Regenerate the Promise client types from Protocol and Schema.
+
 ## 2026-10-24: Carry Project escalation reasons on native requests
 
 - Add `Coordination.EscalationReason { sessionID, reason }` (reason 1–500 characters) and `Coordination.Escalation { reasons }` (1–4 entries).

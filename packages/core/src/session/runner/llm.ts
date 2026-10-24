@@ -580,6 +580,7 @@ const layer = Layer.effect(
         },
       })
       const publication = Semaphore.makeUnsafe(1)
+      yield* Effect.acquireRelease(events.listen(publisher.observe), (unsubscribe) => unsubscribe)
       // Durable publishes are serialized so tool fibers and step settlement never interleave
       // mid-event.
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => publication.withPermit(effect)

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { Effect, Schema } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import { LLMEvent } from "@ycoding-ai/ai"
 import { Money } from "@ycoding-ai/schema/money"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -20,7 +20,7 @@ const capture = (providerMetadataKey = "anthropic") => {
   const published: Array<{ readonly type: string; readonly data: unknown }> = []
   const events: Pick<EventRuntime.Interface, "publish"> = {
     publish: (definition, data) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const event = { id: EventRuntime.ID.create(), type: definition.type, data } as EventRuntime.Payload<typeof definition>
         published.push({
           type: definition.durable
@@ -28,12 +28,11 @@ const capture = (providerMetadataKey = "anthropic") => {
             : definition.type,
           data,
         })
+        yield* publisher.observe(event)
         return event
       }),
   }
-  return {
-    published,
-    publisher: createLLMEventPublisher(events, {
+  const publisher = createLLMEventPublisher(events, {
       sessionID,
       agent: Agent.ID.make("build"),
       model: {
@@ -41,11 +40,69 @@ const capture = (providerMetadataKey = "anthropic") => {
         providerID: Provider.ID.opencode,
       },
       providerMetadataKey,
-    }),
-  }
+    })
+  return { published, publisher }
 }
 
 const call = LLMEvent.toolCall({ id: "call-image", name: "read", input: { path: "pixel.png" } })
+
+for (const source of ["session-state", "team-view", "step-limit"] as const) {
+  test(`context notices only split visible text for ${source}`, async () => {
+    const { published, publisher } = capture()
+    await Effect.runPromise(publisher.publish(LLMEvent.textStart({ id: "context-text" })))
+    await Effect.runPromise(publisher.publish(LLMEvent.textDelta({ id: "context-text", text: "Alpha" })))
+    const notice = SessionEvent.ContextObserved.make({
+      id: EventRuntime.ID.make("evt_context_boundary"), type: "session.context.observed", created: DateTime.makeUnsafe(1010),
+      durable: { aggregateID: sessionID, seq: EventRuntime.Seq.make(1), version: EventRuntime.Version.make(1) },
+      data: { sessionID, source, text: "Context observation" },
+    })
+    await Effect.runPromise(publisher.observe(notice))
+    await Effect.runPromise(publisher.publish(LLMEvent.textDelta({ id: "context-text", text: "Bravo" })))
+    await Effect.runPromise(publisher.publish(LLMEvent.textEnd({ id: "context-text" })))
+    const ended = published.find((event) => event.type === "session.text.ended.1")
+    expect(ended?.data).toMatchObject({ text: "AlphaBravo" })
+    if (source === "step-limit") {
+      expect(ended?.data).toMatchObject({ breaks: [{ offset: 5, after: SessionMessage.ID.fromEvent(notice.id) }] })
+      return
+    }
+    expect(ended?.data).not.toHaveProperty("breaks")
+  })
+}
+
+test("interleaved notice boundaries persist text offsets without splitting provider text or including another Session", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(LLMEvent.textStart({ id: "text" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.textDelta({ id: "text", text: "Alpha 🌿" })))
+  const notice = SessionEvent.Synthetic.make({
+    id: EventRuntime.ID.make("evt_text_boundary"), type: "session.synthetic", created: DateTime.makeUnsafe(1000),
+    durable: { aggregateID: sessionID, seq: EventRuntime.Seq.make(1), version: EventRuntime.Version.make(1) },
+    data: { sessionID, text: "Work finished", description: "Subagent completed" },
+  })
+  await Effect.runPromise(publisher.observe(notice))
+  await Effect.runPromise(publisher.observe({ ...notice, id: EventRuntime.ID.make("evt_foreign_boundary"), data: { ...notice.data, sessionID: Session.ID.make("ses_other") } }))
+  await Effect.runPromise(publisher.publish(LLMEvent.textDelta({ id: "text", text: "Bravo" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.textEnd({ id: "text" })))
+  const ended = published.filter((event) => event.type === "session.text.ended.1")
+  expect(ended).toHaveLength(1)
+  expect(ended[0]?.data).toMatchObject({ text: "Alpha 🌿Bravo", breaks: [{ offset: "Alpha 🌿".length, after: SessionMessage.ID.fromEvent(notice.id) }] })
+  expect(published.filter((event) => event.type === "session.text.started.1")).toHaveLength(1)
+})
+
+test("a later text part anchors after the preceding notice without relying on millisecond ordering", async () => {
+  const { published, publisher } = capture()
+  const notice = SessionEvent.Synthetic.make({
+    id: EventRuntime.ID.make("evt_text_tie"), type: "session.synthetic", created: DateTime.makeUnsafe(1000),
+    durable: { aggregateID: sessionID, seq: EventRuntime.Seq.make(1), version: EventRuntime.Version.make(1) },
+    data: { sessionID, text: "Completed", description: "Subagent completed" },
+  })
+  await Effect.runPromise(publisher.observe(notice))
+  await Effect.runPromise(publisher.publish(LLMEvent.textStart({ id: "later" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.textDelta({ id: "later", text: "Fresh text" })))
+  await Effect.runPromise(publisher.publish(LLMEvent.textEnd({ id: "later" })))
+  expect(published.find((event) => event.type === "session.text.ended.1")?.data).toMatchObject({
+    text: "Fresh text", breaks: [{ offset: 0, after: SessionMessage.ID.fromEvent(notice.id) }],
+  })
+})
 const result = LLMEvent.toolResult({
   id: "call-image",
   name: "read",

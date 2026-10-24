@@ -558,7 +558,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.text.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
-            castDraft(SessionMessage.AssistantText.make({ type: "text", text: "", phase: event.data.phase })),
+            castDraft(SessionMessage.AssistantText.make({ type: "text", text: "", phase: event.data.phase, time: { created: event.created } })),
           )
         })
       },
@@ -574,6 +574,8 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
           if (match) {
             match.text = event.data.text
             match.phase = event.data.phase
+            match.breaks = event.data.breaks?.map((boundary) => ({ ...boundary }))
+            if (match.time) match.time.completed = event.created
           }
         })
       },

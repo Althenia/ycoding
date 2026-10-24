@@ -206,7 +206,7 @@ export type SessionMessageShell = {
   output?: { output: string; cursor: number; size: number; truncated: boolean }
 }
 
-export type SessionMessageAssistantText = { type: "text"; text: string; phase?: "commentary" | "final_answer" }
+export type SessionMessageAssistantTextBreak = { offset: number; after: string }
 
 export type SessionMessageProviderState = { [x: string]: JsonValue }
 
@@ -1156,23 +1156,6 @@ export type SessionTextDelta = {
   data: { sessionID: string; assistantMessageID: string; ordinal: number; delta: string }
 }
 
-export type SessionTextEnded = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.text.ended"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    sessionID: string
-    assistantMessageID: string
-    ordinal: number
-    text: string
-    phase?: "commentary" | "final_answer"
-  }
-}
-
 export type SessionReasoningDelta = {
   id: string
   created: number
@@ -1596,6 +1579,32 @@ export type SessionMessageSkill = {
   conflicts?: SkillConflicts
   skillDeactivations?: Array<SessionMessageSkillDeactivation>
   artifact?: SessionMessageArtifactProvenance
+}
+
+export type SessionMessageAssistantText = {
+  type: "text"
+  text: string
+  phase?: "commentary" | "final_answer"
+  breaks?: Array<SessionMessageAssistantTextBreak>
+  time?: { created: number; completed?: number }
+}
+
+export type SessionTextEnded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.text.ended"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    assistantMessageID: string
+    ordinal: number
+    text: string
+    breaks?: Array<SessionMessageAssistantTextBreak>
+    phase?: "commentary" | "final_answer"
+  }
 }
 
 export type SessionMessageAssistantReasoning = {
@@ -4404,6 +4413,7 @@ export type SessionLogItem =
         assistantMessageID: string
         ordinal: number
         text: string
+        breaks?: Array<SessionMessageAssistantTextBreak>
         phase?: "commentary" | "final_answer"
       }
     }

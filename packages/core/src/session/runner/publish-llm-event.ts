@@ -100,6 +100,8 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
   let providerFailed = false
   let retryEvidence = false
   let assistantText = false
+  let openText: { ordinal: number; length: number; breaks: SessionMessage.TextBreak[] } | undefined
+  let lastNotice: SessionMessage.ID | undefined
   let stepFailure: SessionError.Error | undefined
   let stepSettlement:
     | {
@@ -197,6 +199,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
           assistantMessageID: yield* currentAssistantMessageID(),
           ordinal,
           text: value,
+          ...(openText?.ordinal === ordinal && openText.breaks.length > 0 ? { breaks: [...openText.breaks] } : {}),
           phase: phase === "commentary" || phase === "final_answer" ? phase : undefined,
         })
         if (value.trim().length > 0) assistantText = true
@@ -614,7 +617,37 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
     }
   })
 
+  const observe = (event: EventRuntime.Payload) => Effect.sync(() => {
+    const data = event.data
+    if (data === null || typeof data !== "object" || !("sessionID" in data) || data.sessionID !== input.sessionID) return
+    if (event.type === SessionEvent.Text.Started.type) {
+      if ("ordinal" in data && typeof data.ordinal === "number") openText = { ordinal: data.ordinal, length: 0, breaks: lastNotice === undefined ? [] : [{ offset: 0, after: lastNotice }] }
+      return
+    }
+    if (event.type === SessionEvent.Text.Delta.type) {
+      if (openText !== undefined && "ordinal" in data && data.ordinal === openText.ordinal && "delta" in data && typeof data.delta === "string") openText.length += data.delta.length
+      return
+    }
+    if (event.type === SessionEvent.Text.Ended.type) {
+      openText = undefined
+      return
+    }
+    if (event.type === SessionEvent.ContextObserved.type && "source" in data &&
+      (data.source === "session-state" || data.source === "team-view")) return
+    const noticeTypes: readonly string[] = [SessionEvent.Synthetic.type, SessionEvent.ContextObserved.type, SessionEvent.GuardrailEscalated.type,
+      SessionEvent.Review.Withdrawn.type, SessionEvent.Skill.Activated.type,
+      SessionEvent.Shell.Started.type, SessionEvent.AgentSelected.type, SessionEvent.ModelSelected.type]
+    if (!noticeTypes.includes(event.type)) return
+    if (event.type === SessionEvent.Synthetic.type && (!("description" in data) || typeof data.description !== "string" || !data.description.trim())) return
+    const after = SessionMessage.ID.fromEvent(event.id)
+    lastNotice = after
+    if (openText === undefined) return
+    if (openText.breaks.some((boundary) => boundary.after === after)) return
+    openText.breaks.push({ offset: openText.length, after })
+  })
+
   return {
+    observe,
     publish,
     flush,
     failAssistant,

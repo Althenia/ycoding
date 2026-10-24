@@ -3,9 +3,10 @@ import type {
   GuardrailRequestListOutput,
   GuardrailStatusOutput,
   SessionMessageAssistant,
+  SessionMessageAssistantText,
   SessionMessageInfo,
 } from "@ycoding-ai/client"
-import { createEffect, on, onCleanup, type Accessor } from "solid-js"
+import { createEffect, createMemo, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useData } from "../../context/data"
 import { useClient } from "../../context/client"
@@ -16,6 +17,7 @@ import { guardrailGradeDetails } from "./guardrail-grades"
 export type PartRef = {
   messageID: string
   partID: string
+  start?: number
 }
 
 export type GuardrailSourceRef = { messageID: string; callID: string }
@@ -200,6 +202,12 @@ export function createSessionRows(sessionID: Accessor<string>) {
     ),
   )
 
+  const textBreaks = createMemo(() =>
+    data.session.message.list(sessionID()).flatMap((message) => message.type === "assistant"
+      ? message.content.flatMap((part) => part.type === "text" ? (part.breaks ?? []).map((item) => `${message.id}:${item.offset}:${item.after}`) : []) : []).join(","),
+  )
+  createEffect(on(textBreaks, () => setRows(reconcile(reduce(), { key: "key" })), { defer: true }))
+
   const appendMessage = (messageID: string) =>
     setRows(
       produce((draft) => {
@@ -246,6 +254,14 @@ export function createSessionRows(sessionID: Accessor<string>) {
         if (index !== -1) draft.splice(index, 1)
       }),
     )
+
+  const liveTextRef = (messageID: string, ordinal: number): PartRef => {
+    const partID = `text:${ordinal}`
+    const message = data.session.message.get(sessionID(), messageID)
+    const part = message?.type === "assistant" ? resolvePart(message, partID) : undefined
+    const start = part?.type === "text" ? part.breaks?.at(-1)?.offset : undefined
+    return { messageID, partID, ...(start ? { start } : {}) }
+  }
 
   const isPending = (messageID: string) => {
     const message = data.session.message.get(sessionID(), messageID)
@@ -300,11 +316,12 @@ export function createSessionRows(sessionID: Accessor<string>) {
     data.on("session.model.selected", message),
     data.on("session.text.delta", (event) => {
       if (event.data.sessionID === sessionID() && event.data.delta.trim())
-        appendPart({ messageID: event.data.assistantMessageID, partID: `text:${event.data.ordinal}` }, { type: "text" })
+        appendPart(liveTextRef(event.data.assistantMessageID, event.data.ordinal), { type: "text" })
     }),
     data.on("session.text.ended", (event) => {
-      if (event.data.sessionID === sessionID() && event.data.text.trim())
-        appendPart({ messageID: event.data.assistantMessageID, partID: `text:${event.data.ordinal}` }, { type: "text" })
+      if (event.data.sessionID !== sessionID()) return
+      const ref = liveTextRef(event.data.assistantMessageID, event.data.ordinal)
+      if (event.data.text.slice(ref.start).trim()) appendPart(ref, { type: "text" })
     }),
     data.on("session.reasoning.delta", (event) => {
       if (event.data.sessionID === sessionID() && event.data.delta.trim())
@@ -428,27 +445,60 @@ export function reduceSessionRows(
         ("jobID" in message && message.status !== "completed" && message.status !== "failed")),
   )
   const pending = new Set([...pendingCompactions.map((message) => message.id), ...inputs])
-  const rows = [
+  const ordered = [
     ...transcript.filter((message) => !pending.has(message.id)),
     ...pendingCompactions,
     ...transcript.filter(isInput),
-  ].reduce<SessionRow[]>((rows, message) => {
+  ]
+  const during = arrivedDuringStep(ordered, pending)
+  const deferred = new Set([...during.values()].flat().map((message) => message.id))
+  const pushMessage = (rows: SessionRow[], message: SessionMessageInfo) => {
     insertThrough(rows, message.time.created)
+    if (message.type === "synthetic" && !message.description?.trim()) return
+    if (!pending.has(message.id)) completePrevious(rows)
+    rows.push({ type: "message", messageID: message.id })
+  }
+  const rows = ordered.reduce<SessionRow[]>((rows, message) => {
+    if (deferred.has(message.id)) return rows
     if (message.type !== "assistant") {
-      if (message.type === "synthetic" && !message.description?.trim()) return rows
-      if (!pending.has(message.id)) completePrevious(rows)
-      rows.push({ type: "message", messageID: message.id })
+      pushMessage(rows, message)
       return rows
+    }
+    insertThrough(rows, message.time.created)
+    const arrived = [...(during.get(message.id) ?? [])]
+    const anchors = new Set(message.content.flatMap((part) => part.type === "text" ? (part.breaks ?? []).map((boundary) => boundary.after) : []))
+    const flushBefore = (time: number) => {
+      arrived.filter((item) => item.time.created < time && (time === Infinity || !anchors.has(item.id))).forEach((item) => {
+        arrived.splice(arrived.indexOf(item), 1)
+        pushMessage(rows, item)
+      })
     }
     const ordinals = { text: 0, reasoning: 0 }
     let partTime = message.time.created
+    const placeAfter = (messageID: string) => {
+      const position = arrived.findIndex((item) => item.id === messageID)
+      if (position < 0) return
+      pushMessage(rows, arrived.splice(position, 1)[0])
+    }
     message.content.forEach((part) => {
+      if (part.time) flushBefore(part.time.created)
       insertThrough(rows, "time" in part ? (part.time?.created ?? partTime) : partTime)
       if ("time" in part && part.time) partTime = Math.max(partTime, part.time.completed ?? part.time.created)
       const partID = part.type === "tool" ? part.id : `${part.type}:${ordinals[part.type]++}`
+      if (part.type === "text" && part.breaks?.length) {
+        const breaks = part.breaks
+        const starts = [0, ...breaks.map((item) => item.offset)]
+        starts.forEach((start, index) => {
+          if (part.text.slice(start, breaks[index]?.offset).trim())
+            append(rows, { messageID: message.id, partID, ...(start ? { start } : {}) }, part)
+          if (breaks[index]) placeAfter(breaks[index].after)
+        })
+        return
+      }
       if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
       append(rows, { messageID: message.id, partID }, part)
     })
+    flushBefore(Infinity)
     if (
       (message.finish && !["tool-calls", "unknown"].includes(message.finish)) ||
       message.error ||
@@ -469,6 +519,30 @@ export function reduceSessionRows(
     ),
   )
   return rows
+}
+
+function arrivedDuringStep(messages: SessionMessageInfo[], pending: Set<string>) {
+  const arrived = new Map<string, SessionMessageInfo[]>()
+  const anchors = new Map(messages.flatMap((message) => message.type === "assistant"
+    ? message.content.flatMap((part) => part.type === "text" ? (part.breaks ?? []).map((boundary) => [boundary.after, message.id] as const) : [])
+    : []))
+  messages.reduce<SessionMessageAssistant | undefined>((open, message) => {
+    if (message.type === "assistant") return message
+    if (message.type === "user") return undefined
+    if (message.type === "compaction" || pending.has(message.id)) return open
+    const owner = anchors.get(message.id)
+    if (owner !== undefined) {
+      arrived.set(owner, [...(arrived.get(owner) ?? []), message])
+      return open
+    }
+    if (!open) return open
+    if (!open.content.some((part) => part.type === "text" && (part.time || part.breaks?.length))) return open
+    if (message.time.created < open.time.created || message.time.created > (open.time.completed ?? Infinity) ||
+      message.time.created === open.time.completed) return open
+    arrived.set(open.id, [...(arrived.get(open.id) ?? []), message])
+    return open
+  }, undefined)
+  return arrived
 }
 
 export function compactionMessageTranscriptVisible(message: Extract<SessionMessageInfo, { type: "compaction" }>) {
@@ -511,6 +585,11 @@ function rowBoundaryMessageID(row: SessionRow, messages: Map<string, SessionMess
   if (!messageID) return undefined
   const message = messages.get(messageID)
   if (message?.type === "assistant") return message.id
+}
+
+export function textSlice(part: SessionMessageAssistantText, start = 0) {
+  const end = part.breaks?.find((item) => item.offset > start)?.offset
+  return { text: part.text.slice(start, end), tail: end === undefined }
 }
 
 export function resolvePart(message: SessionMessageAssistant, partID: string) {
@@ -593,7 +672,7 @@ function rowKey(row: SessionRow, message?: SessionMessageInfo): string {
       // available and cannot collide.
       return `task:${row.content}`
     case "part":
-      return `part:${row.ref.messageID}:${row.ref.partID}`
+      return `part:${row.ref.messageID}:${row.ref.partID}${row.ref.start ? `:${row.ref.start}` : ""}`
     case "group": {
       const first = row.refs[0] ?? (row.kind === "exploration" ? row.pending[0] : undefined)
       return `group:${row.kind}:${first?.messageID ?? ""}:${first?.partID ?? ""}`
@@ -695,7 +774,8 @@ function guardrailSensitiveField(key: string) {
 
 function hasPart(rows: SessionRow[], ref: PartRef) {
   return rows.some((row) => {
-    if (row.type === "part") return row.ref.messageID === ref.messageID && row.ref.partID === ref.partID
+    if (row.type === "part")
+      return row.ref.messageID === ref.messageID && row.ref.partID === ref.partID && row.ref.start === ref.start
     if (row.type !== "group") return false
     const refs = row.kind === "exploration" ? [...row.refs, ...row.pending] : row.refs
     return refs.some((item) => item.messageID === ref.messageID && item.partID === ref.partID)

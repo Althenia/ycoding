@@ -669,6 +669,7 @@ export namespace Text {
       assistantMessageID: SessionMessage.ID,
       ordinal: NonNegativeInt,
       text: Schema.String,
+      breaks: Schema.Array(SessionMessage.TextBreak).pipe(optional),
       phase: Schema.Literals(["commentary", "final_answer"]).pipe(optional),
     },
   })

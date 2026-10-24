@@ -1043,6 +1043,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             item.type === "tool" && (callID === undefined || item.id === callID),
         )
       },
+      breakOpenText(messages: SessionMessageInfo[], noticeID: string) {
+        const open = message.activeAssistant(messages)?.content.findLast((part) => part.type === "text" && part.time?.completed === undefined)
+        if (open?.type !== "text" || open.time?.completed !== undefined) return
+        if (open.breaks?.some((boundary) => boundary.after === noticeID)) return
+        open.breaks = [...(open.breaks ?? []), { offset: open.text.length, after: noticeID }]
+      },
       latestText(assistant: SessionMessageAssistant | undefined) {
         return assistant?.content.findLast((item): item is SessionMessageAssistantText => item.type === "text")
       },
@@ -1752,9 +1758,20 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         case "session.text.started":
           message.update(event.data.sessionID, (draft, index) => {
-            message.assistant(draft, index, event.data.assistantMessageID)?.content.push({
+            const assistant = message.assistant(draft, index, event.data.assistantMessageID)
+            if (!assistant) return
+            const position = index.get(assistant.id)!
+            const preceding = draft.slice(position + 1).findLast((item) =>
+              (item.type === "system" && item.metadata?.contextSource !== "session-state" && item.metadata?.contextSource !== "team-view") ||
+              item.type === "skill" || item.type === "shell" || item.type === "model-switched" || item.type === "agent-switched" ||
+              (item.type === "synthetic" && item.metadata?.contextSource !== "session-state" &&
+                item.metadata?.contextSource !== "team-view" && !!item.description?.trim()),
+            )
+            assistant.content.push({
               type: "text",
               text: "",
+              time: { created: event.created },
+              ...(preceding === undefined ? {} : { breaks: [{ offset: 0, after: preceding.id }] }),
             })
           })
           break
@@ -1767,7 +1784,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.text.ended":
           message.update(event.data.sessionID, (draft, index) => {
             const match = message.latestText(message.assistant(draft, index, event.data.assistantMessageID))
-            if (match) match.text = event.data.text
+            if (match) {
+              match.text = event.data.text
+              if (match.time) match.time.completed = event.created
+              match.breaks = event.data.breaks
+            }
           })
           break
         case "session.tool.input.started":
@@ -2204,6 +2225,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           void result.location.mcp.resource.sync(event.location)
           break
       }
+      const materializedNotice = (event.type === "session.context.observed" && event.data.source === "step-limit") || event.type === "session.guardrail.escalated" ||
+        event.type === "session.review.withdrawn" || event.type === "session.skill.activated" ||
+        event.type === "session.shell.started" || event.type === "session.agent.selected" || event.type === "session.model.selected" ||
+        (event.type === "session.synthetic" && !!event.data.description?.trim())
+      if (materializedNotice && "sessionID" in event.data && typeof event.data.sessionID === "string")
+        message.update(event.data.sessionID, (draft) => message.breakOpenText(draft, messageIDFromEvent(event.id)))
     }
 
     const result = {

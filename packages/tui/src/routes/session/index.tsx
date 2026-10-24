@@ -126,6 +126,7 @@ import {
   resolveMessageJump,
   resolvePart,
   sessionRowMessageID,
+  textSlice,
   type PartRef,
   type SessionRow,
 } from "./rows"
@@ -618,6 +619,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const headerMessage = createMemo(() => {
     const message = messages().findLast((item) => item.type === "assistant")
     return message?.type === "assistant" ? message : undefined
+  })
+  const liveTail = createMemo(() => {
+    if (data.session.status(route.sessionID) !== "running" || disabled()) return
+    const assistant = headerMessage()
+    const part = assistant?.content.findLast((item) => item.type === "text")
+    return assistant?.time.completed === undefined && part?.type === "text" && part.time?.completed === undefined ? "Typing" : "Working"
   })
   const currentHeaderModel = createMemo(() => headerModelRef(session()?.model, headerMessage()?.model))
   const headerModel = createMemo(() => {
@@ -1954,6 +1961,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                     </>
                   )}
                 </For>
+                <Show when={!blockedQuestion() && liveTail()}>
+                  {(label) => (
+                    <box id="session-live-tail" paddingLeft={1} marginTop={1} flexShrink={0}>
+                      <Spinner color={theme.text.subdued} frames={DOT_TRAIL_FRAMES} interval={160}>{label()}</Spinner>
+                    </box>
+                  )}
+                </Show>
                 <BackgroundToolHint messages={messages()} />
                 <Show when={mountedEnd() < rows.length}>
                   <text fg={theme.text.subdued} onMouseUp={() => void pageHistory("newer")}>Newer loaded history available</text>
@@ -2294,6 +2308,7 @@ export function SessionRowView(props: {
       const message = props.message(row.ref.messageID)
       if (message?.type !== "assistant") return false
       const content = resolvePart(message, row.ref.partID)
+      if (content?.type === "text" && content.breaks?.length) return textSlice(content, row.ref.start).text.trim() !== ""
       return (
         content !== undefined &&
         (content.type !== "tool" || transcriptToolPartVisible(content, props.activeSkills?.(), props.hideSubagentTools))
@@ -2461,9 +2476,13 @@ function SessionPartView(props: {
     if (item?.type !== "assistant") return
     return resolvePart(item, props.partRef.partID)
   })
+  const slice = createMemo(() => {
+    const item = part()
+    return item?.type === "text" ? textSlice(item, props.partRef.start) : undefined
+  })
   const streaming = createMemo(() => {
     const item = message()
-    return item?.type === "assistant" && item.time.completed === undefined
+    return item?.type === "assistant" && item.time.completed === undefined && slice()?.tail !== false
   })
   return (
     <Show when={part()}>
@@ -2471,11 +2490,11 @@ function SessionPartView(props: {
         <Switch>
           <Match when={item().type === "text"}>
             <TextPart
-              part={item() as SessionMessageAssistantText}
+              part={{ ...(item() as SessionMessageAssistantText), text: slice()?.text ?? "" }}
               last={false}
               streaming={streaming()}
               findActive={props.findActive}
-              identity={props.partRef.partID === "text:0" ? props.assistantIdentity : undefined}
+              identity={props.partRef.partID === "text:0" && !props.partRef.start ? props.assistantIdentity : undefined}
               subagent={props.assistantIdentity?.subagent}
               index={Number(props.partRef.partID.split(":")[1])}
             />

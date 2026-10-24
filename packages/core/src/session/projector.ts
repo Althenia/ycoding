@@ -226,32 +226,47 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       .pipe(Effect.orDie)
   }
 
+  const idMap = new Map<string, SessionMessage.ID>()
+  const copiedRange = (after: number, through: number) => and(
+    eq(SessionMessageTable.session_id, event.data.parentID),
+    gt(SessionMessageTable.seq, after),
+    lt(SessionMessageTable.seq, through + 1),
+    sql`${SessionMessageTable.type} != 'compaction' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
+  )
+  let identityCursor = checkpoint?.coveredThrough.seq ?? -1
+  while (copiedSeq !== undefined) {
+    const identities = yield* db.select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
+      .from(SessionMessageTable)
+      .where(copiedRange(identityCursor, copiedSeq))
+      .orderBy(asc(SessionMessageTable.seq))
+      .limit(ForkBatchSize)
+      .all()
+      .pipe(Effect.orDie)
+    if (identities.length === 0) break
+    identities.forEach((row) => idMap.set(row.id, SessionMessage.ID.create()))
+    identityCursor = identities.at(-1)!.seq
+  }
   let cursor = checkpoint?.coveredThrough.seq ?? -1
   while (copiedSeq !== undefined) {
     const rows = yield* db
       .select()
       .from(SessionMessageTable)
-      .where(
-        and(
-          eq(SessionMessageTable.session_id, event.data.parentID),
-          gt(SessionMessageTable.seq, cursor),
-          lt(SessionMessageTable.seq, copiedSeq + 1),
-          sql`${SessionMessageTable.type} != 'compaction' or json_extract(${SessionMessageTable.data}, '$.status') != 'running'`,
-        ),
-      )
+      .where(copiedRange(cursor, copiedSeq))
       .orderBy(asc(SessionMessageTable.seq))
       .limit(ForkBatchSize)
       .all()
       .pipe(Effect.orDie)
     if (rows.length === 0) break
 
-    const idMap = new Map(rows.map((row) => [row.id, SessionMessage.ID.create()]))
     yield* db
       .insert(SessionMessageTable)
       .values(
         rows.map((row) => {
           const id = idMap.get(row.id)
           if (!id) throw new Error(`Fork message ID mapping missing: ${row.id}`)
+          const content = row.type === "assistant"
+            ? (row.data as Omit<(typeof SessionMessage.Assistant)["Encoded"], "type" | "id">).content
+            : undefined
           return {
             id,
             session_id: event.data.sessionID,
@@ -259,7 +274,16 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
             seq: row.seq,
             time_created: row.time_created,
             time_updated: row.time_updated,
-            data: row.data,
+            data: content ? {
+              ...row.data,
+              content: content.map((part) => part.type === "text" && part.breaks ? {
+                ...part,
+                breaks: part.breaks.flatMap((boundary) => {
+                  const after = idMap.get(boundary.after)
+                  return after === undefined ? [] : [{ ...boundary, after }]
+                }),
+              } : part),
+            } : row.data,
           }
         }),
       )
