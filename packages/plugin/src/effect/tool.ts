@@ -150,19 +150,27 @@ export const validateName = (name: string) =>
     ? Effect.void
     : Effect.fail(new RegistrationError({ name, message: `Invalid tool name: ${name}` }))
 
-export const registrationEntries = (tools: Readonly<Record<string, AnyTool>>, namespace?: string) =>
+export const registrationEntries = (
+  tools: Readonly<Record<string, AnyTool>>,
+  namespace?: string,
+  paths?: Readonly<Record<string, string>>,
+) =>
   Object.entries(tools).map(([name, tool]) => {
     const normalized = name.replace(/[^a-zA-Z0-9_-]/g, "_")
     return {
       key: namespace === undefined ? normalized : `${namespace.replaceAll(".", "_")}_${normalized}`,
       name: normalized,
       namespace,
+      path: paths?.[name] ?? (namespace === undefined ? normalized : `${namespace}.${normalized}`),
       tool,
     }
   })
 
+export const validPath = (path: string) =>
+  path.split(".").every((segment) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(segment))
+
 export const validateNamespace = (namespace: string) =>
-  namespace.split(".").every((segment) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(segment))
+  validPath(namespace)
     ? Effect.void
     : Effect.fail(
         new RegistrationError({ name: namespace, message: `Invalid tool namespace: ${JSON.stringify(namespace)}` }),
@@ -297,6 +305,7 @@ export interface RegisterOptions {
   readonly namespace?: string
   /** Defaults to true. False exposes the tool directly to the provider. */
   readonly codemode?: boolean
+  readonly paths?: Readonly<Record<string, string>>
 }
 
 export interface ToolDraft {

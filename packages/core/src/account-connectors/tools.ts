@@ -28,9 +28,11 @@ export const make = Effect.fn("AccountConnectorTools.make")(function* (input: {
   if (input.catalog.length > 8192) return yield* Effect.fail(new Error("Account connector catalog exceeds 8192 tools"))
   const validators = new AjvJsonSchemaValidator()
   const tools: Record<string, Tool.AnyTool> = {}
+  const paths = callablePaths(input.provider, input.catalog)
+  if (paths instanceof Error) return yield* Effect.fail(paths)
   for (const entry of input.catalog) {
     const tool = entry.tool
-    const name = `${input.provider}_${entry.id.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 80)}_${tool.name.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 80)}_${Hash.sha256(`${entry.id}\0${tool.name}`).slice(0, 12)}`
+    const name = securityName(input.provider, entry.id, tool.name)
     if (tools[name])
       return yield* Effect.fail(new Error("Account connector catalog contains a duplicate tool identity"))
     const validate = yield* Effect.try(() =>
@@ -96,5 +98,87 @@ export const make = Effect.fn("AccountConnectorTools.make")(function* (input: {
       name,
     )
   }
-  return [{ tools }]
+  return [{ tools, options: { paths } }]
 })
+
+const securityName = (provider: string, id: string, tool: string) =>
+  `${provider}_${id.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 80)}_${tool.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 80)}_${Hash.sha256(`${id}\0${tool}`).slice(0, 12)}`
+
+function callablePaths(
+  provider: string,
+  catalog: ReadonlyArray<{ readonly id: string; readonly label: string; readonly tool: { readonly name: string } }>,
+) {
+  const connectorIDs = [...new Set(catalog.map((entry) => entry.id))]
+  const titles = new Map(catalog.map((entry) => [entry.id, entry.label]))
+  const labels = new Map(catalog.map((entry) => [entry.id, slug(entry.label.toLowerCase(), 40)]))
+  const bases = new Map(
+    connectorIDs.map((id) => {
+      const label = labels.get(id)!
+      return [id, usable(label, titles.get(id)!) ? label : `connector_${short(id)}`] as const
+    }),
+  )
+  const connectors = disambiguate(bases, (id) => short(id))
+  const connectorCollision = collision(connectors)
+  if (connectorCollision) return new Error(`Account connector paths collide at ${provider}.${connectorCollision}`)
+  const paths: Record<string, string> = {}
+  for (const id of connectorIDs) {
+    const label = bases.get(id) === labels.get(id) ? labels.get(id)! : undefined
+    const operations = new Map(
+      catalog
+        .filter((entry) => entry.id === id)
+        .map((entry) => {
+          const normalized = slug(entry.tool.name, 56)
+          const stripped =
+            label !== undefined && normalized.toLowerCase().startsWith(`${label}_`)
+              ? normalized.slice(label.length + 1)
+              : normalized
+          const operation = usable(stripped, entry.tool.name)
+            ? stripped
+            : usable(normalized, entry.tool.name)
+              ? normalized
+              : `operation_${short(`${id}\0${entry.tool.name}`)}`
+          return [entry.tool.name, operation] as const
+        }),
+    )
+    const names = disambiguate(operations, (name) => short(`${id}\0${name}`))
+    const operationCollision = collision(names)
+    if (operationCollision)
+      return new Error(`Account connector paths collide at ${provider}.${connectors.get(id)}.${operationCollision}`)
+    for (const [name, operation] of names)
+      paths[securityName(provider, id, name)] = `${provider}.${connectors.get(id)}.${operation}`
+  }
+  return paths
+}
+
+const reserved = new Set(["__proto__", "constructor", "prototype"])
+
+const short = (value: string) => Hash.sha256(value).slice(0, 6)
+
+const slug = (value: string, length: number) =>
+  value
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+/, "")
+    .slice(0, length)
+    .replace(/_+$/, "")
+
+const usable = (value: string, source: string) =>
+  /^[A-Za-z]/.test(value) && !reserved.has(value) && !reserved.has(source.trim().toLowerCase())
+
+function disambiguate(segments: ReadonlyMap<string, string>, suffix: (key: string) => string) {
+  const counts = new Map<string, number>()
+  for (const segment of segments.values()) counts.set(segment, (counts.get(segment) ?? 0) + 1)
+  return new Map(
+    [...segments].map(
+      ([key, segment]) => [key, counts.get(segment)! > 1 ? `${segment}_${suffix(key)}` : segment] as const,
+    ),
+  )
+}
+
+function collision(segments: ReadonlyMap<string, string>) {
+  const seen = new Set<string>()
+  for (const segment of segments.values()) {
+    if (seen.has(segment)) return segment
+    seen.add(segment)
+  }
+  return undefined
+}

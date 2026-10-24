@@ -138,26 +138,24 @@ describe("empty segments", () => {
 })
 
 describe("canonical path collisions", () => {
-  test("the last definition supplied for a canonical path wins", async () => {
-    const runtime = CodeMode.make({
-      tools: { "issues.list": echo("First", "first"), issues: { list: echo("Second", "second") } },
-    })
-    expect(await value(runtime, `return await tools.issues.list({})`)).toBe("second")
-    expect(runtime.catalog()).toHaveLength(1)
-    expect(runtime.catalog()[0]?.description).toBe("Second")
+  test("two definitions for one canonical path are rejected in either order", () => {
+    for (const tools of [
+      { "issues.list": echo("First", "first"), issues: { list: echo("Second", "second") } },
+      { issues: { list: echo("Second", "second") }, "issues.list": echo("First", "first") },
+    ])
+      expect(() => CodeMode.make({ tools })).toThrow("Tool path 'issues.list' is defined more than once.")
   })
 
-  test("overriding one path keeps sibling tools from both shapes", async () => {
+  test("distinct sibling paths from both shapes coexist", async () => {
     const runtime = CodeMode.make({
       tools: {
-        "issues.list": echo("First list", "first"),
-        issues: { list: echo("Second list", "second"), get: echo("Get issue", "got") },
+        "issues.list": echo("List issues", "listed"),
+        issues: { get: echo("Get issue", "got") },
         "issues.close": echo("Close issue", "closed"),
       },
     })
-    // Catalog order follows first appearance of each canonical path.
     expect(runtime.catalog().map((tool) => tool.path)).toEqual(["issues.list", "issues.get", "issues.close"])
-    expect(await value(runtime, `return await tools.issues.list({})`)).toBe("second")
+    expect(await value(runtime, `return await tools.issues.list({})`)).toBe("listed")
     expect(await value(runtime, `return await tools.issues.get({})`)).toBe("got")
     expect(await value(runtime, `return await tools.issues.close({})`)).toBe("closed")
   })

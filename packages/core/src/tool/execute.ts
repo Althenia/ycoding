@@ -39,7 +39,7 @@ type CollectedFiles = {
 interface Registration {
   readonly tool: AnyTool
   readonly name: string
-  readonly namespace?: string
+  readonly path: string
 }
 
 export const create = (registrations: ReadonlyMap<string, Registration>) => {
@@ -56,9 +56,7 @@ export const create = (registrations: ReadonlyMap<string, Registration>) => {
         output: child.outputSchema,
         run: (input) => invoke(name, registration, input),
       })
-      const path =
-        registration.namespace === undefined ? registration.name : `${registration.namespace}.${registration.name}`
-      tools[path] = value
+      tools[registration.path] = value
     }
     return CodeMode.make<typeof tools>({ tools, ...hooks })
   }

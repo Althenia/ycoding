@@ -78,6 +78,8 @@ interface Tools {
 
 Registration replaces unsupported name characters with `_` and reserves `execute` for Code Mode.
 
+Code Mode calls each tool at its normalized name, or at `<namespace>.<name>` when the registration options set `namespace`. The `paths` option maps tool names to replacement Code Mode paths; each dot-separated segment must match `^[A-Za-z][A-Za-z0-9_-]{0,63}$`. A path changes neither the registered name nor permission or capability matching. Two visible tools with one Code Mode path fail the request, and Code Mode rejects two definitions for one canonical path.
+
 A Location plugin receives only the narrow `Tools` registration capability, not the internal registry. Each activation acquires the Location's services, constructs its tools, and registers them in a fresh plugin-owned Scope.
 
 Within one placement:

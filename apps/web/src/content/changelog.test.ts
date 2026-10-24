@@ -11,7 +11,7 @@ describe("release entries", () => {
     const entry = RELEASES[0]
     expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-23", tags: ["Added", "Changed", "Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Projects", "Master", "member Sessions", "desktop Sessions panel", "phone sheet", "interruption", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified", "Manual", "YOLO", "Auto", "Autonomous", "no model call", "hard and custom-rule reviews", "match dismissals", "pending reviews", "ycoding update", "YCODING_VERSION=0.11.0"])
+    for (const fragment of ["Projects", "Master", "member Sessions", "desktop Sessions panel", "phone sheet", "interruption", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified", "Manual", "YOLO", "Auto", "Autonomous", "no model call", "hard and custom-rule reviews", "match dismissals", "pending reviews", "ycoding update", "YCODING_VERSION=0.11.0", "tools.chatgpt.ycoding.session_catalog", "saved approvals", "duplicate Code Mode paths"])
       expect(text).toContain(fragment)
     expect(after("0.11.0")?.version).toBe("0.10.25")
   })

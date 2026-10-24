@@ -154,8 +154,8 @@ ultimate source of truth.
       `.then`/`.catch` handlers and collection callbacks, but remain opaque references that cannot cross the data
       boundary.
 - [ ] Thenable assimilation; objects with a callable `then` field remain plain data.
-- [x] Dotted tool names are canonicalized into namespace paths; a path can be both callable and a namespace, and the
-      last definition supplied for a canonical path wins.
+- [x] Dotted tool names are canonicalized into namespace paths; a path can be both callable and a namespace, and two
+      definitions for one canonical path are rejected.
 - [x] Tool path segments may be named `constructor`, `prototype`, or `__proto__` because paths use inert Map keys.
 - [x] Outbound tool arguments follow JSON serialization semantics, like `JSON.stringify`: object properties with
       `undefined` values are dropped, `undefined` array elements and non-finite numbers become `null`, and sparse

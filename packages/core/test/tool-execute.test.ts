@@ -13,7 +13,7 @@ test("execute preserves successful results with visible unhandled rejections", a
     output: Schema.String,
     execute: () => Effect.fail(new Tool.Failure({ message: "Lookup refused" })),
   })
-  const execute = ExecuteTool.create(new Map([["fail", { tool: child, name: "fail" }]]))
+  const execute = ExecuteTool.create(new Map([["fail", { tool: child, name: "fail", path: "fail" }]]))
   const result = await Effect.runPromise(
     Tool.settle(
       execute,
@@ -61,10 +61,10 @@ test("execute provider definition stays stable while runtime search follows the 
     execute: ({ query }) => Effect.succeed(query),
   })
   const githubExecute = ExecuteTool.create(
-    new Map([["github_issue", { tool: github, name: "issue", namespace: "github" }]]),
+    new Map([["github_issue", { tool: github, name: "issue", path: "github.issue" }]]),
   )
   const slackExecute = ExecuteTool.create(
-    new Map([["slack_channel", { tool: slack, name: "channel", namespace: "slack" }]]),
+    new Map([["slack_channel", { tool: slack, name: "channel", path: "slack.channel" }]]),
   )
 
   expect(Tool.definition("execute", githubExecute)).toEqual(Tool.definition("execute", slackExecute))
@@ -112,8 +112,8 @@ test("execute supports callable namespace tools", async () => {
   })
   const execute = ExecuteTool.create(
     new Map([
-      ["slack_admin", { tool: callable, name: "admin", namespace: "slack" }],
-      ["slack_admin_create", { tool: child, name: "create", namespace: "slack.admin" }],
+      ["slack_admin", { tool: callable, name: "admin", path: "slack.admin" }],
+      ["slack_admin_create", { tool: child, name: "create", path: "slack.admin.create" }],
     ]),
   )
   const result = await Effect.runPromise(

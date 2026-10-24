@@ -286,7 +286,7 @@ export const copyOut = (value: unknown, mode: CopyOutMode): unknown => {
   return value
 }
 
-// Dots in tool names are namespace separators; the last definition for a canonical path wins.
+// Dots in tool names are namespace separators; two definitions for one canonical path are rejected.
 type ToolNode<R> = {
   definition?: Definition<R>
   readonly children: Map<string, ToolNode<R>>
@@ -294,20 +294,27 @@ type ToolNode<R> = {
 
 const toolTrie = <R>(tools: Tools<R>): ToolNode<R> => {
   const root: ToolNode<R> = { children: new Map() }
-  const insert = (node: ToolNode<R>, group: Tools<R>): void => {
+  const insert = (node: ToolNode<R>, group: Tools<R>, prefix: ReadonlyArray<string>): void => {
     for (const [name, value] of Object.entries(group)) {
       let current = node
+      const path = [...prefix]
       for (const segment of name.split(".")) {
         if (segment === "") throw new TypeError(`Tool name '${name}' contains an empty segment.`)
         const child = current.children.get(segment) ?? { children: new Map() }
         current.children.set(segment, child)
         current = child
+        path.push(segment)
       }
-      if (isDefinition(value)) current.definition = value
-      else insert(current, value)
+      if (!isDefinition(value)) {
+        insert(current, value, path)
+        continue
+      }
+      if (current.definition !== undefined)
+        throw new TypeError(`Tool path '${path.join(".")}' is defined more than once.`)
+      current.definition = value
     }
   }
-  insert(root, tools)
+  insert(root, tools, [])
   return root
 }
 

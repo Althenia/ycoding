@@ -18,6 +18,7 @@ import {
   RegistrationError,
   settle,
   validateNamespace,
+  validPath,
   type AnyTool,
 } from "./tool"
 import { Tools } from "./tools"
@@ -122,6 +123,7 @@ const registryLayer = Layer.effect(
       readonly tool: AnyTool
       readonly name: string
       readonly namespace?: string
+      readonly path: string
       readonly codemode: boolean
     }
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
@@ -216,7 +218,15 @@ const registryLayer = Layer.effect(
         const planned = yield* Effect.forEach(registrations, ({ tools, options }) =>
           Effect.gen(function* () {
             if (options?.namespace !== undefined) yield* validateNamespace(options.namespace)
-            const entries = registrationEntries(tools, options?.namespace)
+            const entries = registrationEntries(tools, options?.namespace, options?.paths)
+            const invalid = entries.find((entry) => !validPath(entry.path))
+            if (invalid)
+              return yield* Effect.fail(
+                new RegistrationError({
+                  name: invalid.key,
+                  message: `Invalid Code Mode path: ${JSON.stringify(invalid.path)}`,
+                }),
+              )
             const codemode = options?.codemode ?? true
             const reserved = codemode ? undefined : entries.find((entry) => entry.key === "execute")
             if (reserved)
@@ -241,6 +251,7 @@ const registryLayer = Layer.effect(
                         tool: entry.tool,
                         name: entry.name,
                         namespace: entry.namespace,
+                        path: entry.path,
                         codemode,
                       },
                     },
@@ -280,13 +291,19 @@ const registryLayer = Layer.effect(
         }),
       )
       for (const registration of registrations)
-        for (const entry of registrationEntries(registration.tools, registration.options?.namespace)) {
+        for (const entry of registrationEntries(
+          registration.tools,
+          registration.options?.namespace,
+          registration.options?.paths,
+        )) {
           if (entry.key === "execute") throw new Error('Tool name "execute" is reserved for CodeMode')
           if (selected.has(entry.key)) throw new Error(`Request tool collides with a registered tool: ${entry.key}`)
+          if (!validPath(entry.path)) throw new Error(`Invalid Code Mode path: ${JSON.stringify(entry.path)}`)
           selected.set(entry.key, {
             tool: entry.tool,
             name: entry.name,
             namespace: entry.namespace,
+            path: entry.path,
             codemode: registration.options?.codemode ?? true,
           })
         }
@@ -295,6 +312,15 @@ const registryLayer = Layer.effect(
         if (!ConfigCapabilities.allowsTool(capabilities, name)) continue
         if (registration.codemode) codemode.set(name, registration)
         else direct.set(name, registration)
+      }
+      const callable = new Map<string, string>()
+      for (const [name, registration] of codemode) {
+        const existing = callable.get(registration.path)
+        if (existing !== undefined)
+          throw new Error(
+            `Code Mode path ${registration.path} is claimed by both ${[existing, name].toSorted().join(" and ")}`,
+          )
+        callable.set(registration.path, name)
       }
       const execute =
         codemode.size > 0 && !whollyDisabled("execute", rules) && ConfigCapabilities.allowsTool(capabilities, "execute")

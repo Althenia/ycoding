@@ -364,7 +364,7 @@ test("keeps the CodeMode execute namespace stable across dynamic catalogs", () =
       output: Schema.String,
       execute: ({ query }) => Effect.succeed(query),
     })
-    const execute = ExecuteTool.create(new Map([[`${namespace}_${name}`, { tool: child, name, namespace }]]))
+    const execute = ExecuteTool.create(new Map([[`${namespace}_${name}`, { tool: child, name, path: `${namespace}.${name}` }]]))
     return Tool.definition("execute", execute)
   }
   const first = registered("github", "issue", "Find a GitHub issue")
