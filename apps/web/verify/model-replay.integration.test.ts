@@ -47,7 +47,7 @@ async function harness(initial: ModelRefView | null = { providerID: "openai", id
   let current: ModelRefView | undefined = initial ?? undefined
   let catalogModels: readonly ModelOption[] = models
   let refused = false
-  let promptUnknown = false
+  let promptRejected = false
   let sessionRevision = 2
   const session = () => ({ id: "ses_a", title: "Model replay", agent: "god", model: current === undefined ? undefined : { ...current }, time: { created: 1, updated: sessionRevision++ } })
   const relay = await startRelayDouble({
@@ -57,9 +57,9 @@ async function harness(initial: ModelRefView | null = { providerID: "openai", id
       if (request.operation === "session.catalog" || request.operation === "workspace.catalog") return { ok: true, value: { defaultModel, agents: [{ id: "god", name: "God", mode: "primary" }], models: catalogModels, commands: [{ name: "plan", description: "Plan" }], skills: [], references: [], resources: [] } }
       if (request.operation === "session.list") return { ok: true, value: { data: [session()], cursor: {} } }
       if (request.operation === "session.get") return { ok: true, value: { data: session() } }
-      if (request.operation === "session.prompt" && promptUnknown) {
-        promptUnknown = false
-        return { ok: false, code: "outcome_unknown", message: "Admission answer was lost" }
+      if (request.operation === "session.prompt" && promptRejected) {
+        promptRejected = false
+        return { ok: false, code: "internal_error", message: "Prompt admission was rejected" }
       }
       if (request.operation !== "session.switchModel") return "default"
       if (refused) return { ok: false, code: "forbidden", message: "Switch refused" }
@@ -79,7 +79,7 @@ async function harness(initial: ModelRefView | null = { providerID: "openai", id
   await wait(page, `window.modelReplayStore?.state().transport.kind === 'open' && window.modelReplayStore.state().sessions.length > 0`)
   await page.evaluate(`window.modelReplayStore.selectSession('ses_a')`)
   await wait(page, `document.querySelector('.model-control__trigger')?.disabled === false`)
-  return { page, relay, current: () => current, refuse: () => { refused = true }, failNextPrompt: () => { promptUnknown = true }, refreshSessionInfo: () => relay.pushSessions(["ses_a"]), setCatalogModels: (next: readonly ModelOption[]) => { catalogModels = next }, external: (model: ModelRefView) => { current = model; relay.pushEvent("ses_a", { type: "session.model.selected", data: { sessionID: "ses_a", model } }) }, close: async () => { await page.close(); await relay.stop() } }
+  return { page, relay, current: () => current, refuse: () => { refused = true }, rejectNextPrompt: () => { promptRejected = true }, refreshSessionInfo: () => relay.pushSessions(["ses_a"]), setCatalogModels: (next: readonly ModelOption[]) => { catalogModels = next }, external: (model: ModelRefView) => { current = model; relay.pushEvent("ses_a", { type: "session.model.selected", data: { sessionID: "ses_a", model } }) }, close: async () => { await page.close(); await relay.stop() } }
 }
 async function choose(page: Page, name: string) {
   await page.evaluate(`document.querySelector('.model-control__trigger').click()`)
@@ -414,7 +414,7 @@ test("reselecting the current named profile forces one confirmed rebind before p
 test("a confirmed same-profile rebind is not repeated when retrying rejected prompt admission", async () => {
   const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
   try {
-    h.failNextPrompt()
+    h.rejectNextPrompt()
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
@@ -433,7 +433,7 @@ test("a confirmed same-profile rebind is not repeated when retrying rejected pro
 test("a retry fails closed if another client changes the model after the confirmed rebind", async () => {
   const h = await harness({ providerID: "openai", id: "model-a", profile: "profileA" })
   try {
-    h.failNextPrompt()
+    h.rejectNextPrompt()
     await h.page.evaluate(`document.querySelector('.model-control__trigger').click()`)
     await h.page.evaluate(`document.querySelector('[aria-label="Profile"]').click()`)
     await h.page.evaluate(`[...document.querySelectorAll('[role="option"]')].find(option=>option.textContent.includes('profileA')).click()`)
@@ -647,7 +647,7 @@ test("an existing Session without a model uses the catalog default identity, not
   } finally { await h.close() }
 })
 
-test("named profile choices replace the body inside the same full-screen model panel on phones", async () => {
+test("named profile choices replace the body inside the same content-sized model panel on phones", async () => {
   const h = await harness({ providerID: "openai", id: "model-a" }, undefined, undefined, [390, 844])
   try {
     await wait(h.page, `document.querySelector('.composer__mobile-trigger')?.disabled === false`)
@@ -657,10 +657,18 @@ test("named profile choices replace the body inside the same full-screen model p
     await wait(h.page, `document.querySelector('.composer__selection-sheet .model-control__trigger')?.disabled === false`)
     await h.page.evaluate(`document.querySelector('.composer__selection-sheet .model-control__trigger')?.click()`)
     await wait(h.page, `document.querySelector('.model-control__profile [aria-label="Profile"]') !== null`)
-    await h.page.evaluate(`document.querySelector('.model-control__profile [aria-label="Profile"]').click()`)
+    expect(await h.page.evaluate<boolean>(`(() => { const surface=document.querySelector('.model-control__surface'); document.querySelector('.model-control__profile [aria-label="Profile"]').click(); return surface === document.querySelector('.model-control__surface'); })()`)).toBe(true)
     await wait(h.page, `document.querySelector('.model-control__surface[role="dialog"][aria-label="Choose profile"]') !== null`)
-    expect(await h.page.evaluate<{ width: number; height: number; modal: string | null }>(`(() => { const surface=document.querySelector('.model-control__surface[aria-label="Choose profile"]'),rect=surface.getBoundingClientRect(); return { width:rect.width, height:rect.height, modal:surface.getAttribute('aria-modal') }; })()`)).toMatchObject({ modal: "true" })
-    expect(await h.page.evaluate<boolean>(`(() => { const rect=document.querySelector('.model-control__surface[aria-label="Choose profile"]').getBoundingClientRect(); return rect.width >= innerWidth - 16 && rect.height >= innerHeight - 24; })()`)).toBe(true)
+    const geometry = await h.page.evaluate<{ width: number; height: number; bottom: number; viewportWidth: number; viewportHeight: number; viewportBottom: number; modal: string | null; panels: number; options: number; optionsVisible: boolean }>(`(() => { const surface=document.querySelector('.model-control__surface[aria-label="Choose profile"]'),rect=surface.getBoundingClientRect(),options=[...surface.querySelectorAll('[role="option"]')],viewport=visualViewport; return { width:rect.width, height:rect.height, bottom:rect.bottom, viewportWidth:viewport?.width ?? innerWidth, viewportHeight:viewport?.height ?? innerHeight, viewportBottom:(viewport?.offsetTop ?? 0)+(viewport?.height ?? innerHeight), modal:surface.getAttribute('aria-modal'), panels:document.querySelectorAll('.model-control__surface').length, options:options.length, optionsVisible:options.every(option=>{const item=option.getBoundingClientRect();return item.height>0&&item.top>=rect.top&&item.bottom<=rect.bottom}) }; })()`)
+    expect(geometry.modal).toBe("true")
+    expect(geometry.panels).toBe(1)
+    expect(geometry.width).toBeGreaterThanOrEqual(geometry.viewportWidth - 16)
+    expect(geometry.width).toBeLessThanOrEqual(geometry.viewportWidth)
+    expect(geometry.height).toBeGreaterThan(0)
+    expect(geometry.height).toBeLessThan(geometry.viewportHeight - 24)
+    expect(geometry.bottom).toBeCloseTo(geometry.viewportBottom, 0)
+    expect(geometry.options).toBe(3)
+    expect(geometry.optionsVisible).toBe(true)
     expect(await h.page.evaluate<boolean>(`[...document.querySelectorAll('.model-control__surface [role="option"]')].some(option=>option.textContent.includes('profileA'))`)).toBe(true)
   } finally { await h.close() }
 })
