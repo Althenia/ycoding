@@ -1,0 +1,314 @@
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import { TextareaRenderable } from "@opentui/core"
+import { json, sessionSnapshot } from "../fixture/tui-client"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+
+const names = [
+  "TMPDIR",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_STATE_HOME",
+  "YCODING_TEST_HOME",
+  "YCODING_TEST_XDG_ROOT",
+] as const
+const previous = new Map(names.map((name) => [name, process.env[name]]))
+let root = ""
+
+beforeAll(async () => {
+  root = await mkdtemp(path.join(tmpdir(), "ycoding-dots-screen-"))
+  process.env.TMPDIR = root
+  process.env.XDG_CACHE_HOME = path.join(root, "cache")
+  process.env.XDG_CONFIG_HOME = path.join(root, "config")
+  process.env.XDG_DATA_HOME = path.join(root, "data")
+  process.env.XDG_STATE_HOME = path.join(root, "state")
+  process.env.YCODING_TEST_HOME = root
+  process.env.YCODING_TEST_XDG_ROOT = root
+})
+
+afterAll(async () => {
+  for (const name of names) {
+    const value = previous.get(name)
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+  await rm(root, { recursive: true, force: true })
+})
+
+async function withDotsScreen(
+  status: (bound: boolean, target: unknown) => Response | undefined,
+  run: (view: {
+    screen: Awaited<ReturnType<Awaited<typeof import("./harness")>["renderScreen"]>>
+    sent: unknown[]
+    prompts: unknown[]
+    requests: string[]
+    target: Record<string, string>
+    isBound: () => boolean
+    wait: (predicate: () => boolean) => Promise<void>
+  }) => Promise<void>,
+) {
+  const { renderScreen } = await import("./harness")
+  const { Global } = await import("@ycoding-ai/core/global")
+  expect(Global.Path.data.startsWith(root + path.sep)).toBe(true)
+  expect(Global.Path.tmp.startsWith(root + path.sep)).toBe(true)
+  const sessionID = "ses_dots_screen"
+  const directory = "/tmp/ycoding/dots-screen"
+  const location = { directory, project: { id: "proj_dots_screen", directory } }
+  const model = { providerID: "openai", id: "synthetic" }
+  const session = {
+    id: sessionID,
+    title: "External peer",
+    projectID: location.project.id,
+    location: { directory },
+    agent: "build",
+    model,
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 1, updated: 2 },
+  }
+  const target = {
+    profile: "fixture-profile",
+    dotID: "dot-1",
+    threadID: "thread-1",
+    generation: "generation-1",
+    label: "Fixture Dot / conversation",
+  }
+  const sent: unknown[] = []
+  const prompts: unknown[] = []
+  let bound = false
+  const requests: string[] = []
+  const screen = await renderScreen({
+    width: 120,
+    height: 36,
+    kittyKeyboard: true,
+    args: { sessionID },
+    sessionReady: true,
+    settle: "Message YCoding…",
+    config: { animations: false, session: { sidebar: "hide" } },
+    route: async (url, request) => {
+      requests.push(`${request.method} ${url.pathname}`)
+      if (url.pathname.endsWith("/wait")) return new Response(null, { status: 204 })
+      if (url.pathname.endsWith("/dots/targets")) return json({ data: [target] })
+      if (url.pathname.endsWith("/dots/bind")) {
+        expect(await request.json()).toEqual(target)
+        bound = true
+        return json({ data: { enabled: true, state: "connected", target } })
+      }
+      if (url.pathname.endsWith("/dots/send")) {
+        const body = await request.json()
+        sent.push(body)
+        return json({ data: { messageID: body.id, status: "accepted", turnID: "turn-1" } })
+      }
+      if (url.pathname.endsWith("/dots")) return status(bound, target)
+      if (request.method === "POST" && url.pathname.endsWith("/prompt")) {
+        prompts.push(await request.json())
+        return json({})
+      }
+      if (request.method === "POST") return json({})
+      if (url.pathname === "/api/location") return json(location)
+      if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
+      if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
+      if (url.pathname.endsWith("/snapshot")) return sessionSnapshot(sessionID, [], { session })
+      if (url.pathname.endsWith("/subagent"))
+        return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
+      if (["pending", "permission", "todo", "skills"].some((part) => url.pathname.endsWith(`/${part}`)))
+        return json({ data: [] })
+      if (url.pathname === "/api/integration")
+        return json({
+          location,
+          data: [
+            {
+              id: "openai",
+              name: "OpenAI",
+              methods: [],
+              connections: [{ type: "credential", id: "cred_fixture", label: "fixture-profile", active: false }],
+            },
+          ],
+        })
+      if (url.pathname === "/api/integration/openai")
+        return json({
+          location,
+          data: {
+            id: "openai",
+            name: "OpenAI",
+            methods: [],
+            connections: [{ type: "credential", id: "cred_fixture", label: "fixture-profile", active: false }],
+          },
+        })
+      if (url.pathname === "/api/agent")
+        return json({
+          location,
+          data: [
+            {
+              id: "build",
+              name: "Build",
+              request: { headers: {}, body: {} },
+              mode: "primary",
+              hidden: false,
+              permissions: [],
+            },
+          ],
+        })
+      if (url.pathname === "/api/model" || url.pathname === "/api/model/default") {
+        const info = {
+          ...model,
+          modelID: model.id,
+          name: "Synthetic",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          variants: [],
+          time: { released: 0 },
+          cost: [],
+          status: "active",
+          enabled: true,
+          limit: { context: 200000, output: 32000 },
+        }
+        return json({ location, data: url.pathname.endsWith("default") ? { ...info, selection: model } : [info] })
+      }
+      return undefined
+    },
+  })
+  const wait = async (predicate: () => boolean) => {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      if (predicate()) return
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    throw new Error(`Dots transition missing:\n${screen.frame()}`)
+  }
+  try {
+    await run({ screen, sent, prompts, requests, target, isBound: () => bound, wait })
+  } finally {
+    await screen.dispose()
+  }
+}
+
+const enabledStatus = (bound: boolean, target: unknown) =>
+  json({ data: { enabled: true, state: "connected", ...(bound ? { target } : {}) } })
+
+test("bare Dots command confirms an explicit destination and waits for a separate Send", async () => {
+  await withDotsScreen(enabledStatus, async ({ screen, sent, prompts, target, isBound, wait }) => {
+    await screen.mouse.click(
+      3,
+      screen.lines().findIndex((line) => line.includes("Message YCoding…")),
+    )
+    const editor = screen.renderer.currentFocusedEditor
+    if (!(editor instanceof TextareaRenderable)) throw new Error("Composer not focused")
+    await screen.input.typeText("/dots")
+    await wait(() => screen.frame().includes("Select Dots destination"))
+    expect(sent).toEqual([])
+    screen.input.pressEnter()
+    await wait(() => editor.plainText === "/dots ")
+    expect(sent).toEqual([])
+    screen.input.pressEnter()
+    await wait(
+      () =>
+        !editor.focused &&
+        screen.frame().includes("Select ChatGPT profile for Dots") &&
+        screen.frame().includes("fixture-profile"),
+    )
+    screen.input.pressEnter()
+    await wait(() => screen.frame().includes("Select Dot and conversation"))
+    screen.input.pressEnter()
+    await wait(() => screen.frame().includes("Confirm Dots destination"))
+    expect(isBound()).toBe(false)
+    expect(sent).toEqual([])
+    screen.input.pressEnter()
+    await wait(() => isBound() && screen.frame().includes("Dots · Fixture Dot / conversation"))
+    expect(sent).toEqual([])
+    editor.setText("/dots chosen message")
+    editor.focus()
+    screen.input.pressEnter()
+    await wait(() => sent.length === 1)
+    await wait(() => editor.plainText === "")
+    expect(sent[0]).toMatchObject({ text: "chosen message", expectedTarget: target })
+    expect(Object.keys(sent[0] as object).sort()).toEqual(["expectedTarget", "id", "text"])
+    expect(prompts).toEqual([])
+  })
+}, 30000)
+
+test("enabled Dots is offered in the command palette", async () => {
+  await withDotsScreen(enabledStatus, async ({ screen, requests, wait }) => {
+    await wait(() => requests.includes("GET /api/session/ses_dots_screen/dots"))
+    await screen.renderOnce()
+    screen.input.pressKey("p", { ctrl: true })
+    await wait(() => screen.frame().includes("Search"))
+    await screen.input.typeText("Dots dest")
+    await wait(() => screen.frame().includes("Select Dots destination"))
+  })
+}, 30000)
+
+const disabledStatuses = {
+  disabled: () => json({ data: { enabled: false, state: "disconnected" } }),
+  omitted: () => json({ data: { state: "connected" } }),
+  unavailable: () => new Response("unavailable", { status: 503 }),
+}
+
+test.each(Object.entries(disabledStatuses))(
+  "Dots is absent from slash completion when the capability is %s",
+  async (_name, status) => {
+    await withDotsScreen(status, async ({ screen, requests, wait }) => {
+      await screen.mouse.click(
+        3,
+        screen.lines().findIndex((line) => line.includes("Message YCoding…")),
+      )
+      await wait(() => requests.includes("GET /api/session/ses_dots_screen/dots"))
+      await screen.input.typeText("/")
+      await wait(() => screen.frame().includes("/compact"))
+      await screen.input.typeText("dots")
+      await screen.renderOnce()
+      expect(screen.frame()).not.toContain("Select Dots destination")
+    })
+  },
+  30000,
+)
+
+test.each(Object.entries(disabledStatuses))(
+  "A typed /dots is refused without a model prompt or native call when the capability is %s",
+  async (_name, status) => {
+    await withDotsScreen(status, async ({ screen, sent, prompts, requests, wait }) => {
+      await screen.mouse.click(
+        3,
+        screen.lines().findIndex((line) => line.includes("Message YCoding…")),
+      )
+      const editor = screen.renderer.currentFocusedEditor
+      if (!(editor instanceof TextareaRenderable)) throw new Error("Composer not focused")
+      const statusReads = () => requests.filter((request) => request === "GET /api/session/ses_dots_screen/dots").length
+      await wait(() => statusReads() === 1)
+      for (const character of "/dots hello") {
+        await screen.input.typeText(character)
+        await screen.renderOnce()
+      }
+      screen.input.pressEnter()
+      await wait(() => screen.frame().includes("Dots is disabled"))
+      expect(editor.plainText).toBe("/dots hello")
+      expect(sent).toEqual([])
+      expect(prompts).toEqual([])
+      expect(statusReads()).toBe(1)
+      expect(
+        requests.filter(
+          (request) =>
+            request.includes("/dots/") || request.endsWith("/prompt") || request === "GET /api/integration/openai",
+        ),
+      ).toEqual([])
+    })
+  },
+  30000,
+)
+
+test.each(Object.entries(disabledStatuses))(
+  "Dots is absent from the command palette when the capability is %s",
+  async (_name, status) => {
+    await withDotsScreen(status, async ({ screen, requests, wait }) => {
+      await wait(() => requests.includes("GET /api/session/ses_dots_screen/dots"))
+      await screen.renderOnce()
+      screen.input.pressKey("p", { ctrl: true })
+      await wait(() => screen.frame().includes("Search"))
+      await screen.input.typeText("Dots dest")
+      await screen.renderOnce()
+      expect(screen.frame()).not.toContain("Select Dots destination")
+    })
+  },
+  30000,
+)

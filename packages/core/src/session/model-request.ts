@@ -16,6 +16,7 @@ import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Context, Effect, Layer } from "effect"
 import { Config } from "../config"
 import { AccountConnectors } from "../account-connectors"
+import { DotsRuntimeNode } from "../dots/node"
 import { ConfigEfficiency } from "../config/efficiency"
 import { Database } from "../database/database"
 import { CoordinationService } from "../coordination/index"
@@ -118,6 +119,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const coordination = yield* CoordinationService.Service
       const config = yield* Config.Service
       const connectors = yield* AccountConnectors.Service
+      const dotsTools = yield* DotsRuntimeNode.RequestTools
       const cacheRuntime = yield* SessionCacheRuntime.Service
       const continuation = yield* SessionContinuation.Service
       const providerState = yield* SessionProviderState.Service
@@ -158,17 +160,19 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const permissions = [...basePermissions, ...CoordinationAccess.rules(scoped)]
         const executableTools = toolsDisabled
           ? undefined
-          : yield* registry.materialize(
-              permissions,
-              Config.capabilities(configEntries),
-              yield* connectors
+          : yield* registry.materialize(permissions, Config.capabilities(configEntries), [
+              ...(yield* connectors
                 .tools({
                   profile: resolved.ref.providerID === "openai" ? resolved.ref.profile : undefined,
                   binding: resolved.ref.providerID === "openai" ? resolved.profileBinding : undefined,
-                  claude: resolved.ref.providerID === "anthropic" ? { profile: resolved.ref.profile, binding: resolved.profileBinding } : undefined,
+                  claude:
+                    resolved.ref.providerID === "anthropic"
+                      ? { profile: resolved.ref.profile, binding: resolved.profileBinding }
+                      : undefined,
                 })
-                .pipe(Effect.orDie),
-            )
+                .pipe(Effect.orDie)),
+              ...(yield* dotsTools.registrations(session.id)),
+            ])
         const system = baseSystem(input.context)
         const directOpenAIResponses =
           model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)
@@ -584,6 +588,7 @@ export function configured(options?: SessionModelHeaders.Options) {
       ToolRegistry.node,
       Config.node,
       AccountConnectors.node,
+      DotsRuntimeNode.requestToolsNode,
       Database.node,
       CoordinationService.node,
       SessionCacheRuntime.node,

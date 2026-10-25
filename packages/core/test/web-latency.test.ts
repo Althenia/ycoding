@@ -185,3 +185,19 @@ it.effect("defaults to undecided, persists decisions and refuses disabled append
     expect(yield* database.db.select().from(WebLatencyTable).all()).toHaveLength(1)
   }),
 )
+
+it.effect("round-trips consented Dots request timings with only the closed sample fields", () =>
+  Effect.gen(function* () {
+    const consent = yield* TelemetryConsent.Service
+    yield* consent.set({ enabled: true, noticeVersion: 1 })
+    const db = (yield* Database.Service).db
+    const dots = Schema.decodeUnknownSync(Telemetry.Sample)({ ...sample, operation: "session.dots.send" })
+    expect(yield* WebLatency.append(db, [dots])).toEqual({ accepted: 1 })
+    const rows = yield* db.select().from(WebLatencyTable).all()
+    expect(rows.map((row) => row.sample)).toEqual([dots])
+    expect(Object.keys(rows[0].sample).sort()).toEqual(
+      ["at", "kind", "operation", "outcome", "queueMs", "settlementMs", "totalMs"].sort(),
+    )
+    expect((yield* WebLatency.list(db, {})).data).toEqual([{ receivedAt: 0, sample: dots }])
+  }),
+)

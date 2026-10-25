@@ -137,7 +137,7 @@ Use the generated YCoding schema endpoint rather than a different product's sche
 
 ## Capability toggles
 
-The `capabilities` object turns runtime capabilities off so a Session sees exactly the instructions, skills, tools, and integrations a run intends, for example an evaluation without `AGENTS.md`, with one skill, or without MCP. Every field is optional; an omitted field keeps the default behavior. It works in every configuration layer, including global and project files, `YCODING_CONFIG_CONTENT`, and `ycoding run --config`. Each leaf field is last-wins across layers in the normal [precedence](#runtime-configuration-discovery-and-precedence) order, and a list replaces the list from a lower layer instead of merging with it.
+The `capabilities` object controls runtime capability availability so a Session sees exactly the instructions, skills, tools, and integrations a run intends, for example an evaluation without `AGENTS.md`, with one skill, or without MCP. Every field is optional; an omitted field keeps its documented default. The object works in every configuration layer, including global and project files, `YCODING_CONFIG_CONTENT`, and `ycoding run --config`. Each leaf field is last-wins across layers in the normal [precedence](#runtime-configuration-discovery-and-precedence) order, and a list replaces the list from a lower layer instead of merging with it.
 
 ```jsonc
 {
@@ -328,7 +328,7 @@ each client through its existing authorization flow. An ordinary same-epoch sock
 grants. Reusing a single-use refresh token also revokes its client grant; do not reuse a revoked token
 or switch accounts to avoid reauthorization. The two revocation paths are distinct.
 
-Relay MCP lets an MCP client such as ChatGPT control the machine's Sessions through the relay. It is off by default. Turning Remote on never enables it, and it runs only while Remote is on. The server's authenticated `GET` and `PUT /api/remote/mcp` (`{ enabled }`) operations switch and read it for both the CLI and the TUI, and the state is `off`, `connecting`, `on`, or `error` with an optional message and, when `on`, the device URL `<relay origin>/api/mcp/devices/<device ID>`. Use that URL as the MCP server URL in the client. The relay is the OAuth issuer; the client registers by Client ID Metadata Document or Dynamic Client Registration as a public client, then an allowlisted Google owner of the device signs in again and consents to the client. One scope, `ycoding:remote`, grants the published tool surface: remote operations except browser subscriptions, message streaming, attachment upload, telemetry consent, and latency samples, plus `session_create_in_directory`. That scope covers every Session on the backend, including prompts, interrupts, question, form, permission, and review decisions, persistent Always approvals where the runtime offers them, autonomy category mode and goal changes, provider connections, shell controls, and usage reads. Local HTTP apps require separate explicit registration. The existing autonomy, guardrail, and hard-review rules apply to these tools unchanged. Access tokens last five minutes and refresh tokens rotate within a 30-day absolute limit.
+Relay MCP lets an MCP client such as ChatGPT control the machine's Sessions through the relay. It is off by default. Turning Remote on never enables it, and it runs only while Remote is on. The server's authenticated `GET` and `PUT /api/remote/mcp` (`{ enabled }`) operations switch and read it for both the CLI and the TUI, and the state is `off`, `connecting`, `on`, or `error` with an optional message and, when `on`, the device URL `<relay origin>/api/mcp/devices/<device ID>`. Use that URL as the MCP server URL in the client. The relay is the OAuth issuer; the client registers by Client ID Metadata Document or Dynamic Client Registration as a public client, then an allowlisted Google owner of the device signs in again and consents to the client. One scope, `ycoding:remote`, grants the published tool surface: remote operations except browser subscriptions, message streaming, attachment upload, telemetry consent, latency samples, and the `session.dots.*` controls, plus `session_create_in_directory`. Dots controls stay excluded because a published tool would let MCP clients send external Dot messages or control its runtime. That scope covers every Session on the backend, including prompts, interrupts, question, form, permission, and review decisions, persistent Always approvals where the runtime offers them, autonomy category mode and goal changes, provider connections, shell controls, and usage reads. Local HTTP apps require separate explicit registration. The existing autonomy, guardrail, and hard-review rules apply to these tools unchanged. Access tokens last five minutes and refresh tokens rotate within a 30-day absolute limit.
 
 `artifact_demo_preview({})` and `artifact_demo_export({})` are fixed, read-only client-capability tools. The preview references `ui://ycoding/artifact-demo/v1.html` with MIME `text/html;profile=mcp-app` and empty network/resource/frame CSP allowlists. The export links only `ycoding-demo.png`, with original-byte size and SHA-256, and expires 15 minutes after the connector's MCP server initializes. Discovery and resource reads use the same per-request authorization as tool calls. No Session, workspace path, generated HTML or arbitrary file can be selected. The chat host must ingest the exported bytes into its native attachment facility; a resource link does not establish delivery. Actual-host rendering and native delivery require verification. See [the fixed demo contract](../specs/relay-mcp-demo.md).
 
@@ -437,6 +437,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `tool_output`           | object                                | Tool-output truncation limits.                                                                        |
 | `mcp`                   | object                                | MCP defaults and named servers.                                                                       |
 | `account_connectors`    | object                                | Opt-in ChatGPT and Claude account tools, selected profiles, and per-connector policy.                   |
+| `dots`                  | object                                | Opt-in external Dot conversation peer; `enabled` defaults to false.                                   |
 | `compaction`            | object                                | Selective-compaction retention, budget, manifest, and advisory policy.                                |
 | `session_retention`     | object                                | Global-only idle Session family deletion; see [Session retention](#session-retention).                |
 | `analytics_retention`   | object                                | Global-only usage and latency fact retention; see [Analytics retention](#analytics-retention).        |
@@ -500,6 +501,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | `provider_usage`                                  | `Config.ProviderUsage`                                                         | unset           | Read-only provider-usage client bridge.                                                                  |
 | `efficiency`                                      | `Config.Efficiency`                                                            | runtime-derived | Helper-model, cache, and continuation policy.                                                            |
 | `image_analyzer`                                  | `Config.ImageAnalyzer`                                                         | unset           | Vision fallback for text-only models: provider/model, prompt, and thresholds.                            |
+| `dots`                                            | `Config.Dots`                                                                  | disabled        | Set `enabled: true` to enable the external Dot conversation peer for the Location.                       |
 | `capabilities`                                    | `Config.Capabilities`                                                          | unset           | Capability toggles; each leaf is last-wins across layers. See [Capability toggles](#capability-toggles). |
 | `experimental`                                    | `Config.Experimental`                                                          | unset           | Experimental runtime policy.                                                                             |
 
@@ -751,7 +753,9 @@ Direct OpenAI GPT-5.6 Responses requests automatically request `reasoning.contex
 
 The native OpenAI and ChatGPT/Codex routes do not consume `chunkTimeout`, `headerTimeout`, or `timeout` from `providers.openai.settings`. `chunkTimeout` and `timeout` are AI-SDK adapter controls for providers resolved through an AI-SDK package, while `headerTimeout` currently has no runtime consumer. These fields do not prevent an established Codex SSE socket from being reset; native Codex recovery uses the bounded transport retry policy documented in [`runtime.md`](./runtime.md).
 
-Daybreak is OpenAI's Trusted Access for Cyber program with two access levels, `daybreak_blue` and `daybreak_red`, selected per Session as `session.daybreak`; an absent value is off and requests keep standard safeguards. ChatGPT connections discover Daybreak availability from the authenticated Codex model catalog at startup and when the active connection changes. Catalog requests use the supported Codex catalog client version `0.157.1`, independently of the YCoding release version, and retain `User-Agent: ycoding/<version>`. Each ordinary model entry advertising `daybreak_blue` or `daybreak_red` in `available_access_programs.cyber` carries an advertised `daybreak` list containing exactly those programs. Discovery runs in the background with a three-second timeout; missing, unknown, invalid, or unavailable metadata never blocks ordinary model use. Changing the connection clears the previous account's discovery, and late responses cannot restore it.
+ChatGPT OAuth authorization uses the `Codex Desktop` originator. Authenticated model, catalog, quota, account connector, native Library and Dots requests share `originator: Codex Desktop` and `User-Agent: Codex Desktop/26.1013.31256 (<platform>; <architecture>)`. Local Codex app-server quota initialization uses the same name and version. Direct OpenAI API-key requests retain their own identity. Signed file-transfer destinations receive only the transfer headers required by their signature, never the account bearer or account identity.
+
+Daybreak is OpenAI's Trusted Access for Cyber program with two access levels, `daybreak_blue` and `daybreak_red`, selected per Session as `session.daybreak`; an absent value is off and requests keep standard safeguards. ChatGPT connections discover Daybreak availability from the authenticated Codex model catalog at startup and when the active connection changes. Catalog requests use Codex catalog client version `0.163.0-alpha.10.2`, independently of the YCoding release version. Each ordinary model entry advertising `daybreak_blue` or `daybreak_red` in `available_access_programs.cyber` carries an advertised `daybreak` list containing exactly those programs. Discovery runs in the background with a three-second timeout; missing, unknown, invalid, or unavailable metadata never blocks ordinary model use. Changing the connection clears the previous account's discovery, and late responses cannot restore it.
 
 Use `/daybreak blue`, `/daybreak red`, or `/daybreak off`, or the Daybreak command in the landing or Session command palette. Without an argument, `/daybreak` cycles off → blue → red → off, offering only programs the selected model profile advertises. An explicit named profile uses its own advertised programs, including an empty list; it does not inherit model-wide programs. The provider default uses the model-wide advertisement. The model picker lists ordinary models, not separate Daybreak entries. A landing selection updates the header immediately without creating a Session; it is saved durably as `session.daybreak.set` after Session creation and before the first prompt or explicit goal starts. A Session toggle saves the selection immediately. If saving fails, the prompt or goal does not start. The header shows `Daybreak Blue` or `Daybreak Red` beside the current model name; an unsupported model, profile, or provider shows the saved selection as `(inactive)`. Switching back to a supported model or profile restores the selected mode; `/daybreak off` clears it and removes the indicator.
 
@@ -828,6 +832,8 @@ Permissions are evaluated in order. Each rule has:
 ```
 
 `effect` is `allow`, `deny`, or `ask`.
+
+Interactive and deferred permission approval for the Session remember the exact canonical action and the displayed resource patterns. Matching later requests in that Session proceed without another permission prompt; other actions, resources and Sessions remain subject to their own rules. These approvals survive TUI reconnects and Location runtime recreation within the same backend, and are cleared when the Session is deleted or the backend restarts. Existing explicitly saved Project permissions retain their stored scope. Explicit denies, ceilings and human-only requests take precedence.
 
 Automatic handling is controlled by durable Session autonomy `{ mode: "normal", permissions, guardrails, answers, goal?, sleep? }`, each category `manual` (default), `yolo`, or `auto`. Set them with `/autonomous`, one dialog with Permissions, Guardrails, and Answers rows: Up/Down selects a row, Left/Right cycles Manual, YOLO, and Auto with wrapping, and `1`, `2`, and `3` set every row to Manual, YOLO, or Auto. The dialog shows each row's effective mode and, when an ancestor or root supplies it, the source Session; a local Manual never hides inherited authority and cannot cancel it. `manual`: only a human settles unresolved requests, and no helper model runs. `auto`: deterministic rules only, with no model fallback. Permissions approve `ask` requests by rule; guardrails approve ordinary standard reviews for the root family while awake, never hard or custom-rule reviews; answers supply only a valid explicit default or exactly one `Recommended` option in the Session itself. `yolo`: the category's hidden evaluator (`yolo-permission`, `yolo-guardrail`, or `yolo-answer`; all tools denied) judges requests deterministic rules leave unresolved, and only `yolo-answer` generates required free text, after typed bounded validation. Inheritance: effective permissions take `auto` over `yolo` over `manual` across the managed-task ancestor chain, preferring the Session itself on ties; guardrails read the root family's choice; answers take the Session's own `auto`, otherwise `yolo` from the Session or a managed-task ancestor, and an ancestor's `auto` never propagates. An active goal approves no permissions, answers no questions or forms, and settles no guardrail reviews. Explicit denies, caps, and inherited permission ceilings settle first and remain enforced. Manual permission decisions, including approval for the current Session, remain available.
 
@@ -1179,7 +1185,7 @@ only within their provider. See the
 
 ### ChatGPT account connectors
 
-`account_connectors.chatgpt` enables tools from the selected ChatGPT account's hosted MCP catalog. It is disabled when omitted or when `enabled` is false; disabled configuration makes no connector discovery requests and advertises no account connector tools.
+`account_connectors.chatgpt` enables the selected account's native Library tools and hosted MCP catalog. It is disabled when omitted or when `enabled` is false; disabled configuration makes no discovery requests and advertises neither surface.
 
 ```jsonc
 {
@@ -1198,13 +1204,58 @@ only within their provider. See the
 
 `profile` selects an existing named OpenAI ChatGPT OAuth profile. When omitted, an OpenAI Session uses its selected model profile; other Sessions use the active OpenAI profile. API keys are not supported. Connector policies use stable catalog connector IDs, not display names. Omitted connector policies allow discovery; `deny` removes that connector's tools and rejects previously captured calls. Tools without a valid connector identity are rejected.
 
-Tools appear in Code Mode at `tools.chatgpt.<connector>.<operation>`, for example `tools.chatgpt.ycoding_work.session_catalog`. See [Account connector Code Mode paths](#account-connector-code-mode-paths). Tool schemas and executable bindings are captured per model request. Profile replacement, changes to implicit profile selection, and configuration disablement invalidate captured calls. Explicit model-profile bindings remain pinned across global activation changes. Calls recheck these boundaries after permission settlement.
+Tools appear in Code Mode at `tools.chatgpt.<connector>.<operation>`, for example `tools.chatgpt.sites.get_project`. See [Account connector Code Mode paths](#account-connector-code-mode-paths). Tool schemas and executable bindings are captured per model request. Profile replacement, changes to implicit profile selection, and configuration disablement invalidate captured calls. Explicit model-profile bindings remain pinned across global activation changes. Calls recheck these boundaries after permission settlement. A disabled captured connector call returns a configuration error instructing the agent not to retry that connector and to use a permitted native or local tool.
+
+Local Sessions use native tools or the local service for YCoding operations, not YCoding's ChatGPT connectors. To enforce this in configuration, deny each installed YCoding connector's stable ID in `account_connectors.chatgpt.connectors`. A matching `permissions` deny on its registered `chatgpt_<normalized connector ID>_*` action also blocks captured permission requests. Friendly Code Mode paths are not permission-rule keys.
 
 Account connector actions default to the `ask` permission, including externally writing actions. Explicit permission rules, inherited ceilings, saved grants, Session guardrails, and autonomy remain applicable. Tool descriptions and read-only annotations are untrusted provider data and grant no execution authority.
 
 The client uses only YCoding's stored ChatGPT credential and existing refresh flow. It connects directly to `https://chatgpt.com/backend-api/ps/mcp` with the `Authorization` bearer and `ChatGPT-Account-Id` headers, without launching native clients, reading their credential stores, copying desktop cookies, or claiming desktop attestation. The endpoint advertises MCP revision `2026-07-28` through `server/discover` but omits that revision's required `resultType` on list results, so the client always uses the `initialize` handshake, which negotiates `2025-11-25`. Tool definitions keep their output schemas as published, including top-level `anyOf` unions; YCoding validates arguments and results against them. A confirmed HTTP 401 permits one same-profile refresh and retry. Other HTTP failures and tool failures are surfaced without account rotation or uncertain-call replay. Backend access and subscription restrictions remain authoritative.
 
 Only tools returned by the authenticated catalog are available. Install or reconnect a connector and complete additional consent in ChatGPT. YCoding does not automatically initiate connector setup or grant consent. When catalog discovery fails, including missing profiles, required authorization, backend rejection, unsupported schemas, and listings that violate the negotiated MCP revision, that provider's tools are unavailable for the model request and the Session continues without them. The backend log records the warning `account connector tools unavailable` with the connector server (`chatgpt-account-connectors` or `claude-account-connectors`) and the failure message, never credentials. Each later model request retries discovery. Connector requests do not change model reasoning, prompt-cache policy, usage accounting, or quota reporting.
+
+#### Native Library files
+
+The native Library surface calls ChatGPT's first-party file APIs directly; it does not pass through the hosted MCP catalog. A hosted catalog failure does not remove these tools when their selected profile and managed attachment storage remain available.
+
+| Code Mode operation | Input | Result |
+| --- | --- | --- |
+| `tools.chatgpt.library.list` | Optional `cursor`, `limit` from 1–100, and `query` | One page of file metadata and its opaque next cursor. An empty page can still have a cursor. |
+| `tools.chatgpt.library.materialize` | Mounted `fileID`, `name`, optional `mimeType` | The resulting file ID. Creates a file copy without retrieval indexing. |
+| `tools.chatgpt.library.download` | Library `fileID` | A verified managed attachment URI, byte count and confined local file path. |
+| `tools.chatgpt.library.upload` | Managed `attachmentURI`, `name`, `mimeType` | File and Library identities after confirmed processing and persistence. |
+
+File transfers use the existing 20 MiB managed-attachment limit. Callers cannot select an arbitrary download URL or output directory. Authentication stays on the fixed ChatGPT API origin; signed transfers reject redirects and unsupported destinations and never receive the account bearer. Upload creation, byte transfer and processing are separate phases; an uncertain write is not retried automatically. Permission actions are `chatgpt_library_list`, `chatgpt_library_materialize`, `chatgpt_library_download`, and `chatgpt_library_upload`; ordinary permission, guardrail and account-binding checks apply to each call. Account replacement or profile changes invalidate captured operations.
+
+Successful Library listing does not establish upload or materialization eligibility. Unsupported transfer destinations and unverified processing responses fail explicitly without reporting successful persistence.
+
+Run the provider boundary checks locally:
+
+```sh
+bun test --cwd packages/core ./test/account-connector-library.test.ts ./test/account-connectors.test.ts ./test/plugin/provider-openai.test.ts ./test/decision-agent-codex-resolve.test.ts
+```
+
+These checks use synthetic accounts and injected transports. Live file writes require an explicitly selected account and approved synthetic payload; a passing local test is not service-eligibility evidence.
+
+### Dots profiles
+
+Dots is disabled by default. Enable it for the Location with:
+
+```json
+{ "dots": { "enabled": true } }
+```
+
+The top-level `dots` section owns Dots configuration. Its optional `enabled` boolean defaults to false; an empty section enables nothing. The field follows normal configuration-layer precedence. While disabled, the backend rejects discovery, binding, sending and runtime controls before native authentication or network requests. Status reports `enabled: false`, Dots tools and UI entry points are hidden, and existing bindings stop receiving peer messages. Turning the feature off does not pause the external Dot. Enabling it grants no permission and selects no destination.
+
+Destination selection lists the `openai` integration's named credential profiles. Only a ChatGPT OAuth profile with an account identity resolves; any other profile fails with `profile_unavailable`. The user selects the profile explicitly on every binding. YCoding never falls back to the active profile, the Session model profile, or another account. The binding stays pinned to that profile's exact account, and replacing the account fails the binding closed until the user confirms a destination again.
+
+The agent's `dots_send` tool requests these checks before transmitting:
+
+- the `dots_send` permission, with resource `<dotID>/<threadID>`;
+- the `read` permission for each attached file;
+- the Session `dots_send` guardrail.
+
+The runtime-state-specific `dots_pause` and `dots_resume` tools each require their own permission and Session guardrail check. Pause stops the Dot's autonomous runtime until an explicit Resume; Resume can continue its work and goals. Ordinary permission rules, inherited ceilings, autonomy modes, and guardrails apply unchanged. `capabilities.tools` can deny `dots_send`, `dots_pause`, or `dots_resume` by name. See [Dots conversation peer](./runtime.md#dots-conversation-peer).
 
 ### Claude account connectors
 

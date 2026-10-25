@@ -422,7 +422,12 @@ let messages: readonly unknown[] = transcriptProbe ? [...Array.from({ length: 12
     { id: "probe_mixed_reply", type: "assistant", agent: "god", model, content: [{ type: "reasoning", text: "Planning" }, { type: "text", text: "A real assistant reply" }], time: { created: 29, completed: 30 } },
   ] : responseProbe ? [] : accountParams.has("backgroundShellLifecycle") ? defaultMessages.filter((message) => message.id === "msg_assistant") : remoteScenarioData?.messages ?? defaultMessages
 
-const permission = { id: "per_fixture", sessionID, action: "shell", resources: ["bun test *"], metadata: {} }
+const permissionDisplay = accountParams.get("permissionDisplay")
+const permission = permissionDisplay ? {
+  id: "per_fixture", sessionID, action: "chatgpt_connector_42_list_events_012345abcdef", resources: ["connector-42"],
+  ...(permissionDisplay === "no-save" ? {} : { save: ["connector-42"] }),
+  metadata: { connector: "connector-42", connectorLabel: "Work Calendar\u202e\n", tool: "list_events", ...(permissionDisplay === "human" ? { requireHuman: true } : {}) },
+} : { id: "per_fixture", sessionID, action: "shell", resources: ["bun test *"], metadata: {} }
 const guardrail = {
   id: "grq_fixture",
   sessionID,
@@ -636,6 +641,15 @@ function createFixtureStore(): Fixture {
   let createdSideChatID: string | undefined
   let liveReads = 0
   let backgroundReads = 0
+  const dotsTarget = { profile: "fixture", dotID: "dot-1", threadID: "thread-1", generation: "generation-1", label: "Fixture Dot" }
+  let dotsBound = accountParams.get("dots") !== "unbound"
+  let dotsRuntime: "paused" | "unpaused" | "unknown" | undefined = accountParams.get("dots") === "missing" ? undefined : accountParams.get("dots") === "unknown" ? "unknown" : accountParams.get("dots") === "paused" ? "paused" : "unpaused"
+  let dotsUncertain = false
+  let releaseDotsRuntime: (() => void) | undefined
+  Object.assign(window, { dotsFixture: {
+    runtime: (state: "paused" | "unpaused" | "unknown") => { dotsRuntime = state },
+    release: () => releaseDotsRuntime?.(),
+  } })
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const inventoryInputs: Readonly<Record<string, unknown>>[] = []
@@ -733,7 +747,9 @@ function createFixtureStore(): Fixture {
     { ...reviewBase, itemID: "rvw_outside", sessionID, sessionTitle: "Stream remote output safely", kind: "guardrail", reason: "sleep_entry", origin: { requestID: "grq_outside" },
       payload: withChain({ type: "guardrail", action: "write", resources: ["/etc/hosts"], ruleIDs: ["standard.review.outside"], reason: "Writes outside the repository", hardReview: false, directories: ["/etc"], fingerprint: "b".repeat(64), requestID: "grq_outside" }) },
     { ...reviewBase, itemID: "rvw_permission", sessionID, sessionTitle: "Stream remote output safely", kind: "permission", reason: "refused", origin: { requestID: "per_review" },
-      payload: withChain({ type: "permission", action: "edit", resources: ["src/remote.ts"], fingerprint: "c".repeat(64), requestID: "per_review" }) },
+      payload: withChain({ type: "permission", action: permissionDisplay ? permission.action : "edit", resources: permissionDisplay ? permission.resources : ["src/remote.ts"],
+        ...(permissionDisplay === "no-save" || permissionDisplay === "human" ? {} : { save: permissionDisplay ? ["connector-42"] : ["src/remote.ts"] }),
+        fingerprint: "c".repeat(64), requestID: "per_review" }) },
   ] : accountParams.get("review") === "disabled" ? [
     { ...reviewBase, itemID: "rvw_off_question", sessionID, sessionTitle: "Stream remote output safely", kind: "question", reason: "disabled", origin: { messageID: "msg_review", callID: "call_review" },
       payload: { type: "form", title: "Release", questionTool: true, fields: [{ key: "q0", type: "string", title: "Branch", description: "Which branch should ship?" }] } },
@@ -880,6 +896,34 @@ function createFixtureStore(): Fixture {
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (operation.startsWith("coordination.")) return coordinationOutcome(operation, input)
+    if (operation === "session.dots.status") {
+      const capability = accountParams.get("dotsCapability")
+      if (capability === "unavailable") return { status: "failed", error: { code: "agent_unavailable", message: "Dots status is unavailable" } }
+      if (capability === "off") return { status: "ok", value: { data: { enabled: false, state: "disconnected" } } }
+      return { status: "ok", value: { data: {
+        ...(capability === "omitted" ? {} : { enabled: true }),
+        state: accountParams.get("dots") === "disconnected" ? "disconnected" : "connected", ...(dotsBound ? { target: dotsTarget } : {}),
+        ...(dotsBound && dotsRuntime ? { runtimeState: dotsUncertain ? "unknown" : dotsRuntime } : {}),
+      } } }
+    }
+    if (operation === "session.dots.targets") return { status: "ok", value: { data: [dotsTarget] } }
+    if (operation === "session.dots.bind") {
+      mutationRequests.push({ operation, input })
+      dotsBound = true
+      dotsUncertain = false
+      return { status: "ok", value: { data: { enabled: true, state: "connected", target: dotsTarget, ...(dotsRuntime ? { runtimeState: dotsRuntime } : {}) } } }
+    }
+    if (operation === "session.dots.pause" || operation === "session.dots.resume") {
+      mutationRequests.push({ operation, input })
+      if (accountParams.get("dotsOutcome") === "failed") return { status: "failed", error: { code: "invalid_message", message: "The Dot target changed. Reconfirm the destination." } }
+      if (accountParams.get("dotsOutcome") === "unknown") { dotsUncertain = true; return { status: "unknown", error: { code: "outcome_unknown", message: "Runtime control outcome is unknown. Reconfirm the destination." } } }
+      const settle = (): RemoteRequestOutcome => {
+        dotsRuntime = operation === "session.dots.pause" ? "paused" : "unpaused"
+        return { status: "ok", value: { data: { enabled: true, state: "connected", target: dotsTarget, runtimeState: dotsRuntime } } }
+      }
+      if (accountParams.get("dotsOutcome") === "hold") return new Promise<RemoteRequestOutcome>((resolve) => { releaseDotsRuntime = () => resolve(settle()) })
+      return settle()
+    }
     if (operation === "session.delete") {
       mutationRequests.push({ operation, input: { sessionID: targetSessionID } })
       coordinationGroups = coordinationGroups.filter((group) => group.masterSessionID !== targetSessionID).map((group) => ({ ...group, memberSessionIDs: group.memberSessionIDs.filter((id) => id !== targetSessionID), revision: group.revision + 1 }))
@@ -889,7 +933,7 @@ function createFixtureStore(): Fixture {
     if (accountParams.get("teamControls") === "unsupported" && ["session.taskCosts", "session.team.economics", "session.team.shell.list", "session.team.shell.kill", "session.side-chat.list", "session.side-chat.create", "session.subagent.cancel", "session.subagent.answer"].includes(operation))
       return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
     if ([
-      "session.prompt", "session.autonomy.set", "session.goal.set", "session.goal.stop", "session.guardrail.reply", "session.create", "machine.keepAwake.set", "session.review.decide",
+      "session.prompt", "session.autonomy.set", "session.goal.set", "session.goal.stop", "session.guardrail.reply", "session.permission.reply", "session.create", "machine.keepAwake.set", "session.review.decide",
       "session.command", "session.skill", "session.switchModel", "session.switchAgent",
       "session.subagent.cancel", "session.subagent.answer", "session.team.shell.kill", "session.side-chat.create",
     ].includes(operation)) {

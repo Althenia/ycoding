@@ -11,7 +11,8 @@ import { Integration } from "@ycoding-ai/core/integration"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { OpenAIPlugin } from "@ycoding-ai/core/plugin/provider/openai"
+import { OpenAIPlugin, authorizeURL } from "@ycoding-ai/core/plugin/provider/openai"
+import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
 import { Provider } from "@ycoding-ai/core/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
@@ -50,6 +51,26 @@ function fakeSelectorSdk(calls: string[]) {
 }
 
 describe("OpenAIPlugin", () => {
+  it.effect("uses the installed Codex Desktop identity for authorization and native transports", () => Effect.sync(() => {
+    const url = new URL(authorizeURL("http://localhost:1455/auth/callback", {
+      verifier: "fixture-verifier", challenge: "fixture-challenge",
+    }, "fixture-state"))
+    expect(url.origin).toBe("https://auth.openai.com")
+    expect(url.searchParams.get("originator")).toBe("Codex Desktop")
+    expect(url.searchParams.get("state")).toBe("fixture-state")
+    expect(url.searchParams.get("code_challenge")).toBe("fixture-challenge")
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256")
+    expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:1455/auth/callback")
+    expect(OpenAICodex.clientInfo).toEqual({
+      name: "Codex Desktop", title: "Codex Desktop", version: "26.1013.31256",
+    })
+    const platform = process.platform === "darwin" ? "Mac OS" : process.platform === "win32" ? "Windows NT 10.0" : process.platform === "linux" ? "X11; Linux" : process.platform
+    expect(OpenAICodex.headers()).toEqual({
+      originator: "Codex Desktop",
+      "User-Agent": `Codex Desktop/26.1013.31256 (${platform}; ${process.arch})`,
+    })
+  }))
+
   it.effect("advertises per-model Daybreak fields without adding catalog entries despite malformed sibling metadata", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
@@ -72,9 +93,9 @@ describe("OpenAIPlugin", () => {
           metadata: { accountID: "fixture-account" },
         }),
       })
-      const requests: Array<{ url: string; params: string; agent: string | undefined }> = []
+      const requests: Array<{ url: string; params: string; agent: string | undefined; originator: string | undefined }> = []
       const http = HttpClient.make((request) => Effect.sync(() => {
-        requests.push({ url: request.url, params: UrlParams.toString(request.urlParams), agent: request.headers["user-agent"] })
+        requests.push({ url: request.url, params: UrlParams.toString(request.urlParams), agent: request.headers["user-agent"], originator: request.headers.originator })
         expect(request.headers.authorization).toBe("Bearer fixture-access")
         expect(request.headers["chatgpt-account-id"]).toBe("fixture-account")
         return HttpClientResponse.fromWeb(request, Response.json({ models: [
@@ -89,8 +110,9 @@ describe("OpenAIPlugin", () => {
       yield* TestClock.adjust("500 millis")
       expect(requests).toHaveLength(1)
       expect(requests[0]?.url).toBe("https://chatgpt.com/backend-api/codex/models")
-      expect(requests[0]?.params).toBe("client_version=0.157.1")
-      expect(requests[0]?.agent).toStartWith("ycoding/")
+      expect(requests[0]?.params).toBe("client_version=0.163.0-alpha.10.2")
+      expect(requests[0]?.agent).toStartWith("Codex Desktop/26.1013.31256 (")
+      expect(requests[0]?.originator).toBe("Codex Desktop")
       expect(required(yield* catalog.model.get(Provider.ID.openai, CatalogModel.ID.make("gpt-5.6-luna")))).toMatchObject({
         name: "gpt-5.6-luna", enabled: true, daybreak: ["daybreak_blue"],
       })

@@ -3,6 +3,7 @@ export * as CodexUsage from "./codex"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { Provider } from "../provider"
+import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 
 const chatGPTMethods = new Set(["chatgpt-browser", "chatgpt-headless"])
@@ -30,7 +31,7 @@ export interface LoadAppServerInput {
 export async function loadAppServer(input: LoadAppServerInput) {
   try {
     await input.client.call("initialize", {
-      clientInfo: { name: "ycoding", title: "YCoding", version: "1" },
+      clientInfo: OpenAICodex.clientInfo,
     })
     await input.client.notify("initialized")
     const response = await input.client.call("account/rateLimits/read")

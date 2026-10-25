@@ -189,6 +189,14 @@ describe("composer input semantics", () => {
     const large = { ...catalog, skills: Array.from({ length: 63 }, (_, index) => ({ id: `skill-${index}`, name: `Skill ${index}`, slash: true })), commands: Array.from({ length: 24 }, (_, index) => ({ name: `command-${index}` })) }
     expect(optionsForTrigger("$", "", large, [])).toHaveLength(63)
     expect(optionsForTrigger("/", "", large, [])).toHaveLength(95)
+    expect(optionsForTrigger("/", "", large, [], true, true)).toHaveLength(96)
+  })
+  test("offers /dots only for a Session whose backend reports Dots enabled", () => {
+    const labels = (...args: [boolean?, boolean?]) => optionsForTrigger("/", "dots", catalog, [], ...args).map((option) => option.label)
+    expect(labels()).not.toContain("/dots")
+    expect(labels(true, false)).not.toContain("/dots")
+    expect(labels(false, true)).not.toContain("/dots")
+    expect(labels(true, true)).toContain("/dots")
   })
   test("detects a trigger adjacent to the caret without matching prose or later text", () => {
     expect(triggerAt("/pla", 4)).toEqual({ trigger: "/", start: 0, query: "pla" })

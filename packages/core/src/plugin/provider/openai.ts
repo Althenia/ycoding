@@ -12,7 +12,6 @@ import {
 import { Credential } from "../../credential"
 import { Catalog } from "../../catalog"
 import { EventRuntime } from "../../event"
-import { InstallationVersion } from "../../installation/version"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
@@ -210,7 +209,7 @@ export const OpenAIPlugin = define({
             HttpClientRequest.setUrlParam("client_version", OpenAICodex.catalogClientVersion),
             HttpClientRequest.bearerToken(snapshot.value.access),
             HttpClientRequest.setHeader("chatgpt-account-id", accountID),
-            HttpClientRequest.setHeader("User-Agent", `ycoding/${InstallationVersion}`),
+            HttpClientRequest.setHeaders(OpenAICodex.headers()),
             HttpClientRequest.acceptJson,
           ),
         )
@@ -332,7 +331,7 @@ export const OpenAIPlugin = define({
 } satisfies PluginInternal.InternalPlugin)
 
 function headers(contentType: string) {
-  return { "Content-Type": contentType, "User-Agent": `ycoding/${InstallationVersion}` }
+  return { "Content-Type": contentType, ...OpenAICodex.headers() }
 }
 
 function exchange(code: string, redirect: string, pkce: Pkce) {
@@ -400,7 +399,7 @@ function base64UrlEncode(buffer: ArrayBuffer) {
   return Buffer.from(buffer).toString("base64url")
 }
 
-function authorizeURL(redirect: string, pkce: Pkce, state: string) {
+export function authorizeURL(redirect: string, pkce: Pkce, state: string) {
   return `${issuer}/oauth/authorize?${new URLSearchParams({
     response_type: "code",
     client_id: clientID,
@@ -411,7 +410,7 @@ function authorizeURL(redirect: string, pkce: Pkce, state: string) {
     id_token_add_organizations: "true",
     codex_cli_simplified_flow: "true",
     state,
-    originator: "ycoding",
+    originator: OpenAICodex.originator,
   })}`
 }
 

@@ -77,7 +77,7 @@ describe("CodexUsage", () => {
       {
         type: "call",
         method: "initialize",
-        params: { clientInfo: { name: "ycoding", title: "YCoding", version: "1" } },
+        params: { clientInfo: { name: "Codex Desktop", title: "Codex Desktop", version: "26.1013.31256" } },
       },
       { type: "notify", method: "initialized" },
       { type: "call", method: "account/rateLimits/read" },

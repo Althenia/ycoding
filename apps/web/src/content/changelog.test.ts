@@ -19,6 +19,10 @@ describe("release entries", () => {
     for (const fragment of ["horizontal padding", "headers omit repeated titles", "available width without unselected-row chevrons"]) expect(text).toContain(fragment)
     expect(text).toContain("Project name and role without the Master Session title")
     for (const fragment of ["OAuth client ID and secret", "runtime environment", "not bundled"]) expect(text).toContain(fragment)
+    for (const fragment of ["current task context", "same tool and resource patterns", "native or local tools", "disabled connector"])
+      expect(text).toContain(fragment)
+    for (const fragment of ["Dots conversation peers", "dots.enabled: true", "Pause Dot", "Resume Dot", "autonomous runtime", "Native ChatGPT Library", "20 MiB", "Codex Desktop", "signed file transfers"])
+      expect(text).toContain(fragment)
   })
 
   test("retains v0.11.0 Projects and shared machine names", () => {

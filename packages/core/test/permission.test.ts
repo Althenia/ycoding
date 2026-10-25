@@ -598,33 +598,71 @@ describe("Permission", () => {
     }),
   )
 
-  it.effect("stores and removes saved resources for a project", () =>
+  it.effect("stores and removes explicit saved resources for a project", () =>
     Effect.gen(function* () {
       yield* setup()
       const service = yield* Permission.Service
-      const asked = yield* Deferred.make<Permission.Request>()
-      const events = yield* EventRuntime.Service
-      const unsubscribe = yield* events.listen((event) =>
-        event.type === Permission.Event.Asked.type
-          ? Deferred.succeed(asked, event.data as Permission.Request).pipe(Effect.asVoid)
-          : Effect.void,
-      )
-      yield* Effect.addFinalizer(() => unsubscribe)
-      const fiber = yield* service.assert(assertion({ save: ["src/*"] })).pipe(Effect.forkScoped)
-      const request = yield* Deferred.await(asked)
-      yield* service.reply({ requestID: request.id, reply: "always" })
-      yield* Fiber.join(fiber)
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: Project.ID.global, action: "read", resources: ["src/*"] })
 
       const { db } = yield* Database.Service
       expect(
         yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all(),
       ).toMatchObject([{ action: "read", resource: "src/*" }])
-      const saved = yield* PermissionSaved.Service
       const id = (yield* saved.list())[0]!.id
       expect(yield* saved.list()).toEqual([{ id, projectID: Project.ID.global, action: "read", resource: "src/*" }])
       yield* service.assert(assertion({ id: Permission.ID.create("per_next"), resources: ["src/next.ts"] }))
       yield* saved.remove(id)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+
+  it.effect("remembers only the exact canonical tool and resource patterns in the current Session", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* Permission.Service
+      const saved = yield* PermissionSaved.Service
+      const database = yield* Database.Service
+      const sessionID = Session.ID.make("ses_other")
+      yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "other", agent: "test" }).run().pipe(Effect.orDie)
+      const action = "chatgpt_connector_42_list_events_012345abcdef"
+      const first = assertion({ action, resources: ["team/calendar"], save: ["team/*"] })
+      const same = assertion({ id: Permission.ID.create("per_same"), action, resources: ["team/calendar"] })
+      const otherSession = assertion({ id: Permission.ID.create("per_other_session"), sessionID, action, resources: ["team/calendar"] })
+      const otherTool = assertion({ id: Permission.ID.create("per_other_tool"), action: "chatgpt_connector_43_list_events_abcdef012345", resources: ["team/calendar"] })
+      const human = assertion({ id: Permission.ID.create("per_human"), action, resources: ["team/calendar"], requireHuman: true })
+      for (const input of [first, same, otherSession, otherTool, human]) {
+        expect((yield* service.ask(input)).effect).toBe("ask")
+      }
+      yield* service.reply({ requestID: first.id, reply: "always" })
+      expect((yield* service.list()).map((item) => item.id)).toEqual([otherSession.id, otherTool.id, human.id])
+      expect(yield* saved.list()).toEqual([])
+      expect((yield* service.ask(assertion({ action, resources: ["team/next"] }))).effect).toBe("allow")
+      expect((yield* service.ask(assertion({ id: Permission.ID.create("per_personal"), action, resources: ["personal/calendar"] }))).effect).toBe("ask")
+      expect((yield* service.ask(assertion({ id: Permission.ID.create("per_next_tool"), action: "chatgpt_connector_43_list_events_abcdef012345", resources: ["team/next"] }))).effect).toBe("ask")
+      expect((yield* service.ask(assertion({ id: Permission.ID.create("per_next_session"), sessionID, action, resources: ["team/next"] }))).effect).toBe("ask")
+      yield* setRules([{ action, resource: "team/*", effect: "deny" }])
+      expect((yield* service.ask(assertion({ action, resources: ["team/next"] }))).effect).toBe("deny")
+      yield* setRules([])
+      yield* database.db.update(SessionTable).set({ permission: SessionPermissionCeiling.denyOnly([{ action, resource: "team/*", effect: "deny" }]) }).where(eq(SessionTable.id, first.sessionID)).run().pipe(Effect.orDie)
+      expect((yield* service.ask(assertion({ action, resources: ["team/next"] }))).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("does not match remembered actions by wildcards or display-label collisions", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* Permission.Service
+      const first = assertion({ action: "calendar.*", resources: ["team"], save: ["team"] })
+      yield* service.ask(first)
+      yield* service.reply({ requestID: first.id, reply: "always" })
+      expect((yield* service.ask(assertion({ action: "calendar.*", resources: ["team"] }))).effect).toBe("allow")
+      expect((yield* service.ask(assertion({ action: "calendar.read", resources: ["team"] }))).effect).toBe("ask")
+      const collision = assertion({ id: Permission.ID.create("per_collision"), action: "calendar.list_events", resources: ["team"], save: ["team"] })
+      yield* service.ask(collision)
+      yield* service.reply({ requestID: collision.id, reply: "always" })
+      expect((yield* service.ask(assertion({ action: "calendar.list_events", resources: ["team"] }))).effect).toBe("allow")
+      expect((yield* service.ask(assertion({ id: Permission.ID.create("per_hyphen"), action: "calendar.list-events", resources: ["team"] }))).effect).toBe("ask")
     }),
   )
 })

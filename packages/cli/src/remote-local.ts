@@ -37,6 +37,7 @@ import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
+import type { Dots } from "@ycoding-ai/schema/dots"
 import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput, type RemoteIncidentGuidance, type RemoteIncidentGuidanceInput, type RemoteIncidentRecent, type RemoteIncidentRecentInput, type RemoteIncidentReport, type RemoteIncidentReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
@@ -191,6 +192,12 @@ export type LocalServer = {
   readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<void>
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
+  readonly dotsTargets: (sessionID: string, location: LocalLocation, profile: string) => Promise<unknown>
+  readonly dotsStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly dotsBind: (sessionID: string, location: LocalLocation, target: Dots.Target) => Promise<unknown>
+  readonly dotsSend: (sessionID: string, location: LocalLocation, input: Dots.Send) => Promise<unknown>
+  readonly dotsPause: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<Dots.Status>
+  readonly dotsResume: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<Dots.Status>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly deleteSession: (sessionID: string, location: LocalLocation) => Promise<void>
@@ -439,6 +446,12 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       await client.session.switchAgent({ sessionID, agent }, request(location, timeoutMs))
     }),
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
+    dotsTargets: (sessionID, location, profile) => call(() => client.dots.targets({ sessionID, profile }, request(location, timeoutMs))),
+    dotsStatus: (sessionID, location) => call(() => client.dots.status({ sessionID }, request(location, timeoutMs))),
+    dotsBind: (sessionID, location, target) => call(() => client.dots.bind({ sessionID, ...target }, request(location, timeoutMs))),
+    dotsSend: (sessionID, location, input) => call(() => client.dots.send({ sessionID, ...input }, request(location, timeoutMs))),
+    dotsPause: (sessionID, location, expectedTarget) => call(() => client.dots.pause({ sessionID, expectedTarget }, request(location, timeoutMs))),
+    dotsResume: (sessionID, location, expectedTarget) => call(() => client.dots.resume({ sessionID, expectedTarget }, request(location, timeoutMs))),
     skill: (sessionID, location, input) => call(async () => {
       await client.session.skill({ sessionID, ...input }, request(location, timeoutMs))
     }),

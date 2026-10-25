@@ -25,8 +25,6 @@ export const make = (session: Pick<SessionSchema.Info, "id" | "parentID" | "proj
     "x-session-affinity": affinity,
     "X-Session-Id": affinity,
     ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
-    // YCoding identifies itself with its own User-Agent. It never presents itself as another
-    // client, so this stays constant across providers.
     "User-Agent": `ycoding/${InstallationVersion}`,
     ...(options?.providerID !== undefined && SESSION_HEADER_PROVIDERS.has(options.providerID)
       ? { "x-opencode-session": affinity }

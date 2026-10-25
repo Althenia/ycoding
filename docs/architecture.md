@@ -243,6 +243,16 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 
 Core owns account connector composition and ChatGPT discovery in `account-connectors.ts`, Claude account-list and fixed-proxy transport in `account-connectors/claude.ts`, and shared canonical tool construction in `account-connectors/tools.ts`. Configuration selects each provider independently. ChatGPT reuses Integration credential snapshots and refresh; Claude resolves its existing managed profile reference through the Claude credential source and refresh implementation. Both reuse the MCP client, Permission, and SessionGuardrail. Session model-request preparation supplies provider-specific profile bindings and request-local registrations to ToolRegistry; materialization captures executable bindings without changing Location-wide registrations. Schema owns the default ask rules for account connector actions. Permission owns mandatory human-only decisions for Claude organization controls. No native client process, desktop bridge, copied credential store, or browser execution participates.
 
+## Dots conversation peer
+
+- **Core:** `dots.ts` owns the Location-scoped Dots runtime, covering profile resolution, bindings, delivery, recovery, and peer admission. `dots/` owns the fixed-origin HTTP boundary, pub/sub client, room transport, attachment staging, peer context, and agent tool.
+- **Node wiring:** `DotsRuntimeNode.node` is a Location service. It admits peer replies through `PluginRuntime`'s `session.synthetic`, so it never depends on the global Session runtime. `DotsRuntimeNode.requestToolsNode` gives `SessionModelRequest` request-local `dots_send` and runtime-state-specific `dots_pause` or `dots_resume` registrations only for a bound Session; no Dots tool is registered Location-wide.
+- **Schema:** owns `Dots` shapes and peer metadata.
+- **Protocol:** owns the Session-scoped `server.dots` group.
+- **Server:** mounts its handlers.
+- **Client:** exposes the generated `dots` methods and the `@ycoding-ai/client/dots-peer` transcript label.
+- **Remote:** carries the six `session.dots.*` operations. Relay MCP excludes them.
+
 ## Task MCP gateway
 
 Core owns the opt-in task MCP transport, OAuth resource-server verification, and durable ownership/admission index. CLI owns the localhost listener and adapts existing generated Client operations to the gateway. The existing service owns Session execution and transcript persistence. The main HttpApi, remote relay, and generated Client surface are unchanged. See [task contract](../specs/task-mcp.md).

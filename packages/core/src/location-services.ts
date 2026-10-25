@@ -11,6 +11,7 @@ import { Computer } from "./computer"
 import { Command } from "./command"
 import { Config } from "./config"
 import { Decision } from "./decision"
+import { DotsRuntimeNode } from "./dots/node"
 import { LayerNode } from "./effect/layer-node"
 import { Node } from "./effect/app-node"
 import { FileMutation } from "./file-mutation"
@@ -107,6 +108,7 @@ const locationServiceNodes = [
   ToolOutputStore.node,
   ToolRegistry.node,
   ToolRegistry.toolsNode,
+  DotsRuntimeNode.node,
   Image.node,
   SkillInstructions.node,
   ReferenceInstructions.node,
@@ -149,10 +151,11 @@ export function buildLocationServiceMap(
   // payloads omit optional keys) and `{ directory, workspaceID: undefined }` are
   // different RcMap keys. The RcMap caches by the raw key before the build
   // callback runs, so canonicalize at the map boundary to the key-present shape.
-  const canonical = (ref: Location.Ref) => Location.Ref.make({
-    directory: AbsolutePath.make(path.resolve(ref.directory)),
-    workspaceID: ref.workspaceID,
-  })
+  const canonical = (ref: Location.Ref) =>
+    Location.Ref.make({
+      directory: AbsolutePath.make(path.resolve(ref.directory)),
+      workspaceID: ref.workspaceID,
+    })
   const map = Layer.effect(
     LocationServiceMap.Service,
     Effect.gen(function* () {
@@ -177,15 +180,20 @@ export function buildLocationServiceMap(
             node.dependencies.forEach(visit)
             const implementation = node.implementation
             if (!implementation) return
-            timed.push([node, {
-              ...node,
-              implementation: Layer.suspend(() => {
-                const started = performance.now()
-                return Layer.tap(implementation as Layer.Layer<unknown, unknown, unknown>, () => Effect.sync(() => {
-                  stages[node.name] = Math.round(performance.now() - started)
-                }))
-              }),
-            }])
+            timed.push([
+              node,
+              {
+                ...node,
+                implementation: Layer.suspend(() => {
+                  const started = performance.now()
+                  return Layer.tap(implementation as Layer.Layer<unknown, unknown, unknown>, () =>
+                    Effect.sync(() => {
+                      stages[node.name] = Math.round(performance.now() - started)
+                    }),
+                  )
+                }),
+              },
+            ])
           }
           visit(location.node)
 

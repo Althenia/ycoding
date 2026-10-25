@@ -109,6 +109,12 @@ export const remoteOperations = [
   "session.switchModel",
   "session.switchAgent",
   "session.command",
+  "session.dots.targets",
+  "session.dots.status",
+  "session.dots.bind",
+  "session.dots.send",
+  "session.dots.pause",
+  "session.dots.resume",
   "session.skill",
   "usage.providers",
   "usage.summary",
@@ -188,6 +194,12 @@ export const remoteSessionOperations = [
   "session.switchModel",
   "session.switchAgent",
   "session.command",
+  "session.dots.targets",
+  "session.dots.status",
+  "session.dots.bind",
+  "session.dots.send",
+  "session.dots.pause",
+  "session.dots.resume",
   "session.skill",
   "session.usageReport",
   "session.promptCosts",
@@ -195,6 +207,23 @@ export const remoteSessionOperations = [
 ] as const
 
 export type RemoteOperation = (typeof remoteOperations)[number]
+
+export type RemoteDotsTarget = { readonly profile: string; readonly dotID: string; readonly threadID: string; readonly generation: string; readonly label: string }
+export type RemoteDotsStatus = { readonly enabled: boolean; readonly target?: RemoteDotsTarget; readonly state: "disconnected" | "connecting" | "connected" | "failed"; readonly error?: string; readonly runtimeState?: "paused" | "unpaused" | "unknown" }
+export type RemoteDotsSend = { readonly id: string; readonly text: string; readonly files?: readonly { readonly uri: string; readonly name?: string; readonly description?: string; readonly mention?: { readonly start: number; readonly end: number; readonly text: string } }[]; readonly causalMessageID?: string; readonly expectedTarget: RemoteDotsTarget }
+export type RemoteDotsDelivery = { readonly messageID: string; readonly status: "accepted" | "unknown"; readonly turnID?: string }
+
+export function readDotsTarget(value: unknown): RemoteDotsTarget | undefined {
+  return validDotsTarget(value) ? value : undefined
+}
+
+export function remoteDotsPeerLabel(metadata: unknown): string | undefined {
+  if (!isRecord(metadata) || !isRecord(metadata.dots)) return
+  const peer = metadata.dots
+  if (peer.origin !== "dots-peer" || ![peer.profile, peer.dotID, peer.threadID, peer.itemID].every((value) => typeof value === "string" && value.length > 0)) return
+  if (peer.turnID !== undefined && (typeof peer.turnID !== "string" || peer.turnID.length === 0)) return
+  return `Dot ${peer.dotID} · external peer · ${peer.threadID}`.replace(/[\u0000-\u001f\u007f]/g, "�")
+}
 
 /**
  * Ordering class of every relay-proxied operation. Reads never wait for another request's
@@ -273,6 +302,12 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.switchModel": "mutation",
   "session.switchAgent": "mutation",
   "session.command": "mutation",
+  "session.dots.targets": "read",
+  "session.dots.status": "read",
+  "session.dots.bind": "mutation",
+  "session.dots.send": "mutation",
+  "session.dots.pause": "mutation",
+  "session.dots.resume": "mutation",
   "session.skill": "mutation",
   "usage.providers": "read",
   "usage.summary": "read",
@@ -857,7 +892,26 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   }
 }
 
+function validDotsTarget(input: unknown): input is RemoteDotsTarget {
+  return isRecord(input) && Object.keys(input).length === 5 &&
+    ["profile", "dotID", "threadID", "generation", "label"].every((key) => typeof input[key] === "string" && input[key].trim().length > 0 && input[key].length <= 512)
+}
+
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.dots.status") return input === undefined
+  if (operation === "session.dots.targets") return isRecord(input) &&
+    typeof input.profile === "string" && input.profile.trim().length > 0 && input.profile.length <= 256 &&
+    Object.keys(input).length === 1
+  if (operation === "session.dots.bind") return validDotsTarget(input)
+  if (operation === "session.dots.pause" || operation === "session.dots.resume") return isRecord(input) &&
+    validDotsTarget(input.expectedTarget) && Object.keys(input).length === 1
+  if (operation === "session.dots.send") return isRecord(input) &&
+    validDotsTarget(input.expectedTarget) &&
+    typeof input.id === "string" && input.id.length > 0 && input.id.length <= 128 &&
+    typeof input.text === "string" &&
+    (input.files === undefined || Array.isArray(input.files) && input.files.length <= 64 && input.files.every((file) => isRecord(file) && typeof file.uri === "string")) &&
+    (input.causalMessageID === undefined || typeof input.causalMessageID === "string" && input.causalMessageID.length > 0 && input.causalMessageID.length <= 128) &&
+    Object.keys(input).every((key) => ["id", "text", "files", "causalMessageID", "expectedTarget"].includes(key))
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
   if (operation === "artifact.demo.preview" || operation === "artifact.demo.export") return input === undefined

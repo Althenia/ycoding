@@ -93,6 +93,12 @@ ycoding remote mcp off
 
 It exposes the closed remote tool surface on MCP revision 2026-07-28, including a fixed UI/PNG feasibility demo, explicitly registered local HTTP apps, and Session webhook Events. Registered apps remain bound to one Session, client grant, literal-loopback port, and route/method allowlist; registration does not make the service public. Embedded presentation requires separately configured isolated HTTPS origins and host iframe support. Actual-chat rendering and native-file delivery remain unverified. The demo is not a general artifact pipeline: arbitrary Session artifacts, PDFs, and complete proposal bundles are outside its contract. See [registered HTTP apps](specs/local-http-apps.md), [MCP Events](specs/mcp-events.md), and [relay deployment](docs/remote-deployment.md#relay-mcp). This is separate from the localhost task interface below.
 
+### Dots conversation peer
+
+Dots is off by default; enable it with `"dots": { "enabled": true }` in YCoding configuration. `/dots` in the TUI or web composer binds the current Session to one Dot conversation, after you confirm the ChatGPT profile, Dot, and conversation. `/dots <text>` sends only that text and the files you attach, and only after explicit Send. While a Session is bound, its agent can send to that Dot with the permission-checked `dots_send` tool; other Sessions don't get the tool. Relay MCP does not expose Dots controls.
+
+Committed room messages authored by the selected Dot enter the bound Session with external-peer attribution; raw assistant-generation snapshots remain non-final. Pause Dot stops its autonomous runtime until Resume Dot, which can continue its work and goals. Runtime controls do not cancel an individual response or retract a message. Service eligibility is account-specific; image/paste delivery and reconnect recovery still require live acceptance. See [Dots conversation peer](docs/runtime.md#dots-conversation-peer).
+
 ## Guardrails
 
 Permissions decide what an agent may attempt; guardrails review or deny high-impact operations across the main Session and its subagents. An approval never overrides an explicit permission denial or a built-in catastrophic denial.

@@ -21,13 +21,18 @@ test.each([
   const directory = await mkdtemp(join(tmpdir(), "ycoding-project-activation-"))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const masterStarted = gate()
-  const notified = gate<string>()
+  const notified = gate<Record<string, unknown>>()
+  const started: Array<Record<string, unknown>> = []
   const standIn = await startProviderStandIn({
     text: "Done.",
     reply: (request) => {
       const contents = messagesOf(request)
-      const notice = contents.map((content) => /Project notification:\n(\{.*\})/.exec(content)?.[1]).find((match) => match !== undefined)
-      if (notice !== undefined) notified.open(notice)
+      const notices = contents.flatMap((content) =>
+        [...content.matchAll(/Project notification:\n(\{.*\})/g)].map((match) => JSON.parse(match[1]!) as Record<string, unknown>),
+      )
+      started.splice(0, started.length, ...notices.filter((item) => item.event === "started"))
+      const permission = notices.find((item) => item.event === "permission")
+      if (permission !== undefined) notified.open(permission)
       if (contents.some((content) => content.includes(masterPrompt))) masterStarted.open(undefined)
       const member = contents.some((content) => content.includes(memberPrompt)) && !(Reflect.get(request as object, "messages") as Array<{ role?: string }>).some((message) => message.role === "tool")
       if (member) return [toolCallChunk("call_member_check", "shell", JSON.stringify({ command: "echo member-check", description: "Synthetic member check" })), finishChunk("tool_calls")]
@@ -63,7 +68,7 @@ test.each([
   }
 
   await prompt(server, "ses_member", memberPrompt)
-  const notice = JSON.parse(await notified.promise) as Record<string, unknown>
+  const notice = await notified.promise
   const asks = await permissions(server, "ses_member")
   expect(asks.map((ask) => [ask.sessionID, ask.action])).toEqual([["ses_member", "shell"]])
   const requestID = String(asks[0]!.id)
@@ -74,6 +79,7 @@ test.each([
     event: "permission",
     requestID,
   })
+  expect(started).toEqual([expect.objectContaining({ source: "project_notification", groupID, memberSessionID: "ses_member", event: "started" })])
   expect(await active()).toBe(activate)
   expect(server.logs.filter((line) => line.includes("Project event handling failed"))).toEqual([])
   const rejected = await server.request(`/api/session/ses_member/permission/${requestID}/reject`, { method: "POST", headers: json, body: "{}" })

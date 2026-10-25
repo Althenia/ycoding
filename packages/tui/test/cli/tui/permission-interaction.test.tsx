@@ -2,6 +2,7 @@
 import { expect, test } from "bun:test"
 import { BoxRenderable, MouseEvent, ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
+import type { PermissionRequest } from "@ycoding-ai/client"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
 import { ThemeProvider } from "../../../src/context/theme"
@@ -12,6 +13,79 @@ import { LocationProvider } from "../../../src/context/location"
 import { createApi, createFetch } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+
+const permissionNameCases: Array<{
+  action: string
+  metadata: NonNullable<PermissionRequest["metadata"]>
+  label: string
+  title: string
+}> = [
+  {
+    action: "tools.chatgpt.calendar.list_events",
+    metadata: {},
+    label: "ChatGPT · Calendar · List Events",
+    title: "Call tool ChatGPT · Calendar · List Events",
+  },
+  {
+    action: "chatgpt_connector_42_list_events_012345abcdef",
+    metadata: { connector: "connector-42", connectorLabel: "Work Calendar", tool: "list_events" },
+    label: "ChatGPT · Work Calendar · List Events",
+    title: "Call tool ChatGPT · Work Calendar · List Events",
+  },
+  {
+    action: "calendar.\u001b[31mread\u202e",
+    metadata: {},
+    label: "Calendar · \\u001b[31mread\\u202e",
+    title: "Call tool Calendar · \\u001b[31mread\\u202e",
+  },
+  { action: "read", metadata: {}, label: "Read", title: "Read team/calendar" },
+]
+
+test.each(permissionNameCases)("renders safe permission names and confirms only canonical requests: $action", async ({ action, metadata, label, title }) => {
+  const replies: unknown[] = []
+  const transport = createFetch(async (url, request) => {
+    if (url.pathname === "/api/session/ses_names/permission/per_names/reply") {
+      replies.push(await request.json())
+      return new Response(null, { status: 204 })
+    }
+    return undefined
+  })
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ConfigProvider config={createTuiResolvedConfig()}>
+        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+          <ClientProvider api={createApi(transport.fetch)}>
+            <DataProvider>
+              <LocationProvider>
+                <Keymap.Provider>
+                  <PermissionPrompt request={{ id: "per_names", sessionID: "ses_names", action, resources: ["team/calendar"], save: ["team/*"], metadata }} />
+                </Keymap.Provider>
+              </LocationProvider>
+            </DataProvider>
+          </ClientProvider>
+        </ThemeProvider>
+      </ConfigProvider>
+    </TestTuiContexts>
+  ), { width: 100, height: 26, kittyKeyboard: true })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Permission required"))
+    expect(app.captureCharFrame()).toContain(title)
+    expect(app.captureCharFrame()).not.toContain(action)
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressEnter()
+    await app.waitForFrame((frame) => frame.includes("Always allow"))
+    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain(`Allow ${label} for these resource patterns in this Session:`)
+    expect(app.captureCharFrame()).toContain("team/*")
+    expect(app.captureCharFrame()).not.toContain("restarted")
+    expect(replies).toEqual([])
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => replies.length === 1)
+    expect(replies).toEqual([{ reply: "always" }])
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test.each(["profile", "owned"])(
   "shows the %s Chrome site download warning through confirmation and cancel",

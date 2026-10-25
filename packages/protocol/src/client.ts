@@ -33,6 +33,7 @@ export const ClientApi: ClientApiShape = makeDefaultApi({
 })
 
 export const groupNames = {
+  "server.dots": "dots",
   "server.health": "health",
   "server.server": "server",
   "server.usage": "usage",

@@ -40,8 +40,10 @@ import { IsolatedBrowserHandler } from "./handlers/isolated-browser"
 import { KeepAwakeHandler } from "./handlers/keep-awake"
 import { RemoteHandler } from "./handlers/remote"
 import { CoordinationHandler } from "./handlers/coordination"
+import { DotsHandler } from "./handlers/dots"
 
 export const handlers = Layer.mergeAll(
+  DotsHandler,
   HealthHandler,
   CoordinationHandler,
   ServerHandler,

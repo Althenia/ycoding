@@ -60,6 +60,7 @@ import { renderTeamObservation } from "../orchestration-view"
 import { SessionHistory } from "../history"
 import { ModelIncident } from "../../model-incident/index"
 import { MAX_STEPS_PROMPT, MAX_STEPS_RESET_PROMPT } from "./max-steps"
+import { DotsPeer } from "../../dots/peer"
 import { and, eq, inArray, sql } from "drizzle-orm"
 
 type StepEnd = {
@@ -282,9 +283,11 @@ const layer = Layer.effect(
       yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
       let currentStep = step
       let promoted = 0
+      let resetting = 0
       const inputSkills = new Map<string, ReadonlyArray<Skill.Info>>()
       const dispatchInputs = new Set<SessionMessage.ID>()
       const prepareInput = Effect.fn("SessionRunner.prepareInput")(function* (entry: SessionPending.Info) {
+        if (DotsPeer.resetsStepAllowance(entry)) resetting++
         if (entry.type !== "user") return
         if (entry.data.metadata?.inputOrigin === "coordination") dispatchInputs.add(entry.id)
         const requested = SessionSkill.selected(entry.data.metadata)
@@ -327,7 +330,7 @@ const layer = Layer.effect(
           )
         }
         if (promoted > 0) {
-          currentStep = 1
+          if (resetting > 0) currentStep = 1
           if (selected.modelOverride !== undefined || dispatchInputs.size > 0) {
             selected = yield* context.select(sessionID)
             yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)

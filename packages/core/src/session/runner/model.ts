@@ -432,10 +432,14 @@ const codexModel = (
       id: webSocket ? OpenAICodex.webSocketRouteID : OpenAICodex.routeID,
       endpoint: { baseURL: OpenAICodex.baseURL },
       ...(transport === undefined ? {} : { transport }),
-      ...(webSocket ? { headers: { "OpenAI-Beta": "responses_websockets=2026-02-06" } } : {}),
+      headers: Provider.mergeHeaders(providerHeaders(model), {
+        ...OpenAICodex.headers(),
+        ...(webSocket ? { "OpenAI-Beta": OpenAICodex.webSocketBeta } : {}),
+      }),
       auth: (key === undefined ? Auth.none : Auth.bearer(key))
         .andThen(account === undefined ? Auth.none : Auth.headers({ "chatgpt-account-id": account }))
-        .andThen(codexAffinityAuth(account, !webSocket)),
+        .andThen(codexAffinityAuth(account, !webSocket))
+        .andThen(Auth.headers(OpenAICodex.headers())),
     })
     .model({ id: model.modelID ?? model.id })
 }

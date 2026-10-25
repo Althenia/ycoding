@@ -5,6 +5,8 @@ import type { RemoteMcpApps } from "./remote-mcp-apps"
 import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 
 import { createHash } from "node:crypto"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { Schema } from "effect"
 import { realpath, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, isAbsolute, relative, resolve, sep } from "node:path"
@@ -946,6 +948,7 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
+    "session.dots.bind", "session.dots.send", "session.dots.pause", "session.dots.resume",
     "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
     "incident.guidance.clear",
@@ -957,6 +960,16 @@ async function run(input: OperationInput) {
     return input.uploads.append(sessionID, validated.uploadID, validated.index, validated.last, validated.data)
   }
   switch (validated.kind) {
+    case "dots.targets": return { data: await input.local.dotsTargets(sessionID, location, validated.profile) }
+    case "dots.status": return { data: await input.local.dotsStatus(sessionID, location) }
+    case "dots.bind": return { data: await input.local.dotsBind(sessionID, location, validated.target) }
+    case "dots.pause": return { data: await input.local.dotsPause(sessionID, location, validated.expectedTarget) }
+    case "dots.resume": return { data: await input.local.dotsResume(sessionID, location, validated.expectedTarget) }
+    case "dots.send": {
+      const files = await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID)
+      const payload = Schema.decodeUnknownSync(Dots.Send)({ ...validated.input, ...(files === undefined ? {} : { files }) })
+      return { data: await input.local.dotsSend(sessionID, location, payload) }
+    }
     case "session.usageReport":
       return { data: await input.local.sessionUsageReport(sessionID, location, validated.input) }
     case "session.promptCosts":
@@ -1212,6 +1225,11 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
+  | { readonly kind: "dots.targets"; readonly profile: string }
+  | { readonly kind: "dots.status" }
+  | { readonly kind: "dots.bind"; readonly target: Dots.Target }
+  | { readonly kind: "dots.send"; readonly input: Dots.Send }
+  | { readonly kind: "dots.pause" | "dots.resume"; readonly expectedTarget: Dots.Target }
   | { readonly kind: "local.app"; readonly operation: RemoteMcpApps.Operation }
   | { readonly kind: "artifact.demo.preview" | "artifact.demo.export" }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
@@ -1289,6 +1307,7 @@ type Validated =
   | { readonly kind: "coordination"; readonly operation: RemoteOperation; readonly input?: Readonly<Record<string, unknown>> }
 
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
+  "session.dots.status": "dots.status",
   "session.get": "get",
   "session.delete": "delete",
   "session.pending.list": "pending.list",
@@ -1565,6 +1584,23 @@ function validate(request: RemoteRequest): Validated {
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
+    case "session.dots.targets": return { kind: "dots.targets", profile: requireString(fields.profile, "profile", 256) }
+    case "session.dots.bind": return { kind: "dots.bind", target: {
+      profile: requireString(fields.profile, "profile", 256),
+      dotID: requireString(fields.dotID, "dotID", 512),
+      threadID: requireString(fields.threadID, "threadID", 512),
+      generation: requireString(fields.generation, "generation", 512),
+      label: requireString(fields.label, "label", 512),
+    } }
+    case "session.dots.send": return { kind: "dots.send", input: {
+      expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget),
+      id: messageID(fields.id),
+      text: requireString(fields.text, "text", RemoteLimits.maxClientMessageChars, { allowEmpty: true }),
+      ...(fields.files === undefined ? {} : { files: fileAttachments(fields.files) }),
+      ...(fields.causalMessageID === undefined ? {} : { causalMessageID: requireString(fields.causalMessageID, "causalMessageID", 128) }),
+    } }
+    case "session.dots.pause": return { kind: "dots.pause", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
+    case "session.dots.resume": return { kind: "dots.resume", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
     case "session.compact": {
       const id = requireString(fields.id, "id", 128)
       if (!/^cmp_[A-Za-z0-9_-]+$/.test(id)) throw new OperationError("invalid_message", "Invalid compaction ID")
@@ -2241,6 +2277,12 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.switchModel": ["model"],
   "session.switchAgent": ["agent"],
   "session.command": ["id", "command", "arguments", "files", "agents", "delivery"],
+  "session.dots.targets": ["profile"],
+  "session.dots.status": [],
+  "session.dots.bind": ["profile", "dotID", "threadID", "generation", "label"],
+  "session.dots.send": ["id", "text", "files", "causalMessageID", "expectedTarget"],
+  "session.dots.pause": ["expectedTarget"],
+  "session.dots.resume": ["expectedTarget"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
@@ -2319,6 +2361,10 @@ const mutations: ReadonlySet<string> = new Set([
   "session.switchModel",
   "session.switchAgent",
   "session.command",
+  "session.dots.bind",
+  "session.dots.send",
+  "session.dots.pause",
+  "session.dots.resume",
   "session.skill",
   "session.prompt",
   "session.interrupt",

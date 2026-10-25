@@ -38,7 +38,7 @@ test("the review box lists every deferred kind below live requests and sends one
       expect(await page.evaluate<boolean>(`document.querySelector('${item("rvw_hard")}').classList.contains('request--hard')`)).toBe(true)
       expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('${item("rvw_hard")}')).borderTopColor`)).not.toBe(await page.evaluate<string>(`getComputedStyle(document.querySelector('${item("rvw_permission")}')).borderTopColor`))
       expect(await buttons(page, "rvw_outside")).toEqual(["Approve once", "Always", "Reject"])
-      expect(await buttons(page, "rvw_permission")).toEqual(["Approve once", "Always", "Reject"])
+      expect(await buttons(page, "rvw_permission")).toEqual(["Approve once", "Always this session", "Reject"])
       expect(await buttons(page, "rvw_question")).toEqual(["Submit", "Dismiss"])
       expect(await buttons(page, "rvw_child")).toEqual(["Submit", "Dismiss"])
       const child = await page.evaluate<string>(`document.querySelector('${item("rvw_child")}').textContent`)
@@ -226,6 +226,38 @@ async function wait(page: Page, expression: string) {
   throw new Error(`Timed out: ${expression}`)
 }
 const scrollTranscript = (page: Page, edge: "start" | "end") => page.evaluate(`(() => { const scroller = document.querySelector('.workspace__scroll'); scroller.scrollTop = ${edge === "start" ? "0" : "scroller.scrollHeight"} })()`)
+
+test("permission display uses readable escaped names and current-Session patterns without changing reply identity", async () => {
+  for (const mode of ["saved", "no-save", "human"]) for (const width of [1440, 390]) for (const theme of ["light", "dark"]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.setCoarsePointer(width === 390)
+      await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&review=1&permissionDisplay=${mode}`)
+      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
+      await wait(page, `document.querySelector('${item("rvw_permission")}') !== null && document.querySelector('#pending-requests .request--permission') !== null`)
+      const live = "#pending-requests .request--permission"
+      const liveText = await page.evaluate<string>(`document.querySelector('${live}').textContent`)
+      const deferredText = await page.evaluate<string>(`document.querySelector('${item("rvw_permission")}').textContent`)
+      expect(liveText).toContain("ChatGPT · Work Calendar\\u202e\\u000a · List Events")
+      expect(deferredText).toContain("ChatGPT · List Events")
+      for (const text of [liveText, deferredText]) {
+        expect(text).toContain("connector-42")
+        expect(text).not.toContain("012345abcdef")
+        expect(text).not.toContain("\u202e")
+        expect(text.includes("Always this session")).toBe(mode === "saved")
+        if (mode === "saved") expect(text).toContain("for these resource patterns in this Session: connector-42")
+      }
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      await click(page, `${live} button`, mode === "saved" ? "Always this session" : "Approve once")
+      await wait(page, `window.remoteMutationReport().some(entry => entry.operation === 'session.permission.reply')`)
+      expect(await page.evaluate<unknown>(`window.remoteMutationReport().find(entry => entry.operation === 'session.permission.reply').input`)).toEqual({ requestID: "per_fixture", reply: mode === "saved" ? "always" : "once" })
+      await click(page, `${item("rvw_permission")} button`, mode === "saved" ? "Always this session" : "Approve once")
+      await wait(page, `document.querySelector('${item("rvw_permission")}') === null`)
+      expect(await decisions(page)).toEqual([{ itemID: "rvw_permission", decision: { kind: "permission", reply: mode === "saved" ? "always" : "once" } }])
+    } finally { await page.close() }
+  }
+}, 60_000)
 async function ready() { return fetch(`http://127.0.0.1:${port}/verify/remote.html`).then((response) => response.ok, () => false) }
 
 test("guardrail rows, review items, and decision tools show every grade with literal evidence in both themes and sizes", async () => {

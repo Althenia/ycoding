@@ -7,6 +7,7 @@ import { Integration } from "@ycoding-ai/core/integration"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
+import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
 import { Effect } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { testEffect } from "./lib/effect"
@@ -21,6 +22,8 @@ describe("OpenAIUsage", () => {
       const http = HttpClient.make((request) =>
         Effect.sync(() => {
           urls.push(request.url.split("?")[0]!)
+          expect(request.headers.originator).toBeUndefined()
+          expect(request.headers["user-agent"]).toBeUndefined()
           return HttpClientResponse.fromWeb(request, Response.json({ data: [], has_more: false }))
         }),
       )
@@ -148,9 +151,11 @@ describe("OpenAIUsage", () => {
           }),
         )
         const urls: string[] = []
+        const headers: Readonly<Record<string, string>>[] = []
         const http = HttpClient.make((request) =>
           Effect.sync(() => {
             urls.push(request.url)
+            headers.push(request.headers)
             if (request.headers.authorization !== "Bearer fixture-fresh")
               return HttpClientResponse.fromWeb(request, Response.json({}, { status: 401 }))
             expect(request.headers["chatgpt-account-id"]).toBe("fixture-account")
@@ -180,6 +185,11 @@ describe("OpenAIUsage", () => {
         })
         expect(refreshes).toBe(1)
         expect(urls).toEqual(["https://chatgpt.com/backend-api/wham/usage"])
+        expect(headers).toHaveLength(1)
+        expect(headers[0]?.originator).toBe("Codex Desktop")
+        expect(headers[0]?.["user-agent"]).toBe(OpenAICodex.userAgent())
+        expect(headers[0]?.authorization).toBe("Bearer fixture-fresh")
+        expect(headers[0]?.["chatgpt-account-id"]).toBe("fixture-account")
         expect((yield* credentials.get(credential.id))?.generation).toBe(1)
         expect(JSON.stringify(snapshot)).not.toContain("fixture-")
       }),

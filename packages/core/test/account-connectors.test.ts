@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createMcpHandler, Server } from "@modelcontextprotocol/server"
 import type { FetchLike } from "@modelcontextprotocol/client"
 import { Agent } from "@ycoding-ai/core/agent"
+import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { Config } from "@ycoding-ai/core/config"
 import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -13,7 +14,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { Tool } from "@ycoding-ai/core/tool/tool"
-import { Deferred, Effect, Exit, Fiber, Logger, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Logger, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventRuntime.node])))
@@ -95,6 +96,8 @@ function backend(
     const request = new Request(input.toString(), init)
     const body = (await request.clone().json()) as Record<string, unknown>
     requests.push({ url: request.url, headers: request.headers, body })
+    if (request.url === "https://chatgpt.com/backend-api/files/library")
+      return Response.json({ items: [], cursor: "library-next" })
     if (options.status) return new Response("Synthetic denied response", { status: options.status })
     if (options.onceUnauthorized && requests.length === 1) return new Response(null, { status: 401 })
     if (options.hosted) return hosted(body)
@@ -194,6 +197,7 @@ const client = Effect.fn(function* (input: {
   const profile = yield* profiles()
   const assertions: Permission.AssertInput[] = []
   const service = AccountConnectors.make({
+    attachments: AttachmentStore.make("/synthetic-unused-attachments"),
     integration: profile.integrations,
     settings: () => Effect.sync(input.settings ?? (() => settings)),
     directory: "/synthetic-project",
@@ -221,6 +225,25 @@ function find(registrations: ReadonlyArray<{ tools: Readonly<Record<string, Tool
 }
 
 describe("account connectors", () => {
+  it.live("native Library is independent from a rejected hosted catalog and fences the selected profile", () =>
+    Effect.gen(function* () {
+      const remote = backend({ status: 403 })
+      const current = yield* client({ backend: remote })
+      const registrations = yield* current.service.library({})
+      expect(remote.requests).toEqual([])
+      const tool = registrations[0].tools.chatgpt_library_list
+      const result = yield* Tool.settle(tool, { input: { limit: 1 } }, context)
+      expect(result.structured).toEqual({ items: [], cursor: "library-next" })
+      expect(remote.requests[0].headers.get("authorization")).toBe("Bearer fixture-access-a")
+      expect(remote.requests[0].headers.get("chatgpt-account-id")).toBe("fixture-account-a")
+      expect(remote.requests[0].headers.has("cookie")).toBe(false)
+      expect(JSON.stringify(current.assertions)).not.toContain("fixture-account")
+      yield* current.credentials.activate(current.second.id)
+      expect(Exit.isFailure(yield* Tool.settle(tool, { input: {} }, context).pipe(Effect.exit))).toBe(true)
+      expect(remote.requests).toHaveLength(1)
+    }),
+  )
+
   test("configuration retains opt-in profile and connector policy", () => {
     const value = { account_connectors: { chatgpt: { ...settings, profile: "fixture-a" } } }
     expect(Schema.decodeUnknownSync(Config.Info)(value)).toMatchObject(value)
@@ -259,7 +282,8 @@ describe("account connectors", () => {
       expect(
         remote.requests.every((request) => request.headers.get("chatgpt-account-id") === "fixture-account-b"),
       ).toBe(true)
-      expect(remote.requests.every((request) => request.headers.get("user-agent")?.startsWith("ycoding/"))).toBe(true)
+      expect(remote.requests.every((request) => request.headers.get("user-agent")?.startsWith("Codex Desktop/"))).toBe(true)
+      expect(remote.requests.every((request) => request.headers.get("originator") === "Codex Desktop")).toBe(true)
       expect(
         remote.requests.every(
           (request) =>
@@ -286,6 +310,9 @@ describe("account connectors", () => {
       expect(current.assertions).toMatchObject([
         {
           action: name,
+          resources: ["connector_mail"],
+          save: ["connector_mail"],
+          metadata: { connector: "connector_mail", connectorLabel: "Mail", tool: "mail_search" },
           sessionID: context.sessionID,
           source: { type: "tool", messageID: context.messageID, callID: context.callID },
         },
@@ -345,6 +372,31 @@ describe("account connectors", () => {
       expect(
         Exit.isFailure(yield* Tool.settle(search, { input: { query: "synthetic" } }, context).pipe(Effect.exit)),
       ).toBe(true)
+      expect(remote.requests.some((request) => request.body.method === "tools/call")).toBe(false)
+    }),
+  )
+
+  it.live("rejects a captured connector disabled by configuration with native-tool guidance", () =>
+    Effect.gen(function* () {
+      let denied = false
+      const remote = backend()
+      const current = yield* client({
+        backend: remote,
+        settings: () => ({
+          ...settings,
+          connectors: { ...settings.connectors, ...(denied ? { connector_mail: "deny" as const } : {}) },
+        }),
+      })
+      const [, search] = find(yield* current.service.tools({}), "Search synthetic mail")
+      denied = true
+      const exit = yield* Tool.settle(search, { input: { query: "synthetic" } }, context).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit))
+        expect(Cause.squash(exit.cause)).toMatchObject({
+          message:
+            "This ChatGPT connector is disabled by configuration; do not retry this connector; use a permitted native/local tool.",
+        })
+      expect(current.assertions).toEqual([])
       expect(remote.requests.some((request) => request.body.method === "tools/call")).toBe(false)
     }),
   )

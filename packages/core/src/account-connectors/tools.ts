@@ -60,8 +60,9 @@ export const make = Effect.fn("AccountConnectorTools.make")(function* (input: {
               agent: context.agent,
               action: name,
               resources: [entry.id],
+              save: entry.requireHuman ? undefined : [entry.id],
               requireHuman: entry.requireHuman,
-              metadata: { connector: entry.id, tool: tool.name, operationDigest },
+              metadata: { connector: entry.id, connectorLabel: entry.label, tool: tool.name, operationDigest },
               source: { type: "tool", messageID: context.messageID, callID: context.callID },
             })
             yield* input.current(entry.id)

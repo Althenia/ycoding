@@ -86,6 +86,7 @@ export type Resolved = {
   readonly project_artifacts?: boolean
   readonly home_roots?: boolean
   readonly websearch_provider?: Info["websearch_provider"]
+  readonly dots?: boolean
 }
 
 /** Merges layers from lowest to highest priority: each leaf field is last-wins and lists replace. */
@@ -117,6 +118,10 @@ export function allowsTool(capabilities: Resolved, name: string) {
   // CodeMode's `execute` wrapper follows the tools it carries; only `enabled: false` or a deny hides it.
   if (name === "execute") return allows(capabilities.tools && { ...capabilities.tools, allow: undefined }, name)
   return allows(capabilities.tools, name)
+}
+
+export function allowsDots(capabilities: Resolved) {
+  return capabilities.dots === true
 }
 
 export function allowsInstruction(capabilities: Resolved, path: string, source: "global" | "project") {

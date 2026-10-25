@@ -10,7 +10,7 @@ const request = {
   queueMs: 5,
   settlementMs: 20,
   totalMs: 25,
-}
+} as const
 
 test("decodes closed client timings and rejects excess properties", () => {
   const sample = { kind: "client", at: request.at, surface: "tui", metric: "prompt.admit", durationMs: 12 } as const
@@ -37,6 +37,30 @@ test("accepts telemetry for deleting a Session through the remote operation", ()
   expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...request, operation: "session.delete" })).toMatchObject({
     operation: "session.delete",
   })
+})
+
+test("accepts request telemetry for every Session Dots control in closed samples and batches", () => {
+  const names = [
+    "session.dots.targets",
+    "session.dots.status",
+    "session.dots.bind",
+    "session.dots.send",
+    "session.dots.pause",
+    "session.dots.resume",
+  ] as const
+  for (const operation of names) {
+    expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)
+    expect(Schema.decodeUnknownSync(Telemetry.Sample)({ ...request, operation })).toEqual({ ...request, operation })
+  }
+  expect(Schema.is(Telemetry.Batch)({ samples: names.map((operation) => ({ ...request, operation })) })).toBe(true)
+  for (const input of [
+    { samples: [{ ...request, operation: "session.dots" }] },
+    { samples: [{ ...request, operation: "session.dots.unbind" }] },
+    { samples: [{ ...request, operation: "dots.send" }] },
+    { samples: [{ ...request, operation: "session.dots.cancel" }] },
+    { samples: [{ ...request, operation: "session.dots.send", target: "dot_private" }] },
+  ])
+    expect(Schema.is(Telemetry.Batch)(input)).toBe(false)
 })
 
 test("validates notice versions and omits undecided consent", () => {

@@ -27,6 +27,7 @@ Sessions and subagents can select named profiles independently for the same prov
 | Skill and project artifact | Loadable guidance and managed reusable agent customization.                                                             | [Repository resources](./repository-resources.md)    |
 | Workspace memory           | Explicit linked knowledge, separate from transcripts and prompt caches.                                                 | [Memory](./memory.md)                                |
 | Provider cache and quota   | Provider-owned reuse telemetry and read-only usage reporting.                                                           | [Provider efficiency](./provider-efficiency.md)      |
+| Dots conversation peer     | Opt-in external Dot conversation per Session, with untrusted, attributed peer content.                                | [Runtime](./runtime.md#dots-conversation-peer)       |
 
 ### 1. Terminal-first delivery
 
@@ -35,6 +36,8 @@ The terminal application is the primary product and release surface.
 Next-message prediction runs on request with `/suggest [hint]` in the TUI and web composer and uses bounded recent conversation text, the optional hint, and only the project or global memory scopes chosen in its dialog. TUI and web acceptance fills the composer without sending.
 
 `/prompt <intent>` drafts one prompt for review in the TUI or web composer. The caller chooses a mode (`start`, `steer`, `queue`, or `goal`) and the same project or global memory scopes. The draft uses the intent, bounded recent conversation, and selected memory, and it is never sent automatically.
+
+`/dots` in the TUI and web composer binds a Session to one external Dot conversation after explicit profile, Dot, and conversation confirmation. `/dots <text>` sends only the current text and attached files after explicit Send. The bound Session's agent alone receives permission-checked Dots tools. Pause Dot stops its autonomous runtime until Resume Dot, which can continue its work and goals; these controls do not cancel an individual response. Peer content is untrusted, externally attributed, and carries no user or control authority, and Relay MCP excludes Dots controls. Room membership identifies committed messages from the selected Dot; raw assistant-generation snapshots remain non-final. Service eligibility is account-specific; image/paste delivery and reconnect recovery remain unverified. See [Dots conversation peer](./runtime.md#dots-conversation-peer).
 
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 

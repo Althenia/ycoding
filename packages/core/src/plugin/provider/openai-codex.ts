@@ -11,7 +11,21 @@ export * as OpenAICodex from "./openai-codex"
 
 /** ChatGPT-plan requests must target the codex backend instead of the public API. */
 export const baseURL = "https://chatgpt.com/backend-api/codex"
-export const catalogClientVersion = "0.157.1"
+export const catalogClientVersion = "0.163.0-alpha.10.2"
+export const desktopVersion = "26.1013.31256"
+export const originator = "Codex Desktop"
+export const clientInfo = { name: originator, title: originator, version: desktopVersion } as const
+export const webSocketBeta = "responses_websockets=2026-02-06"
+
+export const userAgent = () => {
+  const platform = process.platform === "darwin" ? "Mac OS"
+    : process.platform === "linux" ? "X11; Linux"
+    : process.platform === "win32" ? "Windows NT 10.0" : process.platform
+  return `${originator}/${desktopVersion} (${platform}; ${process.arch})`
+}
+
+export const headers = () => ({ originator, "User-Agent": userAgent() })
+
 export const routeID = "openai-codex-responses"
 export const webSocketRouteID = "openai-codex-websocket-responses"
 

@@ -1,5 +1,7 @@
 import { Locale } from "./locale"
 import { canonicalToolName, finiteNumber, webSearchProviderLabel } from "./tool-display"
+import { toolDisplayName } from "@ycoding-ai/client/tool-display"
+import { escapeTerminalText } from "./terminal-text"
 
 type Dict = Record<string, unknown>
 
@@ -147,8 +149,8 @@ export function permissionPresentation(
 
   return {
     icon: "⚙",
-    title: `Call tool ${source.action}`,
-    lines: [`Tool: ${source.action}`],
+    title: `Call tool ${toolDisplayName(source.action, metadata)}`,
+    lines: [`Tool: ${toolDisplayName(source.action, metadata)}`],
   }
 }
 
@@ -167,11 +169,14 @@ export function permissionAlwaysLines(input: {
 }): string[] {
   const save = input.save ?? []
   if (save.length === 1 && save[0] === "*") {
-    return [`This will allow ${input.action} until YCoding is restarted.`]
+    return [
+      `Allow ${toolDisplayName(input.action, input.metadata)} for all resources in this Session.`,
+      ...chromeSideEffectWarning(dict(input.metadata)),
+    ]
   }
   return [
-    "This will allow the following patterns until YCoding is restarted.",
-    ...save.map((item) => `- ${item}`),
+    `Allow ${toolDisplayName(input.action, input.metadata)} for these resource patterns in this Session:`,
+    ...save.map((item) => `- ${escapeTerminalText(item)}`),
     ...chromeSideEffectWarning(dict(input.metadata)),
   ]
 }

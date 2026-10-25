@@ -18,6 +18,7 @@ import { Config } from "./config"
 import { Decision } from "./decision"
 import { DecisionChoice } from "./decision-choice"
 import { PermissionSaved } from "./permission/saved"
+import { PermissionSession } from "./permission/session"
 import { SessionEvent } from "./session/event"
 import { SessionMessage } from "./session/message"
 import { SessionReviewFold } from "./session/review-fold"
@@ -278,6 +279,7 @@ const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
+    const sessionApprovals = yield* PermissionSession.Service
     const reconsidering = new Set<ID>()
     const settlement = yield* Semaphore.make(1)
     const exclusive = settlement.withPermit
@@ -294,10 +296,14 @@ const layer = Layer.effect(
       )),
     )
 
-    const savedRules = Effect.fnUntraced(function* () {
-      return (yield* saved.list({ projectID: location.project.id })).map(
+    const savedRules = Effect.fnUntraced(function* (input: Pick<AssertInput, "sessionID" | "action">) {
+      const projectRules = (yield* saved.list({ projectID: location.project.id })).map(
         (item): Permission.Rule => ({ action: item.action, resource: item.resource, effect: "allow" }),
       )
+      return [
+        ...projectRules,
+        ...(yield* sessionApprovals.rules(input)),
+      ]
     })
 
     const ruleSources = Effect.fn("Permission.configured")(function* (
@@ -316,7 +322,7 @@ const layer = Layer.effect(
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return decision(input, rules, [])
-      const result = decision(input, rules, yield* savedRules())
+      const result = decision(input, rules, yield* savedRules(input))
       return input.requireHuman ? { ...result, effect: "ask" as const } : result
     })
 
@@ -408,7 +414,7 @@ const layer = Layer.effect(
 
     const applicabilityOf = Effect.fnUntraced(function* (input: AssertInput) {
       const sources = yield* ruleSources(input.sessionID, input.agent)
-      const saved = yield* savedRules()
+      const saved = yield* savedRules(input)
       const rules = [...sources.agent, ...sources.ceiling, ...saved]
       const fingerprint = fingerprintOf(input)
       const reviews = (yield* SessionReviewFold.fold(database.db, [input.sessionID]))
@@ -967,18 +973,15 @@ const layer = Layer.effect(
           }
 
           if (input.reply === "always" && existing.request.save?.length) {
-            yield* saved.add({
-              projectID: location.project.id,
-              action: existing.request.action,
-              resources: existing.request.save,
-            })
+            yield* sessionApprovals.remember({ sessionID: existing.request.sessionID, action: existing.request.action, resources: existing.request.save })
           }
           yield* Deferred.succeed(existing.deferred, undefined)
           pending.delete(input.requestID)
           if (input.reply !== "always" || !existing.request.save?.length) return
 
-          const rememberedRules = yield* savedRules()
+          const rememberedRules = yield* savedRules(existing.request)
           for (const [id, item] of pending) {
+            if (item.request.sessionID !== existing.request.sessionID || item.request.action !== existing.request.action) continue
             if (item.request.metadata?.requireHuman === true) continue
             const input = { ...item.request }
             const rules = yield* configured(item.request.sessionID, item.agent).pipe(
@@ -1024,5 +1027,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node],
+  deps: [EventRuntime.node, Database.node, Config.node, Location.node, Decision.node, Agent.node, SessionAutonomy.node, SessionStore.node, PermissionSaved.node, PermissionSession.node],
 })

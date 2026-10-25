@@ -421,6 +421,18 @@ import type {
   CoordinationUpdateOutput,
   CoordinationDeleteInput,
   CoordinationDeleteOutput,
+  DotsTargetsInput,
+  DotsTargetsOutput,
+  DotsStatusInput,
+  DotsStatusOutput,
+  DotsBindInput,
+  DotsBindOutput,
+  DotsSendInput,
+  DotsSendOutput,
+  DotsPauseInput,
+  DotsPauseOutput,
+  DotsResumeInput,
+  DotsResumeOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -3423,6 +3435,91 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+    },
+    dots: {
+      targets: (input: DotsTargetsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsTargetsOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/targets`,
+            query: { profile: input["profile"] },
+            successStatus: 200,
+            declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      status: (input: DotsStatusInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsStatusOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots`,
+            successStatus: 200,
+            declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      bind: (input: DotsBindInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsBindOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/bind`,
+            body: {
+              profile: input["profile"],
+              dotID: input["dotID"],
+              threadID: input["threadID"],
+              generation: input["generation"],
+              label: input["label"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      send: (input: DotsSendInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsSendOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/send`,
+            body: {
+              id: input["id"],
+              text: input["text"],
+              files: input["files"],
+              causalMessageID: input["causalMessageID"],
+              expectedTarget: input["expectedTarget"],
+            },
+            successStatus: 200,
+            declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      pause: (input: DotsPauseInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsPauseOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/pause`,
+            body: { expectedTarget: input["expectedTarget"] },
+            successStatus: 200,
+            declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      resume: (input: DotsResumeInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsResumeOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/resume`,
+            body: { expectedTarget: input["expectedTarget"] },
+            successStatus: 200,
+            declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
     },
   }
 }

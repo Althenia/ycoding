@@ -2220,6 +2220,68 @@ export interface CoordinationApi<E = never> {
   readonly delete: CoordinationDeleteOperation<E>
 }
 
+type Endpoint40_0Request = Parameters<RawClient["server.dots"]["session.dots.targets"]>[0]
+export type Endpoint40_0Input = {
+  readonly sessionID: Endpoint40_0Request["params"]["sessionID"]
+  readonly profile: Endpoint40_0Request["query"]["profile"]
+}
+export type Endpoint40_0Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.targets"]>>["data"]
+export type DotsTargetsOperation<E = never> = (input: Endpoint40_0Input) => Effect.Effect<Endpoint40_0Output, E>
+
+type Endpoint40_1Request = Parameters<RawClient["server.dots"]["session.dots.status"]>[0]
+export type Endpoint40_1Input = { readonly sessionID: Endpoint40_1Request["params"]["sessionID"] }
+export type Endpoint40_1Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.status"]>>["data"]
+export type DotsStatusOperation<E = never> = (input: Endpoint40_1Input) => Effect.Effect<Endpoint40_1Output, E>
+
+type Endpoint40_2Request = Parameters<RawClient["server.dots"]["session.dots.bind"]>[0]
+export type Endpoint40_2Input = {
+  readonly sessionID: Endpoint40_2Request["params"]["sessionID"]
+  readonly profile: Endpoint40_2Request["payload"]["profile"]
+  readonly dotID: Endpoint40_2Request["payload"]["dotID"]
+  readonly threadID: Endpoint40_2Request["payload"]["threadID"]
+  readonly generation: Endpoint40_2Request["payload"]["generation"]
+  readonly label: Endpoint40_2Request["payload"]["label"]
+}
+export type Endpoint40_2Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.bind"]>>["data"]
+export type DotsBindOperation<E = never> = (input: Endpoint40_2Input) => Effect.Effect<Endpoint40_2Output, E>
+
+type Endpoint40_3Request = Parameters<RawClient["server.dots"]["session.dots.send"]>[0]
+export type Endpoint40_3Input = {
+  readonly sessionID: Endpoint40_3Request["params"]["sessionID"]
+  readonly id: Endpoint40_3Request["payload"]["id"]
+  readonly text: Endpoint40_3Request["payload"]["text"]
+  readonly files?: Endpoint40_3Request["payload"]["files"]
+  readonly causalMessageID?: Endpoint40_3Request["payload"]["causalMessageID"]
+  readonly expectedTarget: Endpoint40_3Request["payload"]["expectedTarget"]
+}
+export type Endpoint40_3Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.send"]>>["data"]
+export type DotsSendOperation<E = never> = (input: Endpoint40_3Input) => Effect.Effect<Endpoint40_3Output, E>
+
+type Endpoint40_4Request = Parameters<RawClient["server.dots"]["session.dots.pause"]>[0]
+export type Endpoint40_4Input = {
+  readonly sessionID: Endpoint40_4Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_4Request["payload"]["expectedTarget"]
+}
+export type Endpoint40_4Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.pause"]>>["data"]
+export type DotsPauseOperation<E = never> = (input: Endpoint40_4Input) => Effect.Effect<Endpoint40_4Output, E>
+
+type Endpoint40_5Request = Parameters<RawClient["server.dots"]["session.dots.resume"]>[0]
+export type Endpoint40_5Input = {
+  readonly sessionID: Endpoint40_5Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_5Request["payload"]["expectedTarget"]
+}
+export type Endpoint40_5Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.resume"]>>["data"]
+export type DotsResumeOperation<E = never> = (input: Endpoint40_5Input) => Effect.Effect<Endpoint40_5Output, E>
+
+export interface DotsApi<E = never> {
+  readonly targets: DotsTargetsOperation<E>
+  readonly status: DotsStatusOperation<E>
+  readonly bind: DotsBindOperation<E>
+  readonly send: DotsSendOperation<E>
+  readonly pause: DotsPauseOperation<E>
+  readonly resume: DotsResumeOperation<E>
+}
+
 export interface AppApi<E = never> {
   readonly health: HealthApi<E>
   readonly server: ServerApi<E>
@@ -2261,4 +2323,5 @@ export interface AppApi<E = never> {
   readonly review: ReviewApi<E>
   readonly mcpEvents: McpEventsApi<E>
   readonly coordination: CoordinationApi<E>
+  readonly dots: DotsApi<E>
 }

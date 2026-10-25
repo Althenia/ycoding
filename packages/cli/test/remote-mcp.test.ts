@@ -8,7 +8,11 @@ import { createRemoteMcp, toolResult } from "../src/remote-mcp"
 import { RemoteMcpSchemas } from "../src/remote-mcp-schemas"
 
 const resource = "https://relay.example.com/api/mcp/devices/dev_1"
-const context = { requestID: "request_fixture", epoch: "epoch_1", principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "client_1" } }
+const context = {
+  requestID: "request_fixture",
+  epoch: "epoch_1",
+  principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "client_1" },
+}
 const meta = {
   "io.modelcontextprotocol/protocolVersion": "2026-07-28",
   "io.modelcontextprotocol/clientCapabilities": {},
@@ -16,32 +20,122 @@ const meta = {
 }
 
 const expectedTools = [
-  "provider_auth_list", "provider_auth_key", "provider_auth_begin", "provider_auth_status", "provider_auth_complete", "provider_auth_cancel",
-  "workspace_list", "workspace_catalog", "workspace_file_find", "session_list", "session_active", "session_get", "session_delete", "session_messages",
-  "session_captured_changes_list", "session_compaction_list", "session_compact", "session_snapshot", "session_pending_list",
-  "session_attachment_read", "session_todo_list", "session_subagent_list", "session_pin", "session_unpin", "session_subagent_cancel",
-  "session_subagent_answer", "session_team_economics", "session_team_shell_list", "session_team_shell_kill", "session_side_chat_list",
-  "session_side_chat_create", "session_family_activity", "session_log", "session_prompt", "session_interrupt", "session_prediction",
-  "session_prompt_generate", "session_permission_list", "session_permission_reply", "session_guardrail_status",
-  "session_guardrail_request_list", "session_guardrail_reply", "session_review_list", "session_review_decide", "session_form_list",
-  "session_form_reply", "session_form_cancel", "session_shell_output", "session_autonomy_get", "session_autonomy_set", "session_goal_set",
-  "session_goal_stop", "session_create", "session_status", "session_catalog", "session_file_find", "session_switch_model",
-  "session_switch_agent", "session_command", "session_skill", "usage_providers", "usage_summary", "usage_report", "session_usage_report",
-  "session_prompt_costs", "session_task_costs", "usage_forecast", "incident_report", "incident_recent", "incident_guidance",
-  "incident_guidance_clear", "machine_keep_awake_get", "machine_keep_awake_set", "artifact_demo_preview", "artifact_demo_export",
-  "coordination_settings", "coordination_list", "coordination_create", "coordination_get", "coordination_update", "coordination_delete",
-  "local_app_register", "local_app_list", "local_app_revoke", "local_app_open", "local_app_status", "local_app_http", "session_create_in_directory",
+  "provider_auth_list",
+  "provider_auth_key",
+  "provider_auth_begin",
+  "provider_auth_status",
+  "provider_auth_complete",
+  "provider_auth_cancel",
+  "workspace_list",
+  "workspace_catalog",
+  "workspace_file_find",
+  "session_list",
+  "session_active",
+  "session_get",
+  "session_delete",
+  "session_messages",
+  "session_captured_changes_list",
+  "session_compaction_list",
+  "session_compact",
+  "session_snapshot",
+  "session_pending_list",
+  "session_attachment_read",
+  "session_todo_list",
+  "session_subagent_list",
+  "session_pin",
+  "session_unpin",
+  "session_subagent_cancel",
+  "session_subagent_answer",
+  "session_team_economics",
+  "session_team_shell_list",
+  "session_team_shell_kill",
+  "session_side_chat_list",
+  "session_side_chat_create",
+  "session_family_activity",
+  "session_log",
+  "session_prompt",
+  "session_interrupt",
+  "session_prediction",
+  "session_prompt_generate",
+  "session_permission_list",
+  "session_permission_reply",
+  "session_guardrail_status",
+  "session_guardrail_request_list",
+  "session_guardrail_reply",
+  "session_review_list",
+  "session_review_decide",
+  "session_form_list",
+  "session_form_reply",
+  "session_form_cancel",
+  "session_shell_output",
+  "session_autonomy_get",
+  "session_autonomy_set",
+  "session_goal_set",
+  "session_goal_stop",
+  "session_create",
+  "session_status",
+  "session_catalog",
+  "session_file_find",
+  "session_switch_model",
+  "session_switch_agent",
+  "session_command",
+  "session_skill",
+  "usage_providers",
+  "usage_summary",
+  "usage_report",
+  "session_usage_report",
+  "session_prompt_costs",
+  "session_task_costs",
+  "usage_forecast",
+  "incident_report",
+  "incident_recent",
+  "incident_guidance",
+  "incident_guidance_clear",
+  "machine_keep_awake_get",
+  "machine_keep_awake_set",
+  "artifact_demo_preview",
+  "artifact_demo_export",
+  "coordination_settings",
+  "coordination_list",
+  "coordination_create",
+  "coordination_get",
+  "coordination_update",
+  "coordination_delete",
+  "local_app_register",
+  "local_app_list",
+  "local_app_revoke",
+  "local_app_open",
+  "local_app_status",
+  "local_app_http",
+  "session_create_in_directory",
 ]
 const excludedOperations = [
-  "session.subscribe", "session.unsubscribe", "session.message.stream", "session.attachment.upload",
-  "machine.telemetry.consent.get", "machine.telemetry.consent.set", "machine.latency.append", "machine.latency.list",
+  "session.subscribe",
+  "session.unsubscribe",
+  "session.message.stream",
+  "session.attachment.upload",
+  "machine.telemetry.consent.get",
+  "machine.telemetry.consent.set",
+  "machine.latency.append",
+  "machine.latency.list",
+  "session.dots.targets",
+  "session.dots.status",
+  "session.dots.bind",
+  "session.dots.send",
+  "session.dots.pause",
+  "session.dots.resume",
 ]
 
 function sessionInfo(id: string, directory = "/work"): SessionInfo {
   return {
-    id, projectID: "prj_1", model: { providerID: "test", id: "model" }, cost: 0,
+    id,
+    projectID: "prj_1",
+    model: { providerID: "test", id: "model" },
+    cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    time: { created: 1, updated: 1 }, title: id, location: { directory, workspaceID: undefined },
+    time: { created: 1, updated: 1 },
+    title: id,
+    location: { directory, workspaceID: undefined },
   } as unknown as SessionInfo
 }
 
@@ -51,19 +145,25 @@ afterEach(async () => {
   for (const close of closers.splice(0)) await close()
 })
 
-async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}, sessions = [sessionInfo("ses_1"), sessionInfo("ses_2")], verification: { verifyWindowMs?: number } = {}) {
+async function fixture(
+  results: Partial<Record<keyof LocalServer, unknown>> = {},
+  sessions = [sessionInfo("ses_1"), sessionInfo("ses_2")],
+  verification: { verifyWindowMs?: number } = {},
+) {
   results.listPage ??= async () => ({ data: sessions })
   results.getSession ??= async (sessionID: string) => sessions.find((info) => info.id === sessionID)
   results.outstandingSessions ??= { data: [], running: [], failed: [], lost: [] }
   const calls: Call[] = []
   const local = new Proxy({} as LocalServer, {
-    get: (_target, property: PropertyKey) => (...args: unknown[]) => {
-      calls.push({ method: String(property), args })
-      const result = results[property as keyof LocalServer]
-      if (typeof result === "function") return Promise.resolve((result as (...a: unknown[]) => unknown)(...args))
-      if (result instanceof Error) return Promise.reject(result)
-      return Promise.resolve(result)
-    },
+    get:
+      (_target, property: PropertyKey) =>
+      (...args: unknown[]) => {
+        calls.push({ method: String(property), args })
+        const result = results[property as keyof LocalServer]
+        if (typeof result === "function") return Promise.resolve((result as (...a: unknown[]) => unknown)(...args))
+        if (result instanceof Error) return Promise.reject(result)
+        return Promise.resolve(result)
+      },
   })
   const registry = createSessionRegistry({ local, ...verification })
   await registry.refresh()
@@ -72,7 +172,15 @@ async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}
   const holds: boolean[] = []
   const subscriptions = createSubscriptions()
   const create = () => {
-    const created = createRemoteMcp({ local, sessions: registry, subscriptions, resource, allowed: (epoch) => state.allowed && epoch === context.epoch, now: () => state.now, onLaneHold: (held) => holds.push(held) })
+    const created = createRemoteMcp({
+      local,
+      sessions: registry,
+      subscriptions,
+      resource,
+      allowed: (epoch) => state.allowed && epoch === context.epoch,
+      now: () => state.now,
+      onLaneHold: (held) => holds.push(held),
+    })
     closers.push(() => created.close())
     return created
   }
@@ -82,7 +190,11 @@ async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}
     await current.close()
     current = create()
   }
-  const request = (method: string, params: Record<string, unknown>, init: { name?: string; signal?: AbortSignal; body?: BodyInit; url?: string; verb?: string } = {}) =>
+  const request = (
+    method: string,
+    params: Record<string, unknown>,
+    init: { name?: string; signal?: AbortSignal; body?: BodyInit; url?: string; verb?: string } = {},
+  ) =>
     current.fetch(
       new Request(init.url ?? resource, {
         method: init.verb ?? "POST",
@@ -103,7 +215,11 @@ async function fixture(results: Partial<Record<keyof LocalServer, unknown>> = {}
   const run = async (name: string, args: Record<string, unknown> = {}) => {
     const response = await tool(name, args)
     expect(response.status).toBe(200)
-    return ((await response.json()) as { result: { isError?: boolean; structuredContent?: unknown; content: { text: string }[] } }).result
+    return (
+      (await response.json()) as {
+        result: { isError?: boolean; structuredContent?: unknown; content: { text: string }[] }
+      }
+    ).result
   }
   return { mcp, calls, state, request, tool, run, results, holds, restart }
 }
@@ -113,29 +229,50 @@ describe("inventory and discovery", () => {
     const { request } = await fixture()
     const discovered = await request("server/discover", {})
     expect(discovered.status).toBe(200)
-    const listed = (await (await request("tools/list", {})).json()) as { result: { tools: { name: string; inputSchema: Record<string, unknown> }[] } }
+    const listed = (await (await request("tools/list", {})).json()) as {
+      result: { tools: { name: string; inputSchema: Record<string, unknown> }[] }
+    }
     expect(listed.result.tools.map((tool) => tool.name)).toEqual(expectedTools)
     for (const tool of listed.result.tools) {
       expect(tool.inputSchema.type).toBe("object")
       if (tool.name !== "usage_forecast") expect(tool.inputSchema.additionalProperties).toBe(false)
     }
-    const operations = RemoteMcpSchemas.tools.map((tool) => tool.operation).filter((operation) => operation !== "session.createInDirectory")
-    expect(operations.map(String).toSorted()).toEqual(remoteOperations.filter((operation) => !excludedOperations.includes(operation)).map(String).toSorted())
+    const operations = RemoteMcpSchemas.tools
+      .map((tool) => tool.operation)
+      .filter((operation) => operation !== "session.createInDirectory")
+    expect(operations.map(String).toSorted()).toEqual(
+      remoteOperations
+        .filter((operation) => !excludedOperations.includes(operation))
+        .map(String)
+        .toSorted(),
+    )
     expect(RemoteMcpSchemas.tools.at(-1)?.operation).toBe("session.createInDirectory")
     expect(new Set(expectedTools).size).toBe(88)
   })
 
   test("session-scoped tools require sessionID and parameterless ones publish no input", async () => {
-    type InputSchema = { required?: string[]; properties?: Record<string, InputSchema>; oneOf?: InputSchema[]; allOf?: InputSchema[] }
+    type InputSchema = {
+      required?: string[]
+      properties?: Record<string, InputSchema>
+      oneOf?: InputSchema[]
+      allOf?: InputSchema[]
+    }
     const schemas = new Map(RemoteMcpSchemas.tools.map((tool) => [tool.name, tool.inputSchema as InputSchema]))
-    expect(schemas.get("session_get")).toMatchObject({ required: ["sessionID"], properties: { sessionID: { type: "string" } } })
+    expect(schemas.get("session_get")).toMatchObject({
+      required: ["sessionID"],
+      properties: { sessionID: { type: "string" } },
+    })
     expect(schemas.get("session_get")?.properties?.input).toBeUndefined()
     expect(schemas.get("session_prompt")?.required).toEqual(["sessionID", "input"])
     expect(schemas.get("session_prompt")?.properties?.input?.required).toEqual(["id", "text"])
     expect(schemas.get("session_create")?.required).toEqual(["input"])
     expect(schemas.get("session_create")?.properties?.input?.required).toEqual(["id", "workspace"])
     for (const name of ["session_create", "session_create_in_directory"])
-      expect(schemas.get(name)?.properties?.input?.properties?.title).toMatchObject({ type: "string", minLength: 1, maxLength: 120 })
+      expect(schemas.get(name)?.properties?.input?.properties?.title).toMatchObject({
+        type: "string",
+        minLength: 1,
+        maxLength: 120,
+      })
     expect(schemas.get("provider_auth_key")?.properties?.sessionID).toBeUndefined()
     expect(schemas.get("provider_auth_key")?.properties?.input?.properties?.target?.oneOf).toHaveLength(2)
     expect(schemas.get("incident_guidance")?.required).toEqual(["input"])
@@ -148,64 +285,119 @@ describe("inventory and discovery", () => {
 describe("fixed artifact demo over authorized Relay MCP", () => {
   test("discovers only fixed resources and exports original PNG bytes without accessing a Session", async () => {
     const { request, run, calls } = await fixture()
-    const catalog = await (await request("tools/list", {})).json() as { result: { tools: { name: string; _meta?: unknown; outputSchema?: unknown }[] } }
-    expect(catalog.result.tools.find((tool) => tool.name === "artifact_demo_preview")).toMatchObject({ _meta: { ui: { resourceUri: "ui://ycoding/artifact-demo/v1.html" } } })
+    const catalog = (await (await request("tools/list", {})).json()) as {
+      result: { tools: { name: string; _meta?: unknown; outputSchema?: unknown }[] }
+    }
+    expect(catalog.result.tools.find((tool) => tool.name === "artifact_demo_preview")).toMatchObject({
+      _meta: { ui: { resourceUri: "ui://ycoding/artifact-demo/v1.html" } },
+    })
     expect(catalog.result.tools.find((tool) => tool.name === "artifact_demo_export")?._meta).toBeUndefined()
-    expect(catalog.result.tools.filter((tool) => tool.name.startsWith("artifact_demo_")).every((tool) => tool.outputSchema !== undefined)).toBe(true)
-    expect((await run("artifact_demo_preview")).structuredContent).toMatchObject({ variants: ["list", "cards"], hostVerification: "required" })
+    expect(
+      catalog.result.tools
+        .filter((tool) => tool.name.startsWith("artifact_demo_"))
+        .every((tool) => tool.outputSchema !== undefined),
+    ).toBe(true)
+    expect((await run("artifact_demo_preview")).structuredContent).toMatchObject({
+      variants: ["list", "cards"],
+      hostVerification: "required",
+    })
     const exported = await run("artifact_demo_export")
-    expect(exported.structuredContent).toMatchObject({ filename: "ycoding-demo.png", mime: "image/png", size: 79, sha256: "d3a97d031a3094c93d334c8e01e97c5a235ae1f44d5aab476d51311f16f0bce5", expiresAt: 901000 })
+    expect(exported.structuredContent).toMatchObject({
+      filename: "ycoding-demo.png",
+      mime: "image/png",
+      size: 79,
+      sha256: "d3a97d031a3094c93d334c8e01e97c5a235ae1f44d5aab476d51311f16f0bce5",
+      expiresAt: 901000,
+    })
     const link = exported.content[0] as unknown as { type: string; uri: string }
     expect(link.type).toBe("resource_link")
-    const read = async (uri: string) => (await (await request("resources/read", { uri }, { name: uri })).json()) as { result: { contents: { uri: string; mimeType: string; blob?: string; text?: string; _meta?: unknown }[] } }
+    const read = async (uri: string) =>
+      (await (await request("resources/read", { uri }, { name: uri })).json()) as {
+        result: { contents: { uri: string; mimeType: string; blob?: string; text?: string; _meta?: unknown }[] }
+      }
     const png = (await read(link.uri)).result.contents[0]
     const bytes = Buffer.from(png.blob ?? "", "base64")
     expect(bytes.length).toBe(79)
-    expect(createHash("sha256").update(bytes).digest("hex")).toBe("d3a97d031a3094c93d334c8e01e97c5a235ae1f44d5aab476d51311f16f0bce5")
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+      "d3a97d031a3094c93d334c8e01e97c5a235ae1f44d5aab476d51311f16f0bce5",
+    )
     expect(JSON.stringify(exported)).not.toContain(png.blob!)
     expect((await read(link.uri)).result.contents[0]).toEqual(png)
     const html = (await read("ui://ycoding/artifact-demo/v1.html")).result.contents[0]
-    expect(html).toMatchObject({ mimeType: "text/html;profile=mcp-app", _meta: { ui: { csp: { connectDomains: [], resourceDomains: [], frameDomains: [] } } } })
+    expect(html).toMatchObject({
+      mimeType: "text/html;profile=mcp-app",
+      _meta: { ui: { csp: { connectDomains: [], resourceDomains: [], frameDomains: [] } } },
+    })
     expect(html.text).toContain("ui/initialize")
-    const listed = await (await request("resources/list", {})).json() as { result: { resources: { uri: string }[] } }
+    const listed = (await (await request("resources/list", {})).json()) as { result: { resources: { uri: string }[] } }
     expect(listed.result.resources.map((item) => item.uri)).toEqual([html.uri, png.uri])
-    expect(await (await request("resources/templates/list", {})).json()).toMatchObject({ result: { resourceTemplates: [] } })
+    expect(await (await request("resources/templates/list", {})).json()).toMatchObject({
+      result: { resourceTemplates: [] },
+    })
     expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
   test("rejects paths, caller-selected Sessions and unknown resources; expiry never renews on retry", async () => {
     const { run, request, state, calls } = await fixture()
-    for (const name of ["artifact_demo_preview", "artifact_demo_export"]) for (const args of [{ path: "/etc/passwd" }, { sessionID: "ses_1" }, { input: { uri: "file:///etc/passwd" } }])
-      expect((await run(name, args)).isError).toBe(true)
-    for (const uri of ["file:///etc/passwd", "ui://ycoding/artifact-demo/../../secret", "artifact://ycoding-demo/unknown"])
-      expect(await (await request("resources/read", { uri }, { name: uri })).json()).toMatchObject({ error: { code: -32602, data: { uri } } })
+    for (const name of ["artifact_demo_preview", "artifact_demo_export"])
+      for (const args of [{ path: "/etc/passwd" }, { sessionID: "ses_1" }, { input: { uri: "file:///etc/passwd" } }])
+        expect((await run(name, args)).isError).toBe(true)
+    for (const uri of [
+      "file:///etc/passwd",
+      "ui://ycoding/artifact-demo/../../secret",
+      "artifact://ycoding-demo/unknown",
+    ])
+      expect(await (await request("resources/read", { uri }, { name: uri })).json()).toMatchObject({
+        error: { code: -32602, data: { uri } },
+      })
     const exported = await run("artifact_demo_export")
     const uri = (exported.content[0] as unknown as { uri: string }).uri
     state.now = 901000
     expect((await run("artifact_demo_export")).isError).toBe(true)
-    expect(await (await request("resources/read", { uri }, { name: uri })).json()).toMatchObject({ error: { code: -32602, data: { uri } } })
-    expect(await (await request("resources/list", {})).json()).toMatchObject({ result: { resources: [{ uri: "ui://ycoding/artifact-demo/v1.html" }] } })
+    expect(await (await request("resources/read", { uri }, { name: uri })).json()).toMatchObject({
+      error: { code: -32602, data: { uri } },
+    })
+    expect(await (await request("resources/list", {})).json()).toMatchObject({
+      result: { resources: [{ uri: "ui://ycoding/artifact-demo/v1.html" }] },
+    })
     expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
-  test.each(["tools/list", "resources/list", "resources/templates/list", "resources/read", "tools/call"])("rechecks authority after asynchronous admission for %s", async (method) => {
-    const { request, state, calls } = await fixture()
-    const started = Promise.withResolvers<void>()
-    const body = Promise.withResolvers<void>()
-    const params = method === "resources/read" ? { uri: "ui://ycoding/artifact-demo/v1.html" } : method === "tools/call" ? { name: "artifact_demo_export", arguments: {} } : {}
-    const target = "uri" in params ? params.uri : "name" in params ? params.name : undefined
-    const pending = request(method, params, { ...(target === undefined ? {} : { name: target }), body: new ReadableStream({ async start(controller) {
-      started.resolve()
-      await body.promise
-      controller.enqueue(new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params, _meta: meta } })))
-      controller.close()
-    } }) })
-    await started.promise
-    state.allowed = false
-    body.resolve()
-    expect((await pending).status).toBe(503)
-    expect(calls).toEqual([])
-  })
+  test.each(["tools/list", "resources/list", "resources/templates/list", "resources/read", "tools/call"])(
+    "rechecks authority after asynchronous admission for %s",
+    async (method) => {
+      const { request, state, calls } = await fixture()
+      const started = Promise.withResolvers<void>()
+      const body = Promise.withResolvers<void>()
+      const params =
+        method === "resources/read"
+          ? { uri: "ui://ycoding/artifact-demo/v1.html" }
+          : method === "tools/call"
+            ? { name: "artifact_demo_export", arguments: {} }
+            : {}
+      const target = "uri" in params ? params.uri : "name" in params ? params.name : undefined
+      const pending = request(method, params, {
+        ...(target === undefined ? {} : { name: target }),
+        body: new ReadableStream({
+          async start(controller) {
+            started.resolve()
+            await body.promise
+            controller.enqueue(
+              new TextEncoder().encode(
+                JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params, _meta: meta } }),
+              ),
+            )
+            controller.close()
+          },
+        }),
+      })
+      await started.promise
+      state.allowed = false
+      body.resolve()
+      expect((await pending).status).toBe(503)
+      expect(calls).toEqual([])
+    },
+  )
 
   test("cancelled and closed resource reads disclose no bytes, and a safe read retry retains identity", async () => {
     const { request, run, mcp } = await fixture()
@@ -229,7 +421,9 @@ describe("tool calls run the connector operations", () => {
     expect(result.isError).toBeUndefined()
     expect(result.structuredContent).toEqual({ data: [] })
     expect(calls.filter((call) => call.method === "integrationList")).toHaveLength(1)
-    expect((await run("provider_auth_list", { input: { target: { sessionID: "ses_1" }, integrationID: "extra" } })).isError).toBe(true)
+    expect(
+      (await run("provider_auth_list", { input: { target: { sessionID: "ses_1" }, integrationID: "extra" } })).isError,
+    ).toBe(true)
   })
 
   test("returns the complete connector value as structured content and matching text", async () => {
@@ -242,13 +436,20 @@ describe("tool calls run the connector operations", () => {
 
   test("refuses inputs the published schema does not allow before Session operations", async () => {
     const { run, calls } = await fixture()
-    for (const args of [{}, { sessionID: "ses_1", input: {} }, { sessionID: "ses_1", extra: 1 }, { sessionID: "bad id" }]) {
+    for (const args of [
+      {},
+      { sessionID: "ses_1", input: {} },
+      { sessionID: "ses_1", extra: 1 },
+      { sessionID: "bad id" },
+    ]) {
       expect((await run("session_get", args)).isError).toBe(true)
     }
     expect((await run("session_prompt", { sessionID: "ses_1", input: { text: "hi" } })).isError).toBe(true)
     expect((await run("session_create", { input: { workspace: "wsp_1" } })).isError).toBe(true)
     expect((await run("session_list", { sessionID: "ses_1" })).isError).toBe(true)
-    expect((await run("provider_auth_list", { sessionID: "ses_1", input: { target: { sessionID: "ses_1" } } })).isError).toBe(true)
+    expect(
+      (await run("provider_auth_list", { sessionID: "ses_1", input: { target: { sessionID: "ses_1" } } })).isError,
+    ).toBe(true)
     expect(calls.every((call) => call.method === "mcpEventsStatus")).toBe(true)
   })
 
@@ -256,7 +457,11 @@ describe("tool calls run the connector operations", () => {
     const { run, calls, results } = await fixture({ prompt: { id: "msg_one" } })
     const sent = await run("session_prompt", { sessionID: "ses_1", input: { id: "msg_one", text: "hi" } })
     expect(sent.structuredContent).toEqual({ data: { id: "msg_one" } })
-    expect(calls.find((call) => call.method === "prompt")?.args).toEqual(["ses_1", { directory: "/work" }, { id: "msg_one", text: "hi" }])
+    expect(calls.find((call) => call.method === "prompt")?.args).toEqual([
+      "ses_1",
+      { directory: "/work" },
+      { id: "msg_one", text: "hi" },
+    ])
     results.prompt = new LocalFailure("transport", "no response")
     const unknown = await run("session_prompt", { sessionID: "ses_1", input: { id: "msg_two", text: "hi" } })
     expect(unknown.isError).toBe(true)
@@ -267,11 +472,18 @@ describe("tool calls run the connector operations", () => {
 
   test("usage_forecast ties the Location scope to sessionID", async () => {
     const { run, calls } = await fixture({ usageForecast: { data: { ok: true } } })
-    expect((await run("usage_forecast", { input: { localScope: "backend" } })).structuredContent).toEqual({ data: { ok: true } })
-    expect((await run("usage_forecast", { sessionID: "ses_1", input: { localScope: "location" } })).isError).toBeUndefined()
+    expect((await run("usage_forecast", { input: { localScope: "backend" } })).structuredContent).toEqual({
+      data: { ok: true },
+    })
+    expect(
+      (await run("usage_forecast", { sessionID: "ses_1", input: { localScope: "location" } })).isError,
+    ).toBeUndefined()
     expect((await run("usage_forecast", { input: { localScope: "location" } })).isError).toBe(true)
     expect((await run("usage_forecast", { sessionID: "ses_1", input: { localScope: "backend" } })).isError).toBe(true)
-    expect(calls.filter((call) => call.method === "usageForecast").map((call) => call.args)).toEqual([["backend"], ["location", { directory: "/work" }]])
+    expect(calls.filter((call) => call.method === "usageForecast").map((call) => call.args)).toEqual([
+      ["backend"],
+      ["location", { directory: "/work" }],
+    ])
   })
 
   test("incident guidance keeps its optional Session and resolves its Location through the connector", async () => {
@@ -315,7 +527,14 @@ describe("routing descriptors", () => {
 
 describe("result conversion", () => {
   test("names the machine update for an operation an older connector does not know", () => {
-    const result = toolResult([{ type: "response", id: "r", ok: false, error: { code: "unknown_operation", message: "Operation is not proxied by this agent" } }])
+    const result = toolResult([
+      {
+        type: "response",
+        id: "r",
+        ok: false,
+        error: { code: "unknown_operation", message: "Operation is not proxied by this agent" },
+      },
+    ])
     expect(result.isError).toBe(true)
     expect(result.content[0]!.text).toContain("Update YCoding on this machine")
   })
@@ -331,9 +550,15 @@ describe("result conversion", () => {
 
   test("fails explicitly past the result bound and for incomplete chunk sequences", () => {
     const frames = successFrames("r", { data: "x".repeat(RemoteLimits.maxAgentMessageChars + 5_000) })
-    expect(toolResult(frames, 1_000).structuredContent).toEqual({ error: { code: "message_too_large", message: expect.any(String) } })
-    expect(toolResult(frames.slice(0, 1), 10_000_000).structuredContent).toEqual({ error: { code: "internal_error", message: expect.any(String) } })
-    expect(toolResult(successFrames("r", { data: "y".repeat(2_000) }), 1_000).structuredContent).toEqual({ error: { code: "message_too_large", message: expect.any(String) } })
+    expect(toolResult(frames, 1_000).structuredContent).toEqual({
+      error: { code: "message_too_large", message: expect.any(String) },
+    })
+    expect(toolResult(frames.slice(0, 1), 10_000_000).structuredContent).toEqual({
+      error: { code: "internal_error", message: expect.any(String) },
+    })
+    expect(toolResult(successFrames("r", { data: "y".repeat(2_000) }), 1_000).structuredContent).toEqual({
+      error: { code: "message_too_large", message: expect.any(String) },
+    })
   })
 })
 
@@ -350,7 +575,9 @@ describe("mutation ordering", () => {
       interrupt: async () => {},
     })
     expect((await run("session_switch_model", { sessionID: "ses_1", input: { model: target } })).isError).toBe(true)
-    expect((await run("session_interrupt", { sessionID: "ses_1" })).structuredContent).toMatchObject({ error: { code: "outcome_unknown" } })
+    expect((await run("session_interrupt", { sessionID: "ses_1" })).structuredContent).toMatchObject({
+      error: { code: "outcome_unknown" },
+    })
     expect(calls.filter((call) => call.method === "interrupt")).toEqual([])
     expect(holds).toEqual([true])
   })
@@ -365,7 +592,9 @@ describe("mutation ordering", () => {
       interrupt: async () => {},
     })
     state.unavailable = true
-    expect((await run("session_interrupt", { sessionID: "ses_1" })).structuredContent).toMatchObject({ error: { code: "internal_error" } })
+    expect((await run("session_interrupt", { sessionID: "ses_1" })).structuredContent).toMatchObject({
+      error: { code: "internal_error" },
+    })
     expect(calls.filter((call) => call.method === "interrupt")).toEqual([])
     expect(holds).toEqual([])
     state.unavailable = false
@@ -396,7 +625,9 @@ describe("mutation ordering", () => {
     expect((await run("session_interrupt", { sessionID: "ses_1" })).isError).toBe(true)
     expect(calls.filter((call) => call.method === "interrupt")).toEqual([])
     expect((await run("session_get", { sessionID: "ses_1" })).isError).toBeUndefined()
-    expect((await run("session_prompt", { sessionID: "ses_2", input: { id: "msg_other", text: "Other Session" } })).isError).toBeUndefined()
+    expect(
+      (await run("session_prompt", { sessionID: "ses_2", input: { id: "msg_other", text: "Other Session" } })).isError,
+    ).toBeUndefined()
   })
 
   test("holds a Session's mutation lane through settlement while other Sessions and reads proceed", async () => {
@@ -419,7 +650,9 @@ describe("mutation ordering", () => {
     const slow = tool("session_prompt", { sessionID: "ses_1", input: { id: "msg_slow", text: "a" } })
     await firstStarted.promise
     const interrupt = tool("session_interrupt", { sessionID: "ses_1" })
-    expect((await run("session_prompt", { sessionID: "ses_2", input: { id: "msg_other", text: "b" } })).isError).toBeUndefined()
+    expect(
+      (await run("session_prompt", { sessionID: "ses_2", input: { id: "msg_other", text: "b" } })).isError,
+    ).toBeUndefined()
     expect((await run("session_get", { sessionID: "ses_1" })).isError).toBeUndefined()
     expect(order).toEqual(["prompt:ses_1:msg_slow", "prompt:ses_2:msg_other"])
     releaseFirst.resolve({ id: "msg_slow" })
@@ -437,7 +670,12 @@ describe("mutation ordering", () => {
       },
     })
     const body = (id: string) =>
-      JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "session_prompt", arguments: { sessionID: "ses_1", input: { id, text: "t" } }, _meta: meta } })
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "session_prompt", arguments: { sessionID: "ses_1", input: { id, text: "t" } }, _meta: meta },
+      })
     const delayed = new TransformStream<Uint8Array>()
     const writer = delayed.writable.getWriter()
     const first = request("tools/call", {}, { name: "session_prompt", body: delayed.readable })
@@ -485,7 +723,10 @@ describe("unknown outcome holds", () => {
   const unknown = () => {
     throw new LocalFailure("transport", "Local deadline expired")
   }
-  const sessionsWith = (model: Record<string, string>) => [{ ...sessionInfo("ses_1"), model } as unknown as SessionInfo, sessionInfo("ses_2")]
+  const sessionsWith = (model: Record<string, string>) => [
+    { ...sessionInfo("ses_1"), model } as unknown as SessionInfo,
+    sessionInfo("ses_2"),
+  ]
   const select = (sessions: SessionInfo[], model: Record<string, string>) => {
     sessions[0] = { ...sessions[0], model } as unknown as SessionInfo
   }
@@ -558,17 +799,20 @@ describe("unknown outcome holds", () => {
   test("a switch whose Session cannot be read is refused before dispatch and does not hold the Session", async () => {
     const sessions = sessionsWith({ providerID: "test", id: "model" })
     const gate = { unreadable: false }
-    const { run, calls, holds } = await fixture({
-      getSession: (sessionID: string) => {
-        if (gate.unreadable) {
-          gate.unreadable = false
-          throw new LocalFailure("transport", "Local server unreachable")
-        }
-        return sessions.find((info) => info.id === sessionID)
+    const { run, calls, holds } = await fixture(
+      {
+        getSession: (sessionID: string) => {
+          if (gate.unreadable) {
+            gate.unreadable = false
+            throw new LocalFailure("transport", "Local server unreachable")
+          }
+          return sessions.find((info) => info.id === sessionID)
+        },
+        switchModel: undefined,
+        prompt: { id: "msg_after" },
       },
-      switchModel: undefined,
-      prompt: { id: "msg_after" },
-    }, sessions)
+      sessions,
+    )
     gate.unreadable = true
     const refused = await run("session_switch_model", switchTo(target))
     expect(refused.isError).toBe(true)
@@ -601,7 +845,11 @@ describe("unknown outcome holds", () => {
   })
 
   test("a held prompt retry that fails or stays unknown keeps the Session held", async () => {
-    const failures = [new LocalFailure("transport", "Local deadline expired"), new LocalFailure("invalid", "Rejected"), new LocalFailure("transport", "Local deadline expired")]
+    const failures = [
+      new LocalFailure("transport", "Local deadline expired"),
+      new LocalFailure("invalid", "Rejected"),
+      new LocalFailure("transport", "Local deadline expired"),
+    ]
     const attempts: string[] = []
     const { run, holds } = await fixture({
       prompt: (_sessionID: string, _location: unknown, input: { id: string }) => {
@@ -621,13 +869,16 @@ describe("unknown outcome holds", () => {
 
   test("an unknown interrupt holds every other mutation of its Session, including any prompt ID, while reads and other Sessions continue", async () => {
     const sessions = sessionsWith({ providerID: "test", id: "model" })
-    const { run, calls, holds } = await fixture({
-      interrupt: (sessionID: string) => {
-        if (sessionID === "ses_1") unknown()
+    const { run, calls, holds } = await fixture(
+      {
+        interrupt: (sessionID: string) => {
+          if (sessionID === "ses_1") unknown()
+        },
+        prompt: { id: "msg_any" },
+        switchModel: undefined,
       },
-      prompt: { id: "msg_any" },
-      switchModel: undefined,
-    }, sessions)
+      sessions,
+    )
     expect(codeOf(await run("session_interrupt", { sessionID: "ses_1" }))).toBe("outcome_unknown")
     select(sessions, target)
     expect(codeOf(await run("session_interrupt", { sessionID: "ses_1" }))).toBe("outcome_unknown")
@@ -645,20 +896,25 @@ describe("unknown outcome holds", () => {
     const sessions = sessionsWith({ providerID: "test", id: "model" })
     const started = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
-    const { tool, calls } = await fixture({
-      switchModel: async (_sessionID: string, _location: unknown, model: Record<string, string>) => {
-        started.resolve()
-        await release.promise
-        select(sessions, model)
-        unknown()
+    const { tool, calls } = await fixture(
+      {
+        switchModel: async (_sessionID: string, _location: unknown, model: Record<string, string>) => {
+          started.resolve()
+          await release.promise
+          select(sessions, model)
+          unknown()
+        },
+        prompt: { id: "msg_queued" },
       },
-      prompt: { id: "msg_queued" },
-    }, sessions)
+      sessions,
+    )
     const first = tool("session_switch_model", switchTo(target))
     await started.promise
     const queued = tool("session_prompt", promptWith("msg_queued"))
     release.resolve()
-    expect(((await (await first).json()) as { result: Result }).result.structuredContent).toMatchObject({ error: { code: "outcome_unknown" } })
+    expect(((await (await first).json()) as { result: Result }).result.structuredContent).toMatchObject({
+      error: { code: "outcome_unknown" },
+    })
     expect(((await (await queued).json()) as { result: Result }).result.isError).toBeUndefined()
     expect(count(calls, "prompt")).toBe(1)
   })
@@ -667,15 +923,18 @@ describe("unknown outcome holds", () => {
     const sessions = sessionsWith({ providerID: "test", id: "model" })
     const started = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
-    const { tool, calls, state } = await fixture({
-      switchModel: async (_sessionID: string, _location: unknown, model: Record<string, string>) => {
-        started.resolve()
-        await release.promise
-        select(sessions, model)
-        unknown()
+    const { tool, calls, state } = await fixture(
+      {
+        switchModel: async (_sessionID: string, _location: unknown, model: Record<string, string>) => {
+          started.resolve()
+          await release.promise
+          select(sessions, model)
+          unknown()
+        },
+        prompt: { id: "msg_queued" },
       },
-      prompt: { id: "msg_queued" },
-    }, sessions)
+      sessions,
+    )
     const first = tool("session_switch_model", switchTo(target))
     await started.promise
     const queued = tool("session_prompt", promptWith("msg_queued"))
@@ -683,13 +942,17 @@ describe("unknown outcome holds", () => {
     const mark = calls.length
     release.resolve()
     await first
-    expect(((await (await queued).json()) as { result: Result }).result.structuredContent).toMatchObject({ error: { code: "agent_unavailable" } })
+    expect(((await (await queued).json()) as { result: Result }).result.structuredContent).toMatchObject({
+      error: { code: "agent_unavailable" },
+    })
     expect(calls.slice(mark).map((call) => call.method)).toEqual([])
   })
 
   test("the confirmation read bypasses the Session verification window", async () => {
     const sessions = sessionsWith({ providerID: "test", id: "model" })
-    const { run, holds } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions, { verifyWindowMs: 3_600_000 })
+    const { run, holds } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions, {
+      verifyWindowMs: 3_600_000,
+    })
     expect((await run("session_get", { sessionID: "ses_1" })).isError).toBeUndefined()
     await run("session_switch_model", switchTo(target))
     select(sessions, target)
@@ -699,7 +962,10 @@ describe("unknown outcome holds", () => {
 
   test("a restarted endpoint starts without holds and never replays the earlier call", async () => {
     const sessions = sessionsWith({ providerID: "test", id: "model" })
-    const { run, calls, holds, restart } = await fixture({ switchModel: unknown, prompt: { id: "msg_after" } }, sessions)
+    const { run, calls, holds, restart } = await fixture(
+      { switchModel: unknown, prompt: { id: "msg_after" } },
+      sessions,
+    )
     await run("session_switch_model", switchTo(target))
     await restart()
     expect(holds).toEqual([true, false])
@@ -738,7 +1004,8 @@ describe("authorization gate and request shape", () => {
     state.allowed = false
     release.resolve({ id: "msg_a" })
     await first
-    const refused = ((await (await second).json()) as { result: { isError: boolean; structuredContent: unknown } }).result
+    const refused = ((await (await second).json()) as { result: { isError: boolean; structuredContent: unknown } })
+      .result
     expect(refused.isError).toBe(true)
     expect(refused.structuredContent).toMatchObject({ error: { code: "agent_unavailable" } })
     expect(calls.filter((call) => call.method === "prompt")).toHaveLength(1)
@@ -747,7 +1014,9 @@ describe("authorization gate and request shape", () => {
   test("serves only POST at the fixed resource, with bounded bodies and no caching", async () => {
     const { request, tool } = await fixture()
     expect((await request("tools/list", {}, { verb: "GET", body: undefined })).status).toBe(405)
-    expect((await request("tools/list", {}, { url: "https://relay.example.com/api/mcp/devices/other" })).status).toBe(404)
+    expect((await request("tools/list", {}, { url: "https://relay.example.com/api/mcp/devices/other" })).status).toBe(
+      404,
+    )
     expect((await request("tools/list", {}, { url: `${resource}?x=1` })).status).toBe(404)
     expect((await request("tools/call", {}, { name: "session_get", body: "x".repeat(200_000) })).status).toBe(413)
     expect((await tool("session_get", { sessionID: "ses_1" })).headers.get("cache-control")).toBe("no-store")

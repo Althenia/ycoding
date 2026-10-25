@@ -15,6 +15,7 @@ import { Global } from "./global"
 import { InstallationVersion } from "./installation/version"
 import { createClaudeCodeCredentialStore } from "./plugin/provider/anthropic-claude-code-account"
 import { createManagedClaudeCodeCredentialSource } from "./plugin/provider/anthropic-claude-code-login"
+import { OpenAICodex } from "./plugin/provider/openai-codex"
 import { join } from "node:path"
 import { AntigravityUsage } from "./provider-usage/antigravity"
 import { CopilotUsage } from "./provider-usage/copilot"
@@ -942,7 +943,7 @@ export const openAI = (
         http,
         "https://chatgpt.com/backend-api/wham/usage",
         snapshot.value.access,
-        CodexUsage.accountHeaders(snapshot.value),
+        { ...OpenAICodex.headers(), ...CodexUsage.accountHeaders(snapshot.value) },
       )
       return CodexUsage.normalize({
         providerID: input.providerID,

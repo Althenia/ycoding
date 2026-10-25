@@ -88,6 +88,8 @@ The Worker also serves Relay MCP for each enrolled device: the resource `/api/mc
 3. Deploy the Worker and web assets, and update every connector machine with `ycoding update` and a service restart. A connector without Relay MCP answers MCP requests with a machine-update error.
 4. Enroll and connect the device, then enable Relay MCP on that machine with `ycoding remote mcp on` or the TUI **Relay MCP** toggle. The device URL printed by `ycoding remote mcp status` is the MCP server URL for the client.
 
+Relay MCP's tool surface excludes the six `session.dots.*` operations, so MCP clients cannot read Dots destinations, bind, send, pause, or resume. The browser relay forwards those operations to the local runtime unchanged, and the connector rejects bind, send, pause, and resume for child Sessions other than `btw` side chats.
+
 Relay MCP needs no new binding, secret, token-signing key, extra D1 database, Cloudflare Tunnel, or third-party MCP configuration. Access tokens are opaque and stored only as digests, so there is no key to rotate. Turning Relay MCP off, revoking the device, or deleting the account deletes the device's grants. Relay MCP responses and OAuth pages are `Cache-Control: no-store`; the Worker does not log authorization queries, bodies, tokens, tool inputs, or results.
 
 ### App preview Worker

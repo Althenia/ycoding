@@ -49,7 +49,10 @@ test("preserves explicit default model selection alongside model metadata", asyn
 test("R7 sends explicit goal resume and preserves the returned objective", async () => {
   const requests: Request[] = []
   const state = {
-    mode: "normal", permissions: "manual", guardrails: "yolo", answers: "auto",
+    mode: "normal",
+    permissions: "manual",
+    guardrails: "yolo",
+    answers: "auto",
     goal: { text: "Verify the release", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 3 },
   }
   const client = YCoding.make({
@@ -69,10 +72,13 @@ test("R7 sends explicit goal resume and preserves the returned objective", async
 test("outstanding reports lost shell notices through the generated Session client", async () => {
   const requests: Request[] = []
   const result = { data: [], running: [], failed: [], lost: ["ses_lost_shell"] }
-  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (input, init) => {
-    requests.push(input instanceof Request ? input : new Request(input, init))
-    return Response.json(result)
-  } })
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      requests.push(input instanceof Request ? input : new Request(input, init))
+      return Response.json(result)
+    },
+  })
   expect(await client.session.outstanding()).toEqual(result)
   expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
     ["GET", "/api/session/outstanding"],
@@ -86,10 +92,18 @@ test("keep-awake methods use the local-runtime HTTP contract without a Session o
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
-      return Response.json({ data: request.method === "PUT" ? { state: "on" } : { state: "unsupported", message: "Keep machine awake is available on macOS only." } })
+      return Response.json({
+        data:
+          request.method === "PUT"
+            ? { state: "on" }
+            : { state: "unsupported", message: "Keep machine awake is available on macOS only." },
+      })
     },
   })
-  expect(await client.keepAwake.get()).toEqual({ state: "unsupported", message: "Keep machine awake is available on macOS only." })
+  expect(await client.keepAwake.get()).toEqual({
+    state: "unsupported",
+    message: "Keep machine awake is available on macOS only.",
+  })
   expect(await client.keepAwake.set({ enabled: true })).toEqual({ state: "on" })
   expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
     ["GET", "/api/keep-awake"],
@@ -101,18 +115,30 @@ test("keep-awake methods use the local-runtime HTTP contract without a Session o
 
 test("generated telemetry methods address one local machine without Session or Location input", async () => {
   const requests: Request[] = []
-  const sample = { kind: "request" as const, at: "2026-10-04T12:00:00.000Z", operation: "session.list" as const,
-    outcome: "ok" as const, queueMs: 1, settlementMs: 2, totalMs: 3 }
-  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (input, init) => {
-    const request = input instanceof Request ? input : new Request(input, init)
-    requests.push(request)
-    return Response.json(request.method === "POST" ? { accepted: 1 } :
-      { data: [{ receivedAt: 100, sample }], cursor: {} })
-  } })
+  const sample = {
+    kind: "request" as const,
+    at: "2026-10-04T12:00:00.000Z",
+    operation: "session.list" as const,
+    outcome: "ok" as const,
+    queueMs: 1,
+    settlementMs: 2,
+    totalMs: 3,
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json(
+        request.method === "POST" ? { accepted: 1 } : { data: [{ receivedAt: 100, sample }], cursor: {} },
+      )
+    },
+  })
   expect(await client.server.telemetry.append({ samples: [sample] })).toEqual({ accepted: 1 })
   expect(await client.server.telemetry.list({ limit: 1 })).toEqual({ data: [{ receivedAt: 100, sample }], cursor: {} })
   expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
-    ["POST", "/api/server/web-latency"], ["GET", "/api/server/web-latency"],
+    ["POST", "/api/server/web-latency"],
+    ["GET", "/api/server/web-latency"],
   ])
   expect(await requests[0].json()).toEqual({ samples: [sample] })
   expect(new URL(requests[1].url).searchParams.get("limit")).toBe("1")
@@ -121,15 +147,35 @@ test("generated telemetry methods address one local machine without Session or L
 
 test("sends global MCP Events requests through the generated client without Location input", async () => {
   const requests: Request[] = []
-  const context = { requestID: "request_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" }, epoch: "epoch_fixture" }
-  const subscription = { name: "session.completed" as const, arguments: { session_id: "ses_fixture", include_descendants: false }, delivery: { mode: "webhook" as const, url: "https://callback.example/events", secret: "fixture-secret" } }
+  const context = {
+    requestID: "request_fixture",
+    principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" },
+    epoch: "epoch_fixture",
+  }
+  const subscription = {
+    name: "session.completed" as const,
+    arguments: { session_id: "ses_fixture", include_descendants: false },
+    delivery: { mode: "webhook" as const, url: "https://callback.example/events", secret: "fixture-secret" },
+  }
   const subscribed = { id: "subscription_fixture", refreshBefore: null, cursor: null, truncated: false }
-  const client = YCoding.make({ baseUrl: "http://localhost:3000", fetch: async (input, init) => {
-    const request = input instanceof Request ? input : new Request(input, init)
-    requests.push(request)
-    const route = new URL(request.url).pathname.split("/").at(-1)
-    return Response.json({ data: route === "status" ? { available: true } : route === "catalog" ? { events: [] } : route === "subscribe" ? subscribed : {} })
-  } })
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      const route = new URL(request.url).pathname.split("/").at(-1)
+      return Response.json({
+        data:
+          route === "status"
+            ? { available: true }
+            : route === "catalog"
+              ? { events: [] }
+              : route === "subscribe"
+                ? subscribed
+                : {},
+      })
+    },
+  })
   expect(await client.mcpEvents.status()).toEqual({ available: true })
   expect(await client.mcpEvents.list({ cursor: "next+page" })).toEqual({ events: [] })
   expect(await client.mcpEvents.subscribe({ context, subscription })).toEqual(subscribed)
@@ -144,7 +190,11 @@ test("sends global MCP Events requests through the generated client without Loca
   expect(new URL(requests[1]!.url).searchParams.get("cursor")).toBe("next+page")
   expect(await requests[2]!.json()).toEqual({ context, subscription })
   expect(await requests[3]!.json()).toEqual({ context, subscription: unsubscribe })
-  expect(requests.every((request) => !request.headers.has("x-ycoding-directory") && !new URL(request.url).searchParams.has("location"))).toBe(true)
+  expect(
+    requests.every(
+      (request) => !request.headers.has("x-ycoding-directory") && !new URL(request.url).searchParams.has("location"),
+    ),
+  ).toBe(true)
 })
 
 test("exposes every standard HTTP API group", () => {
@@ -191,8 +241,10 @@ test("exposes every standard HTTP API group", () => {
     "review",
     "mcpEvents",
     "coordination",
+    "dots",
   ])
   expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete"])
+  expect(Object.keys(client.dots)).toEqual(["targets", "status", "bind", "send", "pause", "resume"])
   expect(Object.keys(client.mcpEvents)).toEqual(["status", "list", "subscribe", "unsubscribe"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])

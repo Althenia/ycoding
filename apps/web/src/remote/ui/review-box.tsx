@@ -2,6 +2,7 @@ import { For, Show, createMemo, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
 import type { FormAnswerView, ReviewItemView, ReviewReason } from "../projection"
+import { permissionDisplay } from "../projection"
 import type { ReviewDecision } from "../store"
 import { FormRequest } from "./form-request"
 import { TeamAnswerForm } from "./subagent-bar"
@@ -34,6 +35,7 @@ function ReviewItemCard(props: { readonly item: () => ReviewItemView; readonly o
   const hard = () => { const item = props.item(); return item.kind === "guardrail" && item.hardReview }
   const guardrail = () => { const item = props.item(); return item.kind === "guardrail" ? item : undefined }
   const permission = () => { const item = props.item(); return item.kind === "permission" ? item : undefined }
+  const permissionView = () => { const item = permission(); return item ? permissionDisplay(item) : undefined }
   const question = () => { const item = props.item(); return item.kind === "question" ? item : undefined }
   const subagent = () => { const item = props.item(); return item.kind === "subagent_question" ? item : undefined }
   const recovery = () => { const item = props.item(); return item.kind === "recovery" ? item : undefined }
@@ -68,14 +70,15 @@ function ReviewItemCard(props: { readonly item: () => ReviewItemView; readonly o
         <button type="button" class="button button--danger button--small" disabled={busy()} onClick={() => decide({ kind: "guardrail", reply: "reject" })}>Reject</button>
       </div>
     </>}</Show>
-    <Show when={permission()}>{(item) => <>
-      <p class="request__body"><strong>{item().action}</strong><Show when={item().resources.length}><span> on {item().resources.join(", ")}</span></Show></p>
+    <Show when={permission()}>
+      <p class="request__body"><strong>{permissionView()?.action}</strong><Show when={permissionView()?.resources.length}><span> on {permissionView()?.resources.join(", ")}</span></Show></p>
+      <Show when={permissionView()?.always}>{(scope) => <p class="request__note">{scope()}</p>}</Show>
       <div class="request__actions">
         <button type="button" class="button button--primary button--small" disabled={busy()} onClick={() => decide({ kind: "permission", reply: "once" })}>Approve once</button>
-        <button type="button" class="button button--secondary button--small" disabled={busy()} onClick={() => decide({ kind: "permission", reply: "always" })}>Always</button>
+        <Show when={permissionView()?.always}><button type="button" class="button button--secondary button--small" disabled={busy()} onClick={() => decide({ kind: "permission", reply: "always" })}>Always this session</button></Show>
         <button type="button" class="button button--danger button--small" disabled={busy()} onClick={() => decide({ kind: "permission", reply: "reject" })}>Reject</button>
       </div>
-    </>}</Show>
+    </Show>
     <Show when={recovery()}>{(item) => <>
       <p class="request__body">This subagent was working when the service restarted. These tool calls may or may not have finished, so their results are unknown:</p>
       <For each={item().tools}>{(tool) => <p class="request__body" data-recovery-tool><code>{tool.name}</code><span> · call </span><code>{tool.callID}</code><span> · message </span><code>{tool.messageID}</code></p>}</For>

@@ -8,6 +8,8 @@ import {
   type ProviderMetadata,
 } from "@ycoding-ai/ai"
 import { Effect, Option, Schema } from "effect"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { DotsPeer } from "../../dots/peer"
 import type { AttachmentStore } from "../../attachment-store"
 import type { CatalogModel } from "../../model"
 import { SessionMessage } from "../message"
@@ -394,7 +396,23 @@ function toLLMMessage(
           },
         }),
       ]
-    case "synthetic":
+    case "synthetic": {
+      const peer = Dots.peer(message.metadata)
+      if (peer) {
+        const id = `dots-peer:${message.id}`
+        return [
+          Message.make({
+            id: `${message.id}:source`,
+            role: "assistant",
+            content: [ToolCallPart.make({ id, name: "dots_peer_message", input: { dotID: peer.dotID, threadID: peer.threadID, itemID: peer.itemID } })],
+          }),
+          Message.make({
+            id: message.id,
+            role: "tool",
+            content: [ToolResultPart.make({ id, name: "dots_peer_message", result: DotsPeer.context(peer, message.text), resultType: "text" })],
+          }),
+        ]
+      }
       if (message.metadata?.remoteCompactionV2 === true) {
         const state = materialized.get(SessionProviderState.key(message.id, 0, "reasoning"))
         if (
@@ -416,6 +434,7 @@ function toLLMMessage(
         ]
       }
       return [Message.make({ id: message.id, role: "user", content: message.text })]
+    }
     case "skill":
       return [Message.make({ id: message.id, role: "user", content: message.text, metadata: message.metadata })]
     case "system":

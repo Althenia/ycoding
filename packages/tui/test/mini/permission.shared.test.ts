@@ -124,8 +124,8 @@ describe("run permission shared", () => {
     })
 
     expect(permissionInfo(req({ action: "custom_tool" }))).toMatchObject({
-      title: "Call tool custom_tool",
-      lines: ["Tool: custom_tool"],
+      title: "Call tool Custom Tool",
+      lines: ["Tool: Custom Tool"],
     })
   })
 
@@ -182,11 +182,11 @@ describe("run permission shared", () => {
 
   test("formats always-allow copy for wildcard and explicit patterns", () => {
     expect(permissionAlwaysLines(req({ action: "bash", save: ["*"] }))).toEqual([
-      "This will allow bash until YCoding is restarted.",
+      "Allow Bash for all resources in this Session.",
     ])
 
     expect(permissionAlwaysLines(req({ save: ["src/**/*.ts", "src/**/*.tsx"] }))).toEqual([
-      "This will allow the following patterns until YCoding is restarted.",
+      "Allow Read for these resource patterns in this Session:",
       "- src/**/*.ts",
       "- src/**/*.tsx",
     ])

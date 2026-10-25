@@ -11,8 +11,7 @@ import { ModelIncident } from "../model-incident/index"
 import { EventRuntime } from "../event"
 import { Form } from "../form"
 import { Question } from "../question"
-import { PermissionSaved } from "../permission/saved"
-import { Project } from "../project"
+import { PermissionSession } from "../permission/session"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionOrchestration } from "./orchestration"
@@ -70,7 +69,7 @@ const layer = Layer.effect(
     const events = yield* EventRuntime.Service
     const sessions = yield* Session.Service
     const orchestration = yield* SessionOrchestration.Service
-    const saved = yield* PermissionSaved.Service
+    const permissions = yield* PermissionSession.Service
     const locks = KeyedMutex.makeUnsafe<ID>()
 
     const deliver = Effect.fnUntraced(function* (
@@ -152,18 +151,7 @@ const layer = Layer.effect(
             `The user rejected deferred permission item ${item.itemID} (${item.payload.action}). Do not retry it; choose another approach or report the blocker to the user.`,
           )
         if (decision.reply === "always" && item.payload.save && item.payload.save.length > 0) {
-          const row = yield* db
-            .select({ projectID: SessionTable.project_id })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, owner))
-            .get()
-            .pipe(Effect.orDie)
-          if (row)
-            yield* saved.add({
-              projectID: Project.ID.make(row.projectID),
-              action: item.payload.action,
-              resources: [...item.payload.save],
-            })
+          yield* permissions.remember({ sessionID: owner, action: item.payload.action, resources: item.payload.save })
         }
         return yield* prompt(
           `The user approved deferred permission item ${item.itemID} ${decision.reply === "always" ? "always" : "once"}: ${item.payload.action} on ${item.payload.resources.join(", ")}. Re-issue exactly that action now if it is still needed; the approval covers one identical request from this Session.`,
@@ -336,5 +324,5 @@ function validate(item: SessionReviewFold.Folded, decision: SessionReview.Decisi
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventRuntime.node, Session.node, SessionOrchestration.node, PermissionSaved.node],
+  deps: [Database.node, EventRuntime.node, Session.node, SessionOrchestration.node, PermissionSession.node],
 })

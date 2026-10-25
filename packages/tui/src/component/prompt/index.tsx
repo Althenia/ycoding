@@ -25,6 +25,9 @@ import { useExit } from "../../context/exit"
 import { promptCommandPalette, promptOffsetWidth } from "../../prompt/display"
 import { expandPromptInputPastedText, realignPromptInputMentions } from "../../prompt/mention"
 import { parseSlashHead } from "../../prompt/parse"
+import { createDotsCapability, dotsInput } from "../../prompt/dots"
+import { DialogDots } from "../dialog-dots"
+import type { Dots } from "@ycoding-ai/schema/dots"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { emptyPrompt, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
@@ -268,6 +271,79 @@ export function Prompt(props: PromptProps) {
   const config = useConfig().data
   const dialog = useDialog()
   const toast = useToast()
+  const [dotsTarget, setDotsTarget] = createSignal<Dots.Target>()
+  let dotsRetry: { fingerprint: string; id: string } | undefined
+  let dotsDialogOpen = false
+  const dotsCapability = createDotsCapability({
+    sessionID: () => props.sessionID,
+    connected: () => client.connection.status() === "connected",
+    read: async (sessionID, signal) =>
+      (await client.api.dots.status({ sessionID }, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) })).enabled === true,
+    reset: () => {
+      setDotsTarget(undefined)
+      dotsRetry = undefined
+      if (dotsDialogOpen) dialog.clear()
+    },
+  })
+
+  function dotsDisabled() {
+    toast.show({ message: "Dots is disabled for this Location.", variant: "warning" })
+  }
+
+  async function selectDots() {
+    const sessionID = props.sessionID
+    if (!sessionID) {
+      toast.show({ message: "Open a Session before selecting a Dots destination.", variant: "warning" })
+      return
+    }
+    if (!dotsCapability.enabled()) return dotsDisabled()
+    const fence = dotsCapability.fence()
+    const stale = () => disposed || fence !== dotsCapability.fence()
+    const location = data.session.get(sessionID)?.location ?? currentLocation.current
+    const response = await client.api.integration.get({ integrationID: "openai", location: { directory: location.directory, workspace: location.workspaceID } }, { signal: AbortSignal.timeout(5000) }).catch(() => {
+      if (!disposed) toast.show({ message: "Could not read ChatGPT profiles. Draft retained.", variant: "error" })
+      return undefined
+    })
+    if (!response || stale()) return
+    const integration = response.data
+    const profiles = integration?.connections.flatMap((connection) => connection.type === "credential" ? [connection.label] : []) ?? []
+    const requireCurrent = () => {
+      if (stale()) throw new Error("The selected Session changed.")
+    }
+    const settle = (status: Dots.Status) => {
+      requireCurrent()
+      if (!status.enabled) dotsCapability.disable()
+      return status
+    }
+    dotsDialogOpen = true
+    const target = await DialogDots.show(dialog, {
+      profiles,
+      load: async (profile) => {
+        requireCurrent()
+        return await client.api.dots.targets({ sessionID, profile })
+      },
+      confirm: async (target) => {
+        requireCurrent()
+        await client.api.dots.bind({ sessionID, ...target })
+      },
+      status: async () => {
+        requireCurrent()
+        const status = settle(await client.api.dots.status({ sessionID }))
+        if (status.enabled) setDotsTarget(status.target)
+        return status
+      },
+      pause: async (expectedTarget) => {
+        requireCurrent()
+        return settle(await client.api.dots.pause({ sessionID, expectedTarget }))
+      },
+      resume: async (expectedTarget) => {
+        requireCurrent()
+        return settle(await client.api.dots.resume({ sessionID, expectedTarget }))
+      },
+    })
+    dotsDialogOpen = false
+    if (!stale() && target) setDotsTarget(target)
+  }
   const connected = useConnected()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
   const btwSession = createMemo(() => {
@@ -825,6 +901,15 @@ export function Prompt(props: PromptProps) {
           if (result?.status !== "unavailable") return
           toast.show({ message: "No suggestion available for the latest reply", variant: "info" })
         },
+      },
+      {
+        title: "Select Dots destination",
+        name: "session.dots",
+        category: "Session",
+        palette: props.sessionID !== undefined,
+        enabled: dotsCapability.enabled(),
+        slash: { name: "dots", arguments: true as const },
+        run: async () => { await selectDots() },
       },
       {
         title: "Generate prompt",
@@ -1884,6 +1969,54 @@ export function Prompt(props: PromptProps) {
     // the objective, active or not; the bare form stops, resumes the retained objective, or asks for
     // one. Only tracked-paste expansion happens before parsing, so multiline and Unicode survive.
     const normalized = inputText.trim()
+    const dotsFiles = structuredClone(unwrap(store.prompt.files ?? []))
+    const dots = dotsInput(inputText, dotsFiles, "pending")
+    if (dots) {
+      if (!dotsCapability.enabled()) {
+        dotsDisabled()
+        return false
+      }
+      if (store.mode !== "normal" || store.prompt.agents?.length || store.prompt.skills?.length) {
+        toast.show({ message: "Use Dots in normal mode with only the text and files to send.", variant: "warning" })
+        return false
+      }
+      const sessionID = props.sessionID
+      if (!sessionID) { await selectDots(); return false }
+      if (dots.kind === "select") { await selectDots(); return false }
+      const expectedTarget = dotsTarget()
+      if (!expectedTarget) { await selectDots(); return false }
+      const fence = dotsCapability.fence()
+      const status = await client.api.dots.status({ sessionID }, requestOptions(currentOperation)).catch(() => {
+        if (!disposed) toast.show({ message: "Could not verify the Dots destination. Draft retained.", variant: "error" })
+        return undefined
+      })
+      if (!status || disposed || fence !== dotsCapability.fence()) return false
+      if (!status.enabled) {
+        dotsCapability.disable()
+        dotsDisabled()
+        return false
+      }
+      if (JSON.stringify(status.target) !== JSON.stringify(expectedTarget)) { await selectDots(); return false }
+      const fingerprint = JSON.stringify({ sessionID, target: status.target, text: dots.input.text, files: dots.input.files })
+      if (dotsRetry?.fingerprint !== fingerprint) dotsRetry = { fingerprint, id: `msg_${crypto.randomUUID().replaceAll("-", "")}` }
+      const submittedText = input.plainText
+      const result = await client.api.dots.send({ sessionID, ...dots.input, id: dotsRetry.id, expectedTarget }, requestOptions(currentOperation)).catch(() => {
+        if (!disposed) toast.show({ message: "Dots send did not settle. Draft and message identity retained.", variant: "error" })
+        return undefined
+      })
+      if (!result) return false
+      if (fence !== dotsCapability.fence() || disposed) return false
+      if (result.status === "unknown") {
+        toast.show({ message: "Dots delivery is uncertain. Draft and message identity retained.", variant: "warning" })
+        return false
+      }
+      if (input.plainText === submittedText && JSON.stringify(store.prompt.files ?? []) === JSON.stringify(dotsFiles)) {
+        await releaseTemporaryAttachments()
+        clearPrompt()
+      }
+      dotsRetry = undefined
+      return true
+    }
     if (normalized === "/goal" || normalized.startsWith("/goal ") || normalized.startsWith("/goal\n")) {
       await applyGoalCommand(normalized.slice(5).trim() || undefined)
       return true
@@ -2499,6 +2632,7 @@ export function Prompt(props: PromptProps) {
 
   return (
     <>
+      <Show when={dotsCapability.enabled() ? dotsTarget() : undefined}>{(target) => <text fg={theme.text.subdued}>Dots · {target().label} · {target().threadID}</text>}</Show>
       <box
         ref={(r: BoxRenderable) => (anchor = r)}
         visible={props.visible !== false}

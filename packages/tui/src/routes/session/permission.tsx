@@ -16,6 +16,7 @@ import { usePathFormatter } from "../../context/path-format"
 import { SimulationSemantics } from "../../simulation/semantics"
 import { GuardrailEscalation } from "../../guardrail-escalation"
 import { ProjectEscalation } from "./project-escalation"
+import { toolDisplayName } from "@ycoding-ai/client/tool-display"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -125,7 +126,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       <Match when={store.stage === "always"}>
         <Prompt
           title="Always allow"
-          semanticLabel={`Always allow ${props.request.action}`}
+          semanticLabel={`Always allow ${toolDisplayName(props.request.action, props.request.metadata)}`}
           instance={props.request.id}
           body={
             <box paddingLeft={1} gap={1}>
@@ -149,7 +150,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
-          action={props.request.action}
+          action={toolDisplayName(props.request.action, props.request.metadata)}
           instance={props.request.id}
           onConfirm={(message) => {
             void client.api.permission.reply({
@@ -278,7 +279,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 }
 
 export function permissionSemanticLabel(action: string, title?: string) {
-  return `Permission required: ${title ?? action}`
+  return `Permission required: ${title ?? toolDisplayName(action)}`
 }
 
 function RejectPrompt(props: {

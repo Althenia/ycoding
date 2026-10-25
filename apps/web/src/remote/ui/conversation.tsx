@@ -1,10 +1,12 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { remoteDotsPeerLabel } from "@ycoding-ai/remote"
 import { catalogKey, modelDisplayLabel } from "../catalog"
 import { useRemote } from "../context"
 import {
   formatPartDuration,
   guardrailContextAvailable,
+  permissionDisplay,
   classifySyntheticNotice,
   noticeSummary,
   previewText,
@@ -386,6 +388,7 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
     return message.kind === "synthetic" || message.kind === "system" ? noticeSummary(message.source, message.text) : undefined
   }
   const syntheticNotice = () => classifySyntheticNotice(props.message())
+  const peer = () => { const message = props.message(); return message.kind === "synthetic" ? remoteDotsPeerLabel(message.metadata) : undefined }
   const guardrail = () => { const message = props.message(); return message.kind === "system" ? message.guardrail : undefined }
   const attachments = () => { const message = props.message(); return message.kind === "user" ? message.attachments ?? [] : [] }
   const sendMutation = () => remote.state().mutations.find((mutation) => (mutation.kind === "prompt" || mutation.kind === "command") && mutation.id === props.message().id && mutation.sessionID === remote.state().activeSessionID)
@@ -431,7 +434,8 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView; r
           </Show>
         </Show>
 
-        <Show when={kind() === "system" || kind() === "synthetic"}>
+        <Show when={peer()}>{(label) => <section aria-label={label()}><h3 class="transcript-message__agent">{label()}</h3><p class="transcript-message__system">{systemText(props.message())}</p></section>}</Show>
+        <Show when={(kind() === "system" || kind() === "synthetic") && !peer()}>
           <Show when={guardrail()} fallback={
           <Show when={parentAnswer(props.message())} fallback={<Show when={syntheticNotice()} fallback={<Show when={observation()} fallback={<p class="transcript-message__system">{fallbackText()}</p>}>{(summary) => <details class="transcript-message__observation"><summary>{summary()}</summary><pre tabindex="0">{systemText(props.message())}</pre></details>}</Show>}>
             {(notice) => <SyntheticNotice notice={notice()} />}
@@ -481,6 +485,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
   const disabled = () => !canReply() || reply()?.state === "sending"
   const review = () => { const request = props.request(); return request.kind === "guardrail" ? request : undefined }
   const permission = () => { const request = props.request(); return request.kind === "permission" ? request : undefined }
+  const permissionView = () => { const request = permission(); return request ? permissionDisplay(request) : undefined }
 
   return (
     <article class={`request request--${props.request().kind}${isHardReview(props.request()) ? " request--hard" : ""}`} aria-live="polite">
@@ -490,11 +495,12 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <span>Permission request</span>
         </header>
         <p class="request__body">
-          <strong>{permissionAction(props.request())}</strong>
-          <Show when={resourceList(props.request()).length > 0}>
-            <span> on {resourceList(props.request()).join(", ")}</span>
+          <strong>{permissionView()?.action}</strong>
+          <Show when={permissionView()?.resources.length}>
+            <span> on {permissionView()?.resources.join(", ")}</span>
           </Show>
         </p>
+        <Show when={permissionView()?.always}>{(scope) => <p class="request__note">{scope()}</p>}</Show>
         <Show when={permission()?.escalation}>{(escalation) => <><p class="request__note" role="status">{humanReviewText(escalation())}</p><Show when={escalation().grades?.length}><DecisionGrades grades={escalation().grades ?? []} selected={escalation().choice} /></Show></>}</Show>
         <Show when={permission()?.projectEscalation}>{(escalation) => <ProjectEscalationNote escalation={escalation()} />}</Show>
         <div class="request__actions">
@@ -505,13 +511,13 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           >
             Approve once
           </button>
-          <button
+          <Show when={permissionView()?.always}><button
             type="button"
             class="button button--secondary button--small"
             onClick={() => void remote.store.replyPermission(props.request().id, "always")}
           >
             Always this session
-          </button>
+          </button></Show>
           <button
             type="button"
             class="button button--danger button--small"
@@ -643,11 +649,9 @@ function CompactionDivider(props: { readonly message: () => RemoteMessageView })
     </div>
   </div>
 }
-const permissionAction = (request: PendingRequestView) => (request.kind === "permission" ? request.action : "")
 const guardrailAction = (request: PendingRequestView) => (request.kind === "guardrail" ? request.action : "")
 const guardrailReason = (request: PendingRequestView) => (request.kind === "guardrail" ? request.reason : "")
 const isHardReview = (request: PendingRequestView) => request.kind === "guardrail" && request.hardReview
-const resourceList = (request: PendingRequestView) => (request.kind === "permission" ? request.resources : [])
 const formOf = (request: PendingRequestView) => (request.kind === "form" ? request.form : undefined)
 const partText = (part: AssistantPart) => (part.kind === "text" || part.kind === "reasoning" ? part.text : "")
 const toolOf = (part: AssistantPart): ToolPartView | undefined => (part.kind === "tool" ? part : undefined)

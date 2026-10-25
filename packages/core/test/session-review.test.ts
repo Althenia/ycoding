@@ -7,6 +7,7 @@ import { Form } from "@ycoding-ai/core/form"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Permission } from "@ycoding-ai/core/permission"
+import { PermissionTable } from "@ycoding-ai/core/permission/sql"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
@@ -106,6 +107,35 @@ it.effect("once grants are exact, Session-bound, single-use durable consumptions
   expect(yield* reviews.consume(root.id, "permission", "b".repeat(64))).toBe(false)
   expect(yield* reviews.consume(root.id, "permission", fingerprint)).toBe(true)
   expect(yield* reviews.consume(root.id, "permission", fingerprint)).toBe(false)
+}))
+
+it.effect("deferred remembered permission stays with the same Session and resource patterns", () => Effect.gen(function* () {
+  const sessions = yield* Session.Service
+  const reviews = yield* SessionReview.Service
+  const root = yield* sessions.create({ location: yield* reviewLocation })
+  const other = yield* sessions.create({ location: root.location })
+  const locations = yield* LocationServiceMap.Service
+  const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(root.location)))
+  const permissions = yield* Permission.Service.pipe(Effect.provide(locations.get(root.location)))
+  yield* agents.transform((draft) => draft.update(Agent.ID.make("grant-test"), (agent) => {
+    agent.permissions = [{ action: "read", resource: "*", effect: "ask" }]
+  }))
+  const request = { action: "read", resources: ["src/first.ts"], workdir: root.location.directory }
+  const item = yield* reviews.open({
+    sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
+    origin: { requestID: "per_session_scope" },
+    payload: { type: "permission", ...request, save: ["src/*"], fingerprint: SessionReview.fingerprint(request), requestID: Permission.ID.make("per_session_scope") },
+  })
+  yield* reviews.decide({ sessionID: root.id, itemID: item.itemID, decision: { kind: "permission", reply: "always" } })
+  const database = yield* Database.Service
+  expect(yield* database.db.select().from(PermissionTable).all().pipe(Effect.orDie)).toEqual([])
+  const check = (sessionID: Session.ID, resource: string) => permissions.ask({ sessionID, action: "read", resources: [resource], agent: Agent.ID.make("grant-test") })
+  expect((yield* check(root.id, "src/next.ts")).effect).toBe("allow")
+  expect((yield* check(other.id, "src/next.ts")).effect).toBe("ask")
+  expect((yield* check(root.id, "private/next.ts")).effect).toBe("ask")
+  yield* sessions.remove(root.id)
+  yield* sessions.create({ id: root.id, location: other.location })
+  expect((yield* check(root.id, "src/next.ts")).effect).toBe("ask")
 }))
 
 it.effect("startup reconciliation delivers a decided item whose prompt was not admitted", () => Effect.gen(function* () {

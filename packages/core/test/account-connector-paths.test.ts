@@ -233,8 +233,10 @@ describe("account connector Code Mode paths", () => {
         {
           action: key,
           resources: ["asdk_app_personal"],
+          save: ["asdk_app_personal"],
           metadata: {
             connector: "asdk_app_personal",
+            connectorLabel: "YCoding",
             tool: "ycoding_session_catalog",
             operationDigest: Hash.json({
               connectorID: "asdk_app_personal",

@@ -23,6 +23,7 @@ import { ConfigAttachments } from "./config/attachments"
 import { ConfigCapabilities } from "./config/capabilities"
 import { ConfigCompaction } from "./config/compaction"
 import { ConfigCoordination } from "./config/coordination"
+import { ConfigDots } from "./config/dots"
 import { ConfigCommand } from "./config/command"
 import { ConfigEfficiency } from "./config/efficiency"
 import { ConfigExperimental } from "./config/experimental"
@@ -138,6 +139,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   coordination: ConfigCoordination.Info.pipe(Schema.optional).annotate({
     description: "Global-only default policy for delegated routine coordination decisions; groups may only narrow it",
   }),
+  dots: ConfigDots.Info.pipe(Schema.optional).annotate({
+    description: "Dots native connector enablement (default: disabled)",
+  }),
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",
   }),
@@ -208,10 +212,13 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
     .findLast((entry) => entry.info[key] !== undefined)?.info[key]
 }
 
-export function capabilities(entries: readonly Entry[]) {
-  return ConfigCapabilities.resolve(
-    entries.flatMap((entry) => (entry.type === "document" ? [entry.info.capabilities] : [])),
-  )
+export function capabilities(entries: readonly Entry[]): ConfigCapabilities.Resolved {
+  const documents = entries.filter((entry): entry is Document => entry.type === "document")
+  const dots = documents.findLast((entry) => entry.info.dots?.enabled !== undefined)?.info.dots?.enabled
+  return {
+    ...ConfigCapabilities.resolve(documents.map((entry) => entry.info.capabilities)),
+    ...(dots === undefined ? {} : { dots }),
+  }
 }
 
 export interface Interface {

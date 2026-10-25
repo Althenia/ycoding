@@ -20,6 +20,7 @@ import { useRoute, useRouteData } from "../../context/route"
 import { useCoordinationOptional } from "../../context/coordination"
 import { useProjectClock } from "./project-members"
 import { escapeTerminalText } from "../../util/terminal-text"
+import { dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
 import { projectNoticeLabel, projectNotification } from "../../util/coordination"
 import { createStore } from "solid-js/store"
 import {
@@ -2825,6 +2826,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   const route = useRoute()
   const projectNotice = () => projectNotification(props.message.metadata)
   const metadata = () => (props.message.type === "synthetic" ? props.message.metadata : undefined)
+  const peer = () => dotsPeerLabel(metadata())
   const source = () => stringValue(metadata()?.source)
   const contextSource = () => stringValue(props.message.metadata?.contextSource)
   const goalSteer = () => props.message.type === "synthetic" && recordValue(metadata()?.autonomy)?.goal === true
@@ -2860,6 +2862,10 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   }
   return (
     <Switch>
+      <Match when={peer()}>{(sender) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
+        <text fg={theme.text.feedback.info.default} wrapMode="word">{escapeTerminalText(sender())}</text>
+        <text fg={theme.text.default} wrapMode="word">{props.message.type === "synthetic" ? escapeTerminalText(props.message.text) : ""}</text>
+      </box>}</Match>
       <Match when={projectNotice()}>{(notice) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
         <box flexDirection="row"><text fg={notice().event === "failed" ? theme.text.feedback.error.default : notice().event === "escalated" ? theme.text.feedback.warning.default : theme.text.subdued} wrapMode="none" truncate flexGrow={1}>{escapeTerminalText(notice().title)} {projectNoticeLabel(notice())}</text><text fg={theme.text.feedback.info.default} onMouseUp={() => route.navigate({ type: "session", sessionID: notice().sessionID })}>[o] Open</text></box>
         <Show when={notice().excerpt}><text fg={theme.text.subdued} wrapMode="word">{escapeTerminalText(notice().excerpt)}</text></Show>

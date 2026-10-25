@@ -7,6 +7,7 @@
  */
 
 import type { Form } from "../../../../packages/schema/src/form"
+import { escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
 import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
 import { autonomyCategories, autonomyLabels, readAutonomyMode, type AutonomyCategory, type AutonomyModes, type EffectiveAutonomyView } from "./autonomy"
 import { parseUnifiedPatch } from "./file-change-diff"
@@ -289,6 +290,8 @@ export type PendingRequestView =
       readonly id: string
       readonly action: string
       readonly resources: readonly string[]
+      readonly save?: readonly string[]
+      readonly metadata?: Readonly<Record<string, unknown>>
       readonly escalation?: DecisionProvenanceView
       readonly projectEscalation?: ProjectEscalationView
       readonly askedAt: number
@@ -331,7 +334,7 @@ export type ReviewItemView = {
   | { readonly kind: "question"; readonly form: FormView; readonly answers: "form" | "questions" }
   | { readonly kind: "subagent_question"; readonly text: string }
   | { readonly kind: "guardrail"; readonly action: string; readonly resources: readonly string[]; readonly ruleIDs: readonly string[]; readonly detail: string; readonly hardReview: boolean; readonly directories: readonly string[] }
-  | { readonly kind: "permission"; readonly action: string; readonly resources: readonly string[] }
+  | { readonly kind: "permission"; readonly action: string; readonly resources: readonly string[]; readonly save?: readonly string[] }
   | { readonly kind: "recovery"; readonly tools: readonly RecoveryToolView[] }
 )
 
@@ -1178,6 +1181,8 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         id: stringField(data.id) ?? "permission",
         action: stringField(data.action) ?? "unknown action",
         resources: stringList(data.resources),
+        ...permissionSave(data.save),
+        ...permissionMetadata(data.metadata),
         ...(readGuardrailProvenance(data.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(data.escalation) }),
         ...projectEscalationOf(data),
         askedAt: now,
@@ -1341,7 +1346,7 @@ export function readReviewItems(payload: unknown): readonly ReviewItemView[] | u
     }
     const resources = strings(payload.resources)
     if (value.kind === "permission" && payload.type === "permission" && typeof payload.action === "string" && resources !== undefined)
-      return [{ ...base, kind: "permission", action: payload.action, resources }]
+      return [{ ...base, kind: "permission", action: payload.action, resources, ...permissionSave(payload.save) }]
     const ruleIDs = strings(payload.ruleIDs)
     const directories = strings(payload.directories)
     if (value.kind === "guardrail" && payload.type === "guardrail" && typeof payload.action === "string" && resources !== undefined && ruleIDs !== undefined &&
@@ -2080,12 +2085,43 @@ export function readPermissionRequests(payload: unknown, now: number): readonly 
         id,
         action: stringField(item.action) ?? "unknown action",
         resources: stringList(item.resources),
+        ...permissionSave(item.save),
+        ...permissionMetadata(item.metadata),
         ...(readGuardrailProvenance(item.escalation) === undefined ? {} : { escalation: readGuardrailProvenance(item.escalation) }),
         ...projectEscalationOf(item),
         askedAt: now,
       },
     ]
   })
+}
+
+function permissionSave(value: unknown): { readonly save?: readonly string[] } {
+  return Array.isArray(value) && value.length > 0 && value.every((item): item is string => typeof item === "string")
+    ? { save: value } : {}
+}
+
+function permissionMetadata(value: unknown): { readonly metadata?: Readonly<Record<string, unknown>> } {
+  if (!isRecord(value)) return {}
+  const metadata = Object.fromEntries(Object.entries(value).filter(([key, entry]) =>
+    ["connector", "connectorLabel", "tool"].includes(key) ? typeof entry === "string" : key === "requireHuman" && typeof entry === "boolean"))
+  return Object.keys(metadata).length ? { metadata } : {}
+}
+
+export function permissionDisplay(request: {
+  readonly action: string
+  readonly resources: readonly string[]
+  readonly save?: readonly string[]
+  readonly metadata?: Readonly<Record<string, unknown>>
+}) {
+  const action = toolDisplayName(request.action, { connector: request.resources[0], ...request.metadata })
+  const save = request.metadata?.requireHuman === true ? [] : request.save ?? []
+  return {
+    action,
+    resources: request.resources.map(escapeDisplayText),
+    always: save.length === 0 ? undefined : save.length === 1 && save[0] === "*"
+      ? `Allow ${action} for all resources in this Session.`
+      : `Allow ${action} for these resource patterns in this Session: ${save.map(escapeDisplayText).join(", ")}`,
+  }
 }
 
 export function readGuardrailRequests(payload: unknown, now: number): readonly PendingRequestView[] {

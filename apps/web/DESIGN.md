@@ -583,6 +583,16 @@ Public routes, documentation, changelog, remote workspace, offline shell, instal
 
 ## Accessibility
 
+### Dots peers
+
+Dots is opt-in through the selected Session Location's `dots.enabled` setting. Keep its slash completion, binding label and dialog unavailable until the backend reports it enabled. A disabled or unavailable capability read keeps the feature hidden; explicitly typed `/dots` retains the draft and reports that Dots is disabled without sending it as a model prompt.
+
+Opening Dots reads current status once. Show the confirmed Dot, conversation and runtime state using the existing field-hint treatment, with explicit Refresh and Change destination actions. Show Pause Dot only for a connected, unpaused runtime and Resume Dot only for a connected, paused runtime. Unknown or stale state exposes neither action. Each action carries the displayed destination, locks during dispatch, and uses the returned authoritative status. Failures and unknown outcomes retain the modal without replay. Destination confirmation still selects only, and closing sends nothing.
+
+Beside an available runtime action, use the existing field-hint treatment to state that Pause stops the Dot's autonomous runtime until Resume; Resume can continue its work and goals. Keep these controls distinct from stopping the YCoding Session or an individual response. Reuse the existing danger button for Pause and ordinary button treatment for Resume.
+
+Use the shared `Modal`, `field`, `input`, `check` and `button` treatments for Dots destination selection. Leave all destination radios unselected until the user chooses one. Confirmation selects only; Send transmits the current payload. Preserve the draft and focus across failure and uncertainty. Show the confirmed Dot and conversation in the existing field-hint treatment. Render attributed peer messages as external content, never as user, System, coordinator or approval controls. Only verified completed replies are admitted peer messages; non-final room revisions are not rendered until a transcript-only channel exists, and any such rendering must be labelled non-final. Use the existing transcript text and heading treatments without new colors or motion. Checks: `test/dots.test.ts`, `src/remote/ui/dots-composer.test.ts`; actual browser focus and rendering require browser verification.
+
 Inherit the brand floors. Primary normal-size button text needs 4.5:1; active boundaries/focus need 3:1 across every surface they occupy (`src/styles/contrast.test.ts`). Keyboard focus and overlay behavior require real rendered review. At installed-app zoom lock, test legibility/reflow separately; do not claim magnification support. Preserve native selection, focus behavior, coarse-pointer hit areas, reduced-motion state, and forced-colors system scrollbar rendering.
 
 ## Verification
@@ -607,6 +617,8 @@ Member counts exclude the separately labeled Master. Live summaries include the 
 New-Master creation offers an optional Session title using the existing `.field`, `.input` and `.field__hint` treatment. An empty title defaults to the Project name. New-member creation uses the same field and keeps the normal untitled default when empty. Invalid titles remain editable with an in-place error.
 
 Native permission, review and form prompts and deferred review items show the reported Project escalation reason chain in chronological order, using the existing request-note treatment. Keep native decision controls and distinguish Project handoff from model escalation; rendering a reason settles nothing.
+
+Permission prompts and deferred permission items show escaped, human-readable tool names with readable connector namespaces, not canonical identity hashes. Preserve canonical action and resource keys in every reply. Show remembered approval only when save patterns are reported, and describe its current-Session resource scope. Reuse the request body, note and action treatments without introducing a new surface or color.
 
 ## Exceptions
 

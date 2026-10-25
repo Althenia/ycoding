@@ -85,6 +85,12 @@ export type TelemetryRequestSample = {
     | "session.switchModel"
     | "session.switchAgent"
     | "session.command"
+    | "session.dots.targets"
+    | "session.dots.status"
+    | "session.dots.bind"
+    | "session.dots.send"
+    | "session.dots.pause"
+    | "session.dots.resume"
     | "session.skill"
     | "usage.providers"
     | "usage.summary"
@@ -785,6 +791,14 @@ export type McpEventsSubscription = {
 export type CoordinationPausedReason = "interrupted" | "restart"
 
 export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
+
+export type DotsTarget = { profile: string; dotID: string; threadID: string; generation: string; label: string }
+
+export type DotsState = "disconnected" | "connecting" | "connected" | "failed"
+
+export type DotsRuntimeState = "paused" | "unpaused" | "unknown"
+
+export type DotsDelivery = { messageID: string; status: "accepted" | "unknown"; turnID?: string }
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -2534,6 +2548,14 @@ export type McpEventsEventDefinition = {
   delivery: Array<"webhook">
   inputSchema: McpEventsJsonSchemaObject
   payloadSchema: McpEventsJsonSchemaObject
+}
+
+export type DotsStatus = {
+  enabled: boolean
+  target?: DotsTarget
+  state: DotsState
+  error?: string
+  runtimeState?: DotsRuntimeState
 }
 
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
@@ -5228,6 +5250,12 @@ export type ServerTelemetryAppendInput = {
             | "session.switchModel"
             | "session.switchAgent"
             | "session.command"
+            | "session.dots.targets"
+            | "session.dots.status"
+            | "session.dots.bind"
+            | "session.dots.send"
+            | "session.dots.pause"
+            | "session.dots.resume"
             | "session.skill"
             | "usage.providers"
             | "usage.summary"
@@ -10997,3 +11025,181 @@ export type CoordinationUpdateOutput = { data: CoordinationInfo }["data"]
 export type CoordinationDeleteInput = { readonly groupID: { readonly groupID: string }["groupID"] }
 
 export type CoordinationDeleteOutput = void
+
+export type DotsTargetsInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly profile: { readonly profile: string }["profile"]
+}
+
+export type DotsTargetsOutput = { data: Array<DotsTarget> }["data"]
+
+export type DotsStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type DotsStatusOutput = { data: DotsStatus }["data"]
+
+export type DotsBindInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly profile: {
+    readonly profile: string
+    readonly dotID: string
+    readonly threadID: string
+    readonly generation: string
+    readonly label: string
+  }["profile"]
+  readonly dotID: {
+    readonly profile: string
+    readonly dotID: string
+    readonly threadID: string
+    readonly generation: string
+    readonly label: string
+  }["dotID"]
+  readonly threadID: {
+    readonly profile: string
+    readonly dotID: string
+    readonly threadID: string
+    readonly generation: string
+    readonly label: string
+  }["threadID"]
+  readonly generation: {
+    readonly profile: string
+    readonly dotID: string
+    readonly threadID: string
+    readonly generation: string
+    readonly label: string
+  }["generation"]
+  readonly label: {
+    readonly profile: string
+    readonly dotID: string
+    readonly threadID: string
+    readonly generation: string
+    readonly label: string
+  }["label"]
+}
+
+export type DotsBindOutput = { data: DotsStatus }["data"]
+
+export type DotsSendInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly id: {
+    readonly id: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly causalMessageID?: string
+    readonly expectedTarget: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+  }["id"]
+  readonly text: {
+    readonly id: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly causalMessageID?: string
+    readonly expectedTarget: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+  }["text"]
+  readonly files?: {
+    readonly id: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly causalMessageID?: string
+    readonly expectedTarget: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+  }["files"]
+  readonly causalMessageID?: {
+    readonly id: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly causalMessageID?: string
+    readonly expectedTarget: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+  }["causalMessageID"]
+  readonly expectedTarget: {
+    readonly id: string
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly causalMessageID?: string
+    readonly expectedTarget: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+  }["expectedTarget"]
+}
+
+export type DotsSendOutput = { data: DotsDelivery }["data"]
+
+export type DotsPauseInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly expectedTarget: {
+    readonly expectedTarget: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+  }["expectedTarget"]
+}
+
+export type DotsPauseOutput = { data: DotsStatus }["data"]
+
+export type DotsResumeInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly expectedTarget: {
+    readonly expectedTarget: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+  }["expectedTarget"]
+}
+
+export type DotsResumeOutput = { data: DotsStatus }["data"]
