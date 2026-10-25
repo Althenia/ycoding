@@ -85,7 +85,10 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
     }
     const link = `.project-event a`
     await page.evaluate(`document.querySelector('${link}').scrollIntoView({block:'center',behavior:'instant'})`)
+    await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
     if (await page.evaluate<boolean>(`matchMedia('(hover:hover)').matches`)) {
+      await page.mouse("mouseMoved", 0, 0)
+      expect(await page.evaluate<boolean>(`document.querySelector('${link}').matches(':hover')`)).toBe(false)
       const target = await page.evaluate<{ x: number; y: number }>(`(() => { const r = document.querySelector('${link}').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
       expect(await page.evaluate<boolean>(`document.querySelector('${link}').contains(document.elementFromPoint(${target.x}, ${target.y}))`)).toBe(true)
       await page.mouse("mouseMoved", target.x, target.y)

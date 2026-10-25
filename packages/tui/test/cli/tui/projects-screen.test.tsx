@@ -72,7 +72,7 @@ async function mount(width = 120) {
     },
     settle: (screen) => {
       const frame = screen.captureCharFrame()
-      return frame.includes("Docs worker finished")
+      return frame.includes("Docs worker finished") && frame.includes(width < 100 ? "⌃x p" : "◇ Master")
     },
     sessionReady: true,
     kittyKeyboard: true,
