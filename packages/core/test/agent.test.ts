@@ -286,7 +286,7 @@ describe("Agent", () => {
         "If your permission ceiling prevents asking for confirmation, do not act; report the blocker.",
         "Before overwriting or deleting existing data, check whether version control can restore it; treat untracked or ignored data as unrecoverable.",
         "Every report of changed work names each changed file by its repository-relative path; describing a change does not replace naming its file.",
-        "Before building, design comprehensive test cases from the accepted requirements and contracts, and reproduce a reported failure at its boundary. Build the complete working feature or milestone together with those tests; do not alternate test and code for each small step, and add no mutation probes unless requested. At each feature checkpoint, run the focused tests once, fix failures, and rerun only the failing scope; run full suites and every affected required check at the integration or merge checkpoint.",
+        "Before building, design comprehensive test cases from the accepted requirements and contracts, and reproduce a reported failure at its boundary. Build the complete working feature or milestone together with those tests; do not alternate test and code for each small step, and add no mutation probes unless requested. At each feature checkpoint, run the focused tests once, fix failures, and rerun only the failing scope. At every checkpoint, including integration and merge, run only explicitly selected test files or cases for the changed behavior and directly affected contracts. Never run full-repository, full-workspace, or entire-package test suites, including through package scripts, CI wrappers, or batches that reconstruct a full suite. Run every affected required non-test check without broadening the selected tests.",
       ]
       for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
         const item = yield* agent.get(Agent.ID.make(id))
@@ -295,6 +295,8 @@ describe("Agent", () => {
           expect(item.system.split(paragraph)).toHaveLength(2)
           expect(item.system.indexOf(paragraph)).toBeLessThan(item.system.indexOf("You are "))
         }
+        for (const stale of ["run full suites", "package-wide test suite", "runs the full checks"])
+          expect(item.system).not.toContain(stale)
       }
 
       const god = yield* agent.get(Agent.ID.make("god"))
@@ -389,7 +391,7 @@ describe("Agent", () => {
         "A queued or running heavy check delays only other heavy checks, never code-writing or review work.",
       )
       expect(god.system).toContain(
-        "merge them through one dedicated integration lane that resolves conflicts and runs the full checks",
+        "merge them through one dedicated integration lane that resolves conflicts and runs the affected required checks",
       )
       expect(gsd.system).not.toContain("prove RED")
       expect(zeus.system).toContain("Issue independent tool calls together in one step")
