@@ -36,6 +36,7 @@ export function SidebarCacheContent(props: {
   const summarizing = createMemo(() => props.summarizing?.() ?? false)
   const pressure = createMemo(() => (summarizing() ? props.pressure?.() : undefined))
   const fallback = createMemo(() => props.fallback?.())
+  const cachePercent = createMemo(() => diagnostics()?.cache.readReported ? cacheHitPercent(diagnostics()?.cache.hitRatio) : undefined)
   // A rail row right-aligns its value, so an over-long model identity would run into it. Rows are bounded
   // by the docked rail width minus its horizontal padding; outside a rail the section spans the terminal.
   const rowWidth = createMemo(() => {
@@ -65,9 +66,9 @@ export function SidebarCacheContent(props: {
             : value?.context.percent === undefined
               ? undefined
               : `${value.context.percent}%`,
-          cacheHitPercent(value?.cache.hitRatio) === undefined
+          cachePercent() === undefined
             ? undefined
-            : `${cacheHitPercent(value?.cache.hitRatio)}% hit`,
+            : `${cachePercent()}% hit`,
         ]
           .filter((item): item is string => item !== undefined)
           .join(" · ")
@@ -88,7 +89,7 @@ export function SidebarCacheContent(props: {
     return `${value.total.toLocaleString()} / ${value.limit.toLocaleString()}`
   })
   const cache = createMemo(() => {
-    const percent = cacheHitPercent(diagnostics()?.cache.hitRatio)
+    const percent = cachePercent()
     return percent === undefined ? "unreported" : `${percent}%`
   })
   const speed = createMemo(() => {
@@ -137,15 +138,11 @@ export function SidebarCacheContent(props: {
       <Show when={diagnostics() || pressure()}>
         <RailRow label="Context" value={context()} />
       </Show>
-      <Show when={diagnostics()}>
-        <RailRow label="Cache" value={cache()} valueColor={theme.text.feedback.success.default} />
-      </Show>
+      <RailRow label="Cache" value={cache()} valueColor={cachePercent() === undefined ? theme.text.subdued : theme.text.feedback.success.default} />
       <Show when={speed()}>{(value) => <RailRow label="Speed" value={value().label} />}</Show>
       <Show when={hasSpend()}>
         <>
-          <Show when={diagnostics()}>
-            <box height={1} flexShrink={0} />
-          </Show>
+          <box height={1} flexShrink={0} />
           <RailSubheading>SPEND</RailSubheading>
           <For each={modelSpend()}>{(entry) => <RailRow label={entry.label} value={entry.value} />}</For>
           <Show when={spent()}>{(total) => <RailRow label="Total" value={money.format(total().value)} />}</Show>

@@ -1106,6 +1106,8 @@ Caching is split into distinct concerns:
 - TUI diagnostics;
 - project artifact reuse, which is not a provider prompt cache.
 
+The expanded TUI Context rail keeps a Cache row when diagnostics or provider cache-read telemetry are absent, displaying `unreported` in subdued ink. A reported zero ratio displays `0%`; reported ratios retain their percentage treatment. This status does not infer cache tokens, cost, or provider quota values.
+
 Anthropic cache profiles publish the minimum cacheable prefix and whether a
 model supports the one-hour cache TTL. Claude Sonnet 5.5 and Haiku 5.5 each
 support the one-hour TTL and a 512-token minimum; the selected profile informs

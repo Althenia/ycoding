@@ -638,3 +638,116 @@ test("keeps same model id/variant from different providers as distinguishable Sp
     app.renderer.destroy()
   }
 })
+
+const unreportedCacheDiagnostics: SessionCacheDiagnostics = {
+  ...diagnostics,
+  tokens: { ...diagnostics.tokens, cacheRead: 0, cacheWrite: 0 },
+  cache: { eligible: 0, hitRatio: 0, mechanism: "none", readReported: false, writeReported: false },
+}
+
+const reportedZeroDiagnostics: SessionCacheDiagnostics = {
+  ...diagnostics,
+  tokens: { ...diagnostics.tokens, cacheRead: 0 },
+  cache: { ...diagnostics.cache, hitRatio: 0, readReported: true },
+}
+
+async function renderCacheRail(
+  source: () => SessionCacheDiagnostics | undefined,
+  input: { width?: number; fallback?: () => { tokens: { input: number; output: number }; cost: number } } = {},
+) {
+  const [{ ConfigProvider }, { ThemeProvider }, { RailProvider }, { railWidth }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+    import("../../../src/routes/session/rail-section"),
+    import("../../../src/routes/session/rail"),
+  ])
+  const width = input.width ?? 120
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <box flexDirection="row" width={width} height={40}>
+              <box flexGrow={1} />
+              <box width={Math.floor(railWidth(width))} flexShrink={0} flexDirection="column">
+                <RailProvider>
+                  <module.SidebarCacheContent diagnostics={source} fallback={input.fallback} />
+                </RailProvider>
+              </box>
+            </box>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width, height: 40 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("CONTEXT") && frame.includes("Cache"))
+  const railStart = width - Math.floor(railWidth(width))
+  const rows = () => app.captureCharFrame().split("\n").map((line) => line.slice(railStart))
+  const ink = (text: string) =>
+    app
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.trim() === text)
+      ?.fg.toInts()
+  return { app, rows, ink }
+}
+
+test("the docked 120-column Context rail keeps one Cache row reading unreported in subdued ink without diagnostics", async () => {
+  const rail = await renderCacheRail(() => undefined, {
+    fallback: () => ({ tokens: { input: 1_411, output: 53 }, cost: 9.08 }),
+  })
+  try {
+    const rows = rail.rows()
+    const cache = rows.filter((line) => /\bCache\b/.test(line))
+    expect(cache).toHaveLength(1)
+    expect(cache[0]!.trimEnd()).toMatch(/Cache +unreported$/)
+    expect(rail.ink("unreported")).toEqual(rail.ink("Cache"))
+    expect(rows.findIndex((line) => line.includes("Cache"))).toBeLessThan(rows.findIndex((line) => line.includes("SPEND")))
+    expect(rows.find((line) => line.includes("Total"))?.trimEnd()).toMatch(/Total +\$9\.08$/)
+    expect(rows.join("\n")).not.toContain("CACHE")
+    expect(rows.join("\n")).not.toContain("Reads")
+    expect(rows.join("\n")).not.toContain("% hit")
+  } finally {
+    rail.app.renderer.destroy()
+  }
+})
+
+test("read-unreported cache telemetry reads unreported, never a fabricated 0%", async () => {
+  const rail = await renderCacheRail(() => unreportedCacheDiagnostics)
+  try {
+    const rows = rail.rows()
+    const cache = rows.filter((line) => /\bCache\b/.test(line))
+    expect(cache).toHaveLength(1)
+    expect(cache[0]!.trimEnd()).toMatch(/Cache +unreported$/)
+    expect(rail.ink("unreported")).toEqual(rail.ink("Cache"))
+    expect(rows.join("\n")).not.toContain("0%")
+    expect(rows.join("\n")).not.toContain("% hit")
+    expect(rows.join("\n")).not.toContain("Reads")
+    expect(rows.join("\n")).not.toContain("Writes")
+  } finally {
+    rail.app.renderer.destroy()
+  }
+})
+
+test("a reported zero cache ratio reads 0% in the reported ink, distinct from unreported", async () => {
+  const zero = await renderCacheRail(() => reportedZeroDiagnostics)
+  const reported = await renderCacheRail(() => diagnostics)
+  try {
+    const zeroCache = zero.rows().filter((line) => /\bCache\b/.test(line))
+    expect(zeroCache).toHaveLength(1)
+    expect(zeroCache[0]!.trimEnd()).toMatch(/Cache +0%$/)
+    expect(zero.rows().join("\n")).not.toContain("unreported")
+    expect(zero.rows().join("\n")).toContain("0% hit")
+    expect(zero.ink("0%")).not.toEqual(zero.ink("Cache"))
+    const reportedCache = reported.rows().filter((line) => /\bCache\b/.test(line))
+    expect(reportedCache).toHaveLength(1)
+    expect(reportedCache[0]!.trimEnd()).toMatch(/Cache +89%$/)
+    expect(reported.ink("89%")).toEqual(zero.ink("0%"))
+    expect(reported.ink("89%")).not.toEqual(reported.ink("Cache"))
+  } finally {
+    zero.app.renderer.destroy()
+    reported.app.renderer.destroy()
+  }
+})
