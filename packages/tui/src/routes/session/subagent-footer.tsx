@@ -372,7 +372,7 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
   const { theme } = useTheme().contextual("elevated")
 
   return (
-    <box height={2} paddingLeft={3} paddingRight={3} alignItems="flex-start" flexDirection="row" flexShrink={0}>
+    <box height={1} paddingLeft={3} paddingRight={3} alignItems="flex-start" flexDirection="row" flexShrink={0}>
       <Show
         when={blocked()}
         fallback={

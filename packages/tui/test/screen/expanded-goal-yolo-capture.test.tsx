@@ -187,12 +187,9 @@ test("captures the expanded goal session with populated rail fixtures", async ()
           break
         await Bun.sleep(20)
       }
-      // Default expansion is SESSION, CONTEXT, TODO only: active goal does not auto-expand GOAL or
-      // AUTONOMY. Expand the panels this capture is about through their real headers, so the
-      // captured expanded state is produced by the shipped interaction rather than assumed.
       if (viewport.width !== NARROW_VIEWPORT.width) {
         const railStart = viewport.width - railWidth(viewport.width)
-        for (const title of ["GOAL", "AUTONOMY", "SUBAGENTS"]) {
+        for (const title of ["GOAL", "SUBAGENTS"]) {
           const collapsed = screen
             .lines()
             .findIndex((line) => line.slice(railStart).includes(`+  ${title}`))
@@ -221,16 +218,16 @@ test("captures the expanded goal session with populated rail fixtures", async ()
         // The session composer renders no hint row by explicit user instruction.
         expect(lines.some((line) => line.includes("Enter send"))).toBe(false)
         expect(screen.colorOf("─")).toEqual([103, 215, 164, 255])
-        // Verify rail section order: SESSION, GOAL, AUTONOMY, CONTEXT, SUBAGENTS
         const rail = lines.join("\n")
-        const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "CONTEXT", "SUBAGENTS"]
+        const sectionHeaders = ["SESSION", "GOAL", "CONTEXT", "SUBAGENTS"]
         const indexes = sectionHeaders.map((header) => rail.indexOf(header))
         expect(indexes.every((index) => index >= 0)).toBe(true)
         expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
         expect(rail).not.toContain("3 / 5")
         // Explicitly expanded sections retain their active-state summaries.
         expect(rail).toMatch(/−\s+GOAL\s+active/)
-        expect(rail).toMatch(/−\s+AUTONOMY[ \t]*(\n|$)/)
+        expect(rail).not.toContain("AUTONOMY")
+        for (const label of ["Permissions Manual", "Guardrails Manual", "Answers Manual"]) expect(rail).toContain(label)
       }
       if (viewport.width === DESIGN_VIEWPORT.width) {
         expect(lines.join("\n")).toContain("YCODING")

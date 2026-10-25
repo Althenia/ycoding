@@ -402,6 +402,7 @@ test("a hard review arriving during a parent answer preserves the answer and own
     width: 100,
     height: 36,
     args: { sessionID: parentID },
+    sessionReady: true,
     route: state.route,
     settle: "Answer",
   })
@@ -587,6 +588,7 @@ test.each(["ordinary draft", "newer answer"] as const)(
       width: 100,
       height: 36,
       args: { sessionID: parentID },
+      sessionReady: true,
       config: { keybinds: { session_child_first: "ctrl+t" } },
       route: state.route,
       settle: "Answer",

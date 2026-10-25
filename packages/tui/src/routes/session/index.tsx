@@ -78,7 +78,7 @@ import { DialogFork } from "./dialog-fork"
 import { DialogTimeline } from "./dialog-timeline"
 import { Sidebar } from "./sidebar"
 import { Composer } from "./composer"
-import { Footer } from "./footer"
+import { Footer, FooterAutonomy } from "./footer"
 import {
   hydrateSubagentPage,
   navigateSubagentSibling,
@@ -518,7 +518,10 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         if (!autonomyRefresh.accepts(request)) return
         acceptAutonomy(sessionID, state)
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (!autonomyRefresh.accepts(request) || route.sessionID !== sessionID || client.connection.status() !== "connected") return
+        setAutonomyResponse(undefined)
+      })
   }
   createEffect(
     on([() => route.sessionID, () => client.connection.status()], ([sessionID, status]) => {
@@ -548,9 +551,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   createEffect(
     on(
-      () => autonomy()?.effective?.asleep ?? false,
+      () => autonomy()?.effective?.asleep,
       (asleep, previous) => {
-        if (previous !== true || asleep || reviewItems().length === 0) return
+        if (previous !== true || asleep !== false || reviewItems().length === 0) return
         const count = reviewItems().length
         toast.show({
           message: `${count} item${count === 1 ? "" : "s"} waiting for your review`,
@@ -2148,6 +2151,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Match when={subagent()}><SubagentFooter reviewing={disabled()} /></Match>
         <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} project={!!projectOwner()} /></Match>
       </Switch>
+      <box backgroundColor={theme.background.chrome} paddingLeft={3} paddingRight={3} flexShrink={0}>
+        <FooterAutonomy autonomy={autonomy()} />
+      </box>
       <Show when={projectOwner()}>
         {(owner) => (
           <text fg={theme.text.subdued} height={1} flexShrink={0} wrapMode="none" truncate>

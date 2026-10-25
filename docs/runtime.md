@@ -1371,11 +1371,11 @@ Every rail section can expand. Defaults expand only `session`, `context`, and `t
 
 ### Section keys
 
-The rail supports these section keys: `session`, `context`, `todo`, `goal`, `autonomy`, `subagents`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`. Running shells are listed in the composer's shell tab, not in the rail.
+Rail state supports these section keys: `session`, `context`, `todo`, `goal`, `autonomy`, `subagents`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`. The Session sidebar shows effective autonomy modes in the footer rather than mounting an autonomy section. Running shells are listed in the composer's shell tab, not in the rail.
 
 ### Default expanded sections
 
-The defaults are `session`, `context`, and `todo`. Every other section (`goal`, `autonomy`, `subagents`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`) starts collapsed behind its header summary but can expand via header toggle or attention. Expansion is driven by the rail's own state; provider inputs do not change it.
+The defaults are `session`, `context`, and `todo`. Every other mounted section (`goal`, `subagents`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`) starts collapsed behind its header summary but can expand via header toggle or attention. Expansion is driven by the rail's own state; provider inputs do not change it.
 
 ### Independent expansion
 
@@ -1389,7 +1389,7 @@ Attention-triggered expansion preserves other expanded sections.
 
 ### Attention triggers
 
-The `subagents` section enters attention mode when any subagent has a pending question. The `autonomy` section enters attention mode when any effective category mode is `yolo`.
+The `subagents` section enters attention mode when any subagent has a pending question.
 
 ### Subagents section
 
@@ -1401,11 +1401,11 @@ The team composer is a separate picker from the sidebar `SUBAGENTS` section. Its
 
 The goal section (`GOAL`) appears while a goal is active. It shows the goal text and status; the header summary is the goal status, not a no-progress count.
 
-### Autonomy section
+### Autonomy footer
 
-The autonomy section (`AUTONOMY`) has a title and attention state without a summary. Its rows identify who decides permission asks, ordinary guardrail reviews, and questions, with a waiting-review count when present. Each row reads the effective mode — `auto`, `yolo`, or `manual` (asleep: `review box`) — followed by the inheriting Session when the mode is inherited. The section has no separate toggle row; `/autonomous` and its palette entry open the dialog.
+The Session footer lists Permissions, Guardrails, and Answers in order with each category's effective `Manual`, `YOLO`, `Auto`, or `unknown` mode. Inherited modes carry an `inherited` label; `/autonomous` and its palette entry open the dialog showing the source Session and local choice. Guardrails adds `disabled` when the backend reports that category unavailable. Unloaded, failed, malformed, and disconnected reads stay unknown; unknown sleep state does not emit a wake notice. A separate warning-colored `asleep` marker identifies family sleep without changing the mode words. The sidebar retains the active GOAL section and a Review waiting row when applicable.
 
-The Session header retains operational state, including sleep, waiting, retries, active shells, and subagent counts, without repeating approval-toggle summaries. Below 80 columns it omits the secondary machine-sleep explanation. The Session footer contains branch identity, subagent and shell counts, usage, and commands without autonomy chips; below 80 columns its identity/counts and keyboard controls use separate rows within the existing height. The landing footer retains its draft autonomy controls.
+The Session header retains operational state, including sleep, waiting, retries, active shells, and subagent counts, without repeating category modes. Below 80 columns it omits the secondary machine-sleep explanation. The Session footer preserves branch identity, subagent and shell counts, usage, and commands; below 80 columns its identity/counts and keyboard controls use separate rows. Category indicators wrap as whole labels beneath them while keeping the composer editable. The landing footer retains its draft autonomy controls.
 
 ### Rail placement
 

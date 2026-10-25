@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { RGBA, TextRenderable } from "@opentui/core"
+import { TextRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type {
   GuardrailStatusOutput,
@@ -136,183 +136,32 @@ test("renders the session title only inside the section body", async () => {
   }
 })
 
-test("awake all-Manual rail names the manual decider on every row", async () => {
+test("the sidebar retains the waiting Review row without autonomy controls", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
-  const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy()} />, {
+  const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy()} reviewCount={2} />, {
     width: 40,
     height: 20,
   })
   try {
-    await app.waitForFrame((frame) => frame.includes("Guardrails"))
-    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Guardrails manual")
-    expect(app.captureCharFrame().replace(/\s+/g, " ")).not.toContain("Auto-answer")
-    expect(app.captureCharFrame()).not.toContain("hard reviews")
+    await app.waitForFrame((frame) => frame.includes("Review"))
+    expect(app.captureCharFrame().replace(/\s+/g, " ")).toContain("Review 2 waiting")
+    expect(app.captureCharFrame()).not.toMatch(/AUTONOMY|Permissions|Guardrails|Answers/)
   } finally {
     app.renderer.destroy()
   }
 })
 
-test("an unloaded autonomy read renders unknown rows, never Manual or Off", async () => {
+test("an unloaded autonomy read adds no sidebar rows", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
   const app = await mount(() => <AutonomyRailContent autonomy={undefined} />, { width: 40, height: 20 })
   try {
-    await app.waitForFrame((frame) => frame.includes("AUTONOMY"))
+    await app.renderOnce()
     const frame = app.captureCharFrame()
-    expect(frame).toContain("unknown")
-    expect(frame).not.toContain("manual")
-    expect(frame).not.toContain("Auto-answer")
+    expect(frame.trim()).toBe("")
   } finally {
     app.renderer.destroy()
   }
 })
-
-test("disabled guardrails read disabled while the other rows keep their mode", async () => {
-  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
-  const app = await mount(() => <AutonomyRailContent autonomy={railAutonomy({ permissions: "auto", guardrails: "auto" }, { guardrailsEnabled: false })} />, {
-    width: 60,
-    height: 30,
-  })
-  try {
-    await app.waitForFrame((frame) => frame.includes("Guardrails"))
-    const frame = app.captureCharFrame().replace(/\s+/g, " ")
-    expect(frame).toContain("Permissions auto")
-    expect(frame).toContain("Guardrails disabled")
-    expect(frame).not.toContain("YOLO")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("an inherited effective mode names its source Session in the rail", async () => {
-  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
-  const app = await mount(
-    () => <AutonomyRailContent autonomy={railAutonomy({}, { permissions: "auto", inherited: { permissions: "ses_parent" } })} />,
-    { width: 80, height: 30 },
-  )
-  try {
-    await app.waitForFrame((frame) => frame.includes("Permissions"))
-    const frame = app.captureCharFrame().replace(/\s+/g, " ")
-    expect(frame).toContain("Permissions auto · inherited from ses_parent")
-    expect(frame).toContain("Guardrails manual")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("renders who decides each action for every auto flag and with an active goal", async () => {
-  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
-  const cases = [
-    { name: "off", modes: {}, goal: false, values: ["manual", "manual", "manual"] },
-    { name: "yolo", modes: { permissions: "yolo", guardrails: "yolo", answers: "yolo" }, goal: false, values: ["yolo", "yolo", "yolo"] },
-    { name: "permission", modes: { permissions: "auto" }, goal: false, values: ["auto", "manual", "manual"] },
-    { name: "guardrail", modes: { guardrails: "auto" }, goal: false, values: ["manual", "auto", "manual"] },
-    { name: "goal", modes: {}, goal: true, values: ["manual", "manual", "manual"] },
-    { name: "answer", modes: { answers: "auto" }, goal: false, values: ["manual", "manual", "auto"] },
-    { name: "mixed", modes: { permissions: "auto", guardrails: "yolo", answers: "yolo" }, goal: false, values: ["auto", "yolo", "yolo"] },
-    { name: "all", modes: { permissions: "auto", guardrails: "auto", answers: "auto" }, goal: false, values: ["auto", "auto", "auto"] },
-  ] as const
-
-  for (const item of cases) {
-    const autonomy = railAutonomy({
-      ...item.modes,
-      ...(item.goal
-        ? { goal: { text: "Ship safely", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 3 } }
-        : {}),
-    })
-    const app = await mount(() => <AutonomyRailContent autonomy={autonomy} />, {
-      width: 110,
-      height: 40,
-    })
-    await app.waitForFrame((frame) => frame.includes("Permissions"))
-    try {
-      const frame = app.captureCharFrame()
-      expect(frame).not.toContain("Hard reviews")
-      expect(frame).not.toContain("always you")
-      expect(frame).not.toContain("YOLO")
-      const rows = frame.split("\n")
-      const expected = ["Permissions", "Guardrails", "Answers"]
-      expect(frame).not.toContain("Scope dispatch")
-      expect(rows.flatMap((line) => expected.filter((label) => line.includes(label)))).toEqual(expected)
-      const labelRows = expected.map((label) => rows.findIndex((line) => line.includes(label)))
-      const block = (index: number) => {
-        const start = labelRows[index]!
-        const next = labelRows[index + 1] ?? rows.length
-        const end = rows.findIndex((line, row) => row > start && (row >= next || line.trim() === ""))
-        return Array.from({ length: (end < 0 ? next : Math.min(end, next)) - start }, (_, offset) => start + offset)
-      }
-      expect(
-        expected.map((label, index) =>
-          block(index)
-            .map((row) => rows[row]!.trim())
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .replace(label, "")
-            .trim(),
-        ),
-      ).toEqual([...item.values])
-      expect(rows.find((line) => line.includes("AUTONOMY"))?.trim()).toMatch(/^−\s+AUTONOMY$/)
-      for (const removed of ["Auto-answer", "ordinary", "this Session"]) expect(frame).not.toContain(removed)
-      const spanLines = app.captureSpans().lines
-      expected.forEach((label, index) => {
-        const value = item.values[index]!
-        const human = value === "manual"
-        const painted = block(index).flatMap((row) =>
-          spanLines[row]!.spans.filter((span) => span.text.trim() !== "" && span.text.trim() !== label),
-        )
-        expect(painted.length, `${item.name} ${value}`).toBeGreaterThan(0)
-        for (const span of painted)
-          expect(span.fg.toInts(), `${item.name} ${value} · ${span.text}`).toEqual(
-            RGBA.fromHex(human ? "#67D7A4" : "#F0BE62").toInts(),
-          )
-      })
-    } finally {
-      app.renderer.destroy()
-    }
-  }
-})
-
-for (const mode of ["dark", "light"] as const) {
-  for (const width of [32, 50]) {
-    for (const asleep of [false, true]) {
-      test(`autonomy heading and rows fit ${width} columns in ${mode}, asleep=${asleep}`, async () => {
-        const { RailProvider } = await import("../src/routes/session/rail-section")
-        const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
-        const app = await mount(
-          () => (
-            <box width={width}>
-              <RailProvider>
-                <AutonomyRailContent autonomy={railAutonomy({ permissions: "auto", sleep: asleep })} />
-              </RailProvider>
-            </box>
-          ),
-          { width: width === 32 ? 120 : 160, height: 28 },
-          mode,
-        )
-        try {
-          await app.waitForFrame((frame) => frame.includes("Permissions"))
-          const lines = app.captureCharFrame().split("\n")
-          const heading = lines.find((line) => line.includes("AUTONOMY"))
-          expect(heading).toBeDefined()
-          expect(heading?.trimEnd().length).toBeLessThanOrEqual(width - 3)
-          expect(heading?.trim()).toMatch(/^−\s+AUTONOMY$/)
-          for (const line of lines) expect(line.slice(width).trim()).toBe("")
-          const guardrailLine = lines.findIndex((line) => line.includes("Guardrails"))
-          const questionLine = lines.findIndex((line) => line.includes("Answers"))
-          const guardrailValue = asleep ? "review box" : "manual"
-          const questionValue = asleep ? "review box" : "manual"
-          expect(lines.slice(guardrailLine, questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
-            `Guardrails ${guardrailValue}`,
-          )
-          expect(lines.slice(questionLine).join(" ").replace(/\s+/g, " ").trim()).toBe(
-            `Answers ${questionValue}`,
-          )
-        } finally {
-          app.renderer.destroy()
-        }
-      })
-    }
-  }
-}
 
 test("renders the goal panel only while its durable status is active", async () => {
   const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
@@ -328,7 +177,8 @@ test("renders the goal panel only while its durable status is active", async () 
       { width: 40, height: 24 },
     )
     try {
-      await app.waitForFrame((frame) => frame.includes("AUTONOMY"))
+      if (status === "active") await app.waitForFrame((frame) => frame.includes("Finish the migration"))
+      if (status !== "active") await app.renderOnce()
       expect(app.captureCharFrame().includes("GOAL"), status).toBe(status === "active")
       expect(app.captureCharFrame().includes("Finish the migration"), status).toBe(status === "active")
     } finally {
@@ -448,8 +298,7 @@ test("renders compact operational rail summaries from live component state", asy
 
   try {
     const frame = app.captureCharFrame()
-    const autonomyHeader = frame.split("\n").find((line) => line.includes("AUTONOMY"))
-    expect(autonomyHeader?.trim()).toMatch(/^−\s+AUTONOMY$/)
+    expect(frame).not.toContain("AUTONOMY")
     const expectations = [
       ["GOAL", "active"],
       ["TODO LIST", "1/2 open"],
@@ -856,7 +705,7 @@ test("expands every section on attention", async () => {
   }
 })
 
-test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TODO LIST in the correct order", async () => {
+test("renders GOAL, SUBAGENTS rail rows, and a TODO LIST in the correct order", async () => {
   const [{ SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }] = await Promise.all(
     [
       import("../src/routes/session/sidebar"),
@@ -901,7 +750,7 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
     const rendered = descendants(app.renderer.root).filter(
       (item): item is TextRenderable => item instanceof TextRenderable,
     )
-    const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "TODO LIST", "SUBAGENTS"]
+    const sectionHeaders = ["SESSION", "GOAL", "TODO LIST", "SUBAGENTS"]
     const indexes = sectionHeaders.map((label) => frame.indexOf(label))
     expect(indexes.every((index) => index >= 0)).toBe(true)
     expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
@@ -911,10 +760,7 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS rail rows, and a TO
     expect(frame).toContain("Fix provider cache accounting")
     expect(frame).toContain("Status")
     expect(frame).toContain("active")
-    expect(frame).toContain("Permissions")
-    expect(frame).toContain("auto")
-    expect(frame).toContain("Guardrails")
-    expect(frame).toContain("auto")
+    expect(frame).not.toMatch(/AUTONOMY|Permissions|Guardrails|Answers/)
     expect(frame).not.toContain("ses_0085fc701234567")
     expect(frame).not.toContain("workspace")
     expect(frame).toContain("docs-sync")

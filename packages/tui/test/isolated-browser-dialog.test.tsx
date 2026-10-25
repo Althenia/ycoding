@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import { KeyEvent } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { IsolatedBrowserStatus, YCodingClient } from "@ycoding-ai/client"
 import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
@@ -162,6 +163,114 @@ test("Chrome pairing code survives status polls and paired disconnects never off
     await Bun.sleep(10)
     expect(result.app.captureCharFrame()).toContain("p".repeat(43))
     expect(result.app.captureCharFrame()).toContain("Pairing code (expires in two minutes)")
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
+test("Chrome pairing code and actions stay visible in a short terminal", async () => {
+  let commands!: Accessor<readonly KeymapCommand[]>
+  const result = await renderBrowser({
+    command: true,
+    baseUrl: "http://127.0.0.1:43210",
+    viewport: { width: 74, height: 14 },
+    fetch: (url, request) => {
+      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
+        return json({ data: { state: "unavailable", paired: false } })
+      if (url.pathname === `/api/session/${first.sessionID}/browser/start`)
+        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
+      return undefined
+    },
+    fixture: () => {
+      commands = Keymap.useCommands()
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  try {
+    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
+    void commands()
+      .find((command) => command.id === "session.browser.chrome")!
+      .run()
+    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
+    result.app.mockInput.pressKey("p")
+    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
+    const frame = result.app.captureCharFrame()
+    expect(frame).toContain("Pairing code (expires in two minutes)")
+    expect(frame).toContain("Not connected")
+    expect(frame).toContain("r refresh")
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
+test("Chrome connection body scrolls so every instruction is reachable in a short terminal", async () => {
+  let commands!: Accessor<readonly KeymapCommand[]>
+  const result = await renderBrowser({
+    command: true,
+    baseUrl: "http://127.0.0.1:43210",
+    viewport: { width: 74, height: 14 },
+    fetch: (url, request) => {
+      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
+        return json({ data: { state: "unavailable", paired: false } })
+      if (url.pathname === `/api/session/${first.sessionID}/browser/start`)
+        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
+      return undefined
+    },
+    fixture: () => {
+      commands = Keymap.useCommands()
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  try {
+    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
+    void commands()
+      .find((command) => command.id === "session.browser.chrome")!
+      .run()
+    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
+    result.app.mockInput.pressKey("p")
+    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
+    const initial = result.app.captureCharFrame()
+    expect(initial).toContain("p create pairing code")
+    expect(initial).toContain("r refresh")
+    expect(initial).toContain("Page Up/Page Down")
+    expect(initial).not.toContain("Model actions still require site permission.")
+
+    const seen: string[] = []
+    let frame = initial
+    for (let page = 0; page < 8 && !frame.replace(/\s+/g, " ").includes("site permission."); page++) {
+      pressPage(result.app, "pagedown")
+      const previous = frame
+      await result.app.waitForFrame((next) => next !== previous)
+      frame = result.app.captureCharFrame()
+      expect(frame).toContain("Page Up/Page Down")
+      seen.push(...frame.split("\n").map((line) => line.trim()).filter((line) => line && !seen.includes(line)))
+    }
+    const reached = seen.join("").replace(/\s+/g, "")
+    expect(reached).toContain("Model actions still require site permission.".replace(/\s+/g, ""))
+    expect(reached).toContain("In chrome://extensions, choose Load unpacked and select:".replace(/\s+/g, ""))
+    expect(reached).toContain(BrowserExtension.location().replace(/\s+/g, ""))
+    expect(reached).toContain("Local service address (enter once in the extension):".replace(/\s+/g, ""))
+    expect(reached).toContain("http://127.0.0.1:43210")
+
+    for (let page = 0; page < 8 && !frame.includes("Pairing code (expires in two minutes)"); page++) {
+      pressPage(result.app, "pageup")
+      const previous = frame
+      await result.app.waitForFrame((next) => next !== previous)
+      frame = result.app.captureCharFrame()
+    }
+    expect(frame).toContain("Pairing code (expires in two minutes)")
+    expect(frame).toContain("r refresh")
+
+    const pointerRow = frame.split("\n").findIndex((line) => line.includes("Pairing code"))
+    expect(pointerRow).toBeGreaterThanOrEqual(0)
+    for (let wheel = 0; wheel < 16 && !frame.replace(/\s+/g, " ").includes("site permission."); wheel++) {
+      const previous = frame
+      await result.app.mockMouse.scroll(20, pointerRow, "down")
+      await result.app.waitForFrame((next) => next !== previous)
+      frame = result.app.captureCharFrame()
+    }
+    expect(frame.replace(/\s+/g, " ")).toContain("site permission.")
+    expect(frame).toContain("Page Up/Page Down")
   } finally {
     result.app.renderer.destroy()
   }
@@ -651,6 +760,25 @@ test("late startup-stop result cannot replace a reopened dialog", async () => {
     result.app.renderer.destroy()
   }
 })
+
+function pressPage(app: Awaited<ReturnType<typeof renderBrowser>>["app"], name: "pageup" | "pagedown") {
+  const sequence = name === "pageup" ? "\u001b[5~" : "\u001b[6~"
+  app.renderer.keyInput.emit(
+    "keypress",
+    new KeyEvent({
+      name,
+      ctrl: false,
+      meta: false,
+      shift: false,
+      option: false,
+      sequence,
+      number: false,
+      raw: sequence,
+      eventType: "press",
+      source: "raw",
+    }),
+  )
+}
 
 type BrowserApi = Partial<YCodingClient["isolatedBrowser"]>
 

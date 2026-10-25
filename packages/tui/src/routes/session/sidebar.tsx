@@ -8,12 +8,6 @@ import type { SessionAutonomyView } from "@ycoding-ai/client"
 
 import { useTerminalDimensions } from "@opentui/solid"
 import { getScrollAcceleration } from "../../util/scroll"
-import {
-  autonomyAutomated,
-  autonomyDecisionKind,
-  autonomyDecisionLabel,
-  autonomyInheritance,
-} from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
 import { RailProvider, RailRow, RailSection } from "./rail-section"
 
@@ -59,7 +53,6 @@ export function Sidebar(props: {
           <box flexShrink={0}>
             <RailProvider
               goal={props.autonomy?.goal?.status === "active"}
-              autonomy={autonomyAutomated(props.autonomy) === true || props.autonomy?.goal?.status === "active"}
               allExpanded={allExpanded()}
               leftRule
             >
@@ -158,53 +151,15 @@ export function AutonomyRailContent(props: {
           </RailSection>
         )}
       </Show>
-      <Show when={true}>
-        <RailSection
-          section="autonomy"
-          title="AUTONOMY"
-          attention={
-            autonomyAutomated(props.autonomy) === true || props.autonomy?.goal?.status === "active" || props.autonomy?.effective?.asleep === true
-          }
-        >
-          <For each={[
-            ["Permissions", "permissions"],
-            ["Guardrails", "guardrails"],
-            ["Answers", "answers"],
-          ] as const}>
-            {([label, action]) => {
-              const decision = () => autonomyDecisionKind(props.autonomy, action)
-              return (
-                <RailRow
-                  label={label}
-                  value={`${autonomyDecisionLabel(props.autonomy, action)}${inheritedNote(props.autonomy, action)}`}
-                  valueColor={
-                    decision() === "manual"
-                      ? theme.text.feedback.success.default
-                      : decision() === "unknown"
-                        ? theme.text.subdued
-                        : theme.text.feedback.warning.default
-                  }
-                />
-              )
-            }}
-          </For>
-          <Show when={props.reviewCount}>
-            {(count) => (
-              <RailRow
-                label="Review"
-                value={`${count()} waiting`}
-                valueColor={theme.text.feedback.warning.default}
-              />
-            )}
-          </Show>
-        </RailSection>
+      <Show when={props.reviewCount}>
+        {(count) => (
+          <RailRow
+            label="Review"
+            value={`${count()} waiting`}
+            valueColor={theme.text.feedback.warning.default}
+          />
+        )}
       </Show>
     </>
   )
-}
-
-function inheritedNote(autonomy: SessionAutonomyView | undefined, action: Parameters<typeof autonomyInheritance>[1]) {
-  const source = autonomyInheritance(autonomy, action)
-  if (!source) return ""
-  return ` · inherited from ${source.length > 13 ? `${source.slice(0, 13)}…` : source}`
 }

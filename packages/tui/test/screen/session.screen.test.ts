@@ -196,7 +196,8 @@ describe("active session screen", () => {
     expect(frame).not.toContain("prefix stable")
     expect(frame).not.toContain("GUARDRAIL")
     expect(frame).not.toContain("LSP")
-    expect(frame).toContain("AUTONOMY")
+    expect(frame).not.toContain("AUTONOMY")
+    for (const title of ["Permissions", "Guardrails", "Answers"]) expect(frame).toContain(title)
     expect(frame).not.toContain("SUBAGENTS")
 
     await screen.dispose()

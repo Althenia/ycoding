@@ -4,7 +4,7 @@ import { testRender } from "@opentui/solid"
 import path from "node:path"
 import { createEffect } from "solid-js"
 import { Composer } from "../../src/routes/session/composer"
-import { Footer } from "../../src/routes/session/footer"
+import { Footer, FooterAutonomy } from "../../src/routes/session/footer"
 import { Header } from "../../src/routes/session/header"
 import { ConfigProvider } from "../../src/config"
 import { ClientProvider } from "../../src/context/client"
@@ -12,7 +12,7 @@ import { DataProvider, useData } from "../../src/context/data"
 import { Keymap } from "../../src/context/keymap"
 import { LocationProvider, useLocation } from "../../src/context/location"
 import { RouteProvider } from "../../src/context/route"
-import { ThemeProvider } from "../../src/context/theme"
+import { ThemeProvider, useTheme } from "../../src/context/theme"
 import { ToastProvider } from "../../src/ui/toast"
 import { DialogProvider } from "../../src/ui/dialog"
 import { createApi, createEventStream, createFetch, json, sessionSnapshot } from "../fixture/tui-client"
@@ -165,6 +165,18 @@ test("keeps the parent header status informational while subagents are active", 
   }
 }, 60_000)
 
+function SessionFooter() {
+  const { theme } = useTheme()
+  return (
+    <>
+      <Footer branch="main" sessionID={sessionID} />
+      <box backgroundColor={theme.background.chrome} paddingLeft={3} paddingRight={3} flexShrink={0}>
+        <FooterAutonomy />
+      </box>
+    </>
+  )
+}
+
 async function boot(viewport: { width: number; height: number }) {
   const events = createEventStream()
   const calls = createFetch(route, events)
@@ -191,7 +203,7 @@ async function boot(viewport: { width: number; height: number }) {
                           />
                           <box flexGrow={1} />
                           <Composer sessionID={sessionID} open={true} defaultTab="subagents" />
-                          <Footer branch="main" sessionID={sessionID} />
+                          <SessionFooter />
                         </box>
                       </DialogProvider></ToastProvider>
                     </Keymap.Provider>

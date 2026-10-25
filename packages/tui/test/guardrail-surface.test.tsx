@@ -170,7 +170,9 @@ async function until(predicate: () => boolean) {
 }
 
 async function waitForFrameText(screen: { frame(): string }, text: string) {
-  await until(() => screen.frame().includes(text))
+  await until(() => screen.frame().includes(text)).catch(() => {
+    throw new Error(`Missing ${text}:\n${screen.frame()}`)
+  })
   expect(screen.frame()).toContain(text)
 }
 

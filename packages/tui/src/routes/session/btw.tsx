@@ -45,7 +45,7 @@ export function BtwFooter(props: { sessionID: string; parentID: string }) {
   return (
     <box
       width="100%"
-      height={3}
+      height={2}
       paddingLeft={3}
       paddingRight={3}
       flexDirection="row"

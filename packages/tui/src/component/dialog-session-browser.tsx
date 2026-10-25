@@ -1,6 +1,7 @@
 import type { IsolatedBrowserStatus, SessionInfo } from "@ycoding-ai/client"
 import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
-import { TextAttributes } from "@opentui/core"
+import { ScrollBoxRenderable, TextAttributes } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { Option, Schema } from "effect"
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js"
 import { Keymap } from "../context/keymap"
@@ -43,6 +44,8 @@ export function DialogChromeConnection(props: { sessionID: string }) {
   const client = useClient()
   const dialog = useDialog()
   const { theme } = useTheme().contextual("elevated")
+  const dimensions = useTerminalDimensions()
+  let scroll: ScrollBoxRenderable | undefined
   const baseUrl = client.baseUrl()
   const address = baseUrl && URL.canParse(baseUrl) ? new URL(baseUrl) : undefined
   const localAddress =
@@ -158,6 +161,18 @@ export function DialogChromeConnection(props: { sessionID: string }) {
       { bind: "p", title: "Create Chrome pairing code", group: "Dialog", run: pair },
       { bind: "r", title: "Refresh Chrome connection", group: "Dialog", run: () => !pending() && refresh() },
       { bind: "f", title: "Forget Chrome pairing", group: "Dialog", run: forget },
+      {
+        id: "chrome-connection.page-up",
+        title: "Scroll Chrome connection up",
+        bind: "pageup",
+        run: () => scroll?.scrollBy(-Math.max(1, scroll.viewport.height)),
+      },
+      {
+        id: "chrome-connection.page-down",
+        title: "Scroll Chrome connection down",
+        bind: "pagedown",
+        run: () => scroll?.scrollBy(Math.max(1, scroll.viewport.height)),
+      },
     ],
   }))
   createEffect(on(() => props.sessionID, refresh))
@@ -172,56 +187,69 @@ export function DialogChromeConnection(props: { sessionID: string }) {
   return (
     <box paddingBottom={1} flexDirection="column">
       <DialogHeader title={<DialogTitle>Chrome connection</DialogTitle>} />
-      <box paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} flexDirection="column">
-        <box flexDirection="column">
-          <text wrapMode="word">In chrome://extensions, choose Load unpacked and select:</text>
-          <text>{BrowserExtension.location()}</text>
-          <text wrapMode="word">Then enter this one-time code in the YCoding extension popup.</text>
-        </box>
-        <Show
-          when={localAddress}
-          fallback={<text wrapMode="word">Connect YCoding to a local loopback service before pairing Chrome.</text>}
-        >
-          {(url) => (
-            <box flexDirection="column">
-              <text>Local service address (enter once in the extension):</text>
-              <text>{url()}</text>
-            </box>
-          )}
-        </Show>
-        <text fg={theme.text.subdued} wrapMode="word">
-          Pairing lets YCoding use eligible Chrome tabs, including the active tab. Model actions still require site
-          permission.
-        </text>
-        <text>
-          {failure()
-            ? "Chrome connection status unavailable"
-            : status() === "connected"
-              ? "Connected to YCoding"
-              : status() === "loading"
-                ? "Loading"
-                : status() === "paired"
-                  ? "Paired; waiting for Chrome to reconnect"
-                : "Not connected"}
-        </text>
-        <Show when={secret()}>
-          {(code) => <text wrapMode="word">Pairing code (expires in two minutes): {code()}</text>}
-        </Show>
-        <Show when={failure()}>
-          <text fg={theme.text.feedback.error.default}>
-            Unable to load or create Chrome pairing. Press r to refresh.
+      <scrollbox
+        ref={(value: ScrollBoxRenderable) => {
+          scroll = value
+        }}
+        maxHeight={Math.max(3, dimensions().height - Math.floor(dimensions().height / 4) - 5)}
+        scrollbarOptions={{ visible: false }}
+      >
+        <box paddingLeft={4} paddingRight={4} paddingTop={1} flexDirection="column">
+          <box paddingBottom={1} flexDirection="column">
+            <text>
+              {failure()
+                ? "Chrome connection status unavailable"
+                : status() === "connected"
+                  ? "Connected to YCoding"
+                  : status() === "loading"
+                    ? "Loading"
+                    : status() === "paired"
+                      ? "Paired; waiting for Chrome to reconnect"
+                    : "Not connected"}
+            </text>
+            <Show when={secret()}>
+              {(code) => <text wrapMode="word">Pairing code (expires in two minutes): {code()}</text>}
+            </Show>
+            <Show when={failure()}>
+              <text fg={theme.text.feedback.error.default}>
+                Unable to load or create Chrome pairing. Press r to refresh.
+              </text>
+            </Show>
+            <text>
+              <Show when={!failure() && !pending() && !paired() && ["pairing", "unavailable"].includes(status())}>
+                <b>p</b> create pairing code{" "}
+              </Show>
+              <Show when={!failure() && !pending() && paired()}>
+                <b>f</b> forget pairing{" "}
+              </Show>
+              <b>r</b> refresh
+            </text>
+          </box>
+          <box flexDirection="column">
+            <text wrapMode="word">In chrome://extensions, choose Load unpacked and select:</text>
+            <text>{BrowserExtension.location()}</text>
+            <text wrapMode="word">Then enter this one-time code in the YCoding extension popup.</text>
+          </box>
+          <Show
+            when={localAddress}
+            fallback={<text wrapMode="word">Connect YCoding to a local loopback service before pairing Chrome.</text>}
+          >
+            {(url) => (
+              <box flexDirection="column">
+                <text>Local service address (enter once in the extension):</text>
+                <text>{url()}</text>
+              </box>
+            )}
+          </Show>
+          <text fg={theme.text.subdued} wrapMode="word">
+            Pairing lets YCoding use eligible Chrome tabs, including the active tab. Model actions still require site
+            permission.
           </text>
-        </Show>
-        <text>
-          <Show when={!failure() && !pending() && !paired() && ["pairing", "unavailable"].includes(status())}>
-            <b>p</b> create pairing code{" "}
-          </Show>
-          <Show when={!failure() && !pending() && paired()}>
-            <b>f</b> forget pairing{" "}
-          </Show>
-          <b>r</b> refresh
-        </text>
-      </box>
+        </box>
+      </scrollbox>
+      <text paddingLeft={4} fg={theme.text.subdued}>
+        Page Up/Page Down scroll · Escape close
+      </text>
     </box>
   )
 }
