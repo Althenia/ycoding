@@ -775,6 +775,15 @@ export type OperationInput = {
   readonly appContext?: McpEvents.RequestContext
 }
 
+const humanDecisionOperations: ReadonlySet<RemoteOperation> = new Set([
+  "session.permission.reply",
+  "session.guardrail.reply",
+  "session.form.reply",
+  "session.form.cancel",
+  "session.review.decide",
+  "session.subagent.answer",
+])
+
 export async function executeRemoteOperation(input: OperationInput): Promise<readonly RemoteResponse[]> {
   return settle(input.request, () => run(input))
 }
@@ -831,6 +840,8 @@ async function homeDescendant(home: string, directory: string) {
 
 async function run(input: OperationInput) {
   const request = input.request
+  if (input.appContext !== undefined && humanDecisionOperations.has(request.operation))
+    throw new OperationError("forbidden", "Settle this request through its native human or parent controls; MCP automation cannot supply the decision.")
   if (request.operation.startsWith("provider.auth.")) {
     const fields = parseProviderAuthInput(request.operation, request.input)
     if (!fields || request.sessionID !== undefined) throw new OperationError("invalid_message", "Invalid provider authentication request")
@@ -948,7 +959,7 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
-    "session.dots.bind", "session.dots.send", "session.dots.pause", "session.dots.resume",
+    "session.dots.bind", "session.dots.send", "session.dots.pause", "session.dots.resume", "session.dots.exchange.create",
     "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
     "incident.guidance.clear",
@@ -960,6 +971,16 @@ async function run(input: OperationInput) {
     return input.uploads.append(sessionID, validated.uploadID, validated.index, validated.last, validated.data)
   }
   switch (validated.kind) {
+    case "dots.exchange.create":
+      if (input.appContext === undefined) return unknownOperation()
+      const recipient = await input.sessions.verify(validated.input.targetSessionID, input.signal)
+      if (recipient === undefined) throw new OperationError("session_not_allowed", "The exchange target is not available in this device's Session inventory")
+      if (recipient.parentID !== undefined && recipient.agent !== "btw")
+        throw new OperationError("subagent_read_only", "Managed subagents accept input only from their parent Session")
+      return { data: await input.local.dotsExchangeCreate(sessionID, location, validated.input, input.appContext) }
+    case "dots.exchange.read":
+      if (input.appContext === undefined) return unknownOperation()
+      return { data: await input.local.dotsExchangeRead(sessionID, location, validated.input, input.appContext) }
     case "dots.targets": return { data: await input.local.dotsTargets(sessionID, location, validated.profile) }
     case "dots.status": return { data: await input.local.dotsStatus(sessionID, location) }
     case "dots.bind": return { data: await input.local.dotsBind(sessionID, location, validated.target) }
@@ -1169,7 +1190,7 @@ async function run(input: OperationInput) {
       return null
     case "prompt":
       await requireAgentMentions(input.local, location, validated.input.agents)
-      return { data: await input.local.prompt(sessionID, location, { ...validated.input, ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
+      return { data: await input.local.prompt(sessionID, location, { ...validated.input, ...(input.appContext === undefined ? {} : { remoteSource: input.appContext }), ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
     case "interrupt":
       await input.local.interrupt(sessionID, location)
       return null
@@ -1225,6 +1246,8 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
+  | { readonly kind: "dots.exchange.create"; readonly input: Dots.ExchangeCreate }
+  | { readonly kind: "dots.exchange.read"; readonly input: Dots.ExchangeRead }
   | { readonly kind: "dots.targets"; readonly profile: string }
   | { readonly kind: "dots.status" }
   | { readonly kind: "dots.bind"; readonly target: Dots.Target }
@@ -1584,6 +1607,8 @@ function validate(request: RemoteRequest): Validated {
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
+    case "session.dots.exchange.create": return { kind: "dots.exchange.create", input: Schema.decodeUnknownSync(Dots.ExchangeCreate)(fields, { onExcessProperty: "error" }) }
+    case "session.dots.exchange.read": return { kind: "dots.exchange.read", input: Schema.decodeUnknownSync(Dots.ExchangeRead)(fields, { onExcessProperty: "error" }) }
     case "session.dots.targets": return { kind: "dots.targets", profile: requireString(fields.profile, "profile", 256) }
     case "session.dots.bind": return { kind: "dots.bind", target: {
       profile: requireString(fields.profile, "profile", 256),
@@ -2281,6 +2306,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.dots.status": [],
   "session.dots.bind": ["profile", "dotID", "threadID", "generation", "label"],
   "session.dots.send": ["id", "text", "files", "causalMessageID", "expectedTarget"],
+  "session.dots.exchange.create": ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text"],
+  "session.dots.exchange.read": ["exchangeID"],
   "session.dots.pause": ["expectedTarget"],
   "session.dots.resume": ["expectedTarget"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
@@ -2363,6 +2390,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.command",
   "session.dots.bind",
   "session.dots.send",
+  "session.dots.exchange.create",
   "session.dots.pause",
   "session.dots.resume",
   "session.skill",

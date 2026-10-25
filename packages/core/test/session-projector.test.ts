@@ -63,6 +63,25 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("keeps Dots exchange metadata out of message projections", () => Effect.gen(function* () {
+    const state: SessionMessageUpdater.MemoryState = {
+      messages: [SessionMessage.User.make({ id: SessionMessage.ID.make("msg_existing"), type: "user", text: "Existing input", time: { created } })],
+    }
+    const before = state.messages.map((message) => encodeMessage(message))
+    yield* SessionMessageUpdater.update(SessionMessageUpdater.memory(state), SessionEvent.DotsExchangeCreated.make({
+      id: EventRuntime.ID.make("evt_exchange_metadata"), type: "session.dots.exchange.created", created,
+      durable: { aggregateID: sessionID, seq: EventRuntime.Seq.make(1), version: EventRuntime.Version.make(1) },
+      data: {
+        sessionID, exchangeID: "synthetic-exchange", targetSessionID: sessionID, inputID: SessionMessage.ID.make("msg_exchange_input"),
+        expectedAttachment: { profile: "fixture", dotID: "dot_fixture", threadID: "thread_fixture", generation: "generation_fixture", label: "Fixture" },
+        accountDigest: "synthetic-account", fingerprint: "synthetic-fingerprint", grantID: "synthetic-grant",
+        source: { requestID: "synthetic-request", epoch: "synthetic-epoch", principal: { ownerID: "synthetic-owner", deviceID: "synthetic-device", clientID: "synthetic-client" } },
+        scope: { rootSessionID: sessionID },
+      },
+    }))
+    expect(state.messages.map((message) => encodeMessage(message))).toEqual(before)
+  }))
+
   it.effect("legacy text settlement never substitutes its end time for an unknown start", () => Effect.gen(function* () {
     const assistantMessageID = SessionMessage.ID.make("msg_legacy_text")
     const state: SessionMessageUpdater.MemoryState = {

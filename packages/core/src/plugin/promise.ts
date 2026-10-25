@@ -235,6 +235,7 @@ export function fromPromise(plugin: Plugin) {
                   id: input.id == null ? undefined : SessionMessage.ID.make(input.id),
                   delivery: input.delivery ?? undefined,
                   resume: input.resume ?? undefined,
+                  remoteSource: input.remoteSource ?? undefined,
                 }),
               ),
             generate: (input) =>

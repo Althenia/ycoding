@@ -154,17 +154,16 @@ test("renders select, confirm, and alert dialogs on the shared panel cell grid",
     "Delete session?",
   )
   expect(confirm.panel.width).toBe(98)
-  expect(confirm.panel.height).toBe(14)
+  expect(confirm.panel.height).toBe(13)
   expectRelativePosition(confirm, "Delete session?", 3, 2)
   expectRelativePosition(confirm, "esc", 91, 2)
-  expectRelativePosition(confirm, "Search", 6, 5)
-  expectRelativePosition(confirm, "Provider cache audit and its 1,204 archived messages", 3, 8)
-  expectRelativePosition(confirm, "will be permanently removed.", 3, 10)
-  expectRelativePosition(confirm, "Cancel", 6, 12)
-  expectRelativePosition(confirm, "Delete", 6, 13)
+  expect(confirm.lines.flat().map((span) => span.text).join("")).not.toContain("Search")
+  expectRelativePosition(confirm, "Provider cache audit and its 1,204 archived messages", 3, 4)
+  expectRelativePosition(confirm, "will be permanently removed.", 3, 6)
+  expectRelativePosition(confirm, "Cancel", 6, 8)
+  expectRelativePosition(confirm, "Delete", 6, 9)
   expectFullPanelBand(confirm, "Delete", colors.selected)
   expectOneRowSelection(confirm, "Delete", colors)
-  expectSearchFocusMark(confirm, colors)
 
   const alert = await renderDialogView(
     { width: 189, height: 40 },

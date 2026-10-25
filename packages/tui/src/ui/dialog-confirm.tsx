@@ -1,10 +1,12 @@
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { DialogHeader, DialogSearchRow, DialogTitle, dialogMessageLines, dialogPanelWidth, useDialog, type DialogContext } from "./dialog"
+import { DialogHeader, DialogTitle, dialogMessageLines, dialogPanelWidth, useDialog, type DialogContext } from "./dialog"
 import { createStore } from "solid-js/store"
-import { createMemo, For } from "solid-js"
+import { createMemo, For, onCleanup } from "solid-js"
 import { Locale } from "../util/locale"
 import { useTerminalDimensions } from "@opentui/solid"
+import type { ScrollBoxRenderable } from "@opentui/core"
+import { stringWidth } from "../util/string-width"
 
 export type DialogConfirmProps = {
   title: string
@@ -24,6 +26,28 @@ export function DialogConfirm(props: DialogConfirmProps) {
     active: "confirm" as "confirm" | "cancel",
   })
   const lines = createMemo(() => dialogMessageLines(props.message))
+  const title = () => Locale.truncateWidth(props.title, Math.max(1, dialogPanelWidth(dimensions().width) - 14))
+  const detailWidth = () => Math.max(1, dialogPanelWidth(dimensions().width) - 7)
+  const titleLines = createMemo(() => title() === props.title ? [] : dialogMessageLines(props.title, detailWidth()))
+  const detailHeight = () => Math.min(
+    Math.max(1, lines().length * 2 + titleLines().reduce((count, line) => count + Math.max(1, Math.ceil(stringWidth(line) / detailWidth())), 0)),
+    Math.max(1, dimensions().height - Math.ceil(dimensions().height / 4) - 8),
+  )
+  const entry = dialog.stack.at(-1)
+  let settled = false
+  let details: ScrollBoxRenderable | undefined
+  onCleanup(() => { settled = true })
+
+  const settle = (choice: "confirm" | "cancel") => {
+    if (settled) return
+    settled = true
+    try {
+      if (choice === "confirm") props.onConfirm?.()
+      if (choice === "cancel") props.onCancel?.()
+    } finally {
+      if (dialog.stack.at(-1) === entry) dialog.clear()
+    }
+  }
 
   Keymap.createLayer(() => ({
     mode: "modal",
@@ -32,11 +56,31 @@ export function DialogConfirm(props: DialogConfirmProps) {
         bind: "return",
         title: "Confirm dialog selection",
         group: "Dialog",
-        run: () => {
-          if (store.active === "confirm") props.onConfirm?.()
-          if (store.active === "cancel") props.onCancel?.()
-          dialog.clear()
-        },
+        run: () => settle(store.active),
+      },
+      {
+        bind: "up",
+        title: "Select cancel",
+        group: "Dialog",
+        run: () => setStore("active", "cancel"),
+      },
+      {
+        bind: "down",
+        title: "Select confirm",
+        group: "Dialog",
+        run: () => setStore("active", "confirm"),
+      },
+      {
+        bind: "pageup",
+        title: "Previous confirmation details",
+        group: "Dialog",
+        run: () => details?.scrollBy(-Math.max(1, details.viewport.height)),
+      },
+      {
+        bind: "pagedown",
+        title: "Next confirmation details",
+        group: "Dialog",
+        run: () => details?.scrollBy(Math.max(1, details.viewport.height)),
       },
       {
         bind: "left",
@@ -57,10 +101,17 @@ export function DialogConfirm(props: DialogConfirmProps) {
     ],
   }))
   return (
-    <box paddingTop={1}>
-      <DialogHeader title={<DialogTitle>{props.title}</DialogTitle>} />
-      <DialogSearchRow />
-      <box paddingTop={2} paddingLeft={3} paddingRight={4}>
+    <box paddingTop={1} paddingBottom={1}>
+      <DialogHeader title={<DialogTitle>{title()}</DialogTitle>} />
+      <scrollbox
+        ref={(value: ScrollBoxRenderable) => { details = value }}
+        marginTop={1}
+        paddingLeft={3}
+        paddingRight={4}
+        height={detailHeight()}
+        scrollbarOptions={{ visible: false }}
+      >
+        <For each={titleLines()}>{(line) => <text fg={theme.text.default} wrapMode="word">{line}</text>}</For>
         <For each={lines()}>
           {(line) => (
             <box height={2}>
@@ -68,18 +119,15 @@ export function DialogConfirm(props: DialogConfirmProps) {
             </box>
           )}
         </For>
-      </box>
+      </scrollbox>
       <box>
         <For each={["cancel", "confirm"] as const}>
           {(key) => (
             <box
               height={1}
               width={dialogPanelWidth(dimensions().width)}
-              onMouseUp={() => {
-                if (key === "confirm") props.onConfirm?.()
-                if (key === "cancel") props.onCancel?.()
-                dialog.clear()
-              }}
+              onMouseDown={() => setStore("active", key)}
+              onMouseUp={() => settle(key)}
             >
               <box
                 height={1}
@@ -96,6 +144,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
           )}
         </For>
       </box>
+      <box paddingLeft={6} paddingTop={1}><text fg={theme.text.subdued}>↑↓/←→ choose · enter confirm · esc cancel</text></box>
     </box>
   )
 }

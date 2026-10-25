@@ -273,6 +273,8 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
     yield* SessionEvent.match(event, {
       "session.created": () => Effect.void,
       "session.profile.bound": () => Effect.void,
+      "session.dots.exchange.created": () => Effect.void,
+      "session.dots.report.recorded": () => Effect.void,
       "session.guardrail.approved": () => Effect.void,
       "session.guardrail.decided": () => Effect.void,
       "session.decision.audited": () => Effect.void,
@@ -364,7 +366,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.execution.interrupted": () => clearCurrentRetry,
       "session.instructions.updated": () => Effect.void,
       "session.context.observed": (event) => {
-        const metadata = { contextSource: event.data.source }
+        const metadata = { contextSource: event.data.source, ...(event.data.dots === undefined ? {} : { dotsCoordination: event.data.dots }) }
         if (event.data.source === "team-view")
           return adapter.appendMessage(
             SessionMessage.Synthetic.make({

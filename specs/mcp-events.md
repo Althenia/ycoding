@@ -44,9 +44,29 @@ The default lifetime is 24 hours, the minimum is 60 seconds, and the maximum is 
 
 Each delivery contains `{ eventId, name, timestamp, data, cursor }`. `timestamp` is the occurrence time, not the attempt time. `data` contains `session_id`, `root_session_id`, a state, and optional request, review-item, or task IDs and bounded categories. It contains no prompt, command, resource path, answer, grade evidence, credential, or raw provider error. Consumers read current Session state before acting on a notification.
 
-Token deltas, tool progress text, and ordinary MCP reads do not create notifications. Completion means the explicit runtime receipt, not an idle transition. An event is a notification, never an instruction or approval.
+Pending and deferred guardrail, permission, Question and Form notifications carry optional `attention` metadata:
 
-The model-facing `question` tool creates native Forms. Its pending and resolved notifications use `session.form.changed` with the `frm_` identifier; consumers read and answer them through `session.form.list` and `session.form.reply`. Native Question-service requests use `session.question.changed` with their own request IDs. These event kinds are not synthesized from each other. `session.review.list` reads durable deferred review-box items, not an aggregate of awake pending permissions, guardrails, and Forms; read the corresponding native pending-request lists.
+```json
+{
+  "kind": "guardrail",
+  "origin": { "type": "tool", "source_event_id": "evt_request", "message_id": "msg_assistant", "call_id": "call_request" },
+  "review": "hard",
+  "human_required": true,
+  "actions": ["inspect", "notify_human"]
+}
+```
+
+`kind` is `guardrail`, `permission`, `question`, `form`, or `subagent_question`. Origins are `tool`, `native`, `managed_task`, `review`, or `unreported`; missing tool identifiers remain unreported rather than being inferred from text. `review` is `ordinary`, `hard`, `custom`, or `unreported` when applicable. Identifiers use the existing 128-character ASCII bound. These actions describe the external controller's inspection and human-handoff surface, not approval authority. Native human decisions and existing delegated native policy remain separate.
+
+Core stores this bounded metadata snapshot on the outbox row. Retries preserve it after the live request disappears. Settlement and restart-cancellation rows retain the original request provenance and expose only `inspect`; they never reinterpret disappearance as approval. Consumers reconcile the exact owning Session, request or review-item ID and current native state before taking an allowed action. An uncertain settlement is read back, not replayed. Callback text never settles a request.
+
+Token deltas, tool progress text, and ordinary MCP reads do not create notifications. Explicit `dots_report` records produce `session.progress` notifications with `request_id` equal to the correlated native input and `category` equal to the report kind. Distinct report events are not coalesced by the ordinary 30-second execution-progress window; replay of one event remains deduplicated. Report bodies are read through the authenticated exchange, not placed in callbacks. Completion means the explicit runtime receipt, not an idle transition. An event is a notification, never an instruction or approval.
+
+For `session.completed`, `data.request_id` is the completed native input ID when it fits the bounded identifier format. Dots coordinators correlate it with the `inputID` returned at exchange creation, then read the exchange for its validated envelope and result. Notification deduplication follows the work-completion event identity, not the input ID, so distinct receipts after a revert remain distinct. The callback contains neither the response text nor the exchange's routing metadata and does not prove that the receiving host has resumed.
+
+The model-facing `question` tool creates native Forms. Its pending and resolved notifications use `session.form.changed` with the `frm_` identifier; Relay MCP consumers inspect them through `session.form.list` and hand human-required settlement to native authenticated controls. Native Question-service requests use `session.question.changed` with their own request IDs. These event kinds are not synthesized from each other. `session.review.list` reads durable deferred review-box items, not an aggregate of awake pending permissions, guardrails, and Forms; read the corresponding native pending-request lists.
+
+Managed-child questions also use `session.question.changed`: `session_id` and `task_id` identify the child, `request_id` identifies its native question, and attention uses `kind: "subagent_question"` with a `managed_task` origin. Answers resolve the request; timeout, child cancellation and loss cancel it. Durable waiting questions remain pending across restart. Read their current native Team state and retain parent mediation; no question or answer body appears in the callback.
 
 Permission and guardrail interruption do not publish a dedicated live cancellation event. Restart reconciliation cancels retained, unresolved ephemeral requests; durable deferred reviews remain governed by their actual settlement. Consumers must confirm a pending request still exists before replying.
 

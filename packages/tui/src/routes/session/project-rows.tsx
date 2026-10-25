@@ -1,5 +1,5 @@
 import { InputRenderable, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
-import { createMemo, createSignal, Index, Show, type Accessor, type JSX } from "solid-js"
+import { createMemo, createSignal, Index, onCleanup, Show, type Accessor, type JSX } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { readableTint } from "../../theme/component"
 import { Keymap } from "../../context/keymap"
@@ -13,6 +13,9 @@ export type Row = {
   kind: "heading" | "info" | "item"
   label: string
   value?: string
+  detail?: string
+  badge?: string
+  disabled?: boolean
   tone?: Tone
   indent?: number
   marker?: "✎" | "›"
@@ -80,7 +83,18 @@ export function createRowList(input: {
   const [lastIndex, setLastIndex] = createSignal(0)
   const [editing, setEditing] = createSignal<{ key: string; draft: string; initial: string }>()
   const [editor, setEditor] = createSignal<InputRenderable>()
+  const keymap = Keymap.use()
+  onCleanup(
+    keymap.intercept("key", (context) => {
+      if (!input.active() || !editing() || !editor()?.focused) return
+      if (keymap.mode.current() !== (input.mode ?? "base")) return
+      if (context.event.name === "escape" || context.event.name === "return") return
+      if (editor()!.handleKeyPress(context.event)) context.consume()
+    }),
+  )
   let scroll: ScrollBoxRenderable | undefined
+  const [measuredWidth, setMeasuredWidth] = createSignal(0)
+  const contentWidth = () => Math.min(input.contentWidth(), measuredWidth() || input.contentWidth())
 
   const selectable = createMemo(() => input.rows().filter((row) => row.kind === "item"))
   const cursor = createMemo(
@@ -94,11 +108,14 @@ export function createRowList(input: {
     if (!scroll || scroll.isDestroyed || !current) return
     const rows = input.rows()
     const index = rows.findIndex((row) => row.key === current.key)
-    const line = index + rows.slice(0, index).filter((row) => row.kind === "heading").length + 1
+    const line = rows
+      .slice(0, index)
+      .reduce((sum, row) => sum + (row.kind === "heading" || row.detail !== undefined ? 2 : 1), 0)
+    const bottom = line + (current.detail === undefined ? 1 : 2)
     const top = scroll.scrollTop
     const height = Math.max(1, scroll.viewport.height)
     if (line < top) scroll.scrollTo(line)
-    else if (line >= top + height) scroll.scrollTo(line - height + 1)
+    else if (bottom > top + height) scroll.scrollTo(bottom - height)
   }
 
   function moveTo(index: number) {
@@ -116,10 +133,11 @@ export function createRowList(input: {
 
   function startEdit(row: Row) {
     if (!row.edit || input.busy?.()) return
+    focusKey(row.key)
     setEditing({ key: row.key, draft: row.edit.initial, initial: row.edit.initial })
   }
   function activate(row: Row | undefined) {
-    if (!row) return
+    if (!row || row.disabled || (input.busy?.() && row.key !== "cancel")) return
     if (row.edit) return startEdit(row)
     row.activate?.()
   }
@@ -160,7 +178,7 @@ export function createRowList(input: {
   function RowLine(line: { row: Row }) {
     const row = () => line.row
     const selected = () => cursor()?.key === row().key
-    const unavailable = () => row().shortcut?.available === false
+    const unavailable = () => row().disabled || row().shortcut?.available === false
     const fill = () =>
       selected()
         ? input.active()
@@ -173,15 +191,19 @@ export function createRowList(input: {
         : unavailable()
           ? quietInk(theme)
           : theme.text.default
-    const column = () => Math.min(input.labelWidth(), Math.max(8, input.contentWidth() - 12))
+    const column = () => Math.min(input.labelWidth(), Math.max(8, contentWidth() - 12))
     const labelText = () => {
-      const text = Locale.truncateWidth(rowText(row()), row().value === undefined ? input.contentWidth() - 2 : column())
+      const text = Locale.truncateWidth(
+        rowText(row()),
+        row().value === undefined ? contentWidth() - 2 - (row().badge ? stringWidth(row().badge!) + 2 : 0) : column(),
+      )
       return row().value === undefined ? text : text + " ".repeat(Math.max(0, column() - stringWidth(text)))
     }
     const valueText = () => {
-      const width = Math.max(1, input.contentWidth() - 2 - column() - 2)
+      const width = Math.max(1, contentWidth() - 2 - column() - 2)
       const marker = row().marker ? row().marker + " " : ""
-      if (row().truncate === "start") return marker + Locale.truncateLeft(row().value ?? "", Math.max(1, width - marker.length))
+      if (row().truncate === "start")
+        return marker + Locale.truncateLeft(row().value ?? "", Math.max(1, width - marker.length))
       return Locale.truncateWidth(`${marker}${row().value ?? ""}`, width)
     }
     return (
@@ -196,8 +218,8 @@ export function createRowList(input: {
         }
       >
         <box
-          flexDirection="row"
-          height={1}
+          flexDirection="column"
+          height={row().detail === undefined ? 1 : 2}
           flexShrink={0}
           backgroundColor={fill()}
           onMouseUp={() => {
@@ -207,58 +229,76 @@ export function createRowList(input: {
             activate(row())
           }}
         >
-          <text flexShrink={0} fg={selected() ? foreground() : quietInk(theme)}>
-            {selected() ? "▸ " : "  "}
-          </text>
-          <text
-            flexShrink={0}
-            fg={
-              selected()
-                ? foreground()
-                : row().kind === "info" || unavailable()
-                  ? quietInk(theme)
-                  : theme.text.default
-            }
-            attributes={selected() ? TextAttributes.BOLD : undefined}
-          >
-            {labelText()}
-          </text>
-          <Show
-            when={editing()?.key === row().key}
-            fallback={
-              <Show when={row().value !== undefined}>
-                <text fg={selected() && input.active() ? foreground() : toneColor(row().tone)}>
-                  {" " + valueText()}
-                </text>
-              </Show>
-            }
-          >
-            <input
-              ref={(value: InputRenderable) => {
-                setEditor(value)
-                setTimeout(() => {
-                  if (value.isDestroyed) return
-                  value.focus()
-                  value.gotoLineEnd()
-                }, 1)
-              }}
-              value={editing()?.draft ?? ""}
-              onInput={(text: string) => {
-                setEditing((current) => (current ? { ...current, draft: text } : current))
-                row().edit?.onInput?.(text)
-              }}
-              onSubmit={commit}
-              onKeyDown={(event: { name: string; preventDefault(): void }) => {
-                if (event.name !== "escape") return
-                event.preventDefault()
-                cancel()
-              }}
-              flexGrow={1}
-              focusedBackgroundColor="transparent"
-              textColor={foreground()}
-              focusedTextColor={foreground()}
-              cursorColor={foreground()}
-            />
+          <box flexDirection="row" height={1} flexShrink={0}>
+            <text selectable={row().kind !== "item"} flexShrink={0} fg={selected() ? foreground() : quietInk(theme)}>
+              {selected() ? "▸ " : "  "}
+            </text>
+            <text
+              selectable={row().kind !== "item"}
+              flexShrink={0}
+              fg={
+                selected()
+                  ? foreground()
+                  : row().kind === "info" || unavailable()
+                    ? quietInk(theme)
+                    : theme.text.default
+              }
+              attributes={selected() ? TextAttributes.BOLD : undefined}
+            >
+              {labelText()}
+            </text>
+            <Show when={row().badge}>
+              <box flexGrow={1} />
+              <text selectable={false} fg={selected() && input.active() ? foreground() : quietInk(theme)}>
+                {row().badge}
+              </text>
+            </Show>
+            <Show
+              when={editing()?.key === row().key}
+              fallback={
+                <Show when={row().value !== undefined}>
+                  <text
+                    selectable={row().kind !== "item"}
+                    fg={selected() && input.active() ? foreground() : toneColor(row().tone)}
+                  >
+                    {" " + valueText()}
+                  </text>
+                </Show>
+              }
+            >
+              <input
+                ref={(value: InputRenderable) => {
+                  setEditor(value)
+                  setTimeout(() => {
+                    if (value.isDestroyed) return
+                    value.focus()
+                    value.gotoLineEnd()
+                  }, 1)
+                }}
+                value={editing()?.draft ?? ""}
+                onInput={(text: string) => {
+                  setEditing((current) => (current ? { ...current, draft: text } : current))
+                  row().edit?.onInput?.(text)
+                }}
+                onSubmit={commit}
+                onKeyDown={(event: { name: string; preventDefault(): void }) => {
+                  if (event.name !== "escape") return
+                  event.preventDefault()
+                  cancel()
+                }}
+                flexGrow={1}
+                focusedBackgroundColor="transparent"
+                textColor={foreground()}
+                focusedTextColor={foreground()}
+                cursorColor={foreground()}
+              />
+            </Show>
+          </box>
+          <Show when={row().detail !== undefined}>
+            <text selectable={false} fg={selected() && input.active() ? foreground() : quietInk(theme)} wrapMode="none">
+              {"  "}
+              {Locale.truncateLeft(row().detail ?? "", Math.max(1, contentWidth() - 2))}
+            </text>
           </Show>
         </box>
       </Show>
@@ -270,7 +310,11 @@ export function createRowList(input: {
       <scrollbox
         ref={(value: ScrollBoxRenderable) => {
           scroll = value
+          requestAnimationFrame(() => {
+            if (!value.isDestroyed) setMeasuredWidth(value.viewport.width)
+          })
         }}
+        onSizeChange={() => setMeasuredWidth(scroll?.viewport.width ?? 0)}
         flexGrow={1}
         minHeight={0}
         horizontalScrollbarOptions={{ visible: false }}

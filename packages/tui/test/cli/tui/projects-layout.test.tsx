@@ -54,6 +54,7 @@ async function mount(
     projects?: ProjectView[]
     error?: string
     width?: number
+    height?: number
     members?: boolean
     project?: ProjectView
     compact?: boolean
@@ -104,42 +105,42 @@ async function mount(
               <ToastProvider>
                 <DialogProvider>
                   <Canvas paint={input.members}>
-                  {input.members ? (
-                    <box width={input.paneWidth ?? "100%"} height="100%">
-                    <ProjectMembers
-                      project={input.project ?? release}
-                      currentSessionID="ses_lead"
-                      focused={focused()}
-                      onFocus={() => focus(true)}
-                      onBack={() => focus(false)}
-                      onOpen={(id) => calls.push(["open", id])}
-                      onSettings={() => calls.push(["settings"])}
-                      sessions={sessions}
-                      service={service}
-                      now={() => 60_000}
-                      loadedAt={() => 57_000}
-                      compact={input.compact ?? (input.width ?? 120) < 100}
-                    />
-                    </box>
-                  ) : (
-                    <ProjectsScreenContent
-                      projects={() => input.projects}
-                      error={() => input.error}
-                      sessions={sessions}
-                      service={service}
-                      filter={() => ({ scope: "all" })}
-                      globalDelegation={() => ({ enabled: true, categories: ["permission", "review"] })}
-                      onFilterChange={(value) => {
-                        calls.push(["filter", value])
-                      }}
-                      onOpen={(id) => calls.push(["open", id])}
-                      onBack={() => calls.push(["back"])}
-                      onRefresh={() => calls.push(["refresh"])}
-                      initialSettings={input.settings ? release.id : undefined}
-                      now={() => 60_000}
-                      loadedAt={() => 57_000}
-                    />
-                  )}
+                    {input.members ? (
+                      <box width={input.paneWidth ?? "100%"} height="100%">
+                        <ProjectMembers
+                          project={input.project ?? release}
+                          currentSessionID="ses_lead"
+                          focused={focused()}
+                          onFocus={() => focus(true)}
+                          onBack={() => focus(false)}
+                          onOpen={(id) => calls.push(["open", id])}
+                          onSettings={() => calls.push(["settings"])}
+                          sessions={sessions}
+                          service={service}
+                          now={() => 60_000}
+                          loadedAt={() => 57_000}
+                          compact={input.compact ?? (input.width ?? 120) < 100}
+                        />
+                      </box>
+                    ) : (
+                      <ProjectsScreenContent
+                        projects={() => input.projects}
+                        error={() => input.error}
+                        sessions={sessions}
+                        service={service}
+                        filter={() => ({ scope: "all" })}
+                        globalDelegation={() => ({ enabled: true, categories: ["permission", "review"] })}
+                        onFilterChange={(value) => {
+                          calls.push(["filter", value])
+                        }}
+                        onOpen={(id) => calls.push(["open", id])}
+                        onBack={() => calls.push(["back"])}
+                        onRefresh={() => calls.push(["refresh"])}
+                        initialSettings={input.settings ? release.id : undefined}
+                        now={() => 60_000}
+                        loadedAt={() => 57_000}
+                      />
+                    )}
                   </Canvas>
                 </DialogProvider>
               </ToastProvider>
@@ -148,7 +149,7 @@ async function mount(
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: input.width ?? 120, height: 40, kittyKeyboard: true },
+    { width: input.width ?? 120, height: input.height ?? 40, kittyKeyboard: true },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes(input.members ? "MEMBERS 3" : "Projects"))
@@ -183,6 +184,11 @@ async function edit(app: App, text: string) {
   await app.mockInput.typeText(text)
   app.mockInput.pressEnter()
   await app.renderOnce()
+}
+
+async function capturePicker(app: App, name: string) {
+  if (!process.env.PROJECTS_CAPTURE_DIR) return
+  await Bun.write(`${process.env.PROJECTS_CAPTURE_DIR}/${name}.txt`, app.captureCharFrame())
 }
 
 for (const [name, projects, error] of [
@@ -541,7 +547,14 @@ const spansOf = (app: App, ...needles: string[]) =>
   app
     .captureSpans()
     .lines.map((line) => line.spans)
-    .find((spans) => needles.every((needle) => spans.map((item) => item.text).join("").includes(needle))) ?? []
+    .find((spans) =>
+      needles.every((needle) =>
+        spans
+          .map((item) => item.text)
+          .join("")
+          .includes(needle),
+      ),
+    ) ?? []
 const spanOf = (app: App, line: string[], needle: string) => {
   const found = spansOf(app, ...line).find((item) => item.text.includes(needle))
   if (!found) throw new Error(`Missing ${needle} on ${line.join(" ")}:\n${app.captureCharFrame()}`)
@@ -575,7 +588,9 @@ for (const mode of ["dark", "light"] as const) {
 
       const selected = ["Release train", "● active"]
       const fill = theme.background.action.primary.focused.toInts().join()
-      for (const item of spansOf(app, ...selected).filter((item) => item.text.trim() && item.bg.toInts().join() === fill))
+      for (const item of spansOf(app, ...selected).filter(
+        (item) => item.text.trim() && item.bg.toInts().join() === fill,
+      ))
         expectReadable(item)
       expect(spanOf(app, selected, "● active").bg.toInts().join()).toBe(fill)
       for (const text of ["● active", "●2", "?1", "○"])
@@ -705,7 +720,14 @@ test("a roster docked narrower than the terminal sizes its columns to the pane, 
     await app.renderOnce()
     const frame = app.captureCharFrame()
     const line = lineOf(frame, "Reconcile")
-    expect(widest(frame.split("\n").map((row) => row.slice(0, 90)).join("\n"))).toBeLessThanOrEqual(90)
+    expect(
+      widest(
+        frame
+          .split("\n")
+          .map((row) => row.slice(0, 90))
+          .join("\n"),
+      ),
+    ).toBeLessThanOrEqual(90)
     expect(frame.split("\n").every((row) => row.slice(90).trim() === "")).toBe(true)
     expect(line).toContain("…")
     expect(line).toMatch(/…\s+MEMBER/)
@@ -735,7 +757,13 @@ const longTitle = "Refactor the authentication middleware for the session gatewa
 const pickerSessions: ProjectSessionChoice[] = [
   { sessionID: "ses_a", title: longTitle, directory: ycodingDirectory, updated: 200 },
   { sessionID: "ses_b", title: longTitle, directory: otherDirectory, updated: 199 },
-  { sessionID: "ses_held", title: "Held elsewhere", directory: "/home/dev/held", updated: 198, projectName: "Release train" },
+  {
+    sessionID: "ses_held",
+    title: "Held elsewhere",
+    directory: "/home/dev/held",
+    updated: 198,
+    projectName: "Release train",
+  },
   ...Array.from({ length: 70 }, (_, index) => ({
     sessionID: `ses_n${index}`,
     title: `Task ${String(index).padStart(2, "0")}`,
@@ -760,8 +788,8 @@ test("new Project picker narrows as the query is typed and keeps the path tail a
     expect(frame).not.toContain("other-tool")
     expect(frame).not.toContain("Held elsewhere")
     const row = lineOf(frame, "Refactor the")
-    expect(row).toContain("…")
-    expect(row).toContain("platform/ycoding")
+    expect(row).toContain(longTitle)
+    expect(frame.split("\n")[frame.split("\n").indexOf(row) + 1]).toContain("platform/ycoding")
     app.mockInput.pressEnter()
     await app.renderOnce()
     await key(app, "DOWN")
@@ -817,8 +845,9 @@ test("add-member picker narrows as the query is typed and keeps the path tail an
     expect(frame).not.toContain("Task 05")
     expect(frame).not.toContain("other-tool")
     expect(frame).not.toContain("Held elsewhere")
-    expect(lineOf(frame, "Refactor")).toContain("…")
-    expect(lineOf(frame, "Refactor")).toContain("/ycoding")
+    const row = lineOf(frame, "Refactor")
+    expect(row).toContain("…")
+    expect(frame.split("\n")[frame.split("\n").indexOf(row) + 1]).toContain("/ycoding")
     app.mockInput.pressEnter()
     await app.renderOnce()
     await key(app, "DOWN")
@@ -844,3 +873,213 @@ test("add-member picker bounds a long Session list", async () => {
     app.renderer.destroy()
   }
 })
+
+for (const [width, height] of [
+  [80, 24],
+  [120, 36],
+] as const) {
+  for (const members of [false, true])
+    for (const mode of ["dark", "light"] as const) {
+      test(`Projects L02-L03 ${members ? "Add Session" : "New Project"} title, path and live Find at ${width}x${height} ${mode}`, async () => {
+        const title = "Reconcile monthly ledger balances"
+        const directory = "/home/dev/Workspace/client-projects/finance-ledger"
+        const sessions = [
+          { sessionID: "ses_ledger", title, directory, updated: 3 },
+          {
+            sessionID: "ses_queue",
+            title: "Investigate queue delivery timeouts",
+            directory: "/repo/message-queue",
+            updated: 2,
+          },
+          {
+            sessionID: "ses_assigned",
+            title: "Inspect assigned worker",
+            directory: "/repo/assigned-worker",
+            updated: 1,
+            projectName: "Delivery",
+          },
+        ]
+        const { app, calls } = await mount({
+          projects: [release],
+          members,
+          compact: true,
+          width,
+          height,
+          sessions,
+          mode,
+        })
+        try {
+          await key(app, members ? "a" : "n")
+          if (!members) await edit(app, "Ledger project")
+          const frame = app.captureCharFrame()
+          const rows = frame.split("\n")
+          const at = rows.findIndex((row) => row.includes(title))
+          expect(at).toBeGreaterThanOrEqual(0)
+          expect(rows[at + 1]).toContain("finance-ledger")
+          expect(rows[at + 1].indexOf("/home/dev")).toBe(rows[at].indexOf(title))
+          if (!members) {
+            const assigned = rows.findIndex((row) => row.includes("Inspect assigned worker"))
+            expect(assigned).toBeGreaterThanOrEqual(0)
+            expect(rows[assigned + 1]).toContain("assigned-worker")
+            expect(frame).toContain("in Delivery")
+          }
+          await capturePicker(app, `${members ? "add" : "new-project"}-${width}x${height}-${mode}`)
+          await focus(app, "Find")
+          app.mockInput.pressEnter()
+          await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+          await app.mockInput.typeText("ledger")
+          await app.waitForFrame((value) => value.includes(title) && !value.includes("queue delivery"))
+          expect(calls).toEqual([])
+          for (let index = 0; index < 6; index++) app.mockInput.pressBackspace()
+          await app.waitForFrame((value) => value.includes("queue delivery"))
+          await app.mockInput.typeText("no-match-found")
+          await app.waitForFrame((value) => value.includes("No matching Sessions"))
+          app.mockInput.pressEscape()
+          await app.waitForFrame((value) => value.includes("queue delivery"))
+          app.mockInput.pressEnter()
+          await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+          await app.mockInput.typeText("finance-ledger")
+          app.mockInput.pressEnter()
+          await key(app, "DOWN")
+          expect(app.captureCharFrame()).toContain(title)
+          expect(app.captureCharFrame()).toContain(directory)
+          await capturePicker(app, `${members ? "add" : "new-project"}-${width}x${height}-${mode}-selected`)
+          app.mockInput.pressEnter()
+          await app.renderOnce()
+          if (members) await app.waitFor(() => calls.some(([name]) => name === "add"))
+          else {
+            await key(app, "c")
+            await app.waitFor(() => calls.some(([name]) => name === "create"))
+          }
+          expect(calls).toContainEqual(
+            members
+              ? ["add", release.id, "ses_ledger"]
+              : ["create", { name: "Ledger project", master: { sessionID: "ses_ledger" } }],
+          )
+        } finally {
+          app.renderer.destroy()
+        }
+      })
+    }
+
+  test(`Projects L05 directory guidance, recents and retained values at ${width}x${height}`, async () => {
+    const { app, calls } = await mount({ projects: [release], width, height })
+    try {
+      await key(app, "n")
+      await edit(app, "Directory project")
+      await focus(app, "Master source")
+      await key(app, "RIGHT")
+      expect(app.captureCharFrame()).toContain("Enter to edit")
+      expect(app.captureCharFrame()).toContain("recent directories")
+      await key(app, "c")
+      expect(app.captureCharFrame()).toContain("Choose a directory")
+      await focus(app, "Directory")
+      await key(app, "RIGHT")
+      expect(app.captureCharFrame()).toContain("/repo/")
+      app.mockInput.pressEnter()
+      await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
+      await app.mockInput.typeText("/discarded")
+      app.mockInput.pressEscape()
+      await app.renderOnce()
+      expect(app.captureCharFrame()).not.toContain("discarded")
+      expect(app.captureCharFrame()).toContain("Directory project")
+      expect(calls).toEqual([])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test(`Projects L02 New Project mouse choice preserves title, path and eligibility at ${width}x${height}`, async () => {
+    const { app, calls } = await mount({
+      projects: [release],
+      width,
+      height,
+      sessions: [
+        {
+          sessionID: "ses_available",
+          title: "Prepare quarterly release evidence",
+          directory: "/repo/release-evidence",
+          updated: 2,
+        },
+        {
+          sessionID: "ses_occupied",
+          title: "Inspect assigned delivery logs",
+          directory: "/repo/delivery-logs",
+          projectName: "Delivery",
+          updated: 1,
+        },
+      ],
+    })
+    try {
+      await key(app, "n")
+      await edit(app, "Release evidence")
+      const rows = app.captureCharFrame().split("\n")
+      const y = rows.findIndex((row) => row.includes("Prepare quarterly release evidence"))
+      expect(y).toBeGreaterThanOrEqual(0)
+      await app.mockMouse.click(rows[y]!.indexOf("Prepare"), y)
+      await app.renderOnce()
+      expect(app.captureCharFrame()).toContain("/repo/release-evidence")
+      await key(app, "c")
+      await app.waitFor(() => calls.some(([name]) => name === "create"))
+      expect(calls).toContainEqual(["create", { name: "Release evidence", master: { sessionID: "ses_available" } }])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test(`Projects L04 local mouse Add returns to members with Escape at ${width}x${height}`, async () => {
+    const { app } = await mount({ projects: [release], width, height })
+    try {
+      const rows = app.captureCharFrame().split("\n")
+      const y = rows.findIndex((row) => row.includes("Add session"))
+      await app.mockMouse.click(rows[y]!.indexOf("Add session"), y)
+      await app.waitForFrame((frame) => frame.includes("ADD SESSION"))
+      expect(app.renderer.getSelection()?.getSelectedText() ?? "").toBe("")
+      app.mockInput.pressEscape()
+      await app.waitForFrame((frame) => frame.includes("MEMBERS 3 + MASTER"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test(`Projects L06 pending creation cannot repeat or navigate after cancel at ${width}x${height}`, async () => {
+    let finishGate!: () => void
+    let settled = false
+    let attempts = 0
+    const gate = new Promise<void>((resolve) => {
+      finishGate = resolve
+    })
+    const { app, calls } = await mount({
+      projects: [release],
+      width,
+      height,
+      service: {
+        create: async () => {
+          attempts++
+          await gate
+          settled = true
+          return "ses_created"
+        },
+      },
+    })
+    try {
+      await key(app, "n")
+      await edit(app, "Pending project")
+      await focus(app, "Spare")
+      app.mockInput.pressEnter()
+      await app.waitForFrame((frame) => frame.includes("● Spare"))
+      await key(app, "c")
+      await key(app, "c")
+      expect(attempts).toBe(1)
+      await key(app, "ESCAPE")
+      finishGate()
+      await app.waitFor(() => settled)
+      await app.renderOnce()
+      expect(calls.filter(([name]) => name === "open")).toEqual([])
+      expect(app.captureCharFrame()).not.toContain("NEW PROJECT")
+    } finally {
+      finishGate()
+      app.renderer.destroy()
+    }
+  })
+}

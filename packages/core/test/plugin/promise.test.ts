@@ -28,6 +28,23 @@ import { host as testHost } from "./host"
 const it = testEffect(PluginTestLayer)
 
 describe("fromPromise", () => {
+  it.effect("normalizes nullable remote provenance at the Promise prompt adapter", () => Effect.gen(function* () {
+    const received: Array<Parameters<PluginRuntime.Interface["session"]["prompt"]>[0]> = []
+    const host = testHost({ session: { prompt: (input) => {
+      received.push(input)
+      return Effect.die("Controlled Session boundary")
+    } } })
+    const remoteSource = {
+      requestID: "synthetic-request", epoch: "synthetic-epoch",
+      principal: { ownerID: "synthetic-owner", deviceID: "synthetic-device", clientID: "synthetic-client" },
+    }
+    yield* PluginPromise.fromPromise(Plugin.define({ id: "nullable-prompt-source", setup: async (context) => {
+      for (const source of [undefined, null, remoteSource])
+        await expect(context.session.prompt({ sessionID: "ses_prompt_source", text: "Synthetic task", remoteSource: source })).rejects.toBeDefined()
+    } })).effect(host)
+    expect(received.map((input) => input.remoteSource)).toEqual([undefined, undefined, remoteSource])
+  }))
+
   it.effect("marks Promise-plugin prompts with the non-user origin at the host boundary", () => Effect.gen(function* () {
     const registry = yield* PluginRegistry.Service
     const runtime = yield* PluginRuntime.Service

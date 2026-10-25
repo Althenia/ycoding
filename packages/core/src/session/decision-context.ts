@@ -2,6 +2,7 @@ export * as SessionDecisionContext from "./decision-context"
 
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm"
 import { Effect, Option, Schema } from "effect"
+import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import type { Database } from "../database/database"
 import { DecisionChoice } from "../decision-choice"
 import { EventRuntime } from "../event"
@@ -221,7 +222,8 @@ function inputSource(metadata: unknown, delegated: boolean) {
     if ("inputOrigin" in metadata) {
       if (metadata.inputOrigin === "human") return "human"
       if (metadata.inputOrigin === "coordination") return "coordination"
-      if (metadata.inputOrigin === "plugin") return "plugin"
+      if (metadata.inputOrigin === "plugin")
+        return "remoteMcp" in metadata && Schema.is(McpEvents.RequestContext)(metadata.remoteMcp) ? "remote-mcp" : "plugin"
       if (metadata.inputOrigin === "subagent") return "delegated-task"
       if (metadata.inputOrigin === "review") return "review-decision"
     }

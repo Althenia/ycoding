@@ -164,6 +164,26 @@ const failedType = versionedType(SessionEvent.Execution.Failed.type, SessionEven
 
 const refuse = (message: string) => new RefusedError({ message })
 
+export const authorizeMember = Effect.fn("CoordinationRuntime.authorizeMember")(function* (
+  coordination: Pick<CoordinationService.Interface, "accessOf" | "scopeOf">,
+  caller: SessionSchema.ID,
+  sessionID: SessionSchema.ID,
+) {
+  const access = yield* coordination.accessOf(caller)
+  if (access === undefined) return yield* refuse("The project tool is only available to a Project's Master and its subagents")
+  if (access.role === "executor" && (yield* coordination.scopeOf(caller)) === undefined)
+    return yield* refuse("The project tool is only available to a Project's Master and its subagents")
+  const scope = access.scope
+  if (!scope.memberSessionIDs.includes(sessionID)) return yield* refuse(`Session ${sessionID} is not a member of this Project`)
+  if (!CoordinationService.canAct(access, sessionID)) {
+    const target = yield* coordination.accessOf(sessionID)
+    return yield* refuse(target?.ownerSessionID === scope.masterSessionID
+      ? `Only the Project's Master acts on Session ${sessionID} until the Master assigns it an owner`
+      : `Session ${sessionID} is owned by another Session; only its owner or the Master acts on it`)
+  }
+  return scope
+})
+
 const clip = (text: string) => (text.length > maxExcerpt ? `${text.slice(0, maxExcerpt - 1)}…` : text)
 
 export function make(options: Options): Interface & { readonly handle: (event: HandledEvent) => Effect.Effect<void>; readonly recover: () => Effect.Effect<void> } {
@@ -183,21 +203,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     return access.scope
   })
 
-  const memberScope = Effect.fnUntraced(function* (caller: SessionSchema.ID, sessionID: SessionSchema.ID) {
-    const access = yield* coordination.accessOf(caller)
-    if (access === undefined) return yield* refuse("The project tool is only available to a Project's Master and its subagents")
-    if (access.role === "executor" && (yield* coordination.scopeOf(caller)) === undefined)
-      return yield* refuse("The project tool is only available to a Project's Master and its subagents")
-    const scope = access.scope
-    if (!scope.memberSessionIDs.includes(sessionID)) return yield* refuse(`Session ${sessionID} is not a member of this Project`)
-    if (!CoordinationService.canAct(access, sessionID)) {
-      const target = yield* coordination.accessOf(sessionID)
-      return yield* refuse(target?.ownerSessionID === scope.masterSessionID
-        ? `Only the Project's Master acts on Session ${sessionID} until the Master assigns it an owner`
-        : `Session ${sessionID} is owned by another Session; only its owner or the Master acts on it`)
-    }
-    return scope
-  })
+  const memberScope = (caller: SessionSchema.ID, sessionID: SessionSchema.ID) => authorizeMember(coordination, caller, sessionID)
 
   const runningSender = Effect.fnUntraced(function* (scope: CoordinationService.Scope, member: SessionSchema.ID, running: ReadonlySet<SessionSchema.ID>) {
     const sender = senders.get(member)

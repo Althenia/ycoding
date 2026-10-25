@@ -1611,7 +1611,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 ? { type: "synthetic" as const, description: "TeamView update" }
                 : { type: "system" as const }),
               text: event.data.text,
-              metadata: { contextSource: event.data.source },
+              metadata: { contextSource: event.data.source, ...(event.data.dots === undefined ? {} : { dotsCoordination: event.data.dots }) },
               time: { created: event.created },
             })
           })

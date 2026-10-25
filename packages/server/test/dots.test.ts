@@ -2,10 +2,18 @@ import { expect, test } from "bun:test"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Session } from "@ycoding-ai/core/session"
 import { DotsRuntime } from "@ycoding-ai/core/dots"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import type { Location } from "@ycoding-ai/core/location"
+import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
+import { SessionMcpEvents } from "@ycoding-ai/core/mcp-events/index"
+import { CoordinationService } from "@ycoding-ai/core/coordination/index"
+import { Database } from "@ycoding-ai/core/database/database"
+import { EventRuntime } from "@ycoding-ai/core/event"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, LayerMap } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -29,6 +37,7 @@ test("runtime controls forward the confirmed target and return the runtime statu
           return { enabled: true, state: "connected" as const, target, runtimeState: action === "pause" ? "paused" as const : "unpaused" as const }
         })
   const service = DotsRuntime.Service.of({
+    attachment: () => Effect.die("Unexpected exchange attachment lookup"),
     targets: () => Effect.die("Unexpected destination lookup"),
     bind: () => Effect.die("Unexpected binding"),
     status: () => Effect.die("Unexpected status lookup"),
@@ -45,10 +54,32 @@ test("runtime controls forward the confirmed target and return the runtime statu
       Layer.succeed(SchemaErrorMiddleware, (effect) => effect),
     )),
     Layer.provide(HttpServer.layerServices),
+    Layer.provideMerge(Layer.mergeAll(
+      Layer.mock(Session.Service, {
+        daybreak: { set: () => Effect.die("Unexpected Session daybreak access") },
+        autonomy: {
+          get: () => Effect.die("Unexpected Session autonomy access"),
+          set: () => Effect.die("Unexpected Session autonomy access"),
+          effective: () => Effect.die("Unexpected Session autonomy access"),
+        },
+        revert: {
+          stage: () => Effect.die("Unexpected Session revert access"),
+          clear: () => Effect.die("Unexpected Session revert access"),
+          commit: () => Effect.die("Unexpected Session revert access"),
+        },
+      }),
+      Layer.mock(SessionExecution.Service, {}),
+      Layer.mock(SessionOrchestration.Service, {}),
+      Layer.mock(SessionMcpEvents.Authorization.Service, {}),
+      Layer.effect(LocationServiceMap.Service, LayerMap.make((_: Location.Ref) => Layer.effectContext<LocationServices, never, never>(Effect.die("Unexpected Location runtime access")))),
+      Layer.mock(CoordinationService.Service, {}),
+      Database.layer({ path: ":memory:" }),
+      Layer.mock(EventRuntime.Service, {}),
+    )),
   ))
   const request = (action: string, body: unknown) => handler.handler(new Request(`http://localhost/api/session/ses_control/dots/${action}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-  }))
+  }), Context.empty())
   try {
     for (const action of ["pause", "resume"]) {
       const response = await request(action, { expectedTarget: target })

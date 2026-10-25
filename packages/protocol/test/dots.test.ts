@@ -6,6 +6,12 @@ import { makeDotsGroup } from "../src/groups/dots.js"
 class SessionLocation extends HttpApiMiddleware.Service<SessionLocation>()("dots-test-location") {}
 const group = makeDotsGroup(SessionLocation)
 
+test("exchange create and read are typed Session-scoped operations with an authenticated source envelope", () => {
+  const document = OpenApi.fromApi(HttpApi.make("dots-exchange-test").add(group))
+  expect(document.paths["/api/session/{sessionID}/dots/exchanges"]?.post?.operationId).toBe("session.dots.exchange.create")
+  expect(document.paths["/api/session/{sessionID}/dots/exchanges/read"]?.post?.operationId).toBe("session.dots.exchange.read")
+})
+
 test("status explicitly reports whether the Location enables Dots", () => {
   const schema = [...group.endpoints["session.dots.status"].success][0]
   if (!schema) throw new Error("Dots status response is missing")

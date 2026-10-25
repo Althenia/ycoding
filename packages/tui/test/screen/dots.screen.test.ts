@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { TextareaRenderable } from "@opentui/core"
+import { createStore } from "solid-js/store"
+import { dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
 import { json, sessionSnapshot } from "../fixture/tui-client"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -48,6 +50,7 @@ async function withDotsScreen(
     isBound: () => boolean
     wait: (predicate: () => boolean) => Promise<void>
   }) => Promise<void>,
+  messages: Parameters<typeof sessionSnapshot>[1] = [],
 ) {
   const { renderScreen } = await import("./harness")
   const { Global } = await import("@ycoding-ai/core/global")
@@ -110,7 +113,7 @@ async function withDotsScreen(
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
-      if (url.pathname.endsWith("/snapshot")) return sessionSnapshot(sessionID, [], { session })
+      if (url.pathname.endsWith("/snapshot")) return sessionSnapshot(sessionID, messages, { session })
       if (url.pathname.endsWith("/subagent"))
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
       if (["pending", "permission", "todo", "skills"].some((part) => url.pathname.endsWith(`/${part}`)))
@@ -186,6 +189,62 @@ async function withDotsScreen(
 
 const enabledStatus = (bound: boolean, target: unknown) =>
   json({ data: { enabled: true, state: "connected", ...(bound ? { target } : {}) } })
+
+test("remote source attribution accepts resident reactive metadata", () => {
+  const [metadata] = createStore({ inputOrigin: "plugin", remoteMcp: { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } } })
+  expect(dotsPeerLabel(metadata)).toBe("Remote MCP · external peer · client_fixture")
+})
+
+test("L10 named exchange renders the chosen name with non-human provenance and canonical source details", async () => {
+  await withDotsScreen(enabledStatus, async ({ screen, wait, prompts }) => {
+    await wait(() => screen.frame().includes("user-chosen name"))
+    const frame = screen.frame().replace(/\s+/g, " ")
+    expect(frame).toContain("V · external peer · Remote MCP · user-chosen name")
+    for (const identity of ["client_fixture", "dot_named", "thread_named", "ses_target", "exchange_named"])
+      expect(frame).toContain(identity)
+    expect(frame).toContain("Inspect this module")
+    expect(prompts).toEqual([])
+  }, [{
+    id: "msg_named_fixture", type: "user", text: "Inspect this module", time: { created: 1 },
+    metadata: {
+      inputOrigin: "plugin", remoteMcp: { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } },
+      dotsExchange: { sessionID: "ses_anchor", targetSessionID: "ses_target", exchangeID: "exchange_named", attachment: { profile: "fixture", dotID: "dot_named", threadID: "thread_named", generation: "generation_named", label: "V" } },
+    },
+  }])
+}, 30_000)
+
+test("L10 bound composer uses the chosen name without promoting raw IDs into its title", async () => {
+  const named = { profile: "fixture-profile", dotID: "dot-1", threadID: "thread-1", generation: "generation-1", label: "V" }
+  await withDotsScreen(() => json({ data: { enabled: true, state: "connected", target: named } }), async ({ screen, wait, sent, prompts }) => {
+    await screen.mouse.click(3, screen.lines().findIndex((line) => line.includes("Message YCoding…")))
+    const editor = screen.renderer.currentFocusedEditor
+    if (!(editor instanceof TextareaRenderable)) throw new Error("Composer not focused")
+    editor.setText("/dots ")
+    screen.input.pressEnter()
+    await wait(() => screen.frame().includes("Dots destination · V"))
+    screen.input.pressEscape()
+    await wait(() => screen.frame().includes("Dots · V"))
+    const title = screen.frame().split("\n").find((line) => line.includes("Dots · V"))
+    expect(title).not.toContain(named.dotID)
+    expect(title).not.toContain(named.threadID)
+    expect(sent).toEqual([])
+    expect(prompts).toEqual([])
+  })
+}, 30_000)
+
+test("remote plugin task text renders with external source and exchange identity", async () => {
+  await withDotsScreen(enabledStatus, async ({ screen, wait, prompts }) => {
+    await wait(() => screen.frame().includes("Remote MCP"))
+    expect(screen.frame()).toContain("external peer")
+    expect(screen.frame()).toContain("client_fixture")
+    expect(screen.frame()).toContain("exchange_fixture")
+    expect(screen.frame()).toContain("Investigate the synthetic module")
+    expect(prompts).toEqual([])
+  }, [{
+    id: "msg_remote_fixture", type: "user", text: "Investigate the synthetic module", time: { created: 1 },
+    metadata: { inputOrigin: "plugin", remoteMcp: { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }, dotsExchange: { sessionID: "ses_anchor", exchangeID: "exchange_fixture" } },
+  }])
+}, 30_000)
 
 test("bare Dots command confirms an explicit destination and waits for a separate Send", async () => {
   await withDotsScreen(enabledStatus, async ({ screen, sent, prompts, target, isBound, wait }) => {

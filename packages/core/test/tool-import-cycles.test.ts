@@ -41,6 +41,10 @@ function cycleBackTo(target: string) {
 }
 
 describe("built-in tool modules", () => {
+  test("Dots report tool has no value-import cycle back through the plugin supervisor", () => {
+    const cycle = cycleBackTo(path.join(root, "dots/report-tool.ts"))
+    expect(cycle?.map((file) => path.relative(root, file))).toBeUndefined()
+  })
   test("registers explicit decisions without partition dispatch", () => {
     expect(tools).toContain("decision")
     expect(tools).not.toContain("scope")

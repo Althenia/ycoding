@@ -50,14 +50,21 @@ function refresh(mounted: Mounted, revision: number) {
 
 function expectFooterIdentity(screen: Screen, identity: string, width: number) {
   const all = lines(screen)
-  const matches = all.flatMap((line, index) => (line.includes(identity.startsWith("◇") ? "◇" : "↑") && /shells \d|sh\d/.test(line) ? [index] : []))
+  const matches = all.flatMap((line, index) =>
+    line.includes(identity.startsWith("◇") ? "◇" : "↑") && /shells \d|sh\d/.test(line) ? [index] : [],
+  )
   expect(matches).toHaveLength(1)
   const filled = all.flatMap((line, index) => (line.trim() === "" ? [] : [index]))
   expect(all.slice(0, 3).some((line) => line.includes(identity))).toBe(false)
   expect(all[matches[0]!]!.trimEnd().length).toBeLessThanOrEqual(width)
   const footer = all[matches[0]]
   expect(footer).toMatch(/usage|\bu\b/i)
-  for (const mode of [/Permissions Manual|P Manual|P:M/, /Guardrails Manual|G Manual|G:M/, /Answers Manual|A Manual|A:M/]) expect(footer).toMatch(mode)
+  for (const mode of [
+    /Permissions Manual|P Manual|P:M/,
+    /Guardrails Manual|G Manual|G:M/,
+    /Answers Manual|A Manual|A:M/,
+  ])
+    expect(footer).toMatch(mode)
   expect(filled.at(-1)).toBe(matches[0])
   expect(all.slice(0, matches[0]!).some((line) => line.includes("Message YCoding…"))).toBe(true)
 }
@@ -186,6 +193,54 @@ test("the Projects tab runs the roster actions and leaves no hidden-tab keyboard
     await screen.dispose()
   }
 }, 40_000)
+
+for (const [width, height] of [
+  [80, 24],
+  [120, 36],
+] as const) {
+  test(`Projects L03 Team Find owns real typing and mouse selection at ${width}x${height}`, async () => {
+    const mounted = await mountCoordination({ width, height })
+    const { screen, server } = mounted
+    try {
+      await openProjects(screen)
+      screen.input.pressKey("a")
+      await waitForFrame(screen, "ADD SESSION")
+      screen.input.pressEnter()
+      await until(screen, () => screen.renderer.currentFocusedEditor instanceof InputRenderable, "Find editor")
+      await screen.input.typeText("planning")
+      await until(
+        screen,
+        () => screen.frame().includes("Planning") && !screen.frame().includes("Scratch"),
+        "live title filter",
+      )
+      screen.input.pressArrow("left")
+      expect(screen.frame()).toContain("ADD SESSION")
+      screen.input.pressArrow("right")
+      for (let index = 0; index < 8; index++) screen.input.pressBackspace()
+      await until(screen, () => screen.frame().includes("Scratch"), "cleared results")
+      await screen.input.typeText("no-match")
+      await waitForFrame(screen, "No matching Sessions")
+      screen.input.pressEscape()
+      await until(screen, () => screen.frame().includes("Scratch"), "cancel restores query")
+      screen.input.pressEnter()
+      await until(screen, () => screen.renderer.currentFocusedEditor instanceof InputRenderable, "Find refocused")
+      await screen.input.typeText("Workspace/plan")
+      screen.input.pressEnter()
+      await until(
+        screen,
+        () => screen.frame().includes("Planning") && !screen.frame().includes("Scratch"),
+        "directory filter",
+      )
+      const rows = lines(screen)
+      const y = rows.findIndex((row) => row.includes("Planning"))
+      await screen.mouse.click(rows[y]!.indexOf("Planning"), y)
+      await until(screen, () => server.state.projects[0]!.memberSessionIDs.includes(planningID), "mouse attachment")
+      expect(server.state.writes.filter((write) => write.method === "PATCH")).toHaveLength(1)
+    } finally {
+      await screen.dispose()
+    }
+  }, 30_000)
+}
 
 test("leaving the Project while Projects is selected falls back to Subagents", async () => {
   const mounted = await mountCoordination({ width: 120 })

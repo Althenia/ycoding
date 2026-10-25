@@ -24,6 +24,7 @@ import {
   type SessionCompletionsOutput,
   type SessionMessageInfo,
   type YCodingClient,
+  type DotsExchange,
   type IntegrationInfo,
   type ProviderIntegrationRef,
   type IntegrationAttemptStatus,
@@ -54,6 +55,7 @@ export type LocalPrompt = {
   readonly metadata?: { readonly skills: readonly { readonly id: string }[] }
   readonly delivery?: "steer" | "queue"
   readonly resume?: boolean
+  readonly remoteSource?: McpEvents.RequestContext
 }
 
 export type LocalAutonomyMode = "manual" | "yolo" | "auto"
@@ -193,6 +195,8 @@ export type LocalServer = {
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly dotsTargets: (sessionID: string, location: LocalLocation, profile: string) => Promise<unknown>
+  readonly dotsExchangeCreate: (sessionID: string, location: LocalLocation, input: Dots.ExchangeCreate, remoteSource: McpEvents.RequestContext) => Promise<DotsExchange>
+  readonly dotsExchangeRead: (sessionID: string, location: LocalLocation, input: Dots.ExchangeRead, remoteSource: McpEvents.RequestContext) => Promise<DotsExchange>
   readonly dotsStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly dotsBind: (sessionID: string, location: LocalLocation, target: Dots.Target) => Promise<unknown>
   readonly dotsSend: (sessionID: string, location: LocalLocation, input: Dots.Send) => Promise<unknown>
@@ -435,6 +439,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
             ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
             ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
             ...(input.resume === undefined ? {} : { resume: input.resume }),
+            ...(input.remoteSource === undefined ? {} : { remoteSource: input.remoteSource }),
           } as Parameters<YCodingClient["session"]["prompt"]>[0],
           request(location, timeoutMs),
         ),
@@ -447,6 +452,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     }),
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
     dotsTargets: (sessionID, location, profile) => call(() => client.dots.targets({ sessionID, profile }, request(location, timeoutMs))),
+    dotsExchangeCreate: (sessionID, location, input, remoteSource) => call(() => client.dots.exchange.create({ sessionID, ...input, remoteSource }, request(location, timeoutMs))),
+    dotsExchangeRead: (sessionID, location, input, remoteSource) => call(() => client.dots.exchange.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs))),
     dotsStatus: (sessionID, location) => call(() => client.dots.status({ sessionID }, request(location, timeoutMs))),
     dotsBind: (sessionID, location, target) => call(() => client.dots.bind({ sessionID, ...target }, request(location, timeoutMs))),
     dotsSend: (sessionID, location, input) => call(() => client.dots.send({ sessionID, ...input }, request(location, timeoutMs))),
@@ -576,6 +583,8 @@ function classify(cause: unknown, timeoutMs: number): LocalFailure {
     return new LocalFailure("transport", message, { cause })
   }
   const tag = typeof cause === "object" && cause !== null ? Reflect.get(cause, "_tag") : undefined
+  if (typeof cause === "object" && cause !== null && tag === "InvalidRequestError" && Reflect.get(cause, "field") === "dots" && Reflect.get(cause, "kind") === "outcome_unknown")
+    return new LocalFailure("transport", "The exchange admission return is unconfirmed", { cause })
   if (tag === "InvalidRequestError" || tag === "InvalidCursorError" || tag === "SchemaError")
     return new LocalFailure("invalid", "Local server rejected the request", { cause })
   if (

@@ -61,6 +61,8 @@ import { SessionHistory } from "../history"
 import { ModelIncident } from "../../model-incident/index"
 import { MAX_STEPS_PROMPT, MAX_STEPS_RESET_PROMPT } from "./max-steps"
 import { DotsPeer } from "../../dots/peer"
+import { DotsContext } from "../../dots/context"
+import { DotsRuntimeNode } from "../../dots/node"
 import { and, eq, inArray, sql } from "drizzle-orm"
 
 type StepEnd = {
@@ -91,7 +93,7 @@ type Route = {
 
 type RecoveryMode = "normal" | "terminal-response" | "provider"
 const isContextSource = (value: unknown): value is SessionHistory.ObservationSource =>
-  value === "session-state" || value === "team-view" || value === "step-limit"
+  value === "session-state" || value === "team-view" || value === "step-limit" || value === "dots"
 
 const layer = Layer.effect(
   Service,
@@ -104,6 +106,8 @@ const layer = Layer.effect(
     const snapshots = yield* Snapshot.Service
     const database = yield* Database.Service
     const db = database.db
+    const dotsTools = yield* DotsRuntimeNode.RequestTools
+    const dotsContext = DotsContext.make({ db, events })
     const compaction = yield* SessionCompaction.Service
     const compactionJobs = yield* SessionCompactionJob.Service
     const config = yield* Config.Service
@@ -264,6 +268,11 @@ const layer = Layer.effect(
           }),
         { discard: true },
       )
+      yield* dotsContext.observe(selected.session.id, yield* dotsTools.observation(
+        selected.session.id,
+        SessionContext.toolPermissions(selected.agent.info, selected.session.permissionCeiling ?? []),
+        terminalResponseRecovery || stepLimitReached,
+      ))
     })
 
     const attemptStep = Effect.fn("SessionRunner.attemptStep")(function* (
@@ -1405,6 +1414,7 @@ export const node = makeLocationNode({
     SessionContext.node,
     SessionLiveState.node,
     SessionModelRequest.node,
+    DotsRuntimeNode.requestToolsNode,
     SessionProviderRequest.node,
     SessionContinuation.node,
     SessionProviderState.node,

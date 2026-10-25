@@ -864,6 +864,8 @@ describe("remote operations", () => {
       "session.dots.send",
       "session.dots.pause",
       "session.dots.resume",
+      "session.dots.exchange.create",
+      "session.dots.exchange.read",
       "session.skill",
       "usage.providers",
       "usage.summary",

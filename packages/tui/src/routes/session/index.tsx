@@ -20,7 +20,7 @@ import { useRoute, useRouteData } from "../../context/route"
 import { useCoordinationOptional } from "../../context/coordination"
 import { useProjectClock } from "./project-members"
 import { escapeTerminalText } from "../../util/terminal-text"
-import { dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
+import { dotsPeerAttribution, dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
 import { projectNoticeLabel, projectNotification } from "../../util/coordination"
 import { createStore } from "solid-js/store"
 import {
@@ -3269,6 +3269,8 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
   const renderer = useRenderer()
   const promptRef = usePromptRef()
   const skills = createMemo(() => promptSkillsFromMetadata(props.message.metadata))
+  const peer = createMemo(() => dotsPeerAttribution(props.message.metadata))
+  const peerWidth = () => Math.max(20, Math.floor(ctx.width * 0.515) - 4)
   // The bubble caps at 51.5% of the transcript width. Yoga clamps a `maxWidth` bubble's height to
   // the container instead of growing with its wrapped content, which silently dropped the
   // remainder of a long prompt. Capping the text's own width keeps the pill silhouette at every
@@ -3330,6 +3332,10 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
           flexDirection="column"
           flexShrink={0}
         >
+          <Show when={peer()}>{(sender) => <>
+            <text fg={theme.text.feedback.info.default} wrapMode="word" width={peerWidth()}>{escapeTerminalText(sender().label)}</text>
+            <Show when={sender().details}>{(details) => <text fg={theme.text.subdued} wrapMode="word" width={peerWidth()}>{escapeTerminalText(details())}</text>}</Show>
+          </>}</Show>
           <text wrapMode="word" fg={props.findActive ? theme.text.action.primary.focused : theme.text.default} bg={props.findActive ? theme.background.action.primary.focused : undefined} width={intrinsicWidth()}>
             <For each={content()}>
               {(part) => (

@@ -30,8 +30,6 @@ describe("MCP catalog pattern interoperability", () => {
     ["session_command", ["input", "id"], "msg_"],
     ["session_skill", ["input", "id"], "msg_"],
     ["session_prompt_costs", ["input", "inputIDs", "items"], "msg_"],
-    ["session_permission_reply", ["input", "requestID"], "per_"],
-    ["session_guardrail_reply", ["input", "requestID"], "grq_"],
   ] as const) {
     test(`${name} accepts complete unique IDs and rejects malformed IDs`, () => {
       const pattern = schema(name, ...path).pattern!
@@ -60,6 +58,16 @@ describe("MCP catalog pattern interoperability", () => {
       }
     })
   }
+})
+
+describe("MCP human decision boundary", () => {
+  test("human-only decision tools are absent from the catalog", () => {
+    const names = RemoteMcpSchemas.tools.map((tool) => tool.name)
+    for (const name of ["session_permission_reply", "session_guardrail_reply", "session_form_reply", "session_form_cancel", "session_review_decide", "session_subagent_answer"])
+      expect(names).not.toContain(name)
+    for (const operation of ["session.permission.reply", "session.guardrail.reply", "session.form.reply", "session.form.cancel", "session.review.decide", "session.subagent.answer"])
+      expect(RemoteMcpSchemas.excludedOperations.map(String)).toContain(operation)
+  })
 })
 
 describe("MCP autonomy schema", () => {

@@ -34,6 +34,7 @@ import { Provider } from "./provider.js"
 import { Guardrail } from "./guardrail.js"
 import { SessionReview } from "./session-review.js"
 import { DecisionFailure } from "./decision-failure.js"
+import { Dots } from "./dots.js"
 
 export { FileAttachment }
 
@@ -440,6 +441,20 @@ export const InputConsumed = Event.durable({
 })
 export type InputConsumed = typeof InputConsumed.Type
 
+export const DotsExchangeCreated = Event.durable({
+  type: "session.dots.exchange.created",
+  ...options,
+  schema: Dots.ExchangeRecord.fields,
+})
+export type DotsExchangeCreated = typeof DotsExchangeCreated.Type
+
+export const DotsReportRecorded = Event.durable({
+  type: "session.dots.report.recorded",
+  ...options,
+  schema: { ...Base, ...Dots.ExchangeOutput.fields, callID: Schema.String },
+})
+export type DotsReportRecorded = typeof DotsReportRecorded.Type
+
 export namespace Execution {
   export const Started = Event.durable({ type: "session.execution.started", ...options, schema: Base })
   export type Started = typeof Started.Type
@@ -489,8 +504,9 @@ export const ContextObserved = Event.durable({
   ...options,
   schema: {
     ...Base,
-    source: Schema.Literals(["session-state", "team-view", "step-limit"]),
+    source: Schema.Literals(["session-state", "team-view", "step-limit", "dots"]),
     text: Schema.String,
+    dots: Dots.CoordinationContext.pipe(optional),
   },
 })
 export type ContextObserved = typeof ContextObserved.Type
@@ -1015,6 +1031,8 @@ export const Definitions = Event.inventory(
   InputPromoted,
   InputAdmitted,
   InputConsumed,
+  DotsExchangeCreated,
+  DotsReportRecorded,
   Execution.Started,
   Execution.Succeeded,
   Execution.Failed,

@@ -151,6 +151,29 @@ const Category = Schema.String.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]{0,63}$/),
 )
 
+const AttentionKindValues = ["guardrail", "permission", "question", "form", "subagent_question"] as const
+export const AttentionKind = Schema.Literals(AttentionKindValues)
+const AttentionOriginTypeValues = ["tool", "native", "managed_task", "review", "unreported"] as const
+export const AttentionOriginType = Schema.Literals(AttentionOriginTypeValues)
+const AttentionReviewValues = ["ordinary", "hard", "custom", "unreported"] as const
+export const AttentionReview = Schema.Literals(AttentionReviewValues)
+const AttentionActionValues = ["inspect", "notify_human"] as const
+export const AttentionAction = Schema.Literals(AttentionActionValues)
+
+export interface Attention extends Schema.Schema.Type<typeof Attention> {}
+export const Attention = Schema.Struct({
+  kind: AttentionKind,
+  origin: Schema.Struct({
+    type: AttentionOriginType,
+    source_event_id: Identifier,
+    message_id: optional(Identifier),
+    call_id: optional(Identifier),
+  }),
+  review: optional(AttentionReview),
+  human_required: Schema.Literal(true),
+  actions: Schema.Array(AttentionAction),
+}).annotate({ identifier: "McpEvents.Attention" })
+
 export interface EventData extends Schema.Schema.Type<typeof EventData> {}
 export const EventData = Schema.Struct({
   session_id: SessionID,
@@ -161,6 +184,7 @@ export const EventData = Schema.Struct({
   task_id: optional(Identifier),
   category: optional(Category),
   reason: optional(Category),
+  attention: optional(Attention),
 }).annotate({ identifier: "McpEvents.EventData" })
 
 export interface Payload extends Schema.Schema.Type<typeof Payload> {}
@@ -207,6 +231,28 @@ const payloadSchema: JsonSchemaObject = {
     task_id: { type: "string" },
     category: { type: "string" },
     reason: { type: "string" },
+    attention: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: AttentionKindValues },
+        origin: {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: AttentionOriginTypeValues },
+            source_event_id: { type: "string" },
+            message_id: { type: "string" },
+            call_id: { type: "string" },
+          },
+          required: ["type", "source_event_id"],
+          additionalProperties: false,
+        },
+        review: { type: "string", enum: AttentionReviewValues },
+        human_required: { type: "boolean", const: true },
+        actions: { type: "array", items: { type: "string", enum: AttentionActionValues } },
+      },
+      required: ["kind", "origin", "human_required", "actions"],
+      additionalProperties: false,
+    },
   },
   required: ["session_id", "root_session_id", "state"],
   additionalProperties: false,

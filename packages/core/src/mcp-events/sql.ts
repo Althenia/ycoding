@@ -1,4 +1,5 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 
 export const McpEventSubscriptionTable = sqliteTable(
   "mcp_event_subscription",
@@ -47,6 +48,7 @@ export const McpEventOutboxTable = sqliteTable(
     task_id: text(),
     category: text(),
     reason: text(),
+    attention: text({ mode: "json" }).$type<McpEvents.Attention>(),
     time_created: integer().notNull(),
     attempts: integer().notNull(),
     next_attempt_at: integer().notNull(),

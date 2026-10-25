@@ -20,6 +20,12 @@ export const excludedOperations = [
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
+  "session.subagent.answer",
+  "session.permission.reply",
+  "session.guardrail.reply",
+  "session.review.decide",
+  "session.form.reply",
+  "session.form.cancel",
 ] as const satisfies readonly RemoteOperation[]
 
 export type ToolOperation = Exclude<RemoteOperation, (typeof excludedOperations)[number]> | "session.createInDirectory"
@@ -89,8 +95,8 @@ const sessionID = prefixed("^ses[A-Za-z0-9_-]+$", 128)
 const messageID = prefixed("^msg_[A-Za-z0-9_-]+$", 128)
 const shellID = prefixed("^sh_[A-Za-z0-9]+$", 128)
 const memory = array(choice("repository", "knowledge"), 0, 2, true)
-const reply = choice("once", "always", "reject")
 const delivery = choice("steer", "queue")
+const dotsAttachment = object({ profile: text(512), dotID: text(512), threadID: text(512), generation: text(512), label: text(512) }, ["profile", "dotID", "threadID", "generation", "label"])
 const maxNoProgress = { anyOf: [integer(0, 1_000), { type: "null" }] }
 
 const model = object({ providerID: text(128), id: text(128), variant: text(128), profile: text(128) }, [
@@ -104,13 +110,6 @@ const mention = object({ start: integer(0, 1_000_000), end: integer(0, 1_000_000
 ])
 const files = array(object({ uri: text(2_048), name: text(256), description: text(1_024), mention }, ["uri"]), 0, 64)
 const agents = array(object({ name: text(256), mention }, ["name"]), 0, 64)
-const formAnswer: Schema = {
-  type: "object",
-  additionalProperties: {
-    anyOf: [{ type: "string" }, { type: "number" }, boolean, { type: "array", items: { type: "string" } }],
-  },
-}
-
 const providerTarget: Schema = {
   oneOf: [
     object({ sessionID: prefixed("^ses_[A-Za-z0-9_-]+$", 128) }, ["sessionID"]),
@@ -175,22 +174,6 @@ const usageReport = object(
   ["group"],
 )
 
-const reviewDecision: Schema = {
-  oneOf: [
-    object({ kind: choice("question", "subagent_question"), dismissed: { const: true } }, ["kind", "dismissed"]),
-    object({ kind: { const: "recovery" }, choice: choice("continue", "stop") }, ["kind", "choice"]),
-    object({ kind: choice("guardrail", "permission"), reply }, ["kind", "reply"]),
-    object(
-      {
-        kind: { const: "question" },
-        answers: { anyOf: [array(array({ type: "string" }, 0, maxSafeInteger), 0, maxSafeInteger), formAnswer] },
-      },
-      ["kind", "answers"],
-    ),
-    object({ kind: { const: "subagent_question" }, text: text(65_536), data: {} }, ["kind", "text"]),
-  ],
-}
-
 const autonomyMode = choice("manual", "yolo", "auto")
 const autonomy: Schema = {
   oneOf: [
@@ -220,6 +203,14 @@ const forecast = {
 } as const
 
 const specs = {
+  "session.dots.exchange.create": {
+    description: "Admit one explicitly targeted external task through the attachment Session's current native ownership scope. Stable exchange IDs reconcile retries; room text never admits work.",
+    input: object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery, text: text(32768) }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text"]),
+  },
+  "session.dots.exchange.read": {
+    description: "Read only the authorized exchange's correlated progress and result. Does not retry work or transmit room messages.",
+    input: object({ exchangeID: text(256) }, ["exchangeID"]),
+  },
   "provider.auth.list": {
     description:
       "List the provider integrations, connection labels and connection methods available at a Session or workspace target.",
@@ -323,14 +314,6 @@ const specs = {
     description: "Cancel a managed subagent of a Session.",
     input: object({ childID: sessionID }, ["childID"]),
   },
-  "session.subagent.answer": {
-    description: "Answer a question a managed subagent asked. Send only the answer the user authorized.",
-    input: object({ childID: sessionID, questionID: prefixed("^qst_[A-Za-z0-9_-]+$", 128), text: text(8_192) }, [
-      "childID",
-      "questionID",
-      "text",
-    ]),
-  },
   "session.team.economics": {
     description: "Read cost, token and context figures for members of a Session's family.",
     input: object({ sessionIDs: array(sessionID, 1, 15, true) }, ["sessionIDs"]),
@@ -388,36 +371,10 @@ const specs = {
     ]),
   },
   "session.permission.list": { description: "List a Session's pending permission requests." },
-  "session.permission.reply": {
-    description:
-      "Answer a pending permission request: once approves this request, always persists the approval, reject refuses. Send only the decision the user authorized.",
-    input: object({ requestID: prefixed("^per_[A-Za-z0-9_-]+$", 128), reply, message: text(1_024, 0) }, [
-      "requestID",
-      "reply",
-    ]),
-  },
   "session.guardrail.status": { description: "Read a Session's guardrail review status." },
   "session.guardrail.request.list": { description: "List a Session family's pending guardrail reviews." },
-  "session.guardrail.reply": {
-    description:
-      "Answer a pending guardrail review: once approves this action, always persists a directory-scoped approval, reject refuses. Send only the decision the user authorized.",
-    input: object({ requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 128), reply }, ["requestID", "reply"]),
-  },
   "session.review.list": { description: "List the open review items of a Session's family, including deferred ones." },
-  "session.review.decide": {
-    description:
-      "Decide an open review item with the decision kind it requires: answer or dismiss a question, once/always/reject a guardrail or permission, or continue/stop a recovery. Send only the decision the user authorized.",
-    input: object({ itemID: prefixed("^rvw_[A-Za-z0-9_-]+$", 128), decision: reviewDecision }, ["itemID", "decision"]),
-  },
   "session.form.list": { description: "List a Session's pending forms and questions." },
-  "session.form.reply": {
-    description: "Answer a pending form with the values the user supplied.",
-    input: object({ formID: prefixed("^frm_[A-Za-z0-9_-]+$", 64), answer: formAnswer }, ["formID", "answer"]),
-  },
-  "session.form.cancel": {
-    description: "Cancel a pending form.",
-    input: object({ formID: prefixed("^frm_[A-Za-z0-9_-]+$", 64) }, ["formID"]),
-  },
   "session.shell.output": {
     description: "Read a page of a shell's output. Pass the returned cursor to continue.",
     input: object({ shellID, cursor: integer(0, maxSafeInteger), limit: integer(1, 65_536) }, ["shellID"]),

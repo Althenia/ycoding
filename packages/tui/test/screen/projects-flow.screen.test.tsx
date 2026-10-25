@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { InputRenderable, RenderableEvents, type Renderable } from "@opentui/core"
 import { docsID, groupID, leadID, planningID, scratchID } from "../fixture/coordination-backend"
 import { mountCoordination, waitForFrame } from "../fixture/coordination-screen"
+import { json } from "../fixture/tui-client"
 
 type Mounted = Awaited<ReturnType<typeof mountCoordination>>
 type Screen = Mounted["screen"]
@@ -11,6 +12,240 @@ async function settle(screen: Screen, frames = 8) {
     await screen.renderOnce()
     await Bun.sleep(15)
   }
+}
+
+async function openBoundaryCreation(view: Mounted, member: boolean) {
+  const { screen } = view
+  if (member) {
+    screen.input.pressKey("x", { ctrl: true })
+    screen.input.pressKey("p")
+    await waitForFrame(screen, "MEMBERS 4 + MASTER")
+    screen.input.pressKey("n")
+  } else {
+    view.router().navigate({ type: "projects", sessionID: leadID })
+    await waitForFrame(screen, "[a] Add session")
+    screen.input.pressKey("n")
+    await until(screen, () => editing(screen), "Name editor")
+    await screen.input.typeText("Boundary project")
+    screen.input.pressEnter()
+    await until(screen, () => !editing(screen), "Name committed")
+    screen.input.pressArrow("right")
+    await waitForFrame(screen, "new Session in a directory")
+    screen.input.pressArrow("down")
+    screen.input.pressEnter()
+  }
+  await until(screen, () => editing(screen), "Directory editor")
+  await screen.input.typeText("/home/dev/boundary")
+  screen.input.pressEnter()
+  await until(screen, () => !editing(screen), "Directory committed")
+}
+
+const boundaryText = (screen: Screen) => screen.frame().replace(/│/g, "").replace(/\s+/g, " ")
+
+for (const [width, height] of [
+  [80, 24],
+  [120, 36],
+] as const) {
+  for (const member of [false, true]) {
+    test(`Projects boundary refresh failure preserves created ${member ? "member" : "Master"} at ${width}x${height}`, async () => {
+      let hasCreatedSession = () => false
+      let blocked = true
+      let failedReads = 0
+      const view = await mountCoordination({
+        width,
+        height,
+        respond: (url, request) => {
+          if (blocked && hasCreatedSession() && url.pathname === "/api/coordination" && request.method === "GET") {
+            failedReads++
+            return new Response("membership read unavailable", { status: 503 })
+          }
+          return undefined
+        },
+      })
+      hasCreatedSession = () => view.server.state.created > 0
+      try {
+        await openBoundaryCreation(view, member)
+        view.screen.input.pressKey("c")
+        await waitForFrame(view.screen, "Session created: ses_new00000001")
+        expect(boundaryText(view.screen)).toContain("Projects could not be refreshed")
+        expect(view.screen.frame()).toContain("/home/dev/boundary")
+        if (!member) expect(view.screen.frame()).toContain("Boundary project")
+        const before = failedReads
+        view.screen.input.pressKey("c")
+        await until(
+          view.screen,
+          () => failedReads > before && !view.screen.frame().includes("Saving…"),
+          "failed membership-only retry",
+        )
+        expect(view.server.state.created).toBe(1)
+        expect(view.server.state.writes.filter((write) => write.path.startsWith("/api/coordination"))).toEqual([])
+        expect(
+          view.server.state.projects.some(
+            (project) =>
+              project.masterSessionID === "ses_new00000001" || project.memberSessionIDs.includes("ses_new00000001"),
+          ),
+        ).toBe(false)
+        expect(boundaryText(view.screen)).toContain("Retry reuses this Session")
+        blocked = false
+        view.screen.input.pressKey("c")
+        await until(
+          view.screen,
+          () =>
+            view.server.state.projects.some((project) =>
+              member
+                ? project.id === groupID && project.memberSessionIDs.includes("ses_new00000001")
+                : project.masterSessionID === "ses_new00000001",
+            ),
+          "recovered membership",
+        )
+        expect(view.server.state.created).toBe(1)
+      } finally {
+        await view.screen.dispose()
+      }
+    }, 30_000)
+
+    test(`Projects boundary reassigned created ${member ? "member" : "Master"} conflicts without replay at ${width}x${height}`, async () => {
+      const view = await mountCoordination({ width, height })
+      try {
+        await openBoundaryCreation(view, member)
+        view.server.state.failWrite = "attachment temporarily unavailable"
+        view.screen.input.pressKey("c")
+        await waitForFrame(view.screen, "Session created: ses_new00000001")
+        const mutations = view.server.state.writes.filter((write) => write.path.startsWith("/api/coordination")).length
+        view.server.state.projects[1]!.memberSessionIDs.push("ses_new00000001")
+        view.server.state.projects[1]!.revision++
+        view.server.state.failWrite = undefined
+        view.screen.input.pressKey("c")
+        await until(
+          view.screen,
+          () => boundaryText(view.screen).includes("The Session belongs to another Project"),
+          "cross-Project conflict",
+        )
+        expect(view.server.state.created).toBe(1)
+        expect(view.server.state.writes.filter((write) => write.path.startsWith("/api/coordination"))).toHaveLength(
+          mutations,
+        )
+        expect(view.server.state.projects[0]!.memberSessionIDs).not.toContain("ses_new00000001")
+        expect(view.screen.frame()).toContain("ses_new00000001")
+        expect(view.screen.frame()).toContain("/home/dev/boundary")
+      } finally {
+        await view.screen.dispose()
+      }
+    }, 30_000)
+  }
+
+  for (const member of [false, true])
+    for (const change of ["disappears", "reassigned"] as const)
+      for (const mouse of [false, true]) {
+        test(`Projects boundary ${member ? "Team Add" : "New Project"} candidate ${change} before ${mouse ? "mouse" : "keyboard"} dispatch at ${width}x${height}`, async () => {
+          let blockInvalidAdmission = false
+          let admissionAttempts = 0
+          const view = await mountCoordination({
+            width,
+            height,
+            respond: (url, request) => {
+              if (
+                blockInvalidAdmission &&
+                url.pathname.startsWith("/api/coordination") &&
+                (request.method === "POST" || request.method === "PATCH")
+              ) {
+                admissionAttempts++
+                return json(
+                  { _tag: "CoordinationError", reason: "Coordination.ConflictError", message: "Candidate unavailable" },
+                  { status: 409 },
+                )
+              }
+              return undefined
+            },
+          })
+          const { screen, server } = view
+          try {
+            await screen.waitForEventStream()
+            if (member) {
+              screen.input.pressKey("x", { ctrl: true })
+              screen.input.pressKey("p")
+              await waitForFrame(screen, "MEMBERS 4 + MASTER")
+              screen.input.pressKey("a")
+              await waitForFrame(screen, "ADD SESSION")
+            } else {
+              view.router().navigate({ type: "projects", sessionID: leadID })
+              await waitForFrame(screen, "[a] Add session")
+              screen.input.pressKey("n")
+              await until(screen, () => editing(screen), "Name editor")
+              await screen.input.typeText("Stale candidate project")
+              screen.input.pressEnter()
+              await until(screen, () => !editing(screen), "Name committed")
+              screen.input.pressArrow("down")
+            }
+            screen.input.pressEnter()
+            await until(screen, () => editing(screen), "Find editor")
+            await screen.input.typeText("planning")
+            screen.input.pressEnter()
+            await until(screen, () => !editing(screen) && screen.frame().includes("Planning"), "filtered candidate")
+            screen.input.pressArrow("down")
+            await until(
+              screen,
+              () =>
+                screen
+                  .frame()
+                  .split("\n")
+                  .some((line) => line.includes("▸ Planning")),
+              "candidate focused",
+            )
+            const rows = screen.lines()
+            const candidateY = rows.findIndex((line) => line.includes("Planning"))
+            const candidateX = rows[candidateY]!.indexOf("Planning")
+            if (!member) {
+              if (mouse) await screen.mouse.click(candidateX, candidateY)
+              else screen.input.pressEnter()
+              await waitForFrame(screen, "● Planning")
+            }
+            expect(server.state.writes).toEqual([])
+            if (change === "disappears") {
+              delete server.state.sessions[planningID]
+              screen.events.emit({
+                id: `evt_boundary_${width}_${member}_${mouse}`,
+                created: Date.now(),
+                type: "session.deleted",
+                data: { sessionID: planningID },
+              } as never)
+            } else {
+              server.state.projects[1]!.memberSessionIDs.push(planningID)
+              server.state.projects[1]!.revision++
+              screen.events.emit({
+                id: `evt_boundary_${width}_${member}_${mouse}`,
+                created: Date.now(),
+                type: "coordination.updated",
+                data: { groupID: server.state.projects[1]!.id, revision: server.state.projects[1]!.revision },
+              } as never)
+            }
+            blockInvalidAdmission = true
+            await waitForFrame(screen, member || change === "disappears" ? "No matching Sessions" : "in Docs sweep")
+            if (member) {
+              if (mouse) await screen.mouse.click(candidateX, candidateY)
+              else screen.input.pressEnter()
+              await screen.renderOnce()
+            } else {
+              if (mouse) {
+                const current = screen.lines()
+                const y = current.findIndex((line) => line.includes("[c] Create project"))
+                await screen.mouse.click(current[y]!.indexOf("Create project"), y)
+              } else screen.input.pressKey("c")
+              await until(
+                screen,
+                () => admissionAttempts > 0 || /Choose|unavailable|Failed|belongs/.test(screen.frame()),
+                "stale selection refused",
+              )
+            }
+            expect(server.state.writes).toEqual([])
+            expect(admissionAttempts).toBe(0)
+            expect(server.state.projects).toHaveLength(2)
+            expect(server.state.created).toBe(0)
+          } finally {
+            await screen.dispose()
+          }
+        }, 30_000)
+      }
 }
 async function until(screen: Screen, check: () => boolean, label: string) {
   for (let i = 0; i < 300 && !check(); i++) {
@@ -53,9 +288,15 @@ for (const width of [120, 80, 60]) {
       expect(identity[0]!.trimEnd().length).toBeLessThanOrEqual(width)
       const filled = lines.filter((line) => line.trim() !== "")
       expect(filled.at(-1)).toBe(identity[0])
-      for (const label of [/Permissions Manual|P Manual|P:M/, /Guardrails Manual|G Manual|G:M/, /Answers Manual|A Manual|A:M/]) expect(identity[0]).toMatch(label)
+      for (const label of [
+        /Permissions Manual|P Manual|P:M/,
+        /Guardrails Manual|G Manual|G:M/,
+        /Answers Manual|A Manual|A:M/,
+      ])
+        expect(identity[0]).toMatch(label)
       expect(identity[0]).toMatch(/usage|\bu\b/i)
-      for (const absent of ["ctrl+x p members", "enter send · esc interrupt", "members ›"]) expect(frame).not.toContain(absent)
+      for (const absent of ["ctrl+x p members", "enter send · esc interrupt", "members ›"])
+        expect(frame).not.toContain(absent)
     } finally {
       await screen.dispose()
     }
@@ -118,7 +359,12 @@ test("Project chat keeps at most one keymap destroy listener per renderable acro
     await screen.waitForEventStream()
     for (let index = 0; index < 6; index++) {
       server.state.sessions[docsID]!.state = index % 2 === 0 ? "running" : "idle"
-      screen.events.emit({ id: `evt_${index}`, created: index, type: "coordination.updated", data: { groupID, revision: 7 } } as never)
+      screen.events.emit({
+        id: `evt_${index}`,
+        created: index,
+        type: "coordination.updated",
+        data: { groupID, revision: 7 },
+      } as never)
       await settle(screen, 12)
     }
     await Bun.sleep(5_200)
@@ -167,11 +413,17 @@ test("creating a Project from an existing Session through the real Projects rout
     screen.input.pressEnter()
     await settle(screen)
     screen.input.pressKey("c")
-    await until(screen, () => {
-      const route = router().data
-      return route.type === "session" && route.sessionID === scratchID
-    }, "Master chat")
-    expect(server.state.writes.find((write) => write.method === "POST" && write.path === "/api/coordination")?.body).toEqual({
+    await until(
+      screen,
+      () => {
+        const route = router().data
+        return route.type === "session" && route.sessionID === scratchID
+      },
+      "Master chat",
+    )
+    expect(
+      server.state.writes.find((write) => write.method === "POST" && write.path === "/api/coordination")?.body,
+    ).toEqual({
       name: "Ship it",
       masterSessionID: scratchID,
       memberSessionIDs: [],
@@ -251,7 +503,13 @@ const runningMaster = (width: number) =>
     backend: {
       sessions: {
         [leadID]: { title: "Lead", directory: "/home/dev/api", state: "running", lastActivity: Date.now(), updated: 1 },
-        [docsID]: { title: "Docs worker", directory: "/home/dev/docs", state: "idle", lastActivity: Date.now(), updated: 1 },
+        [docsID]: {
+          title: "Docs worker",
+          directory: "/home/dev/docs",
+          state: "idle",
+          lastActivity: Date.now(),
+          updated: 1,
+        },
       },
       projects: [
         {
@@ -300,3 +558,267 @@ test("the narrow Master identity line names the Project without aggregate counts
     await screen.dispose()
   }
 }, 30_000)
+
+for (const [width, height] of [
+  [80, 24],
+  [120, 36],
+] as const) {
+  for (const mouse of [false, true])
+    test(`Projects L04 primary Add and member Open at ${width}x${height} ${mouse ? "mouse" : "keyboard"}`, async () => {
+      const { screen, server, router } = await mountCoordination({ width, height })
+      try {
+        router().navigate({ type: "projects", sessionID: leadID })
+        await waitForFrame(screen, "[a] Add session")
+        await screen.renderOnce()
+        expect(screen.frame()).toContain("Add session")
+        if (mouse) {
+          const rows = screen.lines()
+          const y = rows.findIndex((row) => row.includes("Add session"))
+          await screen.mouse.click(rows[y]!.indexOf("Add session"), y)
+        } else screen.input.pressKey("a")
+        await waitForFrame(screen, "ADD SESSION")
+        await screen.renderOnce()
+        if (editing(screen)) {
+          screen.input.pressEscape()
+          await until(screen, () => !editing(screen), "Find editing cancelled")
+        }
+        screen.input.pressEscape()
+        await waitForFrame(screen, "MEMBERS 4 + MASTER")
+        if (mouse) {
+          const rows = screen.lines()
+          const y = rows.findIndex((row) => row.includes("Docs worker"))
+          await screen.mouse.click(rows[y]!.indexOf("Docs worker"), y)
+        } else {
+          screen.input.pressArrow("down")
+          screen.input.pressKey("o")
+        }
+        await until(
+          screen,
+          () => {
+            const route = router().data
+            return route.type === "session" && route.sessionID === docsID
+          },
+          "selected member opens",
+        )
+        expect(server.state.writes).toEqual([])
+      } finally {
+        await screen.dispose()
+      }
+    }, 30_000)
+
+  test(`Projects L05 rejected directory retains fields and allows correction at ${width}x${height}`, async () => {
+    let reject = true
+    const { screen, router, server } = await mountCoordination({
+      width,
+      height,
+      respond: (url, request) => {
+        if (reject && url.pathname === "/api/session" && request.method === "POST")
+          return json({ _tag: "InvalidRequestError", message: "Directory is not accessible" }, { status: 400 })
+        return undefined
+      },
+    })
+    try {
+      router().navigate({ type: "projects", sessionID: leadID })
+      await waitForFrame(screen, "PROJECTS")
+      screen.input.pressKey("n")
+      await until(screen, () => editing(screen), "Name editor")
+      await screen.input.typeText("Directory validation")
+      screen.input.pressEnter()
+      await settle(screen, 2)
+      screen.input.pressArrow("right")
+      screen.input.pressArrow("down")
+      screen.input.pressEnter()
+      await until(screen, () => editing(screen), "Directory editor")
+      await screen.input.typeText("/home/dev/inaccessible")
+      screen.input.pressEnter()
+      await settle(screen, 2)
+      screen.input.pressKey("c")
+      await waitForFrame(screen, "Directory is not accessible")
+      expect(screen.frame()).toContain("Directory validation")
+      expect(screen.frame()).toContain("/home/dev/inaccessible")
+      expect(server.state.created).toBe(0)
+      reject = false
+      screen.input.pressKey("c")
+      await until(
+        screen,
+        () => server.state.projects.some((project) => project.name === "Directory validation"),
+        "corrected create",
+      )
+      expect(server.state.created).toBe(1)
+    } finally {
+      await screen.dispose()
+    }
+  }, 30_000)
+
+  for (const member of [false, true])
+    test(`Projects L06 reconciles applied ${member ? "attachment" : "Project creation"} before retry at ${width}x${height}`, async () => {
+      let apply: (() => void) | undefined
+      let calls = 0
+      const { screen, server, router } = await mountCoordination({
+        width,
+        height,
+        respond: (url, request) => {
+          if (
+            apply &&
+            (member ? request.method === "PATCH" : request.method === "POST") &&
+            url.pathname.startsWith("/api/coordination")
+          ) {
+            calls++
+            const current = apply
+            apply = undefined
+            current()
+            return new Response("reply lost", { status: 503 })
+          }
+          return undefined
+        },
+      })
+      try {
+        if (member) {
+          screen.input.pressKey("x", { ctrl: true })
+          screen.input.pressKey("p")
+          await waitForFrame(screen, "MEMBERS 4 + MASTER")
+          screen.input.pressKey("n")
+        } else {
+          router().navigate({ type: "projects", sessionID: leadID })
+          await waitForFrame(screen, "PROJECTS")
+          screen.input.pressKey("n")
+          await until(screen, () => editing(screen), "Name editor")
+          await screen.input.typeText("Reconciled project")
+          screen.input.pressEnter()
+          await settle(screen, 2)
+          screen.input.pressArrow("right")
+          screen.input.pressArrow("down")
+          screen.input.pressEnter()
+        }
+        await until(screen, () => editing(screen), "Directory editor")
+        await screen.input.typeText("/home/dev/reconciled")
+        screen.input.pressEnter()
+        await settle(screen, 2)
+        apply = () => {
+          if (member) {
+            server.state.projects[0]!.memberSessionIDs.push("ses_new00000001")
+            server.state.projects[0]!.revision++
+            return
+          }
+          server.state.projects.push({
+            id: "cgrp_reconciled",
+            name: "Reconciled project",
+            masterSessionID: "ses_new00000001",
+            memberSessionIDs: [],
+            revision: 1,
+            active: false,
+            settings: { concurrency: null },
+          })
+        }
+        screen.input.pressKey("c")
+        await waitForFrame(screen, "Session created")
+        screen.input.pressKey("c")
+        await until(
+          screen,
+          () => (member ? screen.frame().includes("MEMBERS 5 + MASTER") : router().data.type === "session"),
+          "confirmed recovery",
+        )
+        expect(calls).toBe(1)
+        expect(server.state.created).toBe(1)
+        expect(server.state.projects.filter((project) => project.masterSessionID === "ses_new00000001")).toHaveLength(
+          member ? 0 : 1,
+        )
+      } finally {
+        await screen.dispose()
+      }
+    }, 30_000)
+
+  for (const member of [false, true]) {
+    test(`Projects L06 ${member ? "member" : "Master"} retries reuse the created Session at ${width}x${height}`, async () => {
+      const { screen, server, router } = await mountCoordination({ width, height })
+      try {
+        if (member) {
+          screen.input.pressKey("x", { ctrl: true })
+          screen.input.pressKey("p")
+          await waitForFrame(screen, "MEMBERS 4 + MASTER")
+          screen.input.pressKey("n")
+        } else {
+          router().navigate({ type: "projects", sessionID: leadID })
+          await waitForFrame(screen, "PROJECTS")
+          screen.input.pressKey("n")
+          await until(screen, () => editing(screen), "Name editor")
+          await screen.input.typeText("Recovery project")
+          screen.input.pressEnter()
+          await settle(screen, 2)
+          screen.input.pressArrow("right")
+          screen.input.pressArrow("down")
+          screen.input.pressEnter()
+        }
+        await until(screen, () => editing(screen), "Directory editor")
+        await screen.input.typeText("/home/dev/recovery")
+        screen.input.pressEnter()
+        await settle(screen, 2)
+        server.state.failWrite = "membership temporarily unavailable"
+        screen.input.pressKey("c")
+        await waitForFrame(screen, "Session created")
+        expect(screen.frame()).toContain("ses_new00000001")
+        expect(screen.frame()).toContain("/home/dev/recovery")
+        expect(server.state.created).toBe(1)
+        screen.input.pressEscape()
+        await waitForFrame(screen, member ? "MEMBERS 4 + MASTER" : "PROJECTS")
+        screen.input.pressKey("n")
+        await waitForFrame(screen, "Session created")
+        server.state.failWrite = undefined
+        screen.input.pressKey("c")
+        await until(
+          screen,
+          () =>
+            member
+              ? server.state.projects[0]!.memberSessionIDs.includes("ses_new00000001")
+              : server.state.projects.some((project) => project.masterSessionID === "ses_new00000001"),
+          "membership-only retry",
+        )
+        expect(server.state.created).toBe(1)
+        expect(server.state.writes.filter((write) => write.path === "/api/session")).toHaveLength(1)
+      } finally {
+        await screen.dispose()
+      }
+    }, 30_000)
+  }
+
+  test(`Projects L06 unknown Session creation is not replayed after cancel at ${width}x${height}`, async () => {
+    let attempts = 0
+    const { screen, router } = await mountCoordination({
+      width,
+      height,
+      respond: (url, request) => {
+        if (url.pathname !== "/api/session" || request.method !== "POST") return
+        attempts++
+        return new Response("creation outcome unavailable", { status: 503 })
+      },
+    })
+    try {
+      router().navigate({ type: "projects", sessionID: leadID })
+      await waitForFrame(screen, "PROJECTS")
+      screen.input.pressKey("n")
+      await until(screen, () => editing(screen), "Name editor")
+      await screen.input.typeText("Uncertain project")
+      screen.input.pressEnter()
+      await settle(screen, 2)
+      screen.input.pressArrow("right")
+      screen.input.pressArrow("down")
+      screen.input.pressEnter()
+      await until(screen, () => editing(screen), "Directory editor")
+      await screen.input.typeText("/home/dev/uncertain")
+      screen.input.pressEnter()
+      await settle(screen, 2)
+      screen.input.pressKey("c")
+      await waitForFrame(screen, "outcome unknown")
+      screen.input.pressEscape()
+      await waitForFrame(screen, "PROJECTS")
+      screen.input.pressKey("n")
+      await waitForFrame(screen, "outcome unknown")
+      screen.input.pressKey("c")
+      await settle(screen, 2)
+      expect(attempts).toBe(1)
+      expect(screen.frame()).toContain("Uncertain project")
+    } finally {
+      await screen.dispose()
+    }
+  }, 30_000)
+}

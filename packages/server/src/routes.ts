@@ -33,6 +33,7 @@ import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { ModelsDev } from "@ycoding-ai/core/models-dev"
 import { ModelIncident } from "@ycoding-ai/core/model-incident/index"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
+import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionReview } from "@ycoding-ai/core/session/review"
 import { SessionOrchestrationNotifier } from "@ycoding-ai/core/session/orchestration-notifier"
@@ -73,6 +74,7 @@ const applicationServices = LayerNode.group([
   EventRuntime.node,
   EventLogger.node,
   SessionMcpEvents.node,
+  SessionMcpEvents.Authorization.node,
   httpClient,
   ToolOutputStore.cleanupNode,
   SessionRetention.node,
@@ -91,6 +93,7 @@ const applicationServices = LayerNode.group([
   PtyEnvironment.node,
   LocationServiceMap.node,
   SessionRestart.node,
+  SessionExecution.node,
   SessionOrchestration.node,
   SessionReview.node,
   SessionOrchestrationNotifier.node,

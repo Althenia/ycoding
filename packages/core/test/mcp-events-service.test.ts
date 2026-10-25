@@ -686,6 +686,39 @@ it.effect("descendant filtering uses the backend session tree and progress coale
   expect(payloads().filter((payload) => payload.name === "session.progress")).toHaveLength(2)
 }))
 
+it.effect("Dots completion correlation preserves distinct receipts and deduplicates exact event replay", () => Effect.gen(function* () {
+  const { parent } = yield* seed("dots_completion")
+  const svc = yield* make
+  yield* subscribe(svc, parent, "session.completed")
+  const data = { sessionID: parent, inputID: "msg_dots_completed", assistantMessageID: "msg_dots_reply" }
+  yield* svc.capture({ type: "session.work.completed", id: "evt_work_first", data })
+  yield* svc.capture({ type: "session.work.completed", id: "evt_work_first", data })
+  yield* svc.capture({ type: "session.work.completed", id: "evt_work_second", data })
+  yield* svc.dispatchOnce()
+  const completed = payloads()
+  expect(completed).toHaveLength(2)
+  expect(completed.map((entry) => entry.data.request_id)).toEqual([data.inputID, data.inputID])
+  expect(new Set(completed.map((entry) => entry.eventId)).size).toBe(2)
+  expect(completed.map((entry) => Object.keys(entry.data).sort())).toEqual([
+    ["request_id", "root_session_id", "session_id", "state"],
+    ["request_id", "root_session_id", "session_id", "state"],
+  ])
+}))
+
+it.effect("Dots report notifications keep distinct explicit reports inside the progress coalescing window", () => Effect.gen(function* () {
+  const { parent } = yield* seed("dots_reports")
+  const svc = yield* make
+  yield* subscribe(svc, parent, "session.progress")
+  const data = { sessionID: parent, text: "Private synthetic body", envelope: { kind: "progress", replyToMessageID: "msg_input" } }
+  yield* svc.capture({ type: "session.dots.report.recorded", id: "evt_report_one", data })
+  yield* svc.capture({ type: "session.dots.report.recorded", id: "evt_report_one", data })
+  yield* svc.capture({ type: "session.dots.report.recorded", id: "evt_report_two", data })
+  yield* svc.dispatchOnce()
+  expect(payloads()).toHaveLength(2)
+  expect(payloads().map((entry) => entry.data.request_id)).toEqual(["msg_input", "msg_input"])
+  expect(deliveries().some((entry) => entry.body.includes(data.text))).toBe(false)
+}))
+
 it.effect("replayable cursors resume without skipping, restart redelivers pending rows, and rotated secrets dual-sign", () => Effect.gen(function* () {
   const { parent } = yield* seed("replay")
   const svc = yield* make
@@ -783,9 +816,138 @@ it.effect("restart cancels only the latest unresolved ephemeral attention, inclu
   const restarted = yield* make
   yield* restarted.dispatchOnce()
   expect(payloads().slice(before).map((row) => row.data)).toEqual([
-    { session_id: parent, root_session_id: parent, state: "cancelled", request_id: "grq_pending", reason: "restart" },
+    { session_id: parent, root_session_id: parent, state: "cancelled", request_id: "grq_pending", reason: "restart", attention: {
+      kind: "guardrail", origin: { type: "unreported", source_event_id: "src_grq_pending" }, review: "unreported", human_required: true, actions: ["inspect"],
+    } },
   ])
   const again = yield* make
   yield* again.dispatchOnce()
   expect(deliveries()).toHaveLength(before + 1)
+}))
+
+it.effect("controller attention persists canonical request origin and actions without sensitive request data", () => Effect.gen(function* () {
+  const { parent, child } = yield* seed("controller_attention")
+  const svc = yield* make
+  for (const name of ["session.guardrail.changed", "session.permission.changed", "session.question.changed", "session.form.changed"] as const)
+    yield* subscribe(svc, parent, name, { arguments: { session_id: parent, include_descendants: true } })
+  const source = { type: "tool", messageID: "msg_attention", callID: "call_attention" }
+  const events = [
+    { type: "guardrail.asked", id: "evt_attention_ordinary", data: { id: "grq_ordinary", rootSessionID: parent, sessionID: child, standard: true, source, resources: ["private synthetic target"], reason: "private synthetic reason" } },
+    { type: "guardrail.asked", id: "evt_attention_hard", data: { id: "grq_hard", rootSessionID: parent, sessionID: child, standard: true, hardReview: true, source } },
+    { type: "guardrail.asked", id: "evt_attention_custom", data: { id: "grq_custom", rootSessionID: parent, sessionID: child, standard: false, source } },
+    { type: "permission.asked", id: "evt_attention_permission", data: { id: "per_attention", sessionID: child, action: "read", source, resources: ["private synthetic target"] } },
+    { type: "question.asked", id: "evt_attention_question", data: { id: "que_attention", sessionID: child, text: "private synthetic question" } },
+    { type: "form.created", id: "evt_attention_form", data: { form: { id: "frm_attention", sessionID: child, metadata: { kind: "question", tool: source }, title: "private synthetic title", fields: [] } } },
+  ]
+  for (const event of events) yield* svc.capture(event)
+  yield* svc.dispatchOnce()
+  const sentAttention = payloads().map((item) => item.data)
+  expect(sentAttention).toHaveLength(6)
+  for (const data of sentAttention) expect(data).toMatchObject({ session_id: child, root_session_id: parent, state: "pending", attention: { human_required: true, actions: ["inspect", "notify_human"] } })
+  for (const [requestID, review] of [["grq_ordinary", "ordinary"], ["grq_hard", "hard"], ["grq_custom", "custom"]])
+    expect(sentAttention.find((item) => item.request_id === requestID)).toMatchObject({ attention: { kind: "guardrail", review, origin: { type: "tool", message_id: source.messageID, call_id: source.callID } } })
+  expect(sentAttention.find((item) => item.request_id === "frm_attention")).toMatchObject({ attention: { kind: "form", origin: { type: "tool", source_event_id: "evt_attention_form", message_id: source.messageID, call_id: source.callID } } })
+  for (const body of deliveries().map((item) => item.body)) expect(body).not.toContain("private synthetic")
+}))
+
+it.effect("controller attention retries preserve the snapshot and settlement retains original request provenance", () => Effect.gen(function* () {
+  const { parent } = yield* seed("controller_retry")
+  const svc = yield* make
+  yield* subscribe(svc, parent, "session.permission.changed")
+  const source = { type: "tool", messageID: "msg_attention_retry", callID: "call_attention_retry" }
+  yield* svc.capture({ type: "permission.asked", id: "evt_attention_retry", data: { id: "per_attention_retry", sessionID: parent, action: "read", source } })
+  statuses = [500]
+  yield* svc.dispatchOnce()
+  const pending = payloads()[0]
+  const attention = pending.data.attention
+  expect(attention).toMatchObject({ kind: "permission", origin: { type: "tool", source_event_id: "evt_attention_retry", message_id: source.messageID, call_id: source.callID }, actions: ["inspect", "notify_human"] })
+  yield* svc.capture({ type: "permission.replied", id: "evt_attention_resolved", data: { requestID: "per_attention_retry", sessionID: parent, reply: "reject" } })
+  yield* TestClock.adjust("1 hour")
+  yield* svc.dispatchOnce()
+  expect(payloads()[1]).toEqual(pending)
+  const resolved = payloads().find((item) => item.data.state === "resolved")
+  expect(resolved?.data).toMatchObject({ request_id: "per_attention_retry", attention: { kind: "permission", origin: { source_event_id: "evt_attention_retry" }, actions: ["inspect"], human_required: true } })
+}))
+
+it.effect("controller attention classifies the native request after assessment escalation without storing a partial snapshot", () => Effect.gen(function* () {
+  const { parent, child } = yield* seed("controller_escalation")
+  const svc = yield* make
+  yield* subscribe(svc, parent, "session.guardrail.changed", { arguments: { session_id: parent, include_descendants: true } })
+  const source = { messageID: "msg_escalation", callID: "call_escalation" }
+  for (const [review, classification] of [["hard", { hardReview: true, standard: true }], ["custom", { standard: false }]] as const) {
+    const requestID = `grq_escalated_${review}`
+    yield* svc.capture({ type: "session.guardrail.escalated", id: `evt_escalated_${review}`, data: { sessionID: child, requestID, source, grades: [{ evidence: "private synthetic evidence" }] } })
+    yield* svc.dispatchOnce()
+    expect(payloads().some((item) => item.data.request_id === requestID)).toBe(false)
+    yield* svc.capture({ type: "guardrail.asked", id: `evt_asked_${review}`, data: { id: requestID, sessionID: child, source, ...classification } })
+    yield* svc.dispatchOnce()
+    const sent = payloads().filter((item) => item.data.request_id === requestID)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].data).toMatchObject({ session_id: child, root_session_id: parent, state: "pending", attention: {
+      kind: "guardrail", review, origin: { type: "tool", source_event_id: `evt_asked_${review}`, message_id: source.messageID, call_id: source.callID }, human_required: true, actions: ["inspect", "notify_human"],
+    } })
+    yield* svc.capture({ type: "guardrail.replied", id: `evt_rejected_${review}`, data: { sessionID: child, requestID, reply: "reject" } })
+    yield* svc.dispatchOnce()
+    expect(payloads().find((item) => item.data.request_id === requestID && item.data.state === "resolved")?.data.attention).toMatchObject({ review, origin: { source_event_id: `evt_asked_${review}` }, actions: ["inspect"] })
+  }
+  for (const delivery of deliveries()) expect(delivery.body).not.toContain("private synthetic")
+}))
+
+it.effect("controller attention restart cancellation never invents approval or reconstructs request bodies", () => Effect.gen(function* () {
+  const { parent } = yield* seed("controller_restart")
+  const svc = yield* make
+  yield* subscribe(svc, parent, "session.guardrail.changed")
+  yield* svc.capture({ type: "guardrail.asked", id: "evt_attention_restart", data: { id: "grq_attention_restart", sessionID: parent, standard: true, hardReview: true } })
+  yield* svc.dispatchOnce()
+  const restarted = yield* make
+  yield* restarted.dispatchOnce()
+  const cancelled = payloads().find((item) => item.data.state === "cancelled")
+  expect(cancelled?.data).toMatchObject({ request_id: "grq_attention_restart", reason: "restart", attention: { kind: "guardrail", review: "hard", actions: ["inspect"], human_required: true, origin: { source_event_id: "evt_attention_restart" } } })
+  expect(payloads().some((item) => item.data.state === "resolved")).toBe(false)
+}))
+
+it.effect("controller managed-question attention survives restart and retains parent-mediated provenance at settlement", () => Effect.gen(function* () {
+  const { parent, child } = yield* seed("controller_managed_question")
+  const svc = yield* make
+  yield* subscribe(svc, parent, "session.question.changed", { arguments: { session_id: parent, include_descendants: true } })
+  yield* svc.capture({ type: "session.task.updated", id: "evt_managed_question", data: { sessionID: child, change: { type: "question_asked", question: { id: "qst_managed", text: "private synthetic question", data: { secret: "private synthetic data" }, time: 1 } } } })
+  yield* svc.dispatchOnce()
+  expect(payloads().map((item) => item.data)).toEqual([{
+    session_id: child, root_session_id: parent, task_id: child, request_id: "qst_managed", state: "pending", attention: {
+      kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_managed_question" }, human_required: true, actions: ["inspect", "notify_human"],
+    },
+  }])
+  const restarted = yield* make
+  yield* restarted.dispatchOnce()
+  expect(payloads()).toHaveLength(1)
+  yield* restarted.capture({ type: "session.task.updated", id: "evt_managed_answer", data: { sessionID: child, change: { type: "question_answered", answer: { questionID: "qst_managed", text: "private synthetic answer" } } } })
+  yield* restarted.dispatchOnce()
+  expect(payloads()[1].data).toEqual({
+    session_id: child, root_session_id: parent, task_id: child, request_id: "qst_managed", state: "resolved", attention: {
+      kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_managed_question" }, human_required: true, actions: ["inspect"],
+    },
+  })
+  yield* restarted.capture({ type: "session.task.updated", id: "evt_answered_child_cancelled", data: { sessionID: child, change: { type: "cancelled" } } })
+  yield* restarted.dispatchOnce()
+  expect(payloads()).toHaveLength(2)
+  for (const delivery of deliveries()) expect(delivery.body).not.toContain("private synthetic")
+}))
+
+it.effect("controller managed-question attention cancels once when a waiting child is cancelled or lost", () => Effect.gen(function* () {
+  for (const type of ["cancelled", "lost"]) {
+    const { parent, child } = yield* seed(`controller_managed_${type}`)
+    const svc = yield* make
+    yield* subscribe(svc, parent, "session.question.changed", { arguments: { session_id: parent, include_descendants: true } })
+    yield* svc.capture({ type: "session.task.updated", id: `evt_managed_${type}_question`, data: { sessionID: child, change: { type: "question_asked", question: { id: `qst_${type}`, text: "private synthetic question", time: 1 } } } })
+    const terminal = { type: "session.task.updated", id: `evt_managed_${type}_terminal`, data: { sessionID: child, change: { type } } }
+    yield* svc.capture(terminal)
+    yield* svc.capture(terminal)
+    yield* svc.dispatchOnce()
+    const sent = payloads().filter((item) => item.data.session_id === child)
+    expect(sent).toHaveLength(2)
+    expect(sent[1].data).toMatchObject({ session_id: child, root_session_id: parent, task_id: child, request_id: `qst_${type}`, state: "cancelled", attention: {
+      kind: "subagent_question", origin: { type: "managed_task", source_event_id: `evt_managed_${type}_question` }, human_required: true, actions: ["inspect"],
+    } })
+    expect(sent.some((item) => item.data.state === "resolved")).toBe(false)
+  }
 }))

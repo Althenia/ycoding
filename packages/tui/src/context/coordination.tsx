@@ -6,6 +6,7 @@ import {
   externalNotificationAllowed,
   projectContextOf,
   projectOfSession,
+  ProjectCreationError,
   roster,
   type DelegatedDecisionsView,
   type ExternalNotificationKind,
@@ -73,7 +74,8 @@ function createCoordination() {
   let rootGeneration = 0
   let disposed = false
   let scheduled: ReturnType<typeof setTimeout> | undefined
-  let projectRefresh: Promise<void> | undefined
+  let projectRefresh: Promise<boolean> | undefined
+  const creations = new Map<string, { sessionID?: string; submitted?: boolean }>()
 
   async function loadProjects() {
     const token = ++generation
@@ -85,21 +87,24 @@ function createCoordination() {
           .catch(() => undefined),
       ])
       const details = await Promise.all(list.map((summary) => client.api.coordination.get({ groupID: summary.id })))
-      if (disposed || token !== generation) return
+      if (disposed || token !== generation) return false
       records.clear()
       details.forEach((detail) => records.set(detail.id, detail))
       setProjects(details.map(projectView))
       setGlobalDelegation(settings)
       setLoadedAt(Date.now())
       setError(undefined)
+      return true
     } catch (cause) {
       if (!disposed && token === generation) setError(errorMessage(cause))
+      return false
     }
   }
 
-  function refreshProjects(): Promise<void> {
-    const pending = loadProjects().then(async () => {
-      if (!disposed && projectRefresh !== pending) await projectRefresh
+  function refreshProjects(): Promise<boolean> {
+    const pending: Promise<boolean> = loadProjects().then(async (loaded) => {
+      if (!disposed && projectRefresh !== pending && projectRefresh) return await projectRefresh
+      return loaded
     })
     projectRefresh = pending
     return pending
@@ -176,21 +181,77 @@ function createCoordination() {
     })
     return created.id
   }
+  const createForProject = async (key: string, directory: string, title?: string) => {
+    const prior = creations.get(key)
+    if (prior?.sessionID) return prior.sessionID
+    if (prior)
+      throw new ProjectCreationError(
+        "Session creation outcome unknown. Check Sessions before choosing an existing Session; creation will not be repeated.",
+      )
+    const pending: { sessionID?: string; submitted?: boolean } = {}
+    creations.set(key, pending)
+    try {
+      pending.sessionID = await createSession(directory, title)
+      return pending.sessionID
+    } catch (cause) {
+      if (
+        typeof cause === "object" &&
+        cause !== null &&
+        "_tag" in cause &&
+        ["InvalidRequestError", "SessionNotFoundError", "UnauthorizedError"].includes(String(cause._tag))
+      ) {
+        creations.delete(key)
+        throw cause
+      }
+      throw new ProjectCreationError(
+        "Session creation outcome unknown. Check Sessions before choosing an existing Session; creation will not be repeated.",
+      )
+    }
+  }
+  const creationFailure = (sessionID: string, cause: unknown) =>
+    new ProjectCreationError(
+      `Session created: ${sessionID}. Project membership not confirmed: ${errorMessage(cause)}. Retry reuses this Session.`,
+      sessionID,
+    )
 
   const service: ProjectService = {
-    create: (input) =>
-      mutate(async () => {
+    create: (input) => {
+      const key = JSON.stringify(["master", input])
+      return mutate(async () => {
         const masterSessionID =
           "sessionID" in input.master
             ? input.master.sessionID
-            : await createSession(input.master.directory, input.master.title ?? input.name)
-        const created = await client.api.coordination.create({
-          name: input.name,
-          masterSessionID,
-          memberSessionIDs: [],
-        })
-        return created.master.sessionID
-      }),
+            : await createForProject(key, input.master.directory, input.master.title ?? input.name)
+        const attempt = creations.get(key) ?? { sessionID: masterSessionID, submitted: false }
+        creations.set(key, attempt)
+        try {
+          if (!(await refreshProjects())) throw new Error("Projects could not be refreshed")
+          const owner = [...records.values()].find(
+            (record) =>
+              record.master.sessionID === masterSessionID ||
+              record.members.some((member) => member.sessionID === masterSessionID),
+          )
+          if (owner) {
+            if (attempt.submitted && owner.master.sessionID === masterSessionID && owner.name === input.name) {
+              creations.delete(key)
+              return masterSessionID
+            }
+            throw new Error("The Session belongs to another Project")
+          }
+          attempt.submitted = true
+          const created = await client.api.coordination.create({
+            name: input.name,
+            masterSessionID,
+            memberSessionIDs: [],
+          })
+          creations.delete(key)
+          return created.master.sessionID
+        } catch (cause) {
+          if ("sessionID" in input.master) throw cause
+          throw creationFailure(masterSessionID, cause)
+        }
+      })
+    },
     rename: (projectID, name) => update(projectID, { name }).then(() => undefined),
     setMaster: (projectID, sessionID) => {
       const current = record(projectID)
@@ -217,9 +278,22 @@ function createCoordination() {
       return update(projectID, { memberSessionIDs: [...memberIDs(projectID), sessionID] }).then(() => undefined)
     },
     newMember: async (projectID, directory, title) => {
-      const sessionID = await createSession(directory, title)
-      await update(projectID, { memberSessionIDs: [...memberIDs(projectID), sessionID] })
-      return sessionID
+      const key = JSON.stringify(["member", projectID, directory, title])
+      const sessionID = await createForProject(key, directory, title)
+      try {
+        if (!(await refreshProjects())) throw new Error("Projects could not be refreshed")
+        const owner = [...records.values()].find(
+          (record) =>
+            record.master.sessionID === sessionID || record.members.some((member) => member.sessionID === sessionID),
+        )
+        if (owner && (owner.id !== projectID || owner.master.sessionID === sessionID))
+          throw new Error("The Session belongs to another Project")
+        if (!owner) await update(projectID, { memberSessionIDs: [...memberIDs(projectID), sessionID] })
+        creations.delete(key)
+        return sessionID
+      } catch (cause) {
+        throw creationFailure(sessionID, cause)
+      }
     },
     removeMember: (projectID, sessionID) => {
       if (record(projectID).master.sessionID === sessionID)

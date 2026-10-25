@@ -633,7 +633,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
       return
     }
     if (event.type === SessionEvent.ContextObserved.type && "source" in data &&
-      (data.source === "session-state" || data.source === "team-view")) return
+      (data.source === "session-state" || data.source === "team-view" || data.source === "dots")) return
     const noticeTypes: readonly string[] = [SessionEvent.Synthetic.type, SessionEvent.ContextObserved.type, SessionEvent.GuardrailEscalated.type,
       SessionEvent.Review.Withdrawn.type, SessionEvent.Skill.Activated.type,
       SessionEvent.Shell.Started.type, SessionEvent.AgentSelected.type, SessionEvent.ModelSelected.type]

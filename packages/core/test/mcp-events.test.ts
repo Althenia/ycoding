@@ -150,7 +150,7 @@ test("capture maps attention and material execution events to metadata only", ()
   expect(mapEvent({ type: "session.review.deferred", id: "e5", data: { sessionID: "ses_a", itemID: "rev_1", kind: "guardrail", payload: { text: "no" } } }))
     .toMatchObject({ name: "session.guardrail.changed", state: "deferred", itemID: "rev_1" })
   expect(mapEvent({ type: "session.guardrail.escalated", id: "e6", data: { sessionID: "ses_a", requestID: "gr_1", grades: [{ evidence: "private evidence" }] } }))
-    .toMatchObject({ name: "session.guardrail.changed", state: "pending", requestID: "gr_1" })
+    .toBeUndefined()
 
   const failed = mapEvent({ type: "session.execution.failed", id: "e7", data: { sessionID: "ses_a", error: { type: "provider.transport", message: "raw credential detail" } } })
   expect(failed).toMatchObject({ name: "session.error", state: "failed", category: "provider.transport" })
@@ -162,6 +162,26 @@ test("capture maps attention and material execution events to metadata only", ()
   for (const type of ["session.text.delta", "session.tool.progress", "session.step.ended", "session.usage.recorded", "session.task.updated"])
     expect(mapEvent({ type, id: "ex", data: type === "session.task.updated" ? { sessionID: "ses_a", change: { type: "progressed" } } : { sessionID: "ses_a" } })).toBeUndefined()
   expect(mapEvent({ type: "permission.asked", id: "e10", data: { id: "per_2", sessionID: "global" } })).toBeUndefined()
+})
+
+test("Dots completion notifications carry input correlation without message content", () => {
+  const first = mapEvent({ type: "session.work.completed", id: "evt_work_first", data: {
+    sessionID: "ses_a", inputID: "msg_dots_first", assistantMessageID: "msg_reply",
+    text: "Synthetic private response", exchangeID: "caller-selected/exchange", coordinator: "synthetic-coordinator",
+  } })
+  expect(first).toEqual({ name: "session.completed", sessionID: "ses_a", state: "completed", requestID: "msg_dots_first", sourceID: "evt_work_first" })
+  expect(mapEvent({ type: "session.work.completed", id: "evt_work_second", data: { sessionID: "ses_a", inputID: "msg_dots_first" } })?.sourceID).toBe("evt_work_second")
+  for (const inputID of [undefined, "invalid/id", "m".repeat(129)]) {
+    const mapped = mapEvent({ type: "session.work.completed", id: "evt_work_missing", data: { sessionID: "ses_a", inputID } })
+    expect(mapped?.requestID).toBeUndefined()
+    expect(mapped?.sourceID).toBe("evt_work_missing")
+  }
+})
+
+test("Dots report notifications expose only input correlation and report kind", () => {
+  const value = mapEvent({ type: "session.dots.report.recorded", id: "evt_report_first", data: { sessionID: "ses_a", text: "Private synthetic body", envelope: { kind: "blocker", replyToMessageID: "msg_input", coordinator: { clientID: "private-client" } } } })
+  expect(value).toEqual({ name: "session.progress", sessionID: "ses_a", state: "running", requestID: "msg_input", category: "blocker", sourceID: "evt_report_first" })
+  expect(mapEvent({ type: "session.dots.report.recorded", id: "evt_bad", data: { sessionID: "ses_a", envelope: { kind: "blocker" } } })).toBeUndefined()
 })
 
 test("failure values never carry callback or secret material", () => {

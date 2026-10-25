@@ -383,7 +383,7 @@ export const forModel = Effect.fn("SessionHistory.forModel")(function* (
   return (yield* entriesVisibleForModel(db, sessionID, model, accountIdentityDigest)).map((entry) => entry.message)
 })
 
-export type ObservationSource = "session-state" | "team-view" | "step-limit"
+export type ObservationSource = "session-state" | "team-view" | "step-limit" | "dots"
 
 export const observationState = Effect.fn("SessionHistory.observationState")(function* (
   db: DatabaseService,
@@ -399,7 +399,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
         let exhausted = false
         const latest = new Map<ObservationSource, string>()
         const present = new Set<ObservationSource>()
-        while (!exhausted && latest.size < 3) {
+        while (!exhausted && latest.size < 4) {
           const selection = yield* SessionContextState.selectEntries(db, sessionID, (floor) =>
             Effect.gen(function* () {
               if (!boundaryLoaded) {
@@ -431,7 +431,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
                     floorCondition(floor),
                     before === undefined ? undefined : lt(SessionMessageTable.seq, before),
                     inArray(SessionMessageTable.type, ["system", "synthetic"]),
-                    sql`json_extract(${SessionMessageTable.data}, '$.metadata.contextSource') in ('session-state', 'team-view', 'step-limit')`,
+                    sql`json_extract(${SessionMessageTable.data}, '$.metadata.contextSource') in ('session-state', 'team-view', 'step-limit', 'dots')`,
                   ),
                 )
                 .orderBy(desc(SessionMessageTable.seq))
@@ -450,7 +450,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
             .toReversed()
             .flatMap<{ source: ObservationSource; text: string; id: SessionMessage.ID }>((entry) => {
               const source = entry.message.metadata?.contextSource
-              if (source !== "session-state" && source !== "team-view" && source !== "step-limit") return []
+              if (source !== "session-state" && source !== "team-view" && source !== "step-limit" && source !== "dots") return []
               if (source === "team-view") {
                 if (entry.message.type !== "synthetic" || entry.message.description !== "TeamView update") return []
                 return [{ source, text: entry.message.text, id: entry.message.id }]
@@ -489,7 +489,7 @@ export const observationState = Effect.fn("SessionHistory.observationState")(fun
               if (
                 event.data.source !== "session-state" &&
                 event.data.source !== "team-view" &&
-                event.data.source !== "step-limit"
+                event.data.source !== "step-limit" && event.data.source !== "dots"
               )
                 return []
               if (typeof event.data.text !== "string") return []

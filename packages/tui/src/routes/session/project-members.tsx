@@ -19,6 +19,7 @@ import {
   ageLabel,
   concurrencyMeter,
   recentDirectories,
+  ProjectCreationError,
   roster,
   stateGlyph,
   updatedLabel,
@@ -120,6 +121,7 @@ export function ProjectMembers(props: {
   settings?: boolean
   keymapMode?: string
   tab?: boolean
+  initialMode?: "members" | "add"
 }) {
   const dimensions = useTerminalDimensions()
   const paths = useTuiPaths()
@@ -131,9 +133,10 @@ export function ProjectMembers(props: {
       roster(props.project).findIndex((member) => member.sessionID === props.currentSessionID),
     ),
   )
-  const [mode, setMode] = createSignal<"members" | "add" | "new">("members")
+  const [mode, setMode] = createSignal<"members" | "add" | "new">(props.initialMode ?? "members")
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal<string>()
+  const [recovery, setRecovery] = createSignal<ProjectCreationError>()
   const [search, setSearch] = createSignal("")
   const [directory, setDirectory] = createSignal("")
   const [title, setTitle] = createSignal("")
@@ -164,8 +167,7 @@ export function ProjectMembers(props: {
   const showPath = () => !props.compact || (measured() || width()) >= 80
   const pathNeed = () =>
     Math.max(...members().map((member) => 2 + stringWidth(path(member.directory)) + 3 + stringWidth(ageText(member))))
-  const titleNeed = () =>
-    Math.max(...members().map((member) => lead(member) + stringWidth(member.title))) + 2
+  const titleNeed = () => Math.max(...members().map((member) => lead(member) + stringWidth(member.title))) + 2
   const spare = () => inner() - ROLE_CELLS - OPEN_CELLS
   const titleCells = () => {
     if (!props.compact) return inner() - OPEN_CELLS
@@ -182,18 +184,26 @@ export function ProjectMembers(props: {
       await call()
       done?.()
     } catch (error) {
+      if (error instanceof ProjectCreationError) {
+        setRecovery(error)
+        return
+      }
       setFailure(`Failed to ${name}: ${errorMessage(error)}`)
     } finally {
       setBusy(false)
     }
   }
   const add = () => {
+    if (busy()) return
     setMode("add")
     setSearch("")
     setFailure(undefined)
+    queueMicrotask(() => form.focusKey("find"))
   }
   const newSession = () => {
+    if (busy()) return
     setMode("new")
+    if (recovery()) return
     setDirectory("")
     setTitle("")
     setFailure(undefined)
@@ -227,11 +237,19 @@ export function ProjectMembers(props: {
     ))
   }
   const create = () => {
-    if (!directory().trim()) return setFailure("Choose a directory")
+    if (recovery() && !recovery()!.sessionID) return
+    if (!directory().trim()) {
+      setFailure("Choose a directory")
+      form.focusKey("directory")
+      return
+    }
     void run(
       "create Session",
       () => props.service.newMember(props.project.id, directory().trim(), title().trim() || undefined),
-      () => setMode("members"),
+      () => {
+        setRecovery(undefined)
+        setMode("members")
+      },
     )
   }
   const rows = createMemo<Row[]>(() =>
@@ -262,15 +280,18 @@ export function ProjectMembers(props: {
             key: "directory",
             kind: "item",
             label: "Directory",
-            value: directory() || "Choose a directory",
+            value: directory() || "Enter to edit a path",
+            disabled: recovery() !== undefined,
             marker: "✎",
             edit: { initial: directory(), commit: setDirectory },
             step: (direction) => {
+              if (busy() || recovery()) return
               const recent = recentDirectories(props.sessions())
               const index = recent.indexOf(directory())
               setDirectory(recent[(index + direction + recent.length) % recent.length] ?? "")
             },
           },
+          { key: "directory:help", kind: "info", label: "Enter to edit · ←/→ recent directories" },
           {
             key: "title",
             kind: "item",
@@ -278,12 +299,13 @@ export function ProjectMembers(props: {
             value: title() || "optional",
             marker: "✎",
             edit: { initial: title(), commit: setTitle },
+            disabled: recovery() !== undefined,
           },
           {
             key: "create",
             kind: "item",
-            label: "Create Session",
-            shortcut: { key: "c", available: !busy() },
+            label: recovery()?.sessionID ? "Retry attachment" : "Create Session",
+            shortcut: { key: "c", available: !busy() && (!recovery() || !!recovery()!.sessionID) },
             activate: create,
           },
           {
@@ -300,7 +322,7 @@ export function ProjectMembers(props: {
     rows,
     active: () => props.focused,
     labelWidth: () => 12,
-    contentWidth: () => width() - 3,
+    contentWidth: () => inner() - 1,
     busy,
   })
   const help = () =>
@@ -498,8 +520,11 @@ export function ProjectMembers(props: {
                       wrapMode="none"
                       truncate
                     >
-                      {Locale.truncateLeft(path(member.directory), Math.max(8, pathCells() - 5 - stringWidth(ageText(member))))} ·{" "}
-                      {ageText(member)}
+                      {Locale.truncateLeft(
+                        path(member.directory),
+                        Math.max(8, pathCells() - 5 - stringWidth(ageText(member))),
+                      )}{" "}
+                      · {ageText(member)}
                     </text>
                   </Show>
                   <Show when={props.compact && index() === position() && props.focused}>
@@ -524,29 +549,27 @@ export function ProjectMembers(props: {
           gap={inlineActions() ? 2 : 0}
         >
           <box flexDirection="row" gap={2} flexShrink={0}>
-            <text fg={infoInk(theme)} onMouseUp={add}>
+            <text selectable={false} fg={infoInk(theme)} onMouseUp={add}>
               [a] Add
             </text>
-            <text fg={infoInk(theme)} onMouseUp={newSession}>
+            <text selectable={false} fg={infoInk(theme)} onMouseUp={newSession}>
               [n] New session
             </text>
           </box>
           <box flexDirection="row" gap={2} flexShrink={0}>
             <text
+              selectable={false}
               fg={canRemove() ? infoInk(theme) : quietInk(theme)}
               onMouseUp={() => remove(false)}
             >
               {canRemove() ? "[x]" : "(x)"} Remove
             </text>
-            <text
-              fg={canRemove() ? infoInk(theme) : quietInk(theme)}
-              onMouseUp={() => remove(true)}
-            >
+            <text selectable={false} fg={canRemove() ? infoInk(theme) : quietInk(theme)} onMouseUp={() => remove(true)}>
               {canRemove() ? "[D]" : "(D)"} Delete
             </text>
           </box>
           <Show when={props.onSettings}>
-            <text fg={infoInk(theme)} flexShrink={0} onMouseUp={props.onSettings}>
+            <text selectable={false} fg={infoInk(theme)} flexShrink={0} onMouseUp={props.onSettings}>
               [s] Settings
             </text>
           </Show>
@@ -565,6 +588,11 @@ export function ProjectMembers(props: {
         </Show>
         <Show when={failure()}>
           <text fg={theme.text.feedback.error.default}>{failure()}</text>
+        </Show>
+        <Show when={recovery()}>
+          <text fg={theme.text.feedback.warning.default} wrapMode="word">
+            {recovery()!.message}
+          </text>
         </Show>
         <Show when={!props.tab && (props.compact || props.settings || dimensions().width >= 120)}>
           <text height={1} fg={quietInk(theme)}>

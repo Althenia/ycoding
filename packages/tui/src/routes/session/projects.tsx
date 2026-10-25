@@ -28,6 +28,7 @@ import {
   projectNarrowLine,
   projectStatusLabel,
   recentDirectories,
+  ProjectCreationError,
   roster,
   toggleCategory,
   toggleMaster,
@@ -68,6 +69,7 @@ export function ProjectsScreen() {
       loadedAt={coordination.loadedAt}
       now={now}
       initialSettings={route.projectID}
+      currentSessionID={route.sessionID}
       onFilterChange={(filter) => coordination.setFilter(filter)}
       onRefresh={() => void coordination.refresh()}
       onOpen={(sessionID) => router.navigate({ type: "session", sessionID })}
@@ -91,6 +93,7 @@ export function ProjectsScreenContent(props: {
   now?: Accessor<number>
   loadedAt?: Accessor<number | undefined>
   initialSettings?: string
+  currentSessionID?: string
   onOpen: (sessionID: string) => void
   onBack?: () => void
   onRefresh?: () => void
@@ -99,11 +102,24 @@ export function ProjectsScreenContent(props: {
   const { theme } = useTheme()
   const config = useConfig()
   const dialog = useDialog()
-  const [cursor, setCursor] = createSignal(0)
-  const [view, setView] = createSignal<"list" | "new" | "settings">(props.initialSettings ? "settings" : "list")
+  const [position, setPosition] = createSignal(0)
+  const [selectedProject, setSelectedProject] = createSignal(props.initialSettings)
+  const cursor = () => {
+    const index = props.projects()?.findIndex((item) => item.id === selectedProject()) ?? -1
+    return index >= 0 ? index : Math.min(position(), props.projects()?.length ?? 0)
+  }
+  const selectProject = (index: number) => {
+    setPosition(index)
+    setSelectedProject(props.projects()?.[index]?.id)
+  }
+  const [view, setView] = createSignal<"list" | "new" | "settings" | "members">(
+    props.initialSettings ? "settings" : "list",
+  )
+  const [memberEntry, setMemberEntry] = createSignal<"members" | "add">("members")
   const [section, setSection] = createSignal(0)
   const [busy, setBusy] = createSignal(false)
   const [failure, setFailure] = createSignal<string>()
+  const [recovery, setRecovery] = createSignal<ProjectCreationError>()
   const [name, setName] = createSignal("")
   const [source, setSource] = createSignal<"existing" | "new">("existing")
   const [masterID, setMasterID] = createSignal<string>()
@@ -111,9 +127,7 @@ export function ProjectsScreenContent(props: {
   const [directory, setDirectory] = createSignal("")
   const [title, setTitle] = createSignal("")
   const now = () => props.now?.() ?? Date.now()
-  const project = () =>
-    props.projects()?.find((item) => item.id === props.initialSettings) ??
-    props.projects()?.[Math.min(cursor(), (props.projects()?.length ?? 1) - 1)]
+  const project = () => props.projects()?.[Math.min(cursor(), (props.projects()?.length ?? 1) - 1)]
   const wide = () => dimensions().width >= 120
   const listColumns = () => projectListColumns(dimensions().width - 11 - (wide() ? 44 : 0))
   const formWidth = () => Math.max(20, dimensions().width - (dimensions().width >= 100 ? 40 : 6))
@@ -125,13 +139,19 @@ export function ProjectsScreenContent(props: {
       await call()
       done?.()
     } catch (error) {
+      if (error instanceof ProjectCreationError) {
+        setRecovery(error)
+        return
+      }
       setFailure(`Failed to ${action}: ${errorMessage(error)}`)
     } finally {
       setBusy(false)
     }
   }
   const startNew = () => {
+    if (busy()) return
     setView("new")
+    if (recovery()) return
     setName("")
     setMasterID(undefined)
     setSource("existing")
@@ -154,6 +174,7 @@ export function ProjectsScreenContent(props: {
     props.onBack?.()
   }
   const create = () => {
+    if (recovery() && !recovery()!.sessionID) return
     if (!name().trim()) {
       setFailure("Project name is required")
       form.focusKey("name")
@@ -161,6 +182,15 @@ export function ProjectsScreenContent(props: {
     }
     if (source() === "existing" && !masterID()) {
       setFailure("Choose a master Session")
+      return
+    }
+    if (
+      source() === "existing" &&
+      !props.sessions().some((session) => session.sessionID === masterID() && !session.projectName)
+    ) {
+      setMasterID(undefined)
+      setFailure("The selected Session is unavailable. Choose a master Session.")
+      form.focusKey("find")
       return
     }
     if (source() === "new" && !directory().trim()) {
@@ -174,7 +204,8 @@ export function ProjectsScreenContent(props: {
         : { directory: directory().trim(), ...(title().trim() ? { title: title().trim() } : {}) }
     void run("create project", async () => {
       const id = await props.service.create({ name: name().trim(), master })
-      props.onOpen(id)
+      setRecovery(undefined)
+      if (view() === "new") props.onOpen(id)
     })
   }
   const removeProject = () => {
@@ -196,6 +227,7 @@ export function ProjectsScreenContent(props: {
     marker: "✎",
     kind: "item",
     edit: { initial: value, commit },
+    disabled: view() === "new" && recovery() !== undefined,
   })
   const info = (key: string, label: string, value?: string): Row => ({ key, label, value, kind: "info" })
   const updateDelegation = (next: DelegatedDecisionsView) => {
@@ -223,8 +255,13 @@ export function ProjectsScreenContent(props: {
           kind: "item",
           label: "Master source",
           value: source() === "existing" ? "‹ existing Session ›" : "‹ new Session in a directory ›",
-          step: () => setSource((current) => (current === "existing" ? "new" : "existing")),
-          activate: () => setSource((current) => (current === "existing" ? "new" : "existing")),
+          step: () => {
+            if (!busy() && !recovery()) setSource((current) => (current === "existing" ? "new" : "existing"))
+          },
+          activate: () => {
+            if (!busy() && !recovery()) setSource((current) => (current === "existing" ? "new" : "existing"))
+          },
+          disabled: recovery() !== undefined,
         },
         ...(source() === "existing"
           ? sessionPickerRows({
@@ -238,21 +275,24 @@ export function ProjectsScreenContent(props: {
           : [
               {
                 ...editRow("directory", "Directory", directory(), setDirectory),
+                value: directory() || "Enter to edit a path",
                 step: (direction: 1 | -1) => {
+                  if (busy() || recovery()) return
                   const recents = recentDirectories(props.sessions())
                   setDirectory(
                     recents[(recents.indexOf(directory()) + direction + recents.length) % recents.length] ?? "",
                   )
                 },
               },
+              info("directory:help", "Enter to edit · ←/→ recent directories"),
               editRow("title", "Title", title(), setTitle),
               info("title:help", "optional; defaults to the Project name"),
             ]),
         {
           key: "create",
           kind: "item",
-          label: "Create project",
-          shortcut: { key: "c", available: !busy() },
+          label: recovery()?.sessionID ? "Retry Project creation" : "Create project",
+          shortcut: { key: "c", available: !busy() && (!recovery() || !!recovery()!.sessionID) },
           activate: create,
         },
         { key: "cancel", kind: "item", label: "Cancel", shortcut: { key: "esc", available: true }, activate: back },
@@ -408,13 +448,18 @@ export function ProjectsScreenContent(props: {
   })
   const openSelected = () =>
     cursor() >= (props.projects()?.length ?? 0) ? startNew() : project() && props.onOpen(project()!.master.sessionID)
+  const openMembers = (entry: "members" | "add" = "members") => {
+    if (!project() || cursor() >= (props.projects()?.length ?? 0)) return
+    setMemberEntry(entry)
+    setView("members")
+  }
   const help = () =>
     dialog.replace(() => (
       <DialogAlert
         title="Project keys"
         message={
           view() === "list"
-            ? "↑↓ project · enter open master chat · n new project\nD delete project · r refresh · ? keys · esc back"
+            ? "↑↓ project · enter open master chat · a add session · m members\nn new project · D delete project · r refresh · ? keys · esc back"
             : view() === "new"
               ? "↑↓ field · ←→ master source · enter pick / edit\nc create · esc cancel"
               : "↑↓ field · enter edit · ←→ change choice\nspace toggle · tab section · esc back"
@@ -422,13 +467,13 @@ export function ProjectsScreenContent(props: {
       />
     ))
   Keymap.createLayer(() => ({
-    enabled: !form.editing() && !(view() === "settings" && section() === 1),
+    enabled: !form.editing() && view() !== "members" && !(view() === "settings" && section() === 1),
     commands: [
       {
         bind: "up",
         title: "Previous row",
         run: () => {
-          if (view() === "list") setCursor((value) => Math.max(0, value - 1))
+          if (view() === "list") selectProject(Math.max(0, cursor() - 1))
           else form.move(-1)
         },
       },
@@ -436,7 +481,7 @@ export function ProjectsScreenContent(props: {
         bind: "down",
         title: "Next row",
         run: () => {
-          if (view() === "list") setCursor((value) => Math.min(props.projects()?.length ?? 0, value + 1))
+          if (view() === "list") selectProject(Math.min(props.projects()?.length ?? 0, cursor() + 1))
           else form.move(1)
         },
       },
@@ -444,7 +489,7 @@ export function ProjectsScreenContent(props: {
         bind: "home",
         title: "First row",
         run: () => {
-          if (view() === "list") setCursor(0)
+          if (view() === "list") selectProject(0)
           else form.moveTo(0)
         },
       },
@@ -452,7 +497,7 @@ export function ProjectsScreenContent(props: {
         bind: "end",
         title: "Last row",
         run: () => {
-          if (view() === "list") setCursor(props.projects()?.length ?? 0)
+          if (view() === "list") selectProject(props.projects()?.length ?? 0)
           else form.moveTo(form.selectable().length - 1)
         },
       },
@@ -462,9 +507,23 @@ export function ProjectsScreenContent(props: {
         run: () => (view() === "list" ? openSelected() : form.activate(form.cursor())),
       },
       { bind: "space", title: "Toggle", run: () => form.activate(form.cursor()) },
-      { bind: "left", title: "Previous choice", run: () => form.cursor()?.step?.(-1) },
-      { bind: "right", title: "Next choice", run: () => form.cursor()?.step?.(1) },
+      {
+        bind: "left",
+        title: "Previous choice",
+        run: () => {
+          if (!busy() && !recovery()) form.cursor()?.step?.(-1)
+        },
+      },
+      {
+        bind: "right",
+        title: "Next choice",
+        run: () => {
+          if (!busy() && !recovery()) form.cursor()?.step?.(1)
+        },
+      },
       { bind: "n", title: "New project", enabled: view() === "list", run: startNew },
+      { bind: "a", title: "Add session", enabled: view() === "list", run: () => openMembers("add") },
+      { bind: "m", title: "Members", enabled: view() === "list", run: () => openMembers() },
       { bind: "c", title: "Create project", enabled: view() === "new", run: create },
       { bind: "shift+d", title: "Delete project", enabled: view() === "list", run: removeProject },
       { bind: "r", title: "Refresh Projects", enabled: view() === "list", run: () => props.onRefresh?.() },
@@ -508,10 +567,12 @@ export function ProjectsScreenContent(props: {
         ? "enter next field · esc cancel"
         : `editing ${form.cursor()?.label} · enter save · esc cancel`
       : view() === "list"
-        ? "↑↓ project · enter open master chat · n new project · D delete · r refresh · ? keys · esc back"
-        : view() === "new"
-          ? "↑↓ field · ←→ master source · enter pick / edit · c create · esc cancel"
-          : "↑↓ field · enter edit · ←→ change choice · space toggle · tab section · ? keys · esc back"
+        ? "↑↓ project · enter open · a add session · m members · n new · ? keys · esc back"
+        : view() === "members"
+          ? "↑↓ member · enter/o open · a add · n new session · esc back"
+          : view() === "new"
+            ? "↑↓ field · ←→ master source · enter pick / edit · c create · esc cancel"
+            : "↑↓ field · enter edit · ←→ change choice · space toggle · tab section · ? keys · esc back"
   function List() {
     return (
       <Panel title={`PROJECTS ${props.projects()?.length ?? 0}`} active={view() === "list"} flexGrow={1}>
@@ -522,7 +583,9 @@ export function ProjectsScreenContent(props: {
         <scrollbox flexGrow={1} minHeight={0}>
           <Show when={props.error?.()}>
             <text fg={theme.text.feedback.error.default}>{props.error?.()}</text>
-            <text fg={theme.text.default} onMouseUp={props.onRefresh}>[r] Retry</text>
+            <text fg={theme.text.default} onMouseUp={props.onRefresh}>
+              [r] Retry
+            </text>
           </Show>
           <Show when={!props.error?.() && props.projects() === undefined}>
             <text fg={theme.text.default}>Loading projects…</text>
@@ -538,14 +601,14 @@ export function ProjectsScreenContent(props: {
                 flexShrink={0}
                 backgroundColor={cursor() === index() ? theme.background.action.primary.focused : undefined}
                 onMouseUp={() => {
-                  setCursor(index())
-                  props.onOpen(item.master.sessionID)
+                  selectProject(index())
                 }}
               >
                 <Show
                   when={view() === "list"}
                   fallback={
                     <text
+                      selectable={false}
                       fg={cursor() === index() ? theme.text.action.primary.focused : theme.text.default}
                       wrapMode="none"
                       truncate
@@ -576,22 +639,32 @@ export function ProjectsScreenContent(props: {
             }
             onMouseUp={startNew}
           >
-            <text fg={infoInk(theme)}>
+            <text selectable={false} fg={infoInk(theme)}>
               {cursor() === (props.projects()?.length ?? 0) ? "▸ " : "  "}[n] + New project
             </text>
           </box>
         </scrollbox>
-        <Show when={view() === "list" && project()}>
-          <box flexDirection="row" gap={2}>
-            <text fg={infoInk(theme)} onMouseUp={openSelected}>
-              [Enter] Open master
-            </text>
-            <text fg={infoInk(theme)} onMouseUp={removeProject}>
-              [D] Delete
-            </text>
-            <text fg={infoInk(theme)} onMouseUp={() => setView("settings")}>
-              [s] Settings
-            </text>
+        <Show when={view() === "list" && project() && cursor() < (props.projects()?.length ?? 0)}>
+          <box flexDirection="column">
+            <box flexDirection="row" gap={2}>
+              <text selectable={false} fg={infoInk(theme)} onMouseUp={() => openMembers("add")}>
+                [a] Add session
+              </text>
+              <text selectable={false} fg={infoInk(theme)} onMouseUp={() => openMembers()}>
+                [m] Members
+              </text>
+            </box>
+            <box flexDirection="row" gap={2}>
+              <text selectable={false} fg={infoInk(theme)} onMouseUp={openSelected}>
+                [Enter] Open master
+              </text>
+              <text selectable={false} fg={infoInk(theme)} onMouseUp={removeProject}>
+                [D] Delete
+              </text>
+              <text selectable={false} fg={infoInk(theme)} onMouseUp={() => setView("settings")}>
+                [s] Settings
+              </text>
+            </box>
           </box>
         </Show>
       </Panel>
@@ -604,7 +677,13 @@ export function ProjectsScreenContent(props: {
         <text fg={theme.text.default}>
           {" "}
           Projects
-          {view() === "new" ? " › New project" : view() === "settings" ? ` › ${project()?.name ?? ""} › Settings` : ""}
+          {view() === "new"
+            ? " › New project"
+            : view() === "settings"
+              ? ` › ${project()?.name ?? ""} › Settings`
+              : view() === "members"
+                ? ` › ${project()?.name ?? ""} › Members`
+                : ""}
         </text>
         <box flexGrow={1} />
         <Show when={view() !== "new" && dimensions().width >= 120}>
@@ -612,7 +691,10 @@ export function ProjectsScreenContent(props: {
             {updatedLabel(props.loadedAt?.() === undefined ? undefined : now() - props.loadedAt!()!)}
           </text>
         </Show>
-        <text fg={theme.text.default} onMouseUp={back}> esc {view() === "new" ? "cancel" : "back"}</text>
+        <text fg={theme.text.default} onMouseUp={back}>
+          {" "}
+          esc {view() === "new" ? "cancel" : "back"}
+        </text>
       </box>
       <box flexGrow={1} minHeight={0} paddingLeft={3} paddingRight={3} gap={2}>
         <Show when={view() === "list"}>
@@ -660,7 +742,7 @@ export function ProjectsScreenContent(props: {
                   <text fg={theme.text.default}>MEMBERS {selected().members.length} + MASTER</text>
                   <For each={roster(selected())}>
                     {(member) => (
-                      <box marginTop={1}>
+                      <box marginTop={1} onMouseUp={() => props.onOpen(member.sessionID)}>
                         <box flexDirection="row" gap={1}>
                           <text fg={theme.text.default}>
                             {member.role === "master" ? "MASTER" : "MEMBER"} {member.title}
@@ -684,7 +766,7 @@ export function ProjectsScreenContent(props: {
         </Show>
         <Show when={view() !== "list"}>
           <box flexDirection="row" flexGrow={1} minHeight={0} gap={2}>
-            <Show when={dimensions().width >= 100}>
+            <Show when={dimensions().width >= 100 && view() !== "members"}>
               <box width={32}>
                 <Show
                   when={view() === "new"}
@@ -714,9 +796,15 @@ export function ProjectsScreenContent(props: {
                 </Show>
               </box>
             </Show>
-            <Panel title={view() === "new" ? "NEW PROJECT" : sections[section()]!.toUpperCase()} active flexGrow={1}>
+            <Panel
+              title={
+                view() === "new" ? "NEW PROJECT" : view() === "members" ? "MEMBERS" : sections[section()]!.toUpperCase()
+              }
+              active
+              flexGrow={1}
+            >
               <Show
-                when={view() === "settings" && section() === 1 && project()}
+                when={(view() === "members" || (view() === "settings" && section() === 1)) && project()}
                 fallback={
                   <>
                     <form.Rows />
@@ -732,7 +820,8 @@ export function ProjectsScreenContent(props: {
                   <ProjectMembers
                     project={current()}
                     focused
-                    currentSessionID={undefined}
+                    currentSessionID={props.currentSessionID}
+                    initialMode={view() === "members" ? memberEntry() : "members"}
                     onFocus={() => {}}
                     onBack={back}
                     onOpen={props.onOpen}
@@ -757,8 +846,12 @@ export function ProjectsScreenContent(props: {
                     .join(", ")}
                 </text>
                 <text fg={theme.text.default}> [a] Add [n] New session [x] Remove [D] Delete</text>
-                <text fg={theme.text.default}>Delegation {delegationSummary(current().delegatedDecisions, props.globalDelegation())}</text>
-                <text fg={theme.text.default}>Notifications {notificationFilterLabel(props.filter(), masterChoices(props.projects()))}</text>
+                <text fg={theme.text.default}>
+                  Delegation {delegationSummary(current().delegatedDecisions, props.globalDelegation())}
+                </text>
+                <text fg={theme.text.default}>
+                  Notifications {notificationFilterLabel(props.filter(), masterChoices(props.projects()))}
+                </text>
                 <text fg={theme.text.default}> question · permission · review · failure · completion</text>
               </Panel>
             )}
@@ -769,6 +862,11 @@ export function ProjectsScreenContent(props: {
         </Show>
         <Show when={failure()}>
           <text fg={theme.text.feedback.error.default}>{failure()}</text>
+        </Show>
+        <Show when={view() === "new" && recovery()}>
+          <text fg={theme.text.feedback.warning.default} wrapMode="word">
+            {recovery()!.message}
+          </text>
         </Show>
       </box>
       <box height={1} flexShrink={0} paddingLeft={3}>
@@ -798,12 +896,12 @@ function ProjectListLine(props: {
           : plain()
   return (
     <box flexDirection="row" flexGrow={1} minWidth={0} overflow="hidden">
-      <text fg={plain()} wrapMode="none" flexShrink={0}>
+      <text selectable={false} fg={plain()} wrapMode="none" flexShrink={0}>
         {props.selected ? "▸ " : "  "}
       </text>
       <For each={projectListLine(props.project, props.animated, props.columns)}>
         {(segment) => (
-          <text fg={color(segment)} wrapMode="none" flexShrink={0}>
+          <text selectable={false} fg={color(segment)} wrapMode="none" flexShrink={0}>
             {segment.text}
           </text>
         )}

@@ -7,6 +7,7 @@ import {
   type KeyEvent,
 } from "@opentui/core"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show } from "solid-js"
+import { escapeDisplayText } from "@ycoding-ai/client/tool-display"
 import { registerYCodingSpinner } from "../register-spinner"
 import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
@@ -2632,7 +2633,7 @@ export function Prompt(props: PromptProps) {
 
   return (
     <>
-      <Show when={dotsCapability.enabled() ? dotsTarget() : undefined}>{(target) => <text fg={theme.text.subdued}>Dots · {target().label} · {target().threadID}</text>}</Show>
+      <Show when={dotsCapability.enabled() ? dotsTarget() : undefined}>{(target) => <text fg={theme.text.subdued}>Dots · {escapeDisplayText(target().label)}</text>}</Show>
       <box
         ref={(r: BoxRenderable) => (anchor = r)}
         visible={props.visible !== false}

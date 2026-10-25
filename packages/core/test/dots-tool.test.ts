@@ -29,13 +29,14 @@ const context = {
   progress: () => Effect.void,
 }
 
-function harness(options: { status?: Dots.Status; deny?: boolean; denyRead?: boolean; onPermission?: () => void; onGuardrail?: () => void } = {}) {
+function harness(options: { status?: Dots.Status; capture?: boolean; deny?: boolean; denyRead?: boolean; onPermission?: (action: string) => void; onGuardrail?: () => void } = {}) {
   const order: string[] = []
   const sends: Array<{ sessionID: string } & Dots.Send> = []
   const controls: Array<{ sessionID: string; expectedTarget: Dots.Target; action: string }> = []
   const permissions: Permission.AssertInput[] = []
   const guardrails: Array<{ action: string; resources: ReadonlyArray<string> }> = []
   const dots: DotsRuntime.Interface = {
+    attachment: () => Effect.die("Unexpected exchange attachment lookup"),
     targets: () => Effect.succeed([]),
     bind: () => Effect.die("agents never bind"),
     status: () => Effect.succeed(options.status ?? { enabled: true, target, state: "connected" }),
@@ -52,14 +53,14 @@ function harness(options: { status?: Dots.Status; deny?: boolean; denyRead?: boo
     dots,
     state: options.status?.state,
     runtimeState: options.status?.runtimeState,
-    target: options.status?.target,
+    target: options.capture === false ? undefined : options.status ? options.status.target : target,
     directory: "/synthetic/project",
     permission: {
       assert: (input) =>
         Effect.suspend(() => {
           order.push("permission")
           permissions.push(input)
-          options.onPermission?.()
+          options.onPermission?.(input.action)
           return options.deny || (options.denyRead && input.action === "read")
             ? Effect.fail(
                 new Permission.BlockedError({ rules: [], permission: "dots_send", resources: input.resources }),
@@ -105,6 +106,52 @@ describe("Dots agent tools", () => {
       expect(value.controls).toEqual([])
       expect(value.order.at(-1)).toBe("release")
     }
+  })
+
+  test("rejects a captured send after same-ID profile, Dot, thread or generation rebinding before permission", async () => {
+    for (const changed of [{ profile: "other-profile" }, { dotID: "other-dot" }, { threadID: "other-thread" }, { generation: "2" }]) {
+      const value = harness()
+      value.setStatus({ enabled: true, target: { ...target, ...changed }, state: "connected" })
+      const exit = await run(value.tools.dots_send!, { text: "Intended for the first Dot" })
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(value.permissions).toEqual([])
+      expect(value.guardrails).toEqual([])
+      expect(value.sends).toEqual([])
+    }
+  })
+
+  test("never falls back to the fresh target when no destination was captured", async () => {
+    const value = harness({ capture: false })
+    const exit = await run(value.tools.dots_send!, { text: "No captured destination" })
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(value.permissions).toEqual([])
+    expect(value.sends).toEqual([])
+  })
+
+  test("rechecks the captured send target after each settlement and releases an acquired reservation once", async () => {
+    for (const gate of ["permission", "read", "guardrail"] as const) {
+      const rebind = () => value.setStatus({ enabled: true, target: { ...target, generation: "2" }, state: "connected" })
+      const value = harness({
+        onPermission: (action) => { if (action === (gate === "permission" ? "dots_send" : "read") && gate !== "guardrail") rebind() },
+        onGuardrail: () => { if (gate === "guardrail") rebind() },
+      })
+      const exit = await run(value.tools.dots_send!, { text: "Hold", files: ["notes/report.md"] })
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(value.sends).toEqual([])
+      expect(value.order.filter((step) => step === "release")).toHaveLength(gate === "guardrail" ? 1 : 0)
+      expect(value.guardrails).toHaveLength(gate === "guardrail" ? 1 : 0)
+    }
+  })
+
+  test("a label-only update keeps the captured destination and the message identity", async () => {
+    const value = harness()
+    value.setStatus({ enabled: true, target: { ...target, label: "Renamed Dot" }, state: "connected" })
+    const exit = await run(value.tools.dots_send!, { text: "Still the same Dot" })
+    expect(Exit.isSuccess(exit)).toBe(true)
+    expect(value.sends).toHaveLength(1)
+    expect(value.sends[0]).toMatchObject({ expectedTarget: target, causalMessageID: context.messageID })
+    expect(value.sends[0]?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect(value.order.filter((step) => step === "release")).toHaveLength(1)
   })
 
   test("a read denial cannot be bypassed by attaching a file to a Dots message", async () => {

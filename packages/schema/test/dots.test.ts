@@ -2,10 +2,36 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { Dots } from "../src/dots.js"
 import { Dots as RootDots } from "../src/index.js"
+import { SessionID } from "../src/session-id.js"
 
 const target = { profile: "fixture-a", dotID: "dot_1", threadID: "thread_1", generation: "3", label: "Fixture Dot" }
 
 describe("Dots contract", () => {
+  test("L10 named exchange metadata requires canonical attachment and target identity", () => {
+    expect(Dots.ExchangeMetadata).toBeDefined()
+    const value = { sessionID: "ses_anchor", targetSessionID: "ses_target", exchangeID: "exchange_named", attachment: { ...target, label: "V" } }
+    const decode = Schema.decodeUnknownSync(Dots.ExchangeMetadata)
+    expect(decode(value)).toMatchObject(value)
+    for (const invalid of [
+      { ...value, targetSessionID: "" },
+      { ...value, attachment: { ...value.attachment, dotID: "" } },
+      { ...value, attachment: { ...value.attachment, generation: "" } },
+      { ...value, attachment: { ...value.attachment, label: "   " } },
+    ]) expect(() => decode(invalid)).toThrow()
+  })
+
+  test("exchange creation requires an explicit task recipient, generation, identity and delivery", () => {
+    expect(Dots.ExchangeCreate).toBeDefined()
+    const input = { exchangeID: "exchange_1", expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), channel: "task", delivery: "queue", text: "Inspect a synthetic module" } as const
+    expect(Schema.decodeUnknownSync(Dots.ExchangeCreate)(input)).toEqual(input)
+    for (const invalid of [
+      { ...input, exchangeID: "" }, { ...input, targetSessionID: "" }, { ...input, channel: "human" },
+      { ...input, delivery: "background" }, { ...input, expectedAttachment: { ...target, generation: "" } },
+    ]) expect(() => Schema.decodeUnknownSync(Dots.ExchangeCreate)(invalid)).toThrow()
+    expect(() => Schema.decodeUnknownSync(Dots.ExchangeCreate)({ ...input, origin: "human" }, { onExcessProperty: "error" })).toThrow()
+    expect(() => Schema.decodeUnknownSync(Dots.ExchangeCreate)({ ...input, remoteSource: {} }, { onExcessProperty: "error" })).toThrow()
+  })
+
   test("drops non-final revision identity from completed-reply attribution", () => {
     const peer: Dots.Peer = {
       origin: "dots-peer",
@@ -159,5 +185,142 @@ describe("Dots contract", () => {
     expect(Dots.peer({ dots: peer })).toEqual(peer)
     expect(Dots.peer({ dots: peer })).not.toHaveProperty("turnID")
     expect(Dots.peer({ dots: { ...peer, turnID: "" } })).toBeUndefined()
+  })
+})
+
+describe("routing envelope", () => {
+  const shared = {
+    coordinator: { ownerID: "owner_1", deviceID: "device_1", clientID: "client_1" },
+    scope: { epoch: "epoch_1", grantID: "grant_1" },
+    exchangeID: "exchange_1",
+    messageID: "msg_1",
+  }
+  const task = { ...shared, kind: "task", origin: "plugin", targetSessionID: "ses_target" }
+  const report = (kind: string) => ({ ...shared, kind, origin: "agent", sourceSessionID: "ses_source", replyToMessageID: "msg_0" })
+  const reportKinds = ["progress", "blocker", "decision_request", "completion"]
+  const strict = { onExcessProperty: "error" } as const
+  const decode = (schema: Schema.Decoder<unknown>, value: unknown) => Schema.decodeUnknownSync(schema)(value, strict)
+  const metadata = { sessionID: "ses_anchor", targetSessionID: "ses_target", exchangeID: "exchange_1", attachment: { ...target, label: "V" } }
+
+  test("routing envelope decodes the task kind with its target session", () => {
+    expect(decode(Dots.TaskEnvelope, task)).toEqual(task)
+    expect(decode(Dots.Envelope, task)).toEqual(task)
+  })
+
+  test("routing envelope decodes every report kind with source session and reply message", () => {
+    for (const kind of reportKinds) {
+      expect(decode(Dots.ReportEnvelope, report(kind))).toEqual(report(kind))
+      expect(decode(Dots.Envelope, report(kind))).toEqual(report(kind))
+    }
+  })
+
+  test("routing envelope rejects the wrong direction for each kind", () => {
+    const { targetSessionID: _targetSessionID, ...taskWithoutTarget } = task
+    expect(() => decode(Dots.TaskEnvelope, report("completion"))).toThrow()
+    expect(() => decode(Dots.TaskEnvelope, { ...task, sourceSessionID: "ses_source", replyToMessageID: "msg_0" })).toThrow()
+    expect(() => decode(Dots.TaskEnvelope, { ...task, origin: "agent" })).toThrow()
+    expect(() => decode(Dots.TaskEnvelope, taskWithoutTarget)).toThrow()
+    for (const kind of reportKinds) {
+      expect(() => decode(Dots.ReportEnvelope, { ...report(kind), kind: "task" })).toThrow()
+      expect(() => decode(Dots.ReportEnvelope, { ...report(kind), origin: "plugin" })).toThrow()
+      expect(() => decode(Dots.ReportEnvelope, { ...report(kind), targetSessionID: "ses_target" })).toThrow()
+    }
+    expect(() => decode(Dots.Envelope, { ...task, kind: "progress" })).toThrow()
+    expect(() => decode(Dots.Envelope, { ...report("progress"), kind: "unknown" })).toThrow()
+  })
+
+  test("routing envelope requires every identifier and rejects empties", () => {
+    const cases = [
+      [Dots.TaskEnvelope, task, ["kind", "origin", "targetSessionID", "coordinator", "scope", "exchangeID", "messageID"]],
+      ...reportKinds.map((kind) => [Dots.ReportEnvelope, report(kind), ["kind", "origin", "sourceSessionID", "replyToMessageID", "coordinator", "scope", "exchangeID", "messageID"]] as const),
+    ] as const
+    for (const [schema, value, keys] of cases) {
+      for (const key of keys) {
+        const { [key]: _removed, ...rest } = value as Record<string, unknown>
+        expect(() => decode(schema, rest)).toThrow()
+      }
+    }
+    for (const value of [task, ...reportKinds.map(report)]) {
+      for (const invalid of [
+        { ...value, exchangeID: "" },
+        { ...value, messageID: "" },
+        { ...value, messageID: "bad_1" },
+        { ...value, scope: { ...shared.scope, epoch: "" } },
+        { ...value, scope: { ...shared.scope, grantID: "" } },
+        { ...value, scope: { grantID: "grant_1" } },
+        { ...value, scope: { epoch: "epoch_1" } },
+        { ...value, coordinator: { ...shared.coordinator, ownerID: "" } },
+        { ...value, coordinator: { ...shared.coordinator, deviceID: "" } },
+        { ...value, coordinator: { ...shared.coordinator, clientID: "" } },
+        { ...value, coordinator: "Display Name" },
+      ]) expect(() => decode(Dots.Envelope, invalid)).toThrow()
+    }
+    expect(() => decode(Dots.TaskEnvelope, { ...task, targetSessionID: "" })).toThrow()
+    expect(() => decode(Dots.ReportEnvelope, { ...report("progress"), sourceSessionID: "" })).toThrow()
+    expect(() => decode(Dots.ReportEnvelope, { ...report("progress"), replyToMessageID: "" })).toThrow()
+  })
+
+  test("routing envelope rejects spoofed excess fields under strict parsing", () => {
+    for (const value of [task, ...reportKinds.map(report)]) {
+      for (const extra of [{ spoofed: true }, { grantID: "grant_2" }, { epoch: "epoch_2" }, { principal: shared.coordinator }]) {
+        expect(() => decode(Dots.Envelope, { ...value, ...extra })).toThrow()
+      }
+      expect(() => decode(Dots.Envelope, { ...value, coordinator: { ...shared.coordinator, displayName: "Spoof" } })).toThrow()
+      expect(() => decode(Dots.Envelope, { ...value, scope: { ...shared.scope, extra: "x" } })).toThrow()
+    }
+  })
+
+  test("routing envelope is optional on exchange metadata and keeps historical metadata valid", () => {
+    expect(decode(Dots.ExchangeMetadata, metadata)).toEqual(metadata)
+    expect(decode(Dots.ExchangeMetadata, { ...metadata, envelope: task })).toEqual({ ...metadata, envelope: task })
+    expect(() => decode(Dots.ExchangeMetadata, { ...metadata, envelope: report("progress") })).toThrow()
+    expect(() => decode(Dots.ExchangeMetadata, { ...metadata, envelope: { ...task, scope: { ...shared.scope, grantID: "" } } })).toThrow()
+  })
+
+  test("routing envelope is required on exchange output as a report", () => {
+    const output = { deliveryID: "delivery_1", messageID: "msg_1", text: "done" }
+    expect(decode(Dots.ExchangeOutput, { ...output, envelope: report("completion") })).toEqual({ ...output, envelope: report("completion") })
+    expect(() => decode(Dots.ExchangeOutput, output)).toThrow()
+    expect(() => decode(Dots.ExchangeOutput, { ...output, envelope: task })).toThrow()
+  })
+
+  test("routing envelope is required on exchange as a task", () => {
+    const exchange = { exchangeID: "exchange_1", sessionID: "ses_anchor", targetSessionID: "ses_target", inputID: "msg_1", channel: "task", state: "pending", progress: [] }
+    expect(decode(Dots.Exchange, { ...exchange, envelope: task })).toEqual({ ...exchange, envelope: task })
+    expect(() => decode(Dots.Exchange, exchange)).toThrow()
+    expect(() => decode(Dots.Exchange, { ...exchange, envelope: report("progress") })).toThrow()
+  })
+
+  test("routing envelope requires a nonempty grant on exchange records", () => {
+    const record = {
+      exchangeID: "exchange_1",
+      sessionID: "ses_anchor",
+      targetSessionID: "ses_target",
+      inputID: "msg_1",
+      expectedAttachment: target,
+      accountDigest: "digest_1",
+      fingerprint: "fingerprint_1",
+      source: { requestID: "request_1", principal: shared.coordinator, epoch: "epoch_1" },
+      scope: { rootSessionID: "ses_root" },
+      grantID: "grant_1",
+    }
+    expect(decode(Dots.ExchangeRecord, record)).toEqual(record)
+    const { grantID: _grant, ...withoutGrant } = record
+    expect(() => decode(Dots.ExchangeRecord, withoutGrant)).toThrow()
+    expect(() => decode(Dots.ExchangeRecord, { ...record, grantID: "" })).toThrow()
+  })
+
+  test("routing envelope is never accepted from exchange creation callers", () => {
+    const input = { exchangeID: "exchange_1", expectedAttachment: target, targetSessionID: "ses_target", channel: "task", delivery: "queue", text: "Inspect" }
+    expect(decode(Dots.ExchangeCreate, input)).toEqual(input)
+    for (const extra of [{ envelope: task }, { grantID: "grant_1" }, { origin: "plugin" }, { coordinator: shared.coordinator }, { scope: shared.scope }]) {
+      expect(() => decode(Dots.ExchangeCreate, { ...input, ...extra })).toThrow()
+    }
+  })
+
+  test("routing envelope exports are reachable from the root barrel", () => {
+    expect(RootDots.TaskEnvelope).toBe(Dots.TaskEnvelope)
+    expect(RootDots.ReportEnvelope).toBe(Dots.ReportEnvelope)
+    expect(RootDots.Envelope).toBe(Dots.Envelope)
   })
 })

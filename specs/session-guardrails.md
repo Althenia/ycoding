@@ -22,6 +22,8 @@ Every guarded side-effect boundary submits:
 
 Core resolves the durable root Session by following parent IDs. Pending reviews and concurrency counters are keyed by that root ID, while the request retains the acting child Session ID for attribution.
 
+A tool-originated pending request retains its canonical `source: { messageID, callID }` when available. MCP Events snapshots derive origin from that source and the native event identity, not from the request's prose. Relay MCP can inspect requests and notify the human; it cannot submit replies or review-box decisions. Authenticated native/browser replies and existing delegated native policy keep their own authority checks.
+
 The decision order is:
 
 1. an unoverrideable standard catastrophic deny;

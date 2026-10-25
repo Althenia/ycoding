@@ -81,9 +81,17 @@ export function make(input: {
       ],
       execute: (args, context) =>
         Effect.gen(function* () {
-          const status = yield* input.dots.status(context.sessionID)
-          const target = status.target
+          const target = confirmedTarget
           if (!target) return yield* new Tool.Failure({ message: "The user has not confirmed a Dot for this Session." })
+          const validate = () =>
+            input.dots.status(context.sessionID).pipe(
+              Effect.flatMap((status) =>
+                sameDot(status.target, target)
+                  ? Effect.void
+                  : Effect.fail(new Tool.Failure({ message: "The Session's confirmed Dot changed; prepare a new message." })),
+              ),
+            )
+          yield* validate()
           const files = (args.files ?? []).map((file) => path.resolve(input.directory, file))
           const source = { messageID: context.messageID, callID: context.callID }
           yield* input.permission.assert({
@@ -98,7 +106,8 @@ export function make(input: {
             },
             source: { type: "tool", ...source },
           })
-          if (files.length > 0)
+          yield* validate()
+          if (files.length > 0) {
             yield* input.permission.assert({
               sessionID: context.sessionID,
               agent: context.agent,
@@ -106,28 +115,40 @@ export function make(input: {
               resources: files,
               source: { type: "tool", ...source },
             })
+            yield* validate()
+          }
           const reservation = yield* input.guardrail.assert({
             sessionID: context.sessionID,
             action: "dots_send",
             resources: files,
             source,
           })
-          return yield* input.dots
-            .send({
-              sessionID: context.sessionID,
-              id: messageID(context.messageID, context.callID),
-              text: args.text,
-              files: files.map((file) => ({ uri: pathToFileURL(file).href, name: path.basename(file) })),
-              causalMessageID: context.messageID,
-              expectedTarget: target,
-            })
-            .pipe(Effect.ensuring(reservation.release))
+          return yield* validate().pipe(
+            Effect.andThen(
+              input.dots.send({
+                sessionID: context.sessionID,
+                id: messageID(context.messageID, context.callID),
+                text: args.text,
+                files: files.map((file) => ({ uri: pathToFileURL(file).href, name: path.basename(file) })),
+                causalMessageID: context.messageID,
+                expectedTarget: target,
+              }),
+            ),
+            Effect.ensuring(reservation.release),
+          )
         }).pipe(Effect.mapError((error) => (error instanceof Tool.Failure ? error : failure(error)))),
     }),
     dots_pause: runtimeControl("pause"),
     dots_resume: runtimeControl("resume"),
   }
 }
+
+const sameDot = (left: Dots.Target | undefined, right: Dots.Target) =>
+  left !== undefined &&
+  left.profile === right.profile &&
+  left.dotID === right.dotID &&
+  left.threadID === right.threadID &&
+  left.generation === right.generation
 
 const messageID = (message: string, call: string) => {
   const hex = Hash.sha256(`${message}\0${call}`)

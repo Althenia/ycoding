@@ -1,7 +1,9 @@
 export * as DotsRuntimeNode from "./node"
 
 import { Event } from "@ycoding-ai/schema/config"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Stream } from "effect"
+import { and, eq, sql } from "drizzle-orm"
+import { Dots } from "@ycoding-ai/schema/dots"
 import { DotsRuntime } from "../dots"
 import { AttachmentStore } from "../attachment-store"
 import { Config } from "../config"
@@ -9,11 +11,18 @@ import { ConfigCapabilities } from "../config/capabilities"
 import { Database } from "../database/database"
 import { makeLocationNode, type Node } from "../effect/app-node"
 import { EventRuntime } from "../event"
+import { EventTable } from "../event/sql"
 import { Integration } from "../integration"
 import { Location } from "../location"
+import { LocationServiceMap } from "../location-service-map"
 import { Permission } from "../permission"
 import { PluginRuntime } from "../plugin/runtime"
 import { SessionGuardrail } from "../session/guardrail"
+import { Session } from "../session"
+import { SessionEvent } from "../session/event"
+import { SessionExecution } from "../session/execution"
+import { SessionMcpEvents } from "../mcp-events/index"
+import { CoordinationService } from "../coordination/index"
 import type { SessionSchema } from "../session/schema"
 import { SessionStore } from "../session/store"
 import type { Tools } from "../tool/tools"
@@ -23,6 +32,11 @@ import { DotsPubSub } from "./pubsub"
 import { DotsRoom } from "./room"
 import { DotsSocket } from "./socket"
 import { DotsTool } from "./tool"
+import { DotsExchange } from "./exchange"
+import { DotsReporting } from "./report"
+import { DotsReportTool } from "./report-tool"
+import { DotsContext } from "./context"
+import { ToolRegistry } from "../tool/registry"
 import type { DotsTransport } from "./transport"
 
 export const configured = (transport: DotsTransport.Interface) =>
@@ -90,11 +104,12 @@ export interface RequestToolsInterface {
   readonly registrations: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<Parameters<Tools.Interface["registerBatch"]>[0]>
+  readonly observation: (sessionID: SessionSchema.ID, permissions: Permission.Ruleset, toolsDisabled: boolean) => Effect.Effect<DotsContext.State>
 }
 
 export class RequestTools extends Context.Service<RequestTools, RequestToolsInterface>()("@ycoding/DotsRequestTools") {}
 
-export const makeRequestTools = (input: Parameters<typeof DotsTool.make>[0]): RequestToolsInterface => ({
+export const makeRequestTools = (input: Parameters<typeof DotsTool.make>[0]): Pick<RequestToolsInterface, "registrations"> => ({
   registrations: (sessionID) =>
     input.dots.status(sessionID).pipe(
       Effect.orDie,
@@ -119,8 +134,54 @@ export const requestToolsNode: Node.LocationNode<RequestTools> = makeLocationNod
       const location = yield* Location.Service
       const permission = yield* Permission.Service
       const guardrail = yield* SessionGuardrail.Service
-      return RequestTools.of(makeRequestTools({ dots, directory: location.directory, permission, guardrail }))
+      const database = yield* Database.Service
+      const events = yield* EventRuntime.Service
+      const config = yield* Config.Service
+      const registry = yield* ToolRegistry.Service
+      const observed = new Set<SessionSchema.ID>()
+      const observer = DotsContext.make({ db: database.db, events })
+      const exchanges = yield* DotsExchange.service
+      const reporting = DotsReporting.make({ db: database.db, events, resolve: exchanges.resolveReport })
+      const report = DotsReportTool.make({ resolve: exchanges.resolveReport, report: reporting.report, permission, guardrail })
+      const native = makeRequestTools({ dots, directory: location.directory, permission, guardrail })
+      const associated = (sessionID: SessionSchema.ID) => database.db.select({ id: EventTable.id }).from(EventTable).where(and(
+        eq(EventTable.type, EventRuntime.versionedType(SessionEvent.DotsExchangeCreated.type, 1)),
+        sql`json_extract(${EventTable.data}, '$.targetSessionID') = ${sessionID}`,
+      )).limit(1).get().pipe(Effect.orDie, Effect.map((row) => row !== undefined))
+      const registrations: RequestToolsInterface["registrations"] = (sessionID) => Effect.gen(function* () {
+        const enabled = ConfigCapabilities.allowsDots(Config.capabilities(yield* config.entries()))
+        const base = yield* native.registrations(sessionID)
+        return enabled ? [...base, { tools: { dots_report: report } }] : base
+      })
+      const service = RequestTools.of({
+        registrations,
+        observation: (sessionID, permissions, toolsDisabled) => Effect.gen(function* (): Effect.fn.Return<DotsContext.State> {
+          observed.add(sessionID)
+          const capabilities = Config.capabilities(yield* config.entries())
+          if (!ConfigCapabilities.allowsDots(capabilities)) return { state: "disabled", reason: "capability_disabled" }
+          if (!(yield* associated(sessionID))) return { state: "disabled", reason: "no_task" }
+          const available = yield* registry.available(permissions, capabilities, yield* registrations(sessionID))
+          if (toolsDisabled || !available.has("dots_report")) return { state: "disabled", reason: "tool_unavailable" }
+          return yield* exchanges.resolveReport(sessionID).pipe(
+            Effect.map(({ record }) => ({ state: "enabled" as const, tool: "dots_report" as const, envelope: Dots.TaskEnvelope.make({
+              coordinator: record.source.principal, scope: { epoch: record.source.epoch, grantID: record.grantID },
+              exchangeID: record.exchangeID, messageID: record.inputID, targetSessionID: record.targetSessionID,
+              kind: "task", origin: "plugin",
+            }) })),
+            Effect.catch((error) => Effect.succeed({ state: "disabled" as const, reason: error.code === "exchange_not_found" ? "no_task" as const : "unavailable" as const })),
+          )
+        }),
+      })
+      yield* events.subscribe(Event.Updated).pipe(
+        Stream.runForEach(() => Effect.gen(function* () {
+          if (ConfigCapabilities.allowsDots(Config.capabilities(yield* config.entries()))) return
+          yield* Effect.forEach([...observed], (sessionID) => observer.observe(sessionID, { state: "disabled", reason: "capability_disabled" }), { discard: true })
+        })),
+        Effect.forkScoped,
+      )
+      return service
     }),
   ),
-  deps: [node, Location.node, Permission.node, SessionGuardrail.node],
+  deps: [node, Location.node, Permission.node, SessionGuardrail.node, Database.node, EventRuntime.node, Config.node, ToolRegistry.node,
+    Session.node, SessionExecution.node, CoordinationService.node, SessionMcpEvents.Authorization.node, LocationServiceMap.node],
 })

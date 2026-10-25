@@ -576,6 +576,7 @@ describe("guardrail decision modes", () => {
       yield* seed({ guardrails: "manual" })
       const service = yield* SessionGuardrail.Service
       const running = yield* service.assert(forcePush).pipe(Effect.forkScoped)
+      expect(yield* awaitRequest()).toHaveProperty("source", source)
       yield* rejectPending(running)
       expect(manualHard.calls).toEqual([])
     }),

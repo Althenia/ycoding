@@ -23,6 +23,16 @@ const target = {
 const parse = (operation: string, input?: unknown, sessionID: string | null = "ses_test") =>
   parseClientMessage(JSON.stringify({ type: "request", id: "req_test", operation, sessionID, input }))
 
+test("typed exchanges reject caller provenance, missing recipients and non-task channels", () => {
+  const input = { exchangeID: "exchange_1", expectedAttachment: target, targetSessionID: "ses_target", channel: "task", delivery: "queue", text: "Synthetic task" }
+  expect(parse("session.dots.exchange.create", input).ok).toBe(true)
+  expect(parse("session.dots.exchange.read", { exchangeID: "exchange_1" }).ok).toBe(true)
+  for (const changed of [{ ...input, channel: "human" }, { ...input, targetSessionID: undefined }, { ...input, origin: "human" }, { ...input, remoteSource: {} }])
+    expect(parse("session.dots.exchange.create", changed).ok).toBe(false)
+  expect(remoteOperationAccess["session.dots.exchange.create"]).toBe("mutation")
+  expect(remoteOperationAccess["session.dots.exchange.read"]).toBe("read")
+})
+
 test("Dots controls require a Session and stay in the closed operation set", () => {
   for (const [operation, input] of [
     ["session.dots.targets", { profile: "synthetic" }],

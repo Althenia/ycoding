@@ -130,6 +130,7 @@ export default {
           \`task_id\` text,
           \`category\` text,
           \`reason\` text,
+          \`attention\` text,
           \`time_created\` integer NOT NULL,
           \`attempts\` integer NOT NULL,
           \`next_attempt_at\` integer NOT NULL,

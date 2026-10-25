@@ -47,6 +47,8 @@ test("accepts request telemetry for every Session Dots control in closed samples
     "session.dots.send",
     "session.dots.pause",
     "session.dots.resume",
+    "session.dots.exchange.create",
+    "session.dots.exchange.read",
   ] as const
   for (const operation of names) {
     expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)

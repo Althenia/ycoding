@@ -91,6 +91,8 @@ export type TelemetryRequestSample = {
     | "session.dots.send"
     | "session.dots.pause"
     | "session.dots.resume"
+    | "session.dots.exchange.create"
+    | "session.dots.exchange.read"
     | "session.skill"
     | "usage.providers"
     | "usage.summary"
@@ -394,6 +396,35 @@ export type FormValue = string | number | boolean | Array<string>
 export type QuestionAnswer = Array<string>
 
 export type SessionPendingSyntheticData1 = { text: string; description?: string; metadata?: { [x: string]: any } }
+
+export type DotsTarget = { profile: string; dotID: string; threadID: string; generation: string; label: string }
+
+export type McpEventsRequestContext = {
+  requestID: string
+  principal: { ownerID: string; deviceID: string; clientID: string }
+  epoch: string
+}
+
+export type DotsReportEnvelope = {
+  coordinator: { ownerID: string; deviceID: string; clientID: string }
+  scope: { epoch: string; grantID: string }
+  exchangeID: string
+  messageID: string
+  kind: "progress" | "blocker" | "decision_request" | "completion"
+  origin: "agent"
+  sourceSessionID: string
+  replyToMessageID: string
+}
+
+export type DotsTaskEnvelope = {
+  coordinator: { ownerID: string; deviceID: string; clientID: string }
+  scope: { epoch: string; grantID: string }
+  exchangeID: string
+  messageID: string
+  kind: "task"
+  origin: "plugin"
+  targetSessionID: string
+}
 
 export type SessionOrchestrationQuestion1 = {
   id: string
@@ -792,8 +823,6 @@ export type CoordinationPausedReason = "interrupted" | "restart"
 
 export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
 
-export type DotsTarget = { profile: string; dotID: string; threadID: string; generation: string; label: string }
-
 export type DotsState = "disconnected" | "connecting" | "connected" | "failed"
 
 export type DotsRuntimeState = "paused" | "unpaused" | "unknown"
@@ -1114,17 +1143,6 @@ export type SessionInstructionsUpdated = {
   durable: { aggregateID: string; seq: number; version: 2 }
   location?: LocationRef
   data: { sessionID: string; delta: { [x: string]: string | "removed" } }
-}
-
-export type SessionContextObserved = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.context.observed"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { sessionID: string; source: "session-state" | "team-view" | "step-limit"; text: string }
 }
 
 export type SessionSynthetic = {
@@ -2118,6 +2136,56 @@ export type SessionPendingSyntheticMessage = {
   data: SessionPendingSyntheticData1
   delivery: "steer" | "queue"
 }
+
+export type SessionDotsExchangeCreated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.dots.exchange.created"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    exchangeID: string
+    sessionID: string
+    targetSessionID: string
+    inputID: string
+    expectedAttachment: DotsTarget
+    accountDigest: string
+    fingerprint: string
+    source: McpEventsRequestContext
+    grantID: string
+    scope: { rootSessionID: string; groupID?: string; ownerSessionID?: string }
+  }
+}
+
+export type SessionDotsReportRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.dots.report.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    deliveryID: string
+    messageID: string
+    text: string
+    envelope: DotsReportEnvelope
+    callID: string
+  }
+}
+
+export type DotsExchangeOutput = { deliveryID: string; messageID: string; text: string; envelope: DotsReportEnvelope }
+
+export type DotsCoordinationContext =
+  | { state: "enabled"; generation: number; tool: "dots_report"; envelope: DotsTaskEnvelope }
+  | {
+      state: "disabled"
+      generation: number
+      reason: "capability_disabled" | "no_task" | "task_settled" | "unavailable" | "tool_unavailable"
+    }
 
 export type SessionShellStarted = {
   id: string
@@ -3120,6 +3188,34 @@ export type FormReplied = {
   data: { id: string; sessionID: string; answer: FormAnswer; source?: FormReplySource }
 }
 
+export type DotsExchange = {
+  envelope: DotsTaskEnvelope
+  exchangeID: string
+  sessionID: string
+  targetSessionID: string
+  inputID: string
+  channel: "task"
+  state: "pending" | "running" | "completed" | "failed" | "unknown"
+  progress: Array<DotsExchangeOutput>
+  result?: DotsExchangeOutput
+}
+
+export type SessionContextObserved = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.context.observed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    source: "session-state" | "team-view" | "step-limit" | "dots"
+    text: string
+    dots?: DotsCoordinationContext
+  }
+}
+
 export type ModelInfo = {
   id: string
   modelID: string
@@ -3510,6 +3606,7 @@ export type GuardrailAsked = {
     escalation?: GuardrailEscalation
     coordinationEscalation?: CoordinationEscalation
     metadata?: { [x: string]: JsonValue }
+    source?: GuardrailSource
   }
 }
 
@@ -4203,6 +4300,44 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.dots.exchange.created"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        exchangeID: string
+        sessionID: string
+        targetSessionID: string
+        inputID: string
+        expectedAttachment: DotsTarget
+        accountDigest: string
+        fingerprint: string
+        source: McpEventsRequestContext
+        grantID: string
+        scope: { rootSessionID: string; groupID?: string; ownerSessionID?: string }
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.dots.report.recorded"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        deliveryID: string
+        messageID: string
+        text: string
+        envelope: DotsReportEnvelope
+        callID: string
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.execution.started"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -4266,7 +4401,12 @@ export type SessionLogItem =
       type: "session.context.observed"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
-      data: { sessionID: string; source: "session-state" | "team-view" | "step-limit"; text: string }
+      data: {
+        sessionID: string
+        source: "session-state" | "team-view" | "step-limit" | "dots"
+        text: string
+        dots?: DotsCoordinationContext
+      }
     }
   | {
       id: string
@@ -4728,6 +4868,8 @@ export type ServerEvent =
   | SessionInputPromoted
   | SessionInputAdmitted
   | SessionInputConsumed
+  | SessionDotsExchangeCreated
+  | SessionDotsReportRecorded
   | SessionExecutionStarted
   | SessionExecutionSucceeded
   | SessionExecutionFailed
@@ -5256,6 +5398,8 @@ export type ServerTelemetryAppendInput = {
             | "session.dots.send"
             | "session.dots.pause"
             | "session.dots.resume"
+            | "session.dots.exchange.create"
+            | "session.dots.exchange.read"
             | "session.skill"
             | "usage.providers"
             | "usage.summary"
@@ -5897,6 +6041,11 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["id"]
@@ -5914,6 +6063,11 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["text"]
@@ -5931,6 +6085,11 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["files"]
@@ -5948,6 +6107,11 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["agents"]
@@ -5965,9 +6129,36 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["metadata"]
+  readonly remoteSource?: {
+    readonly id?: string | null
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly agents?: ReadonlyArray<{
+      readonly name: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
+    readonly delivery?: "steer" | "queue" | null
+    readonly resume?: boolean | null
+  }["remoteSource"]
   readonly delivery?: {
     readonly id?: string | null
     readonly text: string
@@ -5982,6 +6173,11 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["delivery"]
@@ -5999,6 +6195,11 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly remoteSource?: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["resume"]
@@ -7055,6 +7256,7 @@ export type GuardrailRequestListOutput = {
     escalation?: GuardrailEscalation
     coordinationEscalation?: CoordinationEscalation
     metadata?: { [x: string]: JsonValue }
+    source?: GuardrailSource
   }>
 }["data"]
 
@@ -11025,6 +11227,167 @@ export type CoordinationUpdateOutput = { data: CoordinationInfo }["data"]
 export type CoordinationDeleteInput = { readonly groupID: { readonly groupID: string }["groupID"] }
 
 export type CoordinationDeleteOutput = void
+
+export type DotsExchangeCreateInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly exchangeID: {
+    readonly exchangeID: string
+    readonly expectedAttachment: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+    readonly targetSessionID: string
+    readonly channel: "task"
+    readonly delivery: "steer" | "queue"
+    readonly text: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["exchangeID"]
+  readonly expectedAttachment: {
+    readonly exchangeID: string
+    readonly expectedAttachment: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+    readonly targetSessionID: string
+    readonly channel: "task"
+    readonly delivery: "steer" | "queue"
+    readonly text: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["expectedAttachment"]
+  readonly targetSessionID: {
+    readonly exchangeID: string
+    readonly expectedAttachment: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+    readonly targetSessionID: string
+    readonly channel: "task"
+    readonly delivery: "steer" | "queue"
+    readonly text: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["targetSessionID"]
+  readonly channel: {
+    readonly exchangeID: string
+    readonly expectedAttachment: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+    readonly targetSessionID: string
+    readonly channel: "task"
+    readonly delivery: "steer" | "queue"
+    readonly text: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["channel"]
+  readonly delivery: {
+    readonly exchangeID: string
+    readonly expectedAttachment: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+    readonly targetSessionID: string
+    readonly channel: "task"
+    readonly delivery: "steer" | "queue"
+    readonly text: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["delivery"]
+  readonly text: {
+    readonly exchangeID: string
+    readonly expectedAttachment: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+    readonly targetSessionID: string
+    readonly channel: "task"
+    readonly delivery: "steer" | "queue"
+    readonly text: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["text"]
+  readonly remoteSource: {
+    readonly exchangeID: string
+    readonly expectedAttachment: {
+      readonly profile: string
+      readonly dotID: string
+      readonly threadID: string
+      readonly generation: string
+      readonly label: string
+    }
+    readonly targetSessionID: string
+    readonly channel: "task"
+    readonly delivery: "steer" | "queue"
+    readonly text: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["remoteSource"]
+}
+
+export type DotsExchangeCreateOutput = { data: DotsExchange }["data"]
+
+export type DotsExchangeReadInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly exchangeID: {
+    readonly exchangeID: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["exchangeID"]
+  readonly remoteSource: {
+    readonly exchangeID: string
+    readonly remoteSource: {
+      readonly requestID: string
+      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+      readonly epoch: string
+    }
+  }["remoteSource"]
+}
+
+export type DotsExchangeReadOutput = { data: DotsExchange }["data"]
 
 export type DotsTargetsInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

@@ -115,7 +115,7 @@ describe("Dots room transport", () => {
       Effect.gen(function* () {
         const view = yield* fixture
         expect(yield* view.transport.destinations(credentials)).toEqual([
-          { dotID: "dot-1", threadID: "thread/1", generation: "generation-1", label: "dot-1" },
+          { dotID: "dot-1", threadID: "thread/1", generation: "generation-1", label: "Primary Dot conversation" },
         ])
         view.state.selection = { selection: null }
         expect(yield* view.transport.destinations(credentials)).toEqual([])
@@ -367,34 +367,52 @@ describe("Dots room transport", () => {
       }),
     ))
 
-  test("seeds committed room history and admits live Dot posts once through the runtime", () =>
+  test("seeds committed room history and parses live Dot posts without admitting any through the runtime", () =>
     run(
       Effect.gen(function* () {
         const profile = yield* profiles()
         const view = yield* fixture
         view.state.history = [{ items: [posted("historical")], prev_cursor: null }]
-        const admitted = yield* Queue.unbounded<DotsRuntime.PeerAdmission>()
         const admissions: DotsRuntime.PeerAdmission[] = []
+        const pulled = yield* Queue.unbounded<DotsTransport.Inbound>()
+        const transport: DotsTransport.Interface = {
+          ...view.transport,
+          connect: (credentials) =>
+            view.transport.connect(credentials).pipe(
+              Effect.map((connection) => ({
+                ...connection,
+                inbound: connection.inbound.pipe(Stream.rechunk(1), Stream.tap((event) => Queue.offer(pulled, event))),
+              })),
+            ),
+        }
         const service = yield* DotsRuntime.make({
           enabled: () => Effect.succeed(true),
           integration: profile.integrations,
-          transport: view.transport,
+          transport,
           attachments: () => Effect.die("No attachment reads are expected"),
           sessions: {
             exists: (id) => Effect.succeed(id === s1),
-            admit: (input) => Effect.sync(() => { admissions.push(input) }).pipe(Effect.andThen(Queue.offer(admitted, input)), Effect.asVoid),
+            admit: (input) => Effect.sync(() => { admissions.push(input) }),
           },
         })
         yield* service.bind({ sessionID: s1, target: { profile: "fixture-a", dotID: "dot-1", threadID: "thread/1", generation: "generation-1", label: "dot-1" } })
         expect(admissions).toEqual([])
+        const notify = (type: string, payload: unknown) =>
+          Queue.offer(view.notices, { type: "message", topicID: "calpico-chatgpt-messaging", payload: { type, payload } })
+        const pull = Queue.take(pulled).pipe(Effect.timeout("2 seconds"))
         view.state.history = [{ items: [posted("historical"), posted("live")], prev_cursor: null }]
-        yield* Queue.offer(view.notices, { type: "message", topicID: "calpico-chatgpt-messaging", payload: { type: "calpico-message-add", payload: { room_id: "room/1" } } })
-        expect((yield* Queue.take(admitted).pipe(Effect.timeout("2 seconds"))).metadata.dots).toMatchObject({ itemID: "live", origin: "dots-peer" })
+        yield* notify("calpico-message-add", { room_id: "room/1" })
+        expect(yield* pull).toMatchObject({ type: "message", itemID: "historical" })
+        expect(yield* pull).toMatchObject({ type: "message", itemID: "live" })
         view.state.history = [{ items: [posted("historical"), posted("live", "dot-member", "Edited"), posted("next")], prev_cursor: null }]
-        yield* Queue.offer(view.notices, { type: "message", topicID: "calpico-chatgpt-messaging", payload: { type: "calpico-message-update", payload: { room_id: "room/1", message_id: "live" } } })
-        yield* Queue.take(admitted).pipe(Effect.timeout("2 seconds"))
-        expect(admissions.map((item) => item.metadata.dots.itemID)).toEqual(["live", "next"])
-        expect(admissions.every((item) => item.metadata.dots.turnID === undefined)).toBe(true)
+        yield* notify("calpico-message-update", { room_id: "room/1", message_id: "live" })
+        const batch = [yield* pull, yield* pull, yield* pull]
+        expect(batch.map((event) => (event.type === "message" ? event.itemID : undefined))).toEqual(["historical", "live", "next"])
+        expect(batch[1]).toMatchObject({ text: "Edited" })
+        view.state.history = [{ items: [posted("historical")], prev_cursor: null }]
+        yield* notify("calpico-room-update", { room_id: "room/1" })
+        expect(yield* pull).toMatchObject({ type: "message", itemID: "historical" })
+        expect(admissions).toEqual([])
       }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventRuntime.node])))),
     ))
 })
@@ -443,6 +461,7 @@ function fakeTransport() {
   }
   return Effect.gen(function* () {
     const connected = yield* Queue.unbounded<number>()
+    const pulled = yield* Queue.unbounded<DotsTransport.Inbound>()
     const transport: DotsTransport.Interface = {
       runtimeState: (credentials) => Effect.suspend(() => {
         log.runtimeReads.push(credentials)
@@ -485,11 +504,14 @@ function fakeTransport() {
                 log.sends.push(input)
                 return control.send(input)
               }),
-            inbound: Stream.fromQueue(inbound),
+            inbound: Stream.fromQueue(inbound).pipe(
+              Stream.rechunk(1),
+              Stream.tap((event) => Queue.offer(pulled, event)),
+            ),
           }
         }),
     }
-    return { transport, log, control, connected }
+    return { transport, log, control, connected, pulled }
   })
 }
 
@@ -598,7 +620,48 @@ const code = <A>(effect: Effect.Effect<A, DotsRuntime.Error>) =>
     Effect.map((error) => error.code),
   )
 
+let drains = 0
+const drained = (value: { readonly control: { readonly connections: Array<Queue.Queue<DotsTransport.Inbound, DotsTransport.Error | Cause.Done>> }; readonly pulled: Queue.Queue<DotsTransport.Inbound> }, connection = 0) =>
+  Effect.gen(function* () {
+    const marker = `drain-${++drains}`
+    yield* Queue.offer(value.control.connections[connection]!, { type: "turn.completed", threadID: marker, turnID: marker })
+    while ((yield* Queue.take(value.pulled).pipe(Effect.timeout("2 seconds"))).threadID !== marker) continue
+  })
+
 describe("Dots runtime", () => {
+  it.live("L10 names only the explicitly confirmed binding and renames without redirecting", () => Effect.gen(function* () {
+    const value = yield* runtime()
+    const named = yield* value.service.bind({ sessionID: s1, target: { ...a1, label: "  V  " } })
+    expect(named.target).toEqual({ ...a1, label: "V" })
+    expect((yield* value.service.bind({ sessionID: s2, target: b1 })).target).toEqual(b1)
+    const connections = value.log.connects.length
+    expect((yield* value.service.bind({ sessionID: s1, target: { ...a1, label: "  Vega  " } })).target).toEqual({ ...a1, label: "Vega" })
+    expect((yield* value.service.status(s2)).target).toEqual(b1)
+    expect(value.log.connects).toHaveLength(connections)
+    expect(value.log.sends).toEqual([])
+    expect(value.admissions).toEqual([])
+    expect((yield* value.service.bind({ sessionID: s1, target: { ...a1, label: "   " } })).target).toEqual(a1)
+  }))
+
+  it.live("L10 generation and account replacement require confirmation and never inherit a prior name", () => Effect.gen(function* () {
+    const value = yield* runtime()
+    yield* value.service.bind({ sessionID: s1, target: { ...a1, label: "V" } })
+    const replacement = { ...a1, generation: "new-generation", label: "Primary Dot conversation" }
+    value.control.offered = [replacement]
+    expect(yield* code(value.service.attachment(s1))).toBe("target_changed")
+    expect(yield* code(value.service.bind({ sessionID: s1, target: a1 }))).toBe("target_unavailable")
+    expect((yield* value.service.bind({ sessionID: s1, target: replacement })).target).toEqual(replacement)
+    yield* value.service.bind({ sessionID: s1, target: { ...replacement, label: "V" } })
+    yield* value.credentials.update(value.first.id, { value: Credential.OAuth.make({
+      type: "oauth", methodID, access: "fixture-replacement", refresh: "fixture-replacement-refresh",
+      expires: Date.now() + 3_600_000, metadata: { accountID: "fixture-replacement-account" },
+    }) })
+    expect(yield* code(value.service.attachment(s1))).toBe("profile_changed")
+    expect((yield* value.service.bind({ sessionID: s1, target: replacement })).target).toEqual(replacement)
+    expect(value.log.sends).toEqual([])
+    expect(value.admissions).toEqual([])
+  }))
+
   it.effect("bounds runtime status reads and degrades a hung read to unknown", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
@@ -737,13 +800,16 @@ describe("Dots runtime", () => {
       expect(value.admissions).toEqual([])
       expect(value.log.sends).toEqual([])
       yield* Queue.offer(value.control.connections[0]!, { type: "message", threadID: a1.threadID, itemID: "during-control", text: "Inbound while control waits" })
-      expect((yield* Queue.take(value.admitted)).text).toBe("Inbound while control waits")
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
+      expect(value.log.sends).toEqual([])
       expect(yield* code(value.service.pause({ sessionID: s1, expectedTarget: a1 }))).toBe("runtime_unknown")
       yield* Deferred.succeed(release, undefined)
       expect((yield* Fiber.join(first)).runtimeState).toBe("paused")
       value.control.runtimeState = () => Effect.succeed("paused")
       expect((yield* value.service.resume({ sessionID: s1, expectedTarget: a1 })).runtimeState).toBe("unpaused")
       expect(value.log.controls.map(item => item.action)).toEqual(["pause", "resume"])
+      expect(value.admissions).toEqual([])
     }),
   )
 
@@ -809,7 +875,7 @@ describe("Dots runtime", () => {
     }),
   )
 
-  it.live("never admits non-final room revisions from snapshots, reconnects or live updates", () =>
+  it.live("never admits room revisions or completed messages from snapshots, reconnects or live updates", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       const revision = (hash: string, text: string): DotsTransport.Inbound => ({
@@ -824,6 +890,7 @@ describe("Dots runtime", () => {
       value.control.snapshot = () => [
         revision("initial", "Initial visible text"),
         revision("updated", "Updated visible text"),
+        { type: "message", threadID: a1.threadID, itemID: "snapshot-room-item", text: "Snapshot reply" },
       ]
       const first = value.control.connections[0]
       if (!first) throw new Error("The first connection is missing")
@@ -844,9 +911,10 @@ describe("Dots runtime", () => {
         itemID: "completed-room-item",
         text: "Completed reply",
       })
-      const completed = yield* Queue.take(value.admitted).pipe(Effect.timeout("2 seconds"))
-      expect(completed.metadata.dots.itemID).toBe("completed-room-item")
-      expect(value.admissions.map((item) => item.text)).toEqual(["Completed reply"])
+      yield* drained(value, 1)
+      expect(value.admissions).toEqual([])
+      expect(value.log.sends).toEqual([])
+      expect(value.log.controls).toEqual([])
     }),
   )
   it.live("refuses dispatch when the service no longer offers the confirmed generation", () =>
@@ -1249,11 +1317,15 @@ describe("Dots runtime", () => {
     }),
   )
 
-  it.live("admits a correlated peer reply with external attribution and ignores other threads", () =>
+  it.live("admits no correlated peer reply and still correlates the sent turn on its echo", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
-      yield* value.service.send({ sessionID: s1, expectedTarget: a1, id: "m1", text: "hello" })
+      value.control.send = () => Effect.fail(new DotsTransport.Error({ reason: "disconnected", message: "response lost" }))
+      expect(yield* value.service.send({ sessionID: s1, expectedTarget: a1, id: "m1", text: "hello" })).toEqual({
+        messageID: "m1",
+        status: "unknown",
+      })
       const inbound = value.control.connections[0]!
       yield* Queue.offer(inbound, { type: "turn.started", threadID: "thread_a1", turnID: "turn_m1" })
       yield* Queue.offer(inbound, {
@@ -1270,24 +1342,15 @@ describe("Dots runtime", () => {
         itemID: "item_1",
         text: "Hi there",
       })
-      const admission = yield* Queue.take(value.admitted)
-      expect(admission).toMatchObject({
-        sessionID: s1,
-        text: "Hi there",
-        metadata: {
-          dots: {
-            origin: "dots-peer",
-            profile: "fixture-a",
-            dotID: "dot_a",
-            threadID: "thread_a1",
-            turnID: "turn_m1",
-            itemID: "item_1",
-            causalMessageID: "m1",
-          },
-        },
+      yield* Queue.offer(inbound, { type: "user.message", threadID: "thread_a1", turnID: "turn_m1", clientMessageID: "m1" })
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
+      expect(yield* value.service.send({ sessionID: s1, expectedTarget: a1, id: "m1", text: "hello" })).toEqual({
+        messageID: "m1",
+        status: "accepted",
+        turnID: "turn_m1",
       })
-      expect(admission.id.startsWith("msg_dots_")).toBe(true)
-      expect(value.admissions).toHaveLength(1)
+      expect(value.log.sends).toHaveLength(1)
     }),
   )
 
@@ -1314,7 +1377,7 @@ describe("Dots runtime", () => {
     }),
   )
 
-  it.live("admits a streamed reply assembled from deltas when its turn completes", () =>
+  it.live("admits no streamed reply assembled from deltas when its turn completes", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
@@ -1335,16 +1398,13 @@ describe("Dots runtime", () => {
         delta: "lo",
       })
       yield* Queue.offer(inbound, { type: "turn.completed", threadID: "thread_a1", turnID: "turn_m1" })
-      const admission = yield* Queue.take(value.admitted)
-      expect(admission).toMatchObject({
-        text: "Hello",
-        metadata: { dots: { itemID: "item_1", causalMessageID: "m1" } },
-      })
-      expect(value.admissions).toHaveLength(1)
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
+      expect(value.log.sends).toHaveLength(1)
     }),
   )
 
-  it.live("admits the completed item instead of its streamed deltas", () =>
+  it.live("admits neither streamed deltas nor their completed item", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
@@ -1371,13 +1431,12 @@ describe("Dots runtime", () => {
         itemID: "item_2",
         text: "Next",
       })
-      expect((yield* Queue.take(value.admitted)).text).toBe("Final")
-      expect((yield* Queue.take(value.admitted)).text).toBe("Next")
-      expect(value.admissions.map((item) => item.text)).toEqual(["Final", "Next"])
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
     }),
   )
 
-  it.live("seeds the first thread snapshot without admitting or waking earlier replies", () =>
+  it.live("seeds the first thread snapshot and admits neither earlier nor later replies", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       value.control.snapshot = () => [
@@ -1402,12 +1461,12 @@ describe("Dots runtime", () => {
         itemID: "item_new",
         text: "New",
       })
-      expect((yield* Queue.take(value.admitted)).metadata.dots.itemID).toBe("item_new")
-      expect(value.admissions.map((item) => item.metadata.dots.itemID)).toEqual(["item_new"])
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
     }),
   )
 
-  it.live("keeps an unfinished first-snapshot reply until its live completion", () =>
+  it.live("admits no unfinished first-snapshot reply at its live completion", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       value.control.snapshot = () => [
@@ -1423,11 +1482,12 @@ describe("Dots runtime", () => {
         delta: "reply",
       })
       yield* Queue.offer(value.control.connections[0]!, { type: "turn.completed", threadID: "thread_a1", turnID: "t1" })
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).text).toBe("Opening reply")
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
     }),
   )
 
-  it.live("replaces an interrupted partial reply with its authoritative reconnect snapshot", () =>
+  it.live("admits nothing from an interrupted partial reply or its authoritative reconnect snapshot", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
@@ -1438,7 +1498,7 @@ describe("Dots runtime", () => {
         itemID: "i1",
         delta: "Old ",
       })
-      yield* Effect.yieldNow
+      yield* drained(value)
       value.control.snapshot = () => [
         { type: "message.snapshot", threadID: "thread_a1", turnID: "t1", itemID: "i1", text: "Old recovered " },
       ]
@@ -1454,7 +1514,9 @@ describe("Dots runtime", () => {
         delta: "tail",
       })
       yield* Queue.offer(value.control.connections[1]!, { type: "turn.completed", threadID: "thread_a1", turnID: "t1" })
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).text).toBe("Old recovered tail")
+      yield* drained(value, 1)
+      expect(value.admissions).toEqual([])
+      expect(value.log.subscribes).toEqual(["thread_a1", "thread_a1"])
     }),
   )
 
@@ -1478,7 +1540,7 @@ describe("Dots runtime", () => {
     }),
   )
 
-  it.live("retains a live reply received while a new thread snapshot is pending", () =>
+  it.live("flushes a live reply received while a new thread snapshot is pending without admitting it", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
@@ -1495,17 +1557,18 @@ describe("Dots runtime", () => {
         itemID: "new_item",
         text: "Arrived during subscription",
       })
-      yield* Effect.yieldNow
+      yield* drained(value)
       expect(value.admissions).toEqual([])
+      expect((yield* value.service.status(s2)).state).toBe("connecting")
       yield* Deferred.succeed(gate, undefined)
-      yield* Fiber.join(binding)
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).text).toBe(
-        "Arrived during subscription",
-      )
+      expect((yield* Fiber.join(binding)).state).toBe("connected")
+      expect(value.admissions).toEqual([])
+      expect((yield* value.service.send({ sessionID: s2, expectedTarget: a2, id: "after_buffer", text: "hello" })).status).toBe("accepted")
+      expect(value.log.sends).toHaveLength(1)
     }),
   )
 
-  it.live("admits only unseen completed replies from a reconnect snapshot", () =>
+  it.live("admits no completed reply from live events or reconnect snapshots", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       const message = (itemID: string): DotsTransport.Inbound => ({
@@ -1518,23 +1581,23 @@ describe("Dots runtime", () => {
       value.control.snapshot = () => [message("item_1")]
       yield* value.service.bind({ sessionID: s1, target: a1 })
       yield* Queue.offer(value.control.connections[0]!, message("item_2"))
-      expect((yield* Queue.take(value.admitted)).metadata.dots.itemID).toBe("item_2")
+      yield* drained(value)
       value.control.snapshot = () => [message("item_1"), message("item_2"), message("item_3")]
       yield* Queue.end(value.control.connections[0]!)
-      expect((yield* Queue.take(value.admitted)).metadata.dots.itemID).toBe("item_3")
+      expect(yield* Queue.take(value.connected)).toBe(1)
+      expect(yield* Queue.take(value.connected)).toBe(2)
       yield* connectedStatus(value.service, s1)
       yield* Queue.end(value.control.connections[1]!)
-      yield* Queue.take(value.connected)
-      yield* Queue.take(value.connected)
+      expect(yield* Queue.take(value.connected)).toBe(3)
       yield* connectedStatus(value.service, s1)
       yield* Queue.offer(value.control.connections[2]!, message("item_4"))
-      expect((yield* Queue.take(value.admitted)).metadata.dots.itemID).toBe("item_4")
-      expect(value.admissions.map((item) => item.metadata.dots.itemID)).toEqual(["item_2", "item_3", "item_4"])
+      yield* drained(value, 2)
+      expect(value.admissions).toEqual([])
       expect(value.log.subscribes).toEqual(["thread_a1", "thread_a1", "thread_a1"])
     }),
   )
 
-  it.live("ignores another thread's records in first and reconnect snapshots", () =>
+  it.live("keeps another thread's records out of first and reconnect snapshots and admits no own-thread reply", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       const foreign = (suffix: string): ReadonlyArray<DotsTransport.Inbound> => [
@@ -1585,28 +1648,27 @@ describe("Dots runtime", () => {
         itemID: "live_1",
         text: "live_1",
       })
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).metadata.dots).toMatchObject({
-        itemID: "live_1",
-      })
-      expect(value.admissions[0]!.metadata.dots.causalMessageID).toBeUndefined()
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
       expect(value.log.controls).toEqual([])
 
       value.control.snapshot = () => [...foreign("second"), own("own_1"), own("own_2")]
       yield* Queue.end(first)
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).metadata.dots.itemID).toBe("own_2")
+      expect(yield* Queue.take(value.connected)).toBe(1)
+      expect(yield* Queue.take(value.connected)).toBe(2)
       yield* connectedStatus(value.service, s1)
       yield* Queue.offer(value.control.connections[1]!, {
         type: "turn.completed",
         threadID: "thread_a1",
         turnID: "foreign_turn_second",
       })
-      yield* Effect.yieldNow
+      yield* drained(value, 1)
       expect(value.log.controls).toEqual([])
-      expect(value.admissions.map((item) => item.metadata.dots.itemID)).toEqual(["live_1", "own_2"])
+      expect(value.admissions).toEqual([])
     }),
   )
 
-  it.live("keeps a buffered historical item historical and admits a buffered new item once", () =>
+  it.live("buffers historical and new items during a pending snapshot and admits neither", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
@@ -1629,20 +1691,19 @@ describe("Dots runtime", () => {
       const inbound = value.control.connections[0]!
       yield* Queue.offer(inbound, message("old_item"))
       yield* Queue.offer(inbound, message("new_item"))
-      yield* Effect.yieldNow
+      yield* drained(value)
       expect(value.admissions).toEqual([])
       yield* Deferred.succeed(gate, undefined)
-      yield* Fiber.join(binding)
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).metadata.dots.itemID).toBe("new_item")
+      expect((yield* Fiber.join(binding)).state).toBe("connected")
+      expect(value.admissions).toEqual([])
       yield* Queue.offer(inbound, { type: "turn.completed", threadID: "thread_a2", turnID: "turn_new_item" })
       yield* Queue.offer(inbound, message("new_item"))
       yield* Queue.offer(inbound, message("barrier"))
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).metadata.dots.itemID).toBe("barrier")
-      expect(value.admissions.map((item) => item.metadata.dots.itemID)).toEqual(["new_item", "barrier"])
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
     }),
   )
-
-  it.live("admits only the authoritative final text after a snapshot partial", () =>
+  it.live("admits no final text after a snapshot partial", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       value.control.snapshot = () => [
@@ -1653,12 +1714,10 @@ describe("Dots runtime", () => {
       yield* Queue.offer(inbound, { type: "message", threadID: "thread_a1", turnID: "t1", itemID: "i1", text: "Final" })
       yield* Queue.offer(inbound, { type: "turn.completed", threadID: "thread_a1", turnID: "t1" })
       yield* Queue.offer(inbound, { type: "message", threadID: "thread_a1", turnID: "t2", itemID: "i2", text: "Next" })
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).text).toBe("Final")
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).text).toBe("Next")
-      expect(value.admissions.map((item) => item.text)).toEqual(["Final", "Next"])
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
     }),
   )
-
   it.live("settles an unknown delivery from a reconnect snapshot without resending", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
@@ -1674,19 +1733,19 @@ describe("Dots runtime", () => {
         { type: "message", threadID: "thread_a1", turnID: "turn_x", itemID: "item_1", text: "Got it" },
       ]
       yield* Queue.end(value.control.connections[0]!)
-      const reply = yield* Queue.take(value.admitted)
-      expect(reply.metadata.dots.causalMessageID).toBe("m1")
+      expect(yield* Queue.take(value.connected)).toBe(1)
+      expect(yield* Queue.take(value.connected)).toBe(2)
+      yield* connectedStatus(value.service, s1)
+      expect(value.admissions).toEqual([])
       expect(yield* value.service.send({ sessionID: s1, expectedTarget: a1, id: "m1", text: "hello" })).toEqual({
         messageID: "m1",
         status: "accepted",
         turnID: "turn_x",
       })
-      yield* connectedStatus(value.service, s1)
       yield* Queue.end(value.control.connections[1]!)
-      yield* Queue.take(value.connected)
-      yield* Queue.take(value.connected)
+      expect(yield* Queue.take(value.connected)).toBe(3)
       yield* connectedStatus(value.service, s1)
-      expect(value.admissions).toHaveLength(1)
+      expect(value.admissions).toEqual([])
       expect(yield* value.service.send({ sessionID: s1, expectedTarget: a1, id: "m1", text: "hello" })).toEqual({
         messageID: "m1",
         status: "accepted",
@@ -1695,8 +1754,7 @@ describe("Dots runtime", () => {
       expect(value.log.sends).toHaveLength(1)
     }),
   )
-
-  it.live("admits a correlated room reply once without a remote turn", () =>
+  it.live("admits no correlated room reply and keeps the room without a remote turn", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       value.control.snapshot = () => [
@@ -1718,15 +1776,11 @@ describe("Dots runtime", () => {
         itemID: "room_2",
         text: "Next",
       })
-      const first = yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))
-      expect(first.text).toBe("Final")
-      expect(first.metadata.dots.causalMessageID).toBe("m1")
-      expect(first.metadata.dots).not.toHaveProperty("turnID")
-      expect((yield* Queue.take(value.admitted).pipe(Effect.timeout("1 second"))).text).toBe("Next")
-      expect(value.admissions).toHaveLength(2)
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
+      expect(value.log.sends).toEqual([])
     }),
   )
-
   it.live("settles an echoed room request without inferring runtime pause state", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
@@ -1834,7 +1888,7 @@ describe("Dots runtime", () => {
     }),
   )
 
-  it.live("suppresses a redelivered completed peer item and attributes uncorrelated turns", () =>
+  it.live("admits no completed, redelivered or streamed peer item", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
@@ -1857,15 +1911,11 @@ describe("Dots runtime", () => {
       yield* Queue.offer(inbound, message)
       yield* Queue.offer(inbound, { type: "turn.completed", threadID: "thread_a1", turnID: "turn_peer" })
       yield* Queue.offer(inbound, { ...message, turnID: "turn_next", itemID: "item_2", text: "Second" })
-      const first = yield* Queue.take(value.admitted)
-      const second = yield* Queue.take(value.admitted)
-      expect(first.metadata.dots.causalMessageID).toBeUndefined()
-      expect(second.metadata.dots.itemID).toBe("item_2")
-      expect(second.id).not.toBe(first.id)
-      expect(value.admissions.map((item) => item.text)).toEqual(["Unprompted", "Second"])
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
+      expect(value.log.sends).toEqual([])
     }),
   )
-
   it.live("controls only the Session's confirmed destination", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
@@ -2120,26 +2170,23 @@ describe("Dots capability gate", () => {
     }),
   )
 
-  it.live("admits no peer message once the capability is off even before the change notice arrives", () =>
+  it.live("admits no peer message once the capability is off, and the change notice closes the connection", () =>
     Effect.gen(function* () {
       const value = yield* runtime()
       yield* value.service.bind({ sessionID: s1, target: a1 })
-      const before = value.gate.checks
       value.gate.on = false
       yield* Queue.offer(value.control.connections[0]!, { type: "message", threadID: a1.threadID, itemID: "late", text: "Late reply" })
-      yield* Effect.sync(() => value.gate.checks).pipe(
-        Effect.repeat({ until: (checks) => checks > before, schedule: Schedule.spaced("1 millis") }),
-        Effect.timeout("2 seconds"),
-      )
+      yield* drained(value)
       expect(value.admissions).toEqual([])
+      yield* value.setEnabled(false)
       yield* Effect.sync(() => value.log.closed).pipe(
         Effect.repeat({ until: (closed) => closed === 1, schedule: Schedule.spaced("1 millis") }),
         Effect.timeout("2 seconds"),
       )
+      expect(value.admissions).toEqual([])
       expect(value.log.connects).toHaveLength(1)
     }),
   )
-
   it.live("does not reconnect a dropped connection while the capability is off", () =>
     Effect.gen(function* () {
       const value = yield* runtime()

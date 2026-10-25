@@ -14,7 +14,9 @@ import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { SessionSharedContext } from "@ycoding-ai/core/session/shared-context"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
-import { DateTime, Effect } from "effect"
+import { DateTime, Effect, Schema } from "effect"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { DotsContext } from "../src/dots/context"
 
 const timestamp = DateTime.makeUnsafe(0)
 const parentID = SessionSchema.ID.make("ses_cache_source")
@@ -196,6 +198,23 @@ const recordsWithText = (value: unknown): Array<Record<string, unknown> & { read
     ...Object.values(value).flatMap(recordsWithText),
   ]
 }
+
+test("Dots appended state transitions preserve earlier wire input and cache configuration", async () => {
+  const enabled = Message.system(DotsContext.render(Schema.decodeUnknownSync(Dots.CoordinationContext)({
+    state: "enabled", generation: 1, tool: "dots_report", envelope: {
+      coordinator: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" },
+      scope: { epoch: "epoch_fixture", grantID: "grant_fixture" }, exchangeID: "exchange_fixture", messageID: "msg_task",
+      targetSessionID: "ses_cache_a", kind: "task", origin: "plugin",
+    },
+  })))
+  const disabled = Message.system(DotsContext.render(Schema.decodeUnknownSync(Dots.CoordinationContext)({ state: "disabled", generation: 2, reason: "capability_disabled" })))
+  const before = await prepare(prefixText, undefined, false, "ses_cache_a", [enabled])
+  const after = await prepare(prefixText, undefined, false, "ses_cache_a", [enabled, disabled])
+  expect(after.body.input.slice(0, before.body.input.length)).toEqual([...before.body.input])
+  expect(after.body.tools).toEqual(before.body.tools)
+  expect(after.body.prompt_cache_key).toBe(before.body.prompt_cache_key)
+  expect(recordsWithText(after.body.input).at(-1)?.text).toContain("disabled")
+})
 
 test("compiles one shared marked prefix and records offline wire metrics", async () => {
   const resolvedSnapshot = await Effect.runPromise(

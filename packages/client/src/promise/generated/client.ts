@@ -421,6 +421,10 @@ import type {
   CoordinationUpdateOutput,
   CoordinationDeleteInput,
   CoordinationDeleteOutput,
+  DotsExchangeCreateInput,
+  DotsExchangeCreateOutput,
+  DotsExchangeReadInput,
+  DotsExchangeReadOutput,
   DotsTargetsInput,
   DotsTargetsOutput,
   DotsStatusInput,
@@ -1085,6 +1089,7 @@ export function make(options: ClientOptions) {
               files: input["files"],
               agents: input["agents"],
               metadata: input["metadata"],
+              remoteSource: input["remoteSource"],
               delivery: input["delivery"],
               resume: input["resume"],
             },
@@ -3437,6 +3442,40 @@ export function make(options: ClientOptions) {
         ),
     },
     dots: {
+      exchange: {
+        create: (input: DotsExchangeCreateInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsExchangeCreateOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/exchanges`,
+              body: {
+                exchangeID: input["exchangeID"],
+                expectedAttachment: input["expectedAttachment"],
+                targetSessionID: input["targetSessionID"],
+                channel: input["channel"],
+                delivery: input["delivery"],
+                text: input["text"],
+                remoteSource: input["remoteSource"],
+              },
+              successStatus: 200,
+              declaredStatuses: [400, 404, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        read: (input: DotsExchangeReadInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsExchangeReadOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/exchanges/read`,
+              body: { exchangeID: input["exchangeID"], remoteSource: input["remoteSource"] },
+              successStatus: 200,
+              declaredStatuses: [400, 404, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
       targets: (input: DotsTargetsInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: DotsTargetsOutput }>(
           {

@@ -1,13 +1,31 @@
 import { DotsRuntime } from "@ycoding-ai/core/dots"
+import { DotsExchange } from "@ycoding-ai/core/dots/exchange"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InvalidRequestError } from "@ycoding-ai/protocol/errors"
 import { Api } from "../api"
 
-const failure = (error: DotsRuntime.Error) => new InvalidRequestError({ field: "dots", message: error.message })
+const failure = (error: DotsRuntime.Error) => new InvalidRequestError({
+  field: "dots", message: error.message,
+  ...(error.code === "exchange_outcome_unknown" ? { kind: "outcome_unknown" } : {}),
+})
 
 export const DotsHandler = HttpApiBuilder.group(Api, "server.dots", (handlers) =>
   handlers
+    .handle(
+      "session.dots.exchange.create",
+      Effect.fn(function* (ctx) {
+        const exchanges = yield* DotsExchange.service
+        return { data: yield* exchanges.create({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+      }),
+    )
+    .handle(
+      "session.dots.exchange.read",
+      Effect.fn(function* (ctx) {
+        const exchanges = yield* DotsExchange.service
+        return { data: yield* exchanges.read({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+      }),
+    )
     .handle(
       "session.dots.targets",
       Effect.fn(function* (ctx) {

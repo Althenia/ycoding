@@ -125,6 +125,7 @@ export class Request extends Schema.Class<Request>("Guardrail.Request")({
   escalation: Escalation.pipe(optional),
   coordinationEscalation: Coordination.Escalation.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Json).pipe(optional),
+  source: Source.pipe(optional),
 }) {}
 
 export const Reply = Schema.Literals(["once", "always", "reject"]).annotate({ identifier: "Guardrail.Reply" })

@@ -2,7 +2,7 @@ export * as RemoteMcp from "./remote-mcp"
 
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
-import { Option, Schema } from "effect"
+import { Option, Result, Schema } from "effect"
 import { RemoteMCPTransport } from "@ycoding-ai/core/remote-mcp/transport"
 import { localAppOperations, parseChunkedValue, type McpPrincipal, type RemoteErrorCode, type RemoteRequest, type RemoteResponse } from "@ycoding-ai/remote"
 import type { LocalServer } from "./remote-local"
@@ -17,6 +17,8 @@ import {
 import { RemoteMcpSchemas } from "./remote-mcp-schemas"
 import { RemoteMcpDemo } from "./remote-mcp-demo"
 import { McpEvents } from "@ycoding-ai/schema/mcp-events"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { DotsReport } from "@ycoding-ai/schema/dots-report"
 import { RemoteMcpApps } from "./remote-mcp-apps"
 
 export const maxResultChars = 2 * 1024 * 1024
@@ -44,6 +46,7 @@ type Admitted = { readonly response: Response } | { readonly body: string; reado
 type Hold =
   | { readonly kind: "model"; readonly sessionID: string; readonly model: Readonly<Record<string, unknown>> }
   | { readonly kind: "prompt"; readonly messageID: string }
+  | { readonly kind: "exchange"; readonly sessionID: string; readonly exchangeID: string; readonly fingerprint: string }
   | { readonly kind: "unknown" }
 
 const guidance: Partial<Record<RemoteErrorCode, string>> = {
@@ -137,9 +140,16 @@ export function createRemoteMcp(options: Options) {
       const revoked = denied()
       if (revoked !== undefined) return revoked
       const frames = await dispatch(tool, call.arguments, call.signal, ticket.context)
+      const rawResult = toolResult(frames, limit)
+      const result = tool.operation === "session.dots.exchange.read" ? reportResult(rawResult, limit) : rawResult
+      if (tool.operation === "session.dots.exchange.read" && !result.isError) {
+        const sessionID = call.arguments.sessionID
+        const exchangeID = RemoteMcpSchemas.recordOf(call.arguments.input)?.exchangeID
+        const held = typeof sessionID === "string" ? holds.get(`session:${sessionID}`) : undefined
+        if (held?.kind === "exchange" && held.exchangeID === exchangeID) release(`session:${held.sessionID}`)
+      }
       if (lane !== undefined && frames.some((frame) => !frame.ok && frame.error.code === "outcome_unknown")) hold(lane, holdOf(tool, call.arguments, baseline?.model))
       else if (lane !== undefined && held?.kind === "prompt" && frames[0]?.ok === true) release(lane)
-      const result = toolResult(frames, limit)
       if (!result.isError && (localAppOperations as readonly string[]).includes(tool.operation)) {
         const app = RemoteMcpSchemas.recordOf(result.structuredContent)
         if (app === undefined || !("value" in app)) return failure("internal_error", "Registered app returned no result")
@@ -159,6 +169,15 @@ export function createRemoteMcp(options: Options) {
   }
 
   async function reconcile(lane: string, held: Hold, tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, signal: AbortSignal, context: Context) {
+    if (held.kind === "exchange") {
+      const input = RemoteMcpSchemas.recordOf(args.input)
+      if (tool.operation !== "session.dots.exchange.create" || input === undefined || held.fingerprint !== exchangeFingerprint(input))
+        return failure("outcome_unknown", "An exchange admission is unconfirmed. Read that exchange before issuing another mutation; no work was replayed.")
+      const result = reportResult(toolResult(await operate({ type: "request", id: `mcp_${randomUUID()}`, operation: "session.dots.exchange.read", sessionID: held.sessionID, input: { exchangeID: held.exchangeID } }, signal, context), limit), limit)
+      if (result.isError) return failure("outcome_unknown", "The exchange admission could not be reconciled. This lane remains read-only; no work was replayed.")
+      release(lane)
+      return result
+    }
     if (held.kind === "prompt")
       return tool.operation === "session.prompt" && RemoteMcpSchemas.recordOf(args.input)?.id === held.messageID
         ? undefined
@@ -313,13 +332,34 @@ export function toolResult(frames: readonly RemoteResponse[], limit = maxResultC
   return parsed.ok ? success(text, parsed.value, limit) : failure("internal_error", "The local agent returned an unreadable chunked response")
 }
 
+function reportResult(result: TextResult, limit: number): TextResult {
+  if (result.isError) return result
+  const data = RemoteMcpSchemas.recordOf(result.structuredContent)?.data
+  const exchange = Schema.decodeUnknownOption(Dots.Exchange)(data, { onExcessProperty: "error" })
+  if (Option.isNone(exchange)) return failure("internal_error", "The Dots exchange response is invalid")
+  const reports = [...exchange.value.progress, ...(exchange.value.result ? [exchange.value.result] : [])]
+  if (reports.length === 0) return result
+  const rendered = Result.try(() => reports.map((report) => ({ type: "text" as const, text: DotsReport.render(report.envelope, report.text) })))
+  if (Result.isFailure(rendered)) return failure("internal_error", "The Dots report representation is invalid")
+  const content = rendered.success
+  if (content.reduce((length, item) => length + item.text.length, 0) > limit) return failure("message_too_large", "The Dots reports exceed the response bound")
+  return { ...result, content }
+}
+
 function holdOf(tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, baseline: Readonly<Record<string, unknown>> | undefined): Hold {
   const input = RemoteMcpSchemas.recordOf(args.input)
+  if (tool.operation === "session.dots.exchange.create" && typeof args.sessionID === "string" && typeof input?.exchangeID === "string")
+    return { kind: "exchange", sessionID: args.sessionID, exchangeID: input.exchangeID, fingerprint: exchangeFingerprint(input) }
   if (tool.operation === "session.prompt" && typeof input?.id === "string") return { kind: "prompt", messageID: input.id }
   const model = RemoteMcpSchemas.recordOf(input?.model)
   if (tool.operation !== "session.switchModel" || typeof args.sessionID !== "string" || model === undefined) return { kind: "unknown" }
   if (model.profile !== undefined && (baseline === undefined || sameModel(baseline, model))) return { kind: "unknown" }
   return { kind: "model", sessionID: args.sessionID, model }
+}
+
+function exchangeFingerprint(input: Record<string, unknown>) {
+  const attachment = RemoteMcpSchemas.recordOf(input.expectedAttachment)
+  return JSON.stringify([input.exchangeID, attachment?.profile, attachment?.dotID, attachment?.threadID, attachment?.generation, input.targetSessionID, input.channel, input.delivery, input.text])
 }
 
 function sameModel(current: Readonly<Record<string, unknown>> | undefined, target: Readonly<Record<string, unknown>> | undefined) {

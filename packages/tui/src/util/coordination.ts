@@ -58,6 +58,16 @@ export type ProjectSessionChoice = {
 
 export type NewMaster = { readonly sessionID: string } | { readonly directory: string; readonly title?: string }
 
+export class ProjectCreationError extends Error {
+  constructor(
+    message: string,
+    readonly sessionID?: string,
+  ) {
+    super(message)
+    this.name = "ProjectCreationError"
+  }
+}
+
 export type ProjectService = {
   create(input: { name: string; master: NewMaster }): Promise<string>
   rename(projectID: string, name: string): Promise<void>

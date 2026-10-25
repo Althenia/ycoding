@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "node:os"
-import { Cause, DateTime, Effect, Layer, Queue, Schema, Stream } from "effect"
+import { Cause, DateTime, Deferred, Effect, Layer, Queue, Schema, Stream } from "effect"
 import { Config } from "../src/config"
 import { Event } from "@ycoding-ai/schema/config"
 import { Credential } from "../src/credential"
@@ -26,6 +26,9 @@ import { EventRuntime } from "../src/event"
 import { CatalogModel } from "../src/model"
 import { Provider } from "../src/provider"
 import { Session } from "../src/session"
+import { SessionEvent } from "../src/session/event"
+import { SessionMcpEvents } from "../src/mcp-events/index"
+import { DotsContext } from "../src/dots/context"
 import { SessionExecution } from "../src/session/execution"
 import { SessionMessage } from "../src/session/message"
 import { SessionPending } from "../src/session/pending"
@@ -109,7 +112,7 @@ const setup = Effect.gen(function* () {
 })
 
 describe("Dots peer admission", () => {
-  it.live("never wakes the agent or admits visible room revisions while completed replies still admit", () =>
+  it.live("room posts, human-facing replies, revisions and echoes never admit work or wake a Session", () =>
     Effect.gen(function* () {
       const value = yield* setup
       const integration = yield* Integration.Service
@@ -137,6 +140,7 @@ describe("Dots peer admission", () => {
       })
       const inbound = yield* Queue.unbounded<DotsTransport.Inbound, DotsTransport.Error | Cause.Done>()
       const admissions = yield* Queue.unbounded<DotsRuntime.PeerAdmission>()
+      const processed = yield* Deferred.make<void>()
       const destination = { dotID: "dot_snapshot", threadID: "thread_snapshot", generation: "1", label: "Snapshot Dot" }
       const revision = (hash: string, text: string): DotsTransport.Inbound => ({
         type: "message.revision",
@@ -157,7 +161,11 @@ describe("Dots peer admission", () => {
             Effect.succeed({
               subscribe: () => Effect.succeed([revision("historical", "Historical snapshot")]),
               send: () => Effect.die("No sends are allowed"),
-              inbound: Stream.fromQueue(inbound),
+              inbound: Stream.fromQueue(inbound).pipe(Stream.tap((event) =>
+                event.type === "turn.completed" && event.turnID === "barrier"
+                  ? Deferred.succeed(processed, undefined)
+                  : Effect.void,
+              )),
             }),
         },
         sessions: {
@@ -181,30 +189,23 @@ describe("Dots peer admission", () => {
         itemID: "room_completed",
         text: "Completed reply",
       })
-      const completed = yield* Queue.take(admissions).pipe(Effect.timeout("2 seconds"))
-      expect(completed.metadata.dots.itemID).toBe("room_completed")
-      expect(completed.metadata.dots.turnID).toBeUndefined()
+      yield* Queue.offer(inbound, {
+        type: "message",
+        threadID: destination.threadID,
+        itemID: "room_human_reply",
+        text: "This reply is only for the human, not a task.",
+      })
+      yield* Queue.offer(inbound, {
+        type: "user.message",
+        threadID: destination.threadID,
+        clientMessageID: "echo",
+      })
+      yield* Queue.offer(inbound, { type: "turn.completed", threadID: destination.threadID, turnID: "barrier" })
+      yield* Deferred.await(processed).pipe(Effect.timeout("2 seconds"))
       const pending = yield* SessionPending.list(value.db, value.session.id)
-      expect(pending.map((entry) => entry.id)).toEqual([completed.id])
-      expect(woken).toEqual([value.session.id])
-      const context = JSON.stringify(
-        toLLMMessages(
-          [
-            SessionMessage.Synthetic.make({
-              id: completed.id,
-              type: "synthetic",
-              text: completed.text,
-              description: completed.description,
-              metadata: completed.metadata,
-              time: { created: DateTime.makeUnsafe(0) },
-            }),
-          ],
-          CatalogModel.Ref.make({ id: CatalogModel.ID.make("model"), providerID: Provider.ID.make("provider") }),
-        ),
-      )
-      expect(context).toContain("Completed reply")
-      for (const text of ["Historical snapshot", "Visible snapshot", "Updated visible snapshot"])
-        expect(JSON.stringify(pending)).not.toContain(text)
+      expect(pending).toEqual([])
+      expect(woken).toEqual([])
+      expect(yield* Queue.size(admissions)).toBe(0)
     }),
   )
 
@@ -495,6 +496,7 @@ describe("Dots request tools", () => {
       LayerNode.group([
         DotsRuntimeNode.node,
         DotsRuntimeNode.requestToolsNode,
+        Database.node,
         ToolRegistry.node,
         ToolRegistry.toolsNode,
         Session.node,
@@ -517,6 +519,10 @@ describe("Dots request tools", () => {
         [Permission.node, permission],
         [SessionGuardrail.node, guardrail],
         [SessionExecution.node, execution],
+        [SessionMcpEvents.Authorization.node, Layer.succeed(SessionMcpEvents.Authorization.Service, {
+          capabilities: Effect.succeed(true), resolve: () => Effect.die("No remote admission in this fixture"),
+          check: () => Effect.succeed({ expiresAt: Date.now() + 60_000 }),
+        })],
       ],
     ),
   )
@@ -556,13 +562,61 @@ describe("Dots request tools", () => {
     })
   const names = (definitions: ReadonlyArray<{ readonly name: string }>) => definitions.map((tool) => tool.name)
 
-  toolsIt.live("gives an unbound Session exactly the base Location tool surface", () =>
+  toolsIt.live("report context appends disabled on a capability transition without a model step", () => Effect.gen(function* () {
+    yield* connectProfile
+    const sessionID = yield* newSession("Reporting transition")
+    const sessions = yield* Session.Service
+    const events = yield* EventRuntime.Service
+    const db = (yield* Database.Service).db
+    const dots = yield* DotsRuntime.Service
+    const tools = yield* DotsRuntimeNode.RequestTools
+    yield* dots.bind({ sessionID, target })
+    const attachment = yield* dots.attachment(sessionID)
+    const input = yield* sessions.prompt({ sessionID, text: "Synthetic task", origin: "plugin", resume: false })
+    yield* events.publish(SessionEvent.DotsExchangeCreated, { sessionID, targetSessionID: sessionID, inputID: input.id, exchangeID: "transition_fixture", expectedAttachment: target, accountDigest: attachment.accountDigest, fingerprint: "fixture", grantID: "grant_fixture", source: { requestID: "req_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }, scope: { rootSessionID: sessionID } })
+    yield* events.publish(SessionEvent.InputPromoted, { sessionID, inputID: input.id })
+    const enabled = yield* tools.observation(sessionID, [{ action: "*", resource: "**", effect: "allow" }], false)
+    expect(enabled.state).toBe("enabled")
+    yield* DotsContext.make({ db, events }).observe(sessionID, enabled)
+    const disabled = yield* Deferred.make<SessionEvent.ContextObserved>()
+    yield* events.subscribe(SessionEvent.ContextObserved).pipe(Stream.runForEach((event) => event.data.dots?.state === "disabled" ? Deferred.succeed(disabled, event) : Effect.void), Effect.forkScoped)
+    capabilityGate.dots = false
+    yield* events.publish(Event.Updated, {})
+    const notice = yield* Deferred.await(disabled).pipe(Effect.timeout("1 second"))
+    expect(notice.data.dots).toEqual({ state: "disabled", reason: "capability_disabled", generation: 2 })
+  }))
+
+  toolsIt.live("report tools stay stable for an associated Session while disabled reporting fails closed", () => Effect.gen(function* () {
+    yield* connectProfile
+    const sessionID = yield* newSession("Report context")
+    const tools = yield* DotsRuntimeNode.RequestTools
+    const events = yield* EventRuntime.Service
+    const initial = yield* tools.registrations(sessionID)
+    expect(initial.flatMap((item) => Object.keys(item.tools))).toEqual(["dots_report"])
+    yield* events.publish(SessionEvent.DotsExchangeCreated, {
+      sessionID, targetSessionID: sessionID, inputID: SessionMessage.ID.make("msg_report_fixture"), exchangeID: "report_fixture",
+      expectedAttachment: target, accountDigest: "fixture", fingerprint: "fixture", grantID: "grant_fixture",
+      source: { requestID: "req_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } },
+      scope: { rootSessionID: sessionID },
+    })
+    const before = yield* tools.registrations(sessionID)
+    expect(before).toEqual(initial)
+    expect(before.flatMap((item) => Object.keys(item.tools))).toEqual(["dots_report"])
+    expect(yield* tools.observation(sessionID, [{ action: "*", resource: "**", effect: "allow" }], false)).toEqual({ state: "disabled", reason: "no_task" })
+    expect(yield* tools.registrations(sessionID)).toEqual(before)
+    capabilityGate.dots = false
+    expect(yield* tools.registrations(sessionID)).toEqual([])
+    expect(yield* tools.observation(sessionID, [], false)).toEqual({ state: "disabled", reason: "capability_disabled" })
+  }))
+
+  toolsIt.live("gives an unbound Session the stable report tool without native Dot controls", () =>
     Effect.gen(function* () {
+      capabilityGate.dots = true
       const tools = yield* DotsRuntimeNode.RequestTools
       const registrations = yield* tools.registrations(yield* newSession("Unbound"))
-      expect(registrations).toEqual([])
+      expect(registrations.flatMap((registration) => Object.keys(registration.tools))).toEqual(["dots_report"])
       const base = yield* surface()
-      expect(yield* surface(registrations)).toEqual(base)
+      expect(names(yield* surface(registrations))).toEqual([...names(base), "execute"])
       expect(names(base)).not.toContain("execute")
       expect(names(base)).not.toContain("dots_send")
       expect(names(base).some(name => name === "dots_pause" || name === "dots_resume")).toBe(false)
@@ -579,14 +633,14 @@ describe("Dots request tools", () => {
       expect((yield* (yield* DotsRuntime.Service).bind({ sessionID: bound, target })).target).toEqual(target)
       const base = yield* surface()
       const boundRegistrations = yield* tools.registrations(bound)
-      expect(boundRegistrations.flatMap((registration) => Object.keys(registration.tools))).toEqual(["dots_send"])
+      expect(boundRegistrations.flatMap((registration) => Object.keys(registration.tools))).toEqual(["dots_send", "dots_report"])
       const available = yield* registry.available(undefined, undefined, boundRegistrations)
       expect(available.has("dots_send")).toBe(true)
       expect(["dots_pause", "dots_resume"].some(name => available.has(name))).toBe(false)
       expect(names(yield* surface(boundRegistrations))).toEqual([...names(base), "execute"])
       const neighbour = yield* tools.registrations(unbound)
-      expect(neighbour).toEqual([])
-      expect(yield* surface(neighbour)).toEqual(base)
+      expect(neighbour.flatMap((registration) => Object.keys(registration.tools))).toEqual(["dots_report"])
+      expect(names(yield* surface(neighbour))).toEqual([...names(base), "execute"])
     }),
   )
 
@@ -609,7 +663,7 @@ describe("Dots request tools", () => {
       const base = yield* surface()
       expect(names(base)).toContain("execute")
       expect((yield* registry.available()).has("fixture_codemode")).toBe(true)
-      expect(yield* surface(yield* tools.registrations(unbound))).toEqual(base)
+      expect(names(yield* surface(yield* tools.registrations(unbound)))).toEqual(names(base))
       const boundRegistrations = yield* tools.registrations(bound)
       expect(names(yield* surface(boundRegistrations))).toEqual(names(base))
       const available = yield* registry.available(undefined, undefined, boundRegistrations)
@@ -626,7 +680,7 @@ describe("Dots request tools", () => {
       const events = yield* EventRuntime.Service
       const bound = yield* newSession("Bound then disabled")
       yield* dots.bind({ sessionID: bound, target })
-      expect((yield* tools.registrations(bound)).flatMap((registration) => Object.keys(registration.tools))).toEqual(["dots_send"])
+      expect((yield* tools.registrations(bound)).flatMap((registration) => Object.keys(registration.tools))).toEqual(["dots_send", "dots_report"])
       capabilityGate.dots = false
       yield* events.publish(Event.Updated, {})
       expect(yield* tools.registrations(bound)).toEqual([])
@@ -634,7 +688,7 @@ describe("Dots request tools", () => {
       expect((yield* dots.bind({ sessionID: bound, target }).pipe(Effect.flip)).code).toBe("feature_disabled")
       capabilityGate.dots = true
       expect(yield* dots.status(bound)).toEqual({ enabled: true, state: "disconnected" })
-      expect(yield* tools.registrations(bound)).toEqual([])
+      expect((yield* tools.registrations(bound)).flatMap((registration) => Object.keys(registration.tools))).toEqual(["dots_report"])
     }),
   )
 })

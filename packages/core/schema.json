@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "1f135a31-cca2-44e8-b0fa-82ef1941cc76",
+  "id": "fbcfe45e-751f-418f-bbd1-e9c9969878b2",
   "prevIds": [
-    "ee02f46d-ac6f-40f0-9b12-3232f0683d34"
+    "1f135a31-cca2-44e8-b0fa-82ef1941cc76"
   ],
   "ddl": [
     {
@@ -1009,6 +1009,16 @@
       "default": null,
       "generated": null,
       "name": "reason",
+      "entityType": "columns",
+      "table": "mcp_event_outbox"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attention",
       "entityType": "columns",
       "table": "mcp_event_outbox"
     },

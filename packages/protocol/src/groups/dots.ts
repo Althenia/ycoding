@@ -1,4 +1,5 @@
 import { Dots } from "@ycoding-ai/schema/dots"
+import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Session } from "@ycoding-ai/schema/session"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
@@ -6,6 +7,22 @@ import { InvalidRequestError, SessionNotFoundError } from "../errors.js"
 
 export function makeDotsGroup<Id extends HttpApiMiddleware.AnyId, Service>(middleware: Context.Key<Id, Service>) {
   return HttpApiGroup.make("server.dots")
+    .add(
+      HttpApiEndpoint.post("session.dots.exchange.create", "/api/session/:sessionID/dots/exchanges", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ ...Dots.ExchangeCreate.fields, remoteSource: McpEvents.RequestContext }),
+        success: Schema.Struct({ data: Dots.Exchange }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.exchange.create", summary: "Admit an authenticated external task to an authorized Session" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.exchange.read", "/api/session/:sessionID/dots/exchanges/read", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ ...Dots.ExchangeRead.fields, remoteSource: McpEvents.RequestContext }),
+        success: Schema.Struct({ data: Dots.Exchange }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.exchange.read", summary: "Read the correlated progress and result of an authenticated exchange" })),
+    )
     .add(
       HttpApiEndpoint.get("session.dots.targets", "/api/session/:sessionID/dots/targets", {
         params: { sessionID: Session.ID },

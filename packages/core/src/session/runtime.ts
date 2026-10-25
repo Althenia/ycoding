@@ -3,6 +3,7 @@ import { ListAnchor } from "@ycoding-ai/schema/session"
 import { History } from "@ycoding-ai/schema/session-compaction"
 import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
+import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Money } from "@ycoding-ai/schema/money"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
@@ -395,6 +396,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     text: string
     origin?: "subagent" | "plugin" | "review"
+    remoteSource?: McpEvents.RequestContext
     files?: PromptInput.Prompt["files"]
     agents?: PromptInput.Prompt["agents"]
     metadata?: Record<string, unknown>
@@ -2457,10 +2459,11 @@ const layer = Layer.effect(
                       : undefined
                     const metadata = {
                       ...(shared
-                        ? { ...input.metadata, sharedContext: shared.sharedContext }
+                        ? { ...Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== "remoteMcp")), sharedContext: shared.sharedContext }
                         : Object.fromEntries(
-                            Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext"),
+                            Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext" && key !== "remoteMcp"),
                           )),
+                      ...(input.origin === "plugin" && input.remoteSource ? { remoteMcp: input.remoteSource } : {}),
                       inputOrigin: input.origin ?? "human",
                     }
                     const admitted = yield* Effect.gen(function* () {

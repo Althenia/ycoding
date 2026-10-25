@@ -94,7 +94,7 @@ export function make(options: {
         (selection.messaging_room_id != null && selection.messaging_room_id !== room.roomID)
       )
         return yield* rejected()
-      return [{ dotID: room.dotID, threadID: selection.thread_id, generation: selection.generation, label: room.dotID }]
+      return [{ dotID: room.dotID, threadID: selection.thread_id, generation: selection.generation, label: "Primary Dot conversation" }]
     })
 
   const connect: DotsTransport.Interface["connect"] = (credentials) =>

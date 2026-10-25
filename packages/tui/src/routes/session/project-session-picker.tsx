@@ -32,17 +32,16 @@ export function sessionPickerRows(input: {
             key: session.sessionID,
             kind: "item",
             label: session.title,
-            value: `in ${session.projectName}`,
-            marker: "›",
+            detail: session.directory,
+            badge: `in ${session.projectName}`,
+            disabled: true,
             tone: "subdued",
           }
         : {
             key: session.sessionID,
             kind: "item",
             label: `${input.chosen === session.sessionID ? "● " : ""}${session.title}`,
-            value: session.directory,
-            truncate: "start",
-            marker: "›",
+            detail: session.directory,
             activate: () => input.choose(session),
           },
   )
@@ -51,9 +50,7 @@ export function sessionPickerRows(input: {
     find,
     ...rows,
     ...(matches.length === 0 ? [{ key: "find:none", kind: "info", label: "No matching Sessions" } satisfies Row] : []),
-    ...(hidden > 0
-      ? [{ key: "find:more", kind: "info", label: `${hidden} more · type to narrow` } satisfies Row]
-      : []),
+    ...(hidden > 0 ? [{ key: "find:more", kind: "info", label: `${hidden} more · type to narrow` } satisfies Row] : []),
   ]
 }
 
@@ -67,6 +64,9 @@ export function SessionPickerDetail(props: { session: Accessor<ProjectSessionCho
           <text fg={theme.text.subdued} wrapMode="word">
             {session().directory}
           </text>
+          <Show when={session().projectName}>
+            <text fg={theme.text.subdued}>Already in {session().projectName}; unavailable</text>
+          </Show>
         </box>
       )}
     </Show>

@@ -1,8 +1,12 @@
 import type { Dots } from "@ycoding-ai/schema/dots"
-import { createSignal, onCleanup, onMount } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
+import { Show, createSignal, onCleanup, onMount } from "solid-js"
 import { DialogSelect } from "../ui/dialog-select"
-import { useDialog, type DialogContext } from "../ui/dialog"
+import { DialogPrompt } from "../ui/dialog-prompt"
+import { dialogPanelWidth, useDialog, type DialogContext } from "../ui/dialog"
 import { escapeDisplayText } from "@ycoding-ai/client/tool-display"
+import { Keymap } from "../context/keymap"
+import { stringWidth } from "../util/string-width"
 
 export function DialogDots(props: {
   profiles: readonly string[]
@@ -14,9 +18,12 @@ export function DialogDots(props: {
   onComplete: (target: Dots.Target | null) => void
 }) {
   const dialog = useDialog()
+  const shortcuts = Keymap.useShortcuts()
+  const dimensions = useTerminalDimensions()
   const [profile, setProfile] = createSignal<string>()
   const [targets, setTargets] = createSignal<readonly Dots.Target[]>([])
   const [chosen, setChosen] = createSignal<Dots.Target>()
+  const [editingName, setEditingName] = createSignal(false)
   const [busy, setBusy] = createSignal(false)
   const [error, setError] = createSignal<string>()
   const [status, setStatus] = createSignal<Dots.Status>()
@@ -56,11 +63,21 @@ export function DialogDots(props: {
     }
   }
   onMount(() => { void refresh() })
+  const targetDetails = (target: Dots.Target) => [
+    { label: "Dot ID", value: escapeDisplayText(target.dotID) },
+    { label: "Conversation", value: escapeDisplayText(target.threadID) },
+  ].flatMap((item) => {
+    const detail = `${item.label}: ${item.value}`
+    return stringWidth(detail) > Math.max(1, dialogPanelWidth(dimensions().width) - 10)
+      ? [`${item.label}:`, item.value]
+      : [detail]
+  })
   const options = () =>
     binding()
       ? [
           ...(runtimeAction() ? [{ title: runtimeAction() === "pause" ? "Pause Dot" : "Resume Dot", value: runtimeAction()!, description: runtimeLabel() }] : []),
           { title: "Refresh status", value: "refresh" },
+          { title: "Edit display name", value: "name", details: targetDetails(binding()!), detailsWrap: true },
           { title: "Change destination", value: "change" },
         ]
       : error() && !selecting()
@@ -70,19 +87,30 @@ export function DialogDots(props: {
           {
             title: `Confirm ${escapeDisplayText(chosen()!.label)}`,
             value: "confirm",
-            description: escapeDisplayText(`${chosen()!.dotID} · ${chosen()!.threadID}`),
+            details: targetDetails(chosen()!),
+            detailsWrap: true,
           },
+          { title: "Edit display name", value: "name" },
         ]
       : profile()
         ? targets().map((target) => ({
             title: escapeDisplayText(target.label),
             value: JSON.stringify(target),
-            description: escapeDisplayText(`${target.dotID} · ${target.threadID}`),
+            details: targetDetails(target),
+            detailsWrap: true,
           }))
         : props.profiles.map((name) => ({ title: escapeDisplayText(name), value: name, description: "ChatGPT profile" }))
 
   const select = async (value: string) => {
     if (busy() || closed) return
+    if (value === "name" && (chosen() || binding())) {
+      const target = chosen() ?? binding()
+      if (!target) return
+      setChosen(target)
+      setSelecting(true)
+      setEditingName(true)
+      return
+    }
     if (binding() || error() && !selecting()) {
       if (value === "refresh") { await refresh(); return }
       if (value === "change") {
@@ -141,6 +169,18 @@ export function DialogDots(props: {
   }
 
   return (
+    <Show when={!editingName()} fallback={<DialogPrompt
+      title="Dot display name"
+      description={() => <text>User-chosen display name only; the Dot identity and permissions stay unchanged.</text>}
+      value={chosen()?.label}
+      placeholder="Optional display name"
+      onConfirm={(value) => {
+        const target = chosen()
+        if (!target || closed) return
+        setChosen({ ...target, label: value.trim() || target.label })
+        setEditingName(false)
+      }}
+    />}>
     <DialogSelect
       title={
         binding()
@@ -153,14 +193,18 @@ export function DialogDots(props: {
       }
       options={options()}
       locked={busy()}
+      renderFilter={!binding() && !chosen() && !error() && (profile() ? targets().length > 1 : props.profiles.length > 1)}
       emptyView={<text>{error() ?? (busy() ? "Loading destinations…" : "No destinations available")}</text>}
-      footer={<text>{error() ?? (binding()
-        ? `${escapeDisplayText(binding()!.dotID)} · ${escapeDisplayText(binding()!.threadID)} · ${status()?.state} · ${changing() ? changing() === "pause" ? "Pausing Dot…" : "Resuming Dot…" : runtimeLabel()} · Escape closes`
-        : "Escape cancels · Confirm selects only; Send transmits")}{runtimeAction() ? "\nPause stops the Dot's autonomous runtime until Resume; Resume may continue its work and goals." : ""}</text>}
+      footer={error() || binding() ? <text>{error() ?? `${status()?.state} · ${changing() ? changing() === "pause" ? "Pausing Dot…" : "Resuming Dot…" : runtimeLabel()} · Escape closes`}{runtimeAction() ? "\nPause stops the Dot's autonomous runtime until Resume; Resume may continue its work and goals." : ""}</text> : undefined}
+      footerHints={error() || binding() ? [] : [
+        ...[shortcuts.all("dialog.select.submit")].flatMap((label) => label ? [{ label, title: chosen() ? "confirm only" : "select" }] : []),
+        { label: "esc", title: "cancel", side: "right" },
+      ]}
       onSelect={(option) => {
         void select(option.value)
       }}
     />
+    </Show>
   )
 }
 

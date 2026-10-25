@@ -2,6 +2,7 @@ import { Session } from "@ycoding-ai/core/session"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { SessionPrediction } from "@ycoding-ai/core/session/prediction"
 import { SessionPromptGenerator } from "@ycoding-ai/core/session/prompt-generator"
+import { SessionMcpEvents } from "@ycoding-ai/core/mcp-events/index"
 import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -608,6 +609,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          if (ctx.payload.remoteSource) {
+            const authorization = yield* SessionMcpEvents.Authorization.Service
+            yield* authorization.resolve(ctx.payload.remoteSource).pipe(Effect.mapError(() =>
+              new InvalidRequestError({ field: "remoteSource", message: "The remote invocation is not authorized." }),
+            ))
+          }
           return {
             data: yield* session
               .prompt({
@@ -617,6 +624,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 files: ctx.payload.files,
                 agents: ctx.payload.agents,
                 metadata: ctx.payload.metadata,
+                ...(ctx.payload.remoteSource ? { origin: "plugin" as const, remoteSource: ctx.payload.remoteSource } : {}),
                 delivery: ctx.payload.delivery,
                 resume: ctx.payload.resume,
               })

@@ -3,6 +3,7 @@ import { InputRenderable } from "@opentui/core"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { useRoute } from "../../../src/context/route"
+import { Keymap } from "../../../src/context/keymap"
 import { backend, docsID, leadID } from "../../fixture/coordination-backend"
 import { json, sessionSnapshot } from "../../fixture/tui-client"
 import { renderScreen } from "../../screen/harness"
@@ -10,6 +11,8 @@ import { renderScreen } from "../../screen/harness"
 async function mount(width = 120) {
   const server = backend()
   let router!: ReturnType<typeof useRoute>
+  let keymap!: ReturnType<typeof Keymap.use>
+  let pendingKeys!: ReturnType<typeof Keymap.usePendingSequence>
   const route = async (url: URL, request: Request) => {
     if (/^\/api\/session\/[^/]+\/todo$/.test(url.pathname)) return json({ data: [] })
     if (url.pathname === "/api/location") {
@@ -69,6 +72,8 @@ async function mount(width = 120) {
     config: { animations: false },
     data: () => {
       router = useRoute()
+      keymap = Keymap.use()
+      pendingKeys = Keymap.usePendingSequence()
     },
     settle: (screen) => {
       const frame = screen.captureCharFrame()
@@ -77,7 +82,7 @@ async function mount(width = 120) {
     sessionReady: true,
     kittyKeyboard: true,
   })
-  return { screen, server, router: () => router }
+  return { screen, server, router: () => router, keymap: () => keymap, pendingKeys: () => pendingKeys() }
 }
 async function waitFor(screen: Awaited<ReturnType<typeof mount>>["screen"], text: string) {
   for (let i = 0; i < 250; i++) {
@@ -174,7 +179,10 @@ test("80-column Session opens a keyboard-operated Project roster in the composer
     expect(screen.frame()).toContain("Design review")
     expect(screen.frame()).toContain("[o] Open")
     expect(screen.frame()).toContain("Projects")
-    const footer = screen.lines().filter((line) => line.trim() !== "").at(-1)!
+    const footer = screen
+      .lines()
+      .filter((line) => line.trim() !== "")
+      .at(-1)!
     expect(footer).toMatch(/subagents 0|sa0/)
     expect(footer).toMatch(/shells 0|sh0/)
     expect(footer).toContain("⌃p")
@@ -202,7 +210,10 @@ test("24-row Project chat keeps a useful transcript viewport and the draft while
     expect(screen.frame()).toContain("Docs worker finished")
     expect(screen.frame()).toContain("keep this draft")
     expect(screen.scrollbox()!.viewport.height).toBeGreaterThanOrEqual(4)
-    const footer = screen.lines().filter((line) => line.trim() !== "").at(-1)!
+    const footer = screen
+      .lines()
+      .filter((line) => line.trim() !== "")
+      .at(-1)!
     expect(footer).toMatch(/subagents 0|sa0/)
     expect(footer).toMatch(/shells 0|sh0/)
     expect(footer).toContain("⌃p")
@@ -217,7 +228,10 @@ test("24-row Project chat keeps a useful transcript viewport and the draft while
 test("60-column Project chat keeps identity, counts and modes on one footer row", async () => {
   const { screen } = await mount(60)
   try {
-    const footer = screen.lines().filter((line) => line.trim() !== "").at(-1)!
+    const footer = screen
+      .lines()
+      .filter((line) => line.trim() !== "")
+      .at(-1)!
     expect(footer).toContain("◇ Master")
     expect(footer).toMatch(/subagents 0|sa0/)
     expect(footer).toMatch(/shells 0|sh0/)
@@ -230,6 +244,32 @@ test("60-column Project chat keeps identity, counts and modes on one footer row"
     expect(screen.frame()).not.toContain("Workspace/")
     await capture(screen, "tray-60x24")
   } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("Projects L04 mouse entry keeps the Project keyboard owner", async () => {
+  const { screen, router, keymap, pendingKeys } = await mount(120)
+  const events: { key: string; reason: string; mode: string }[] = []
+  const stop = keymap().intercept("key:after", (context) =>
+    events.push({ key: context.event.name, reason: context.reason, mode: keymap().mode.current() }),
+  )
+  try {
+    router().navigate({ type: "projects", sessionID: leadID })
+    await waitFor(screen, "[a] Add session")
+    const rows = screen.lines()
+    const y = rows.findIndex((row) => row.includes("[a] Add session"))
+    await screen.mouse.click(rows[y]!.indexOf("Add session"), y)
+    await waitFor(screen, "ADD SESSION")
+    expect(keymap().mode.current()).toBe("base")
+    expect(pendingKeys()).toEqual([])
+    expect(screen.renderer.getSelection()).toBeFalsy()
+    screen.input.pressEscape()
+    await screen.renderOnce()
+    expect(events.at(-1)).toMatchObject({ key: "escape", reason: "binding-handled", mode: "base" })
+    await waitFor(screen, "MEMBERS 4 + MASTER")
+  } finally {
+    stop()
     await screen.dispose()
   }
 }, 30_000)

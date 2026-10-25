@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createLocalServer, LocalFailure } from "../src/remote-local"
 import { createSessionRegistry, createSubscriptions, executeRemoteOperation } from "../src/remote-operations"
+import { SessionID } from "@ycoding-ai/schema/session-id"
 
 type Recorded = {
   readonly method: string
@@ -138,6 +139,22 @@ test("each Dots method surfaces a rejected request as an invalid local failure, 
       expect(failure).toMatchObject({ kind: "invalid" })
     }
     expect(requests).toHaveLength(6)
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("an admitted exchange with an unconfirmed return maps to an unknown outcome without replay", async () => {
+  const { requests, server, local } = serve(() => Response.json({
+    _tag: "InvalidRequestError", field: "dots", kind: "outcome_unknown", message: "Admission occurred; inspect the exchange.",
+  }, { status: 400 }))
+  try {
+    const failure = await local.dotsExchangeCreate(sessionID, location, {
+      exchangeID: "exchange_uncertain", expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), channel: "task", delivery: "queue", text: "Synthetic task",
+    }, { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }).then(() => undefined, (error: unknown) => error)
+    expect(failure).toBeInstanceOf(LocalFailure)
+    expect(failure).toMatchObject({ kind: "transport" })
+    expect(requests).toHaveLength(1)
   } finally {
     await server.stop(true)
   }

@@ -115,6 +115,8 @@ export const remoteOperations = [
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
+  "session.dots.exchange.create",
+  "session.dots.exchange.read",
   "session.skill",
   "usage.providers",
   "usage.summary",
@@ -200,6 +202,8 @@ export const remoteSessionOperations = [
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
+  "session.dots.exchange.create",
+  "session.dots.exchange.read",
   "session.skill",
   "session.usageReport",
   "session.promptCosts",
@@ -308,6 +312,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.dots.send": "mutation",
   "session.dots.pause": "mutation",
   "session.dots.resume": "mutation",
+  "session.dots.exchange.create": "mutation",
+  "session.dots.exchange.read": "read",
   "session.skill": "mutation",
   "usage.providers": "read",
   "usage.summary": "read",
@@ -898,6 +904,12 @@ function validDotsTarget(input: unknown): input is RemoteDotsTarget {
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.dots.exchange.read") return isRecord(input) && Object.keys(input).length === 1 &&
+    typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256
+  if (operation === "session.dots.exchange.create") return isRecord(input) &&
+    Object.keys(input).length === 6 && typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256 &&
+    validDotsTarget(input.expectedAttachment) && isSessionID(input.targetSessionID) && input.channel === "task" &&
+    (input.delivery === "steer" || input.delivery === "queue") && typeof input.text === "string" && input.text.length > 0 && input.text.length <= 32768
   if (operation === "session.dots.status") return input === undefined
   if (operation === "session.dots.targets") return isRecord(input) &&
     typeof input.profile === "string" && input.profile.trim().length > 0 && input.profile.length <= 256 &&

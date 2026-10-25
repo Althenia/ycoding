@@ -52,6 +52,22 @@ test("estimates all resident message payloads without claiming exact heap attrib
   expect(formatMemoryBytes(2 * 1024 * 1024)).toBe("2.0 MiB")
 })
 
+test("Dots context retains canonical coordination metadata on live transcript updates", async () => {
+  const mounted = await mount((url) => url.pathname === `/api/session/${sessionID}/snapshot` ? sessionSnapshot(sessionID, [user(1)]) : undefined)
+  try {
+    await mounted.data.session.message.sync(sessionID)
+    const received = Promise.withResolvers<void>()
+    const unsubscribe = mounted.data.on("session.context.observed", (event) => { if (event.id === "evt_dots_context") received.resolve() })
+    const dots = { state: "disabled" as const, generation: 2, reason: "capability_disabled" as const }
+    mounted.events.emit({ id: "evt_dots_context", created: 2, type: "session.context.observed", durable: { aggregateID: sessionID, seq: 2, version: 1 }, data: { sessionID, source: "dots", text: "Dots coordination disabled.", dots } })
+    await received.promise
+    unsubscribe()
+    expect(mounted.data.session.message.get(sessionID, "msg_dots_context")?.metadata).toEqual({ contextSource: "dots", dotsCoordination: dots })
+  } finally {
+    mounted.destroy()
+  }
+})
+
 test("global events retain transcripts only for resident or loading Sessions", async () => {
   const canonical = Promise.withResolvers<Response>()
   const mounted = await mount((url) =>

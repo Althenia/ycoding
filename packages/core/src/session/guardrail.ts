@@ -754,6 +754,7 @@ export const layer = Layer.effect(
               ...(result.hardReview ? { hardReview: true } : {}),
               ...(result.risk ? { risk: result.risk } : {}),
               ...(input.metadata === undefined ? {} : { metadata: structuredClone(input.metadata) }),
+              ...(input.source === undefined ? {} : { source: input.source }),
             })
             const deferred = yield* Deferred.make<void, DeclinedError | DeferredError>()
             pending.set(request.id, {

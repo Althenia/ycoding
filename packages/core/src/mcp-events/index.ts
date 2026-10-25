@@ -268,6 +268,22 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       data: { ...input.data, sessionID: review.sessionID, kind: review.kind, origin: review.origin, payload: review.payload },
     })
     if (notification === undefined) return
+    yield* captureNotification(notification)
+    if (input.type !== "session.task.updated" || notification.taskID === undefined || notification.state !== "cancelled") return
+    const previous = yield* db.select().from(McpEventOutboxTable).where(and(
+      eq(McpEventOutboxTable.session_id, notification.sessionID), eq(McpEventOutboxTable.name, "session.question.changed"),
+      sql`json_extract(${McpEventOutboxTable.attention}, '$.kind') = 'subagent_question'`,
+    )).orderBy(sql`${McpEventOutboxTable.seq} DESC`).limit(1).get().pipe(Effect.orDie)
+    if (previous === undefined || previous.request_id === null || (previous.state !== "pending" && previous.state !== "deferred")) return
+    yield* captureNotification({
+      name: "session.question.changed", sessionID: notification.sessionID, taskID: notification.taskID,
+      requestID: previous.request_id, sourceID: input.id, state: "cancelled",
+      ...(notification.reason === undefined ? {} : { reason: notification.reason }),
+      ...(previous.attention === null ? {} : { attention: previous.attention }),
+    })
+  })
+
+  const captureNotification = Effect.fn("McpEvents.captureNotification")(function* (notification: Notification) {
     const current = yield* now
     const chain = yield* ancestorsOf(notification.sessionID)
     const root = chain[chain.length - 1] ?? notification.sessionID
@@ -281,7 +297,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       if (sub.expires_at <= current) continue
       const matches = sub.session_id === notification.sessionID || (sub.include_descendants === 1 && chain.includes(sub.session_id))
       if (!matches) continue
-      if (notification.name === "session.progress") {
+      if (notification.name === "session.progress" && notification.requestID === undefined) {
         const latest = yield* db
           .select()
           .from(McpEventOutboxTable)
@@ -292,6 +308,23 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
         const last = latest[latest.length - 1]
         if (last !== undefined && last.state === notification.state && current - last.time_created < PROGRESS_COALESCE_MS) continue
       }
+      const previous = notification.requestID === undefined && notification.itemID === undefined ? undefined : yield* db
+        .select({ attention: McpEventOutboxTable.attention })
+        .from(McpEventOutboxTable)
+        .where(and(
+          eq(McpEventOutboxTable.subscription_id, sub.id), eq(McpEventOutboxTable.session_id, notification.sessionID),
+          eq(McpEventOutboxTable.name, notification.name),
+          or(
+            notification.requestID === undefined ? undefined : eq(McpEventOutboxTable.request_id, notification.requestID),
+            notification.itemID === undefined ? undefined : eq(McpEventOutboxTable.item_id, notification.itemID),
+          ),
+          isNotNull(McpEventOutboxTable.attention),
+        )).orderBy(sql`${McpEventOutboxTable.seq} DESC`).limit(1).get().pipe(Effect.orDie)
+      const snapshot = previous?.attention ?? notification.attention
+      const attention = snapshot === undefined ? undefined : McpEvents.Attention.make({
+        ...snapshot,
+        actions: notification.state === "pending" || notification.state === "deferred" ? ["inspect", "notify_human"] : ["inspect"],
+      })
       yield* db
         .insert(McpEventOutboxTable)
         .values({
@@ -307,6 +340,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
           task_id: notification.taskID ?? null,
           category: notification.category ?? null,
           reason: notification.reason ?? null,
+          attention: attention ?? null,
           time_created: current,
           attempts: 0,
           next_attempt_at: current,
@@ -422,6 +456,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
           ...(row.task_id === null ? {} : { task_id: row.task_id }),
           ...(row.category === null ? {} : { category: row.category }),
           ...(row.reason === null ? {} : { reason: row.reason }),
+          ...(row.attention === null ? {} : { attention: row.attention }),
         },
         cursor: REPLAYABLE.has(name) ? deps.secretBox.encodeCursor(sub.identity_hash, row.seq) : null,
       }
@@ -488,6 +523,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
         .where(and(
           eq(McpEventOutboxTable.state, "pending"),
           inArray(McpEventOutboxTable.name, [...EPHEMERAL_ATTENTION]),
+          or(isNull(McpEventOutboxTable.attention), sql`json_extract(${McpEventOutboxTable.attention}, '$.kind') <> 'subagent_question'`),
           isNotNull(McpEventOutboxTable.request_id),
           notExists(db.select({ seq: later.seq }).from(later).where(and(
             eq(later.subscription_id, McpEventOutboxTable.subscription_id),
@@ -516,6 +552,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
             task_id: row.task_id,
             category: row.category,
             reason: "restart",
+            attention: row.attention === null ? null : McpEvents.Attention.make({ ...row.attention, actions: ["inspect"] }),
             time_created: current,
             attempts: 0,
             next_attempt_at: current,

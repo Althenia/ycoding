@@ -4,7 +4,7 @@ import { Dots } from "@ycoding-ai/schema/dots"
 import { Cause, Context, Deferred, Effect, Exit, Option, Schema, Scope, Semaphore, Stream, type Duration } from "effect"
 import type { Database } from "./database/database"
 import type { DotsAttachments } from "./dots/attachments"
-import { DotsPeer } from "./dots/peer"
+import { Hash } from "./util/hash"
 import type { DotsTransport } from "./dots/transport"
 import { Integration } from "./integration"
 import type { IntegrationConnection } from "./integration/connection"
@@ -28,6 +28,7 @@ export interface PeerAdmission {
 }
 
 export interface Interface {
+  readonly attachment: (sessionID: SessionSchema.ID) => Effect.Effect<{ readonly target: Dots.Target; readonly accountDigest: string }, Error>
   readonly targets: (profile: string) => Effect.Effect<Dots.Target[], Error>
   readonly bind: (input: {
     readonly sessionID: SessionSchema.ID
@@ -56,26 +57,15 @@ interface Client {
   readonly scope: Scope.Closeable
   ready: Deferred.Deferred<void>
   readonly threads: Map<string, SessionSchema.ID>
-  readonly turns: Map<string, { readonly threadID: string; readonly causalMessageID?: string }>
   readonly seen: Map<string, Set<string>>
   readonly buffered: Map<string, DotsTransport.Inbound[]>
-  readonly partials: Map<
-    string,
-    {
-      readonly threadID: string
-      readonly turnID?: string
-      readonly itemID: string
-      readonly causalMessageID?: string
-      text: string
-    }
-  >
   state: Dots.State
   error?: string
   connection?: DotsTransport.Connection
 }
 
 interface Binding {
-  readonly target: Dots.Target
+  target: Dots.Target
   readonly client: Client
   runtimeState?: Dots.RuntimeState
   control?: "pending" | "unknown"
@@ -296,23 +286,20 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     if (sessionID === undefined) return
     const events = snapshot.filter((event) => event.threadID === threadID && event.type !== "message.delta")
     if (client.seen.has(threadID)) {
-      yield* Effect.forEach(events, (event) => handle(client, sessionID, event), { discard: true })
+      yield* Effect.forEach(events, (event) => handle(sessionID, event), { discard: true })
     } else {
       const seeded = new Set<string>()
       for (const event of events) if (event.type === "message") seeded.add(event.itemID)
       client.seen.set(threadID, seeded)
       for (const event of events) {
-        if (event.type === "message.snapshot") yield* handle(client, sessionID, event)
+        if (event.type === "message.snapshot") yield* handle(sessionID, event)
         if (event.type === "user.message") {
           reconcile(sessionID, event.clientMessageID, event.turnID)
-          if (event.turnID !== undefined)
-            client.turns.set(event.turnID, { threadID, causalMessageID: event.clientMessageID })
         }
-        if (event.type === "turn.completed") client.turns.delete(event.turnID)
       }
     }
     const buffered = client.buffered.get(threadID)
-    for (let event = buffered?.shift(); event; event = buffered?.shift()) yield* handle(client, sessionID, event)
+    for (let event = buffered?.shift(); event; event = buffered?.shift()) yield* handle(sessionID, event)
     client.buffered.delete(threadID)
   })
 
@@ -325,123 +312,14 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
         buffered.push(event)
         return
       }
-      yield* handle(client, sessionID, event)
+      yield* handle(sessionID, event)
     })
 
-  const handle = (client: Client, sessionID: SessionSchema.ID, event: DotsTransport.Inbound) =>
+  const handle = (sessionID: SessionSchema.ID, event: DotsTransport.Inbound) =>
     Effect.gen(function* () {
-      if (event.type === "message.revision") return
-      const turn = event.turnID === undefined ? undefined : client.turns.get(event.turnID)
-      if (event.type === "turn.started") {
-        const causalMessageID = event.clientMessageID ?? turn?.causalMessageID
-        return void client.turns.set(event.turnID, {
-          threadID: event.threadID,
-          ...(causalMessageID === undefined ? {} : { causalMessageID }),
-        })
-      }
       if (event.type === "user.message") {
         reconcile(sessionID, event.clientMessageID, event.turnID)
-        if (event.turnID !== undefined)
-          client.turns.set(event.turnID, { threadID: event.threadID, causalMessageID: event.clientMessageID })
-        return
       }
-      if (event.type === "message.snapshot") {
-        const key = `${event.threadID}\0${event.itemID}`
-        if (client.seen.get(event.threadID)?.has(event.itemID)) return void client.partials.delete(key)
-        return void client.partials.set(key, {
-          threadID: event.threadID,
-          turnID: event.turnID,
-          itemID: event.itemID,
-          text: event.text,
-          causalMessageID: event.causalMessageID,
-        })
-      }
-      if (event.type === "message.delta") {
-        const key = `${event.threadID}\0${event.itemID}`
-        const partial = client.partials.get(key)
-        if (partial) partial.text += event.delta
-        if (!partial)
-          client.partials.set(key, {
-            threadID: event.threadID,
-            turnID: event.turnID,
-            itemID: event.itemID,
-            text: event.delta,
-            causalMessageID: event.causalMessageID,
-          })
-        return
-      }
-      if (event.type === "message") {
-        client.partials.delete(`${event.threadID}\0${event.itemID}`)
-        return yield* admit(client, sessionID, {
-          ...event,
-          causalMessageID: event.causalMessageID ?? turn?.causalMessageID,
-        })
-      }
-      const streamed = [...client.partials.entries()].filter(([, partial]) => partial.turnID === event.turnID)
-      for (const [key, partial] of streamed) {
-        client.partials.delete(key)
-        yield* admit(client, sessionID, {
-          ...partial,
-          causalMessageID: partial.causalMessageID ?? turn?.causalMessageID,
-        })
-      }
-      client.turns.delete(event.turnID)
-    })
-
-  const admit = (
-    client: Client,
-    sessionID: SessionSchema.ID,
-    reply: {
-      readonly threadID: string
-      readonly turnID?: string
-      readonly itemID: string
-      readonly text: string
-      readonly causalMessageID?: string
-    },
-  ) =>
-    Effect.gen(function* () {
-      const admissible = () => {
-        const binding = bindings.get(sessionID)
-        const seen = client.seen.get(reply.threadID)
-        return !binding ||
-          binding.client !== client ||
-          binding.target.threadID !== reply.threadID ||
-          client.threads.get(reply.threadID) !== sessionID ||
-          !seen ||
-          seen.has(reply.itemID) ||
-          reply.text === ""
-          ? undefined
-          : { binding, seen }
-      }
-      if (!admissible()) return
-      if (!(yield* allowed)) return yield* disableSoon
-      const admitted = admissible()
-      if (!admitted) return
-      const { binding, seen } = admitted
-      yield* options.sessions.admit({
-        sessionID,
-        id: DotsPeer.messageID({
-          sessionID,
-          accountID: client.account.accountID,
-          dotID: binding.target.dotID,
-          threadID: reply.threadID,
-          itemID: reply.itemID,
-        }),
-        text: reply.text,
-        description: `Dots message from ${binding.target.label || binding.target.dotID}`,
-        metadata: {
-          dots: {
-            origin: "dots-peer",
-            profile: binding.target.profile,
-            dotID: binding.target.dotID,
-            threadID: reply.threadID,
-            ...(reply.turnID === undefined ? {} : { turnID: reply.turnID }),
-            itemID: reply.itemID,
-            ...(reply.causalMessageID === undefined ? {} : { causalMessageID: reply.causalMessageID }),
-          },
-        },
-      })
-      seen.add(reply.itemID)
     })
 
   const reconcile = (sessionID: SessionSchema.ID, messageID: string, turnID?: string) => {
@@ -457,10 +335,8 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
       scope,
       ready: yield* Deferred.make<void>(),
       threads: new Map(),
-      turns: new Map(),
       seen: new Map(),
       buffered: new Map(),
-      partials: new Map(),
       state: "connecting",
     }
     clients.set(account.key, client)
@@ -473,10 +349,6 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     binding.client.threads.delete(threadID)
     binding.client.seen.delete(threadID)
     binding.client.buffered.delete(threadID)
-    for (const [turnID, turn] of binding.client.turns)
-      if (turn.threadID === threadID) binding.client.turns.delete(turnID)
-    for (const [key, partial] of binding.client.partials)
-      if (partial.threadID === threadID) binding.client.partials.delete(key)
     if (binding.client.threads.size > 0) return
     if (clients.get(binding.client.account.key) === binding.client) clients.delete(binding.client.account.key)
     yield* Scope.close(binding.client.scope, Exit.void)
@@ -525,8 +397,6 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
         ),
         Effect.mapError(transportFailure("send_failed")),
       )
-    if (receipt.turnID !== undefined)
-      client.turns.set(receipt.turnID, { threadID: binding.target.threadID, causalMessageID: input.id })
     return {
       messageID: input.id,
       status: receipt.status,
@@ -585,6 +455,16 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     )
 
   return Service.of({
+    attachment: Effect.fn("DotsRuntime.attachment")(function* (sessionID) {
+      yield* requireEnabled
+      const binding = bindings.get(sessionID)
+      if (!binding) return yield* fail("not_bound", "Confirm a Dot for this Session before creating an exchange.")
+      const found = yield* destinations(binding.target.profile)
+      if (found.account.key !== binding.client.account.key) return yield* fail("profile_changed", "The confirmed ChatGPT account changed.")
+      if (!found.targets.some((target) => sameTarget(target, binding.target))) return yield* fail("target_changed", targetChangedMessage)
+      if (binding !== bindings.get(sessionID)) return yield* fail("target_changed", targetChangedMessage)
+      return { target: binding.target, accountDigest: Hash.sha256(binding.client.account.key) }
+    }),
     targets: Effect.fn("DotsRuntime.targets")(function* (profile) {
       yield* requireEnabled
       return (yield* destinations(profile)).targets
@@ -594,15 +474,17 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
       if (!(yield* options.sessions.exists(input.sessionID)))
         return yield* fail("session_not_found", "The Session does not exist.")
       const found = yield* destinations(input.target.profile)
-      const target = found.targets.find((item) => sameTarget(item, input.target))
-      if (!target)
+      const offered = found.targets.find((item) => sameTarget(item, input.target))
+      if (!offered)
         return yield* fail("target_unavailable", "That Dot conversation is no longer offered by the profile.")
+      const target = { ...offered, label: input.target.label.trim() || offered.label }
       const client = yield* lock.withPermits(1)(
         Effect.gen(function* () {
           yield* requireEnabled
           const existing = bindings.get(input.sessionID)
           if (existing && existing.client.account.key === found.account.key && sameTarget(existing.target, target)) {
             if (existing.control === "pending") return yield* fail("runtime_unknown", "A Dots runtime control is still pending.")
+            existing.target = target
             existing.control = undefined
             existing.runtimeState = undefined
             if (existing.client.state === "failed") yield* start(existing.client)
