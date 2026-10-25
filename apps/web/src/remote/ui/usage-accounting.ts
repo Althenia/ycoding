@@ -159,11 +159,16 @@ export type ConsumptionRate = {
   readonly coverage: { readonly pricedRequests: number; readonly unpricedRequests: number }
 }
 
+export const consumptionNeedsProfile = (rates: readonly ConsumptionRate[], rate: ConsumptionRate) =>
+  rates.some((other) => other !== rate && other.providerID === rate.providerID && other.modelID === rate.modelID)
+
 export function consumptionRow(rate: ConsumptionRate) {
   const perMinute = (value: number | undefined) => value === undefined ? "unreported" : `${exactNumber.format(value)} tokens/min`
   const estimate = rate.estimatedUSDPerHour === undefined ? undefined : `${currency(rate.estimatedUSDPerHour)}/hour est.`
+  const parts = { provider: rate.providerID, model: rate.modelID, profile: rate.profile ? `profile ${rate.profile}` : "default profile" }
   return {
-    identity: [rate.providerID, rate.modelID, rate.profile ? `profile ${rate.profile}` : "default profile"].filter(Boolean).join(" · "),
+    parts,
+    identity: [parts.provider, parts.model, parts.profile].filter(Boolean).join(" · "),
     tokens: `${tokenRate(rate.tokensPerMinute)} tokens/min`,
     cost: estimate === undefined ? "cost rate unreported" : rate.coverage.unpricedRequests > 0 ? `Known ${estimate} + unreported` : estimate,
     details: [

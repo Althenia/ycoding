@@ -607,6 +607,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       return { type: "working", startedAt: message.time.created } as const
     }
     if (running) return { type: "working" } as const
+    if (parentID && session()?.agent === "btw" && queuedPending().length > 0)
+      return { type: "pending" } as const
     const latest = messages().findLast((item) => item.type === "assistant")
     if (latest?.type === "assistant" && latest.error?.type.startsWith("provider."))
       return { type: "provider-error", message: safeProviderErrorMessage(latest.error) } as const

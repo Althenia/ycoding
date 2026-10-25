@@ -85,7 +85,7 @@ describe("Settings Keep machine awake", () => {
       }
     }
   })
-  test("shows the backend state, reserves geometry, and changes it only from a keyboard action without browser persistence", async () => {
+  test("shows the backend state, sizes the status to its content, and changes it only from a keyboard action without browser persistence", async () => {
     for (const width of [320, 390, 1440])
       for (const theme of ["light", "dark"]) {
         const page = await open("held", theme, width)
@@ -95,8 +95,8 @@ describe("Settings Keep machine awake", () => {
               `({ label: ${label}, disabled: ${control}.disabled, checked: ${control}.checked })`,
             ),
           ).toEqual({ label: "Checking", disabled: true, checked: false })
-          const before = await page.evaluate<{ top: number; storage: string }>(
-            `({ top: document.getElementById('following-settings').getBoundingClientRect().top, storage: JSON.stringify(localStorage) })`,
+          const before = await page.evaluate<{ storage: string; gap: number; status: number }>(
+            `({ storage: JSON.stringify(localStorage) })`,
           )
           expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toMatch(
             /macOS.*idle sleep and lid-closed sleep.*battery.*stops or restarts/,
@@ -104,8 +104,15 @@ describe("Settings Keep machine awake", () => {
           await page.evaluate(`window.keepAwakeFixture.releaseRead('off')`)
           await until(page, `${label} === 'Off' && !${control}.disabled`)
           expect(
-            await page.evaluate<number>(`document.getElementById('following-settings').getBoundingClientRect().top`),
-          ).toBe(before.top)
+            await page.evaluate<{ gap: number; clipped: boolean }>(
+              `({ gap: document.getElementById('machine-awake-caveat').getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom, clipped: document.getElementById('machine-awake-status').scrollHeight > document.getElementById('machine-awake-status').clientHeight })`,
+            ),
+          ).toEqual({ gap: expect.any(Number), clipped: false })
+          expect(
+            await page.evaluate<number>(
+              `document.getElementById('machine-awake-caveat').getBoundingClientRect().top - document.getElementById('machine-awake-status').getBoundingClientRect().bottom`,
+            ),
+          ).toBeLessThanOrEqual(24)
           expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
           if (width < 768)
             expect(

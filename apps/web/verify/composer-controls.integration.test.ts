@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { launchBrowser } from "./cdp"
 
 const port = 4387
+const goalPanel = (width: number) => width < 768 ? ".session-status__goal-sheet" : ".session-status__goal-popover"
 const browserPath = process.env.YCODING_WEB_CHROME
 if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
@@ -29,10 +30,10 @@ test("selected Session speed and context share one stable composer row and acces
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
       await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-      const baseline = await page.evaluate<{ row: number; controls: number; mobile: number }>(`(() => { const mount=document.querySelector('.mini-composer__mount'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:mount.querySelector('.composer__controls').getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-identity').getBoundingClientRect().height }; })()`)
+      const baseline = await page.evaluate<{ row: number; controls: number; mobile: number }>(`(() => { const mount=document.querySelector('.mini-composer__mount'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:mount.querySelector('.composer__controls').getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0 }; })()`)
       await page.evaluate(`window.composerSetDiagnostics('known')`)
       await wait(page, `document.querySelector('.mini-composer__mount .composer__speed')?.textContent?.includes('6,000 tok/s') === true`)
-      const layout = await page.evaluate<{ row: number; controls: number; mobile: number; speed: string; ring: boolean; ringBeforeModel: boolean; inFooter: boolean; mobileRing: boolean; tapHeight: number; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), ring=mount.querySelector('.composer__context-trigger'), mobile=mount.querySelector('.composer__mobile-trigger'), model=mount.querySelector('.model-control__trigger'), speed=mount.querySelector('.composer__speed'), controls=mount.querySelector('.composer__controls'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:controls.getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-identity').getBoundingClientRect().height, speed:speed?.textContent ?? '', ring:!!ring, ringBeforeModel:!!ring && !!model && ring.getBoundingClientRect().right<=model.getBoundingClientRect().left+1, inFooter:!!speed && controls.contains(speed) && speed.getBoundingClientRect().right<=controls.getBoundingClientRect().right+1, mobileRing:!!mobile?.querySelector('.composer__mobile-context-ring'), tapHeight:mobile?.getBoundingClientRect().height ?? 0, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+      const layout = await page.evaluate<{ row: number; controls: number; mobile: number; speed: string; ring: boolean; ringBeforeModel: boolean; inFooter: boolean; mobileRing: boolean; tapHeight: number; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), ring=mount.querySelector('.composer__context-trigger'), mobile=mount.querySelector('.composer__mobile-trigger'), model=mount.querySelector('.model-control__trigger'), speed=mount.querySelector('.composer__speed'), controls=mount.querySelector('.composer__controls'); return { row:mount.querySelector('.composer__row').getBoundingClientRect().height, controls:controls.getBoundingClientRect().height, mobile:mount.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0, speed:speed?.textContent ?? '', ring:!!ring, ringBeforeModel:!!ring && !!model && ring.getBoundingClientRect().right<=model.getBoundingClientRect().left+1, inFooter:!!speed && controls.contains(speed) && speed.getBoundingClientRect().right<=controls.getBoundingClientRect().right+1, mobileRing:!!mobile?.querySelector('.composer__mobile-context-ring'), tapHeight:mobile?.getBoundingClientRect().height ?? 0, overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
       expect(layout.speed).toContain("6,000 tok/s")
       expect(layout.row).toBe(baseline.row)
       expect(layout.controls).toBe(baseline.controls)
@@ -92,7 +93,7 @@ test("selected Session speed and context share one stable composer row and acces
       if (width === 390) await page.pressEscape()
       await page.evaluate(`window.composerSetDiagnostics('estimated')`)
       await wait(page, `document.querySelector('.mini-composer__mount .composer__speed')?.textContent?.includes('≈ 6,000 tok/s') === true`)
-      expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__mobile-speed')?.textContent ?? ''`)).toBe("≈ 6,000 tok/s")
+      expect(await page.evaluate<string | null>(`document.querySelector('.mini-composer__mount .composer__mobile-speed')?.textContent ?? null`)).toBe(width === 390 ? "≈ 6,000 tok/s" : null)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount .composer__speed')?.getAttribute('aria-label') ?? ''`)).toContain("Estimated")
       expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .composer__speed-trend') === null`)).toBe(true)
       await page.evaluate(`window.composerSetDiagnostics('unreported')`)
@@ -241,7 +242,7 @@ test("retry status yields to progress and terminal state at phone and desktop wi
   }
 }, 30_000)
 
-test("phone tool-running status text stays inside its pill and footer", async () => {
+test("phone tool-running status shows its full words inside its pill and footer, off the identity line", async () => {
   for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
     try {
@@ -250,11 +251,14 @@ test("phone tool-running status text stays inside its pill and footer", async ()
       await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
       await wait(page, `document.querySelector('.mini-composer__mount .session-status__slot') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
-      const bounds = await page.evaluate<{ text: string; clipped: boolean; inside: boolean; footerInside: boolean }>(`(() => { const slot=document.querySelector('.mini-composer__mount .session-status__slot'), text=slot.querySelector('.session-status__mobile'), row=document.querySelector('.mini-composer__mount .composer__row'), sr=slot.getBoundingClientRect(), tr=text.getBoundingClientRect(), rr=row.getBoundingClientRect(), style=getComputedStyle(text); return { text:text.textContent, clipped:getComputedStyle(slot).overflowX === 'hidden' && style.overflowX === 'hidden' && style.textOverflow === 'ellipsis', inside:tr.right <= sr.right + 1, footerInside:sr.right <= rr.right + 1 }; })()`)
+      await settled(page)
+      const bounds = await page.evaluate<{ visible: boolean; text: string; fits: boolean; inside: boolean; footerInside: boolean; belowIdentity: boolean }>(`(() => { const slot=document.querySelector('.mini-composer__mount .session-status__slot'), label=slot.querySelector('.session-status__label'), identity=document.querySelector('.mini-composer__mount .composer__mobile-trigger'), row=document.querySelector('.mini-composer__mount .composer__row'), sr=slot.getBoundingClientRect(), range=document.createRange(), rr=row.getBoundingClientRect(); range.selectNodeContents(label); return { visible:sr.width > 0 && sr.height >= 28, text:label.textContent, fits:getComputedStyle(label).position !== 'absolute' && label.scrollWidth <= label.clientWidth + 1 && slot.scrollWidth <= slot.clientWidth + 1, inside:range.getBoundingClientRect().right <= sr.right, footerInside:sr.right <= rr.right + 1, belowIdentity:sr.top >= identity.getBoundingClientRect().bottom - 1 }; })()`)
+      expect(bounds.visible).toBe(true)
       expect(bounds.text).toBe("tool running")
-      expect(bounds.clipped).toBe(true)
+      expect(bounds.fits).toBe(true)
       expect(bounds.inside).toBe(true)
       expect(bounds.footerInside).toBe(true)
+      expect(bounds.belowIdentity).toBe(true)
       await Bun.write(new URL(`../../../.cache/tmp/composer-tool-390-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
     } finally { await page.close() }
   }
@@ -277,7 +281,7 @@ test("phone status shows the Session state, never the autonomy level shown besid
   }
 }, 30_000)
 
-test("phone selection lives above the card while its footer stays on one line", async () => {
+test("phone agent and model summary, autonomy and goal share one line above the draft while primary actions sit below it", async () => {
   for (const [width, height] of [[360, 780], [390, 844], [430, 932], [820, 1180]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()
     try {
@@ -287,19 +291,20 @@ test("phone selection lives above the card while its footer stays on one line", 
       await wait(page, `document.querySelector('.mini-composer__mount .composer__row') !== null`)
       await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; window.composerSetStatus('tool')`)
       await Bun.sleep(600)
-      const layout = await page.evaluate<{ first: string; visible: boolean; label: string; pillVisible: boolean; oneLine: boolean; aligned: boolean; ellipsis: boolean; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), selector=mount.querySelector('.composer__mobile-identity'), button=selector?.querySelector('button'), controls=mount.querySelector('.composer__controls'), rects=[...controls.querySelectorAll('button,.session-status__slot')].map(item=>item.getBoundingClientRect()).filter(rect=>rect.width>0 && rect.height>0), trigger=button?.getBoundingClientRect(), card=mount.querySelector('.composer__row').getBoundingClientRect(); return { first:mount.firstElementChild?.className ?? '', visible:!!selector && getComputedStyle(selector).display!=='none', label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), oneLine:rects.every(rect=>Math.abs(rect.top-rects[0].top)<=1), aligned:!!trigger && Math.abs(trigger.left-card.left)<=1 && Math.abs(trigger.right-card.right)<=1, ellipsis:getComputedStyle(button?.querySelector('span')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth }; })()`)
+      const layout = await page.evaluate<{ present: boolean; label: string; pillVisible: boolean; summaryLine: boolean; summaryAboveDraft: boolean; actionsBelowDraft: boolean; inside: boolean; ellipsis: boolean; overflow: boolean }>(`(() => { const mount=document.querySelector('.mini-composer__mount'), button=mount.querySelector('.composer__summary .composer__mobile-trigger'), auto=mount.querySelector('.session-status__autonomous-trigger'), goal=mount.querySelector('.session-status__goal-trigger'), controls=mount.querySelector('.composer__controls'), card=mount.querySelector('.composer__row').getBoundingClientRect(), input=mount.querySelector('textarea').getBoundingClientRect(), actions=[...mount.querySelectorAll('.composer__attach,.composer__delivery-toggle,.mini-composer__send')].map(item=>item.getBoundingClientRect()), summary=[button,auto,goal].map(item=>item?.getBoundingClientRect()); const present=!!button; return { present, label:button?.textContent ?? '', pillVisible:[...controls.querySelectorAll('.mini-picker,.model-control')].some(item=>getComputedStyle(item).display!=='none'), summaryLine:present && summary.every(rect=>rect && Math.abs(rect.top-summary[0].top)<=1), summaryAboveDraft:present && summary.every(rect=>rect.bottom<=input.top+1), actionsBelowDraft:actions.length===3 && actions.every(rect=>rect.top>=input.bottom-1 && Math.abs(rect.top-actions[0].top)<=1), inside:present && summary[0].left>=card.left && summary[2].right<=card.right, ellipsis:present && getComputedStyle(button.querySelector('.composer__mobile-label')).textOverflow==='ellipsis', overflow:document.documentElement.scrollWidth>innerWidth } })()`)
       if (width! <= 430) {
-        expect(layout.first).toContain("composer__mobile-identity")
-        expect(layout.visible).toBe(true)
+        expect(layout.present).toBe(true)
         expect(layout.label).toContain("GSD")
         expect(layout.label).toContain("GPT-6 Sol")
         expect(layout.label).toContain("High")
         expect(layout.pillVisible).toBe(false)
-        expect(layout.oneLine).toBe(true)
-        expect(layout.aligned).toBe(true)
+        expect(layout.summaryLine).toBe(true)
+        expect(layout.summaryAboveDraft).toBe(true)
+        expect(layout.actionsBelowDraft).toBe(true)
+        expect(layout.inside).toBe(true)
         expect(layout.ellipsis).toBe(true)
       } else {
-        expect(layout.visible).toBe(false)
+        expect(layout.present).toBe(false)
         expect(layout.pillVisible).toBe(true)
       }
       expect(layout.overflow).toBe(false)
@@ -338,7 +343,10 @@ test("status stays inside a fixed-height composer and pending picks survive unre
     expect(idle).toBeLessThanOrEqual(160)
     for (const status of ["running", "waiting", "goal", "goal-auto", "auto", "idle"]) {
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(status)})`)
-      expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)).toBe(idle)
+      const height = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
+      if (status === "idle") expect(height).toBe(idle)
+      else expect(height).toBeLessThanOrEqual(idle + 64)
+      expect(height).toBeGreaterThanOrEqual(idle)
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Agent"]')?.textContent`)).toContain("architect")
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Model"]')?.textContent`)).toContain("Low")
       expect(await page.evaluate<string>(`document.querySelector('.mini-composer__mount button[aria-label="Agent"]')?.getAttribute('aria-description')`)).toBe("applies with your next send")
@@ -347,8 +355,8 @@ test("status stays inside a fixed-height composer and pending picks survive unre
     }
     await page.evaluate(`window.composerSetStatus('goal')`)
     await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
-    expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent`)).toContain("Finish task")
-    await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+    expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-sheet')?.textContent`)).toContain("Finish task")
+    await page.evaluate(`document.querySelector('.session-status__goal-sheet button')?.click()`)
     expect(await page.evaluate<string>(`window.composerRequests().at(-1)?.operation`)).toBe("session.goal.stop")
   } finally { await page.close() }
 }, 30_000)
@@ -369,7 +377,7 @@ test("the Autonomous dialog cycles one category, sets all three, contains focus,
       await wait(page, `${trigger} !== null`)
       if (width === 390) expect(await page.evaluate<boolean>(`[${trigger}, document.querySelector('.mini-composer__mount .session-status__goal-trigger')].every(button => { const rect=button.getBoundingClientRect(); return rect.width>=44 && rect.height>=44 })`)).toBe(true)
       expect(await page.evaluate<string>(`${trigger}.getAttribute('aria-label')`)).toBe("Autonomous: Autonomous Manual")
-      expect(await page.evaluate<string>(`${trigger}.innerText`)).toBe(width === 390 ? "Au·M" : "Autonomous Manual")
+      expect(await page.evaluate<string>(`${trigger}.innerText`)).toBe(width === 390 ? "Manual" : "Autonomous Manual")
       expect(await page.evaluate<number>(`document.querySelectorAll('.mini-composer__mount .session-status__mode').length`)).toBe(0)
       const lastRequest = () => page.evaluate<unknown>(`window.composerRequests().at(-1)`)
       const value = (category: string) => `document.querySelector('#autonomous-row-${category} .autonomous__value')?.textContent`
@@ -434,15 +442,18 @@ test("the Autonomous dialog cycles one category, sets all three, contains focus,
       expect(await page.evaluate<boolean>(`document.activeElement === ${trigger}`)).toBe(true)
       expect(await page.evaluate<boolean>(`window.composerRequests().every(item => item.operation === 'session.autonomy.set') && window.composerRequests().length === 9`)).toBe(true)
 
+      const goalSurface = width === 390 ? "dialog.overlay--confirm .overlay__surface" : ".session-status__goal-popover"
       await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
-      await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
-      expect(await page.evaluate<boolean>(`(() => { const rect=document.querySelector('.session-status__goal-popover').getBoundingClientRect(); return rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight })()`)).toBe(true)
-      await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship the next release")
-      await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      await wait(page, `document.querySelector('${goalPanel(width!)} input[aria-label="Goal"]') !== null`)
+      await settled(page)
+      expect(await page.evaluate<boolean>(`(() => { const rect=document.querySelector('${goalSurface}').getBoundingClientRect(); return rect.left>=0 && rect.right<=innerWidth && rect.top>=0 && rect.bottom<=innerHeight })()`)).toBe(true)
+      await type(page, `${goalPanel(width!)} input[aria-label='Goal']`, "Ship the next release")
+      await page.evaluate(`document.querySelector('${goalPanel(width!)} button')?.click()`)
       expect(await lastRequest()).toEqual({ operation: "session.goal.set", input: { goal: "Ship the next release" } })
+      if (width === 390) await wait(page, `document.querySelector('dialog.overlay--confirm') === null`)
       await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
-      expect(await page.evaluate<string>(`document.querySelector('.session-status__goal-popover')?.textContent`)).toContain("Ship the next release")
-      await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('${goalPanel(width!)}')?.textContent`)).toContain("Ship the next release")
+      await page.evaluate(`document.querySelector('${goalPanel(width!)} button')?.click()`)
       expect(await lastRequest()).toEqual({ operation: "session.goal.stop", input: { goal: null } })
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth<=innerWidth`)).toBe(true)
     } finally { await page.close() }
@@ -544,7 +555,7 @@ test("Goal is visibly off after completion and other terminal states while its c
         if (status !== "completed") continue
         await Bun.write(new URL(`../../../.cache/tmp/composer-goal-off-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
         await page.evaluate(`document.querySelector('.mini-composer__mount .session-status__goal-trigger')?.click()`)
-        expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)).toBe(true)
+        expect(await page.evaluate<boolean>(`document.querySelector('${goalPanel(width!)} input[aria-label="Goal"]') !== null`)).toBe(true)
         await page.pressEscape()
       }
     } finally { await page.close() }
@@ -611,12 +622,12 @@ test("sleep, wake, and keep-awake commands run their operations and show autonom
       expect(await modes()).toEqual([{ label: "asleep", tone: "session-status__mode--on" }])
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('${composer} .session-status__mode')].every(chip => chip.getBoundingClientRect().right <= innerWidth)`)).toBe(true)
       expect(await page.evaluate<string[]>(`(() => { const status = document.querySelector('${composer} .session-status'); const boxes = (selector, inside) => [...document.querySelectorAll(selector)].filter(el => status.contains(el) === inside && el.getClientRects().length > 0).map(el => [el, el.getBoundingClientRect()]); const others = boxes('${composer} :is(button,textarea,[role="slider"])', false); return boxes('${composer} :is(.session-status__mode,.session-status__autonomous-trigger,.session-status__goal-trigger)', true).flatMap(([chip, a]) => others.filter(([, b]) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1).map(([other]) => (chip.title || chip.className) + ' overlaps ' + (other.getAttribute('aria-label') || other.className))) })()`)).toEqual([])
-      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => getComputedStyle(chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"})).display === 'none' ? '' : chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}).textContent)`)).toEqual(width === 390 ? ["P·A", "G·A", "Zz"] : ["Permissions Auto", "Guardrails Auto", "asleep"])
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('${composer} .session-status__mode')].map(chip => getComputedStyle(chip.querySelector('.session-status__mode-full')).display === 'none' ? '' : chip.querySelector('.session-status__mode-full').textContent)`)).toEqual(["Permissions Auto", "Guardrails Auto", "asleep"])
       await Bun.write(new URL(`../../../.cache/tmp/composer-asleep-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       await wait(page, `document.querySelectorAll('${composer} .session-status__mode').length === 3`)
       if (width === 390) {
-        const metadata = await page.evaluate<{ modes: string[]; readable: boolean; contained: boolean }>(`(() => { const root = document.querySelector('${composer}'), cluster = root.querySelector('.session-status__modes'), box = cluster.getBoundingClientRect(), goal = root.querySelector('.session-status__goal-trigger').getBoundingClientRect(), attach = root.querySelector('.composer__attach').getBoundingClientRect(), chips = [...cluster.querySelectorAll('.session-status__mode')]; return { modes: chips.map(chip => chip.dataset.mode), readable: chips.every(chip => { const range = document.createRange(); range.selectNodeContents(chip.querySelector('.session-status__mode-compact')); const text = range.getBoundingClientRect(), bounds = chip.getBoundingClientRect(); return text.width > 0 && text.left >= bounds.left - 0.5 && text.right <= bounds.right + 0.5 }), contained: box.left >= goal.right && box.right <= attach.left && box.height <= goal.height }; })()`)
-        expect(metadata).toEqual({ modes: ["permissions", "guardrails", "sleep"], readable: true, contained: true })
+        const metadata = await page.evaluate<{ modes: string[]; words: string[]; readable: boolean; contained: boolean }>(`(() => { const root = document.querySelector('${composer}'), cluster = root.querySelector('.session-status__modes'), box = cluster.getBoundingClientRect(), goal = root.querySelector('.session-status__goal-trigger').getBoundingClientRect(), card = root.querySelector('.composer__row').getBoundingClientRect(), draft = root.querySelector('textarea').getBoundingClientRect(), chips = [...cluster.querySelectorAll('.session-status__mode')]; return { modes: chips.map(chip => chip.dataset.mode), words: chips.map(chip => chip.textContent.trim()), readable: chips.every(chip => { const range = document.createRange(); range.selectNodeContents(chip.querySelector('.session-status__mode-full')); const text = range.getBoundingClientRect(), bounds = chip.getBoundingClientRect(); return text.width > 0 && text.left >= bounds.left - 0.5 && text.right <= bounds.right + 0.5 }), contained: box.left >= card.left && box.right <= card.right && box.top >= goal.bottom - 1 && box.bottom <= draft.top + 1 }; })()`)
+        expect(metadata).toEqual({ modes: ["permissions", "guardrails", "sleep"], words: ["Permissions Auto", "Guardrails Auto", "asleep"], readable: true, contained: true })
       }
       await run("/keep-awake", "machine.keepAwake.set", { enabled: true })
       await run("/wake", "session.autonomy.set", { sleep: false })
@@ -665,9 +676,9 @@ test("Conversation autonomy controls issue Session-scoped relay operations", asy
       await page.pressEscape()
       await wait(page, `document.querySelector('dialog.overlay--autonomous') === null`)
       await page.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
-      await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
-      await type(page, ".session-status__goal-popover input[aria-label='Goal']", "Ship a reliable Session")
-      await page.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      await wait(page, `document.querySelector('${goalPanel(width)} input[aria-label="Goal"]') !== null`)
+      await type(page, `${goalPanel(width)} input[aria-label='Goal']`, "Ship a reliable Session")
+      await page.evaluate(`document.querySelector('${goalPanel(width)} button')?.click()`)
       await wait(page, `(window.remoteOperationReport().operations['session.goal.set'] ?? 0) === 1`)
     } finally { await page.close() }
 
@@ -679,8 +690,8 @@ test("Conversation autonomy controls issue Session-scoped relay operations", asy
       await active.evaluate(`document.querySelector('a[href^="/remote/session?"]')?.click()`)
       await wait(active, `document.querySelector('.workspace__main .session-status__goal-trigger')?.textContent?.includes('Goal') === true`)
       await active.evaluate(`document.querySelector('.workspace__main .session-status__goal-trigger')?.click()`)
-      await wait(active, `document.querySelector('.session-status__goal-popover button')?.textContent === 'Stop goal'`)
-      await active.evaluate(`document.querySelector('.session-status__goal-popover button')?.click()`)
+      await wait(active, `document.querySelector('${goalPanel(width)} button')?.textContent === 'Stop goal'`)
+      await active.evaluate(`document.querySelector('${goalPanel(width)} button')?.click()`)
       await wait(active, `(window.remoteOperationReport().operations['session.goal.stop'] ?? 0) === 1`)
     } finally { await active.close() }
   }
@@ -1036,7 +1047,10 @@ test("composer states and effort surface retain layout at four sizes in both the
       for (const state of ["idle", "running", "waiting", "goal"]) {
       await page.evaluate(`window.composerSetStatus(${JSON.stringify(state)})`)
       if (state === "waiting") expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount .session-status__slot')?.classList.contains('session-status__slot--attention')`)).toBe(true)
-      expect(await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)).toBe(idle)
+      const rowHeight = await page.evaluate<number>(`document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect().height`)
+      if (state !== "idle" && width! < 768) expect(rowHeight).toBeGreaterThanOrEqual(idle)
+      else expect(rowHeight).toBe(idle)
+      if (state !== "idle" && width! < 768) expect(rowHeight).toBeLessThanOrEqual(idle + 64)
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
       expect(await page.evaluate<boolean>(`(() => { const row = document.querySelector('.mini-composer__mount .composer__row').getBoundingClientRect(); return [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden').every(item => { const rect = item.getBoundingClientRect(); return rect.left >= row.left - 1 && rect.right <= row.right + 1 }) })()`)).toBe(true)
       const overlaps = await page.evaluate<string[]>(`(() => { const controls = [...document.querySelectorAll('.mini-composer__mount .composer__controls button, .mini-composer__mount .session-status__slot')].filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden'); return controls.flatMap((a, index) => controls.slice(index + 1).flatMap(b => { const x = a.getBoundingClientRect(), y = b.getBoundingClientRect(); return x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top ? [] : [a.className + ' / ' + b.className] })) })()`)
@@ -1044,8 +1058,8 @@ test("composer states and effort surface retain layout at four sizes in both the
       await Bun.sleep(240)
       await Bun.write(new URL(`../../../.cache/tmp/composer-${state}-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       }
-      if (width! < 480) await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
-      await page.evaluate(`document.querySelector(${JSON.stringify(width! < 480 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
+      if (width! < 768) await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
+      await page.evaluate(`document.querySelector(${JSON.stringify(width! < 768 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
       await wait(page, `document.querySelector('.model-control__surface') !== null`)
       expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__surface')).animationName`)).toBe("none")
       await Bun.write(new URL(`../../../.cache/tmp/composer-effort-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
@@ -1133,19 +1147,19 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
           await Bun.sleep(420)
           expect(await page.evaluate<boolean>(`document.querySelector('.mini-composer__mount [role="listbox"][aria-label="Suggestions"]')?.textContent?.includes('slow.txt') ?? false`)).toBe(false)
         }
-        if (width! < 480) {
+        if (width! < 768) {
           await page.evaluate(`document.querySelector('.composer__mobile-trigger')?.click()`)
           expect(await page.evaluate<boolean>(`document.querySelector('.composer__selection-sheet[role="dialog"]') !== null`)).toBe(true)
         }
-        await page.evaluate(`document.querySelector(${JSON.stringify(width! < 480 ? '.composer__selection-sheet button[aria-label="Agent"]' : '.mini-composer__mount .composer__controls button[aria-label="Agent"]')})?.click()`)
+        await page.evaluate(`document.querySelector(${JSON.stringify(width! < 768 ? '.composer__selection-sheet button[aria-label="Agent"]' : '.mini-composer__mount .composer__controls button[aria-label="Agent"]')})?.click()`)
         await wait(page, `document.querySelector('.mini-picker__surface [role="option"]') !== null`)
-        if (width! < 480) expect(await page.evaluate<boolean>(`(() => { const item=[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(node=>node.textContent.includes('architect')), rect=item.getBoundingClientRect(); return item.contains(document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2)); })()`)).toBe(true)
+        if (width! < 768) expect(await page.evaluate<boolean>(`(() => { const item=[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(node=>node.textContent.includes('architect')), rect=item.getBoundingClientRect(); return item.contains(document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2)); })()`)).toBe(true)
         expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].map(item => item.textContent.trim())`)).toEqual(["GSD", "architect"])
         expect(await page.evaluate<boolean>(`document.querySelector('.mini-picker__surface')?.classList.contains('mini-picker__surface--sheet')`)).toBe(width! < 768)
         await page.evaluate(`[...document.querySelectorAll('.mini-picker__surface [role="option"]')].find(item => item.textContent.includes('architect'))?.click()`)
-        await page.evaluate(`document.querySelector(${JSON.stringify(width! < 480 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
+        await page.evaluate(`document.querySelector(${JSON.stringify(width! < 768 ? '.composer__selection-sheet button[aria-label="Model"]' : '.mini-composer__mount .composer__controls button[aria-label="Model"]')})?.click()`)
         await wait(page, `document.querySelector('.model-control__switch') !== null`)
-        if (width! < 480) expect(await page.evaluate<boolean>(`(() => { const item=document.querySelector('.model-control__switch'), rect=item.getBoundingClientRect(); return item.contains(document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2)); })()`)).toBe(true)
+        if (width! < 768) expect(await page.evaluate<boolean>(`(() => { const item=document.querySelector('.model-control__switch'), rect=item.getBoundingClientRect(); return item.contains(document.elementFromPoint((rect.left+rect.right)/2,(rect.top+rect.bottom)/2)); })()`)).toBe(true)
         await page.evaluate(`document.querySelector('.model-control__switch')?.click()`)
         await wait(page, `document.querySelector('.mini-picker__search') !== null`)
         expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.mini-picker__group')].map(item => item.textContent.trim())`)).toEqual(["OpenAI", "Anthropic"])
@@ -1156,7 +1170,7 @@ test("keyboard and mouse autocomplete, pending identity, and creation work acros
         await page.pressKey("End", "End", 35)
         expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Max")
         await page.evaluate(`document.querySelector('.model-control__heading-actions button[aria-label="Close model picker"]')?.click()`)
-        if (width! < 480) {
+        if (width! < 768) {
           expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.textContent`)).toContain("architect · Claude Opus 5.5 · Max")
           expect(await page.evaluate<boolean>(`document.querySelector('.composer__mobile-trigger')?.classList.contains('composer__mobile-trigger--pending')`)).toBe(true)
           expect(await page.evaluate<string>(`document.querySelector('.composer__mobile-trigger')?.getAttribute('aria-description')`)).toBe("applies with your next send")
@@ -1295,7 +1309,7 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
       const geometry = () => page.evaluate<readonly (readonly number[] | null)[]>(`${JSON.stringify(stable)}.map(selector => { const element = document.querySelector('${mount} ' + selector); if (!element) return null; const box = element.getBoundingClientRect(); return [box.x, box.y, box.width, box.height].map(value => Math.round(value * 10) / 10) })`)
       const chipSelector = width === 390 ? ".session-status__goal-trigger .session-status__goal-progress" : ".session-status__goal-setting"
-      const modeBoxes = `[...document.querySelectorAll('${mount} .session-status__mode')].map(chip => { const box = chip.getBoundingClientRect(), span = chip.querySelector(${width === 390 ? "'.session-status__mode-compact'" : "'.session-status__mode-full'"}), range = document.createRange(); range.selectNodeContents(span); const text = ${width === 390 ? "range.getBoundingClientRect()" : "span.getBoundingClientRect()"}; return { mode: chip.dataset.mode, readable: ${width === 390 ? "text.width > 0" : "box.width >= 20"} && text.left >= box.left - 0.5 && text.right <= box.right + 0.5 } })`
+      const modeBoxes = `[...document.querySelectorAll('${mount} .session-status__mode')].map(chip => { const box = chip.getBoundingClientRect(), span = chip.querySelector('.session-status__mode-full'), range = document.createRange(); range.selectNodeContents(span); const text = range.getBoundingClientRect(); return { mode: chip.dataset.mode, readable: text.width > 0 && box.width >= 20 && text.left >= box.left - 0.5 && text.right <= box.right + 0.5 } })`
       const idle = await geometry()
       expect(idle.every((box) => box !== null)).toBe(true)
       expect(await page.evaluate<unknown>(modeBoxes)).toEqual([{ mode: "permissions", readable: true }, { mode: "guardrails", readable: true }])
@@ -1333,9 +1347,9 @@ test("setting a goal from the composer never blocks it and shows one stable, ann
       await type(page, `${mount} textarea`, "")
 
       await page.evaluate(`document.querySelector('${mount} .session-status__goal-trigger')?.click()`)
-      await wait(page, `document.querySelector('.session-status__goal-popover input[aria-label="Goal"]') !== null`)
-      await type(page, ".session-status__goal-popover input[aria-label='Goal']", "second from popover")
-      expect(await page.evaluate<boolean>(`document.querySelector('.session-status__goal-popover button[type="submit"]').disabled`)).toBe(true)
+      await wait(page, `document.querySelector('${goalPanel(width!)} input[aria-label="Goal"]') !== null`)
+      await type(page, `${goalPanel(width!)} input[aria-label='Goal']`, "second from popover")
+      expect(await page.evaluate<boolean>(`document.querySelector('${goalPanel(width!)} button[type="submit"]').disabled`)).toBe(true)
       await page.pressEscape()
 
       await page.evaluate(`window.remoteReleaseGoal('ok')`)
@@ -1438,6 +1452,7 @@ test("a failed file search leaves no stuck panel: Escape and Close dismiss it an
   } finally { await page.close() }
 }, 30_000)
 
+const settled = (page: Page) => page.evaluate(`document.fonts.ready.then(() => Promise.all(document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)))).then(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))`)
 async function type(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, selector: string, text: string) {
   await page.evaluate(`(() => { const field = document.querySelector(${JSON.stringify(selector)}); field.focus(); field.value = ${JSON.stringify(text)}; field.setSelectionRange(field.value.length, field.value.length); field.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
 }

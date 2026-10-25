@@ -128,6 +128,7 @@ test("todo toggle persists per browser and reduced motion disables expansion tra
   if (!browser) throw new Error("Browser not started")
   const page = await browser.openPage()
   try {
+    await page.setViewport(1024, 820)
     await page.setReducedMotion(true)
     await page.injectOnNewDocument(`if (!sessionStorage.getItem('todo-persistence-started')) { localStorage.removeItem('ycoding.remote.todo.expanded'); sessionStorage.setItem('todo-persistence-started', 'true') }`)
     await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html?theme=dark`)

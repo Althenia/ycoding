@@ -23,7 +23,7 @@ beforeAll(async () => {
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
 test("the Goal panel enters and leave over frames while restoring focus immediately", async () => {
-  for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"] as const) for (const reduce of [false, true]) for (const kind of ["goal"] as const) {
+  for (const [width, height] of [[820, 1180], [1440, 900]]) for (const theme of ["light", "dark"] as const) for (const reduce of [false, true]) for (const kind of ["goal"] as const) {
     const page = await browser!.openPage()
     try {
       await page.setViewport(width!, height!)
@@ -63,7 +63,7 @@ test("the Goal panel enters and leave over frames while restoring focus immediat
 test("reopening the Goal panel during exit cancels closure", async () => {
   const page = await browser!.openPage()
   try {
-    await page.setViewport(390, 844)
+    await page.setViewport(1024, 768)
     await page.setReducedMotion(false)
     await page.navigate(`http://127.0.0.1:${port}/verify/composer-fixture.html`)
     for (let attempt = 0; attempt < 60 && !await page.evaluate<boolean>(`document.querySelector('.session-status__goal-trigger') !== null`); attempt += 1) await Bun.sleep(50)

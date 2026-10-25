@@ -8,6 +8,7 @@ import { LocalContext } from "../../context/local"
 import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { getGlyph } from "../../ui/glyph"
+import { truncateFilePath } from "../../ui/file-path"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
 import { stringWidth } from "../../util/string-width"
@@ -17,6 +18,7 @@ import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 export type SessionHeaderOperationalState =
   // Penpot's resting frame displays the existing working state with its elapsed value.
   | { type: "ready" }
+  | { type: "pending" }
   | { type: "working"; elapsed?: number; startedAt?: number }
   | { type: "thinking"; elapsed?: number; startedAt?: number }
   | { type: "tool-running"; elapsed?: number; startedAt?: number }
@@ -114,13 +116,31 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number; a
     ],
     ["variant", input.variant],
   ]
+  const segments = ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
+  const pathWidth = Math.min(
+    Math.floor(input.width / 3),
+    (input.availableWidth ?? input.width) -
+      stringWidth(
+        segments
+          .filter((segment) => segment.key !== "path")
+          .map((segment) => segment.label)
+          .join(" · "),
+      ) -
+      (segments.length > 1 ? 3 : 0),
+  )
   return (["path", "branch", "agent", "variant"] as const).reduce(
     (segments, key) =>
       input.availableWidth !== undefined &&
       stringWidth(segments.map((segment) => segment.label).join(" · ")) > input.availableWidth
         ? segments.filter((segment) => segment.key !== key)
         : segments,
-    ordered.flatMap(([key, label]) => (label ? [{ key, label }] : [])),
+    segments.flatMap((segment) =>
+      segment.key !== "path"
+        ? [segment]
+        : pathWidth < 4
+          ? []
+          : [{ ...segment, label: truncateFilePath(segment.label, pathWidth) }],
+    ),
   )
 }
 
@@ -159,6 +179,7 @@ export function headerStatusLabel(
   if (state.type === "retry-scheduled")
     return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
   if (state.type === "retrying") return `retrying · attempt ${state.attempt}`
+  if (state.type === "pending") return "pending"
   if (
     state.type === "working" ||
     state.type === "thinking" ||
@@ -295,7 +316,7 @@ export function Header(
       ),
       path: identity().path,
       branch: identity().branch,
-      agent: identity().agent,
+      agent: props.sideChat ? undefined : identity().agent,
       profile: identity().profile,
       model: identity().model,
       daybreak: identity().daybreak,

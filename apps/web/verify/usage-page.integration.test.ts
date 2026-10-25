@@ -768,11 +768,20 @@ test("first Usage reads reserve visible placeholders without replacing settled c
 }, 180_000)
 
 async function selectSessionGroup(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, label = "Sessions") {
+  const phone = await page.evaluate<boolean>(`!!document.querySelector('.usage-filter-bar__trigger')`)
+  if (phone) {
+    await page.evaluate(`document.querySelector('.usage-filter-bar__trigger').click()`)
+    await wait(page, `!!document.querySelector('dialog.overlay--usage-filters[open]')`)
+  }
   await page.evaluate(`document.querySelector('[aria-label="Usage group"]').click()`)
   await wait(page, `!!document.querySelector('[role="listbox"][aria-label="Usage group"]')`)
   await page.evaluate(`(() => { const option = [...document.querySelectorAll('[role="listbox"][aria-label="Usage group"] [role="option"]')].find(item => item.textContent.trim() === ${JSON.stringify(label)}); if (!option) throw new Error('Group missing'); option.click(); })()`)
   await page.evaluate(`[...document.querySelectorAll('button')].find(button => button.textContent.includes('Confirm Selection'))?.click()`)
   await wait(page, `!document.querySelector('.custom-select__surface') && !document.querySelector('.custom-select__dialog')`)
+  if (phone) {
+    await page.evaluate(`[...document.querySelectorAll('dialog.overlay--usage-filters button')].find(button => button.textContent.trim() === 'Apply filters').click()`)
+    await wait(page, `!document.querySelector('dialog.overlay--usage-filters')`)
+  }
 }
 
 async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, expression: string) {

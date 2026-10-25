@@ -87,12 +87,16 @@ test("time filters bound the report with exact millisecond edges and an empty ra
     expect(week).toMatchObject({ group: "model", offset: 0, limit: 25 })
     expect(week).not.toHaveProperty("to")
     expect(await text(page, ".incidents__summary")).toBe("Showing 1–2 of 2 groups")
+    const today = new Date()
+    const to = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - 60 * 86_400_000
+    const from = to - 7 * 86_400_000
+    const [fromDay, toDay] = [from, to].map((time) => new Date(time).toISOString().slice(0, 10))
     await click(page, '.incidents [aria-label="Incident range"] button', "Custom UTC")
-    await page.evaluate(`(() => { const set = (label, value) => { const input = document.querySelector('[aria-label="' + label + '"]'); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })) }; set('Incident from UTC', '2026-10-08'); set('Incident to UTC', '2026-10-01'); document.querySelector('.incidents__range-form button[type="submit"]').click() })()`)
+    await page.evaluate(`(() => { const set = (label, value) => { const input = document.querySelector('[aria-label="' + label + '"]'); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })) }; set('Incident from UTC', '${toDay}'); set('Incident to UTC', '${fromDay}'); document.querySelector('.incidents__range-form button[type="submit"]').click() })()`)
     await wait(page, `!!document.querySelector('.incidents__range-form [role="alert"]')`)
-    await page.evaluate(`(() => { const set = (label, value) => { const input = document.querySelector('[aria-label="' + label + '"]'); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })) }; set('Incident from UTC', '2026-10-01'); set('Incident to UTC', '2026-10-08'); document.querySelector('.incidents__range-form button[type="submit"]').click() })()`)
+    await page.evaluate(`(() => { const set = (label, value) => { const input = document.querySelector('[aria-label="' + label + '"]'); input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })) }; set('Incident from UTC', '${fromDay}'); set('Incident to UTC', '${toDay}'); document.querySelector('.incidents__range-form button[type="submit"]').click() })()`)
     await wait(page, `document.querySelector('.incidents')?.textContent.includes('No model incidents in this period.')`)
-    expect((await requests(page, "incident.report")).at(-1)).toEqual({ group: "model", from: Date.UTC(2026, 9, 1), to: Date.UTC(2026, 9, 8), offset: 0, limit: 25 })
+    expect((await requests(page, "incident.report")).at(-1)).toEqual({ group: "model", from, to, offset: 0, limit: 25 })
   } finally { await page.close() }
 }, 40_000)
 

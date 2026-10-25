@@ -52,17 +52,37 @@
 .incidents__preview { max-block-size: 20rem; margin: 0; padding-block: var(--yc-space-3); overflow: auto; color: var(--yc-text); font: var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .incidents__clear { justify-self: start; min-height: var(--yc-hit-min); }
 
+.incidents__details, .incidents__pagination button { position: relative; inline-size: var(--yc-hit-min); padding: 0; }
+.incidents__details[aria-expanded="true"] > svg { rotate: 90deg; }
+.incidents__range-select { min-inline-size: 0; flex: 1 1 var(--yc-device-max); }
+.incidents__range-select .custom-select { min-inline-size: 0; }
+.incidents .incidents__detail-row > td { display: block; padding: 0; border: 0; text-align: start; white-space: normal; }
+
 @container (max-width: 767px) {
+  .incidents__controls { align-items: end; }
+  .incidents__controls .usage-toggle { flex: 0 0 auto; min-inline-size: 0; }
+  .incidents__controls .usage-toggle button { padding-inline: var(--yc-space-3); }
+  .incidents__range-select .field__label { display: flex; align-items: center; gap: var(--yc-space-2); }
   .incidents__panel { border: 0; background: transparent; overflow: visible; }
   .incidents__table-wrap { overflow: visible; }
   .incidents__table-wrap table { min-inline-size: 0; }
   .incidents__table thead { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
   .incidents__table, .incidents__table tbody, .incidents__table caption { display: block; }
-  .incidents__table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--yc-space-2) var(--yc-space-3); padding-block: var(--yc-space-4); border-top: 1px solid var(--yc-border); text-align: start; }
-  .incidents__table tbody tr > * { display: block; min-inline-size: 0; padding: 0; border: 0; text-align: start; white-space: normal; overflow-wrap: anywhere; }
-  .incidents__table tbody tr > th[data-label="Model"] { grid-column: 1 / -1; }
-  .incidents__table tbody tr > [data-label]::before { content: attr(data-label); display: block; color: var(--yc-text-muted); font: var(--yc-size-2xs)/var(--yc-leading-2xs) var(--yc-font-mono); }
-  .incidents__table tbody tr > td:last-child { grid-column: 1 / -1; }
-  .incidents__details { inline-size: 100%; }
-  .incidents__pagination { padding-inline: 0; }
+  .incidents__table tbody tr[data-incident-row] { display: flex; flex-wrap: wrap; align-items: center; gap: var(--yc-space-1) var(--yc-space-3); padding-block: var(--yc-space-2); border-top: 1px solid var(--yc-border); text-align: start; }
+  .incidents__table tbody tr[data-incident-row] > * { display: block; min-inline-size: 0; padding: 0; border: 0; text-align: start; white-space: normal; overflow-wrap: anywhere; font: var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); color: var(--yc-text-muted); }
+  .incidents__table tbody tr[data-incident-row] > th[data-label="Model"] { order: 1; flex: 1 1 calc(100% - var(--yc-hit-min) - var(--yc-space-3) - 1px); color: var(--yc-text); font-weight: var(--yc-weight-semibold); }
+  .incidents__table tbody tr[data-incident-row] > td:last-child { order: 2; flex: none; }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Agent"] { order: 3; flex-basis: 100%; }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Total"] { order: 4; color: var(--yc-text); font-weight: var(--yc-weight-semibold); }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Fallbacks"] { order: 5; }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Escalated"] { order: 6; }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Rejected"] { order: 7; }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Last incident"] { order: 8; flex-basis: 100%; }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Total"]::after, .incidents__table tbody tr[data-incident-row] > td[data-label="Fallbacks"]::after,
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Escalated"]::after, .incidents__table tbody tr[data-incident-row] > td[data-label="Rejected"]::after { content: " " attr(data-label); text-transform: lowercase; }
+  .incidents__table tbody tr[data-incident-row] > td[data-label="Last incident"]::before { content: "Last "; }
+  .incidents__table tbody tr[data-incident-row] > td:last-child { inline-size: var(--yc-hit-min); }
+  .incidents__detail-row { display: block; }
+  .incidents__detail { margin-top: 0; }
+  .incidents__pagination { justify-content: space-between; padding-inline: 0; }
 }

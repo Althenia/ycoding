@@ -53,9 +53,9 @@ const delegated = () =>
   )
 
 const formats = {
-  permissions: [/Permissions Auto +· inherited/, /P Auto +· inherited/, /P Auto *\*/, /P:A *\*/],
+  permissions: [/Permissions Auto/, /P Auto/, /P Auto/, /P:A/],
   guardrails: [/Guardrails YOLO/, /G YOLO/, /G YOLO/, /G:Y/],
-  answers: [/Answers Manual +· inherited/, /A Manual +· inherited/, /A Manual *\*/, /A:M *\*/],
+  answers: [/Answers Manual/, /A Manual/, /A Manual/, /A:M/],
 }
 
 function palette(mode: "dark" | "light") {
@@ -224,6 +224,7 @@ for (const mode of ["dark", "light"] as const) {
         expect(row).toMatch(/shells 0|sh0/)
         expect(row).toContain("⌃p")
         expect(row).not.toMatch(/ses_parent|ses_root/)
+        expect(row).not.toContain("inherited")
         expect(row.search(/shells 0|sh0/)).toBeLessThan(row.search(/Permissions|P[ :]/))
         if (width <= 40) expect(row).not.toContain("Master")
         if (width >= 60) expect(row).toContain("◇ Master")
@@ -249,7 +250,7 @@ for (const mode of ["dark", "light"] as const) {
         )
         expectReadableChrome(app, mode)
         if (width === 200) {
-          for (const label of ["◇ Master of Release train", "main", "subagents 0", "shells 0", "Permissions Auto · inherited", "Guardrails YOLO", "Answers Manual · inherited", "asleep", "⌃x p project", "usage", "⌃p commands"])
+          for (const label of ["◇ Master of Release train", "main", "subagents 0", "shells 0", "Permissions Auto", "Guardrails YOLO", "Answers Manual", "asleep", "⌃x p project", "usage", "⌃p commands"])
             expect(row.replace(/ +/g, " ")).toContain(label)
           const spans = rowSpans(app)
           const key = spans.find((span) => span.text.includes("⌃x p"))!
@@ -260,10 +261,9 @@ for (const mode of ["dark", "light"] as const) {
           expect(label.fg.toInts()).toEqual(usageLabel.fg.toInts())
           expect(row.indexOf("project")).toBeLessThan(row.indexOf("usage"))
           expect(row.slice(row.indexOf("project"), row.indexOf("⌃x", row.indexOf("project"))).trim()).toBe("project")
-          expect(spans.find((span) => span.text.includes("inherited"))?.fg.toInts()).toEqual(readableTint(theme.text.subdued, theme.background.chrome).toInts())
         }
         if (width === 32) {
-          expect(row).toMatch(/P:A\* G:Y A:M\*/)
+          expect(row).toMatch(/P:A G:Y A:M/)
           expect(row).toContain("sl*")
         }
       } finally {
@@ -300,10 +300,10 @@ for (const mode of ["dark", "light"] as const) {
         expectReadableChrome(app, mode)
 
         setView(autonomyView({}, { guardrails: "auto", guardrailsEnabled: false, inherited: { guardrails: "ses_root" } }))
-        await app.waitForFrame((frame) => /disabled|G:A\*!/.test(frame))
+        await app.waitForFrame((frame) => /disabled|G:A!/.test(frame))
         expectOneRow(app, width)
         const disabled = footerRow(app)
-        expect(disabled).toMatch(width === 200 ? /Guardrails Auto +· inherited · disabled/ : /G:A *\*!/)
+        expect(disabled).toMatch(width === 200 ? /Guardrails Auto +· disabled/ : /G:A *!/)
         expect(disabled).not.toContain("ses_root")
         expect(chip(app, theme.background.action.destructive.default).map((span) => span.text.trim())).toEqual([width === 200 ? "Guardrails Auto" : "G:A"])
         expectReadableChrome(app, mode)
@@ -332,19 +332,16 @@ test("FooterAutonomy picks the longest single-row format within its measured wid
   )
   app.renderer.start()
   try {
-    const full = [" Permissions Auto  · inherited", " Guardrails YOLO ", " Answers Manual  · inherited", " asleep "].join("  ")
-    const short = [" P Auto  · inherited", " G YOLO ", " A Manual  · inherited", " asleep "].join("  ")
-    const marked = [" P Auto *", " G YOLO ", " A Manual *", " asleep "].join("  ")
-    const codes = [" P:A *", " G:Y ", " A:M *", " sl* "].join(" ")
-    const compact = "P:A* G:Y A:M* sl*"
+    const full = [" Permissions Auto ", " Guardrails YOLO ", " Answers Manual ", " asleep "].join("  ")
+    const short = [" P Auto ", " G YOLO ", " A Manual ", " asleep "].join("  ")
+    const codes = [" P:A ", " G:Y ", " A:M ", " sl* "].join(" ")
+    const compact = "P:A G:Y A:M sl*"
     for (const [width, expected] of [
       [200, full],
       [full.length, full],
       [full.length - 1, short],
       [short.length, short],
-      [short.length - 1, marked],
-      [marked.length, marked],
-      [marked.length - 1, codes],
+      [short.length - 1, codes],
       [codes.length, codes],
       [codes.length - 1, compact],
       [compact.length, compact],

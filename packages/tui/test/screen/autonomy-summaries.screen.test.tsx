@@ -346,7 +346,7 @@ test("an active goal shows in the docked GOAL section and nowhere in the header 
   }
 }, 30_000)
 
-test("an inherited effective mode is marked in the footer with its source in the dialog", async () => {
+test("an inherited effective mode stays concise in the footer with its source in the dialog", async () => {
   const { state, route } = fixture()
   state.autonomy = AutonomyFixture.autonomyView(
     { permissions: "manual", guardrails: "manual", answers: "manual" },
@@ -354,8 +354,9 @@ test("an inherited effective mode is marked in the footer with its source in the
   )
   const screen = await renderScreen({ width: 200, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
   try {
-    await waitFor(screen, () => /Guardrails YOLO +· inherited/.test(footerRow(screen)), "inherited guardrails indicator")
-    expect(footerRow(screen)).toMatch(/Guardrails YOLO +· inherited/)
+    await waitFor(screen, () => /Guardrails YOLO/.test(footerRow(screen)), "effective guardrails indicator")
+    expect(footerRow(screen)).toMatch(/Guardrails YOLO/)
+    expect(footerRow(screen)).not.toContain("inherited")
     expect(screen.frame()).toMatch(/Permissions Manual/)
     expect(screen.frame()).not.toContain("Guardrails Manual")
     await openAutonomous(screen)
@@ -413,7 +414,7 @@ test("disconnect makes footer modes unknown and reconnect reloads effective mode
       { answers: "yolo", asleep: true, inherited: { answers: "ses_root" } },
     )
     reconnect.resolve(screen.events.connect())
-    await waitFor(screen, () => /(?:Answers|A) YOLO(?: +· inherited| *\*)|A:Y *\*/.test(footerRow(screen)), "reconnected footer")
+    await waitFor(screen, () => /(?:Answers|A) YOLO|A:Y/.test(footerRow(screen)), "reconnected footer")
     const footer = screen.lines().slice(-6).join("\n")
     expect(footer).toMatch(modePattern("Permissions", "Manual"))
     expect(footer).toMatch(modePattern("Guardrails", "Manual"))
@@ -441,7 +442,7 @@ test("a failed refresh clears previously loaded footer modes and the Autonomous 
     },
   })
   try {
-    await waitFor(screen, () => /(?:Permissions|P) Auto(?: +· inherited| *\*)|P:A *\*/.test(footerRow(screen)), "loaded inherited mode")
+    await waitFor(screen, () => /(?:Permissions|P) Auto|P:A/.test(footerRow(screen)), "loaded effective mode")
     expect(footerRow(screen)).toMatch(/asleep|sl\*/)
     await screen.waitForEventStream()
     failRead = true

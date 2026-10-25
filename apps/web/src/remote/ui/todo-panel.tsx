@@ -4,6 +4,15 @@ import type { TodoView } from "../store"
 import "./todo-panel.css"
 
 const storageKey = "ycoding.remote.todo.expanded"
+const phoneQuery = "(max-width: 767px)"
+
+export function todoInitiallyExpanded(stored: string | null, phone: boolean) {
+  return !phone && stored === "true"
+}
+
+export function todoLabel(summary: ReturnType<typeof todoSummary>) {
+  return `Todo list: ${summary.progress} done${summary.active ? `, current: ${summary.active}` : ""}`
+}
 
 export function todoSummary(todos: readonly TodoView[]) {
   return {
@@ -15,7 +24,7 @@ export function todoSummary(todos: readonly TodoView[]) {
 
 export function TodoPanel(props: { readonly todos?: readonly TodoView[] }): JSX.Element {
   const [expanded, setExpanded] = createSignal((() => {
-    try { return localStorage.getItem(storageKey) === "true" } catch { return false }
+    try { return todoInitiallyExpanded(localStorage.getItem(storageKey), matchMedia(phoneQuery).matches) } catch { return false }
   })())
   const summary = createMemo(() => todoSummary(props.todos ?? []))
   const [shownTodos, setShownTodos] = createSignal(props.todos ?? [])
@@ -45,6 +54,7 @@ export function TodoPanel(props: { readonly todos?: readonly TodoView[] }): JSX.
   const toggle = () => {
     const next = !expanded()
     setExpanded(next)
+    if (matchMedia(phoneQuery).matches) return
     try { localStorage.setItem(storageKey, String(next)) } catch {}
   }
   const marker = (status: TodoView["status"]) => status === "completed" ? "✓" : status === "in_progress" ? "●" : status === "cancelled" ? "–" : "○"
@@ -52,7 +62,7 @@ export function TodoPanel(props: { readonly todos?: readonly TodoView[] }): JSX.
   return <Show when={present()}>
     <section ref={panel} class={`todo-panel${closing() ? " todo-panel--closing" : ""}`} aria-label="Session todo list" aria-hidden={closing()} inert={closing()}>
       <div class="todo-panel__inner">
-        <button class="todo-panel__toggle" type="button" aria-expanded={expanded()} aria-controls="session-todo-items" disabled={closing()} onClick={toggle}>
+        <button class="todo-panel__toggle" type="button" aria-label={todoLabel(summary())} aria-expanded={expanded()} aria-controls="session-todo-items" disabled={closing()} onClick={toggle}>
           <span class="todo-panel__heading">Todo list</span>
           <span class="todo-panel__progress">{summary().progress}</span>
           <Show when={!expanded() && summary().active}><span class="todo-panel__active">{summary().active}</span></Show>

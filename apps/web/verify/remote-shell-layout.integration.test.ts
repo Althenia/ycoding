@@ -61,13 +61,12 @@ describe("remote shell layout", () => {
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('${row}__input') !== null`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`(() => { const input = document.querySelector('${row}__input'); input.value = 'Studio Alias'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.form.requestSubmit() })()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.device__name')?.textContent?.trim() === 'Studio Alias'`); attempt += 1) await Bun.sleep(50)
-      const aliased = await page.evaluate<{ readonly row: string; readonly rowHostname: string; readonly name: string; readonly hostname: string; readonly title: string | null }>(`(() => {
+      const aliased = await page.evaluate<{ readonly row: string; readonly rowHostnames: number; readonly name: string; readonly hostnames: number; readonly title: string | null }>(`(() => {
         const item = ${nameOf("Studio Alias")}
         const name = document.querySelector('.device__name')
-        const hostname = name?.parentElement?.querySelector('.device__hostname')
-        return { row: item?.querySelector('.machine-row__name')?.textContent?.trim() ?? '', rowHostname: item?.querySelector('.machine-row__hostname')?.textContent?.trim() ?? '', name: name?.textContent?.trim() ?? '', hostname: hostname?.textContent?.trim() ?? '', title: name?.getAttribute('title') ?? null }
+        return { row: item?.querySelector('.machine-row__name')?.textContent?.trim() ?? '', rowHostnames: document.querySelectorAll('.machine-row__hostname').length, name: name?.textContent?.trim() ?? '', hostnames: document.querySelectorAll('.device__hostname').length, title: name?.getAttribute('title') ?? null }
       })()`)
-      expect(aliased).toEqual({ row: "Studio Alias", rowHostname: "Studio Mac", name: "Studio Alias", hostname: "Studio Mac", title: "Studio Mac" })
+      expect(aliased).toEqual({ row: "Studio Alias", rowHostnames: 0, name: "Studio Alias", hostnames: 0, title: "Studio Mac" })
       await page.evaluate(`${nameOf("Laptop")}.querySelector('.machine-row__connect').click()`)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`${nameOf("Laptop")}?.getAttribute('aria-current') === 'true'`); attempt += 1) await Bun.sleep(50)
       await page.evaluate(`document.querySelector('.app-header__palette')?.click()`)

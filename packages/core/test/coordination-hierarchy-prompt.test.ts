@@ -374,14 +374,16 @@ const unimplemented = ["owner_session_id", "enforce"]
 const operating = [
   "Accept a member's work as complete only from verified evidence, not from a settled turn or a status claim",
   "Start the highest-priority ready work as soon as its inputs are final and its resource is free",
-  "While a resource-limited check runs, keep authoring and reviewing on separate files",
+  "While a resource-limited check runs, keep coordinating other ready work and reviewing evidence",
   "Give each assignment a bounded scope with standing authority for its routine continuation",
   "do not require an acknowledgment for each command",
   "name that writer in the assignment",
   "Cite evidence by a compact reference such as a file, hash, or message ID instead of repeating or truncating it",
   "When blocked, name the real dependency or approval you await and continue from the event that resolves it",
   "After a dispatch error, verify that the requested agent is registered and read the Session's actual state before acting again",
-  "Reuse valid check results and rerun only the scope whose inputs changed",
+  "Require each assignment to plan and complete its coherent bounded work, including code, tests, contracts, docs and consumers, before one consolidated build and verification pass",
+  "Reuse valid evidence for unchanged relevant sources, contracts and environment, including at integration and merge",
+  "A rerun needs a concrete relevant source change, failed check, invalidated evidence or explicit acceptance requirement; state the trigger, run only affected checks, and batch corrections first",
   "A missing prior measurement is not a reason to wait: run within the agreed bounded limit and record actual usage afterward",
   "Report progress by delivery milestones, not by mixed administrative counts",
   "As Main, use `assign` to give a member Session to a supervising subagent you launched",
@@ -497,6 +499,9 @@ describe("Master hierarchy prompt assembly", () => {
       const system = systemText(yield* requestFor(otherSessionID, "Coordinate the team"))
       expect(system).toContain("Directly manage Sessions owned by the Master")
       expect(system).toContain("for supervisor-owned Sessions, give directions to their recorded supervisor rather than relaying their routine events")
+      expect(system).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
+      expect(system).toContain("Verify assignments and completion evidence against the user's current direction.")
+      expect(system).toContain("Manual-mode requests remain human-only.")
       expect(system).not.toContain("assigns member Sessions directly")
       expect(system).not.toContain("directly or through supervising subagents")
     }),
@@ -513,10 +518,13 @@ describe("Master hierarchy prompt assembly", () => {
       const owned = systemText(yield* requestFor(supervisor, "Supervise the member"))
       expect(owned).toContain("Project role: supervisor")
       expect(owned).toContain("You cannot assign or transfer ownership")
+      expect(owned).toContain("Do not execute a member's task, take over its tools, or control its subagents.")
       expect(owned).toContain(JSON.stringify(CoordinationInstructions.content).slice(1, -1))
       for (const text of hierarchy) expect(owned).toContain(text)
       const executor = systemText(yield* requestFor(supervisorExecutor, "Executor work"))
       expect(executor).toContain("Project role: executor")
+      expect(executor).toContain("Own execution and verification of your assigned scope.")
+      expect(executor).toContain("Manage only your own direct subagents when delegation is permitted.")
       expect(executor).not.toContain("Coordinate and supervise only")
       for (const text of [...hierarchy, ...operating]) expect(executor).not.toContain(text)
     }),

@@ -33,3 +33,49 @@ export function customUsageRange(from: string, to: string) {
   const end = parse(to)
   return start === undefined || end === undefined || start >= end ? undefined : { from: start, to: end }
 }
+
+export const defaultUsageGroup: UsageGroupPresentation = "model"
+export const defaultUsageFilters: UsageFiltersPresentation = { provider: "", profile: "", model: "", effort: "", range: "last30" }
+
+export const usageRangeChoices = [
+  { value: "last7", label: "7 days", summary: "Last 7 days" },
+  { value: "last30", label: "30 days", summary: "Last 30 days" },
+  { value: "all", label: "All retained", summary: "All retained history" },
+  { value: "custom", label: "Custom UTC", summary: "Custom UTC range" },
+] as const
+
+const utcDay = (time: number) => new Date(time).toISOString().slice(0, 10)
+
+export function usageFilterSummary(group: UsageGroupPresentation, filters: UsageFiltersPresentation, providerLabel?: string) {
+  const range = usageRangeChoices.find((choice) => choice.value === filters.range)!
+  return [
+    usageGroups.find((option) => option.value === group)!.label,
+    filters.range === "custom" && filters.from !== undefined && filters.to !== undefined ? `UTC ${utcDay(filters.from)} to ${utcDay(filters.to)} (exclusive)` : range.summary,
+    ...(filters.provider ? [`Provider ${providerLabel ?? filters.provider}`] : []),
+    ...(filters.profile ? [`Profile ${filters.profile}`] : []),
+    ...(filters.model ? [`Model ${filters.model}`] : []),
+    ...(filters.effort ? [`Effort ${filters.effort}`] : []),
+  ]
+}
+
+export function usageFilterCount(group: UsageGroupPresentation, filters: UsageFiltersPresentation) {
+  return [group !== defaultUsageGroup, filters.provider !== "", filters.profile !== "", filters.model !== "", filters.effort !== "", filters.range !== defaultUsageFilters.range].filter(Boolean).length
+}
+
+export type UsageFilterDraft = UsageFiltersPresentation & { readonly group: UsageGroupPresentation; readonly fromText: string; readonly toText: string }
+
+export const usageFilterDraft = (group: UsageGroupPresentation, filters: UsageFiltersPresentation): UsageFilterDraft => ({
+  ...filters,
+  group,
+  fromText: filters.range === "custom" && filters.from !== undefined ? utcDay(filters.from) : "",
+  toText: filters.range === "custom" && filters.to !== undefined ? utcDay(filters.to) : "",
+})
+
+export function commitUsageFilterDraft(draft: UsageFilterDraft) {
+  const bounds = draft.range === "custom" ? customUsageRange(draft.fromText, draft.toText) : undefined
+  if (draft.range === "custom" && bounds === undefined) return undefined
+  return {
+    group: draft.group,
+    filters: { provider: draft.provider, profile: draft.profile.trim(), model: draft.model.trim(), effort: draft.effort.trim(), range: draft.range, ...bounds } satisfies UsageFiltersPresentation,
+  }
+}
