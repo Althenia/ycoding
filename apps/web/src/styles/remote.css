@@ -348,6 +348,9 @@ body:has(.app) {
 .workspace__rail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--yc-space-2); min-block-size: var(--yc-header-h); padding-inline: var(--yc-space-4); }
 .workspace__rail-head .brand { min-inline-size: 0; }
 .workspace__rail-head .brand__mark { flex: none; }
+.conversation-metadata { min-inline-size:0; padding-block-start:var(--yc-space-1); }
+.conversation-metadata:empty { display:none; }
+.app--conversation.app--selected .workspace__main:has(.composer--metadata-in-transcript) > .workspace__scroll { padding-block:0; }
 .workspace__rail-navigation { display: grid; gap: var(--yc-space-3); padding: var(--yc-space-4); }
 .workspace__rail-body { overflow-y: auto; overflow-anchor: none; min-block-size: 0; min-inline-size: 0; }
 .workspace__rail-body > .pane { padding: var(--yc-space-4); border-block-start: var(--yc-border-width) solid var(--yc-border); }

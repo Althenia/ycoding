@@ -308,6 +308,56 @@ for (const kind of ["permission", "guardrail"] as const) {
 }
 
 for (const kind of ["permission", "guardrail"] as const) {
+  test(`${kind} short details keep their natural height and leave the transcript space across resize`, async () => {
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <Keymap.Provider>
+                <box height="100%">
+                  <box id="transcript.region" flexGrow={1}>
+                    <text>Transcript remains visible</text>
+                  </box>
+                  <Prompt
+                    kind={kind}
+                    title="Approval required"
+                    instance="short_approval"
+                    body={<text>{"SHORT DETAIL ONE\nSHORT DETAIL TWO"}</text>}
+                    options={{ reject: "Deny", once: "Allow once", always: "Allow for this session" }}
+                    escapeKey="reject"
+                    onSelect={() => undefined}
+                  />
+                </box>
+              </Keymap.Provider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 100, height: 40, kittyKeyboard: true },
+    )
+    try {
+      await app.waitForFrame((frame) => frame.includes("SHORT DETAIL TWO") && frame.includes("Allow for this session"))
+      for (const size of [{ width: 100, height: 40 }, { width: 120, height: 60 }, { width: 100, height: 40 }]) {
+        app.renderer.resize(size.width, size.height)
+        await app.renderOnce()
+        await app.renderOnce()
+        const scroll = descendants(app.renderer.root).find((item) => item.id === `session.${kind}.details`)!
+        const transcript = descendants(app.renderer.root).find((item) => item.id === "transcript.region")!
+        const panel = descendants(app.renderer.root).find((item) => item.id === `session.${kind}`)!
+        const lines = app.captureCharFrame().split("\n")
+        expect(scroll.height).toBe(2)
+        expect(lines.findIndex((line) => line.includes("Choose")) - lines.findIndex((line) => line.includes("SHORT DETAIL TWO"))).toBe(2)
+        expect(transcript.height + panel.height).toBe(size.height)
+        expect(transcript.height).toBeGreaterThan(size.height / 2)
+        for (const label of ["Approval required", "SHORT DETAIL ONE", "Deny", "Allow once", "Allow for this session", "pgup/pgdn"])
+          expect(app.captureCharFrame()).toContain(label)
+      }
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   for (const width of [50, 100]) {
     test(`${kind} choices stay on the same terminal lines during selection at width ${width}`, async () => {
       const decisions: string[] = []

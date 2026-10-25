@@ -254,7 +254,7 @@ Use Geist Mono at 14px / 18px line height for terminal specimens. The running TU
 
 ## Layout
 
-Short approval details use their natural height; the review cap must not create empty space that displaces transcript rows.
+Short approval details use their natural height; the measured viewport budget is a maximum, never a reserved height, so the review cap must not create empty space that displaces transcript rows.
 Transcript scroll content allows vertical overflow and measures full row heights independently of the viewport; shrinking the viewport must not truncate the scroll extent or hide a pending review's status below the tail. Verify hydrated and live subagent reviews in `test/guardrail-surface.test.tsx`.
 
 Guardrail audit ordering (T35): untimed assistant text follows the preceding timed part's completion or creation when placing settled disclosures. After compaction, omit audit rows older than the retained chat window from the transcript without discarding their status records. Pending inputs do not set that window's lower boundary. Retained chat may precede checkpoint activation; pending family reviews remain actionable at the tail. Verify replay and rendered ordering in `test/cli/tui/session-rows.test.ts`, `test/session-transcript-live-fixes.test.tsx`, and `test/guardrail-compaction-audit.test.ts`.

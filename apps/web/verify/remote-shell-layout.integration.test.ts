@@ -242,7 +242,23 @@ describe("remote shell layout", () => {
         const trigger = `.workspace__main .session-status__${kind}-trigger`
         await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
         if (kind === "goal") expect(await page.evaluate<number>(labelAsymmetry(trigger))).toBeLessThanOrEqual(1)
-        await page.evaluate(`document.querySelector('${trigger}')?.click()`)
+        await page.evaluate(`(() => { const trigger = document.querySelector('${trigger}'); trigger.focus({ preventScroll: true }); trigger.click() })()`)
+        if (width < 768) {
+          for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('dialog[aria-label="Goal"]')?.open === true`); attempt += 1) await Bun.sleep(50)
+          await page.evaluate(`Promise.all(document.querySelector('dialog[aria-label="Goal"]').getAnimations({ subtree: true }).filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished))`)
+          expect(await page.evaluate<{ readonly modal: boolean; readonly sheet: boolean; readonly popover: boolean; readonly inside: boolean; readonly contentSized: boolean; readonly focused: boolean }>(`(() => {
+            const dialog = document.querySelector('dialog[aria-label="Goal"]'), surface = dialog.querySelector('.overlay__surface').getBoundingClientRect(), viewport = visualViewport;
+            return { modal: dialog.matches(':modal'), sheet: dialog.querySelector('.session-status__goal-sheet') !== null, popover: document.querySelector('.session-status__popover') !== null,
+              inside: surface.left >= viewport.offsetLeft && surface.top >= viewport.offsetTop && surface.right <= viewport.offsetLeft + viewport.width && surface.bottom <= viewport.offsetTop + viewport.height,
+              contentSized: surface.height < viewport.height, focused: dialog.contains(document.activeElement) };
+          })()`)).toEqual({ modal: true, sheet: true, popover: false, inside: true, contentSized: true, focused: true })
+          await page.evaluate(`(() => { const controls = [...document.querySelector('dialog[aria-label="Goal"]').querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter(control => control.getClientRects().length > 0); controls.at(-1).focus() })()`)
+          await page.pressKey("Tab", "Tab", 9)
+          expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('dialog[aria-label="Goal"] .overlay__close')`)).toBe(true)
+          await page.pressKey("Escape", "Escape", 27)
+          expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('${trigger}') && !document.querySelector('dialog[aria-label="Goal"]')?.open`)).toBe(true)
+          continue
+        }
         for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.session-status__popover') !== null`); attempt += 1) await Bun.sleep(50)
         await page.evaluate(`Promise.all([...document.querySelector('.session-status__popover').getAnimations()].map(animation => animation.finished))`)
         const placement = await page.evaluate<{ readonly gap: number; readonly overlap: boolean; readonly inside: boolean }>(`(() => { const pill = document.querySelector('${trigger}').getBoundingClientRect(), panel = document.querySelector('.session-status__popover').getBoundingClientRect(); return { gap: Math.max(pill.top - panel.bottom, panel.top - pill.bottom), overlap: panel.left < pill.right && panel.right > pill.left, inside: panel.left >= 0 && panel.top >= 0 && panel.right <= innerWidth && panel.bottom <= innerHeight, pill: [pill.left, pill.top, pill.right, pill.bottom].map(Math.round), panel: [panel.left, panel.top, panel.right, panel.bottom].map(Math.round), viewport: [innerWidth, innerHeight] } })()`)
@@ -712,6 +728,95 @@ describe("remote shell layout", () => {
       } finally { await page.close() }
     }
   }, 120_000)
+
+  test("short conversation viewports move metadata once into the existing scroller without replacing controls or drafts", async () => {
+    for (const theme of ["dark", "light"] as const) {
+      const page = await fixture("view=chat", 390, "Stream remote output safely", theme, 844)
+      try {
+        await page.setCoarsePointer(true)
+        await page.evaluate(`document.fonts.ready`)
+        await page.evaluate(`(() => {
+          document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove();
+          Object.assign(document.querySelector('.fixture').style, { height:'100dvh', minHeight:'0', overflow:'hidden' });
+          const input = document.querySelector('.composer__input'); input.value = 'Keep this viewport draft'; input.dispatchEvent(new InputEvent('input', { bubbles:true })); input.focus();
+          window.metadataOriginal = { input, autonomous:document.querySelector('.composer__summary .session-status__autonomous-trigger'), goal:document.querySelector('.composer__summary .session-status__goal-trigger') };
+        })()`)
+        const reads = await page.evaluate<string>(`JSON.stringify(window.requestLog.map(request => request.operation))`)
+        const placement = () => page.evaluate<{ readonly detached: boolean; readonly emptyHeight: number; readonly primary: number; readonly slots: number; readonly modes: number; readonly goals: number; readonly same: boolean; readonly focused: boolean; readonly draft: string; readonly visible: boolean; readonly targets: boolean; readonly scrollOwner: boolean }>(`(() => {
+          const mount = document.querySelector('.conversation-metadata'), composer = document.querySelector('.composer'), row = composer.querySelector('.composer__row').getBoundingClientRect(), nav = document.querySelector('.bottom-nav').getBoundingClientRect();
+          return { detached:mount?.querySelector('.session-status--metadata') !== null && mount !== null, emptyHeight:mount?.getBoundingClientRect().height ?? -1,
+            primary:document.querySelectorAll('.session-status__autonomous-trigger,.session-status__goal-trigger').length,
+            slots:document.querySelectorAll('.session-status__slot').length, modes:document.querySelectorAll('.session-status__modes').length, goals:document.querySelectorAll('.session-status__active-goal').length,
+            same:window.metadataOriginal.input === composer.querySelector('.composer__input') && window.metadataOriginal.autonomous === composer.querySelector('.session-status__autonomous-trigger') && window.metadataOriginal.goal === composer.querySelector('.session-status__goal-trigger'),
+            focused:document.activeElement === window.metadataOriginal.input, draft:window.metadataOriginal.input.value,
+            visible:row.bottom <= Math.min(innerHeight, nav.height > 0 ? nav.top : innerHeight) + 1,
+            targets:[...composer.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0).every(button => button.getBoundingClientRect().height >= 44),
+            scrollOwner:mount?.parentElement.classList.contains('workspace__scroll') === true && !['auto','scroll'].includes(getComputedStyle(mount).overflowY) };
+        })()`)
+        expect(await placement()).toMatchObject({ detached:false, emptyHeight:0, primary:2, slots:1, modes:1, goals:1, same:true, focused:true, draft:"Keep this viewport draft", visible:true, targets:true, scrollOwner:true })
+        for (const [width, height, detached] of [[320, 380, true], [390, 480, true], [844, 390, true], [390, 481, false], [390, 844, false], [320, 380, true]] as const) {
+          await page.setViewport(width, height)
+          await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+          expect(await placement(), `${theme} ${width}x${height}`).toMatchObject({ detached, primary:2, slots:1, modes:1, goals:1, same:true, focused:true, draft:"Keep this viewport draft", visible:true, targets:true, scrollOwner:true })
+          if (width === 844) {
+            const scroll = await page.evaluate<{ readonly x: number; readonly y: number }>(`(() => { const rect = document.querySelector('.workspace__scroll').getBoundingClientRect(); return { x:rect.left + rect.width / 2, y:rect.top + rect.height / 2 } })()`)
+            await page.wheel(scroll.x, scroll.y, 0, 1000)
+            await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+            expect(await page.evaluate<boolean>(`(() => {
+              const node = document.querySelector('.conversation-metadata .session-status__active-goal'); node.scrollIntoView({ block:'center' });
+              const range = document.createRange(); range.selectNodeContents(node); const host = document.querySelector('.workspace__scroll'), frame = host.getBoundingClientRect();
+              return [...range.getClientRects()].every((_, index) => { host.scrollTop += range.getClientRects()[index].top - frame.top; const text = range.getClientRects()[index]; return text.top >= frame.top - 1 && text.bottom <= frame.bottom + 1 });
+            })()`), `${theme} landscape goal words remain reachable`).toBe(true)
+          }
+        }
+        expect(await page.evaluate<string>(`JSON.stringify(window.requestLog.map(request => request.operation))`)).toBe(reads)
+        expect(await page.evaluate<string>(`document.querySelector('.conversation-metadata').innerText`)).toContain("Waiting for your decision")
+        expect(await page.evaluate<string>(`document.querySelector('.conversation-metadata').innerText`)).toContain("Permissions Auto")
+        expect(await page.evaluate<string>(`document.querySelector('.conversation-metadata').innerText`)).toContain("Guardrails Auto")
+        expect(await page.evaluate<string>(`document.querySelector('.conversation-metadata').innerText`)).toContain("Goal active")
+        const scroll = await page.evaluate<{ readonly x: number; readonly y: number }>(`(() => { const rect = document.querySelector('.workspace__scroll').getBoundingClientRect(); return { x:rect.left + rect.width / 2, y:rect.top + rect.height / 2 } })()`)
+        await page.wheel(scroll.x, scroll.y, 0, 1000)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        for (const selector of [".session-status__label", ".session-status__mode-full", ".session-status__active-goal"]) {
+          expect(await page.evaluate<boolean>(`(() => {
+            const node = document.querySelector('.conversation-metadata ${selector}'); node.scrollIntoView({ block:'center' });
+            const range = document.createRange(); range.selectNodeContents(node); const host = document.querySelector('.workspace__scroll'), frame = host.getBoundingClientRect();
+            return [...range.getClientRects()].every((_, index) => { host.scrollTop += range.getClientRects()[index].top - frame.top; const text = range.getClientRects()[index]; return text.top >= frame.top - 1 && text.bottom <= frame.bottom + 1 });
+          })()`), `${theme} scroll reaches ${selector}`).toBe(true)
+        }
+        await page.evaluate(`document.querySelector('.session-status__goal-trigger').click(); window.metadataGoalDialog = document.querySelector('dialog[aria-label="Goal"]')`)
+        await page.setViewport(390, 844)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        expect(await page.evaluate<boolean>(`window.metadataGoalDialog === document.querySelector('dialog[aria-label="Goal"]') && window.metadataGoalDialog.open && window.metadataGoalDialog.contains(document.activeElement)`)).toBe(true)
+        await page.pressEscape()
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!window.metadataGoalDialog.isConnected`); attempt += 1) await Bun.sleep(25)
+        await page.evaluate(`(() => {
+          window.metadataOriginal.input.focus(); window.metadataNativeViewport = window.visualViewport;
+          const stub = Object.assign(new EventTarget(), { height:420, width:390, offsetTop:0, offsetLeft:0, scale:1, pageTop:0, pageLeft:0 });
+          const add = stub.addEventListener.bind(stub), remove = stub.removeEventListener.bind(stub), listeners = new Map();
+          stub.addEventListener = (type, listener, options) => { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(listener); add(type, listener, options) };
+          stub.removeEventListener = (type, listener, options) => { listeners.get(type)?.delete(listener); remove(type, listener, options) };
+          stub.listenerCount = () => [...listeners.values()].reduce((sum, group) => sum + group.size, 0);
+          window.metadataViewportStub = stub; Object.defineProperty(window, 'visualViewport', { configurable:true, value:stub }); window.dispatchEvent(new Event('resize'));
+        })()`)
+        expect(await placement()).toMatchObject({ detached:true, primary:2, slots:1, modes:1, goals:1, same:true, focused:true, draft:"Keep this viewport draft" })
+        await page.evaluate(`window.metadataViewportStub.height = 700; window.metadataViewportStub.dispatchEvent(new Event('resize'))`)
+        expect(await placement()).toMatchObject({ detached:false, emptyHeight:0, same:true, focused:true, draft:"Keep this viewport draft" })
+        await page.evaluate(`Object.defineProperty(window, 'visualViewport', { configurable:true, value:window.metadataNativeViewport }); window.dispatchEvent(new Event('resize'))`)
+        expect(await page.evaluate<number>(`window.metadataViewportStub.listenerCount()`)).toBe(0)
+        expect(await page.evaluate<string>(`JSON.stringify(window.requestLog.map(request => request.operation))`)).toBe(reads)
+        await page.setViewport(320, 380)
+        await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+        await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+        expect(await page.evaluate<boolean>(`document.querySelector('.conversation-metadata').children.length === 0 && document.querySelector('.composer--collapsed .session-status__slot') !== null`)).toBe(true)
+        await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)
+        expect(await placement()).toMatchObject({ detached:true, primary:2, slots:1, modes:1, goals:1, focused:true, draft:"Keep this viewport draft" })
+        await page.evaluate(`document.querySelector('.bottom-nav a[href="/remote/settings"]').click()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`document.querySelector('.conversation-metadata').children.length === 0`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<boolean>(`document.querySelector('.conversation-metadata').children.length === 0 && document.querySelector('.conversation-metadata').getBoundingClientRect().height === 0`)).toBe(true)
+      } finally { await page.close() }
+    }
+  }, 45_000)
 
   test("follows a VisualViewport that shrinks and shifts while the layout viewport stays put (stubbed VisualViewport, not a real on-screen keyboard)", async () => {
     const page = await fixture("view=chat", 390, "Stream remote output safely", "dark", 844)
@@ -1461,8 +1566,16 @@ describe("remote shell layout", () => {
   test("keeps the mobile composer compact and sizes dense controls for the active pointer", async () => {
     for (const theme of ["dark", "light"] as const) {
       const page = await fixture("scenario=conversation-tool-terminal-output-390", 390, "Run sanity checks on worker threads.", theme, 620)
+      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture = document.querySelector('.fixture'); fixture.style.height = '100dvh'; fixture.style.minHeight = '0'; fixture.style.overflow = 'hidden'; })()`)
       const state = await page.evaluate<{
         readonly height: number
+        readonly budget: number
+        readonly hit: number
+        readonly space: number
+        readonly rows: readonly number[]
+        readonly ordered: boolean
+        readonly summaryNamed: boolean
+        readonly transcriptVisible: boolean
         readonly input: number
         readonly mobileTrigger: number
         readonly actions: readonly { readonly label: string; readonly height: number }[]
@@ -1470,8 +1583,15 @@ describe("remote shell layout", () => {
         readonly overflow: boolean
       }>(`(() => {
         const composer=document.querySelector('.composer');
+        const root=getComputedStyle(document.documentElement), hit=parseFloat(root.getPropertyValue('--yc-hit-min')), space=parseFloat(root.getPropertyValue('--yc-space-1')), border=parseFloat(root.getPropertyValue('--yc-border-width'));
+        const dock=composer.querySelector('.composer__dock').getBoundingClientRect(), summary=composer.querySelector('.composer__summary'), summaryRect=summary.getBoundingClientRect(), input=composer.querySelector('.composer__input').getBoundingClientRect(), actions=composer.querySelector('.composer__actions').getBoundingClientRect(), transcript=document.querySelector('.workspace__scroll').getBoundingClientRect();
         return {
           height:composer?.getBoundingClientRect().height ?? 0,
+          budget:4*hit+4*space+2*border,hit,space,
+          rows:[dock.height,summaryRect.height,input.height,actions.height],
+          ordered:dock.bottom<=summaryRect.top && summaryRect.bottom<=input.top && input.bottom<=actions.top,
+          summaryNamed:['.composer__mobile-trigger','.session-status__autonomous-trigger','.session-status__goal-trigger'].every(selector=>!!summary.querySelector(selector)?.getAttribute('aria-label')),
+          transcriptVisible:transcript.height>=2*hit && transcript.top>=0 && transcript.bottom<=composer.getBoundingClientRect().top+1 && composer.getBoundingClientRect().bottom<=innerHeight,
           input:composer?.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
           mobileTrigger:document.querySelector('.composer__mobile-trigger')?.getBoundingClientRect().height ?? 0,
           actions:[...composer?.querySelectorAll('button') ?? []].filter(button=>button.getBoundingClientRect().width>0).map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
@@ -1479,7 +1599,14 @@ describe("remote shell layout", () => {
           overflow:document.documentElement.scrollWidth > innerWidth,
         };
       })()`)
-      expect(state.height).toBeLessThanOrEqual(160)
+      expect(state.height).toBeLessThanOrEqual(state.budget)
+      expect(state.rows[0]).toBeLessThanOrEqual(state.hit)
+      expect(state.rows[1]).toBeLessThanOrEqual(state.hit + state.space)
+      expect(state.rows[2]).toBeLessThanOrEqual(state.hit)
+      expect(state.rows[3]).toBeLessThanOrEqual(state.hit + state.space)
+      expect(state.ordered).toBe(true)
+      expect(state.summaryNamed).toBe(true)
+      expect(state.transcriptVisible).toBe(true)
       expect(state.input).toBeGreaterThanOrEqual(44)
       expect(state.mobileTrigger).toBeGreaterThanOrEqual(44)
       expect(state.actions.map((action) => action.label)).toContain("Send prompt")
@@ -1488,8 +1615,10 @@ describe("remote shell layout", () => {
       expect(state.overflow).toBe(false)
       await page.setCoarsePointer(true)
       expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.composer button,.composer__mobile-trigger')].filter(button => button.getBoundingClientRect().width > 0).every(button => button.getBoundingClientRect().height >= 44)`)).toBe(true)
+      await page.evaluate(`(() => { const field = document.querySelector('.composer__input'); field.value = 'Keep this phone draft'; field.dispatchEvent(new InputEvent('input', { bubbles: true })) })()`)
       await page.evaluate(`document.querySelector('.composer__delivery-toggle')?.click()`)
       expect(await page.evaluate<string | null>(`document.querySelector('.composer__delivery-toggle')?.getAttribute('aria-pressed') ?? null`)).toBe("true")
+      expect(await page.evaluate<string>(`document.querySelector('.composer__input').value`)).toBe("Keep this phone draft")
       await page.close()
     }
   }, 30_000)

@@ -46,6 +46,14 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Changed", text: "Antigravity sign-in and token refresh use OAuth client values embedded at build time. The release build receives its configured values; custom builds supply both client values." },
       { tag: "Fixed", text: "BTW headers show the side chat's own pending and execution state, omit its redundant agent name and keep long paths within the available header width." },
       { tag: "Fixed", text: "Usage incident details and cost/accounting views preserve the selected context on mobile. Confirmation dialogs let Up/Down move through choices, keep Cancel and Confirm visible while details scroll, and settle a selection once." },
+      {
+        tag: "Fixed",
+        text: "Short permission and guardrail details use natural height, preserving transcript space; longer reviews remain bounded and scrollable with decisions visible.",
+      },
+      {
+        tag: "Fixed",
+        text: "Short phone layouts move Session status, full-word autonomy-mode labels, sleep and review labels, and the active-goal preview into the conversation scroll area while keeping primary controls in the composer.",
+      },
     ],
   },
   {

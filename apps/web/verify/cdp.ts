@@ -36,6 +36,11 @@ export async function launchBrowser(executable: string, width: number, height: n
       const target = await send<{ readonly targetId: string }>("Target.createTarget", { url: "about:blank" })
       const attached = await send<{ readonly sessionId: string }>("Target.attachToTarget", { targetId: target.targetId, flatten: true })
       const call = <T>(method: string, params: Record<string, unknown> = {}) => send<T>(method, params, attached.sessionId)
+      const media = new Map<string, string>()
+      const setMedia = (name: string, value: string) => {
+        media.set(name, value)
+        return call("Emulation.setEmulatedMedia", { features: [...media].map(([name, value]) => ({ name, value })) })
+      }
       const requests = new Map<string, string>()
       const failures: string[] = []
       const pausedCleanup = new Set<() => void>()
@@ -56,6 +61,7 @@ export async function launchBrowser(executable: string, width: number, height: n
       await call("Page.enable")
       await call("Runtime.enable")
       await call("Emulation.setFocusEmulationEnabled", { enabled: true })
+      await setMedia("prefers-reduced-motion", "no-preference")
       await call("Network.enable")
       await call("Network.setBlockedURLs", { urls: ["*sw.js*"] })
       await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false })
@@ -126,19 +132,13 @@ export async function launchBrowser(executable: string, width: number, height: n
           await call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 })
         },
         pinch: (x: number, y: number, scaleFactor: number) => call("Input.synthesizePinchGesture", { x, y, scaleFactor, relativeSpeed: 800, gestureSourceType: "touch" }),
-        setColorScheme: (scheme: "light" | "dark") => call("Emulation.setEmulatedMedia", {
-          features: [{ name: "prefers-color-scheme", value: scheme }],
-        }),
+        setColorScheme: (scheme: "light" | "dark") => setMedia("prefers-color-scheme", scheme),
         async setAnimationPlaybackRate(playbackRate: number) {
           await call("Animation.enable")
           await call("Animation.setPlaybackRate", { playbackRate })
         },
-        setReducedMotion: (reduce: boolean) => call("Emulation.setEmulatedMedia", {
-          features: [{ name: "prefers-reduced-motion", value: reduce ? "reduce" : "no-preference" }],
-        }),
-        setForcedColors: (active: boolean) => call("Emulation.setEmulatedMedia", {
-          features: [{ name: "forced-colors", value: active ? "active" : "none" }],
-        }),
+        setReducedMotion: (reduce: boolean) => setMedia("prefers-reduced-motion", reduce ? "reduce" : "no-preference"),
+        setForcedColors: (active: boolean) => setMedia("forced-colors", active ? "active" : "none"),
         mouse: (type: "mouseMoved" | "mousePressed" | "mouseReleased", x: number, y: number, held = false) => call("Input.dispatchMouseEvent", {
           type,
           x,
@@ -155,9 +155,7 @@ export async function launchBrowser(executable: string, width: number, height: n
         }),
         async setCoarsePointer(enabled: boolean) {
           await call("Emulation.setTouchEmulationEnabled", { enabled, ...(enabled ? { maxTouchPoints: 1 } : {}) })
-          await call("Emulation.setEmulatedMedia", {
-            features: [{ name: "pointer", value: enabled ? "coarse" : "fine" }],
-          })
+          await setMedia("pointer", enabled ? "coarse" : "fine")
         },
         async pressKey(key: string, code: string, windowsVirtualKeyCode: number, text?: string) {
           await call("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, ...(text === undefined ? {} : { text }) })

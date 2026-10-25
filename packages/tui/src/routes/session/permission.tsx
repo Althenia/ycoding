@@ -659,7 +659,6 @@ export function Prompt<const T extends Record<string, string>>(props: {
         }}
         width="100%"
         maxHeight={detailsHeight()}
-        height={detailsHeight()}
         minHeight={1}
         flexShrink={1}
         scrollX={false}

@@ -24,6 +24,7 @@
 .composer__context-bar-fill { display:block; block-size:100%; border-radius:inherit; background:var(--yc-green-strong); }
 .composer__selection-options :is(.mini-picker__trigger,.model-control__trigger) { justify-content:space-between; inline-size:100%; max-inline-size:none; min-block-size:var(--yc-hit-min); }
 .composer { position: relative; display:flex; flex-direction:column; border:0; background:transparent; padding:var(--yc-space-3) var(--yc-gutter) max(var(--yc-space-3), env(safe-area-inset-bottom)); }
+.composer.composer--metadata-in-transcript { padding-block:var(--yc-space-1) max(var(--yc-space-1), env(safe-area-inset-bottom)); }
 .composer__dock-toggle { min-inline-size:var(--yc-hit-min); min-block-size:var(--yc-hit-min); }
 .composer__dock-toggle svg { inline-size:16px; block-size:16px; }
 .composer__dock-toggle[aria-expanded="false"] svg { transform:rotate(180deg); }

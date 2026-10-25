@@ -3,6 +3,7 @@ import { Portal } from "solid-js/web"
 import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
+import { watchVisualViewport } from "../../ui/visual-viewport"
 import type { RemoteDotsTarget } from "@ycoding-ai/remote"
 import { createDotsCapabilityReader, dotsClient, dotsDisabledMessage } from "../dots"
 import { DotsDialog } from "./dots-dialog"
@@ -41,6 +42,7 @@ export function MiniComposer(props: {
   readonly onInterrupt?: () => void
   readonly showStatus?: boolean
   readonly phoneSummary?: boolean
+  readonly metadataMount?: HTMLElement
 }): JSX.Element {
   const remote = useRemote()
   const [agent, setAgent] = createSignal<string>()
@@ -62,6 +64,7 @@ export function MiniComposer(props: {
   const [bound, setBound] = createSignal<number>()
   const [mobileOpen, setMobileOpen] = createSignal(false)
   const [phone, setPhone] = createSignal(false)
+  const [shortViewport, setShortViewport] = createSignal(false)
   const [contextOpen, setContextOpen] = createSignal(false)
   const [contextPinned, setContextPinned] = createSignal(false)
   const [contextLeaving, setContextLeaving] = createSignal(false)
@@ -156,6 +159,7 @@ export function MiniComposer(props: {
     return remote.state().queuedPromptDrafts?.[target.sessionID]
   }
   const collapsed = () => dockCollapsed() && sessionTarget()
+  const metadataMount = () => shortViewport() && !collapsed() ? props.metadataMount : undefined
   const predictionView = () => props.target && "sessionID" in props.target && remote.state().view?.id === props.target.sessionID ? remote.state().view : undefined
   const predictionSource = () => predictionView()?.messages.findLast(message => message.kind === "assistant")?.id
   const dismissedSource = () => remote.state().dismissedPredictions.find((item) => item.scope === modelKey())?.source
@@ -361,10 +365,15 @@ export function MiniComposer(props: {
   onMount(() => {
     if (!props.phoneSummary) return
     const media = window.matchMedia("(max-width: 767px)")
-    const follow = () => { setPhone(media.matches); if (!media.matches) setMobileOpen(false) }
-    setPhone(media.matches)
-    media.addEventListener("change", follow)
-    onCleanup(() => media.removeEventListener("change", follow))
+    const layout = window.matchMedia("(max-width: 767px), (max-height: 599px) and (pointer: coarse)")
+    const follow = () => {
+      setPhone(media.matches)
+      setShortViewport(layout.matches && Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight) <= 480)
+      if (!media.matches) setMobileOpen(false)
+    }
+    const releaseViewport = watchVisualViewport(follow)
+    layout.addEventListener("change", follow)
+    onCleanup(() => { layout.removeEventListener("change", follow); releaseViewport() })
   })
   onMount(() => {
     const expand = () => setDock("palette-draft")
@@ -585,7 +594,7 @@ export function MiniComposer(props: {
           <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
         </section>
     </Portal></Show>
-    <div class="composer" classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true }}>
+    <div class="composer" classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true, "composer--metadata-in-transcript": metadataMount() !== undefined }}>
     <div class="composer__row" classList={{ "composer__row--dragging": dragging() }} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }}>
       <div class="composer__body" aria-hidden={collapsed()} inert={collapsed()}><div class="composer__body-inner">
       <div ref={inputWrap} class="mini-composer__input-wrap">
@@ -622,7 +631,7 @@ export function MiniComposer(props: {
         <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
         <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
         </div>
-        <Show when={props.showStatus && !collapsed()}><div class="composer__summary"><Show when={props.phoneSummary && phone()}><button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}; ${speed()!.description}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label" title={mobileLabel()}>{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed" title={value().description}>{value().label}</span>}</Show><Icon name="chevron-down" /></button></Show><ComposerStatus /></div></Show>
+        <Show when={props.showStatus && !collapsed()}><div class="composer__summary"><Show when={props.phoneSummary && phone()}><button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}; ${speed()!.description}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label" title={mobileLabel()}>{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed" title={value().description}>{value().label}</span>}</Show><Icon name="chevron-down" /></button></Show><ComposerStatus metadataMount={metadataMount()} /></div></Show>
         <div class="composer__control-set" aria-hidden={collapsed()} inert={collapsed()}>
         <Show when={speed()}>{(value) => <span class="composer__speed" title={value().description} aria-label={`Generation speed ${value().label}: ${value().description}`}>{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />
@@ -718,7 +727,7 @@ function SuggestDialog(props: {
   </Modal>
 }
 
-export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean }): JSX.Element {
+export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean; readonly metadataMount?: HTMLElement }): JSX.Element {
   const remote = useRemote()
   const [suggestion, setSuggestion] = createSignal<{ readonly hint?: string; readonly returnFocus: HTMLElement }>()
   let composerMount: HTMLDivElement | undefined
@@ -736,7 +745,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
     return true
   }
   return <div class="mini-composer__mount" ref={composerMount}>
-    <MiniComposer phoneSummary target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
+    <MiniComposer phoneSummary metadataMount={props.metadataMount} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
       const sessionID = props.sessionID
       const draft = text()
       if (!sessionID) return false

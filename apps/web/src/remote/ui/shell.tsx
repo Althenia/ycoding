@@ -168,6 +168,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   }
   const view = (): RemoteView => views.find((entry) => entry === props.path()) ?? "/remote"
   let scrollHost: HTMLDivElement | undefined
+  const [composerMetadataMount, setComposerMetadataMount] = createSignal<HTMLDivElement>()
   let jumpSlot: HTMLDivElement | undefined
   const anchors = new Map<string, TranscriptPosition>()
   const [pendingAnchor, setPendingAnchor] = createSignal<{ readonly sessionID: string; readonly position: TranscriptPosition }>()
@@ -544,6 +545,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
                   <div class="pane settings"><AccountSettings /></div>
                 </Show>
               </Show>
+              <div class="conversation-metadata" ref={setComposerMetadataMount} />
             </div>
             <div class="conversation-jump-slot" ref={jumpSlot} />
             <Show when={view() === "/remote/sessions" && jumpSlot}>{(slot) => <SessionsTopAnchor slot={slot()} scroll={() => scrollHost} />}</Show>
@@ -553,6 +555,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
             <Show when={selected()}>
                 <RoutePanel active={!managedChild() && (view() !== "/remote/session" || ownsSessionRoute())} preserve class="composer-resident"><Composer
                   sessionID={composerSessionID()}
+                  metadataMount={!conversationHidden() && !managedChild() && !selectedLoading() ? composerMetadataMount() : undefined}
                   running={state().view?.status === "running"}
                   canSend={
                     !managedChild() && state().transport.kind === "open" &&

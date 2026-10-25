@@ -21,6 +21,45 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited; if (captures) await rm(captures, { recursive: true }) })
 
+test("CDP media choices survive changes to independent media features", async () => {
+  const page = await browser!.openPage()
+  const state = () => page.evaluate<{ reduced: boolean; dark: boolean; forced: boolean; coarse: boolean; touch: number }>(`({ reduced:matchMedia('(prefers-reduced-motion: reduce)').matches, dark:matchMedia('(prefers-color-scheme: dark)').matches, forced:matchMedia('(forced-colors: active)').matches, coarse:matchMedia('(pointer: coarse)').matches, touch:navigator.maxTouchPoints })`)
+  try {
+    await page.setReducedMotion(true)
+    await page.setColorScheme("dark")
+    expect(await state()).toMatchObject({ reduced: true, dark: true })
+    await page.setForcedColors(true)
+    await page.setCoarsePointer(true)
+    expect(await state()).toEqual({ reduced: true, dark: true, forced: true, coarse: true, touch: 1 })
+    await page.setColorScheme("light")
+    expect(await state()).toEqual({ reduced: true, dark: false, forced: true, coarse: true, touch: 1 })
+    await page.setReducedMotion(false)
+    expect(await state()).toEqual({ reduced: false, dark: false, forced: true, coarse: true, touch: 1 })
+    await page.setForcedColors(false)
+    expect(await state()).toEqual({ reduced: false, dark: false, forced: false, coarse: true, touch: 1 })
+    await page.setCoarsePointer(false)
+    expect(await state()).toEqual({ reduced: false, dark: false, forced: false, coarse: false, touch: 0 })
+    await page.setReducedMotion(true)
+    expect(await state()).toEqual({ reduced: true, dark: false, forced: false, coarse: false, touch: 0 })
+  } finally { await page.close() }
+})
+
+test("CDP pages default to normal motion without overriding native mobile touch media", async () => {
+  const first = await browser!.openPage()
+  const page = await browser!.openPage()
+  try {
+    await first.setReducedMotion(true)
+    expect(await page.evaluate<{ reduced: boolean; normal: boolean }>(`({ reduced:matchMedia('(prefers-reduced-motion: reduce)').matches, normal:matchMedia('(prefers-reduced-motion: no-preference)').matches })`)).toEqual({ reduced: false, normal: true })
+    await page.setMobileViewport(390, 844)
+    await page.setColorScheme("dark")
+    await page.setForcedColors(false)
+    expect(await page.evaluate<{ normal: boolean; coarse: boolean; touch: number }>(`({ normal:matchMedia('(prefers-reduced-motion: no-preference)').matches, coarse:matchMedia('(pointer: coarse)').matches, touch:navigator.maxTouchPoints })`)).toEqual({ normal: true, coarse: true, touch: 5 })
+    await page.setReducedMotion(true)
+    expect(await page.evaluate<{ reduced: boolean; coarse: boolean; touch: number }>(`({ reduced:matchMedia('(prefers-reduced-motion: reduce)').matches, coarse:matchMedia('(pointer: coarse)').matches, touch:navigator.maxTouchPoints })`)).toEqual({ reduced: true, coarse: true, touch: 5 })
+    expect(await first.evaluate<boolean>(`matchMedia('(prefers-reduced-motion: reduce)').matches`)).toBe(true)
+  } finally { await page.close(); await first.close() }
+})
+
 test("selected Session speed and context share one stable composer row and accessible details", async () => {
   for (const [width, height] of [[390, 844], [1440, 900]]) for (const theme of ["light", "dark"]) {
     const page = await browser!.openPage()

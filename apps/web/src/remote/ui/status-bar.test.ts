@@ -6,6 +6,7 @@ const phone = "@media (max-width: 767px)"
 const sheet = await readStylesheet("../remote/ui/status-bar.css")
 const source = await Bun.file(new URL("./status-bar.tsx", import.meta.url)).text()
 const phoneRule = (header: string) => declarationsWhere(sheet, (rule) => rule.header === header && rule.conditions.includes(phone))
+const metadataRule = (header: string) => phoneRule(`:is(.composer__summary, .session-status--metadata) ${header}`)
 const baseRule = (header: string) => declarationsWhere(sheet, (rule) => rule.header === header && rule.conditions.length === 0)
 
 test("the phone autonomy word is the shared effective mode word, or Mixed when categories differ", () => {
@@ -40,10 +41,10 @@ test("below 768px the autonomy control reads as an icon with one effective word 
 
 test("below 768px mode, sleep and review chips and the active goal take full-width lines in readable words", () => {
   expect(phoneRule(".composer__summary > .session-status")).toMatchObject({ display: "contents" })
-  expect(phoneRule(".composer__summary .session-status__modes")).toMatchObject({ flex: "1 1 auto", order: "2" })
-  expect(phoneRule(".composer__summary .session-status__active-goal")).toMatchObject({ flex: "1 1 100%", order: "3", "max-inline-size": "none" })
-  expect(phoneRule(".composer__summary .session-status__mode")["min-block-size"]).toBe("28px")
-  expect(phoneRule(".composer__summary .session-status__slot--empty")).toMatchObject({ display: "none" })
+  expect(metadataRule(".session-status__modes")).toMatchObject({ flex: "1 1 auto", order: "2" })
+  expect(metadataRule(".session-status__active-goal")).toMatchObject({ flex: "1 1 100%", order: "3", "max-inline-size": "none" })
+  expect(metadataRule(".session-status__mode")["min-block-size"]).toBe("28px")
+  expect(metadataRule(".session-status__slot--empty")).toMatchObject({ display: "none" })
 })
 
 test("the phone Goal control opens a focus-contained sheet while wider widths keep the anchored popover", () => {
@@ -79,13 +80,18 @@ test("from tablet width the transient status slot follows the metadata so the se
 })
 
 test("below 768px the transient status leaves the identity line and shows its full words", () => {
-  expect(phoneRule(".composer__summary .session-status__slot")).toMatchObject({ order: "1", flex: "0 1 auto", "max-inline-size": "100%" })
-  expect(phoneRule(".composer__summary .session-status__label")).toMatchObject({ position: "static", "clip-path": "none" })
-  expect(phoneRule(".composer__summary .session-status__mobile")).toMatchObject({ display: "none" })
+  expect(metadataRule(".session-status__slot")).toMatchObject({ order: "1", flex: "0 1 auto", "max-inline-size": "100%" })
+  expect(metadataRule(".session-status__label")).toMatchObject({ position: "static", "clip-path": "none" })
+  expect(metadataRule(".session-status__mobile")).toMatchObject({ display: "none" })
 })
 
 test("below 768px an in-flight goal keeps the operational status visible and its colors", () => {
-  expect(phoneRule(".composer__summary .session-status__goal-setting")).toMatchObject({ display: "none" })
-  expect(phoneRule(".composer__summary .session-status__slot--setting .session-status__label")).toMatchObject({ visibility: "visible" })
+  expect(metadataRule(".session-status__goal-setting")).toMatchObject({ display: "none" })
+  expect(metadataRule(".session-status__slot--setting .session-status__label")).toMatchObject({ visibility: "visible" })
   expect(sheet.rules.some((rule) => rule.conditions.includes(phone) && rule.header.includes("session-status__slot--setting") && rule.declarations.display === "none")).toBe(false)
+})
+
+test("metadata relocated into the conversation retains full wrapping words without another scroller", () => {
+  expect(baseRule(".session-status--metadata :is(.session-status__slot,.session-status__label,.session-status__mode,.session-status__mode-full,.session-status__active-goal)")).toMatchObject({ "min-inline-size":"0", overflow:"visible", "overflow-wrap":"anywhere", "white-space":"normal" })
+  expect(baseRule(".session-status--metadata .session-status__active-goal")).toMatchObject({ flex:"1 1 100%", "max-inline-size":"none" })
 })

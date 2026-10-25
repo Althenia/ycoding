@@ -57,6 +57,12 @@ describe("release entries", () => {
       "settle a selection once",
     ])
       expect(text).toContain(fragment)
+    expect(text).toContain(
+      "Short permission and guardrail details use natural height, preserving transcript space; longer reviews remain bounded and scrollable with decisions visible.",
+    )
+    expect(text).toContain(
+      "Short phone layouts move Session status, full-word autonomy-mode labels, sleep and review labels, and the active-goal preview into the conversation scroll area while keeping primary controls in the composer.",
+    )
     expect(after("0.11.2")?.version).toBe("0.11.1")
   })
 
