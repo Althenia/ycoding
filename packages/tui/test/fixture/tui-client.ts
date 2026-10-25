@@ -145,6 +145,8 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/active") return json({ data: {} })
+    if (/^\/api\/session\/[^/]+\/dots$/.test(url.pathname))
+      return json({ data: { enabled: false, state: "disconnected" } })
     if (/^\/api\/session\/[^/]+\/snapshot$/.test(url.pathname))
       return sessionSnapshot(url.pathname.slice("/api/session/".length, -"/snapshot".length), [])
     if (/^\/api\/session\/[^/]+\/(pending|skills|todo)$/.test(url.pathname)) return json({ data: [] })
