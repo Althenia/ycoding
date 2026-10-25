@@ -19,6 +19,8 @@ YCODING_WEB_CHROME="$browser" bun test --cwd apps/web verify/public-fidelity.int
 
 `verify/scrollbar.integration.test.ts` is the only suite that launches Chrome with visible scrollbars (`launchBrowser(..., { scrollbars: true })`). The other suites pass `--hide-scrollbars`, which hides styled scrollbars but still reserves `scrollbar-gutter`, so their geometry includes the reserved gutter; assert scrollbar rendering only in the visible-scrollbar suite.
 
+Use native wheel, touch, keyboard, or jump controls to leave latest-follow before positioning a conversation reader. Do not use `scrollIntoView()` alone for this transition. Await the reader's visible navigation state before measuring hover, focus, or hit targets.
+
 ## Managed image reuse
 
 Bound resolved managed-image reuse to 32 sources and 8 MiB of data-URL text, evicting least-recently used sources without invalidating mounted previews or lightboxes. Coalesce pending reads independently of that resolved budget; never abort a pending read for cache eviction. Preserve MIME validation, explicit retry, and selection/connection teardown. Evicted sources may be fetched again.

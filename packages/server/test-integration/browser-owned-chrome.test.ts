@@ -126,7 +126,7 @@ test("pairs a private Chrome extension for owned and automatically listed existi
     if (!(readable instanceof Readable) || !(writable instanceof Writable))
       throw new Error("Private Chrome did not expose its control pipe")
     cdp = connect(readable, writable)
-    const version = record(await cdp.send("Browser.getVersion"))
+    const version = record(await cdp.send("Browser.getVersion", {}, undefined, undefined, 15_000))
     expect(Number(/^Chrome\/(\d+)\./.exec(String(version.product))?.[1])).toBeGreaterThanOrEqual(152)
     await cdp.send("Target.setDiscoverTargets", { discover: true })
     const worker = await eventually(async () => {

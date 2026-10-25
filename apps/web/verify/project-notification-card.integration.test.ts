@@ -42,6 +42,39 @@ async function openCards(page: Page, theme: "light" | "dark") {
   await page.evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect && Number.isFinite(animation.effect.getComputedTiming().endTime)).map(animation => animation.finished.catch(() => undefined)))`)
 }
 
+async function revealCard(page: Page, refresh = false) {
+  const viewport = await page.evaluate<{ x: number; y: number; distance: number }>(`(() => {
+    const root = document.querySelector('.workspace__scroll')
+    const rect = root.getBoundingClientRect()
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, distance: root.scrollHeight }
+  })()`)
+  await page.wheel(viewport.x, viewport.y, 0, -viewport.distance)
+  await wait(page, `document.querySelector('.workspace__scroll').scrollTop <= 1 && !!document.querySelector('[aria-label="Jump to latest"]')`)
+  await page.evaluate(`(() => {
+    document.querySelector('.project-event a').scrollIntoView({block:'center',behavior:'instant'})
+    ${refresh ? "return window.transcriptRefresh()" : ""}
+  })()`)
+  await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+}
+
+test("Project card reading survives a snapshot arriving during scroll positioning", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await openCards(page, "light")
+    await revealCard(page, true)
+    const target = await page.evaluate<{ hit: boolean; inside: boolean; reading: boolean }>(`(() => {
+      const link = document.querySelector('.project-event a')
+      const rect = link.getBoundingClientRect()
+      const root = document.querySelector('.workspace__scroll').getBoundingClientRect()
+      return { hit: link.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)),
+        inside: rect.top >= root.top && rect.bottom <= root.bottom,
+        reading: !!document.querySelector('[aria-label="Jump to latest"]') }
+    })()`)
+    expect(target).toEqual({ hit: true, inside: true, reading: true })
+  } finally { await page.close() }
+}, 90_000)
+
 const cases = (["light", "dark"] as const).flatMap((theme) => [1440, 1024, 1023, 640, 639, 390, 359].map((width) => ({ theme, width })))
 
 test.each(cases)("Project cards use bounded full-width previews at $width in $theme", async ({ theme, width }) => {
@@ -84,8 +117,7 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
       expect(card.height).toBeLessThanOrEqual(card.line * 3 + 1)
     }
     const link = `.project-event a`
-    await page.evaluate(`document.querySelector('${link}').scrollIntoView({block:'center',behavior:'instant'})`)
-    await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+    await revealCard(page)
     if (await page.evaluate<boolean>(`matchMedia('(hover:hover)').matches`)) {
       await page.mouse("mouseMoved", 0, 0)
       expect(await page.evaluate<boolean>(`document.querySelector('${link}').matches(':hover')`)).toBe(false)
