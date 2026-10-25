@@ -1,9 +1,10 @@
 import { batch, createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { Modal } from "../../ui/modal"
+import { CustomSelect } from "../../ui/custom-select"
 import { Icon } from "../../ui/icon"
 import { useRemote } from "../context"
 import { createRemoteQuery } from "../query"
-import { usageRead, type UsageRead } from "../queries"
+import { usageRead } from "../queries"
 import { LoadingPlaceholder } from "./loading"
 import {
   decidedByLabel, guidanceIndicator, incidentCount, incidentGuidanceInput, incidentKindLabel, incidentModelLabel, incidentPageSize, incidentPageSummary, incidentRecentInput,
@@ -16,7 +17,7 @@ const ranges = [{ value: "last7", label: "7 days" }, { value: "last30", label: "
 const groups = [{ value: "model", label: "Model" }, { value: "agent", label: "Agent" }] as const
 const unsupportedMessage = "Update YCoding on this machine to see model incidents."
 
-export function ModelIncidents() {
+export function ModelIncidents(props: { readonly phone?: boolean }) {
   const remote = useRemote()
   const [group, setGroup] = createSignal<IncidentGroup>("model")
   const [range, setRange] = createSignal<IncidentRange>("all")
@@ -78,7 +79,10 @@ export function ModelIncidents() {
 
   const reset = (next: () => void) => batch(() => { next(); setOffset(0); setSelected(undefined); setStatus(undefined) })
   const chooseRange = (next: IncidentRange) => {
-    if (next === "custom") return setCustomOpen(!customOpen())
+    if (next === "custom") {
+      setCustomOpen(!customOpen())
+      return
+    }
     setCustomOpen(false)
     reset(() => { setRange(next); setAnchor(Date.now()) })
   }
@@ -110,55 +114,7 @@ export function ModelIncidents() {
     }, (error: unknown) => setClearError(error instanceof Error ? error.message : "Guidance could not be cleared.")).finally(() => setClearing(false))
   }
 
-  return <section class="incidents" aria-labelledby="incidents-title">
-    <div class="incidents__head"><h2 id="incidents-title"><Icon name="shield" />Model incidents</h2>
-      <p>Fallbacks and guardrail escalations or rejections retained by this backend. Guidance belongs to a model and applies across agents and Sessions.</p></div>
-    <div class="incidents__controls">
-      <div class={`usage-toggle${group() === "agent" ? " usage-toggle--tokens" : ""}`} role="group" aria-label="Incident grouping">
-        <For each={groups}>{(item) => <button type="button" aria-pressed={group() === item.value} onClick={() => reset(() => setGroup(item.value))}><Icon name={item.value === "model" ? "cpu" : "team"} />{item.label}</button>}</For>
-      </div>
-      <div class="incidents__range" role="group" aria-label="Incident range">
-        <For each={ranges}>{(item) => <button type="button" aria-pressed={range() === item.value} aria-expanded={item.value === "custom" ? customOpen() : undefined} onClick={() => chooseRange(item.value)}><Icon name="sessions" />{item.label}</button>}</For>
-      </div>
-    </div>
-    <Show when={customOpen()}><form class="incidents__range-form" onSubmit={applyCustom}>
-      <label class="field"><span class="field__label">From UTC (inclusive)</span><input class="input" aria-label="Incident from UTC" placeholder="YYYY-MM-DD" value={from()} onInput={(event) => setFrom(event.currentTarget.value)} /></label>
-      <label class="field"><span class="field__label">To UTC (exclusive)</span><input class="input" aria-label="Incident to UTC" placeholder="YYYY-MM-DD" value={to()} onInput={(event) => setTo(event.currentTarget.value)} /></label>
-      <button type="submit" class="button button--secondary"><Icon name="check" />Apply range</button>
-      <Show when={rangeError()}><p role="alert">Enter valid UTC dates with From before To.</p></Show>
-    </form></Show>
-
-    <div class="incidents__panel" aria-busy={updating() ? "true" : "false"}>
-      <Show when={!shown() && !connected() && report().status === "idle"}><p class="usage-message" role="status">Connect to a machine to see model incidents.</p></Show>
-      <Show when={!shown() && connected() && (report().status === "loading" || report().status === "idle")}><LoadingPlaceholder kind="usage" label="Loading model incidents…" /></Show>
-      <Show when={!shown() && report().status === "unsupported"}><p class="usage-message" role="status">{unsupportedMessage}</p></Show>
-      <Show when={!shown() && report().status === "error"}><p class="usage-message" role="alert">{report().message} <button type="button" onClick={retryReport}>Retry</button></p></Show>
-      <Show when={shown()}>{(page) => <>
-        <Show when={report().status === "error"}><p class="incidents__feedback" role="alert">{report().message} <button type="button" onClick={retryReport}>Retry</button></p></Show>
-        <Show when={page().report.rows.length > 0} fallback={<p class="usage-message" role="status">No model incidents in this period.</p>}>
-          <div class="incidents__table-wrap usage-table-wrap"><table class="incidents__table"><caption>{page().input.group === "agent" ? "Incidents by model and agent" : "Incidents by model"}</caption>
-            <thead><tr><th scope="col">Model</th><Show when={page().input.group === "agent"}><th scope="col">Agent</th></Show><th scope="col">Fallbacks</th><th scope="col">Escalated</th><th scope="col">Rejected</th><th scope="col">Total</th><th scope="col">Last incident</th><th scope="col"><span class="visually-hidden">Details</span></th></tr></thead>
-            <tbody><For each={page().report.rows}>{(row) => {
-              const key = incidentRowKey(row)
-              const name = `${incidentModelLabel(row)}${row.agent === undefined ? "" : ` · ${row.agent}`}`
-              return <tr data-incident-row classList={{ "is-selected": selected()?.key === key }}>
-                <th scope="row" data-label="Model">{incidentModelLabel(row)}</th>
-                <Show when={page().input.group === "agent"}><td data-label="Agent"><span class="usage-provider-chip">{row.agent}</span></td></Show>
-                <td data-label="Fallbacks">{incidentCount(row.fallbacks)}</td><td data-label="Escalated">{incidentCount(row.escalated)}</td><td data-label="Rejected">{incidentCount(row.rejected)}</td>
-                <td data-label="Total">{incidentCount(incidentTotal(row))}</td>
-                <td data-label="Last incident"><time datetime={new Date(row.last).toISOString()}>{incidentTime(row.last)}</time></td>
-                <td><button type="button" class="incidents__details" data-incident-details aria-expanded={selected()?.key === key} aria-controls="incident-detail" aria-label={`Details for ${name}`} onClick={() => toggleDetails(row)}><Icon name="chevron-right" />Details</button></td>
-              </tr>
-            }}</For></tbody></table></div>
-          <div class="incidents__pagination"><span class="incidents__summary">{incidentPageSummary(page().input.offset ?? 0, page().report.rows.length, page().report.groups)}</span>
-            <div><button type="button" disabled={updating() || (page().input.offset ?? 0) === 0} onClick={() => move(Math.max(0, (page().input.offset ?? 0) - incidentPageSize))}><Icon name="arrow-left" />Previous</button>
-              <button type="button" disabled={updating() || (page().input.offset ?? 0) + page().report.rows.length >= page().report.groups} onClick={() => move((page().input.offset ?? 0) + incidentPageSize)}>Next<Icon name="arrow-right" /></button></div></div>
-        </Show>
-      </>}</Show>
-    </div>
-
-    <Show when={status()?.key === modelKey() ? status() : undefined}>{(done) => <p class="incidents__status" role="status">{done().text}</p>}</Show>
-    <Show when={selected()}>{(target) => {
+  const detailPanel = () => <Show when={selected()}>{(target) => {
       const label = () => `${incidentModelLabel(target().row)}${target().row.agent === undefined ? "" : ` · ${target().row.agent}`}`
       const indicator = () => guidance() ? guidanceIndicator(guidance()!) : undefined
       return <section id="incident-detail" class="incidents__detail" aria-label={`Incident details for ${label()}`}>
@@ -190,6 +146,61 @@ export function ModelIncidents() {
         </div>
       </section>
     }}</Show>
+
+  return <section class="incidents" aria-labelledby="incidents-title">
+    <div class="incidents__head"><h2 id="incidents-title"><Icon name="shield" />Model incidents</h2>
+      <p>Fallbacks and guardrail escalations or rejections retained by this backend. Guidance belongs to a model and applies across agents and Sessions.</p></div>
+    <div class="incidents__controls">
+      <div class={`usage-toggle${group() === "agent" ? " usage-toggle--tokens" : ""}`} role="group" aria-label="Incident grouping">
+        <For each={groups}>{(item) => <button type="button" aria-pressed={group() === item.value} onClick={() => reset(() => setGroup(item.value))}><Icon name={item.value === "model" ? "cpu" : "team"} />{item.label}</button>}</For>
+      </div>
+      <Show when={props.phone} fallback={<div class="incidents__range" role="group" aria-label="Incident range">
+        <For each={ranges}>{(item) => <button type="button" aria-pressed={range() === item.value} aria-expanded={item.value === "custom" ? customOpen() : undefined} onClick={() => chooseRange(item.value)}><Icon name="sessions" />{item.label}</button>}</For>
+      </div>}>
+        <div class="incidents__range-select field"><span class="field__label"><Icon name="sessions" />Range</span>
+          <CustomSelect label="Incident range" placeholder="Choose range" value={range() === "custom" || customOpen() ? "custom" : range()} options={ranges}
+            onChange={(value) => { const next = ranges.find((item) => item.value === value); if (next) chooseRange(next.value) }} /></div>
+      </Show>
+    </div>
+    <Show when={customOpen()}><form class="incidents__range-form" onSubmit={applyCustom}>
+      <label class="field"><span class="field__label">From UTC (inclusive)</span><input class="input" aria-label="Incident from UTC" placeholder="YYYY-MM-DD" value={from()} onInput={(event) => setFrom(event.currentTarget.value)} /></label>
+      <label class="field"><span class="field__label">To UTC (exclusive)</span><input class="input" aria-label="Incident to UTC" placeholder="YYYY-MM-DD" value={to()} onInput={(event) => setTo(event.currentTarget.value)} /></label>
+      <button type="submit" class="button button--secondary"><Icon name="check" />Apply range</button>
+      <Show when={rangeError()}><p role="alert">Enter valid UTC dates with From before To.</p></Show>
+    </form></Show>
+
+    <div class="incidents__panel" aria-busy={updating() ? "true" : "false"}>
+      <Show when={!shown() && !connected() && report().status === "idle"}><p class="usage-message" role="status">Connect to a machine to see model incidents.</p></Show>
+      <Show when={!shown() && connected() && (report().status === "loading" || report().status === "idle")}><LoadingPlaceholder kind="usage" label="Loading model incidents…" /></Show>
+      <Show when={!shown() && report().status === "unsupported"}><p class="usage-message" role="status">{unsupportedMessage}</p></Show>
+      <Show when={!shown() && report().status === "error"}><p class="usage-message" role="alert">{report().message} <button type="button" onClick={retryReport}>Retry</button></p></Show>
+      <Show when={shown()}>{(page) => <>
+        <Show when={report().status === "error"}><p class="incidents__feedback" role="alert">{report().message} <button type="button" onClick={retryReport}>Retry</button></p></Show>
+        <Show when={page().report.rows.length > 0} fallback={<p class="usage-message" role="status">No model incidents in this period.</p>}>
+          <div class="incidents__table-wrap usage-table-wrap"><table class="incidents__table"><caption>{page().input.group === "agent" ? "Incidents by model and agent" : "Incidents by model"}</caption>
+            <thead><tr><th scope="col">Model</th><Show when={page().input.group === "agent"}><th scope="col">Agent</th></Show><th scope="col">Fallbacks</th><th scope="col">Escalated</th><th scope="col">Rejected</th><th scope="col">Total</th><th scope="col">Last incident</th><th scope="col"><span class="visually-hidden">Details</span></th></tr></thead>
+            <tbody><For each={page().report.rows}>{(row) => {
+              const key = incidentRowKey(row)
+              const name = `${incidentModelLabel(row)}${row.agent === undefined ? "" : ` · ${row.agent}`}`
+              return <><tr data-incident-row classList={{ "is-selected": selected()?.key === key }}>
+                <th scope="row" data-label="Model">{incidentModelLabel(row)}</th>
+                <Show when={page().input.group === "agent"}><td data-label="Agent"><span class="usage-provider-chip">{row.agent}</span></td></Show>
+                <td data-label="Fallbacks">{incidentCount(row.fallbacks)}</td><td data-label="Escalated">{incidentCount(row.escalated)}</td><td data-label="Rejected">{incidentCount(row.rejected)}</td>
+                <td data-label="Total">{incidentCount(incidentTotal(row))}</td>
+                <td data-label="Last incident"><time datetime={new Date(row.last).toISOString()}>{incidentTime(row.last)}</time></td>
+                <td><button type="button" class="incidents__details" data-incident-details aria-expanded={selected()?.key === key} aria-controls="incident-detail" aria-label={`Details for ${name}`} title="Details" onClick={() => toggleDetails(row)}><Icon name="chevron-right" /><span class="usage-action-label">Details</span></button></td>
+              </tr>
+              <Show when={props.phone && selected()?.key === key}><tr class="incidents__detail-row"><td colspan="8">{detailPanel()}</td></tr></Show></>
+            }}</For></tbody></table></div>
+          <div class="incidents__pagination"><span class="incidents__summary">{incidentPageSummary(page().input.offset ?? 0, page().report.rows.length, page().report.groups)}</span>
+            <div><button type="button" aria-label="Previous incident groups" title="Previous page" disabled={updating() || (page().input.offset ?? 0) === 0} onClick={() => move(Math.max(0, (page().input.offset ?? 0) - incidentPageSize))}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button>
+              <button type="button" aria-label="Next incident groups" title="Next page" disabled={updating() || (page().input.offset ?? 0) + page().report.rows.length >= page().report.groups} onClick={() => move((page().input.offset ?? 0) + incidentPageSize)}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>
+        </Show>
+      </>}</Show>
+    </div>
+
+    <Show when={status()?.key === modelKey() ? status() : undefined}>{(done) => <p class="incidents__status" role="status">{done().text}</p>}</Show>
+    <Show when={!props.phone}>{detailPanel()}</Show>
     <Show when={confirming()} keyed>{(target) => {
       let close: (() => void) | undefined
       return <Modal class="overlay--confirm" label="Clear model guidance" returnFocus={target.trigger} onClose={() => setConfirming(undefined)} requestClose={(handoff) => { close = handoff }}>

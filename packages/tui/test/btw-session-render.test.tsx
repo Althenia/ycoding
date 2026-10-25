@@ -5,7 +5,7 @@ import { realpathSync } from "node:fs"
 import { mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import type { SessionMessageAssistantTool, SessionTodoInfo } from "@ycoding-ai/client"
+import type { SessionMessageAssistantTool, SessionTodoInfo, YCodingEvent } from "@ycoding-ai/client"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 
@@ -62,8 +62,11 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
   const interrupts: unknown[] = []
   let failParentPrompt = false
   let taskActive = true
+  const active: Record<string, Record<string, never>> = {}
 
   async function route(url: URL, request: Request) {
+    if (url.pathname === `/api/session/${btwID}/wait` && request.method === "POST") return new Response(null, { status: 204 })
+    if (url.pathname === "/api/session/active") return json({ data: active })
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session" && request.method === "POST") {
@@ -311,6 +314,7 @@ function fixture(options: { variant?: string; todos?: SessionTodoInfo[]; goalSte
     switches,
     generates,
     interrupts,
+    active,
     failNextParentPrompt() {
       failParentPrompt = true
     },
@@ -347,6 +351,111 @@ async function clearBtwDraft(screen: Awaited<ReturnType<typeof renderScreen>>) {
 
 function descendants(root: Renderable): Renderable[] {
   return [root, ...root.getChildren().flatMap(descendants)]
+}
+
+test("BTW header follows its own execution lifecycle and reconnects independently of its parent", async () => {
+  const state = fixture()
+  const screen = await renderScreen({
+    width: 160, height: 40, args: { sessionID: btwID }, route: state.route,
+    settle: "Side-chat context loaded.", sessionReady: true, config: { animations: false },
+  })
+  let seq = 0
+  const next = (sessionID = btwID) => ({
+    id: `evt_btw_header_${sessionID}_${++seq}`, created: Date.now(), location: { directory },
+    durable: { aggregateID: sessionID, seq, version: 1 as const },
+  })
+  const header = () => screen.lines().slice(0, 3).join(" ")
+  const emit = (event: YCodingEvent) => screen.events.emit(event)
+  try {
+    await screen.waitForEventStream()
+    expect(header()).toContain("ready")
+    emit({ ...next(parentID), type: "session.execution.started", data: { sessionID: parentID } })
+    await screen.renderOnce()
+    expect(header()).toContain("ready")
+    emit({ ...next(), type: "session.execution.started", data: { sessionID: btwID } })
+    await waitFor(() => header().includes("cooking"), "BTW execution start")
+    const assistantMessageID = "msg_btw_activity"
+    emit({ ...next(), type: "session.step.started", data: { sessionID: btwID, assistantMessageID, agent: "btw", model } })
+    emit({ ...next(), type: "session.tool.input.started", data: { sessionID: btwID, assistantMessageID, callID: "call_btw_read", name: "read" } })
+    emit({ ...next(), type: "session.tool.called", data: { sessionID: btwID, assistantMessageID, callID: "call_btw_read", input: { path: "sample.ts" }, executed: true } })
+    await waitFor(() => header().includes("tool running"), "BTW tool activity")
+    emit({ ...next(), type: "session.execution.interrupted", data: { sessionID: btwID, reason: "user" } })
+    await waitFor(() => header().includes("ready"), "BTW interruption")
+    emit({ ...next(), type: "session.execution.started", data: { sessionID: btwID } })
+    emit({ ...next(), type: "session.step.started", data: { sessionID: btwID, assistantMessageID: "msg_btw_failure", agent: "btw", model } })
+    emit({ ...next(), type: "session.step.failed", data: { sessionID: btwID, assistantMessageID: "msg_btw_failure", error: { type: "provider.transport", message: "Connection interrupted" } } })
+    emit({ ...next(), type: "session.execution.failed", data: { sessionID: btwID, error: { type: "provider.transport", message: "Connection interrupted" } } })
+    await waitFor(() => header().includes("provider error"), "BTW failure")
+    state.active[btwID] = {}
+    screen.events.disconnect()
+    await screen.waitForEventStream()
+    await waitFor(() => !header().includes("provider error") && /cooking|tool running/.test(header()), "BTW running snapshot on reconnect")
+    emit({ ...next(), type: "session.step.started", data: { sessionID: btwID, assistantMessageID: "msg_btw_completed", agent: "btw", model } })
+    emit({ ...next(), type: "session.execution.succeeded", data: { sessionID: btwID } })
+    await waitFor(() => !header().includes("cooking") && !header().includes("tool running"), "BTW completion")
+    expect(header()).toContain("BTW")
+    expect(header()).toContain("ready")
+  } finally {
+    await screen.dispose()
+  }
+}, 40_000)
+
+test("BTW header distinguishes admitted child input from idle and ignores parent input", async () => {
+  const state = fixture()
+  const screen = await renderScreen({ width: 120, height: 32, args: { sessionID: btwID }, route: state.route, settle: "Side-chat context loaded.", sessionReady: true })
+  let seq = 0
+  const admit = (sessionID: string) => screen.events.emit({
+    id: `evt_btw_pending_${++seq}`, created: Date.now(), type: "session.input.admitted",
+    durable: { aggregateID: sessionID, seq, version: 1 }, location: { directory },
+    data: { sessionID, inputID: `msg_pending_${sessionID}`, input: { type: "user", data: { text: "Inspect retry behavior" }, delivery: "steer" } },
+  })
+  const header = () => screen.lines().slice(0, 3).join(" ")
+  try {
+    await screen.waitForEventStream()
+    admit(parentID)
+    await screen.renderOnce()
+    expect(header()).toContain("ready")
+    admit(btwID)
+    await waitFor(() => header().includes("pending"), "BTW pending admission")
+    expect(header()).not.toContain("ready")
+    screen.events.emit({
+      id: "evt_btw_pending_started", created: Date.now(), type: "session.execution.started",
+      durable: { aggregateID: btwID, seq: ++seq, version: 1 }, location: { directory },
+      data: { sessionID: btwID },
+    })
+    await waitFor(() => header().includes("cooking"), "BTW execution takes precedence over admission")
+    screen.events.emit({
+      id: "evt_btw_promoted", created: Date.now(), type: "session.input.promoted",
+      durable: { aggregateID: btwID, seq: ++seq, version: 1 }, location: { directory },
+      data: { sessionID: btwID, inputID: `msg_pending_${btwID}` },
+    })
+    await screen.renderOnce()
+    expect(header()).toContain("cooking")
+    screen.events.emit({
+      id: "evt_btw_pending_interrupted", created: Date.now(), type: "session.execution.interrupted",
+      durable: { aggregateID: btwID, seq: ++seq, version: 1 }, location: { directory },
+      data: { sessionID: btwID, reason: "user" },
+    })
+    await waitFor(() => header().includes("ready"), "BTW settled admission")
+  } finally {
+    await screen.dispose()
+  }
+}, 40_000)
+
+for (const width of [80, 120, 160]) {
+  test(`BTW header omits its redundant agent name at ${width} columns`, async () => {
+    const state = fixture()
+    const screen = await renderScreen({ width, height: 32, args: { sessionID: btwID }, route: state.route, settle: "Side-chat context loaded.", sessionReady: true })
+    try {
+      const header = screen.lines().slice(0, 3).join(" ")
+      expect(header).toContain("BTW")
+      expect(header).not.toMatch(/\bBtw\b/)
+      expect(header).toContain("openai/")
+      expect(header).toContain("ready")
+    } finally {
+      await screen.dispose()
+    }
+  }, 40_000)
 }
 
 test("mounts one ordinary composer only for the root and BTW child without a BTW subagent picker", async () => {

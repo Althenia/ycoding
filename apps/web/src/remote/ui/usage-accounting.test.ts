@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { consumptionRow, costCoverage, costText, forecastDetails, forecastStatus, measuredSpeedLines, providerProvenanceLines, residentUnitCosts, unitCostLines, type UnitCostPresentation } from "./usage-accounting"
+import { consumptionNeedsProfile, consumptionRow, costCoverage, costText, forecastDetails, forecastStatus, measuredSpeedLines, providerProvenanceLines, residentUnitCosts, unitCostLines, type UnitCostPresentation } from "./usage-accounting"
 
 const zero = { total: 0, known: 0, pricedRequests: 1, unpricedRequests: 0 }
 const partial = { known: 0, pricedRequests: 1, unpricedRequests: 2 }
@@ -106,4 +106,13 @@ test("recorded consumption details keep exact rates, windows, coverage, observat
   expect(sparse).toContain("Estimated cost rate unreported")
   expect(sparse).toContain("Profile provider default at request time")
   expect(sparse).toContain("0 priced · 7 unpriced")
+})
+
+test("a recorded consumption row exposes provider, model and profile separately and asks for the profile only when rows would otherwise look identical", () => {
+  expect(consumptionRow(rate).parts).toEqual({ provider: "openai", model: "gpt-6-sol", profile: "profile Personal" })
+  expect(consumptionRow({ ...rate, profile: undefined }).parts.profile).toBe("default profile")
+  const other = { ...rate, profile: "Work" }
+  expect(consumptionNeedsProfile([rate, other], rate)).toBe(true)
+  expect(consumptionNeedsProfile([rate, { ...rate, providerID: "anthropic" }], rate)).toBe(false)
+  expect(consumptionNeedsProfile([rate], rate)).toBe(false)
 })

@@ -27,6 +27,7 @@ import { DEFAULT_THEMES } from "../src/theme/builtins"
 import { resolveThemeFile } from "../src/theme/resolve"
 import { getGlyph } from "../src/ui/glyph"
 import { autonomyState } from "./fixture/autonomy"
+import { stringWidth } from "../src/util/string-width"
 
 const identity = {
   path: "~/Workspace/Personal/YCoding",
@@ -41,6 +42,21 @@ function labels(width: number) {
 }
 
 describe("header truncation ladder", () => {
+  test("bounds long paths before they displace branch, agent or model identity", () => {
+    for (const width of [120, 140, 160, 200]) {
+      const path = `/workspace/worktrees/repo_${"a".repeat(64)}/title-prompts`
+      const input = { ...identity, path, width, availableWidth: 85 }
+      const segments = headerSegments(input)
+      const label = segments.find((segment) => segment.key === "path")?.label
+      expect(label).toBeDefined()
+      expect(label).toEndWith("title-prompts")
+      expect(stringWidth(label!)).toBeLessThanOrEqual(Math.floor(width / 3))
+      expect(stringWidth(segments.map((segment) => segment.label).join(" · "))).toBeLessThanOrEqual(85)
+      expect(segments.map((segment) => segment.key)).toEqual(["path", "branch", "agent", "model", "variant"])
+      expect(input.path).toBe(path)
+    }
+  })
+
   test("keeps the full path at 160 columns", () => {
     expect(labels(160)).toEqual([
       "~/Workspace/Personal/YCoding",
@@ -417,6 +433,26 @@ async function renderHeader(
     await app.waitForFrame((frame) => frame.includes("leader pending"))
   }
   return app
+}
+
+for (const width of [119, 120, 139, 140, 159, 160, 200]) {
+  test(`long worktree paths retain useful suffixes and model identity at ${width} columns`, async () => {
+    const path = `/workspace/worktrees/repo_${"b".repeat(64)}/研究/title-prompts`
+    const app = await renderHeader(width, { type: "ready" }, { identity: { ...identity, path } })
+    try {
+      const line = app.captureCharFrame().split("\n")[1]!
+      expect(line).toContain("Build")
+      expect(line).toContain("anthropic/claude-opus-5")
+      expect(line).toContain("main")
+      expect(line.trimEnd()).toEndWith("ready")
+      if (width >= 120) expect(line).toContain("title-prompts")
+      if (width < 120) expect(line).not.toContain("title-prompts")
+      expect(line).not.toContain("b".repeat(64))
+      expect(stringWidth(line)).toBeLessThanOrEqual(width)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
 }
 
 describe("autonomy mode chips", () => {

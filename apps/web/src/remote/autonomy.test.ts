@@ -116,17 +116,16 @@ describe("labels", () => {
     expect(autonomyLabels({ permissions: "auto", guardrails: "yolo", answers: "manual" })).toEqual(["Permissions Auto", "Guardrails YOLO", "Answers Manual"])
   })
 
-  test("the summary carries the trigger text, compact forms, and per-category chips for mixed modes", () => {
-    expect(autonomySummary(manual)).toEqual({ label: "Autonomous Manual", compact: "Au·M", chips: [] })
-    expect(autonomySummary({ permissions: "auto", guardrails: "auto", answers: "auto" })).toEqual({ label: "Autonomous Auto", compact: "Au·A", chips: [] })
-    expect(autonomySummary({ permissions: "yolo", guardrails: "yolo", answers: "yolo" }).compact).toBe("Au·Y")
+  test("the summary carries the trigger text and per-category chips for mixed modes", () => {
+    expect(autonomySummary(manual)).toEqual({ label: "Autonomous Manual", chips: [] })
+    expect(autonomySummary({ permissions: "auto", guardrails: "auto", answers: "auto" })).toEqual({ label: "Autonomous Auto", chips: [] })
+    expect(autonomySummary({ permissions: "yolo", guardrails: "yolo", answers: "yolo" }).label).toBe("Autonomous YOLO")
     expect(autonomySummary({ permissions: "auto", guardrails: "yolo", answers: "manual" })).toEqual({
       label: "Autonomous",
-      compact: "Au·Mx",
       chips: [
-        { key: "permissions", label: "Permissions Auto", compact: "P·A", mode: "auto" },
-        { key: "guardrails", label: "Guardrails YOLO", compact: "G·Y", mode: "yolo" },
-        { key: "answers", label: "Answers Manual", compact: "Q·M", mode: "manual" },
+        { key: "permissions", label: "Permissions Auto", mode: "auto" },
+        { key: "guardrails", label: "Guardrails YOLO", mode: "yolo" },
+        { key: "answers", label: "Answers Manual", mode: "manual" },
       ],
     })
   })

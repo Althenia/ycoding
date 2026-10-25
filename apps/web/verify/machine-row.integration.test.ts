@@ -64,28 +64,28 @@ const doubleClickName = (page: Page, name: string) => page.evaluate(`${item(name
 const laptopRequests = (page: Page) => page.evaluate<number>(`window.remoteDeviceRequests.filter(request => request.deviceID === 'dev_laptop').length`)
 
 describe("machine row", () => {
-  test("lists every owned machine in one horizontal row with its connection state and no dropdown", async () => {
+  test("lists every owned machine as a vertical list of compact rows with its connection state and no dropdown", async () => {
     for (const width of [320, 390, 1440]) for (const theme of ["light", "dark"] as const) {
       const page = await open(width, "view=settings&machines=distinct", { theme })
       try {
         expect(await page.evaluate<boolean>(`document.querySelector('${section} [aria-label="Machine"], ${section} [role="listbox"], ${section} .custom-select, #device-display-name') === null`)).toBe(true)
         expect(await names(page)).toEqual(["Studio Mac", "Laptop", "Sleeping Mac"])
-        const layout = await page.evaluate<{ tops: number[]; heights: number[]; lefts: number[]; overflowX: string; rowFits: boolean; rowScrolls: boolean; sectionWidth: number; rowWidth: number; pageOverflow: boolean; minWidth: number; listRole: string | null; listLabel: string | null }>(`(() => {
+        const layout = await page.evaluate<{ tops: number[]; heights: number[]; lefts: number[]; widths: number[]; sectionWidth: number; rowWidth: number; rowScrolls: boolean; pageOverflow: boolean; listRole: string | null; listLabel: string | null; hostnames: number; controls: number[] }>(`(() => {
           const row = document.querySelector('${section} .machine-row'), items = [...row.querySelectorAll('.machine-row__item')], rects = items.map(node => node.getBoundingClientRect()), box = row.getBoundingClientRect()
-          return { tops: rects.map(rect => Math.round(rect.top)), heights: rects.map(rect => Math.round(rect.height)), lefts: rects.map(rect => rect.left), overflowX: getComputedStyle(row).overflowX, rowFits: row.scrollWidth <= row.clientWidth + 1, rowScrolls: row.scrollWidth > row.clientWidth + 1, sectionWidth: document.querySelector('${section}').getBoundingClientRect().width, rowWidth: box.width, pageOverflow: document.documentElement.scrollWidth > innerWidth, minWidth: Math.min(...rects.map(rect => rect.width)), listRole: row.getAttribute('role'), listLabel: row.getAttribute('aria-label') }
+          return { tops: rects.map(rect => Math.round(rect.top)), heights: rects.map(rect => Math.round(rect.height)), lefts: rects.map(rect => Math.round(rect.left)), widths: rects.map(rect => Math.round(rect.width)), sectionWidth: document.querySelector('${section}').getBoundingClientRect().width, rowWidth: box.width, rowScrolls: row.scrollWidth > row.clientWidth + 1, pageOverflow: document.documentElement.scrollWidth > innerWidth, listRole: row.getAttribute('role'), listLabel: row.getAttribute('aria-label'), hostnames: row.querySelectorAll('.machine-row__hostname').length, controls: items.flatMap(node => [...node.querySelectorAll('button')].map(button => Math.round(button.getBoundingClientRect().height))) }
         })()`)
         const detail = JSON.stringify({ width, theme, layout })
-        expect(new Set(layout.tops).size, detail).toBe(1)
-        expect(new Set(layout.heights).size, detail).toBe(1)
-        expect(layout.lefts[0]! < layout.lefts[1]! && layout.lefts[1]! < layout.lefts[2]!, detail).toBe(true)
+        expect(layout.tops[0]! < layout.tops[1]! && layout.tops[1]! < layout.tops[2]!, detail).toBe(true)
+        expect(new Set(layout.lefts).size, detail).toBe(1)
+        expect(new Set(layout.widths).size, detail).toBe(1)
+        expect(Math.max(...layout.heights), detail).toBeLessThanOrEqual(80)
         expect(layout.rowWidth, detail).toBeLessThanOrEqual(layout.sectionWidth + 1)
+        expect(layout.rowScrolls, detail).toBe(false)
         expect(layout.pageOverflow, detail).toBe(false)
-        expect(layout.overflowX, detail).toBe("auto")
-        expect(layout.minWidth, detail).toBeGreaterThanOrEqual(width === 320 ? 200 : 220)
+        expect(layout.hostnames, detail).toBe(0)
+        expect(Math.min(...layout.controls), detail).toBeGreaterThanOrEqual(44)
         expect(layout.listRole).toBe("list")
         expect(layout.listLabel).toBe("Machines")
-        if (width === 1440) expect(layout.rowFits, detail).toBe(true)
-        if (width === 320) expect(layout.rowScrolls, detail).toBe(true)
         const states = await page.evaluate<Record<string, { state: string; connect: string; disabled: boolean; current: string | null }>>(`Object.fromEntries([...document.querySelectorAll('${section} .machine-row__item')].map(node => [node.querySelector('.machine-row__name').textContent, { state: node.querySelector('.machine-row__state').textContent.trim(), connect: node.querySelector('.machine-row__connect').textContent.trim(), disabled: node.querySelector('.machine-row__connect').disabled, current: node.getAttribute('aria-current') }]))`)
         expect(states).toEqual({
           "Studio Mac": { state: "Online", connect: "Connected", disabled: true, current: "true" },
@@ -148,8 +148,8 @@ describe("machine row", () => {
       await page.pressKey("Enter", "Enter", 13, "\r")
       await until(page, `document.querySelector('${section} .machine-row__input') === null && ${item("Desk Linux")} !== undefined`)
       expect(await aliases(page)).toEqual({ dev_laptop: "Desk Linux" })
-      const identity = await page.evaluate<{ name: string; hostname: string; title: string | null; same: boolean; focus: string | null }>(`(() => { const node = ${item("Desk Linux")}; return { name: node.querySelector('.machine-row__name').textContent, hostname: node.querySelector('.machine-row__hostname').textContent, title: node.querySelector('.machine-row__name').getAttribute('title'), same: [...document.querySelectorAll('${section} .machine-row__item')].every((entry, index) => entry === window.rowNodes[index]), focus: document.activeElement?.getAttribute('aria-label') ?? null } })()`)
-      expect(identity).toEqual({ name: "Desk Linux", hostname: "Laptop", title: "Laptop", same: true, focus: "Edit name of Desk Linux" })
+      const identity = await page.evaluate<{ name: string; hostname: number; title: string | null; same: boolean; focus: string | null }>(`(() => { const node = ${item("Desk Linux")}; return { name: node.querySelector('.machine-row__name').textContent, hostname: node.querySelectorAll('.machine-row__hostname').length, title: node.querySelector('.machine-row__name').getAttribute('title'), same: [...document.querySelectorAll('${section} .machine-row__item')].every((entry, index) => entry === window.rowNodes[index]), focus: document.activeElement?.getAttribute('aria-label') ?? null } })()`)
+      expect(identity).toEqual({ name: "Desk Linux", hostname: 0, title: "Laptop", same: true, focus: "Edit name of Desk Linux" })
       expect(await laptopRequests(page)).toBe(before)
       expect(await page.evaluate<string>(`${item("Studio Mac")}.getAttribute('aria-current')`)).toBe("true")
       expect(await page.evaluate<string>(`document.querySelector('${section} .machine-row__scope').textContent`)).toMatch(/account.*browsers/i)
@@ -207,7 +207,6 @@ describe("machine row", () => {
       await until(page, `document.querySelector('${section} .machine-row__input') === null`)
       expect(await aliases(page)).toEqual({})
       expect(await names(page)).toEqual(["Studio Mac", "Laptop", "Sleeping Mac"])
-      expect(await page.evaluate<boolean>(`document.querySelector('${section} .machine-row__hostname') === null`)).toBe(true)
     } finally { await page.close() }
   }, 30_000)
 
@@ -246,8 +245,8 @@ describe("machine row", () => {
         await page.pressKey("Enter", "Enter", 13, "\r")
         await until(page, `document.querySelector('${section} .machine-row__input') === null`)
         expect(await names(page)).toEqual(["<b>Studio</b>", hostile, "Sleeping Mac"])
-        const markup = await page.evaluate<{ images: number; bold: number; pwned: unknown; hostname: string; overflow: boolean }>(`({ images: document.querySelectorAll('${section} img').length, bold: document.querySelectorAll('${section} b').length, pwned: window.pwned ?? null, hostname: ${item(hostile)}.querySelector('.machine-row__hostname').textContent, overflow: document.documentElement.scrollWidth > innerWidth })`)
-        expect(markup).toEqual({ images: 0, bold: 0, pwned: null, hostname: "Laptop", overflow: false })
+        const markup = await page.evaluate<{ images: number; bold: number; pwned: unknown; title: string | null; overflow: boolean }>(`({ images: document.querySelectorAll('${section} img').length, bold: document.querySelectorAll('${section} b').length, pwned: window.pwned ?? null, title: ${item(hostile)}.querySelector('.machine-row__name').getAttribute('title'), overflow: document.documentElement.scrollWidth > innerWidth })`)
+        expect(markup).toEqual({ images: 0, bold: 0, pwned: null, title: "Laptop", overflow: false })
         expect(await aliases(page)).toEqual({ dev_laptop: hostile })
       } finally { await page.close() }
     }
@@ -282,7 +281,8 @@ describe("machine row", () => {
       expect(await page.evaluate<unknown>(`window.remoteAliasReport().requests`)).toEqual([{ deviceID: "dev_studio", alias: "Studio Alias" }])
       expect(await page.evaluate<string>(`document.querySelector('.device__name')?.textContent?.trim() ?? ''`)).toBe("Studio Alias")
       expect(await names(page)).toEqual(["Studio Alias", "Laptop", "Sleeping Mac"])
-      expect(await page.evaluate<string>(`${item("Studio Alias")}.querySelector('.machine-row__hostname').textContent`)).toBe("Studio Mac")
+      expect(await page.evaluate<string | null>(`${item("Studio Alias")}.querySelector('.machine-row__name').getAttribute('title')`)).toBe("Studio Mac")
+      expect(await page.evaluate<number>(`document.querySelectorAll('.machine-row__hostname, .device__hostname').length`)).toBe(0)
       expect(await page.evaluate<string>(`document.querySelector('${section} .machine-row__scope').textContent`)).toMatch(/account.*browsers/i)
     } finally { await page.close() }
   }, 30_000)
@@ -294,7 +294,7 @@ describe("machine row", () => {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=settings&machines=distinct&machineAlias=Account%20name`)
       await until(page, `${item("Account name")} !== undefined`)
       expect(await names(page)).toEqual(["Account name", "Laptop", "Sleeping Mac"])
-      expect(await page.evaluate<string>(`${item("Account name")}.querySelector('.machine-row__hostname').textContent`)).toBe("Studio Mac")
+      expect(await page.evaluate<string | null>(`${item("Account name")}.querySelector('.machine-row__name').getAttribute('title')`)).toBe("Studio Mac")
       expect(await page.evaluate<unknown>(`JSON.parse(localStorage.getItem('ycoding.remote.device-aliases'))`)).toEqual({ dev_studio: "Browser-only name" })
     } finally { await page.close() }
   }, 30_000)

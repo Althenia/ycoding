@@ -25,7 +25,6 @@ export type AutonomyRow = {
 
 const modeLabels = { manual: "Manual", yolo: "YOLO", auto: "Auto" } as const
 const categoryTitles = { permissions: "Permissions", guardrails: "Guardrails", answers: "Answers" } as const
-const categoryInitials = { permissions: "P", guardrails: "G", answers: "Q" } as const
 const allModeKeys = { "1": "manual", "2": "yolo", "3": "auto" } as const
 
 export function readAutonomyMode(value: unknown): AutonomyMode | undefined {
@@ -99,12 +98,10 @@ export function autonomySummary(modes: AutonomyModes) {
   const uniform = uniformMode(modes)
   return {
     label: uniform === undefined ? "Autonomous" : `Autonomous ${modeLabels[uniform]}`,
-    compact: uniform === undefined ? "Au·Mx" : `Au·${modeLabels[uniform][0]}`,
     chips: uniform === undefined
       ? autonomyCategories.map((category) => ({
           key: category,
           label: `${categoryTitles[category]} ${modeLabels[modes[category]]}`,
-          compact: `${categoryInitials[category]}·${modeLabels[modes[category]][0]}`,
           mode: modes[category],
         }))
       : [],

@@ -305,10 +305,7 @@ function autonomyItems(view: SessionAutonomyView | undefined, level: AutonomyLev
         ? "?"
         : "unknown"
     const disabled = row.category === "guardrails" && row.effective !== undefined && view?.effective?.guardrailsEnabled === false
-    const annotations = [
-      ...(row.inherited ? [words ? " · inherited" : "*"] : []),
-      ...(disabled ? [words ? " · disabled" : "!"] : []),
-    ].join("")
+    const annotations = disabled ? (words ? " · disabled" : "!") : ""
     return [
       { text: padded && row.effective ? ` ${label}${value} ` : `${label}${value}`, tone: row.effective },
       ...(annotations ? [{ text: annotations }] : []),

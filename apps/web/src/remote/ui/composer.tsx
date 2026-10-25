@@ -40,7 +40,7 @@ export function MiniComposer(props: {
   readonly onSubmit: (value: ComposerSubmission) => void | boolean | Promise<void | boolean>
   readonly onInterrupt?: () => void
   readonly showStatus?: boolean
-  readonly mobileMount?: HTMLElement
+  readonly phoneSummary?: boolean
 }): JSX.Element {
   const remote = useRemote()
   const [agent, setAgent] = createSignal<string>()
@@ -61,6 +61,7 @@ export function MiniComposer(props: {
   const [dismissed, setDismissed] = createSignal<string>()
   const [bound, setBound] = createSignal<number>()
   const [mobileOpen, setMobileOpen] = createSignal(false)
+  const [phone, setPhone] = createSignal(false)
   const [contextOpen, setContextOpen] = createSignal(false)
   const [contextPinned, setContextPinned] = createSignal(false)
   const [contextLeaving, setContextLeaving] = createSignal(false)
@@ -358,11 +359,12 @@ export function MiniComposer(props: {
     if (model() !== undefined && !modelChoice().blocked && forcedModelSwitches()[modelKey() ?? ""] === undefined && sameModel(chosen, currentModel())) setModel(undefined)
   })
   onMount(() => {
-    if (!props.mobileMount) return
-    const media = window.matchMedia("(max-width: 479px)")
-    const close = () => setMobileOpen(false)
-    media.addEventListener("change", close)
-    onCleanup(() => media.removeEventListener("change", close))
+    if (!props.phoneSummary) return
+    const media = window.matchMedia("(max-width: 767px)")
+    const follow = () => { setPhone(media.matches); if (!media.matches) setMobileOpen(false) }
+    setPhone(media.matches)
+    media.addEventListener("change", follow)
+    onCleanup(() => media.removeEventListener("change", follow))
   })
   onMount(() => {
     const expand = () => setDock("palette-draft")
@@ -572,9 +574,7 @@ export function MiniComposer(props: {
     }
   }
   return <>
-    <Show when={props.mobileMount}><Portal mount={props.mobileMount}>
-      <button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}; ${speed()!.description}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label" title={mobileLabel()}>{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed" title={value().description}>{value().label}</span>}</Show><Icon name="chevron-down" /></button>
-      <Show when={mobileOpen()}><Portal>
+    <Show when={mobileOpen()}><Portal>
         <div class="mini-picker__scrim composer__selection-scrim" data-cursor="action" onClick={closeMobile} />
         <section ref={mobileSheet} class="composer__selection-sheet" role="dialog" aria-modal="true" aria-label="Choose agent and model" tabindex="-1" style={mobileSheetStyle()} onKeyDown={(event) => {
           if (event.key === "Escape") { event.preventDefault(); closeMobile() }
@@ -584,9 +584,8 @@ export function MiniComposer(props: {
           <Show when={contextWindow()}>{(value) => <div class="composer__context-summary"><strong>Context window</strong><div class="composer__context-bar" aria-hidden="true"><span class="composer__context-bar-fill" style={{ width: `${Math.min(100, value().fraction * 100)}%` }} /></div><span>{contextLabel()}</span><span>{value().tokens}</span></div>}</Show>
           <div class="composer__selection-options"><ComposerPicker label="Agent" icon="user" placeholder="Default agent" value={selectedAgent()} pending={agentPending()} options={primaryAgents().map((item) => ({ value: item.id, label: item.name, detail: item.description }))} disabled={props.disabled || catalog()?.status !== "ready"} onChange={setAgent} /><ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} /></div>
         </section>
-      </Portal></Show>
     </Portal></Show>
-    <div class="composer" classList={{ "composer--collapsed": collapsed() }}>
+    <div class="composer" classList={{ "composer--collapsed": collapsed(), "composer--phone-summary": props.phoneSummary === true }}>
     <div class="composer__row" classList={{ "composer__row--dragging": dragging() }} onDragOver={(event) => { if (event.dataTransfer?.types.includes("Files")) { event.preventDefault(); setDragging(true) } }} onDragLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragging(false) }} onDrop={(event) => { setDragging(false); if (!event.dataTransfer?.files.length) return; event.preventDefault(); void addFiles(Array.from(event.dataTransfer.files)) }}>
       <div class="composer__body" aria-hidden={collapsed()} inert={collapsed()}><div class="composer__body-inner">
       <div ref={inputWrap} class="mini-composer__input-wrap">
@@ -623,7 +622,7 @@ export function MiniComposer(props: {
         <Show when={contextWindow()}><div class="composer__context"><button ref={contextTrigger} type="button" class="composer__context-trigger" aria-label={contextAccessible()} aria-expanded={contextOpen() && !contextLeaving()} onMouseEnter={() => { if (window.matchMedia("(hover: hover)").matches) showContext() }} onMouseLeave={queueContextClose} onFocus={showContext} onBlur={() => { if (!contextPinned()) queueContextClose() }} onClick={() => { if (contextPinned()) closeContext(); else { setContextPinned(true); showContext() } }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeContext() } }}>{ring()}</button><Show when={contextOpen()}><div class="composer__context-popover" classList={{ "composer__context-popover--leaving": contextLeaving() }} role="tooltip" aria-hidden={contextLeaving()} inert={contextLeaving()} onMouseEnter={contextClose.cancel} onMouseLeave={queueContextClose} onAnimationEnd={finishContext} onAnimationCancel={finishContext}><strong>Context window</strong><span>{contextLabel()}</span><span>{contextWindow()?.tokens}</span></div></Show></div></Show>
         <ModelControl models={catalog()?.models ?? []} selected={selectedModel()} selectionKey={modelKey()} recent={recentModels()} pending={modelPending()} disabled={props.disabled || catalog()?.status !== "ready" || sessionTarget() && current() === undefined} rememberedVariant={rememberedVariant} onChange={chooseModel} />
         </div>
-        <Show when={props.showStatus && !collapsed()}><ComposerStatus /></Show>
+        <Show when={props.showStatus && !collapsed()}><div class="composer__summary"><Show when={props.phoneSummary && phone()}><button ref={mobileTrigger} type="button" class="composer__mobile-trigger" classList={{ "composer__mobile-trigger--pending": agentPending() || modelPending() }} aria-label={`Agent and model: ${mobileLabel()}${contextWindow() ? `; ${contextAccessible()}` : ""}${speed() ? `; generation speed ${speed()!.label}; ${speed()!.description}` : ""}`} aria-description={agentPending() || modelPending() ? "applies with your next send" : undefined} aria-haspopup="dialog" aria-expanded={mobileOpen()} disabled={props.disabled || catalog()?.status !== "ready"} onClick={() => setMobileOpen(true)}><Show when={contextWindow()}><span class="composer__mobile-context-ring" aria-hidden="true">{ring()}</span></Show><span class="composer__mobile-label" title={mobileLabel()}>{mobileLabel()}</span><Show when={speed()}>{(value) => <span class="composer__mobile-speed" title={value().description}>{value().label}</span>}</Show><Icon name="chevron-down" /></button></Show><ComposerStatus /></div></Show>
         <div class="composer__control-set" aria-hidden={collapsed()} inert={collapsed()}>
         <Show when={speed()}>{(value) => <span class="composer__speed" title={value().description} aria-label={`Generation speed ${value().label}: ${value().description}`}>{value().label}<Show when={value().trend}><span class="composer__speed-trend" aria-hidden="true"> {value().trend}</span></Show></span>}</Show>
         <span class="composer__spacer" />
@@ -721,7 +720,6 @@ function SuggestDialog(props: {
 
 export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean }): JSX.Element {
   const remote = useRemote()
-  const [mobileMount, setMobileMount] = createSignal<HTMLDivElement>()
   const [suggestion, setSuggestion] = createSignal<{ readonly hint?: string; readonly returnFocus: HTMLElement }>()
   let composerMount: HTMLDivElement | undefined
   const text = () => props.sessionID ? remote.state().drafts[props.sessionID] ?? "" : ""
@@ -738,8 +736,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
     return true
   }
   return <div class="mini-composer__mount" ref={composerMount}>
-    <div ref={setMobileMount} class="composer__mobile-identity" />
-    <MiniComposer mobileMount={mobileMount()} target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
+    <MiniComposer phoneSummary target={props.sessionID ? { sessionID: props.sessionID } : undefined} text={text()} onText={(value) => { if (props.sessionID) remote.store.setDraft(props.sessionID, value) }} disabled={!props.canSend || !props.sessionID} running={props.running} showStatus onInterrupt={() => void remote.store.interrupt()} onSubmit={async (value) => {
       const sessionID = props.sessionID
       const draft = text()
       if (!sessionID) return false

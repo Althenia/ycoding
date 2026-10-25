@@ -1963,7 +1963,6 @@ body:has(.app) {
 }
 
 .machine-awake__status {
-  min-block-size: calc(var(--yc-leading-xs) * 6);
   line-height: var(--yc-leading-xs);
   overflow-wrap: anywhere;
 }

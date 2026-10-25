@@ -708,7 +708,7 @@ for (const scenario of [
     }),
   )
 
-for (const mode of ["model", "local"] as const)
+for (const mode of ["model", "local", "off"] as const)
   it.effect(`keeps an explicit session title in ${mode} mode`, () =>
     Effect.gen(function* () {
       const session = yield* generateTitleFor("Quarterly planning", mode)

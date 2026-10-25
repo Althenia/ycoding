@@ -35,7 +35,7 @@ export function UsageDetails(props: { readonly label: string; readonly groups: r
   const [request, setRequest] = createSignal<{ readonly trigger: HTMLButtonElement; readonly pointerOpened: boolean }>()
   const label = () => `${props.label} details`
   return <>
-    <button type="button" class="button button--ghost usage-details-trigger" data-cursor="action" aria-label={label()} aria-haspopup="dialog" onClick={(event) => setRequest({ trigger: event.currentTarget, pointerOpened: event.detail > 0 })}><Icon name="chevron-right" size={12} /> Details</button>
+    <button type="button" class="button button--ghost usage-details-trigger" data-cursor="action" aria-label={label()} title="Details" aria-haspopup="dialog" onClick={(event) => setRequest({ trigger: event.currentTarget, pointerOpened: event.detail > 0 })}><Icon name="chevron-right" size={12} /><span class="usage-details-trigger__label">Details</span></button>
     <Show when={request()} keyed>{(selected) => <Portal><Modal class="overlay--usage-details" label={label()} returnFocus={selected.trigger} pointerOpened={selected.pointerOpened} onClose={() => setRequest(undefined)}>
       <div class="usage-details-content">
         <For each={props.groups}>{(group) => <section>

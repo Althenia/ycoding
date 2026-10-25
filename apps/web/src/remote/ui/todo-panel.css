@@ -23,3 +23,4 @@
 .todo-panel__item--cancelled { color:var(--yc-text-muted); }
 .todo-panel__item--cancelled .todo-panel__text { text-decoration:line-through; }
 @media (pointer:coarse) { .todo-panel__toggle { min-block-size:44px; } }
+@media (max-width: 767px) { .todo-panel:not(.todo-panel--closing) { max-block-size:calc(min(176px, 24dvh) + 80px); } .todo-panel__toggle { min-block-size:var(--yc-hit-min); padding-block:0; } .todo-panel__active { flex:1 1 0; } .todo-panel__list { max-block-size:min(176px, 24dvh); } }

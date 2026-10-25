@@ -106,7 +106,41 @@ test("recorded consumption rows share aligned tracks on wide layouts and stack o
   expect(rule(".usage-consumption__row")).toContain("grid-template-columns: subgrid")
   expect(rule(".usage-consumption__row")).not.toContain("white-space: nowrap")
   expect(css).toMatch(/@container \(max-width: 767px\) \{[^@]*\.usage-consumption__list \{ grid-template-columns: minmax\(0, 1fr\) auto; \}/)
-  expect(css).toContain(".usage-consumption__row > .usage-details-trigger { grid-column: 2; grid-row: 1 / 4; }")
+  expect(css).toContain("grid-column: 2; grid-row: 1 / 3; align-self: center; position: relative; inline-size: var(--yc-hit-min)")
+})
+
+test("phone consumption rows put identity above one wrapping rate line and fold Details into a 44px named icon", () => {
+  const phone = css.match(/@container \(max-width: 767px\) \{([\s\S]*?)\n\}\n@keyframes/)?.[1] ?? ""
+  expect(phone).toContain(".usage-consumption__rates { display: flex; flex-wrap: wrap;")
+  expect(phone).toContain(".usage-consumption__profile { display: none; }")
+  expect(phone).toContain(".usage-consumption__row[data-needs-profile] .usage-consumption__profile { display: inline; }")
+  expect(phone).toContain(".usage-consumption__row .usage-details-trigger__label { position: absolute;")
+  expect(rule(".usage-action-label")).toContain("clip-path: inset(50%)")
+  expect(rule(".usage-pagination button")).toContain("inline-size: var(--yc-hit-min)")
+  expect(rule(".usage-consumption__rates")).toContain("display: contents")
+})
+
+test("the phone filter sheet owns visual-viewport geometry, a sticky action bar and labelled range choices", async () => {
+  const filters = await Bun.file(new URL("./usage-filters.css", import.meta.url)).text()
+  expect(filters).toMatch(/\.usage-filter-sheet__actions \{[^}]*position: sticky/)
+  expect(filters).toMatch(/\.usage-filter-sheet__range \{[^}]*min-block-size: var\(--yc-hit-min\)/)
+  expect(filters).toContain(".usage-filter-sheet__range[aria-pressed=\"true\"] > svg { visibility: visible; }")
+  expect(filters).toMatch(/@media \(max-width: 767px\) \{\s*\.overlay--usage-filters \.overlay__surface \{[^}]*--usage-filters-height[^}]*\}/)
+  expect(filters).not.toMatch(/animation|transition/)
+})
+
+test("phone incident rows are compact flex summaries with a 44px icon Details and no label/value cards", async () => {
+  const incidents = await Bun.file(new URL("./model-incidents.css", import.meta.url)).text()
+  const phone = incidents.slice(incidents.indexOf("@container (max-width: 767px)"))
+  expect(phone).toContain("tr[data-incident-row] { display: flex; flex-wrap: wrap;")
+  expect(incidents).toContain(".incidents__details, .incidents__pagination button { position: relative; inline-size: var(--yc-hit-min); padding: 0; }")
+  expect(phone).toContain("flex: 1 1 calc(100% - var(--yc-hit-min) - var(--yc-space-3) - 1px)")
+  expect(phone).not.toContain("grid-template-columns: repeat(2")
+  expect(phone).not.toMatch(/\[data-label\]::before \{ content: attr\(data-label\); display: block/)
+  expect(phone).toContain("text-transform: lowercase")
+  expect(incidents).toContain(".incidents__details[aria-expanded=\"true\"] > svg { rotate: 90deg; }")
+  expect(incidents).toContain(".incidents .incidents__detail-row > td { display: block; padding: 0; border: 0; text-align: start; white-space: normal; }")
+  expect(incidents).not.toMatch(/animation|transition/)
 })
 
 test("disclosure details wrap long values and add no animation", () => {

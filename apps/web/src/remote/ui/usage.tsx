@@ -5,12 +5,13 @@ import { usageRead } from "../queries"
 import { Icon } from "../../ui/icon"
 import { LoadingPlaceholder } from "./loading"
 import type { RemoteUsageForecast } from "@ycoding-ai/remote"
-import { UsageFilterControls, UsageGroupControl } from "./usage-filters"
-import { usageGroups, type UsageFiltersPresentation } from "./usage-filter-model"
+import { UsageFilterControls, UsageFilterSummary, UsageGroupControl } from "./usage-filters"
+import { defaultUsageFilters, defaultUsageGroup, usageGroups, type UsageFiltersPresentation, type UsageGroupPresentation } from "./usage-filter-model"
+import { createUsagePhone } from "./usage-phone"
 import { ModelIncidents } from "./model-incidents"
 import { ProviderLogo } from "./provider-logo"
 import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
-import { consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
+import { consumptionNeedsProfile, consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
 import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
@@ -29,12 +30,13 @@ const providerKey = (provider: UsageProvider) => `${provider.providerID}\u0000${
 
 export function UsagePage() {
   const remote = useRemote()
+  const usagePhone = createUsagePhone()
   const openedAt = Date.now()
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const [now, setNow] = createSignal(Date.now())
   const [zoneMode, setZoneMode] = createSignal<"utc" | "local">(localStorage.getItem(usageZoneKey) === "local" ? "local" : "utc")
-  const [group, setGroup] = createSignal<(typeof groups)[number]>("model")
-  const [filters, setFilters] = createSignal<UsageFiltersPresentation>({ provider: "", profile: "", model: "", effort: "", range: "last30" })
+  const [group, setGroup] = createSignal<(typeof groups)[number]>(defaultUsageGroup)
+  const [filters, setFilters] = createSignal<UsageFiltersPresentation>(defaultUsageFilters)
   const [sort, setSort] = createSignal<UsageReportInput["sort"]>("cost")
   const [order, setOrder] = createSignal<UsageReportInput["order"]>("desc")
   const [offset, setOffset] = createSignal(0)
@@ -139,6 +141,19 @@ export function UsagePage() {
       setOrder("desc")
     })
   }
+  const applyFilters = (nextGroup: UsageGroupPresentation, nextFilters: UsageFiltersPresentation) => {
+    holdRows()
+    batch(() => {
+      if (nextGroup !== group()) {
+        setGroup(nextGroup)
+        setSort("cost")
+        setOrder("desc")
+      }
+      setFilters(nextFilters)
+      setOffset(0)
+    })
+  }
+  const filterProviders = createMemo(() => [...new Map((providerRead().data ?? []).map((provider) => [provider.providerID, { id: provider.providerID, label: providerHeading(provider).name }])).values()])
   const setSorting = (next: NonNullable<UsageReportInput["sort"]>) => {
     holdRows()
     const direction = sort() === next && order() === "desc" ? "asc" : "desc"
@@ -194,7 +209,7 @@ export function UsagePage() {
     })
   })
 
-  return <div class="usage-page">
+  return <div class="usage-page" ref={usagePhone.ref}>
     <header class="usage-head"><div class="usage-head__title"><h1><Icon name="usage" />Usage</h1><p>Quotas and spend from {machine() ?? "your machine"}</p></div>
       <div class="usage-head__actions"><Show when={latest() !== undefined}><span class="usage-head__freshness">Updated {relativeFreshness(latest()!, now())}</span></Show>
         <div class={`usage-zone usage-toggle${zoneMode() === "local" ? " usage-zone--local" : ""}`} role="group" aria-label="Usage time zone">
@@ -314,7 +329,7 @@ export function UsagePage() {
       </>}>
       <Show when={forecastData()?.localRates?.length}><ul class="usage-consumption__list"><For each={forecastData()?.localRates}>{(rate) => {
         const row = consumptionRow(rate)
-        return <li class="usage-consumption__row"><span class="usage-consumption__identity"><ProviderLogo providerID={rate.providerID} /><span>{row.identity}</span></span><span class="usage-consumption__tokens">{row.tokens}</span><span class="usage-consumption__cost">{row.cost}</span>
+        return <li class="usage-consumption__row" data-needs-profile={consumptionNeedsProfile(forecastData()?.localRates ?? [], rate) ? "" : undefined}><span class="usage-consumption__identity"><ProviderLogo providerID={rate.providerID} /><span class="usage-consumption__name"><span>{row.parts.provider}</span><Show when={row.parts.model}><span> · {row.parts.model}</span></Show><span class="usage-consumption__profile"> · {row.parts.profile}</span></span></span><span class="usage-consumption__rates"><span class="usage-consumption__tokens">{row.tokens}</span><span class="usage-consumption__cost">{row.cost}</span></span>
           <UsageDetails label={row.identity} groups={[{ lines: row.details }]} /></li>
       }}</For></ul></Show>
       <Show when={forecastData()?.localRates === undefined}><p class="usage-message">Recorded consumption unreported · lookup unavailable.</p></Show>
@@ -324,8 +339,10 @@ export function UsagePage() {
 
     <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
       <div class="usage-breakdown__head"><h2 id="usage-breakdown-title"><Icon name="sessions" />Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s</span></Show>
-      <UsageGroupControl value={group()} onChange={selectGroup} /></div>
-      <UsageFilterControls value={filters()} providers={[...new Map((providerRead().data ?? []).map((provider) => [provider.providerID, { id: provider.providerID, label: providerHeading(provider).name }])).values()]} onChange={(value) => { holdRows(); batch(() => { setFilters(value); setOffset(0) }) }} />
+      <Show when={!usagePhone.phone()}><UsageGroupControl value={group()} onChange={selectGroup} /></Show></div>
+      <Show when={usagePhone.phone()} fallback={<UsageFilterControls value={filters()} providers={filterProviders()} onChange={(value) => { holdRows(); batch(() => { setFilters(value); setOffset(0) }) }} />}>
+        <UsageFilterSummary group={group()} filters={filters()} providers={filterProviders()} onApply={applyFilters} />
+      </Show>
       <Show when={group() === "task"}><p class="usage-message">Inclusive task rows overlap; do not add them for a family total.</p></Show>
       <div id="usage-breakdown-panel" role="region" aria-label={`${names[group()]} usage breakdown`} class="usage-breakdown" aria-busy={updating() ? "true" : "false"}>
         <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown().status === "loading" || breakdown().status === "idle")}><LoadingPlaceholder kind="usage" label="Loading breakdown…" /></Show>
@@ -345,12 +362,12 @@ export function UsagePage() {
             return <tr><th scope="row"><span>{identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show><UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} /></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td>{count(row.tokens.cache.write)}</td><td class="usage-table__cost">{reportCostText(row)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
           }}</For></tbody></table></div>
           <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => retryReport(breakdownInput())}>Retry</button></span></Show></div>
-          <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}><Icon name="arrow-left" />Previous</button><button type="button" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}>Next<Icon name="arrow-right" /></button></div></div>
+          <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" aria-label="Previous breakdown page" title="Previous page" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button><button type="button" aria-label="Next breakdown page" title="Next page" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>
           <p class="usage-scope-total">Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}</p>
         </Show></Show>
       </div>
     </section>
-    <ModelIncidents />
+    <ModelIncidents phone={usagePhone.phone()} />
     <footer class="usage-cost-note">Costs are estimates from recorded usage and model pricing, not provider bills. Analytics use configurable request-date retention (default 30 days), independently of Session deletion. Session-owned prompt and task views can have a shorter retained history.</footer>
   </div>
 }

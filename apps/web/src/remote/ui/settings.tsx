@@ -109,7 +109,7 @@ export function MachineSettings(): JSX.Element {
         <For each={machineIDs()}>
           {(id) => {
             const device = () => state().devices.find((entry) => entry.id === id)
-            return <li class="machine-row__item" data-device-id={id} aria-current={state().activeDeviceID === id ? "true" : undefined}>
+            return <li class="machine-row__item" data-device-id={id} data-editing={editing() === id ? "" : undefined} aria-current={state().activeDeviceID === id ? "true" : undefined}>
               <Show when={device()}>
                 {(machine) => {
                   const name = () => remote.deviceName(machine())
@@ -119,15 +119,6 @@ export function MachineSettings(): JSX.Element {
                   const stateLabel = () => machine().status === "revoked" ? "Revoked" : machine().online ? "Online" : "Offline"
                   const connectLabel = () => current() && eligible() ? "Connected" : eligible() ? "Connect" : stateLabel()
                   return <>
-                    <div class="machine-row__head">
-                      <span class="machine-row__state"><span class={`status-dot status-dot--${eligible() ? "online" : "offline"}`} aria-hidden="true" />{stateLabel()}</span>
-                      <Show when={!isEditing()}>
-                        <button type="button" class="button button--ghost machine-row__edit" aria-label={`Edit name of ${name()}`} disabled={savingAlias() || machine().status === "revoked"}
-                          onClick={(event) => startEditing(id, name(), event.currentTarget.closest("li"))}>
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
-                        </button>
-                      </Show>
-                    </div>
                     <div class="machine-row__identity">
                       <Show when={isEditing()} fallback={<span class="machine-row__name" title={machine().name} onDblClick={(event) => { if (machine().status === "active") startEditing(id, name(), event.currentTarget.closest("li")) }}>{name()}</span>}>
                         <form class="machine-row__form" aria-busy={savingAlias()} onSubmit={(event) => { event.preventDefault(); void saveAlias(id, machine().name, event.currentTarget.closest("li")) }}
@@ -141,8 +132,14 @@ export function MachineSettings(): JSX.Element {
                           <Show when={aliasError()}><span class="field__hint" role="alert">{aliasError()}</span></Show>
                         </form>
                       </Show>
-                      <Show when={isEditing() || name() !== machine().name}><span class="machine-row__hostname">{machine().name}</span></Show>
+                      <span class="machine-row__state"><span class={`status-dot status-dot--${eligible() ? "online" : "offline"}`} aria-hidden="true" />{stateLabel()}</span>
                     </div>
+                    <Show when={!isEditing()}>
+                      <button type="button" class="button button--ghost machine-row__edit" aria-label={`Edit name of ${name()}`} disabled={savingAlias() || machine().status === "revoked"}
+                        onClick={(event) => startEditing(id, name(), event.currentTarget.closest("li"))}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
+                      </button>
+                    </Show>
                     <button type="button" class="button button--secondary machine-row__connect" disabled={!eligible() || current() || editing() !== undefined}
                       aria-label={current() && eligible() ? `Connected to ${name()}` : eligible() ? `Connect to ${name()}` : `${name()} is ${stateLabel().toLowerCase()}`}
                       onClick={() => void remote.store.connect(id)}>{connectLabel()}</button>
@@ -155,7 +152,7 @@ export function MachineSettings(): JSX.Element {
       </ul>
     </Show>
     <Show when={note() !== ""}><p class="machine-row__note field__hint" role="status">{note()}</p></Show>
-    <p id="machine-row-scope" class="machine-row__scope field__hint">Names are shared across your account's browsers. Each machine keeps its hostname, shown beneath a renamed machine.</p>
+    <p id="machine-row-scope" class="machine-row__scope field__hint">Names are shared across your account's browsers.</p>
     <div class="defs__row" aria-busy={awake().busy}>
       <span class="defs__key" id="machine-awake-label">Keep machine awake</span>
       <span class="defs__value">
@@ -480,7 +477,6 @@ export function DeviceSettings(): JSX.Element {
               <div class="device" role="row">
                 <div class="device__body" role="cell">
                   <span class="device__name" title={device.name}>{remote.deviceName(device)}</span>
-                  <Show when={remote.deviceName(device) !== device.name}><span class="device__hostname">{device.name}</span></Show>
                 </div>
                 <span class="device__registration" role="cell">{device.status === "revoked" ? "Revoked" : "Enrolled"}</span>
                 <span class="device__connection" role="cell">
