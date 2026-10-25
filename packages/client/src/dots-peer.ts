@@ -4,7 +4,7 @@ import { SessionID } from "@ycoding-ai/schema/session-id"
 import { Schema } from "effect"
 
 const decodeRequestContext = Schema.decodeUnknownOption(McpEvents.RequestContext)
-const decodeExchangeID = Schema.decodeUnknownOption(Dots.ExchangeCreate.fields.exchangeID)
+const decodeExchangeID = Schema.decodeUnknownOption(Dots.ExchangeRead.fields.exchangeID)
 const decodeSessionID = Schema.decodeUnknownOption(SessionID)
 const decodeExchangeMetadata = Schema.decodeUnknownOption(Dots.ExchangeMetadata)
 

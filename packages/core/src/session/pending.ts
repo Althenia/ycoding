@@ -446,53 +446,59 @@ export const has = Effect.fn("SessionPending.has")(function* (
   return row !== undefined
 })
 
-const publish = Effect.fn("SessionPending.publish")(function* <E = never>(
+export type PromotionGuard<G = never> = <E>(entry: Info, promote: (when?: Effect.Effect<boolean>) => Effect.Effect<boolean, E>) => Effect.Effect<boolean, E | G>
+
+const publish = Effect.fn("SessionPending.publish")(function* <E = never, G = never>(
   db: DatabaseService,
   events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   rows: ReadonlyArray<typeof SessionPendingTable.$inferSelect>,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,
+  guard?: PromotionGuard<G>,
 ) {
   return yield* inboxLocks.withLock(sessionID)(
     Effect.gen(function* () {
       if (yield* compaction(db, sessionID)) return 0
-      yield* Effect.forEach(
+      const results = yield* Effect.forEach(
         rows,
         (row) =>
           Effect.gen(function* () {
             const entry = fromRow(row)
             if (entry.type === "compaction") return yield* Effect.die(new LifecycleConflict({ id: entry.id }))
-            if (prepare) yield* prepare(entry)
-            yield* events
-              .publish(SessionEvent.InputPromoted, {
-                sessionID,
-                inputID: entry.id,
-              })
-              .pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof LifecycleConflict
-                    ? promotedFromHistory(db, sessionID, entry.id).pipe(
-                        Effect.flatMap((stored) => (stored !== undefined ? Effect.void : Effect.die(defect))),
-                      )
-                    : Effect.die(defect),
-                ),
-              )
-            return yield* (promoted ? promoted(entry) : Effect.void)
+            if (!(yield* find(db, entry.id))) return false
+            const promote = (when?: Effect.Effect<boolean>) => Effect.gen(function* () {
+              if (prepare) yield* prepare(entry)
+              const published = yield* events
+                .publishBatch([{ definition: SessionEvent.InputPromoted, data: { sessionID, inputID: entry.id } }], { when })
+                .pipe(
+                  Effect.catchDefect((defect) =>
+                    defect instanceof LifecycleConflict
+                      ? promotedFromHistory(db, sessionID, entry.id).pipe(
+                          Effect.flatMap((stored) => (stored !== undefined ? Effect.succeed([stored]) : Effect.die(defect))),
+                        )
+                      : Effect.die(defect),
+                  ),
+                )
+              if (!published.length) return false
+              if (promoted) yield* promoted(entry)
+              return true
+            })
+            return yield* (guard ? guard(entry, promote) : promote())
           }),
-        { discard: true },
       )
-      return rows.length
+      return results.filter(Boolean).length
     }),
   )
 })
 
-export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function* <E = never>(
+export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function* <E = never, G = never>(
   db: DatabaseService,
   events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,
+  guard?: PromotionGuard<G>,
 ) {
   if (yield* compaction(db, sessionID)) return 0
   const rows = yield* db
@@ -502,24 +508,30 @@ export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function*
     .orderBy(asc(SessionPendingTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return yield* publish(db, events, sessionID, rows, prepare, promoted)
+  return yield* publish(db, events, sessionID, rows, prepare, promoted, guard)
 })
 
-export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(function* <E = never>(
+export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(function* <E = never, G = never>(
   db: DatabaseService,
   events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,
+  guard?: PromotionGuard<G>,
 ) {
-  if (yield* compaction(db, sessionID)) return false
-  const row = yield* db
-    .select()
-    .from(SessionPendingTable)
-    .where(and(eq(SessionPendingTable.session_id, sessionID), eq(SessionPendingTable.delivery, "queue")))
-    .orderBy(asc(SessionPendingTable.admitted_seq))
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie)
-  return row === undefined ? false : yield* publish(db, events, sessionID, [row], prepare, promoted).pipe(Effect.as(true))
+  for (;;) {
+    if (yield* compaction(db, sessionID)) return false
+    const row = yield* db
+      .select()
+      .from(SessionPendingTable)
+      .where(and(eq(SessionPendingTable.session_id, sessionID), eq(SessionPendingTable.delivery, "queue")))
+      .orderBy(asc(SessionPendingTable.admitted_seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return false
+    if ((yield* publish(db, events, sessionID, [row], prepare, promoted, guard)) > 0) return true
+    if (yield* find(db, row.id)) return false
+    yield* Effect.yieldNow
+  }
 })

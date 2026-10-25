@@ -1,7 +1,7 @@
 import { createServer } from "node:http"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { Clock, Config, Deferred, Effect, Option, Redacted, Schedule, Schema, Semaphore, Stream } from "effect"
+import { Clock, Deferred, Effect, Option, Redacted, Schedule, Schema, Semaphore, Stream } from "effect"
 import { Sse } from "effect/unstable/encoding"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { AISDK } from "../../aisdk"
@@ -13,6 +13,8 @@ import { CatalogModel } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
 import { Provider } from "../../provider"
 import type { PluginInternal } from "../internal"
+
+declare const YCODING_ANTIGRAVITY_OAUTH: unknown
 
 const integrationID = Integration.ID.make("antigravity")
 const providerID = Provider.ID.make("antigravity")
@@ -154,17 +156,18 @@ type Pkce = { verifier: string; challenge: string }
 const projectIDOf = (value: string | { id?: string } | undefined) =>
   typeof value === "string" ? value || undefined : value?.id
 
-const oauthClient = Effect.gen(function* () {
-  const clientID = yield* Config.nonEmptyString("YCODING_ANTIGRAVITY_CLIENT_ID")
-  const clientSecret = yield* Config.schema(
-    Schema.Redacted(Schema.NonEmptyString),
-    "YCODING_ANTIGRAVITY_CLIENT_SECRET",
-  )
-  return { clientID, clientSecret }
-}).pipe(
-  Effect.mapError(() => new Error(
-    "Set YCODING_ANTIGRAVITY_CLIENT_ID and YCODING_ANTIGRAVITY_CLIENT_SECRET in the local server environment before connecting Antigravity.",
-  )),
+const oauthClient = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    clientID: Schema.NonEmptyString,
+    clientSecret: Schema.RedactedFromValue(Schema.NonEmptyString),
+  }),
+)(typeof YCODING_ANTIGRAVITY_OAUTH === "undefined" ? {} : YCODING_ANTIGRAVITY_OAUTH).pipe(
+  Effect.mapError(
+    () =>
+      new Error(
+        "Antigravity OAuth requires YCODING_ANTIGRAVITY_CLIENT_ID and YCODING_ANTIGRAVITY_CLIENT_SECRET at build time.",
+      ),
+  ),
 )
 
 const tokenRequest = Effect.fnUntraced(function* (http: HttpClient.HttpClient, form: URLSearchParams) {

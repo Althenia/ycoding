@@ -1217,6 +1217,12 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
       if (form === undefined || form.sessionID !== view.id) return view
       return pushRequest(view, { kind: "form", id: form.id, form, ...(isRecord(data.form) ? projectEscalationOf(data.form) : {}), askedAt: now })
     }
+    case "form.assessed": {
+      const assessment = readFormAssessment(data.assessment)
+      if (data.sessionID !== view.id || assessment === undefined) return view
+      return { ...view, requests: view.requests.map((request) => request.kind === "form" && request.id === data.id
+        ? { ...request, form: { ...request.form, assessment } } : request) }
+    }
     case "form.replied":
     case "form.cancelled":
     case "form.timed_out":
@@ -1370,8 +1376,52 @@ export function readForms(value: unknown): readonly FormView[] {
     const title = stringField(item.title)
     if (id === undefined || sessionID === undefined || title === undefined || !Array.isArray(item.fields)) return []
     const fields = item.fields.flatMap(readFormField)
-    return fields.length === 0 || fields.length !== item.fields.length ? [] : [{ id, sessionID, title, ...(recordField(item.metadata) === undefined ? {} : { metadata: recordField(item.metadata) }), fields }]
+    const assessment = readFormAssessment(item.assessment)
+    return fields.length === 0 || fields.length !== item.fields.length ? [] : [{ id, sessionID, title, ...(recordField(item.metadata) === undefined ? {} : { metadata: recordField(item.metadata) }), fields, ...(assessment === undefined ? {} : { assessment }) }]
   })
+}
+
+export function readFormAssessment(value: unknown): Form.Assessment | undefined {
+  const record = recordField(value)
+  if (!record || (record.mode !== "manual" && record.mode !== "auto" && record.mode !== "yolo") ||
+    typeof record.sourceSessionID !== "string" || !Array.isArray(record.fields)) return undefined
+  const fields = record.fields.flatMap((value: unknown): Form.FieldAssessment[] => {
+    const field = recordField(value)
+    if (!field || typeof field.key !== "string" ||
+      (field.status !== "pending" && field.status !== "assessed" && field.status !== "unavailable" && field.status !== "not_assessed") ||
+      typeof field.reason !== "string" || !field.reason.trim() || field.reason.length > 500) return []
+    const grades = Array.isArray(field.grades) ? field.grades.flatMap((value: unknown): Form.OptionGrade[] => {
+      const grade = recordField(value)
+      if (!grade || typeof grade.choice !== "string" || typeof grade.confidence !== "number" || !Number.isFinite(grade.confidence) ||
+        grade.confidence < 0 || grade.confidence > 1 || typeof grade.evidence !== "string" || !grade.evidence.trim() || grade.evidence.length > 500) return []
+      return [{ choice: grade.choice, confidence: grade.confidence, evidence: grade.evidence }]
+    }) : undefined
+    if (field.grades !== undefined && (!Array.isArray(field.grades) || grades?.length !== field.grades.length)) return []
+    const recommendation = field.recommendation === undefined ? undefined : stringList(field.recommendation)
+    if (field.recommendation !== undefined && (!Array.isArray(field.recommendation) || recommendation?.length !== field.recommendation.length)) return []
+    if (field.confidence !== undefined && (typeof field.confidence !== "number" || !Number.isFinite(field.confidence) || field.confidence < 0 || field.confidence > 1)) return []
+    return [{ key: field.key, status: field.status, reason: field.reason,
+      ...(grades === undefined ? {} : { grades }),
+      ...(recommendation === undefined ? {} : { recommendation }),
+      ...(field.confidence === undefined ? {} : { confidence: field.confidence }),
+    }]
+  })
+  return fields.length === record.fields.length ? { mode: record.mode, sourceSessionID: record.sourceSessionID, fields } : undefined
+}
+
+export function readFormReplySource(value: unknown): Form.ReplySource | undefined {
+  const source = recordField(value)
+  if (!source || source.kind !== "coordinator" || typeof source.coordinatorSessionID !== "string" ||
+    (source.groupID !== undefined && typeof source.groupID !== "string") ||
+    (source.via !== undefined && source.via !== "coordination" && source.via !== "yolo" && source.via !== "auto-answer") ||
+    (source.confidence !== undefined && (typeof source.confidence !== "number" || !Number.isFinite(source.confidence) || source.confidence < 0 || source.confidence > 1)) ||
+    (source.rationale !== undefined && (typeof source.rationale !== "string" || !source.rationale.trim() || source.rationale.length > 500))) return undefined
+  return { kind: source.kind, coordinatorSessionID: source.coordinatorSessionID,
+    ...(source.groupID === undefined ? {} : { groupID: source.groupID }),
+    ...(source.via === undefined ? {} : { via: source.via }),
+    ...(source.confidence === undefined ? {} : { confidence: source.confidence }),
+    ...(source.rationale === undefined ? {} : { rationale: source.rationale }),
+  }
 }
 
 function readFormField(value: unknown): readonly FormFieldView[] {

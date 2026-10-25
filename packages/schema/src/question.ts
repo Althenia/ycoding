@@ -7,6 +7,7 @@ import { ascending } from "./identifier.js"
 import { SessionID } from "./session-id.js"
 import { statics } from "./schema.js"
 import { SessionReviewID } from "./session-review-id.js"
+import { Form } from "./form.js"
 
 export const ID = Schema.String.check(Schema.isStartsWith("que")).pipe(
   Schema.brand("Question.ID"),
@@ -53,6 +54,7 @@ export const Request = Schema.Struct({
   sessionID: SessionID,
   questions: Schema.Array(Info).annotate({ description: "Questions to ask" }),
   tool: Tool.pipe(optional),
+  assessment: Form.Assessment.pipe(optional),
 }).annotate({ identifier: "Question.Request" })
 export interface Request extends Schema.Schema.Type<typeof Request> {}
 

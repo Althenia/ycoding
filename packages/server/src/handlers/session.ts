@@ -445,6 +445,28 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.subagent.switchModel",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* orchestration.switchModel({
+              parentID: ctx.params.parentID,
+              childID: ctx.params.childID,
+              expectedModel: ctx.payload.expectedModel,
+              model: ctx.payload.model,
+              source: { type: "native" },
+            }).pipe(Effect.mapError((error) => {
+              if (error._tag === "SessionOrchestration.ModelBlockedError") return new ModelSwitchBlockedError(error.blocked)
+              if (error._tag === "SessionRunnerModel.ProfileUnavailableError") return profileSelectionFailure()
+              if (error._tag === "SessionOrchestration.InvalidRequestError" || error._tag === "Session.CompactionConflictError")
+                return new InvalidRequestError({ field: "model", message: "The selected model cannot be used without changing the child's context or profile." })
+              if (error._tag === "Session.NotFoundError" || error._tag === "SessionOrchestration.NotFoundError" || error._tag === "SessionOrchestration.ForbiddenError" || error._tag === "SessionOrchestration.ConflictError")
+                return mapControlError(error)
+              return new InvalidRequestError({ field: "model", message: "The model, variant, provider or authority is unavailable; the child's selection is unchanged." })
+            })),
+          }
+        }),
+      )
+      .handle(
         "session.todo.list",
         Effect.fn(function* (ctx) {
           const todo = yield* SessionTodo.Service

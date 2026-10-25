@@ -58,23 +58,84 @@ export const Delivery = Schema.Struct({
   turnID: Identity.pipe(optional),
 }).annotate({ identifier: "Dots.Delivery" })
 
-export interface ExchangeCreate extends Schema.Schema.Type<typeof ExchangeCreate> {}
-export const ExchangeCreate = Schema.Struct({
+export const PresentationPreferences = Schema.Struct({
+  format: Schema.Literals(["prose", "bullets"]).pipe(optional),
+  detail: Schema.Literals(["concise", "standard", "detailed"]).pipe(optional),
+}).check(Schema.makeFilter((value) => value.format !== undefined || value.detail !== undefined, {
+  expected: "at least one presentation preference",
+  meta: { _tag: "isMinProperties", minProperties: 1 },
+  arbitrary: { constraint: { minLength: 1 } },
+}))
+export type PresentationPreferences = typeof PresentationPreferences.Type
+export const RoutineInstruction = Schema.Union([
+  Schema.Struct({ operation: Schema.Literal("continue") }),
+  Schema.Struct({ operation: Schema.Literal("presentation"), preferences: PresentationPreferences }),
+]).annotate({ identifier: "Dots.RoutineInstruction", parseOptions: { onExcessProperty: "error" } })
+export type RoutineInstruction = typeof RoutineInstruction.Type
+export const DelegationRef = Schema.Struct({ id: Identity, revision: PositiveInt })
+export type DelegationRef = typeof DelegationRef.Type
+export const RoutineReceipt = Schema.Struct({ delegation: DelegationRef, taskInputID: ID, instruction: RoutineInstruction })
+export type RoutineReceipt = typeof RoutineReceipt.Type
+export const DelegationScope = Schema.Struct({
+  operations: Schema.NonEmptyArray(Schema.Literals(["continue", "presentation"])),
+  format: Schema.NonEmptyArray(Schema.Literals(["prose", "bullets"])).pipe(optional),
+  detail: Schema.NonEmptyArray(Schema.Literals(["concise", "standard", "detailed"])).pipe(optional),
+}).check(Schema.makeFilter((value) => new Set(value.operations).size === value.operations.length &&
+  (value.operations.includes("presentation") ? value.format !== undefined || value.detail !== undefined : value.format === undefined && value.detail === undefined), {
+  expected: "distinct operations and presentation values only with presentation admission",
+  meta: { _tag: "isMaxProperties", maxProperties: 3 },
+  arbitrary: { constraint: { maxLength: 3 } },
+}))
+export type DelegationScope = typeof DelegationScope.Type
+const exchangeFields = {
   exchangeID: Identity.check(Schema.isMaxLength(256)),
   expectedAttachment: Target,
   targetSessionID: SessionID,
   channel: Schema.Literal("task"),
   delivery: Schema.Literals(["steer", "queue"]),
-  text: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(32768)),
-}).annotate({ identifier: "Dots.ExchangeCreate" })
+}
+export const ExchangeCreate = Schema.Union([
+  Schema.Struct({ ...exchangeFields, text: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(32768)),
+    delegation: Schema.Never.pipe(optional), taskInputID: Schema.Never.pipe(optional), instruction: Schema.Never.pipe(optional) }),
+  Schema.Struct({ ...exchangeFields, ...RoutineReceipt.fields }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+]).annotate({ identifier: "Dots.ExchangeCreate" })
+export type ExchangeCreate = typeof ExchangeCreate.Type
+
+export const DelegationStatusInput = Schema.Struct({ expectedAttachment: Target, targetSessionID: SessionID }).annotate({ identifier: "Dots.DelegationStatusInput", parseOptions: { onExcessProperty: "error" } })
+export const DelegationCreate = Schema.Struct({ ...DelegationStatusInput.fields,
+  proposalID: Identity.check(Schema.isMaxLength(256)), sourceExchangeID: exchangeFields.exchangeID,
+  taskInputID: ID, scope: DelegationScope, expiresAt: PositiveInt,
+}).annotate({ identifier: "Dots.DelegationCreate", parseOptions: { onExcessProperty: "error" } })
+export type DelegationCreate = typeof DelegationCreate.Type
+export const DelegationRevoke = Schema.Struct({ ...DelegationRef.fields, expectedAttachment: Target }).annotate({ identifier: "Dots.DelegationRevoke", parseOptions: { onExcessProperty: "error" } })
+export type DelegationRevoke = typeof DelegationRevoke.Type
+export const DelegationInfo = Schema.Struct({ ...DelegationRef.fields,
+  sourceExchangeID: exchangeFields.exchangeID, targetSessionID: SessionID, taskInputID: ID,
+  principal: McpEvents.Principal, scope: DelegationScope, expiresAt: PositiveInt,
+  active: Schema.Boolean,
+}).annotate({ identifier: "Dots.DelegationInfo" })
+export type DelegationInfo = typeof DelegationInfo.Type
+export const DelegationReview = Schema.Struct({
+  kind: Schema.Literal("dots-task-delegation"), proposalID: DelegationCreate.fields.proposalID,
+  sourceExchangeID: exchangeFields.exchangeID, principal: McpEvents.Principal,
+  targetSessionID: SessionID, taskInputID: ID, task: Schema.String, expectedAttachment: Target,
+  scope: DelegationScope, expiresAt: PositiveInt, lifetime: Schema.Literal("binding"), fingerprint: Identity,
+}).annotate({ identifier: "Dots.DelegationReview" })
+export type DelegationReview = typeof DelegationReview.Type
+export const DelegationStatus = Schema.Struct({
+  sources: Schema.Array(Schema.Struct({ sourceExchangeID: exchangeFields.exchangeID, principal: McpEvents.Principal })),
+  tasks: Schema.Array(Schema.Struct({ taskInputID: ID, text: Schema.String })),
+  grants: Schema.Array(DelegationInfo),
+}).annotate({ identifier: "Dots.DelegationStatus" })
+export type DelegationStatus = typeof DelegationStatus.Type
 
 export interface ExchangeRead extends Schema.Schema.Type<typeof ExchangeRead> {}
-export const ExchangeRead = Schema.Struct({ exchangeID: ExchangeCreate.fields.exchangeID }).annotate({ identifier: "Dots.ExchangeRead" })
+export const ExchangeRead = Schema.Struct({ exchangeID: exchangeFields.exchangeID }).annotate({ identifier: "Dots.ExchangeRead" })
 
 const envelopeFields = {
   coordinator: McpEvents.RequestContext.fields.principal,
   scope: Schema.Struct({ epoch: Identity, grantID: Identity }),
-  exchangeID: ExchangeCreate.fields.exchangeID,
+  exchangeID: exchangeFields.exchangeID,
   messageID: ID,
 }
 
@@ -100,20 +161,21 @@ export const Envelope = Schema.Union([TaskEnvelope, ReportEnvelope])
 
 export type CoordinationContext = typeof CoordinationContext.Type
 export const CoordinationContext = Schema.Union([
-  Schema.Struct({ state: Schema.Literal("enabled"), generation: PositiveInt, tool: Schema.Literal("dots_report"), envelope: TaskEnvelope }),
-  Schema.Struct({ state: Schema.Literal("disabled"), generation: PositiveInt, reason: Schema.Literals(["capability_disabled", "no_task", "task_settled", "unavailable", "tool_unavailable"]) }),
+  Schema.Struct({ state: Schema.Literal("enabled"), generation: PositiveInt, tool: Schema.Literal("dots_report"), envelope: TaskEnvelope, routine: RoutineReceipt.pipe(optional) }),
+  Schema.Struct({ state: Schema.Literal("disabled"), generation: PositiveInt, reason: Schema.Literals(["capability_disabled", "no_task", "task_settled", "unavailable", "tool_unavailable"]), routine: RoutineReceipt.pipe(optional) }),
 ]).annotate({ identifier: "Dots.CoordinationContext" })
 
 export interface ExchangeMetadata extends Schema.Schema.Type<typeof ExchangeMetadata> {}
 export const ExchangeMetadata = Schema.Struct({
   sessionID: SessionID,
   targetSessionID: SessionID,
-  exchangeID: ExchangeCreate.fields.exchangeID,
+  exchangeID: exchangeFields.exchangeID,
   attachment: Schema.Struct({
     ...Target.fields,
     label: Schema.String.check(Schema.isPattern(/\S/)),
   }),
   envelope: TaskEnvelope.pipe(optional),
+  routine: RoutineReceipt.pipe(optional),
 }).annotate({ identifier: "Dots.ExchangeMetadata" })
 
 export interface ExchangeOutput extends Schema.Schema.Type<typeof ExchangeOutput> {}
@@ -127,7 +189,7 @@ export const ExchangeOutput = Schema.Struct({
 export interface Exchange extends Schema.Schema.Type<typeof Exchange> {}
 export const Exchange = Schema.Struct({
   envelope: TaskEnvelope,
-  exchangeID: ExchangeCreate.fields.exchangeID,
+  exchangeID: exchangeFields.exchangeID,
   sessionID: SessionID,
   targetSessionID: SessionID,
   inputID: ID,
@@ -139,7 +201,7 @@ export const Exchange = Schema.Struct({
 
 export interface ExchangeRecord extends Schema.Schema.Type<typeof ExchangeRecord> {}
 export const ExchangeRecord = Schema.Struct({
-  exchangeID: ExchangeCreate.fields.exchangeID,
+  exchangeID: exchangeFields.exchangeID,
   sessionID: SessionID,
   targetSessionID: SessionID,
   inputID: ID,
@@ -148,6 +210,7 @@ export const ExchangeRecord = Schema.Struct({
   fingerprint: Identity,
   source: McpEvents.RequestContext,
   grantID: Identity,
+  routine: RoutineReceipt.pipe(optional),
   scope: Schema.Struct({ rootSessionID: SessionID, groupID: Identity.pipe(optional), ownerSessionID: SessionID.pipe(optional) }),
 }).annotate({ identifier: "Dots.ExchangeRecord" })
 
@@ -187,6 +250,12 @@ export const Peer = Schema.Struct({
 }).annotate({ identifier: "Dots.Peer" })
 
 const decodePeer = Schema.decodeUnknownOption(Peer)
+const decodeRoutine = Schema.decodeUnknownOption(RoutineReceipt)
+export const routine = (metadata: Readonly<Record<string, unknown>> | undefined) => {
+  const exchange = metadata?.dotsExchange
+  if (typeof exchange !== "object" || exchange === null || !("routine" in exchange)) return undefined
+  return Option.getOrUndefined(decodeRoutine(exchange.routine, { onExcessProperty: "error" }))
+}
 
 export const peer = (metadata: Readonly<Record<string, unknown>> | undefined) =>
   metadata === undefined ? undefined : Option.getOrUndefined(decodePeer(metadata.dots))

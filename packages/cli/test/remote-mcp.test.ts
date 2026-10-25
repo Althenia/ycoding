@@ -117,6 +117,7 @@ const excludedOperations = [
   "session.dots.targets",
   "session.dots.status",
   "session.dots.bind",
+  "session.dots.unbind",
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
@@ -227,6 +228,21 @@ async function fixture(
 }
 
 describe("inventory and discovery", () => {
+  test("uncertain routine exchanges reconcile only the exact task, delegation and presentation instruction", async () => {
+    const input = { exchangeID: "routine", expectedAttachment: { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "V" }, targetSessionID: "ses_1", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, taskInputID: "msg_human", instruction: { operation: "presentation", preferences: { format: "bullets", detail: "concise" } } }
+    for (const changed of [
+      { ...input, taskInputID: "msg_other" }, { ...input, delegation: { id: "other", revision: 1 } }, { ...input, delegation: { id: "proposal", revision: 2 } },
+      { ...input, instruction: { operation: "continue" } }, { ...input, instruction: { operation: "presentation", preferences: { format: "prose", detail: "concise" } } },
+      { ...input, instruction: { operation: "presentation", preferences: { format: "bullets", detail: "detailed" } } },
+    ]) {
+      const held = await fixture({ dotsExchangeCreate: new LocalFailure("transport", "Synthetic unconfirmed response") })
+      expect((await held.run("session_dots_exchange_create", { sessionID: "ses_1", input })).isError).toBe(true)
+      expect(held.calls.filter((call) => call.method === "dotsExchangeCreate")).toHaveLength(1)
+      expect((await held.run("session_dots_exchange_create", { sessionID: "ses_1", input: changed })).isError).toBe(true)
+      expect(held.calls.filter((call) => call.method === "dotsExchangeRead")).toHaveLength(0)
+      expect(held.calls.filter((call) => call.method === "dotsExchangeCreate")).toHaveLength(1)
+    }
+  })
   test("Dots report text reaches the MCP response with a program-stamped visible header", async () => {
     const envelope = { coordinator: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" }, scope: { epoch: "epoch_fixture", grantID: "grant_fixture" }, exchangeID: "exchange_fixture", messageID: "msg_report", replyToMessageID: "msg_input", sourceSessionID: "ses_1", origin: "agent", kind: "blocker" }
     const value = { sessionID: "ses_1", targetSessionID: "ses_1", exchangeID: "exchange_fixture", inputID: "msg_input", channel: "task", state: "running", envelope: { coordinator: envelope.coordinator, scope: envelope.scope, exchangeID: envelope.exchangeID, messageID: envelope.replyToMessageID, targetSessionID: "ses_1", origin: "plugin", kind: "task" }, progress: [{ deliveryID: "report_fixture", messageID: "msg_report", text: "Synthetic blocker", envelope }] }

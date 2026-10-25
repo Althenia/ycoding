@@ -19,6 +19,7 @@ export const Output = Schema.Union([
   Schema.Struct({ action: Schema.Literal("answer"), task: Task }),
   Schema.Struct({ action: Schema.Literal("cancel"), task: Task }),
   Schema.Struct({ action: Schema.Literal("resume"), task: Task }),
+  Schema.Struct({ action: Schema.Literal("switch_model"), task: Task }),
 ]).pipe(Schema.toTaggedUnion("action"))
 export type Output = typeof Output.Type
 
@@ -33,7 +34,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "List direct child tasks, send steer or queue input (which can reactivate a terminal child while retaining its Session context), answer an open child question, cancel a child, or resume already-pending durable work.",
+              "List direct child tasks, send steer or queue input, answer an open child question, cancel or resume a child, or select a child's model between logical Steps without interrupting or waking it. For switch_model, supply its current model as expectedModel and preserve a compatible profile and variant; success reports the committed selection, not provider execution.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output) }],
@@ -43,6 +44,17 @@ export const Plugin = {
                 if (input.action === "list")
                   return { action: "list" as const, tasks: yield* orchestration.list(context.sessionID) }
                 const target = yield* orchestration.get(context.sessionID, input.sessionID)
+                if (input.action === "switch_model")
+                  return {
+                    action: "switch_model" as const,
+                    task: yield* orchestration.switchModel({
+                      parentID: context.sessionID,
+                      childID: input.sessionID,
+                      expectedModel: input.expectedModel,
+                      model: input.model,
+                      source: { type: "tool", ...source },
+                    }),
+                  }
                 yield* SessionOrchestration.authorize(context.sessionID, target.agent, source, Hash.json(input)).pipe(
                   Effect.provideService(Permission.Service, permission),
                 )

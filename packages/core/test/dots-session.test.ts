@@ -450,6 +450,7 @@ describe("Dots runtime node", () => {
         dots.resume({ sessionID, expectedTarget: target }).pipe(Effect.flip),
       ])
       expect(codes.map((error) => error.code)).toEqual(Array(5).fill("feature_disabled"))
+      expect(yield* dots.unbind({ sessionID, expectedTarget: target })).toEqual({ enabled: false, state: "disconnected" })
       expect(calls).toEqual({ destinations: 0, connect: 0, released: 0 })
     }),
   )

@@ -27,6 +27,7 @@ import type {
 import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
 import { remoteScenario } from "./remote-scenarios"
 import { createProviderAuthFixture } from "./provider-auth-fixture"
+import type { Form } from "../../../packages/schema/src/form"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/site.css"
@@ -409,6 +410,10 @@ const transcriptProbe = accountParams.get("transcriptProbe") === "1"
 const responseProbe = accountParams.get("responseProbe") === "1"
 const childQuestion = accountParams.get("childQuestion") === "1"
 const questionFlow = accountParams.get("questionFlow") === "1"
+let questionAssessment: Form.Assessment | undefined = accountParams.get("questionGrades") === "1" ? {
+  mode: "yolo", sourceSessionID: sessionID,
+  fields: [{ key: "q0", status: "pending", reason: "Answers evaluator is assessing the options." }],
+} : undefined
 let childQuestionAnswered = false
 let releaseChildAnswer: (() => void) | undefined
 Object.assign(window, { remoteReleaseChildAnswer: () => releaseChildAnswer?.() })
@@ -618,6 +623,7 @@ type Fixture = {
   readonly transcriptRefresh: () => Promise<void>
   readonly readingTail: (kind: "progress" | "decisions" | "settle" | "epoch") => Promise<void>
   readonly responseSnapshot: (messages: readonly unknown[], captured: RemoteCapturedChangesPage["data"], running: boolean) => Promise<void>
+  readonly assessQuestion: (assessment: Form.Assessment) => void
 }
 
 function createFixtureStore(): Fixture {
@@ -1166,7 +1172,7 @@ function createFixtureStore(): Fixture {
     if (operation === "session.form.list") return {
       status: "ok",
       value: targetSessionID !== sessionID || accountParams.get("team") === "two" ? [] : remoteScenarioData === undefined
-        ? (formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])).map(withChain)
+        ? (formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])).map(value => withChain(value)).map(value => value.id === form.id && questionAssessment ? { ...value, assessment: questionAssessment } : value)
         : unreplied(remoteScenarioData.forms).map(withChain),
     }
     if (
@@ -1184,7 +1190,7 @@ function createFixtureStore(): Fixture {
       if (formID !== undefined && formOutcome === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown Form outcome" } }
       if (formID !== undefined) answered.add(formID)
       if (questionFlow && operation === "session.form.reply" && formID === form.id && typeof input?.answer === "object" && input.answer !== null && "q0" in input.answer && typeof input.answer.q0 === "string") {
-        const structured = { answers: [[input.answer.q0]] }
+        const structured = { answers: [[input.answer.q0]], ...(questionAssessment === undefined ? {} : { assessment: questionAssessment }) }
         emitEvent(sessionID, { type: "session.tool.success", durable: { aggregateID: sessionID, seq: nextSeq++, version: 1 }, data: { sessionID, assistantMessageID: "msg_question_flow", callID: "call_question_flow", structured, content: [] } })
         messages = messages.map((message) => typeof message === "object" && message !== null && Reflect.get(message, "id") === "msg_question_flow" ? { ...message, content: [{ type: "tool", id: "call_question_flow", name: "question", state: { status: "completed", input: { questions: [{ header: "Scope", question: form.fields[0]!.description, options: [] }] }, structured, content: [] } }] } : message)
         snapshotWatermark = nextSeq - 1
@@ -1501,6 +1507,10 @@ function createFixtureStore(): Fixture {
       await store.reloadMessages()
     },
     operationReport: () => ({ transports: transportsCreated, operations: Object.fromEntries(operationCounts) }),
+    assessQuestion: (assessment) => {
+      questionAssessment = assessment
+      emitEvent(sessionID, { type: "form.assessed", data: { id: form.id, sessionID, assessment } })
+    },
   }
 }
 
@@ -1516,6 +1526,7 @@ if (accountParams.get("grades") === "1") messages = [...messages, {
 const fixture = createFixtureStore()
 Object.assign(window, { transcriptDelta: fixture.transcriptDelta, transcriptRefresh: fixture.transcriptRefresh, responseSnapshot: fixture.responseSnapshot, responseStatus: () => fixture.store.state().view?.status })
 Object.assign(window, { remoteReadingTail: fixture.readingTail })
+Object.assign(window, { remoteQuestionAssessment: fixture.assessQuestion })
 Object.assign(window, { providerAuthState: () => fixture.store.state() })
 Object.assign(window, { remoteQuotaNotice: (frame: RemoteNoticeFrame) => fixture.noticeFrame(frame) })
 Object.assign(window, { remoteReloadMessages: fixture.store.reloadMessages })

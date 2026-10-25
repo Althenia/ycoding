@@ -1472,6 +1472,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           setStore("session", "todo", event.data.sessionID, reconcile(event.data.todos))
           break
         case "session.model.selected":
+          for (const [parentID, page] of Object.entries(store.session.subagent)) {
+            if (!page.data.some(task => task.sessionID === event.data.sessionID)) continue
+            result.session.subagent.invalidate(parentID)
+            setStore("session", "subagent", parentID, "data", task => task.sessionID === event.data.sessionID, "model", reconcile(event.data.model))
+          }
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "model", reconcile(event.data.model))
           if (!store.session.message[event.data.sessionID]) break
@@ -2148,6 +2153,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ...(store.session.form[event.data.form.sessionID] ?? []),
             event.data.form.sessionID === "global" ? { ...event.data.form, location: event.location } : event.data.form,
           ])
+          break
+        case "form.assessed":
+          setStore("session", "form", event.data.sessionID,
+            (store.session.form[event.data.sessionID] ?? []).map((form) => form.id === event.data.id ? { ...form, assessment: event.data.assessment } : form),
+          )
           break
         case "form.replied":
         case "form.cancelled":

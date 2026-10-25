@@ -2826,6 +2826,11 @@ test("adds, dismisses, and refreshes form requests", async () => {
     })
     await wait(() => data.session.form.list("ses_1")?.length === 1)
 
+    const assessment = { mode: "yolo" as const, sourceSessionID: "ses_1", fields: [{ key: "q0", status: "assessed" as const, reason: "Supported choice.", grades: [{ choice: "a", confidence: 0.9, evidence: "Fits the scope." }], recommendation: ["a"] }] }
+    emitEvent(events, { id: "evt_form_assessed", created: 1, type: "form.assessed", data: { id: "frm_1", sessionID: "ses_1", assessment } })
+    await wait(() => data.session.form.list("ses_1")?.[0]?.assessment !== undefined)
+    expect(data.session.form.list("ses_1")?.[0]?.assessment).toEqual(assessment)
+
     emitEvent(events, {
       id: "evt_form_replied_1",
       created: 2,

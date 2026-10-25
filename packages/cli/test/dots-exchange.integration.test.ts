@@ -19,6 +19,7 @@ import { CoordinationService } from "@ycoding-ai/core/coordination/index"
 import { Database } from "@ycoding-ai/core/database/database"
 import { SessionProviderRequestTable } from "@ycoding-ai/core/session/sql"
 import { EventRuntime } from "@ycoding-ai/core/event"
+import { Permission } from "@ycoding-ai/core/permission"
 import { DotsRuntime } from "@ycoding-ai/core/dots"
 import { DotsExchange } from "@ycoding-ai/core/dots/exchange"
 import { DotsReporting } from "@ycoding-ai/core/dots/report"
@@ -69,19 +70,24 @@ test("authenticated MCP exchanges cross the typed protocol into owner-checked du
     const anchorAttachmentReads: string[] = []
     const targetAttachmentReads: string[] = []
     const mappedLocations: Location.Ref[] = []
+    const permission = yield* Permission.Service.pipe(Effect.provide(Layer.mock(Permission.Service, {
+      assert: () => Effect.die("MCP cannot activate native task delegation"),
+    })))
     const context = Context.add(
       yield* Effect.context<Session.Service | SessionOrchestration.Service | SessionExecution.Service | CoordinationService.Service | Database.Service | EventRuntime.Service>(),
       DotsRuntime.Service,
       DotsRuntime.Service.of({
+        withBinding: () => Effect.die("Unexpected delegation binding access"),
         targets: () => Effect.succeed([expectedAttachment]),
         bind: () => Effect.die("No rebinding is permitted"),
+        unbind: () => Effect.die("MCP cannot unbind a native attachment"),
         status: () => Effect.succeed({ enabled: true, state: "connected", target: expectedAttachment }),
         attachment: (sessionID) => Effect.sync(() => { anchorAttachmentReads.push(sessionID) }).pipe(Effect.as({ target: expectedAttachment, accountDigest: "a".repeat(64) })),
         send: () => Effect.die("MCP return reads must not post room messages"),
         pause: () => Effect.die("No runtime control is permitted"),
         resume: () => Effect.die("No runtime control is permitted"),
       }),
-    ).pipe(Context.add(Location.Service, { ...location, project: { id: anchor.projectID, directory: location.directory } }), Context.add(SessionMcpEvents.Authorization.Service, SessionMcpEvents.Authorization.Service.of({
+    ).pipe(Context.add(Permission.Service, permission), Context.add(Location.Service, { ...location, project: { id: anchor.projectID, directory: location.directory } }), Context.add(SessionMcpEvents.Authorization.Service, SessionMcpEvents.Authorization.Service.of({
       capabilities: Effect.succeed(true),
       resolve: (value) => Effect.suspend(() => {
         verified.push(value)
@@ -103,8 +109,10 @@ test("authenticated MCP exchanges cross the typed protocol into owner-checked du
     const reportingContext = configured.pipe(
       Context.add(Location.Service, { ...alphaLocation, project: { id: alpha.projectID, directory: alphaLocation.directory } }),
       Context.add(DotsRuntime.Service, DotsRuntime.Service.of({
+        withBinding: () => Effect.die("Unexpected delegation binding access"),
         targets: () => Effect.die("The reporting Location must not list targets"),
         bind: () => Effect.die("No rebinding is permitted"),
+        unbind: () => Effect.die("MCP cannot unbind a native attachment"),
         status: () => Effect.die("The reporting Location must not read status"),
         attachment: (sessionID) => Effect.sync(() => { targetAttachmentReads.push(sessionID) }).pipe(Effect.andThen(Effect.fail(new DotsRuntime.Error({ code: "not_bound", message: "The reporting Location has no attachment." })))),
         send: () => Effect.die("MCP return reads must not post room messages"),

@@ -22,6 +22,33 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.2",
+    date: "2026-10-25",
+    title: "Projects, Dots exchanges and mobile controls",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Projects provide direct Add session and Members actions, stable selection, titled Session pickers and recovery that reuses a confirmed new Session. Session titles lead with the distinguishing action and subject. Native Dots bindings support confirmed display names and Unbind; the external Dot keeps running. Relay MCP supports explicit Dots task exchanges with program-stamped identities, correlated results without replay of uncertain admissions." },
+      {
+        tag: "Changed",
+        text: "A parent Session can change the selected model for one directly owned child Session. The switch applies after the current logical Step finishes, without interrupting or replaying work; idle children remain idle. The profile binding, questions, task state, permission ceiling, ownership and launch retry identity remain intact. A stale expected selection or incompatible context, provider connection, profile or variant leaves the selection unchanged. Reading the selected model does not prove that a provider request was made with it.",
+      },
+      {
+        tag: "Changed",
+        text: "Native Dots delegation requires separate human-only approval and allows only Continue or scoped presentation preferences for one selected, existing human-authored task. It stays bound to that task, the authenticated coordinator, approved operations and current attachment. It cannot admit new work, answer native Forms, permissions, guardrail reviews or managed-child questions, control child Sessions, or expose Dots credentials or live native controls.",
+      },
+      { tag: "Changed", text: "Native pending-request notifications retain bounded origin, review-class and inspection/handoff metadata across retries and restart cancellation. Relay MCP exchange reads do not settle native permissions, guardrails, Forms, review-box items or managed-child answers; human-only controls remain enforced through authenticated native controls. Primary agents and Project controllers delegate bounded work and retain integration ownership." },
+      {
+        tag: "Changed",
+        text: "YOLO option assessments show the evaluator-reported confidence and evidence for each actual option. A single-choice recommendation requires a unique highest-confidence option at or above 0.8; a multiselect recommendation requires a separately validated compatible set of actual options meeting that threshold. The TUI and web show Assessing options while a YOLO assessment is pending, then the reported assessed or unavailable state and reason. A validated recommendation may answer automatically; weak, ambiguous, invalid, refused, failed or timed-out assessments leave the question waiting for you rather than inventing a recommendation. For these option questions, Manual and Auto make no model call and show Not assessed. Settled views distinguish automatic YOLO answers from answers supplied by you. Assessments do not approve unrelated actions.",
+      },
+      { tag: "Changed", text: "Compact Dots coordination notices keep chronological transcript placement and summarize only valid trusted state; malformed metadata reads as unavailable. The TUI hides only unnamed canonical Remote MCP attribution, retaining the body, metadata, model context, web attribution, native Dot headers and named-exchange headers." },
+      { tag: "Changed", text: "The phone composer retains its draft and attachment actions in a compact layout. Usage filters reflow for narrow screens while preserving provider, profile, model, effort and range selection, and mobile Status and Settings keep their controls accessible." },
+      { tag: "Changed", text: "Antigravity sign-in and token refresh use OAuth client values embedded at build time. The release build receives its configured values; custom builds supply both client values." },
+      { tag: "Fixed", text: "BTW headers show the side chat's own pending and execution state, omit its redundant agent name and keep long paths within the available header width." },
+      { tag: "Fixed", text: "Usage incident details and cost/accounting views preserve the selected context on mobile. Confirmation dialogs let Up/Down move through choices, keep Cancel and Confirm visible while details scroll, and settle a selection once." },
+    ],
+  },
+  {
     version: "0.11.1",
     date: "2026-10-25",
     title: "Project ownership, autonomy modes and Antigravity",

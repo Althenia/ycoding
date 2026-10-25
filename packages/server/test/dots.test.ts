@@ -29,6 +29,7 @@ test("runtime controls forward the confirmed target and return the runtime statu
   const target = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "generation", label: "Fixture" }
   const calls: Array<{ action: string } & Parameters<DotsRuntime.Interface["pause"]>[0]> = []
   let rejected = false
+  const unbinds: Array<Parameters<DotsRuntime.Interface["unbind"]>[0]> = []
   const control = (action: "pause" | "resume", input: Parameters<DotsRuntime.Interface["pause"]>[0]) =>
     rejected
       ? Effect.fail(new DotsRuntime.Error({ code: "target_changed", message: "Confirm the current destination." }))
@@ -37,6 +38,7 @@ test("runtime controls forward the confirmed target and return the runtime statu
           return { enabled: true, state: "connected" as const, target, runtimeState: action === "pause" ? "paused" as const : "unpaused" as const }
         })
   const service = DotsRuntime.Service.of({
+    withBinding: () => Effect.die("Unexpected delegation binding access"),
     attachment: () => Effect.die("Unexpected exchange attachment lookup"),
     targets: () => Effect.die("Unexpected destination lookup"),
     bind: () => Effect.die("Unexpected binding"),
@@ -44,6 +46,13 @@ test("runtime controls forward the confirmed target and return the runtime statu
     send: () => Effect.die("Unexpected send"),
     pause: (input) => control("pause", input),
     resume: (input) => control("resume", input),
+    unbind: (input) =>
+      rejected
+        ? Effect.fail(new DotsRuntime.Error({ code: "target_changed", message: "Confirm the current destination." }))
+        : Effect.sync(() => {
+            unbinds.push(input)
+            return { enabled: true, state: "disconnected" as const }
+          }),
   })
   const location = Context.makeUnsafe<LocationServices>(Context.make(DotsRuntime.Service, service).mapUnsafe)
   const handler = HttpRouter.toWebHandler(HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.dots"])).pipe(
@@ -89,9 +98,17 @@ test("runtime controls forward the confirmed target and return the runtime statu
       expect((await request(action, { turnID: "turn" })).status).toBe(400)
     }
     expect(calls).toHaveLength(2)
+    const unbound = await request("unbind", { expectedTarget: target })
+    expect(unbound.status).toBe(200)
+    expect(await unbound.json()).toEqual({ data: { enabled: true, state: "disconnected" } })
+    expect(unbinds).toEqual([{ sessionID: Session.ID.make("ses_control"), expectedTarget: target }])
+    expect((await request("unbind", { turnID: "turn" })).status).toBe(400)
+    expect(unbinds).toHaveLength(1)
     rejected = true
     expect((await request("pause", { expectedTarget: target })).status).toBe(400)
+    expect((await request("unbind", { expectedTarget: target })).status).toBe(400)
     expect(calls).toHaveLength(2)
+    expect(unbinds).toHaveLength(1)
   } finally {
     await handler.dispose()
   }
@@ -166,6 +183,9 @@ test("mounted Dots endpoints stay disabled by default and reject every operation
         request("dots/pause", { expectedTarget: target }),
         request("dots/resume", { expectedTarget: target }),
       ])
+      const unbound = await request("dots/unbind", { expectedTarget: target })
+      expect(unbound.status).toBe(200)
+      expect(await unbound.json()).toEqual({ data: { enabled: false, state: "disconnected" } })
       for (const response of rejections) {
         expect(response.status).toBe(400)
         const text = await response.text()
@@ -192,6 +212,9 @@ test("mounted Dots controls resolve their Location runtime and fail closed befor
     ).toBe(400)
     expect((await request("dots/pause", { expectedTarget: target })).status).toBe(400)
     expect((await request("dots/resume", { expectedTarget: target })).status).toBe(400)
+    const unbound = await request("dots/unbind", { expectedTarget: target })
+    expect(unbound.status).toBe(200)
+    expect(await unbound.json()).toEqual({ data: { enabled: true, state: "disconnected" } })
     expect((await request("dots/cancel", { turnID: "synthetic-turn" })).status).toBe(404)
   })
 }, 30_000)

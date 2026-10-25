@@ -1,10 +1,26 @@
 import { expect, test } from "bun:test"
 import { HttpApi, HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
 import { Schema } from "effect"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { SessionID } from "@ycoding-ai/schema/session-id"
+import { SessionMessageID } from "@ycoding-ai/schema/session-message-id"
 import { makeDotsGroup } from "../src/groups/dots.js"
 
 class SessionLocation extends HttpApiMiddleware.Service<SessionLocation>()("dots-test-location") {}
 const group = makeDotsGroup(SessionLocation)
+
+test("native task delegation exposes only scoped typed status, human activation and revocation", () => {
+  const document = OpenApi.fromApi(HttpApi.make("native-delegation-test").add(group))
+  for (const [path, operation] of [["/api/session/{sessionID}/dots/delegation/status", "status"], ["/api/session/{sessionID}/dots/delegation", "create"], ["/api/session/{sessionID}/dots/delegation/revoke", "revoke"]])
+    expect(document.paths[path!]?.post?.operationId).toBe(`session.dots.delegation.${operation}`)
+  const payload = group.endpoints["session.dots.delegation.create"].payload.values().next().value?.schemas[0]
+  if (!payload) throw new Error("Native delegation payload is missing")
+  expect("schema" in payload && payload.schema).toBe(Dots.DelegationCreate)
+  const decode = Schema.decodeUnknownSync(Schema.toCodecJson(Dots.DelegationCreate))
+  const value: Dots.DelegationCreate = { proposalID: "proposal", sourceExchangeID: "exchange", targetSessionID: SessionID.make("ses_target"), taskInputID: SessionMessageID.ID.make("msg_human"), expectedAttachment: { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "Fixture" }, scope: { operations: ["continue"] }, expiresAt: 1 }
+  expect(decode(value)).toEqual(value)
+  expect(() => decode({ ...value, principal: { ownerID: "spoofed" } })).toThrow()
+})
 
 test("exchange create and read are typed Session-scoped operations with an authenticated source envelope", () => {
   const document = OpenApi.fromApi(HttpApi.make("dots-exchange-test").add(group))
@@ -28,6 +44,7 @@ test("Dots controls are Session-owned and do not expose credentials", () => {
   expect(document.paths["/api/session/{sessionID}/dots/bind"]?.post?.operationId).toBe("session.dots.bind")
   expect(document.paths["/api/session/{sessionID}/dots/pause"]?.post?.operationId).toBe("session.dots.pause")
   expect(document.paths["/api/session/{sessionID}/dots/resume"]?.post?.operationId).toBe("session.dots.resume")
+  expect(document.paths["/api/session/{sessionID}/dots/unbind"]?.post?.operationId).toBe("session.dots.unbind")
   expect(document.paths["/api/session/{sessionID}/dots/cancel"]).toBeUndefined()
   expect(JSON.stringify(document)).not.toContain("accessToken")
   expect(JSON.stringify(document)).not.toContain("refreshToken")
@@ -48,6 +65,21 @@ test("runtime controls require a confirmed target and return the runtime status"
     for (const runtimeState of ["paused", "unpaused", "unknown"])
       expect(Schema.is(success)({ data: { enabled: true, state: "connected", target: expectedTarget, runtimeState } })).toBe(true)
   }
+})
+
+test("unbind takes the confirmed target and returns the local status without credentials", () => {
+  const expectedTarget = { profile: "synthetic", dotID: "dot", threadID: "thread", generation: "generation", label: "Fixture" }
+  const endpoint = group.endpoints["session.dots.unbind"]
+  const payload = endpoint?.payload.values().next().value?.schemas[0]
+  const success = endpoint && [...endpoint.success][0]
+  if (!payload || !success) throw new Error("Dots unbind schemas are missing")
+  expect(Schema.is(payload)({ expectedTarget })).toBe(true)
+  expect(Schema.is(payload)({})).toBe(false)
+  expect(Schema.is(payload)({ expectedTarget: { ...expectedTarget, threadID: "" } })).toBe(false)
+  expect(Schema.is(payload)({ expectedTarget, credentialID: "credential" })).toBe(true)
+  expect(Schema.is(success)({ data: { enabled: true, state: "disconnected" } })).toBe(true)
+  expect(Schema.is(success)({ data: { enabled: false, state: "disconnected" } })).toBe(true)
+  expect(Schema.is(success)({ state: "disconnected" })).toBe(false)
 })
 
 test("send requires a client identity and carries explicit attachments only", () => {

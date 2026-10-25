@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store"
-import { createEffect, createMemo, For, Match, on, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js"
 import { useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
+import type { BoxRenderable, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useTheme } from "../../context/theme"
 import type { PermissionRequest, SessionAutonomyDecisionMode } from "@ycoding-ai/client"
 import { useClient } from "../../context/client"
@@ -17,6 +17,11 @@ import { SimulationSemantics } from "../../simulation/semantics"
 import { GuardrailEscalation } from "../../guardrail-escalation"
 import { ProjectEscalation } from "./project-escalation"
 import { toolDisplayName } from "@ycoding-ai/client/tool-display"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { Schema } from "effect"
+import { DotsDelegationReview } from "../../component/dialog-dots-delegation"
+
+const decodeDelegationReview = Schema.decodeUnknownOption(Dots.DelegationReview)
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -167,6 +172,8 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       </Match>
       <Match when={store.stage === "permission"}>
         {(() => {
+          const delegation = props.request.action === "dots_delegate"
+          const review = delegation ? decodeDelegationReview(props.request.metadata) : undefined
           const current = permissionPresentation(
             {
               action: props.request.action,
@@ -177,38 +184,47 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             },
             pathFormatter.format,
           )
-          const presentationBody =
-            props.request.action === "edit" ? (
-              <box paddingLeft={3} paddingRight={3}>
-                <EditBody file={current.file} diff={current.diff} patch={current.patch} />
-              </box>
-            ) : props.request.action === "external_directory" ? (
-              <Show when={current.lines.length > 0}>
-                <box paddingLeft={6} paddingRight={3} gap={1}>
-                  <box>
-                    <For each={current.lines}>{(line) => <text fg={theme.text.default}>{line}</text>}</For>
-                  </box>
-                </box>
-              </Show>
+          const presentationBody = delegation ? (
+            review?._tag === "Some" ? (
+              <DotsDelegationReview value={review.value} />
             ) : (
-              <box paddingLeft={6} paddingRight={3}>
-                <For each={current.lines}>
-                  {(line) => (
-                    <text
-                      fg={
-                        props.request.action === "shell" ||
-                        props.request.action === "subagent" ||
-                        props.request.action === "task"
-                          ? theme.text.default
-                          : theme.text.subdued
-                      }
-                    >
-                      {line.replace(/^(?:- |\$ )/, "")}
-                    </text>
-                  )}
-                </For>
+              <box paddingLeft={3} paddingRight={3}>
+                <text fg={theme.text.feedback.warning.default} wrapMode="word">
+                  Delegation review unavailable. Deny and prepare a new native request.
+                </text>
               </box>
             )
+          ) : props.request.action === "edit" ? (
+            <box paddingLeft={3} paddingRight={3}>
+              <EditBody file={current.file} diff={current.diff} patch={current.patch} />
+            </box>
+          ) : props.request.action === "external_directory" ? (
+            <Show when={current.lines.length > 0}>
+              <box paddingLeft={6} paddingRight={3} gap={1}>
+                <box>
+                  <For each={current.lines}>{(line) => <text fg={theme.text.default}>{line}</text>}</For>
+                </box>
+              </box>
+            </Show>
+          ) : (
+            <box paddingLeft={6} paddingRight={3}>
+              <For each={current.lines}>
+                {(line) => (
+                  <text
+                    fg={
+                      props.request.action === "shell" ||
+                      props.request.action === "subagent" ||
+                      props.request.action === "task"
+                        ? theme.text.default
+                        : theme.text.subdued
+                    }
+                  >
+                    {line.replace(/^(?:- |\$ )/, "")}
+                  </text>
+                )}
+              </For>
+            </box>
+          )
 
           const body = (
             <Prompt
@@ -217,7 +233,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               instance={props.request.id}
               body={
                 <box flexDirection="column">
-                  <box paddingLeft={3} paddingRight={3}><ProjectEscalation value={props.request.coordinationEscalation} /></box>
+                  <box paddingLeft={3} paddingRight={3}>
+                    <ProjectEscalation value={props.request.coordinationEscalation} />
+                  </box>
                   <Show when={props.request.escalation}>
                     {(escalation) => (
                       <box paddingLeft={3} paddingRight={3}>
@@ -229,20 +247,26 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   </Show>
                   <box paddingLeft={3} paddingRight={3}>
                     <text fg={theme.text.feedback.info.default}>
-                      {props.request.action === "shell" ? "bash wants to run" : current.title}
+                      {delegation
+                        ? "Delegate routine instructions for an existing task"
+                        : props.request.action === "shell"
+                          ? "bash wants to run"
+                          : current.title}
                     </text>
                   </box>
                   {presentationBody}
                 </box>
               }
               options={
-                props.request.save?.length
-                  ? {
-                      once: permissionOptionLabel("once"),
-                      always: "Allow for this session",
-                      reject: "Deny",
-                    }
-                  : { once: permissionOptionLabel("once"), reject: "Deny" }
+                delegation && review?._tag !== "Some"
+                  ? { reject: "Deny" }
+                  : !delegation && props.request.save?.length
+                    ? {
+                        once: permissionOptionLabel("once"),
+                        always: "Allow for this session",
+                        reject: "Deny",
+                      }
+                    : { once: permissionOptionLabel("once"), reject: "Deny" }
               }
               escapeKey="reject"
               onSelect={(option) => {
@@ -437,6 +461,21 @@ export function Prompt<const T extends Record<string, string>>(props: {
   const dimensions = useTerminalDimensions()
   const config = useConfig().data
   let details: ScrollBoxRenderable | undefined
+  let panel: BoxRenderable | undefined
+  const [layout, setLayout] = createSignal<{ height: number; chrome: number; columns: number; rows: number }>()
+  const measure = () => {
+    if (panel)
+      setLayout({
+        height: panel.height,
+        chrome:
+          panel
+            .getChildren()
+            .filter((child) => child !== details)
+            .reduce((height, child) => height + child.height, 0) + (compact() ? 0 : 1),
+        columns: dimensions().width,
+        rows: dimensions().height,
+      })
+  }
   const kind = props.kind ?? "permission"
   const keys = createMemo(() => Object.keys(props.options) as (keyof T)[])
   const enabled = (option: keyof T) => !props.disabled || props.nonMutatingOptions?.includes(option) === true
@@ -454,12 +493,19 @@ export function Prompt<const T extends Record<string, string>>(props: {
     keys().length * (compact() ? 1 : 2) +
     Number(props.footer !== undefined || kind === "guardrail") +
     (compact() ? 0 : 3)
-  const detailsHeight = () =>
-    Math.max(
+  const detailsHeight = () => {
+    const measured = layout()
+    const current =
+      measured?.columns === dimensions().width && measured.rows === dimensions().height ? measured : undefined
+    return Math.max(
       1,
-      Math.min(dimensions().height - 1, Math.max(chromeHeight() + 2, Math.floor(dimensions().height * 0.65))) -
-        chromeHeight(),
+      Math.min(
+        Math.min(dimensions().height - 1, Math.max(chromeHeight() + 2, Math.floor(dimensions().height * 0.65))) -
+          chromeHeight(),
+        (current?.height ?? dimensions().height) - (current?.chrome ?? chromeHeight()),
+      ),
     )
+  }
   const move = (direction: -1 | 1) => {
     const options = keys().filter(enabled)
     if (options.length === 0) return
@@ -565,14 +611,19 @@ export function Prompt<const T extends Record<string, string>>(props: {
   const content = () => (
     <box
       id={`session.${kind}`}
-      ref={SimulationSemantics.bind(() => ({
-        instance: props.instance,
-        role: "dialog",
-        label: props.semanticLabel ?? props.title,
-      }))}
+      ref={(value: BoxRenderable) => {
+        panel = value
+        SimulationSemantics.bind(() => ({
+          instance: props.instance,
+          role: "dialog",
+          label: props.semanticLabel ?? props.title,
+        }))(value)
+      }}
       width="100%"
-      maxHeight={dimensions().height - 1}
-      flexShrink={0}
+      onSizeChange={measure}
+      maxHeight="100%"
+      minHeight={chromeHeight() + 1}
+      flexShrink={1}
       backgroundColor={theme.background.surface.offset}
       paddingTop={compact() ? 0 : 1}
       paddingRight={1}
@@ -585,6 +636,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
         paddingRight={3}
         flexDirection="row"
         justifyContent="space-between"
+        onSizeChange={measure}
       >
         <text fg={theme.text.default}>{props.title}</text>
         <box flexGrow={1} />
@@ -607,7 +659,9 @@ export function Prompt<const T extends Record<string, string>>(props: {
         }}
         width="100%"
         maxHeight={detailsHeight()}
+        height={detailsHeight()}
         minHeight={1}
+        flexShrink={1}
         scrollX={false}
         scrollAcceleration={getScrollAcceleration(config)}
         contentOptions={{ flexShrink: 0, minHeight: 0 }}
@@ -617,12 +671,13 @@ export function Prompt<const T extends Record<string, string>>(props: {
           {props.body}
         </box>
       </scrollbox>
-      <box width="100%" paddingTop={compact() ? 0 : 1} paddingLeft={3} flexShrink={0}>
+      <box width="100%" paddingTop={compact() ? 0 : 1} paddingLeft={3} flexShrink={0} onSizeChange={measure}>
         <text fg={theme.text.feedback.info.default}>Choose</text>
       </box>
       <box
         width="100%"
         id={`session.${kind}.actions`}
+        onSizeChange={measure}
         ref={SimulationSemantics.bind(() => ({
           instance: props.instance,
           role: "listbox",
@@ -694,6 +749,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
       </box>
       <box
         id={`session.${kind}.footer`}
+        onSizeChange={measure}
         width="100%"
         paddingTop={compact() ? 0 : 1}
         paddingLeft={6}

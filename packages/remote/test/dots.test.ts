@@ -23,6 +23,14 @@ const target = {
 const parse = (operation: string, input?: unknown, sessionID: string | null = "ses_test") =>
   parseClientMessage(JSON.stringify({ type: "request", id: "req_test", operation, sessionID, input }))
 
+test("routine delegation uses the existing exchange operation and never exposes native grant administration", () => {
+  const input = { exchangeID: "routine", expectedAttachment: target, targetSessionID: "ses_target", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, taskInputID: "msg_human", instruction: { operation: "continue" } }
+  expect(parse("session.dots.exchange.create", input).ok).toBe(true)
+  expect(parse("session.dots.exchange.create", { ...input, instruction: { operation: "presentation", preferences: { format: "bullets", detail: "concise" } } }).ok).toBe(true)
+  for (const invalid of [{ ...input, text: "New scope" }, { ...input, command: "synthetic" }, { ...input, instruction: { operation: "approve" } }, { ...input, instruction: { operation: "presentation", preferences: {} } }, { ...input, instruction: { operation: "presentation", preferences: { format: "table" } } }]) expect(parse("session.dots.exchange.create", invalid).ok).toBe(false)
+  for (const operation of ["status", "create", "revoke"]) expect(parse(`session.dots.delegation.${operation}`, {}).ok).toBe(false)
+})
+
 test("typed exchanges reject caller provenance, missing recipients and non-task channels", () => {
   const input = { exchangeID: "exchange_1", expectedAttachment: target, targetSessionID: "ses_target", channel: "task", delivery: "queue", text: "Synthetic task" }
   expect(parse("session.dots.exchange.create", input).ok).toBe(true)
@@ -38,6 +46,7 @@ test("Dots controls require a Session and stay in the closed operation set", () 
     ["session.dots.targets", { profile: "synthetic" }],
     ["session.dots.status", undefined],
     ["session.dots.bind", target],
+    ["session.dots.unbind", { expectedTarget: target }],
     ["session.dots.send", { id: "msg_test", text: "hello", expectedTarget: target }],
     ["session.dots.pause", { expectedTarget: target }],
     ["session.dots.resume", { expectedTarget: target }],
@@ -47,6 +56,7 @@ test("Dots controls require a Session and stay in the closed operation set", () 
   }
   expect(remoteOperationAccess["session.dots.send"]).toBe("mutation")
   expect(remoteOperationAccess["session.dots.bind"]).toBe("mutation")
+  expect(remoteOperationAccess["session.dots.unbind"]).toBe("mutation")
   expect(remoteOperationAccess["session.dots.status"]).toBe("read")
   expect(remoteOperationAccess["session.dots.pause"]).toBe("mutation")
   expect(remoteOperationAccess["session.dots.resume"]).toBe("mutation")
@@ -54,7 +64,7 @@ test("Dots controls require a Session and stay in the closed operation set", () 
 })
 
 test("runtime controls reject missing targets, stale target shapes and caller-selected paths", () => {
-  for (const operation of ["session.dots.pause", "session.dots.resume"]) {
+  for (const operation of ["session.dots.pause", "session.dots.resume", "session.dots.unbind"]) {
     for (const input of [undefined, {}, { turnID: "turn" }, { expectedTarget: { ...target, generation: "" } },
       { expectedTarget: target, path: "/other" }, { expectedTarget: target, directory: "/tmp" }, { expectedTarget: target, turnID: "turn" }])
       expect(parse(operation, input).ok).toBe(false)

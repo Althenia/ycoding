@@ -173,6 +173,18 @@ Elapsed time does not close a required-answer question, admit an answer or no-an
 
 Startup reconciliation preserves a `waiting` task with a durable question ID, text, and timestamp even when its owner process has died or the question is old. Task get/list/page and TeamView derive the existing `question.deferred: true` marker from the owning review item, including sleep-entry conversions, without another stored authority. An answer claims the task through its existing durable transition and wakes the child; eventual completion notifies and wakes the parent. Recovery never replays a prior in-flight provider attempt. Ordinary Question-service requests and Forms are process-local and are not restored by a new service scope, even when their notification outbox rows persist.
 
+## Native Parent Child-Model Selection
+
+`POST /api/session/:parentID/subagent/:childID/model` accepts `{ expectedModel, model }` and returns `{ data: Task }` after committing the selection. The native `subagent_control` action `switch_model` takes the same references plus `sessionID`. Each reference includes provider and model IDs and any selected profile and variant. `expectedModel` compares all four fields; a changed selection returns `409` without mutation.
+
+Only an exact direct managed child can be selected. Native tool calls require a verified human causal input, including a managed launch descended from one, and the parent's effective `subagent` permission. Canonical runtime TeamView observations preserve this causal input; synthetic text or metadata cannot impersonate those observations. Unknown, remote, plugin and coordination origins are refused. HTTP callers use local authenticated authority; the operation is absent from the remote operation set and Dots controls. Foreign process claims, archived Sessions, starting or cancelling tasks, and active coordination-model overrides are refused.
+
+The current logical Step, including physical attempts, fallbacks and tool settlement, finishes before the selection commits. A per-Session gate keeps the next Step from selecting its model during the change. Waiting for this gate is cancellable; cancellation releases both gate and transition reservations without a late selection. Idle, waiting and terminal tasks retain their state; selection does not wake work, answer questions, interrupt, compact, replay or create a Session.
+
+Validation uses the child's recorded Location, target capabilities and existing private profile binding. Named profiles cannot be rebound, replaced or transferred to another provider; incompatible variants and unavailable providers fail unchanged. Provider-connection changes while waiting fail the selection. Context must already fit the target's safe input budget; `409 ModelSwitchBlockedError` carries the fit failure without starting compaction.
+
+`Task.model`, task get/list/page, TeamView and resident TUI task metadata report the selected Session model. The task's launch model remains immutable for exact launch retries. A successful selection is not evidence that a provider request has executed. Independent child requests can have different outcomes; read back uncertain outcomes rather than replaying the mutation.
+
 ## Model Selection Requires Context Fit
 
 `POST /api/session/:sessionID/model` serializes selection through a process-local per-Session transition reservation. It resolves the requested provider, model, and variant through the Session Location's model resolver before interrupting active execution. Invalid targets do not interrupt work. A changed valid target interrupts locally owned requests/tools and awaits settlement before rereading durable model-visible context. Raw transcript rows remain unchanged.

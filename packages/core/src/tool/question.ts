@@ -37,6 +37,8 @@ export const Output = Schema.Struct({
   automatic: Schema.Literal(true).pipe(Schema.optional),
   via: Schema.Literals(["auto-answer", "yolo"]).pipe(Schema.optional),
   confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(Schema.optional),
+  assessment: Form.Assessment.pipe(Schema.optional),
+  source: Form.ReplySource.pipe(Schema.optional),
   timedOutAfterSeconds: Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.optional),
   deferredItemID: SessionReview.ID.pipe(Schema.optional),
   reviewFull: Schema.Literal(true).pipe(Schema.optional),
@@ -56,6 +58,7 @@ export const toModelOutput = (
   deferredItemID?: string,
   reviewFull?: boolean,
   automatic?: true,
+  source?: Form.ReplySource,
 ) => {
   if (reviewFull)
     return "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains."
@@ -66,6 +69,8 @@ export const toModelOutput = (
   const formatted = questions.map((question, index) =>
     `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
   ).join(", ")
+  if (source?.kind === "coordinator")
+    return `The native coordinator answered these questions${source.via === "yolo" ? " through the Answers YOLO evaluator" : source.via === "auto-answer" ? " using deterministic Auto rules" : ""}, not the user: ${formatted}. These answers grant no permission, consent, or human-only approval.`
   if (automatic)
     return `Answers were selected automatically, not provided or approved by the user: ${formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
@@ -80,7 +85,7 @@ export const Plugin = {
       description,
       input: Input,
       output: Output,
-      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers, output.timedOutAfterSeconds, output.deferredItemID, output.reviewFull, output.automatic) }],
+      toModelOutput: ({ input, output }) => [{ type: "text", text: toModelOutput(input.questions, output.answers, output.timedOutAfterSeconds, output.deferredItemID, output.reviewFull, output.automatic, output.source) }],
       execute: (input, context) => permission.assert({
         action: "question", resources: ["*"], sessionID: context.sessionID, agent: context.agent,
         metadata: { operationDigest: Hash.json(input) },
@@ -101,14 +106,14 @@ export const Plugin = {
             if (state.status === "full")
               return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), reviewFull: true as const })
             if (state.status === "deferred")
-              return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), deferredItemID: state.itemID })
+              return Effect.succeed({ answers: input.questions.map((): Question.Answer => []), deferredItemID: state.itemID, ...(state.assessment === undefined ? {} : { assessment: state.assessment }) })
             if (state.status === "cancelled" || state.status === "timed_out") return Effect.die(new CancelledError())
             return Effect.succeed({ answers: input.questions.map((_, index): Question.Answer => {
               const value = state.answer[`q${index}`]
               if (value === undefined) return []
               if (typeof value === "object") return Array.from(value)
               return [String(value)]
-            }), ...(state.automatic ? { automatic: true as const } : {}), ...(state.automatic && state.via ? { via: state.via } : {}), ...(state.automatic && state.confidence !== undefined ? { confidence: state.confidence } : {}) })
+            }), ...(state.automatic ? { automatic: true as const } : {}), ...(state.automatic && state.via ? { via: state.via } : {}), ...(state.automatic && state.confidence !== undefined ? { confidence: state.confidence } : {}), ...(state.assessment === undefined ? {} : { assessment: state.assessment }), ...(state.source === undefined ? {} : { source: state.source }) })
           }),
         )),
       ),

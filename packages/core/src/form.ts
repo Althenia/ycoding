@@ -1,6 +1,7 @@
 export * as Form from "./form"
 
 import { Coordination } from "@ycoding-ai/schema/coordination"
+import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
 import { Form } from "@ycoding-ai/schema/form"
 import { Cache, Context, Deferred, Duration, Effect, Exit, Layer, Option, Schema, Semaphore } from "effect"
 import { Config } from "./config"
@@ -36,7 +37,7 @@ export type When = Form.When
 export const State = Form.State
 export type State = typeof State.Type
 export type TerminalState = Exclude<State, { readonly status: "pending" }>
-export type AskResult = TerminalState & { readonly automatic?: true; readonly via?: "auto-answer" | "yolo"; readonly confidence?: number }
+export type AskResult = TerminalState & { readonly automatic?: true; readonly via?: "auto-answer" | "yolo"; readonly confidence?: number; readonly assessment?: Form.Assessment; readonly source?: ReplySource }
 
 export const Answer = Form.Answer
 export type Answer = typeof Answer.Type
@@ -85,6 +86,8 @@ export interface ReconsiderResult {
 }
 
 export const Event = Form.Event
+export const Assessment = Form.Assessment
+export type Assessment = Form.Assessment
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Form.NotFoundError", {
   id: ID,
@@ -119,7 +122,7 @@ export class InvalidFormError extends Schema.TaggedErrorClass<InvalidFormError>(
   message: Schema.String,
 }) {}
 
-export type CreateInput = Omit<Form.Info, "id"> & { readonly id?: ID }
+export type CreateInput = Omit<Form.Info, "id" | "assessment"> & { readonly id?: ID }
 
 export interface ReplyInput {
   readonly id: ID
@@ -155,6 +158,7 @@ interface Entry {
   readonly state: State
   readonly deferred: Deferred.Deferred<TerminalState>
   readonly epoch: number | undefined
+  readonly source?: ReplySource
 }
 
 export const layer = Layer.effect(
@@ -215,11 +219,18 @@ export const layer = Layer.effect(
         : state.status === "cancelled"
           ? events.publish(Event.Cancelled, { id, sessionID })
           : events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID })
-      yield* Cache.set(forms, id, { form: entry.form, deferred: entry.deferred, epoch: entry.epoch, state })
+      const form = entry.form.assessment === undefined ? entry.form : { ...entry.form, assessment: {
+        ...entry.form.assessment,
+        fields: entry.form.assessment.fields.map((field) => field.status !== "pending" ? field : {
+          key: field.key, status: "not_assessed" as const,
+          reason: state.status === "answered" ? "Answered before assessment settled." : "Request closed before assessment settled.",
+        }),
+      } }
+      yield* Cache.set(forms, id, { form, deferred: entry.deferred, epoch: entry.epoch, state, ...(source === undefined ? {} : { source }) })
       yield* Deferred.succeed(entry.deferred, state)
     })
 
-    const createPending = Effect.fn("Form.createPending")((input: CreateInput, epoch?: number) =>
+    const createPending = Effect.fn("Form.createPending")((input: CreateInput, epoch?: number, assessment?: Form.Assessment) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const id = input.id ?? ID.create()
@@ -233,6 +244,7 @@ export const layer = Layer.effect(
             title: input.title,
             ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
             fields: input.fields,
+            ...(assessment === undefined ? {} : { assessment }),
           }
           const entry: Entry = {
             form,
@@ -318,15 +330,29 @@ export const layer = Layer.effect(
 
     const create = Effect.fn("Form.create")((input: CreateInput) => createPending(input))
 
+    const updateAssessment = (entry: Entry, assessment: Form.Assessment) => Effect.gen(function* () {
+      const updated = { ...entry, form: { ...entry.form, assessment } }
+      yield* Cache.set(forms, entry.form.id, updated)
+      yield* events.publish(Event.Assessed, { id: entry.form.id, sessionID: entry.form.sessionID, assessment })
+      return updated
+    })
+
+    const assessed = (id: ID, fields: ReadonlyArray<Form.FieldAssessment>) => exclusive(Effect.gen(function* () {
+      const entry = yield* find(id).pipe(Effect.orDie)
+      if (entry.state.status !== "pending" || entry.form.assessment === undefined) return
+      yield* updateAssessment(entry, { ...entry.form.assessment, fields })
+    }))
+
+    const withSettlement = (id: ID, result: AskResult) => Effect.gen(function* () {
+      const final = yield* find(id).pipe(Effect.orDie)
+      return { ...result, ...(final.form.assessment === undefined ? {} : { assessment: final.form.assessment }), ...(final.source === undefined ? {} : { source: final.source }) }
+    })
+
     const ask = Effect.fn("Form.ask")((input: CreateInput) =>
       Effect.acquireUseRelease(
         Effect.sync(() => enter(input.sessionID)),
         (ticket) => Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const createWaiting = (waiting: CreateInput) =>
-            createPending(waiting, ticket.epoch).pipe(
-              Effect.tap((created) => (ticket.superseded() ? cancelObsolete(created.id) : Effect.void)),
-            )
           const sessionID = Schema.is(SessionSchema.ID)(input.sessionID) ? input.sessionID : undefined
           const snapshot = sessionID
             ? yield* autonomy
@@ -336,6 +362,20 @@ export const layer = Layer.effect(
           const mode = sessionID && snapshot ? yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers") : "manual"
           const autoAnswer = mode === "auto"
           const yolo = mode === "yolo"
+          const effective = input.metadata?.kind === "question" && sessionID && snapshot
+            ? yield* autonomy.effectiveDecisions(sessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+            : undefined
+          const assessment: Form.Assessment | undefined = input.metadata?.kind === "question" && input.fields.some((field) => (field.type === "string" || field.type === "multiselect") && (field.options?.length ?? 0) > 0) ? {
+            mode, sourceSessionID: effective?.inherited.answers ?? input.sessionID,
+            fields: input.fields.flatMap((field): Form.FieldAssessment[] =>
+              (field.type === "string" || field.type === "multiselect") && (field.options?.length ?? 0) > 0
+                ? [{ key: field.key, status: yolo ? "pending" : "not_assessed", reason: yolo ? "Answers evaluator is assessing the options." : mode === "auto" ? "Auto uses only explicit defaults or a unique Recommended option; no model assessment." : "Manual answers require your decision; no model assessment." }]
+                : []),
+          } : undefined
+          const createWaiting = (waiting: CreateInput, value = assessment) =>
+            createPending(waiting, ticket.epoch, value).pipe(
+              Effect.tap((created) => (ticket.superseded() ? cancelObsolete(created.id) : Effect.void)),
+            )
           const asleep = sessionID
             ? yield* autonomy
                 .isAsleep(sessionID)
@@ -352,7 +392,7 @@ export const layer = Layer.effect(
             }
             if (!auto || !snapshot) {
               const item = yield* openReview(form, sessionID, { reason: "disabled" })
-              return { status: "deferred", itemID: item.itemID } as TerminalState
+              return { status: "deferred", itemID: item.itemID, ...(assessment === undefined ? {} : { assessment }) } as AskResult
             }
             const outcome = yield* restore(decisionAnswer(decision, sessionID, form, { autoAnswer, yolo }))
             const unchanged = outcome.type === "answer" && (yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot))
@@ -362,16 +402,17 @@ export const layer = Layer.effect(
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
               if (asleepNow) {
                 const item = yield* openReview(form, sessionID, outcome.type === "defer" ? outcome : { reason: "disabled" })
-                return { status: "deferred", itemID: item.itemID } as TerminalState
+                return { status: "deferred", itemID: item.itemID, ...(assessment === undefined ? {} : { assessment: { ...assessment, fields: outcome.assessments ?? assessment.fields } }) } as AskResult
               }
               if (ticket.superseded()) return { status: "cancelled" } as TerminalState
-              const created = yield* createWaiting({ ...input, id: form.id })
+              const created = yield* createWaiting({ ...input, id: form.id }, assessment === undefined ? undefined : { ...assessment, fields: outcome.assessments ?? assessment.fields })
               const entry = yield* find(created.id).pipe(Effect.orDie)
               return yield* restore(Deferred.await(entry.deferred)).pipe(
+                Effect.flatMap((result) => withSettlement(created.id, result)),
                 Effect.onInterrupt(() => Effect.ignore(cancel(created.id))),
               )
             }
-            const created = yield* createWaiting({ ...input, id: form.id })
+            const created = yield* createWaiting({ ...input, id: form.id }, assessment === undefined ? undefined : { ...assessment, fields: outcome.assessments ?? assessment.fields })
             const entry = yield* find(created.id).pipe(Effect.orDie)
             const automatic = yield* reply({ id: created.id, answer: outcome.answer }).pipe(
               Effect.as(true),
@@ -379,7 +420,7 @@ export const layer = Layer.effect(
               Effect.orDie,
             )
             const result = yield* Deferred.await(entry.deferred)
-            return automatic ? { ...result, automatic: true as const, via: outcome.via, ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }) } : result
+            return yield* withSettlement(created.id, { ...result, ...(automatic ? { automatic: true as const, via: outcome.via, ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }) } : {}) })
           }
           if (ticket.superseded()) return { status: "cancelled" } as TerminalState
           const form = yield* createWaiting(input)
@@ -393,6 +434,11 @@ export const layer = Layer.effect(
             const unchanged = outcome?.type === "answer" && sessionID && snapshot
               ? yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, snapshot)
               : false
+            if (outcome?.assessments && assessment) yield* assessed(form.id,
+              outcome.type === "answer" && !unchanged
+                ? outcome.assessments.map((field) => ({ ...field, status: "unavailable" as const, recommendation: undefined, reason: "Answers mode changed; assessment not applied." }))
+                : outcome.assessments,
+            )
             const automatic = outcome?.type === "answer" && unchanged
               ? yield* reply({ id: form.id, answer: outcome.answer }).pipe(
                   Effect.as(true),
@@ -401,9 +447,10 @@ export const layer = Layer.effect(
                 )
               : false
             const result = yield* Deferred.await(entry.deferred)
-            return automatic && outcome?.type === "answer"
+            const value = automatic && outcome?.type === "answer"
               ? { ...result, automatic: true as const, via: outcome.via, ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }) }
               : result
+            return yield* withSettlement(form.id, value)
           })).pipe(
             Effect.onInterrupt(() => Effect.ignore(cancel(form.id))),
           )
@@ -495,12 +542,12 @@ export const layer = Layer.effect(
                           decisionAnswer(decision, sessionID, entry.form, { autoAnswer: mode === "auto", yolo: mode === "yolo" }),
                         )
                       : undefined
-                  if (native?.type === "defer")
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: native.reason }
-                  if (native !== undefined && input.answer !== undefined && Hash.json(input.answer) !== Hash.json(native.answer))
+                  if (native?.type === "answer" && input.answer !== undefined && Hash.json(input.answer) !== Hash.json(native.answer))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "answer-not-deterministic" }
-                  const outcome: Extract<SleepOutcome, { readonly type: "answer" }> =
-                    input.answer !== undefined
+                  const outcome: SleepOutcome =
+                    native?.type === "defer"
+                      ? native
+                      : input.answer !== undefined
                       ? {
                           type: "answer",
                           answer: input.answer,
@@ -508,17 +555,9 @@ export const layer = Layer.effect(
                           ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
                         }
                       : native!
-                  if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, authorization)))
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "stale-assessment" }
-                  const via = input.answer !== undefined ? ("coordination" as const) : outcome.via
-                  const source: ReplySource = {
-                    kind: "coordinator",
-                    coordinatorSessionID: input.source.coordinatorSessionID,
-                    groupID: input.source.groupID,
-                    via,
-                    rationale: input.source.rationale,
-                    ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
-                  }
+                  const effective = native?.assessments === undefined ? undefined : yield* autonomy.effectiveDecisions(sessionID).pipe(
+                    Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)),
+                  )
                   return yield* exclusive(
                     Effect.gen(function* () {
                       const current = yield* find(input.id).pipe(
@@ -528,9 +567,27 @@ export const layer = Layer.effect(
                         return { ...base, outcome: "stale" as const, settled: false }
                       if (!(yield* input.validate(current.form)))
                         return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
-                      const invalid = validateAnswer(current.form, outcome.answer)
-                      if (invalid) return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-answer" }
-                      yield* complete(current, { status: "answered", answer: outcome.answer }, source)
+                      if (!(yield* DecisionChoice.autonomyUnchanged(autonomy, sessionID, authorization)))
+                        return { ...base, outcome: "escalated" as const, settled: false, reason: "stale-assessment" }
+                      if (outcome.type === "answer") {
+                        const invalid = validateAnswer(current.form, outcome.answer)
+                        if (invalid) return { ...base, outcome: "escalated" as const, settled: false, reason: "invalid-answer" }
+                      }
+                      const updated = native?.assessments === undefined ? current : yield* updateAssessment(current, {
+                        mode, sourceSessionID: effective?.inherited.answers ?? sessionID, fields: native.assessments,
+                      })
+                      if (outcome.type === "defer")
+                        return { ...base, outcome: "escalated" as const, settled: false, reason: outcome.reason }
+                      const via = input.answer !== undefined ? ("coordination" as const) : outcome.via
+                      const source: ReplySource = {
+                        kind: "coordinator",
+                        coordinatorSessionID: input.source.coordinatorSessionID,
+                        groupID: input.source.groupID,
+                        via,
+                        rationale: input.source.rationale,
+                        ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                      }
+                      yield* complete(updated, { status: "answered", answer: outcome.answer }, source)
                       return {
                         ...base,
                         outcome: "allowed" as const,
@@ -627,12 +684,13 @@ interface AutoMode {
 }
 
 type SleepOutcome =
-  | { readonly type: "answer"; readonly answer: Answer; readonly via: "auto-answer" | "yolo"; readonly confidence?: number }
+  | { readonly type: "answer"; readonly answer: Answer; readonly via: "auto-answer" | "yolo"; readonly confidence?: number; readonly assessments?: ReadonlyArray<Form.FieldAssessment> }
   | {
       readonly type: "defer"
       readonly reason: "disabled" | "free_text" | "error" | DecisionChoice.UnsettledReason
       readonly choice?: string
       readonly confidence?: number
+      readonly assessments?: ReadonlyArray<Form.FieldAssessment>
     }
 
 function decisionAnswer(
@@ -650,16 +708,27 @@ function decisionAnswer(
       },
     }
     const answer: Record<string, Form.Value> = {}
+    const assessments: Form.FieldAssessment[] = []
+    let deferred: Extract<SleepOutcome, { readonly type: "defer" }> | undefined
     let confidence: number | undefined
     for (const field of form.fields) {
       if (field.type === "external") return { type: "defer", reason: "error" } as SleepOutcome
-      if (!isActive(field, answer)) continue
+      if (!isActive(field, answer)) {
+        if (form.metadata?.kind === "question") assessments.push({ key: field.key, status: "not_assessed", reason: "Conditional field is inactive." })
+        continue
+      }
       const outcome = yield* decisionValue(consulted, sessionID, form, field, mode)
-      if (outcome.type === "defer") return outcome
+      if (outcome.assessment !== undefined) assessments.push(outcome.assessment)
+      if (outcome.type === "defer") {
+        if (form.metadata?.kind !== "question") return outcome
+        deferred ??= outcome
+        continue
+      }
       if (outcome.confidence !== undefined) confidence = Math.min(confidence ?? 1, outcome.confidence)
       if (outcome.value === undefined) continue
       answer[field.key] = outcome.value
     }
+    if (deferred) return { ...deferred, ...(assessments.length === 0 ? {} : { assessments }) }
     if (Object.keys(answer).length === 0)
       return {
         type: "defer",
@@ -672,6 +741,7 @@ function decisionAnswer(
           answer,
           via: consultations > 0 ? "yolo" : "auto-answer",
           ...(confidence === undefined ? {} : { confidence }),
+          ...(assessments.length === 0 ? {} : { assessments }),
         } as SleepOutcome)
   })
 }
@@ -681,8 +751,8 @@ function isTextField(field: Form.Field) {
 }
 
 type FieldOutcome =
-  | { readonly type: "value"; readonly value: Form.Value | undefined; readonly confidence?: number }
-  | Extract<SleepOutcome, { readonly type: "defer" }>
+  | { readonly type: "value"; readonly value: Form.Value | undefined; readonly confidence?: number; readonly assessment?: Form.FieldAssessment }
+  | (Extract<SleepOutcome, { readonly type: "defer" }> & { readonly assessment?: Form.FieldAssessment })
 
 const fieldInstructions =
   "The user cannot answer this form right now. Answer only this field from the evidence given and the form's stated purpose. Refuse when the evidence does not support an answer; refusal asks the user instead. Never invent facts, names, addresses, or identifiers the evidence does not supply."
@@ -736,6 +806,21 @@ function decisionValue(
   }
   if (mode.autoAnswer && field.default !== undefined && !validateField(field, field.default))
     return Effect.succeed<FieldOutcome>({ type: "value", value: field.default })
+  if (form.metadata?.kind === "question" && mode.yolo && (field.type === "string" || field.type === "multiselect") && field.options && field.options.length > 0) {
+    return DecisionChoice.recommend(decision, {
+      ...call,
+      instructions: fieldInstructions,
+      state: { ...fieldState(form, field), options: field.options.map((option) => ({ value: option.value, label: option.label, description: option.description ?? null })) },
+      choices: field.options.map((option) => ({ value: option.value, description: option.description ?? option.label })),
+      multiple: field.type === "multiselect",
+    }).pipe(Effect.map((outcome): FieldOutcome => {
+      const assessment: Form.FieldAssessment = { key: field.key, ...outcome, reason: DecisionChoice.recommendationReason(outcome.reason) }
+      const value = field.type === "multiselect" ? outcome.recommendation : outcome.recommendation?.[0]
+      if (value === undefined) return { type: "defer", reason: outcome.status === "assessed" ? "low_confidence" : Schema.is(DecisionFailure.Reason)(outcome.reason) ? outcome.reason : "error", assessment }
+      if (validateField(field, value)) return { type: "defer", reason: "error", assessment: { ...assessment, recommendation: undefined, status: "unavailable", reason: "Recommendation does not satisfy the field constraints." } }
+      return { type: "value", value, confidence: outcome.confidence, assessment }
+    }))
+  }
   if (field.type === "boolean") {
     if (!mode.yolo) return Effect.succeed(unanswered)
     return DecisionChoice.answerBoolean(decision, {

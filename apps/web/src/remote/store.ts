@@ -1035,7 +1035,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       }
       if (type === "permission.asked" || type === "permission.replied" ||
         type === "guardrail.asked" || type === "guardrail.replied" ||
-        type === "form.created" || type === "form.replied" || type === "form.cancelled" || type === "form.timed_out" ||
+        type === "form.created" || type === "form.assessed" || type === "form.replied" || type === "form.cancelled" || type === "form.timed_out" ||
         type === "permission.deferred" || type === "guardrail.deferred" || type === "form.deferred") {
         for (const read of requestReads) {
           if (read.sessionID === item.sessionID) read.live.push({ event: item.event, at })

@@ -13,6 +13,7 @@ export function DialogDots(props: {
   load: (profile: string) => Promise<readonly Dots.Target[]>
   confirm: (target: Dots.Target) => Promise<void>
   status: () => Promise<Dots.Status>
+  unbind: (target: Dots.Target) => Promise<Dots.Status>
   pause: (target: Dots.Target) => Promise<Dots.Status>
   resume: (target: Dots.Target) => Promise<Dots.Status>
   onComplete: (target: Dots.Target | null) => void
@@ -30,6 +31,7 @@ export function DialogDots(props: {
   const [selecting, setSelecting] = createSignal(false)
   const [stale, setStale] = createSignal(false)
   const [changing, setChanging] = createSignal<"pause" | "resume">()
+  const [confirmingUnbind, setConfirmingUnbind] = createSignal(false)
   let closed = false
   onCleanup(() => {
     closed = true
@@ -73,12 +75,15 @@ export function DialogDots(props: {
       : [detail]
   })
   const options = () =>
-    binding()
+    confirmingUnbind()
+      ? [{ title: "Cancel", value: "cancel_unbind" }, { title: "Unbind Dot", value: "confirm_unbind" }]
+    : binding()
       ? [
           ...(runtimeAction() ? [{ title: runtimeAction() === "pause" ? "Pause Dot" : "Resume Dot", value: runtimeAction()!, description: runtimeLabel() }] : []),
           { title: "Refresh status", value: "refresh" },
           { title: "Edit display name", value: "name", details: targetDetails(binding()!), detailsWrap: true },
           { title: "Change destination", value: "change" },
+          { title: "Unbind Dot", value: "unbind" },
         ]
       : error() && !selecting()
         ? [{ title: "Refresh status", value: "refresh" }, { title: "Change destination", value: "change" }]
@@ -103,6 +108,27 @@ export function DialogDots(props: {
 
   const select = async (value: string) => {
     if (busy() || closed) return
+    if (confirmingUnbind()) {
+      if (value === "cancel_unbind") { setConfirmingUnbind(false); return }
+      const target = binding()
+      if (value !== "confirm_unbind" || !target) return
+      setBusy(true)
+      setStale(true)
+      setError(undefined)
+      try {
+        const result = await props.unbind(target)
+        if (closed || !accept(result)) return
+        setStatus(result)
+        props.onComplete(null)
+        dialog.clear()
+      } catch {
+        if (!closed) setError("Unbind not confirmed. Refresh status before another action.")
+      } finally {
+        if (!closed) { setBusy(false); setConfirmingUnbind(false) }
+      }
+      return
+    }
+    if (value === "unbind" && binding()) { setConfirmingUnbind(true); return }
     if (value === "name" && (chosen() || binding())) {
       const target = chosen() ?? binding()
       if (!target) return
@@ -183,7 +209,8 @@ export function DialogDots(props: {
     />}>
     <DialogSelect
       title={
-        binding()
+        confirmingUnbind() ? "Unbind Dots destination"
+        : binding()
           ? `Dots destination · ${escapeDisplayText(binding()!.label)}`
         : chosen()
           ? "Confirm Dots destination · no message sent"
@@ -192,10 +219,11 @@ export function DialogDots(props: {
             : "Select ChatGPT profile for Dots"
       }
       options={options()}
+      current={confirmingUnbind() ? "cancel_unbind" : undefined}
       locked={busy()}
       renderFilter={!binding() && !chosen() && !error() && (profile() ? targets().length > 1 : props.profiles.length > 1)}
       emptyView={<text>{error() ?? (busy() ? "Loading destinations…" : "No destinations available")}</text>}
-      footer={error() || binding() ? <text>{error() ?? `${status()?.state} · ${changing() ? changing() === "pause" ? "Pausing Dot…" : "Resuming Dot…" : runtimeLabel()} · Escape closes`}{runtimeAction() ? "\nPause stops the Dot's autonomous runtime until Resume; Resume may continue its work and goals." : ""}</text> : undefined}
+      footer={confirmingUnbind() ? <text>The external Dot keeps running. Its conversation, credentials and subscriptions stay unchanged.</text> : error() || binding() ? <text>{error() ?? `${status()?.state} · ${changing() ? changing() === "pause" ? "Pausing Dot…" : "Resuming Dot…" : runtimeLabel()} · Escape closes`}{runtimeAction() ? "\nPause stops the Dot's autonomous runtime until Resume; Resume may continue its work and goals." : ""}</text> : undefined}
       footerHints={error() || binding() ? [] : [
         ...[shortcuts.all("dialog.select.submit")].flatMap((label) => label ? [{ label, title: chosen() ? "confirm only" : "select" }] : []),
         { label: "esc", title: "cancel", side: "right" },

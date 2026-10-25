@@ -5,6 +5,7 @@ import { defineConfig, type Plugin, type UserConfig } from "vite"
 import solid from "vite-plugin-solid"
 import { nodeExecArgv, nodeTarget, type NodeTarget, photonWasmAsset } from "./src/node/target"
 import { NODE_BINARY } from "./src/binary"
+import { antigravityBuildDefinitions } from "./script/antigravity-build-env"
 
 const dir = import.meta.dirname
 
@@ -211,6 +212,7 @@ export function mainConfig(input: NodeBuildInput): UserConfig {
     resolve,
     esbuild: { jsx: "automatic" },
     define: {
+      ...antigravityBuildDefinitions(),
       YCODING_VERSION: JSON.stringify(input.version),
       YCODING_CLI_NAME: JSON.stringify(NODE_BINARY),
       YCODING_MODELS_DEV: input.models,

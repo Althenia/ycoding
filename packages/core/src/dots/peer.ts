@@ -18,7 +18,9 @@ export const messageID = (input: {
   )
 
 export const resetsStepAllowance = (entry: SessionPending.Info) =>
-  entry.type !== "synthetic" || Dots.peer(entry.data.metadata) === undefined
+  entry.type === "user" && entry.data.metadata?.inputOrigin === "plugin" && Dots.routine(entry.data.metadata) !== undefined
+    ? false
+    : entry.type !== "synthetic" || Dots.peer(entry.data.metadata) === undefined
 
 export const context = (peer: Dots.Peer, text: string) =>
   [

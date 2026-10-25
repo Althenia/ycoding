@@ -1,11 +1,11 @@
 import { Agent } from "../agent"
 import { Database } from "../database/database"
 import { SessionSchema } from "./schema"
-import { SessionTaskTable } from "./sql"
+import { SessionTable, SessionTaskTable } from "./sql"
 import { SessionReviewFold } from "./review-fold"
 import { canonicalJson } from "./runner/cache"
 import { Task, TeamView, truncateUtf8, type State } from "@ycoding-ai/schema/session-orchestration"
-import { eq } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 import { Effect } from "effect"
 
 const TeamViewBytes = 32 * 1024
@@ -110,10 +110,18 @@ export const withReviewState = Effect.fn("SessionOrchestrationView.withReviewSta
   db: DatabaseService,
   tasks: ReadonlyArray<Task>,
 ) {
-  const reviewed = tasks.filter((task) => task.question !== undefined || task.state === "lost")
-  if (reviewed.length === 0) return tasks
+  if (tasks.length === 0) return tasks
+  const selections = yield* db.select({ id: SessionTable.id, model: SessionTable.model }).from(SessionTable)
+    .where(inArray(SessionTable.id, tasks.map(task => task.sessionID))).all().pipe(Effect.orDie)
+  const selected = tasks.map(task => {
+    const model = selections.find(row => row.id === task.sessionID)?.model
+    if (!model) throw new Error(`Managed child has no selected model: ${task.sessionID}`)
+    return { ...task, model }
+  })
+  const reviewed = selected.filter((task) => task.question !== undefined || task.state === "lost")
+  if (reviewed.length === 0) return selected
   const reviews = (yield* SessionReviewFold.fold(db, reviewed.map((task) => task.sessionID))).filter((item) => item.withdrawn === undefined)
-  return tasks.map((task) => {
+  return selected.map((task) => {
     const deferred = task.question && reviews.some((item) =>
       SessionReviewFold.isOpen(item) && item.sessionID === task.sessionID && (item.kind === "subagent_question" || item.kind === "recovery") &&
       "questionID" in item.origin && item.origin.questionID === task.question?.id,

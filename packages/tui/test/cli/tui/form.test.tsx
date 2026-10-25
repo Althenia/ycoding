@@ -3,7 +3,7 @@ import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Show } from "solid-js"
+import { Show, createSignal } from "solid-js"
 import { ClipboardProvider } from "../../../src/context/clipboard"
 import type { FormWithLocation } from "../../../src/context/data"
 import { ClientProvider } from "../../../src/context/client"
@@ -16,7 +16,7 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createApi, createEventStream, createFetch } from "../../fixture/tui-client"
 
-async function mountForm(root: string, width = 80, bottomAnchored = false, escalated = false) {
+async function mountForm(root: string, width = 80, bottomAnchored = false, escalated = false, extra?: Partial<FormWithLocation>, height = 20) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
 
@@ -56,7 +56,9 @@ async function mountForm(root: string, width = 80, bottomAnchored = false, escal
         title: "Authorize access",
       },
     ],
+    ...extra,
   } satisfies FormWithLocation
+  const [current, setCurrent] = createSignal(form)
   const { FormPrompt } = await import("../../../src/routes/session/form")
 
   function Harness() {
@@ -82,10 +84,10 @@ async function mountForm(root: string, width = 80, bottomAnchored = false, escal
               <ClientProvider api={createApi(transport.fetch)}>
                 <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
                   <ToastProvider>
-                    <Show when={bottomAnchored} fallback={<FormPrompt form={form} />}>
+                    <Show when={bottomAnchored} fallback={<FormPrompt form={current()} />}>
                       <box height="100%" flexDirection="column">
                         <box flexGrow={1} />
-                        <FormPrompt form={form} />
+                        <FormPrompt form={current()} />
                         <text>Session footer</text>
                       </box>
                     </Show>
@@ -99,11 +101,80 @@ async function mountForm(root: string, width = 80, bottomAnchored = false, escal
     )
   }
 
-  const app = await testRender(() => <Harness />, { width, height: 20, kittyKeyboard: true })
+  const app = await testRender(() => <Harness />, { width, height, kittyKeyboard: true })
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Authorization required"))
-  return { app, copied, replies }
+  await app.waitForFrame((frame) => frame.includes(height < 20 ? "enter" : "Authorization required"))
+  return { app, copied, replies, assess: (assessment: FormWithLocation["assessment"]) => setCurrent(current => ({ ...current, assessment })) }
 }
+
+test("question grades name confidence and recommendations without selecting an answer", async () => {
+  await using tmp = await tmpdir()
+  const fields: FormWithLocation["fields"] = [{ key: "q0", type: "string", title: "Database", options: [
+    { value: "SQLite", label: "SQLite" }, { value: "Postgres", label: "Postgres" },
+  ] }]
+  const assessment = { mode: "yolo" as const, sourceSessionID: "ses_test", fields: [{ key: "q0", status: "assessed" as const,
+    reason: "Choose the local engine.", recommendation: ["SQLite"], grades: [
+      { choice: "SQLite", confidence: 0.96, evidence: "Local storage fits." },
+      { choice: "Postgres", confidence: 0.82, evidence: "Requires a server." },
+    ],
+  }] }
+  const prompt = await mountForm(tmp.path, 100, false, false, { fields, assessment })
+  try {
+    expect(prompt.app.captureCharFrame()).toContain("Answers YOLO")
+    expect(prompt.app.captureCharFrame()).toContain("source ses_test")
+    expect(prompt.app.captureCharFrame()).toContain("Assessed")
+    expect(prompt.app.captureCharFrame()).toContain("awaiting your decision")
+    expect(prompt.app.captureCharFrame()).toContain("confidence 0.96")
+    expect(prompt.app.captureCharFrame()).toContain("Local storage fits.")
+    expect(prompt.app.captureCharFrame()).toContain("Recommended: SQLite")
+    expect(prompt.app.captureCharFrame()).not.toContain("Allow")
+    expect(prompt.replies).toEqual([])
+    prompt.app.mockInput.pressKey("2")
+    await prompt.app.waitFor(() => prompt.replies.length === 1)
+    expect(prompt.replies).toEqual([{ answer: { q0: "Postgres" } }])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
+
+for (const [mode, status, label] of [["yolo", "pending", "Assessing options"], ["yolo", "unavailable", "Assessment unavailable"], ["manual", "not_assessed", "Not assessed"], ["auto", "not_assessed", "Not assessed"]] as const) test(`${mode} ${status} is literal warning status without fabricated grades or approval`, async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 100, false, false, {
+    fields: [{ key: "q0", type: "string", options: [{ value: "a", label: "A" }] }],
+    assessment: { mode, sourceSessionID: "ses_test", fields: [{ key: "q0", status, reason: "The reported assessment reason." }] },
+  })
+  try {
+    expect(prompt.app.captureCharFrame()).toContain(label)
+    expect(prompt.app.captureCharFrame()).toContain("The reported assessment reason.")
+    expect(prompt.app.captureCharFrame()).not.toContain("confidence")
+    expect(prompt.app.captureCharFrame()).not.toContain("Allow")
+    expect(prompt.replies).toEqual([])
+  } finally { prompt.app.renderer.destroy() }
+})
+
+test("long question grades keep short-terminal actions reachable and preserve a multiselect draft across live assessment", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 40, false, false, {
+    fields: [{ key: "q0", type: "multiselect", title: "Database", options: [{ value: "SQLite", label: "SQLite" }, { value: "Postgres", label: "Postgres" }] }],
+    assessment: { mode: "yolo", sourceSessionID: "ses_test", fields: [{ key: "q0", status: "pending", reason: "Assessing options." }] },
+  }, 12)
+  try {
+    expect(prompt.app.captureCharFrame()).toContain("enter")
+    prompt.app.mockInput.pressKey("2")
+    prompt.assess({ mode: "yolo", sourceSessionID: "ses_test", fields: [{ key: "q0", status: "assessed", reason: "Choose compatible options.", recommendation: ["SQLite"], grades: [
+      { choice: "SQLite", confidence: 0.96, evidence: "Local tradeoffs. ".repeat(25) },
+      { choice: "Postgres", confidence: 0.82, evidence: "Server tradeoffs. ".repeat(25) },
+    ] }] })
+    await prompt.app.waitForFrame(frame => frame.includes("confidence 0.82"))
+    expect(prompt.app.captureCharFrame()).toContain("enter")
+    expect(prompt.replies).toEqual([])
+    prompt.app.mockInput.pressKey("right")
+    await prompt.app.waitForFrame(frame => frame.includes("Postgres"))
+    prompt.app.mockInput.pressEnter()
+    await prompt.app.waitFor(() => prompt.replies.length === 1)
+    expect(prompt.replies).toEqual([{ answer: { q0: ["Postgres"] } }])
+  } finally { prompt.app.renderer.destroy() }
+})
 
 test("Project escalation reasons appear above the native form without choosing an answer", async () => {
   await using tmp = await tmpdir()

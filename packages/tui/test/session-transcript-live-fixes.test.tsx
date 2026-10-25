@@ -1749,6 +1749,41 @@ test("renders an unanswered completed question as no answer, not timed out", asy
   }
 }, 60_000)
 
+for (const mode of ["dark", "light"] as const) test(`settled automatic question grades rehydrate in ${mode} warning ink with explicit model attribution`, async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT, args: { sessionID }, config: { theme: { name: "ycoding", mode } },
+    route: routeFor(questionTranscript({ answers: [["Gradual"]], automatic: true, via: "yolo", assessment: {
+      mode: "yolo", sourceSessionID: sessionID, fields: [{ key: "q0", status: "assessed", reason: "Staged rollout matches the evidence.", recommendation: ["Gradual"], grades: [
+        { choice: "Gradual", confidence: 0.93, evidence: "Health checks limit disruption." },
+        { choice: "Immediate", confidence: 0.81, evidence: "More disruption risk." },
+      ] }],
+    } })), settle: "automatically answered",
+  })
+  try {
+    expect(screen.frame()).toContain("Answers YOLO")
+    expect(screen.frame()).toContain("Recommended: Gradual")
+    expect(screen.frame()).toContain("Gradual · confidence 0.93")
+    expect(screen.frame()).toContain("Health checks limit disruption.")
+    expect(screen.frame()).not.toContain("awaiting your decision")
+    expect(screen.colorOf("Answers YOLO")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback.warning.default.toInts())
+  } finally { await screen.dispose() }
+}, 60_000)
+
+for (const mode of ["dark", "light"] as const) for (const via of ["coordination", "yolo"] as const)
+test(`settled native coordinator ${via} answer renders its source in ${mode} without claiming human authorship`, async () => {
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, config: { theme: { name: "ycoding", mode } },
+    route: routeFor(questionTranscript({ answers: [["Gradual"]], source: { kind: "coordinator", coordinatorSessionID: "ses_coord", via },
+      ...(via === "yolo" ? { assessment: { mode: "yolo", sourceSessionID: sessionID, fields: [{ key: "q0", status: "assessed", reason: "Supported.", grades: [{ choice: "Gradual", confidence: 0.93, evidence: "Bounded rollout." }], recommendation: ["Gradual"] }] } } : {}),
+    })), settle: "answered by coordinator ses_coord",
+  })
+  try {
+    expect(screen.frame()).toContain("answered by coordinator ses_coord")
+    expect(screen.frame().includes("via Answers YOLO")).toBe(via === "yolo")
+    expect(screen.frame()).not.toContain("answered by you")
+    expect(screen.colorOf("answered by coordinator")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback.warning.default.toInts())
+  } finally { await screen.dispose() }
+}, 60_000)
+
 test("advances running tool elapsed time without changing terminal durations", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,

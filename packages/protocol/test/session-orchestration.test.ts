@@ -2,13 +2,24 @@ import { expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { Session } from "@ycoding-ai/schema/session"
+import { Model } from "@ycoding-ai/schema/model"
+import { Provider } from "@ycoding-ai/schema/provider"
 import {
   SessionSubagentAnswer,
   SessionSubagentLaunch,
   SessionSubagentListQuery,
   SessionSubagentMessage,
+  SessionSubagentModel,
   SubagentCursor,
 } from "../src/groups/session.js"
+
+test("validates exact child model selections without caller authority fields", () => {
+  const decode = Schema.decodeUnknownSync(SessionSubagentModel, { onExcessProperty: "error" })
+  const model = Model.Ref.make({ providerID: Provider.ID.make("openai"), id: Model.ID.make("gpt-6.1-sol-ultrafast"), variant: Model.VariantID.make("high") })
+  expect(decode({ model, expectedModel: model })).toEqual({ model, expectedModel: model })
+  expect(() => decode({ model })).toThrow()
+  expect(() => decode({ model, expectedModel: model, source: { type: "native" } })).toThrow()
+})
 
 test("validates Session subagent launch and control payloads", () => {
   const messageID = SessionMessage.ID.make("msg_control")

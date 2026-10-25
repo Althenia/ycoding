@@ -34,6 +34,7 @@ import { SessionEvent } from "../event"
 import { SessionPending } from "../pending"
 import { SessionProviderRequest } from "../provider-request"
 import { SessionUsageAttribution } from "../usage-attribution"
+import { SessionStepBoundary } from "../step-boundary"
 import { SessionModelRequest } from "../model-request"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
@@ -99,6 +100,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
+    const stepBoundary = yield* SessionStepBoundary.Service
     const llm = yield* LLMClient.Service
     const store = yield* SessionStore.Service
     const context = yield* SessionContext.Service
@@ -107,6 +109,10 @@ const layer = Layer.effect(
     const database = yield* Database.Service
     const db = database.db
     const dotsTools = yield* DotsRuntimeNode.RequestTools
+    const promoteRoutine: SessionPending.PromotionGuard<StepFailedError> = (entry, promote) =>
+      dotsTools.promoteRoutine(entry, promote).pipe(
+        Effect.catchTag("DotsRuntime.Error", (error) => Effect.fail(new StepFailedError({ error: toSessionError(error) }))),
+      )
     const dotsContext = DotsContext.make({ db, events })
     const compaction = yield* SessionCompaction.Service
     const compactionJobs = yield* SessionCompactionJob.Service
@@ -325,10 +331,11 @@ const layer = Layer.effect(
             selected.session.id,
             prepareInput,
             activateInputSkills,
+            promoteRoutine,
           )
         if (promotion === "queue") {
           promoted += Number(
-            yield* SessionPending.promoteNextQueued(db, events, selected.session.id, prepareInput, activateInputSkills),
+            yield* SessionPending.promoteNextQueued(db, events, selected.session.id, prepareInput, activateInputSkills, promoteRoutine),
           )
           promoted += yield* SessionPending.promoteSteers(
             db,
@@ -336,6 +343,7 @@ const layer = Layer.effect(
             selected.session.id,
             prepareInput,
             activateInputSkills,
+            promoteRoutine,
           )
         }
         if (promoted > 0) {
@@ -1155,7 +1163,7 @@ const layer = Layer.effect(
       )
     }, Effect.scoped)
 
-    const runStep = Effect.fnUntraced(function* (
+    const runStepUnlocked = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionPending.Delivery | undefined,
       step: number,
@@ -1319,6 +1327,9 @@ const layer = Layer.effect(
       )
     })
 
+    const runStep = (...args: Parameters<typeof runStepUnlocked>) =>
+      stepBoundary.withStep(args[0], runStepUnlocked(...args))
+
     // Execution lifecycle is published per busy period by SessionExecution, not per drain here.
     const drainExecution = Effect.fn("SessionRunner.drainExecution")(function* (
       input: {
@@ -1410,6 +1421,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     EventRuntime.node,
+    SessionStepBoundary.node,
     llmClient,
     SessionContext.node,
     SessionLiveState.node,

@@ -1,6 +1,6 @@
 export * as DecisionChoice from "./decision-choice"
 
-import { Effect, Exit, Result } from "effect"
+import { Effect, Exit, Option, Result, Schema } from "effect"
 import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
 import type { Category, DecisionMode } from "@ycoding-ai/schema/session-autonomy"
 import type { Decision } from "./decision"
@@ -244,6 +244,69 @@ export function grade(decision: Decision.Interface, input: {
       })) }
     }),
   )
+}
+
+export interface Recommendation {
+  readonly status: "assessed" | "unavailable"
+  readonly reason: string
+  readonly grades?: ReadonlyArray<{ readonly choice: string; readonly confidence: number; readonly evidence: string }>
+  readonly recommendation?: ReadonlyArray<string>
+  readonly confidence?: number
+}
+
+const CompatibleSet = Schema.Struct({
+  recommendation: Schema.Array(Schema.String),
+  compatible: Schema.Boolean,
+  reason: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(500)),
+})
+
+export function recommendationReason(reason: string) {
+  if (Schema.is(DecisionFailure.Reason)(reason)) return DecisionFailure.describe(reason)
+  if (reason === "low_confidence") return "No option reached the 0.8 confidence threshold."
+  if (reason === "ambiguous_recommendation") return "Several options share the highest confidence; choose one."
+  if (reason === "incompatible_recommendation") return "The evaluator could not establish a compatible set."
+  return reason
+}
+
+export function recommend(decision: Decision.Interface, input: Parameters<typeof grade>[1] & {
+  readonly multiple: boolean
+}): Effect.Effect<Recommendation> {
+  return Effect.gen(function* () {
+    const outcome = yield* grade(decision, {
+      ...input,
+      instructions: `${input.instructions} Grade every actual option exactly once. Confidence estimates support for selecting that option, not an objective fitness score or authority. Explain support and limitations in evidence. Refuse if the evidence is insufficient.`,
+    })
+    if (outcome.type === "unsettled") return { status: "unavailable", reason: outcome.reason }
+    const grades = outcome.grades.flatMap((grade) => typeof grade.choice === "string" ? [{ ...grade, choice: grade.choice }] : [])
+    const qualifying = grades.filter((grade) => grade.confidence >= ConfidenceThreshold)
+    if (qualifying.length === 0) return { status: "assessed", grades, reason: "low_confidence" }
+    if (!input.multiple) {
+      const best = Math.max(...qualifying.map((grade) => grade.confidence))
+      const winners = qualifying.filter((grade) => grade.confidence === best)
+      if (winners.length !== 1) return { status: "assessed", grades, reason: "ambiguous_recommendation" }
+      return { status: "assessed", grades, recommendation: [winners[0]!.choice], confidence: best, reason: "Unique best-supported option." }
+    }
+    const selection = yield* answerText(decision, {
+      ...input,
+      name: "compatible_set",
+      invocationKey: `${input.invocationKey ?? input.name}:compatible-set`,
+      instructions: `${input.instructions} Recommend one coherent compatible set of the actual option IDs. Individually high confidence does not imply that options work together. Evaluate conflicts, alternatives and dependencies across the whole set. Return only JSON with exactly recommendation (array of unique actual IDs), compatible (boolean), and reason (nonempty, at most 500 characters). Use compatible false when the evidence cannot establish a coherent set. Never treat this recommendation as approval or user authorization.`,
+      state: { evidence: input.state, grades },
+      maxLength: 8192,
+    })
+    if (selection.type === "unsettled") return { status: "unavailable", grades, reason: selection.reason }
+    const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(CompatibleSet))(selection.value, { onExcessProperty: "error" })
+    if (Option.isNone(decoded)) return { status: "unavailable", grades, reason: "invalid-output" }
+    const value = decoded.value
+    if (!value.compatible) return { status: "assessed", grades, reason: "incompatible_recommendation" }
+    if (value.recommendation.length === 0 || new Set(value.recommendation).size !== value.recommendation.length ||
+      value.recommendation.some((choice) => !qualifying.some((grade) => grade.choice === choice)))
+      return { status: "unavailable", grades, reason: "invalid-output" }
+    return { status: "assessed", grades, recommendation: value.recommendation,
+      confidence: Math.min(selection.confidence, ...qualifying.filter((grade) => value.recommendation.includes(grade.choice)).map((grade) => grade.confidence)),
+      reason: redactText(value.reason).slice(0, 500),
+    }
+  })
 }
 
 export function verifyMatch(decision: Decision.Interface, input: {

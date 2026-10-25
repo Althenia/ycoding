@@ -199,6 +199,7 @@ export type LocalServer = {
   readonly dotsExchangeRead: (sessionID: string, location: LocalLocation, input: Dots.ExchangeRead, remoteSource: McpEvents.RequestContext) => Promise<DotsExchange>
   readonly dotsStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly dotsBind: (sessionID: string, location: LocalLocation, target: Dots.Target) => Promise<unknown>
+  readonly dotsUnbind: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<unknown>
   readonly dotsSend: (sessionID: string, location: LocalLocation, input: Dots.Send) => Promise<unknown>
   readonly dotsPause: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<Dots.Status>
   readonly dotsResume: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<Dots.Status>
@@ -452,10 +453,11 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     }),
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
     dotsTargets: (sessionID, location, profile) => call(() => client.dots.targets({ sessionID, profile }, request(location, timeoutMs))),
-    dotsExchangeCreate: (sessionID, location, input, remoteSource) => call(() => client.dots.exchange.create({ sessionID, ...input, remoteSource }, request(location, timeoutMs))),
+    dotsExchangeCreate: (sessionID, location, input, remoteSource) => call(() => client.dots.exchange.create({ sessionID, payload: { ...input, remoteSource } }, request(location, timeoutMs))),
     dotsExchangeRead: (sessionID, location, input, remoteSource) => call(() => client.dots.exchange.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs))),
     dotsStatus: (sessionID, location) => call(() => client.dots.status({ sessionID }, request(location, timeoutMs))),
     dotsBind: (sessionID, location, target) => call(() => client.dots.bind({ sessionID, ...target }, request(location, timeoutMs))),
+    dotsUnbind: (sessionID, location, expectedTarget) => call(() => client.dots.unbind({ sessionID, expectedTarget }, request(location, timeoutMs))),
     dotsSend: (sessionID, location, input) => call(() => client.dots.send({ sessionID, ...input }, request(location, timeoutMs))),
     dotsPause: (sessionID, location, expectedTarget) => call(() => client.dots.pause({ sessionID, expectedTarget }, request(location, timeoutMs))),
     dotsResume: (sessionID, location, expectedTarget) => call(() => client.dots.resume({ sessionID, expectedTarget }, request(location, timeoutMs))),

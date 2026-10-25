@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { createLocalServer, LocalFailure } from "../src/remote-local"
 import { createSessionRegistry, createSubscriptions, executeRemoteOperation } from "../src/remote-operations"
 import { SessionID } from "@ycoding-ai/schema/session-id"
+import { RemoteMcpSchemas } from "../src/remote-mcp-schemas"
 
 type Recorded = {
   readonly method: string
@@ -67,6 +68,21 @@ const calls = (local: ReturnType<typeof createLocalServer>) => [
   () => local.dotsPause(sessionID, location, target),
   () => local.dotsResume(sessionID, location, target),
 ]
+
+test("native Unbind forwards only its confirmed target and remains excluded from MCP", async () => {
+  const status = { enabled: true, state: "disconnected" }
+  const { requests, server, local } = serve(() => Response.json({ data: status }))
+  try {
+    expect(RemoteMcpSchemas.excludedOperations.map(String)).toContain("session.dots.unbind")
+    expect(RemoteMcpSchemas.tools.some((tool) => tool.name === "session_dots_unbind")).toBe(false)
+    expect(await local.dotsUnbind(sessionID, location, target)).toEqual(status)
+    expect(requests).toEqual([{
+      method: "POST", path: `/api/session/${sessionID}/dots/unbind`, query: {},
+      directory: encodeURIComponent(location.directory), workspace: location.workspaceID,
+      body: { expectedTarget: target },
+    }])
+  } finally { await server.stop(true) }
+})
 
 test("the local Dots status preserves a disabled capability without native discovery", async () => {
   const { requests, server, local } = serve(() => Response.json({ data: { enabled: false, state: "disconnected" } }))
@@ -149,12 +165,15 @@ test("an admitted exchange with an unconfirmed return maps to an unknown outcome
     _tag: "InvalidRequestError", field: "dots", kind: "outcome_unknown", message: "Admission occurred; inspect the exchange.",
   }, { status: 400 }))
   try {
-    const failure = await local.dotsExchangeCreate(sessionID, location, {
+    const input = {
       exchangeID: "exchange_uncertain", expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), channel: "task", delivery: "queue", text: "Synthetic task",
-    }, { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }).then(() => undefined, (error: unknown) => error)
+    } as const
+    const remoteSource = { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }
+    const failure = await local.dotsExchangeCreate(sessionID, location, input, remoteSource).then(() => undefined, (error: unknown) => error)
     expect(failure).toBeInstanceOf(LocalFailure)
     expect(failure).toMatchObject({ kind: "transport" })
     expect(requests).toHaveLength(1)
+    expect(requests[0]?.body).toEqual({ ...input, remoteSource })
   } finally {
     await server.stop(true)
   }
@@ -204,6 +223,7 @@ test("runtime controls use the verified Session Location and preserve returned s
     if (request.path.endsWith("/dots/targets")) return Response.json({ data: [target] })
     if (request.path.endsWith("/dots/send")) return Response.json({ data: { messageID: send.id, status: "accepted" } })
     if (failControls) return Response.json({ error: "Unavailable" }, { status: 503 })
+    if (request.path.endsWith("/dots/unbind")) return Response.json({ data: { enabled: true, state: "disconnected" } })
     return Response.json({ data: { enabled: true, state: "connected", target, runtimeState: request.path.endsWith("/pause") ? "paused" : "unknown" } })
   })
   const sessions = createSessionRegistry({ local, verifyWindowMs: 0 })
@@ -219,17 +239,17 @@ test("runtime controls use the verified Session Location and preserve returned s
       const result = await executeRemoteOperation({ request: { type: "request", id: "req_existing", operation, sessionID, input }, local, sessions, subscriptions })
       expect(result[0]).toMatchObject({ ok: true })
     }
-    for (const operation of ["session.dots.pause", "session.dots.resume"] as const) {
+    for (const operation of ["session.dots.pause", "session.dots.resume", "session.dots.unbind"] as const) {
       requests.length = 0
       const result = await executeRemoteOperation({
         request: { type: "request", id: "req_control", operation, sessionID, input: { expectedTarget: target } },
         local, sessions, subscriptions,
       })
       expect(result).toEqual([{ type: "response", id: "req_control", ok: true, value: {
-        data: { enabled: true, state: "connected", target, runtimeState: operation.endsWith("pause") ? "paused" : "unknown" },
+        data: operation.endsWith("unbind") ? { enabled: true, state: "disconnected" } : { enabled: true, state: "connected", target, runtimeState: operation.endsWith("pause") ? "paused" : "unknown" },
       } }])
       expect(requests.filter((request) => request.method === "POST")).toEqual([{
-        method: "POST", path: `/api/session/${sessionID}/dots/${operation.endsWith("pause") ? "pause" : "resume"}`,
+        method: "POST", path: `/api/session/${sessionID}/dots/${operation.split(".").at(-1)}`,
         query: {}, directory: encodeURIComponent(currentLocation.directory), workspace: currentLocation.workspaceID,
         body: { expectedTarget: target },
       }])
@@ -241,7 +261,7 @@ test("runtime controls use the verified Session Location and preserve returned s
       }
     }
     failControls = true
-    for (const operation of ["session.dots.pause", "session.dots.resume"] as const) {
+    for (const operation of ["session.dots.pause", "session.dots.resume", "session.dots.unbind"] as const) {
       requests.length = 0
       const result = await executeRemoteOperation({ request: { type: "request", id: "req_unknown", operation, sessionID, input: { expectedTarget: target } }, local, sessions, subscriptions })
       expect(result[0]).toMatchObject({ ok: false, error: { code: "outcome_unknown" } })

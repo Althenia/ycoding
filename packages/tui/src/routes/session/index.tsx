@@ -20,7 +20,8 @@ import { useRoute, useRouteData } from "../../context/route"
 import { useCoordinationOptional } from "../../context/coordination"
 import { useProjectClock } from "./project-members"
 import { escapeTerminalText } from "../../util/terminal-text"
-import { dotsPeerAttribution, dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
+import { dotsPeerAttribution } from "@ycoding-ai/client/dots-peer"
+import { Dots } from "@ycoding-ai/schema/dots"
 import { projectNoticeLabel, projectNotification } from "../../util/coordination"
 import { createStore } from "solid-js/store"
 import {
@@ -104,7 +105,7 @@ import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
 import { PermissionPrompt } from "./permission"
 import { GuardrailPrompt, activeGuardrail } from "./guardrail"
-import { FormPrompt } from "./form"
+import { FormAssessment, FormPrompt } from "./form"
 import { ReviewBox, ReviewItemEditor } from "./review-box"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
@@ -134,6 +135,7 @@ import {
 import { switchLabel } from "../../util/model"
 import { findMessageBoundary, messageNavigationSlack } from "./message-navigation"
 import { noticeSummary } from "./notice-summary"
+import { dotsNoticeSummary } from "./dots-notice"
 import { stringWidth } from "../../util/string-width"
 import {
   autonomyAutomated,
@@ -2001,6 +2003,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
             </box>
             <box
               flexShrink={0}
+              maxHeight={activeGuardrailRequest() || permissions().length > 0 ? "100%" : undefined}
+              minHeight={0}
               paddingBottom={
                 disabled() || (projectsTabActive() && dimensions().height <= 24)
                   ? 0
@@ -2828,7 +2832,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   const route = useRoute()
   const projectNotice = () => projectNotification(props.message.metadata)
   const metadata = () => (props.message.type === "synthetic" ? props.message.metadata : undefined)
-  const peer = () => dotsPeerLabel(metadata())
+  const peer = () => dotsPeerAttribution(metadata())
   const source = () => stringValue(metadata()?.source)
   const contextSource = () => stringValue(props.message.metadata?.contextSource)
   const goalSteer = () => props.message.type === "synthetic" && recordValue(metadata()?.autonomy)?.goal === true
@@ -2842,7 +2846,8 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
       return props.message.metadata?.contextSource === "team-view" ? props.message.text : props.message.description ?? ""
     return ""
   }
-  const notice = createMemo(() => noticeSummary(contextSource(), text()))
+  const dotsNotice = createMemo(() => dotsNoticeSummary(props.message))
+  const notice = createMemo(() => dotsNotice() ?? noticeSummary(contextSource(), text()))
   const advisory = () => props.message.type === "synthetic" && metadata()?.decisionInputID !== undefined
   const description = () => (source() === "shell" ? text().replace(/\s+/g, " ").trim() : text())
   const status = () => {
@@ -2865,7 +2870,9 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   return (
     <Switch>
       <Match when={peer()}>{(sender) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
-        <text fg={theme.text.feedback.info.default} wrapMode="word">{escapeTerminalText(sender())}</text>
+        <Show when={Dots.peer(metadata()) || sender().details}>
+          <text fg={theme.text.feedback.info.default} wrapMode="word">{escapeTerminalText(sender().label)}</text>
+        </Show>
         <text fg={theme.text.default} wrapMode="word">{props.message.type === "synthetic" ? escapeTerminalText(props.message.text) : ""}</text>
       </box>}</Match>
       <Match when={projectNotice()}>{(notice) => <box border={["top"]} borderColor={theme.border.default} paddingLeft={1} paddingRight={1} marginTop={1}>
@@ -2902,7 +2909,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
         {/* Session-state and TeamView notices stay in the message store but never render. */}
         <Show when={contextSource() !== "session-state" && contextSource() !== "team-view"}>
           <Show when={notice()} fallback={<RawNoticeMarkdown content={text()} />}>
-            {(summary) => <SummaryNoticeMessage summary={summary()} />}
+            {(summary) => <SummaryNoticeMessage summary={summary()} wrap={dotsNotice() !== undefined} />}
           </Show>
         </Show>
       </Match>
@@ -2910,7 +2917,7 @@ function SessionNoticeMessage(props: { message: SessionMessageInfo }) {
   )
 }
 
-function SummaryNoticeMessage(props: { summary: string }) {
+function SummaryNoticeMessage(props: { summary: string; wrap?: boolean }) {
   const ctx = use()
   const { theme } = useTheme()
   return (
@@ -2919,7 +2926,7 @@ function SummaryNoticeMessage(props: { summary: string }) {
         Notice
       </InlineToolRow>
       <box paddingLeft={3} paddingTop={1}>
-        <text fg={theme.text.subdued}>{Locale.truncateWidth(props.summary, Math.max(0, ctx.width - 5))}</text>
+        <text fg={theme.text.subdued} wrapMode="word">{props.wrap ? props.summary : Locale.truncateWidth(props.summary, Math.max(0, ctx.width - 5))}</text>
       </box>
     </box>
   )
@@ -3271,7 +3278,10 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
   const renderer = useRenderer()
   const promptRef = usePromptRef()
   const skills = createMemo(() => promptSkillsFromMetadata(props.message.metadata))
-  const peer = createMemo(() => dotsPeerAttribution(props.message.metadata))
+  const peer = createMemo(() => {
+    const sender = dotsPeerAttribution(props.message.metadata)
+    return Dots.peer(props.message.metadata) || sender?.details ? sender : undefined
+  })
   const peerWidth = () => Math.max(20, Math.floor(ctx.width * 0.515) - 4)
   // The bubble caps at 51.5% of the transcript width. Yoga clamps a `maxWidth` bubble's height to
   // the container instead of growing with its wrapped content, which silently dropped the
@@ -5113,6 +5123,8 @@ function Question(props: ToolProps) {
 
   function format(answer?: ReadonlyArray<string>) {
     if (timedOut()) return "(timed out)"
+    if (props.metadata.deferredItemID !== undefined) return "(awaiting review)"
+    if (props.metadata.reviewFull === true) return "(review box full)"
     if (!answer?.length) return "(no answer)"
     return answer.join(", ")
   }
@@ -5129,6 +5141,7 @@ function Question(props: ToolProps) {
                   <text fg={timedOut() ? theme.text.feedback.warning.default : theme.text.default}>
                     {format(answers()?.[i()])}
                   </text>
+                  <FormAssessment value={props.metadata.assessment} source={props.metadata.source} fieldKey={`q${i()}`} grades multiple={q.multiple === true} settled={answers()?.[i()]?.length ? props.metadata.automatic === true ? "automatic" : "human" : undefined} />
                 </box>
               )}
             </For>
@@ -5297,8 +5310,11 @@ export function parseApplyPatchFiles(value: unknown) {
 export function parseQuestions(value: unknown) {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => {
-    const question = stringValue(recordValue(item)?.question)
-    return question ? [{ question }] : []
+    const entry = recordValue(item)
+    const question = stringValue(entry?.question)
+    return question
+      ? [{ question, ...(typeof entry?.multiple === "boolean" ? { multiple: entry.multiple } : {}) }]
+      : []
   })
 }
 

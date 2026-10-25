@@ -28,6 +28,7 @@ export interface PeerAdmission {
 }
 
 export interface Interface {
+  readonly withBinding: <A, E, R>(sessionID: SessionSchema.ID, use: (binding: BindingAuthority) => Effect.Effect<A, E, R>) => Effect.Effect<A, E | Error, R>
   readonly attachment: (sessionID: SessionSchema.ID) => Effect.Effect<{ readonly target: Dots.Target; readonly accountDigest: string }, Error>
   readonly targets: (profile: string) => Effect.Effect<Dots.Target[], Error>
   readonly bind: (input: {
@@ -38,6 +39,7 @@ export interface Interface {
   readonly send: (input: { readonly sessionID: SessionSchema.ID } & Dots.Send) => Effect.Effect<Dots.Delivery, Error>
   readonly pause: (input: { readonly sessionID: SessionSchema.ID } & Dots.Control) => Effect.Effect<Dots.Status, Error>
   readonly resume: (input: { readonly sessionID: SessionSchema.ID } & Dots.Control) => Effect.Effect<Dots.Status, Error>
+  readonly unbind: (input: { readonly sessionID: SessionSchema.ID } & Dots.Control) => Effect.Effect<Dots.Status, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/DotsRuntime") {}
@@ -69,6 +71,26 @@ interface Binding {
   readonly client: Client
   runtimeState?: Dots.RuntimeState
   control?: "pending" | "unknown"
+  readonly authority: BindingAuthority
+}
+
+export interface DelegationGrant {
+  readonly anchorSessionID: SessionSchema.ID
+  readonly info: Dots.DelegationInfo
+  readonly bindingID: string
+  readonly accountDigest: string
+  readonly target: Dots.Target
+  readonly taskFence: string
+  readonly ownerFence: string
+  readonly nativeScope: Dots.ExchangeRecord["scope"]
+}
+
+export interface BindingAuthority {
+  readonly incarnation: string
+  target: Dots.Target
+  accountDigest: string
+  readonly grants: Map<string, DelegationGrant>
+  readonly proposals: Map<string, { readonly fingerprint: string; readonly result: Deferred.Deferred<Dots.DelegationInfo, Error> }>
 }
 
 export const make = Effect.fn("DotsRuntime.make")(function* (options: {
@@ -114,6 +136,7 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
   })
 
   const disabledStatus = disable.pipe(Effect.as({ enabled: false, state: "disconnected" } satisfies Dots.Status))
+  yield* Effect.addFinalizer(() => disable)
 
   const disableSoon = disable.pipe(Effect.forkIn(lifetime), Effect.asVoid)
 
@@ -352,6 +375,7 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     if (binding.client.threads.size > 0) return
     if (clients.get(binding.client.account.key) === binding.client) clients.delete(binding.client.account.key)
     yield* Scope.close(binding.client.scope, Exit.void)
+    yield* Deferred.succeed(binding.client.ready, undefined)
   })
 
   const deliver = Effect.fn("DotsRuntime.deliver")(function* (
@@ -455,6 +479,19 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     )
 
   return Service.of({
+    withBinding: (sessionID, use) => Effect.gen(function* () {
+      yield* requireEnabled
+      const binding = bindings.get(sessionID)
+      if (!binding) return yield* fail("not_bound", "Confirm a Dot for this Session before delegating.")
+      const account = yield* resolve(binding.target.profile)
+      return yield* lock.withPermits(1)(Effect.gen(function* () {
+        yield* requireEnabled
+        if (binding !== bindings.get(sessionID) || account.account.key !== binding.client.account.key)
+          return yield* fail("target_changed", targetChangedMessage)
+        binding.authority.target = binding.target
+        return yield* use(binding.authority)
+      }))
+    }),
     attachment: Effect.fn("DotsRuntime.attachment")(function* (sessionID) {
       yield* requireEnabled
       const binding = bindings.get(sessionID)
@@ -499,11 +536,13 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
           const client = reused ?? (yield* open(found.account))
           client.buffered.set(target.threadID, [])
           client.threads.set(target.threadID, input.sessionID)
-          bindings.set(input.sessionID, { target, client })
+          const binding: Binding = { target, client, authority: { incarnation: crypto.randomUUID(), target,
+            accountDigest: Hash.sha256(client.account.key), grants: new Map(), proposals: new Map() } }
+          bindings.set(input.sessionID, binding)
           if (!reused || reused.state === "failed") yield* start(client)
           if (connection)
             yield* subscribe(client, connection, target.threadID).pipe(
-              Effect.tapError(() => release(input.sessionID, { target, client })),
+              Effect.tapError(() => release(input.sessionID, binding)),
             )
           return client
         }),
@@ -556,6 +595,21 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     }),
     pause: (input) => control("pause", input),
     resume: (input) => control("resume", input),
+    unbind: Effect.fn("DotsRuntime.unbind")(function* (input) {
+      if (!(yield* allowed)) return yield* disabledStatus
+      if (!(yield* options.sessions.exists(input.sessionID)))
+        return yield* fail("session_not_found", "The Session does not exist.")
+      return yield* lock.withPermits(1)(
+        Effect.gen(function* () {
+          if (!(yield* allowed)) return yield* disabledStatus
+          const binding = bindings.get(input.sessionID)
+          if (!binding) return statusOf(undefined)
+          if (!sameTarget(binding.target, input.expectedTarget)) return yield* fail("target_changed", targetChangedMessage)
+          yield* release(input.sessionID, binding)
+          return statusOf(undefined)
+        }),
+      )
+    }),
   })
 })
 

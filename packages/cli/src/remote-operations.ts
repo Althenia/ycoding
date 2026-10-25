@@ -959,7 +959,7 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
-    "session.dots.bind", "session.dots.send", "session.dots.pause", "session.dots.resume", "session.dots.exchange.create",
+    "session.dots.bind", "session.dots.unbind", "session.dots.send", "session.dots.pause", "session.dots.resume", "session.dots.exchange.create",
     "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
     "incident.guidance.clear",
@@ -984,6 +984,7 @@ async function run(input: OperationInput) {
     case "dots.targets": return { data: await input.local.dotsTargets(sessionID, location, validated.profile) }
     case "dots.status": return { data: await input.local.dotsStatus(sessionID, location) }
     case "dots.bind": return { data: await input.local.dotsBind(sessionID, location, validated.target) }
+    case "dots.unbind": return { data: await input.local.dotsUnbind(sessionID, location, validated.expectedTarget) }
     case "dots.pause": return { data: await input.local.dotsPause(sessionID, location, validated.expectedTarget) }
     case "dots.resume": return { data: await input.local.dotsResume(sessionID, location, validated.expectedTarget) }
     case "dots.send": {
@@ -1252,7 +1253,7 @@ type Validated =
   | { readonly kind: "dots.status" }
   | { readonly kind: "dots.bind"; readonly target: Dots.Target }
   | { readonly kind: "dots.send"; readonly input: Dots.Send }
-  | { readonly kind: "dots.pause" | "dots.resume"; readonly expectedTarget: Dots.Target }
+  | { readonly kind: "dots.pause" | "dots.resume" | "dots.unbind"; readonly expectedTarget: Dots.Target }
   | { readonly kind: "local.app"; readonly operation: RemoteMcpApps.Operation }
   | { readonly kind: "artifact.demo.preview" | "artifact.demo.export" }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
@@ -1625,6 +1626,7 @@ function validate(request: RemoteRequest): Validated {
       ...(fields.causalMessageID === undefined ? {} : { causalMessageID: requireString(fields.causalMessageID, "causalMessageID", 128) }),
     } }
     case "session.dots.pause": return { kind: "dots.pause", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
+    case "session.dots.unbind": return { kind: "dots.unbind", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
     case "session.dots.resume": return { kind: "dots.resume", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
     case "session.compact": {
       const id = requireString(fields.id, "id", 128)
@@ -2305,8 +2307,9 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.dots.targets": ["profile"],
   "session.dots.status": [],
   "session.dots.bind": ["profile", "dotID", "threadID", "generation", "label"],
+  "session.dots.unbind": ["expectedTarget"],
   "session.dots.send": ["id", "text", "files", "causalMessageID", "expectedTarget"],
-  "session.dots.exchange.create": ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text"],
+  "session.dots.exchange.create": ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text", "delegation", "taskInputID", "instruction"],
   "session.dots.exchange.read": ["exchangeID"],
   "session.dots.pause": ["expectedTarget"],
   "session.dots.resume": ["expectedTarget"],
@@ -2389,6 +2392,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.switchAgent",
   "session.command",
   "session.dots.bind",
+  "session.dots.unbind",
   "session.dots.send",
   "session.dots.exchange.create",
   "session.dots.pause",

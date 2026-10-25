@@ -57,6 +57,8 @@ import type {
   SessionSubagentAnswerOutput,
   SessionSubagentCancelInput,
   SessionSubagentCancelOutput,
+  SessionSubagentSwitchModelInput,
+  SessionSubagentSwitchModelOutput,
   SessionSubagentResumeInput,
   SessionSubagentResumeOutput,
   SessionTodoListInput,
@@ -423,6 +425,12 @@ import type {
   CoordinationDeleteOutput,
   DotsExchangeCreateInput,
   DotsExchangeCreateOutput,
+  DotsDelegationStatusInput,
+  DotsDelegationStatusOutput,
+  DotsDelegationCreateInput,
+  DotsDelegationCreateOutput,
+  DotsDelegationRevokeInput,
+  DotsDelegationRevokeOutput,
   DotsExchangeReadInput,
   DotsExchangeReadOutput,
   DotsTargetsInput,
@@ -437,6 +445,8 @@ import type {
   DotsPauseOutput,
   DotsResumeInput,
   DotsResumeOutput,
+  DotsUnbindInput,
+  DotsUnbindOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -963,6 +973,18 @@ export function make(options: ClientOptions) {
               path: `/api/session/${encodeURIComponent(input.parentID)}/subagent/${encodeURIComponent(input.childID)}/cancel`,
               successStatus: 200,
               declaredStatuses: [404, 403, 409, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        switchModel: (input: SessionSubagentSwitchModelInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionSubagentSwitchModelOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.parentID)}/subagent/${encodeURIComponent(input.childID)}/model`,
+              body: { expectedModel: input["expectedModel"], model: input["model"] },
+              successStatus: 200,
+              declaredStatuses: [404, 403, 409, 400, 500, 401],
               empty: false,
             },
             requestOptions,
@@ -3448,15 +3470,7 @@ export function make(options: ClientOptions) {
             {
               method: "POST",
               path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/exchanges`,
-              body: {
-                exchangeID: input["exchangeID"],
-                expectedAttachment: input["expectedAttachment"],
-                targetSessionID: input["targetSessionID"],
-                channel: input["channel"],
-                delivery: input["delivery"],
-                text: input["text"],
-                remoteSource: input["remoteSource"],
-              },
+              body: input["payload"],
               successStatus: 200,
               declaredStatuses: [400, 404, 401],
               empty: false,
@@ -3469,6 +3483,52 @@ export function make(options: ClientOptions) {
               method: "POST",
               path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/exchanges/read`,
               body: { exchangeID: input["exchangeID"], remoteSource: input["remoteSource"] },
+              successStatus: 200,
+              declaredStatuses: [400, 404, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
+      delegation: {
+        status: (input: DotsDelegationStatusInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsDelegationStatusOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/status`,
+              body: { expectedAttachment: input["expectedAttachment"], targetSessionID: input["targetSessionID"] },
+              successStatus: 200,
+              declaredStatuses: [400, 404, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        create: (input: DotsDelegationCreateInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsDelegationCreateOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation`,
+              body: {
+                expectedAttachment: input["expectedAttachment"],
+                targetSessionID: input["targetSessionID"],
+                proposalID: input["proposalID"],
+                sourceExchangeID: input["sourceExchangeID"],
+                taskInputID: input["taskInputID"],
+                scope: input["scope"],
+                expiresAt: input["expiresAt"],
+              },
+              successStatus: 200,
+              declaredStatuses: [400, 404, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        revoke: (input: DotsDelegationRevokeInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsDelegationRevokeOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/revoke`,
+              body: { id: input["id"], revision: input["revision"], expectedAttachment: input["expectedAttachment"] },
               successStatus: 200,
               declaredStatuses: [400, 404, 401],
               empty: false,
@@ -3552,6 +3612,18 @@ export function make(options: ClientOptions) {
           {
             method: "POST",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/resume`,
+            body: { expectedTarget: input["expectedTarget"] },
+            successStatus: 200,
+            declaredStatuses: [400, 404, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      unbind: (input: DotsUnbindInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsUnbindOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/unbind`,
             body: { expectedTarget: input["expectedTarget"] },
             successStatus: 200,
             declaredStatuses: [400, 404, 401],

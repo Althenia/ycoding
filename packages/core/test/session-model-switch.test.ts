@@ -8,6 +8,7 @@ import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -16,6 +17,7 @@ import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { Instructions } from "@ycoding-ai/core/instructions"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Permission } from "@ycoding-ai/core/permission"
@@ -225,12 +227,13 @@ const compaction = Layer.succeed(
   SessionCompaction.Service,
   SessionCompaction.Service.of({ manifest: () => Effect.die("unused") }),
 )
-const compactionExecution = Layer.effect(
-  SessionCompactionExecution.Service,
-  Effect.gen(function* () {
+const compactionExecution = makeGlobalNode({
+  service: SessionCompactionExecution.Service,
+  layer: Layer.effect(SessionCompactionExecution.Service, Effect.gen(function* () {
     const jobs = yield* SessionCompactionJob.Service
     const contextState = yield* SessionContextState.Service
-    const guardrails = yield* SessionGuardrail.Service
+    const locations = yield* LocationServiceMap.Service
+    const sessions = yield* SessionStore.Service
     const db = (yield* Database.Service).db
     const owner = "switch-test-compaction"
     const terminalResult = (job: SessionCompactionJob.Job) => {
@@ -260,7 +263,12 @@ const compactionExecution = Layer.effect(
           if (!failed) return yield* Effect.die(`Compaction job disappeared: ${job.id}`)
           return terminalResult(failed)
         }
-        const guardrail = yield* guardrails.snapshot(job.sessionID).pipe(Effect.orDie)
+        const session = yield* sessions.get(job.sessionID)
+        if (!session) return yield* Effect.die(`Compaction Session not found: ${job.sessionID}`)
+        const guardrail = yield* Effect.gen(function* () {
+          const guardrails = yield* SessionGuardrail.Service
+          return yield* guardrails.snapshot(job.sessionID)
+        }).pipe(Effect.provide(locations.get(session.location)), Effect.orDie)
         const capture = yield* SessionLiveState.captureDatabase(db, job.sessionID).pipe(Effect.orDie)
         const boundary = yield* db
           .select({ data: SessionMessageTable.data })
@@ -326,8 +334,9 @@ const compactionExecution = Layer.effect(
       })
     const start: SessionCompactionExecution.Interface["start"] = (input) => run(input).pipe(Effect.asVoid)
     return SessionCompactionExecution.Service.of({ start, run })
-  }),
-)
+  })),
+  deps: [SessionCompactionJob.node, SessionContextState.node, LocationServiceMap.node, SessionStore.node, Database.node],
+})
 // A real coordinator-backed execution so interruption, transition reservation, and settlement
 // are the production ones. The drain itself is a controllable hook: this suite owns the
 // boundary, not the runner.

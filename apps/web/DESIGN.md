@@ -309,6 +309,8 @@ This surface inherits `../../DESIGN.md`: the public site and the authenticated r
 
 Inherited R1–R8 apply. These web-specific rules are approved binding statements:
 
+Native question Forms and recorded question cards show the reported Answers mode, source Session, assessment status, and bounded reason in the existing yellow request-note treatment. Each actual choice retains its confidence and literal wrapping evidence; confidence means model-estimated support, not objective fitness. Identify one recommended option or one compatible recommendation set without checking its controls. Separate assessed from automatically answered and awaiting your decision. Recorded native coordinator replies identify the coordinator Session and distinguish its direct answer from a reply obtained through Answers YOLO or deterministic Auto; they never claim human authorship. Retain that attribution even without an assessment. Manual and Auto show not assessed without invented grades. Assessment updates preserve the current draft and native form controls. Use existing request, note, field, spacing, and yellow semantic tokens, with no new motion or palette tokens.
+
 | ID | Status | Binding statement | Enforcing check |
 | --- | --- | --- | --- |
 | W1 | approved | Web CSS MUST use the declared `--yc-*` theme roles and fixed breakpoint steps; documented base and dark token values MUST agree with `tokens.css`. | `src/styles/design-md.test.ts`, `src/styles/tokens.test.ts` |

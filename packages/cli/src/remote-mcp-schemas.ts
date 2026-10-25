@@ -17,6 +17,7 @@ export const excludedOperations = [
   "session.dots.targets",
   "session.dots.status",
   "session.dots.bind",
+  "session.dots.unbind",
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
@@ -204,8 +205,15 @@ const forecast = {
 
 const specs = {
   "session.dots.exchange.create": {
-    description: "Admit one explicitly targeted external task through the attachment Session's current native ownership scope. Stable exchange IDs reconcile retries; room text never admits work.",
-    input: object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery, text: text(32768) }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text"]),
+    description: "Admit external information or a closed routine directive for one separately native-approved task. A routine directive requires an active native human delegation; it cannot supply arbitrary text or decisions. Stable exchange IDs reconcile retries.",
+    input: { oneOf: [
+      object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery, text: text(32768) }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text"]),
+      object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery,
+        delegation: object({ id: text(256), revision: { type: "integer", minimum: 1 } }, ["id", "revision"]), taskInputID: text(256),
+        instruction: { oneOf: [object({ operation: { const: "continue" } }, ["operation"]),
+          object({ operation: { const: "presentation" }, preferences: { ...object({ format: { enum: ["prose", "bullets"] }, detail: { enum: ["concise", "standard", "detailed"] } }), minProperties: 1 } }, ["operation", "preferences"]) ] },
+      }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "taskInputID", "instruction"]),
+    ] },
   },
   "session.dots.exchange.read": {
     description: "Read only the authorized exchange's correlated progress and result. Does not retry work or transmit room messages.",

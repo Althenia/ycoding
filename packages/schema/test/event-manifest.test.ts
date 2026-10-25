@@ -171,7 +171,9 @@ describe("public event manifest", () => {
       Form.Event.Cancelled,
       Form.Event.TimedOut,
       Form.Event.Deferred,
+      Form.Event.Assessed,
     ])
+    expect(EventManifest.Latest.get("form.assessed")).toBe(Form.Event.Assessed)
     expect(Reference.Event.Definitions).toEqual([Reference.Event.Updated])
     expect(Plugin.Event.Definitions).toEqual([Plugin.Event.Added, Plugin.Event.Updated])
     expect(McpEvent.Definitions).toEqual([McpEvent.ToolsChanged, McpEvent.ResourcesChanged, McpEvent.StatusChanged])
@@ -263,6 +265,9 @@ describe("public event manifest", () => {
         "session.guardrail.decided.1",
         "session.daybreak.set.1",
         "session.decision.audited.1",
+        "session.dots.exchange.created.1",
+        "session.dots.instruction.rejected.1",
+        "session.dots.report.recorded.1",
         "session.permission.assessed.1",
         "session.project-artifacts-ended.1",
         "session.moved.1",

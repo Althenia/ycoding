@@ -2272,3 +2272,164 @@ describe("Dots capability gate", () => {
     }),
   )
 })
+
+describe("Dots unbind", () => {
+  const unbound = { enabled: true, state: "disconnected" } as const
+  const remoteEffects = (value: { readonly log: { readonly sends: unknown[]; readonly controls: unknown[]; readonly runtimeReads: unknown[]; readonly destinations: unknown[] }; readonly admissions: unknown[]; readonly refreshed: string[] }) =>
+    JSON.stringify([value.log.sends, value.log.controls, value.log.runtimeReads.length, value.log.destinations.length, value.admissions, value.refreshed])
+
+  it.live("binds, unbinds locally, fences old operations and permits a fresh rebind", () =>
+    Effect.gen(function* () {
+      const value = yield* runtime()
+      yield* value.service.bind({ sessionID: s1, target: a1 })
+      yield* connectedStatus(value.service, s1)
+      const incarnation = yield* value.service.withBinding(s1, (binding) => Effect.succeed(binding.incarnation))
+      yield* value.service.bind({ sessionID: s1, target: { ...a1, label: "Renamed" } })
+      expect(yield* value.service.withBinding(s1, (binding) => Effect.succeed(binding.incarnation))).toBe(incarnation)
+      const before = remoteEffects(value)
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })).toEqual(unbound)
+      expect(remoteEffects(value)).toBe(before)
+      yield* Effect.sync(() => value.log.closed).pipe(
+        Effect.repeat({ until: (closed) => closed === 1, schedule: Schedule.spaced("1 millis") }),
+        Effect.timeout("2 seconds"),
+      )
+      expect(yield* value.service.status(s1)).toEqual(unbound)
+      expect(yield* code(value.service.send({ sessionID: s1, expectedTarget: a1, id: "late", text: "Do not send" }))).toBe("not_bound")
+      expect(yield* code(value.service.pause({ sessionID: s1, expectedTarget: a1 }))).toBe("not_bound")
+      expect(yield* code(value.service.resume({ sessionID: s1, expectedTarget: a1 }))).toBe("not_bound")
+      expect(yield* code(value.service.attachment(s1))).toBe("not_bound")
+      yield* Queue.offer(value.control.connections[0]!, { type: "user.message", threadID: a1.threadID, clientMessageID: "late-peer", turnID: "turn-late" })
+      expect(value.log.sends).toEqual([])
+      expect(value.log.controls).toEqual([])
+      expect(value.admissions).toEqual([])
+      const rebound = yield* value.service.bind({ sessionID: s1, target: { ...a1, label: "Again" } })
+      expect(rebound.target).toEqual({ ...a1, label: "Again" })
+      expect(yield* value.service.withBinding(s1, (binding) => Effect.succeed(binding.incarnation))).not.toBe(incarnation)
+      yield* connectedStatus(value.service, s1)
+      expect(value.log.connects).toHaveLength(2)
+      expect((yield* value.service.send({ sessionID: s1, expectedTarget: a1, id: "fresh", text: "Hello" })).status).toBe("accepted")
+      expect(value.log.sends).toHaveLength(1)
+    }),
+  )
+
+  it.live("is idempotent for an absent binding and still validates the Session", () =>
+    Effect.gen(function* () {
+      const value = yield* runtime()
+      expect(yield* value.service.unbind({ sessionID: s2, expectedTarget: a1 })).toEqual(unbound)
+      yield* value.service.bind({ sessionID: s1, target: a1 })
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })).toEqual(unbound)
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })).toEqual(unbound)
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a2 })).toEqual(unbound)
+      expect(yield* code(value.service.unbind({ sessionID: SessionSchema.ID.make("ses_dots_unknown"), expectedTarget: a1 }))).toBe("session_not_found")
+      expect(value.log.connects).toHaveLength(1)
+      expect(value.log.sends).toEqual([])
+      expect(value.log.controls).toEqual([])
+    }),
+  )
+
+  it.live("rejects a stale target or generation without releasing the current binding", () =>
+    Effect.gen(function* () {
+      const value = yield* runtime()
+      yield* value.service.bind({ sessionID: s1, target: a1 })
+      yield* connectedStatus(value.service, s1)
+      for (const stale of [a2, { ...a1, generation: "older-generation" }, { ...a1, dotID: "other-dot" }, { ...a1, profile: "fixture-b" }])
+        expect(yield* code(value.service.unbind({ sessionID: s1, expectedTarget: stale }))).toBe("target_changed")
+      expect(value.log.closed).toBe(0)
+      expect((yield* value.service.status(s1)).target).toEqual(a1)
+      expect((yield* value.service.send({ sessionID: s1, expectedTarget: a1, id: "still-bound", text: "Hello" })).status).toBe("accepted")
+      const replacement = { ...a1, generation: "new-generation" }
+      value.control.offered = [replacement]
+      yield* value.service.bind({ sessionID: s1, target: replacement })
+      expect(yield* code(value.service.unbind({ sessionID: s1, expectedTarget: a1 }))).toBe("target_changed")
+      expect((yield* value.service.status(s1)).target).toEqual(replacement)
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: replacement })).toEqual(unbound)
+    }),
+  )
+
+  it.live("keeps the shared account client and other bindings until the last binding is removed", () =>
+    Effect.gen(function* () {
+      const value = yield* runtime()
+      yield* value.service.bind({ sessionID: s1, target: a1 })
+      yield* value.service.bind({ sessionID: s2, target: a2 })
+      yield* connectedStatus(value.service, s2)
+      expect(value.log.connects).toHaveLength(1)
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })).toEqual(unbound)
+      expect(value.log.closed).toBe(0)
+      expect((yield* value.service.status(s2)).target).toEqual(a2)
+      expect((yield* value.service.send({ sessionID: s2, expectedTarget: a2, id: "other", text: "Hello" })).status).toBe("accepted")
+      yield* Queue.offer(value.control.connections[0]!, { type: "user.message", threadID: a1.threadID, clientMessageID: "late-peer", turnID: "turn-late" })
+      yield* drained(value)
+      expect(value.admissions).toEqual([])
+      expect(yield* value.service.unbind({ sessionID: s2, expectedTarget: a2 })).toEqual(unbound)
+      yield* Effect.sync(() => value.log.closed).pipe(
+        Effect.repeat({ until: (closed) => closed === 1, schedule: Schedule.spaced("1 millis") }),
+        Effect.timeout("2 seconds"),
+      )
+    }),
+  )
+
+  it.live("rejects a send that was waiting on attachments when its binding is released", () =>
+    Effect.gen(function* () {
+      const hold = yield* Deferred.make<void>()
+      const reading = yield* Deferred.make<void>()
+      const value = yield* runtime({
+        attachments: () => Deferred.succeed(reading, undefined).pipe(
+          Effect.andThen(Deferred.await(hold)),
+          Effect.as({ name: "a.txt", mime: "text/plain", bytes: new Uint8Array([1]) }),
+        ),
+      })
+      yield* value.service.bind({ sessionID: s1, target: a1 })
+      yield* connectedStatus(value.service, s1)
+      const sending = yield* code(value.service.send({ sessionID: s1, expectedTarget: a1, id: "waiting", text: "Hold", files: [{ uri: "data:text/plain;base64,AA==", name: "a.txt" }] })).pipe(Effect.forkChild)
+      yield* Deferred.await(reading)
+      yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })
+      yield* value.service.bind({ sessionID: s1, target: a1 })
+      yield* Deferred.succeed(hold, undefined)
+      expect(yield* Fiber.join(sending)).toBe("target_changed")
+      expect(value.log.sends).toEqual([])
+    }),
+  )
+
+  it.live("completes a bind that is still connecting when the binding is released", () =>
+    Effect.gen(function* () {
+      const value = yield* runtime({ retryDelay: () => 1000 })
+      const subscribing = yield* Deferred.make<void>()
+      value.control.subscribe = () => Deferred.succeed(subscribing, undefined).pipe(Effect.andThen(Effect.never))
+      const binding = yield* value.service.bind({ sessionID: s1, target: a1 }).pipe(Effect.forkChild)
+      yield* Deferred.await(subscribing)
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })).toEqual(unbound)
+      expect(yield* Fiber.join(binding).pipe(Effect.timeout("2 seconds"))).toEqual(unbound)
+      expect(yield* value.service.status(s1)).toEqual(unbound)
+    }),
+  )
+
+  for (const enabled of ["omitted", false, "defect", "throws"] as const)
+    it.live(`reports disabled and disconnected without any effect when ${enabled === false ? "disabled" : enabled}`, () =>
+      Effect.gen(function* () {
+        const value = yield* runtime({ enabled })
+        expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })).toEqual({ enabled: false, state: "disconnected" })
+        expect(yield* value.service.unbind({ sessionID: SessionSchema.ID.make("ses_dots_unknown"), expectedTarget: a1 })).toEqual({ enabled: false, state: "disconnected" })
+        expect(value.integrationReads.count).toBe(0)
+        expect(value.refreshed).toEqual([])
+        expect(value.log.destinations).toEqual([])
+        expect(value.log.connects).toEqual([])
+        expect(value.log.sends).toEqual([])
+        expect(value.log.controls).toEqual([])
+        expect(value.log.runtimeReads).toEqual([])
+        expect(value.admissions).toEqual([])
+      }),
+    )
+
+  it.live("turns a bound Session off without network when the gate closes before the request", () =>
+    Effect.gen(function* () {
+      const value = yield* runtime({ enabled: "succeed" })
+      yield* value.service.bind({ sessionID: s1, target: a1 })
+      const destinations = value.log.destinations.length
+      value.gate.on = false
+      expect(yield* value.service.unbind({ sessionID: s1, expectedTarget: a1 })).toEqual({ enabled: false, state: "disconnected" })
+      expect(value.log.destinations).toHaveLength(destinations)
+      expect(value.log.sends).toEqual([])
+      expect(value.log.controls).toEqual([])
+    }),
+  )
+})

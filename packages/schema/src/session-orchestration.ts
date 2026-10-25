@@ -158,6 +158,12 @@ export const Control = Schema.Union([
   }),
   Schema.Struct({ action: Schema.Literal("cancel"), sessionID: SessionID }),
   Schema.Struct({ action: Schema.Literal("resume"), sessionID: SessionID }),
+  Schema.Struct({
+    action: Schema.Literal("switch_model"),
+    sessionID: SessionID,
+    expectedModel: Model.Ref,
+    model: Model.Ref,
+  }),
 ]).pipe(Schema.toTaggedUnion("action"))
 export type Control = typeof Control.Type
 

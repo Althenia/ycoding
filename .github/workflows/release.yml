@@ -99,7 +99,7 @@ jobs:
       - name: Verify web application and relay
         if: matrix.suite == 'web'
         run: |
-          bun test --cwd apps/web ./src/content/changelog.test.ts ./src/content/docs/registry.test.ts ./src/remote/autonomy-source.test.ts ./src/remote/autonomy.test.ts ./src/remote/coordination.test.ts ./src/remote/prediction.test.ts ./src/remote/project-escalation.test.ts ./src/remote/projection.test.ts ./src/remote/prompt-generate.test.ts ./src/remote/queries.test.ts ./src/remote/ui/autonomous-panel.test.tsx ./src/remote/ui/command-palette-model.test.ts ./src/remote/ui/composer-action.test.ts ./src/remote/ui/composer-logic.test.ts ./src/remote/ui/provider-logo.test.ts ./src/remote/ui/remote-redesign.test.ts ./src/remote/ui/transcript-rows.test.ts ./src/remote/view-model.test.ts ./src/styles/design-md.test.ts ./src/styles/composition.test.ts
+          bun test --cwd apps/web ./src/content/changelog.test.ts ./src/content/docs/registry.test.ts ./src/remote/autonomy-source.test.ts ./src/remote/autonomy.test.ts ./src/remote/coordination.test.ts ./src/remote/prediction.test.ts ./src/remote/project-escalation.test.ts ./src/remote/projection.test.ts ./src/remote/prompt-generate.test.ts ./src/remote/queries.test.ts ./src/remote/ui/autonomous-panel.test.tsx ./src/remote/ui/command-palette-model.test.ts ./src/remote/ui/composer-action.test.ts ./src/remote/ui/composer-layout.test.ts ./src/remote/ui/composer-logic.test.ts ./src/remote/ui/provider-logo.test.ts ./src/remote/ui/remote-redesign.test.ts ./src/remote/ui/settings-layout.test.ts ./src/remote/ui/status-bar.test.ts ./src/remote/ui/todo-panel.test.ts ./src/remote/ui/transcript-rows.test.ts ./src/remote/ui/usage-accounting.test.ts ./src/remote/ui/usage-filters.test.ts ./src/remote/ui/usage-layout.test.ts ./src/remote/view-model.test.ts ./src/styles/design-md.test.ts ./src/styles/composition.test.ts ./src/remote/form-contract.test.ts ./src/remote/question-history.test.ts
           bun test --cwd packages/remote ./test/contract.test.ts ./test/coordination.test.ts ./test/mcp.test.ts ./test/completions.test.ts ./test/provider-auth.test.ts
           bun test --cwd apps/web ./src/content/boundary.test.ts
 
@@ -125,7 +125,13 @@ jobs:
       - name: Verify CLI suites
         if: matrix.suite == 'cli'
         working-directory: packages/cli
-        run: bun test --timeout 30000 ./test/binary-name.test.ts ./test/install-local.test.ts ./test/update.test.ts ./test/chrome-extension-packaging.test.ts ./test/computer-use-packaging.test.ts ./test/build-bytecode.test.ts ./test/commands.test.ts ./test/remote-operations.test.ts ./test/remote-bridge.test.ts ./test/remote-mcp.test.ts ./test/remote-mcp-schemas.test.ts ./test/remote-mcp-directory.test.ts ./test/remote-goal-deadline.test.ts ./test/remote-coordination.integration.test.ts ./test/coordination-activation.integration.test.ts ./test/decision-recovery.integration.test.ts ./test/yolo-continuation.integration.test.ts
+        run: bun test --timeout 30000 ./test/binary-name.test.ts ./test/install-local.test.ts ./test/update.test.ts ./test/chrome-extension-packaging.test.ts ./test/computer-use-packaging.test.ts ./test/build-bytecode.test.ts ./test/commands.test.ts ./test/remote-operations.test.ts ./test/remote-bridge.test.ts ./test/remote-mcp.test.ts ./test/remote-mcp-schemas.test.ts ./test/remote-mcp-directory.test.ts ./test/remote-goal-deadline.test.ts ./test/remote-local-dots.test.ts ./test/dots-exchange.integration.test.ts ./test/remote-coordination.integration.test.ts ./test/coordination-activation.integration.test.ts ./test/decision-recovery.integration.test.ts ./test/yolo-continuation.integration.test.ts
+
+      - name: Verify Antigravity provider and build fixture boundaries
+        if: matrix.suite == 'cli'
+        run: |
+          bun test --cwd packages/core ./test/plugin/provider-antigravity.test.ts
+          bun test --cwd packages/cli/script ./antigravity-build-env.test.ts ./antigravity-build.test.ts
 
       - name: Verify Chrome extension suites
         if: matrix.suite == 'cli'
@@ -143,7 +149,9 @@ jobs:
       - name: Verify goal continuation
         if: matrix.suite == 'tui'
         working-directory: packages/core
-        run: bun test test/session-execution.test.ts test/session-autonomy.test.ts
+        run: |
+          bun test test/session-execution.test.ts test/session-autonomy.test.ts
+          bun test --timeout 40000 test/session-runner.test.ts -t "promotes queued input after continuation ends|resets the configured step allowance when steering input promotes|keeps the configured step allowance when only Dots peer input promotes|resets the step allowance when Dots peer input promotes with user steering|resets the step allowance when an ordinary synthetic input promotes without Dots attribution|promotes queued inputs one at a time in FIFO order|promotes queued input after steering continuation ends|promotes steers before the next queued input|coalesces multiple active steering prompts into one continuation step|preserves durable queued input for a later wake after interruption"
 
       - name: Verify typed decision suites
         if: matrix.suite == 'tui'
@@ -170,6 +178,37 @@ jobs:
         if: matrix.suite == 'tui'
         run: bun test --cwd packages/tui --timeout 40000 ./test/screen/projects-tab.screen.test.tsx ./test/screen/projects-flow.screen.test.tsx ./test/screen/session-chrome-row.screen.test.tsx ./test/screen/autonomy-summaries.screen.test.tsx ./test/screen/session-rail-design-match.test.tsx ./test/screen/subagent-picker-capture.test.tsx ./test/cli/tui/projects-screen.test.tsx ./test/cli/tui/session-rows-chronology.test.tsx ./test/screen/transcript-chronology.screen.test.tsx ./test/cli/tui/sidebar-cache.test.tsx ./test/design-md.test.ts
 
+      - name: Verify Dots unbind and notice boundaries
+        if: matrix.suite == 'tui'
+        run: |
+          bun test --cwd packages/core --timeout 40000 ./test/dots.test.ts ./test/dots-session.test.ts ./test/dots-context.test.ts ./test/dots-exchange.test.ts ./test/dots-report-tool.test.ts ./test/dots-report.test.ts
+          bun test --cwd packages/schema ./test/dots.test.ts ./test/dots-report.test.ts ./test/dots-report-state.test.ts
+          bun test --cwd packages/protocol ./test/dots.test.ts
+          bun test --cwd packages/server --timeout 40000 ./test/dots.test.ts
+          bun test --cwd packages/remote ./test/dots.test.ts
+          bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-codegen.test.ts
+          bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/dots-dialog.test.tsx ./test/screen/dots.screen.test.ts ./test/screen/dots-notice-display.screen.test.ts ./test/screen/dots-delegation.screen.test.ts
+
+      - name: Verify question grading and native Form views
+        if: matrix.suite == 'tui'
+        run: |
+          bun test --cwd packages/core --timeout 40000 ./test/question-grading.test.ts
+          bun test --cwd packages/core --timeout 40000 ./test/yolo-decision.test.ts -t "graded values retain their original mapping when an environment credential rotates during evaluation"
+          bun test --cwd packages/schema ./test/form.test.ts
+          bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/form.test.tsx
+          bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/inline-tool-wrap-snapshot.test.tsx -t "filters malformed nested tool wire data|preserves native question selection modes|renders parsed multi-choice recommendations"
+
+      - name: Verify subagent model selection boundaries
+        if: matrix.suite == 'tui'
+        run: |
+          bun test --cwd packages/schema ./test/subagent-model-selection.test.ts
+          bun test --cwd packages/core --timeout 40000 ./test/session-step-boundary.test.ts ./test/session-subagent-model-switch.test.ts
+          bun test --cwd packages/server --timeout 40000 ./test/session-subagent-model-switch.test.ts
+          bun test --cwd packages/client ./test/subagent-model-codegen.test.ts
+          bun test --cwd packages/remote ./test/subagent-model-boundary.test.ts
+          bun test --cwd packages/protocol ./test/session-orchestration.test.ts
+          bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/subagent-model-selection.test.tsx
+
       - name: Verify installer and web assets
         if: matrix.suite == 'web'
         run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/release-publish.test.ts" "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"
@@ -193,6 +232,12 @@ jobs:
         run: |
           bun test --cwd apps/web --timeout 90000 ./verify/project-notification-card.integration.test.ts
           bun test --cwd apps/web --timeout 90000 ./verify/model-replay.integration.test.ts -t "a confirmed same-profile rebind|a retry fails closed|named profile choices replace"
+
+      - name: Verify merged mobile web and directly affected render cases
+        if: matrix.suite == 'browser'
+        env:
+          YCODING_WEB_CHROME: ${{ steps.test-browser.outputs.executable }}
+        run: bun test --cwd apps/web --timeout 90000 ./verify/composer-controls.integration.test.ts ./verify/conversation-questions.integration.test.ts ./verify/incident-usage.integration.test.ts ./verify/keep-awake-settings.integration.test.ts ./verify/machine-row.integration.test.ts ./verify/mobile-composer.integration.test.ts ./verify/mobile-usage.integration.test.ts ./verify/remote-shell-layout.integration.test.ts ./verify/status-panel-motion.integration.test.ts ./verify/todo.integration.test.ts ./verify/usage-page.integration.test.ts
 
       - name: Verify isolated-browser integration suites
         if: matrix.suite == 'browser'
@@ -299,6 +344,9 @@ jobs:
             || { echo "The signing bundle does not contain the pinned $YCODING_MACOS_SIGNING_IDENTITY certificate" >&2; exit 1; }
 
       - name: Build TUI artifact
+        env:
+          YCODING_ANTIGRAVITY_CLIENT_ID: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_ID }}
+          YCODING_ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.YCODING_ANTIGRAVITY_CLIENT_SECRET }}
         run: bun run build:tui
 
       - name: Validate TUI artifact

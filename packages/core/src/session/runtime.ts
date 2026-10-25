@@ -379,6 +379,16 @@ export interface Interface {
     SessionModelSwitch.Outcome,
     NotFoundError | MessageDecodeError | SessionRunnerModel.Error | CompactionConflictError
   >
+  readonly selectModelAtBoundary: (input: {
+    sessionID: SessionSchema.ID
+    expectedModel: CatalogModel.Ref
+    model: CatalogModel.Ref
+    connectionIdentityDigest: string
+    guard: Effect.Effect<boolean>
+  }) => Effect.Effect<
+    SessionModelSwitch.Outcome | { readonly status: "conflict" },
+    NotFoundError | MessageDecodeError | SessionRunnerModel.Error | CompactionConflictError
+  >
   readonly rename: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<void, NotFoundError>
   readonly daybreak: {
     readonly set: (input: {
@@ -2797,6 +2807,42 @@ const layer = Layer.effect(
             },
           )
           .pipe(Effect.asVoid)
+      }),
+      selectModelAtBoundary: Effect.fn("Session.selectModelAtBoundary")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        if (!sameModel(session.model, input.expectedModel)) return { status: "conflict" } as const
+        if (session.model?.profile !== input.model.profile ||
+          (session.model?.profile !== undefined && session.model.providerID !== input.model.providerID))
+          return yield* new SessionRunnerModel.ProfileUnavailableError({ providerID: input.model.providerID, profile: input.model.profile ?? session.model?.profile ?? "" })
+        const binding = (yield* db.select({ value: SessionTable.profile_binding }).from(SessionTable)
+          .where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie))?.value
+        if (input.model.profile !== undefined && (!binding || binding.providerID !== input.model.providerID || binding.profile !== input.model.profile))
+          return yield* new SessionRunnerModel.ProfileUnavailableError({ providerID: input.model.providerID, profile: input.model.profile })
+        const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(session.location)))
+        const resolved = yield* models.resolve({ ...session, model: input.model }, { binding: binding ?? undefined, refresh: false })
+        if (resolved.connectionIdentityDigest !== input.connectionIdentityDigest) return { status: "conflict" } as const
+        const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+        const target = yield* catalog.model.get(input.model.providerID, input.model.id, input.model.profile)
+        const policy = yield* compactionPolicy(session)
+        const capabilities = SessionContextBudget.resolveCapabilities(target ? [target] : [], input.model.providerID, input.model.id, { safetyMarginTokens: policy.contextSafetyMarginTokens })
+        if (capabilities === undefined || SessionContextBudget.safeInputBudget(capabilities) <= 0)
+          return yield* new CompactionConflictError({ sessionID: session.id, jobID: ID.create(), message: "Target model has no positive input budget" })
+        const checked = SessionModelSwitch.decide({ currentModel: session.model, targetModel: input.model, model: input.model, target: capabilities,
+          messages: yield* SessionHistory.forModel(db, session.id), keepRecentMessages: policy.keepRecentMessages })
+        if (checked.status === "blocked") return checked
+        const unchanged = Effect.gen(function* () {
+          if (!(yield* input.guard)) return false
+          const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie)
+          return row !== undefined && row.time_archived === null && row.directory === session.location.directory &&
+            (row.workspace_id ?? undefined) === session.location.workspaceID && sameModel(row.model ?? undefined, input.expectedModel) &&
+            JSON.stringify(row.profile_binding) === JSON.stringify(binding)
+        })
+        if (sameModel(session.model, input.model)) return { status: (yield* unchanged) ? "switched" : "conflict" } as const
+        const committed = yield* events.publishBatch([
+          { definition: SessionEvent.ModelSelected, data: { sessionID: session.id, model: input.model } },
+        ], { when: unchanged })
+        if (committed.length === 0) return { status: "conflict" } as const
+        return { status: "switched" } as const
       }),
       switchModel: Effect.fn("Session.switchModel")(function* (input) {
         return yield* execution.withTransition(

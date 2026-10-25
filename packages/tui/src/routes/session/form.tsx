@@ -26,6 +26,9 @@ import {
 } from "../../util/form"
 import type { FormAnswerField } from "../../util/form"
 import { ProjectEscalation } from "./project-escalation"
+import { Form } from "@ycoding-ai/schema/form"
+import { Schema } from "effect"
+import { escapeTerminalText } from "../../util/terminal-text"
 
 const FORM_MODE = "form"
 
@@ -72,6 +75,10 @@ export function FormPrompt(props: {
 
   let textarea: TextareaRenderable | undefined
   let review: ScrollBoxRenderable | undefined
+  let content: ScrollBoxRenderable | undefined
+  createEffect(() => {
+    revealOption()
+  })
   createEffect(() => {
     if (props.disabled && textarea && !textarea.isDestroyed) textarea.blur()
   })
@@ -143,6 +150,13 @@ export function FormPrompt(props: {
     return formCustom(answerField())
   })
   const multi = createMemo(() => answerField()?.type === "multiselect")
+  function revealOption() {
+    if (!props.form.assessment || store.editing || !content) return
+    const row = content.content.findDescendantById(`${props.form.id}-${answerField()?.key}-option-${store.selected}`)
+    if (!row) return
+    if (row.y < content.viewport.y || row.y + row.height > content.viewport.y + content.viewport.height)
+      content.scrollBy(row.y - content.viewport.y)
+  }
   const actionLabel = createMemo(() => {
     if (confirm()) return "submit"
     const external = externalField()
@@ -643,11 +657,14 @@ export function FormPrompt(props: {
       borderColor={theme.hue.interactive[themeMode() === "light" ? 800 : 200]}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+      <scrollbox gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}
+        maxHeight={props.form.assessment ? Math.max(3, dimensions().height - 5) : undefined}
+        scrollbarOptions={{ visible: false }} ref={(value: ScrollBoxRenderable) => (content = value)}>
         <box paddingLeft={1}>
           <text fg={theme.text.subdued}>{props.form.title}</text>
         </box>
         <box paddingLeft={1}><ProjectEscalation value={props.form.coordinationEscalation} /></box>
+        <Show when={props.form.assessment}><box paddingLeft={1}><FormAssessment value={props.form.assessment} fieldKey={answerField()?.key} multiple={multi()} /></box></Show>
         <Show when={message()}>
           <box paddingLeft={1}>
             <text fg={theme.text.default}>{message()}</text>
@@ -802,7 +819,8 @@ export function FormPrompt(props: {
                       return value === row.value
                     }
                     return (
-                      <box
+                      <box id={`${props.form.id}-${answerField()?.key}-option-${i()}`}
+                        onSizeChange={() => { if (active()) revealOption() }}
                         onMouseOver={() => setStore("selected", i())}
                         onMouseDown={() => setStore("selected", i())}
                         onMouseUp={() => {
@@ -846,6 +864,9 @@ export function FormPrompt(props: {
                           <box paddingLeft={3}>
                             <text fg={theme.text.subdued}>{row.description}</text>
                           </box>
+                        </Show>
+                        <Show when={props.form.assessment?.fields.find((field) => field.key === answerField()?.key)?.grades?.find((grade) => grade.choice === row.value)}>
+                          {(grade) => <box paddingLeft={3}><text fg={theme.text.feedback.warning.default} wrapMode="word">{`confidence ${grade().confidence} · ${escapeTerminalText(grade().evidence)}`}</text></box>}
                         </Show>
                       </box>
                     )
@@ -981,7 +1002,7 @@ export function FormPrompt(props: {
             </For>
           </scrollbox>
         </Show>
-      </box>
+      </scrollbox>
       <box
         flexDirection="row"
         flexShrink={0}
@@ -1032,4 +1053,31 @@ export function FormPrompt(props: {
       </box>
     </box>
   )
+}
+
+export function FormAssessment(props: { value: unknown; fieldKey?: string; settled?: "automatic" | "human"; source?: unknown; grades?: boolean; multiple?: boolean }) {
+  const { theme } = useTheme()
+  const assessment = createMemo(() => Schema.decodeUnknownOption(Form.Assessment)(props.value).pipe(
+    (value) => value._tag === "Some" ? value.value : undefined,
+  ))
+  const fields = () => assessment()?.fields.filter((field) => props.fieldKey === undefined || field.key === props.fieldKey) ?? []
+  const source = createMemo(() => Schema.decodeUnknownOption(Form.ReplySource)(props.source).pipe(
+    (value) => value._tag === "Some" ? value.value : undefined,
+  ))
+  const settlement = () => {
+    if (!props.settled) return "awaiting your decision"
+    const reply = source()
+    if (reply) return `answered by coordinator ${escapeTerminalText(reply.coordinatorSessionID)}${reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
+    if (props.source !== undefined) return "answer source unreported"
+    return props.settled === "automatic" ? "automatically answered" : "answered by you"
+  }
+  return <Show when={assessment()} fallback={<Show when={props.settled && props.source !== undefined}><text fg={theme.text.feedback.warning.default} wrapMode="word">{settlement()}</text></Show>}>{(value) => <box flexDirection="column">
+    <text fg={theme.text.feedback.warning.default} wrapMode="word">{`Answers ${value().mode === "yolo" ? "YOLO" : value().mode === "auto" ? "Auto" : "Manual"} · source ${escapeTerminalText(value().sourceSessionID)}`}</text>
+    <For each={fields()}>{(field) => <box flexDirection="column">
+      <text fg={theme.text.feedback.warning.default} wrapMode="word">{`${field.status === "pending" ? "Assessing options" : field.status === "assessed" ? "Assessed" : field.status === "unavailable" ? "Assessment unavailable" : "Not assessed"} · ${settlement()}`}</text>
+      <text fg={theme.text.feedback.warning.default} wrapMode="word">{escapeTerminalText(field.reason)}</text>
+      <Show when={field.recommendation?.length}><text fg={theme.text.feedback.warning.default} wrapMode="word">{`Recommended${props.multiple || (field.recommendation?.length ?? 0) > 1 ? " compatible set" : ""}: ${field.recommendation?.map(escapeTerminalText).join(", ")}`}</text></Show>
+      <Show when={props.grades}><For each={field.grades}>{(grade) => <text fg={theme.text.feedback.warning.default} wrapMode="word">{`${escapeTerminalText(grade.choice)} · confidence ${grade.confidence} · ${escapeTerminalText(grade.evidence)}`}</text>}</For></Show>
+    </box>}</For>
+  </box>}</Show>
 }

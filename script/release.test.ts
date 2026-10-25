@@ -369,13 +369,133 @@ test("release test manifests resolve every selected file in its owning directory
   }
 })
 
-test("release verification excludes dedicated Antigravity provider tests", () => {
+test("release verification covers Antigravity provider and build fixtures", () => {
   const verify = workflowJob(workflow, "verify-source")
-  for (const entry of [
-    "Verify Antigravity provider contracts",
-    "./test/plugin/provider-antigravity.test.ts",
-    "./test/provider-usage-antigravity.test.ts",
-  ]) expect(verify.includes(entry)).toBe(false)
+  expect(verify).toContain("Verify Antigravity provider and build fixture boundaries")
+  expect(verify).toContain("./test/plugin/provider-antigravity.test.ts")
+  expect(verify).toContain("./antigravity-build-env.test.ts")
+  expect(verify).toContain("./antigravity-build.test.ts")
+})
+
+test("release source gates cover Dots boundaries and merged mobile web behavior", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  for (const file of [
+    "./test/remote-local-dots.test.ts",
+    "./test/dots-exchange.integration.test.ts",
+    "./test/dots-context.test.ts",
+    "./test/dots-exchange.test.ts",
+    "./test/dots-report-tool.test.ts",
+    "./test/dots-report.test.ts",
+    "./test/dots-session.test.ts",
+    "./test/dots.test.ts",
+    "./test/dots-report-state.test.ts",
+    "./test/dots-peer.test.ts",
+    "./test/cli/tui/dots-dialog.test.tsx",
+    "./test/screen/dots.screen.test.ts",
+    "./test/screen/dots-notice-display.screen.test.ts",
+    "./src/remote/autonomy.test.ts",
+    "./src/remote/ui/composer-layout.test.ts",
+    "./src/remote/ui/settings-layout.test.ts",
+    "./src/remote/ui/status-bar.test.ts",
+    "./src/remote/ui/todo-panel.test.ts",
+    "./src/remote/ui/usage-accounting.test.ts",
+    "./src/remote/ui/usage-filters.test.ts",
+    "./src/remote/ui/usage-layout.test.ts",
+    "./verify/composer-controls.integration.test.ts",
+    "./verify/incident-usage.integration.test.ts",
+    "./verify/keep-awake-settings.integration.test.ts",
+    "./verify/machine-row.integration.test.ts",
+    "./verify/mobile-composer.integration.test.ts",
+    "./verify/mobile-usage.integration.test.ts",
+    "./verify/remote-shell-layout.integration.test.ts",
+    "./verify/status-panel-motion.integration.test.ts",
+    "./verify/todo.integration.test.ts",
+    "./verify/usage-page.integration.test.ts",
+  ]) expect(verify).toContain(file)
+  expect(verify).toContain("Verify merged mobile web and directly affected render cases")
+  expect(verify).toContain("YCODING_WEB_CHROME: ${{ steps.test-browser.outputs.executable }}")
+})
+
+test("release source gates select native task delegation and question grading", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  for (const file of [
+    "./test/question-grading.test.ts",
+    "./test/yolo-decision.test.ts",
+    "./test/form.test.ts",
+    "./test/cli/tui/form.test.tsx",
+    "./test/screen/dots-delegation.screen.test.ts",
+    "./verify/conversation-questions.integration.test.ts",
+  ])
+    expect(verify).toContain(file)
+  expect(verify).toContain("bun test --cwd packages/schema ./test/form.test.ts")
+  expect(verify).toContain(
+    'bun test --cwd packages/core --timeout 40000 ./test/yolo-decision.test.ts -t "graded values retain their original mapping when an environment credential rotates during evaluation"',
+  )
+  expect(verify).toContain(
+    "graded values retain their original mapping when an environment credential rotates during evaluation",
+  )
+  const questionGate =
+    verify.split("      - name: Verify question grading and native Form views\n")[1]?.split("\n      - name: ")[0] ?? ""
+  expect(questionGate).toContain("if: matrix.suite == 'tui'")
+  expect(questionGate).toContain(
+    'bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/inline-tool-wrap-snapshot.test.tsx -t "filters malformed nested tool wire data|preserves native question selection modes|renders parsed multi-choice recommendations"',
+  )
+})
+
+test("release source gates select Form, Dots codegen, model-selection and runner regressions", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  for (const file of [
+    "./src/remote/form-contract.test.ts",
+    "./src/remote/question-history.test.ts",
+    "./test/session-orchestration.test.ts",
+    "./test/subagent-model-selection.test.ts",
+    "./test/session-step-boundary.test.ts",
+    "./test/session-subagent-model-switch.test.ts",
+    "./test/subagent-model-codegen.test.ts",
+    "./test/dots-codegen.test.ts",
+    "./test/subagent-model-boundary.test.ts",
+    "./test/cli/tui/subagent-model-selection.test.tsx",
+    "test/session-runner.test.ts",
+  ])
+    expect(verify).toContain(file)
+  expect(
+    verify
+      .split("\n")
+      .some(
+        (line) =>
+          line.includes("bun test --cwd apps/web") &&
+          line.includes("./src/remote/form-contract.test.ts") &&
+          line.includes("./src/remote/question-history.test.ts"),
+      ),
+  ).toBe(true)
+  expect(verify).toContain("Verify subagent model selection boundaries")
+  expect(verify).toContain(
+    "- name: Verify subagent model selection boundaries\n        if: matrix.suite == 'tui'\n        run: |",
+  )
+  for (const command of [
+    "bun test --cwd packages/schema ./test/subagent-model-selection.test.ts",
+    "bun test --cwd packages/core --timeout 40000 ./test/session-step-boundary.test.ts ./test/session-subagent-model-switch.test.ts",
+    "bun test --cwd packages/server --timeout 40000 ./test/session-subagent-model-switch.test.ts",
+    "bun test --cwd packages/client ./test/subagent-model-codegen.test.ts",
+    "bun test --cwd packages/remote ./test/subagent-model-boundary.test.ts",
+    "bun test --cwd packages/protocol ./test/session-orchestration.test.ts",
+    "bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/subagent-model-selection.test.tsx",
+    "bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-codegen.test.ts",
+  ])
+    expect(verify).toContain(command)
+  const runnerCases = [
+    "promotes queued input after continuation ends",
+    "resets the configured step allowance when steering input promotes",
+    "keeps the configured step allowance when only Dots peer input promotes",
+    "resets the step allowance when Dots peer input promotes with user steering",
+    "resets the step allowance when an ordinary synthetic input promotes without Dots attribution",
+    "promotes queued inputs one at a time in FIFO order",
+    "promotes queued input after steering continuation ends",
+    "promotes steers before the next queued input",
+    "coalesces multiple active steering prompts into one continuation step",
+    "preserves durable queued input for a later wake after interruption",
+  ].join("|")
+  expect(verify).toContain(`bun test --timeout 40000 test/session-runner.test.ts -t "${runnerCases}"`)
 })
 
 test("release source gates include ownership, chronology and compact-footer regressions", () => {

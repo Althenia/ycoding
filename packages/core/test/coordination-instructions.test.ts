@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { CoordinationInstructions } from "../src/coordination/instructions"
 import { Instructions } from "../src/instructions/index"
 
@@ -54,18 +54,18 @@ test("executor guidance keeps delivery and subagent ownership local without cont
 
 test("controller and executor guidance share one consolidated-verification practice with role-specific wording", async () => {
   for (const role of ["master", "supervisor"] as const) {
-    const value = (await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value
+    const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
     for (const text of [
       "Require each assignment to plan and complete its coherent bounded work, including code, tests, contracts, docs and consumers, before one consolidated build and verification pass, with no repetitive micro-edit/build/test loops",
       "Reuse valid evidence for unchanged relevant sources, contracts and environment, including at integration and merge",
       "A rerun needs a concrete relevant source change, failed check, invalidated evidence or explicit acceptance requirement; state the trigger, run only affected checks, and batch corrections first",
-    ]) expect(value?.split(text)).toHaveLength(2)
+    ]) expect(value.split(text)).toHaveLength(2)
     expect(value).not.toContain("Reuse valid check results and rerun only the scope whose inputs changed")
   }
-  const executor = (await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value
+  const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
   for (const text of [
     "Plan and finish your coherent bounded scope, including code, tests, contracts, docs and consumers, before one consolidated build and verification pass; avoid repetitive micro-edit/build/test loops.",
     "Reuse evidence still valid for unchanged relevant sources, contracts and environment; rerun only affected checks after a stated trigger: a relevant source change, failed check, invalidated evidence or explicit acceptance requirement.",
-  ]) expect(executor?.split(text)).toHaveLength(2)
+  ]) expect(executor.split(text)).toHaveLength(2)
   expect(executor).not.toContain("Require each assignment to plan")
 })

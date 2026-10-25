@@ -74,6 +74,7 @@ export const layerWithCell = (cell: Cell) =>
         managed: (childID) => require(cell, (runtime) => runtime.orchestration.managed(childID)),
         get: (parentID, childID) => require(cell, (runtime) => runtime.orchestration.get(parentID, childID)),
         launch: (input) => require(cell, (runtime) => runtime.orchestration.launch(input)),
+        switchModel: (input) => require(cell, (runtime) => runtime.orchestration.switchModel(input)),
         list: (parentID) => require(cell, (runtime) => runtime.orchestration.list(parentID)),
         page: (input) => require(cell, (runtime) => runtime.orchestration.page(input)),
         send: (input) => require(cell, (runtime) => runtime.orchestration.send(input)),

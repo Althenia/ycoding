@@ -12,6 +12,18 @@ const failure = (error: DotsRuntime.Error) => new InvalidRequestError({
 
 export const DotsHandler = HttpApiBuilder.group(Api, "server.dots", (handlers) =>
   handlers
+    .handle("session.dots.delegation.status", Effect.fn(function* (ctx) {
+      const exchanges = yield* DotsExchange.service
+      return { data: yield* exchanges.delegationStatus({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+    }))
+    .handle("session.dots.delegation.create", Effect.fn(function* (ctx) {
+      const exchanges = yield* DotsExchange.service
+      return { data: yield* exchanges.delegationCreate({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+    }))
+    .handle("session.dots.delegation.revoke", Effect.fn(function* (ctx) {
+      const exchanges = yield* DotsExchange.service
+      return { data: yield* exchanges.delegationRevoke({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+    }))
     .handle(
       "session.dots.exchange.create",
       Effect.fn(function* (ctx) {
@@ -78,6 +90,17 @@ export const DotsHandler = HttpApiBuilder.group(Api, "server.dots", (handlers) =
         return {
           data: yield* dots
             .resume({ sessionID: ctx.params.sessionID, expectedTarget: ctx.payload.expectedTarget })
+            .pipe(Effect.mapError(failure)),
+        }
+      }),
+    )
+    .handle(
+      "session.dots.unbind",
+      Effect.fn(function* (ctx) {
+        const dots = yield* DotsRuntime.Service
+        return {
+          data: yield* dots
+            .unbind({ sessionID: ctx.params.sessionID, expectedTarget: ctx.payload.expectedTarget })
             .pipe(Effect.mapError(failure)),
         }
       }),

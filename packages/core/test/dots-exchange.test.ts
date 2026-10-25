@@ -1,6 +1,11 @@
 import { describe, expect } from "bun:test"
 import { tmpdir } from "node:os"
-import { Deferred, Effect, Fiber, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema, Semaphore } from "effect"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { DotsRuntime } from "../src/dots"
+import { DotsPeer } from "../src/dots/peer"
+import { EventTable } from "../src/event/sql"
+import { eq } from "drizzle-orm"
 import { Agent } from "@ycoding-ai/schema/agent"
 import { Model } from "@ycoding-ai/schema/model"
 import { Provider } from "@ycoding-ai/schema/provider"
@@ -54,20 +59,38 @@ const setup = Effect.gen(function* () {
   yield* coordination.activate(group.id)
   const attachment = { target, accountDigest: "a".repeat(64) }
   const authorization = { enabled: true, calls: 0, grantID: "grant_fixture" }
-  const hooks: { attachment?: () => void; message?: () => void; wake?: () => void; authorize?: () => Effect.Effect<void> } = {}
+  const authority: DotsRuntime.BindingAuthority = { incarnation: "binding_fixture", target, accountDigest: attachment.accountDigest, grants: new Map(), proposals: new Map() }
+  const binding: { current: DotsRuntime.BindingAuthority | undefined } = { current: authority }
+  const writer = Semaphore.makeUnsafe(1)
+  const approval = { calls: [] as unknown[], enabled: true, wait: undefined as Effect.Effect<void> | undefined }
+  const clock = { now: Date.now() }
+  const hooks: { attachment?: () => void; message?: () => void; wake?: () => void; authorize?: () => Effect.Effect<void>; checkStored?: () => Effect.Effect<void> } = {}
   const make = () => DotsExchange.make({
     db, events, sessions: { get: sessions.get, message: (input) => sessions.message(input).pipe(Effect.tap(() => Effect.sync(() => hooks.message?.()))) }, coordination,
     execution: { active: Effect.succeed(new Set<Session.ID>()), wake: (id) => Effect.sync(() => { wakes.push(id); hooks.wake?.() }) },
     attachment: () => Effect.sync(() => { hooks.attachment?.(); return attachment }),
+    withBinding: (_id, use) => writer.withPermits(1)(Effect.gen(function* () {
+      if (!binding.current) return yield* new DotsRuntime.Error({ code: "not_bound", message: "Synthetic binding ended" })
+      binding.current.target = attachment.target
+      binding.current.accountDigest = attachment.accountDigest
+      return yield* use(binding.current)
+    })),
+    approve: (input) => Effect.gen(function* () {
+      approval.calls.push(input)
+      if (approval.wait) yield* approval.wait
+      if (!approval.enabled) return yield* new DotsRuntime.Error({ code: "authorization_failed", message: "Synthetic human rejection" })
+    }),
+    now: () => clock.now,
     authorize: (context) => Effect.suspend(() => hooks.authorize?.() ?? Effect.void).pipe(Effect.andThen(Effect.sync(() => {
       authorization.calls++
       if (!authorization.enabled || context.epoch !== source.epoch || context.principal.deviceID !== source.principal.deviceID)
         throw new Error("Unauthorized synthetic invocation")
       return { ...context.principal, epoch: context.epoch, grantID: authorization.grantID }
     }))),
-    checkStored: (principal) => Effect.sync(() => {
+    checkStored: (principal) => Effect.suspend(() => hooks.checkStored?.() ?? Effect.void).pipe(Effect.andThen(Effect.sync(() => {
       if (!authorization.enabled || principal.grantID !== authorization.grantID) throw new Error("Revoked synthetic grant")
-    }),
+      return { expiresAt: clock.now + 10_000_000 }
+    }))),
   })
   const runtime = make()
   const create = (exchangeID: string, targetSessionID = alpha.id, text = "Investigate the synthetic module") => runtime.create({
@@ -75,7 +98,161 @@ const setup = Effect.gen(function* () {
     expectedAttachment: target, channel: "task", delivery: "queue", text,
   })
   const read = (exchangeID: string) => runtime.read({ sessionID: master.id, exchangeID, remoteSource: source })
-  return { sessions, db, events, coordination, master, alpha, beta, outsider, group, attachment, authorization, hooks, make, runtime, create, read }
+  return { sessions, db, events, coordination, master, alpha, beta, outsider, group, attachment, authorization, hooks, make, runtime, create, read, authority, binding, approval, clock }
+})
+
+const delegated = Effect.gen(function* () {
+  const f = yield* setup
+  const task = yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "Implement the synthetic local task", resume: false })
+  yield* f.create("source")
+  yield* SessionPending.promoteSteers(f.db, f.events, f.alpha.id)
+  yield* SessionPending.promoteNextQueued(f.db, f.events, f.alpha.id)
+  const proposal = {
+    sessionID: f.master.id, proposalID: "native_proposal", sourceExchangeID: "source", targetSessionID: f.alpha.id,
+    taskInputID: task.id, expectedAttachment: target, expiresAt: f.clock.now + 3_600_000,
+    scope: { operations: ["continue", "presentation"], format: ["prose", "bullets"], detail: ["concise", "standard", "detailed"] } as const,
+  }
+  const grant = yield* f.runtime.delegationCreate(proposal)
+  const input = {
+    sessionID: f.master.id, remoteSource: source, exchangeID: "routine", targetSessionID: f.alpha.id,
+    expectedAttachment: target, channel: "task" as const, delivery: "queue" as const,
+    delegation: { id: grant.id, revision: grant.revision }, taskInputID: task.id, instruction: { operation: "continue" as const },
+  }
+  return { ...f, task, proposal, grant, input }
+})
+
+describe("native typed task delegation", () => {
+  it.live("requires native human approval once and admits closed continuation and presentation without another approval", () => Effect.gen(function* () {
+    const f = yield* delegated
+    expect(f.approval.calls).toHaveLength(1)
+    expect(f.approval.calls[0]).toMatchObject({ requireHuman: true, action: "dots_delegate" })
+    expect(f.approval.calls[0]).not.toHaveProperty("save")
+    expect((yield* f.runtime.delegationCreate(f.proposal)).id).toBe(f.grant.id)
+    const first = yield* f.runtime.create(f.input)
+    expect((yield* f.runtime.create(f.input)).inputID).toBe(first.inputID)
+    const presentation = yield* f.runtime.create({ ...f.input, exchangeID: "present", instruction: { operation: "presentation", preferences: { format: "bullets", detail: "concise" } } satisfies Dots.RoutineInstruction })
+    expect(presentation.inputID).not.toBe(first.inputID)
+    expect(f.approval.calls).toHaveLength(1)
+    expect(wakes).toEqual([f.alpha.id, f.alpha.id, f.alpha.id])
+    const pending = (yield* SessionPending.list(f.db, f.alpha.id)).find((item): item is SessionPending.User => item.type === "user" && item.id === first.inputID)
+    expect(pending?.data.metadata?.inputOrigin).toBe("plugin")
+    expect(pending?.data.metadata?.dotsExchange).toHaveProperty("routine.taskInputID", f.task.id)
+    expect(DotsPeer.resetsStepAllowance(pending!)).toBe(false)
+    const status = yield* f.runtime.delegationStatus({ sessionID: f.master.id, targetSessionID: f.alpha.id, expectedAttachment: target })
+    expect(status.tasks).toEqual([{ taskInputID: f.task.id, text: "Implement the synthetic local task" }])
+    expect(status.sources[0]?.principal).toEqual(f.grant.principal)
+    expect(status.grants).toContainEqual(f.grant)
+    expect((yield* f.runtime.create({ ...f.input, instruction: { operation: "presentation", preferences: { format: "bullets" } } satisfies Dots.RoutineInstruction }).pipe(Effect.result))._tag).toBe("Failure")
+  }))
+  it.live("rejects new prose, changed proposals, out-of-scope preferences and nonhuman tasks", () => Effect.gen(function* () {
+    const f = yield* delegated
+    const { sessionID, remoteSource, ...routine } = f.input
+    expect((yield* Schema.decodeUnknownEffect(Dots.ExchangeCreate)({ ...routine, text: "Deploy a new task" }).pipe(
+      Effect.flatMap((input) => f.runtime.create({ ...input, sessionID, remoteSource })), Effect.exit,
+    ))._tag).toBe("Failure")
+    expect((yield* f.runtime.delegationCreate({ ...f.proposal, expiresAt: f.clock.now + 1 }).pipe(Effect.exit))._tag).toBe("Failure")
+    expect((yield* f.runtime.delegationCreate({ ...f.proposal, proposalID: "too_long", expiresAt: f.clock.now + 3_600_001 }).pipe(Effect.exit))._tag).toBe("Failure")
+    const plugin = yield* f.sessions.prompt({ sessionID: f.alpha.id, origin: "plugin", text: "Claimed human task", resume: false })
+    expect((yield* f.runtime.delegationCreate({ ...f.proposal, proposalID: "plugin", taskInputID: plugin.id }).pipe(Effect.exit))._tag).toBe("Failure")
+    const narrow = yield* f.runtime.delegationCreate({ ...f.proposal, proposalID: "narrow", scope: { operations: ["presentation"], format: ["bullets"] } })
+    expect((yield* f.runtime.create({ ...f.input, delegation: { id: narrow.id, revision: narrow.revision } }).pipe(Effect.exit))._tag).toBe("Failure")
+    expect((yield* f.runtime.create({ ...f.input, delegation: { id: narrow.id, revision: narrow.revision }, instruction: { operation: "presentation", preferences: { format: "prose" } } satisfies Dots.RoutineInstruction }).pipe(Effect.exit))._tag).toBe("Failure")
+  }))
+  for (const change of ["revoke", "expiry", "unbind", "rebind", "account", "target", "principal", "grant", "epoch", "task", "completed", "owner-return", "restart"] as const) {
+    it.live(`rejects new and queued routine instructions after ${change} without losing the following human input`, () => Effect.gen(function* () {
+      const f = yield* delegated
+      const queued = yield* f.runtime.create(f.input)
+      if (change === "revoke") yield* f.runtime.delegationRevoke({ sessionID: f.master.id, id: f.grant.id, revision: f.grant.revision, expectedAttachment: target })
+      if (change === "expiry") f.clock.now = f.proposal.expiresAt
+      if (change === "unbind") f.binding.current = undefined
+      if (change === "rebind" || change === "restart") f.binding.current = { ...f.authority, incarnation: "replacement", grants: new Map(), proposals: new Map() }
+      if (change === "account") f.attachment.accountDigest = "b".repeat(64)
+      if (change === "target") f.attachment.target = { ...target, generation: "replacement" }
+      if (change === "principal") f.input.remoteSource = { ...source, principal: { ...source.principal, clientID: "replacement" } }
+      if (change === "grant") f.authorization.grantID = "replacement"
+      if (change === "epoch") f.input.remoteSource = { ...source, epoch: "replacement" }
+      if (change === "task") yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "Different native human task", resume: false })
+      if (change === "completed") yield* f.events.publish(SessionEvent.Work.Completed, { sessionID: f.alpha.id, inputID: f.task.id, assistantMessageID: SessionMessage.ID.make("msg_finished_native") })
+      if (change === "owner-return") {
+        yield* f.coordination.setOwner(f.group.id, { sessionID: f.alpha.id, ownerSessionID: f.beta.id })
+        yield* f.coordination.setOwner(f.group.id, { sessionID: f.alpha.id })
+      }
+      expect((yield* f.runtime.create({ ...f.input, exchangeID: "new_after_change" }).pipe(Effect.exit))._tag).toBe("Failure")
+      const next = yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "Next native queued task", delivery: "queue", resume: false })
+      const promoted = yield* SessionPending.promoteNextQueued(f.db, f.events, f.alpha.id, undefined, undefined, f.runtime.promoteRoutine)
+      expect(promoted).toBe(true)
+      expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: queued.inputID })).toBeUndefined()
+      expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: next.id })).toBeDefined()
+      expect((yield* SessionPending.list(f.db, f.alpha.id)).some((item) => item.id === queued.inputID)).toBe(false)
+      const rejected = yield* f.db.select({ data: EventTable.data }).from(EventTable).where(eq(EventTable.type, EventRuntime.versionedType(SessionEvent.DotsInstructionRejected.type, 1))).all().pipe(Effect.orDie)
+      expect(rejected.map((row) => row.data.inputID)).toContain(queued.inputID)
+      if (["revoke", "expiry", "task", "restart"].includes(change)) expect((yield* f.read("routine")).state).toBe("failed")
+    }))
+  }
+  it.live("rechecks all local fences after human approval and never holds the binding writer while asking", () => Effect.gen(function* () {
+    const f = yield* setup
+    const task = yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "Native task", resume: false })
+    yield* f.create("source")
+    const entered = Deferred.makeUnsafe<void>()
+    const release = Deferred.makeUnsafe<void>()
+    f.approval.wait = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+    const pending = yield* f.runtime.delegationCreate({ sessionID: f.master.id, proposalID: "racing", sourceExchangeID: "source", targetSessionID: f.alpha.id, taskInputID: task.id, expectedAttachment: target, expiresAt: f.clock.now + 1000, scope: { operations: ["continue"] } }).pipe(Effect.forkScoped)
+    yield* Deferred.await(entered)
+    f.binding.current = undefined
+    yield* Deferred.succeed(release, undefined)
+    expect((yield* Fiber.join(pending).pipe(Effect.exit))._tag).toBe("Failure")
+  }))
+  for (const boundary of ["admission", "promotion"] as const) it.live(`permits revocation while authorization awaits at ${boundary} and rejects before promotion`, () => Effect.gen(function* () {
+    const f = yield* delegated
+    const queued = boundary === "promotion" ? yield* f.runtime.create(f.input) : undefined
+    const entered = Deferred.makeUnsafe<void>()
+    const release = Deferred.makeUnsafe<void>()
+    f.hooks.checkStored = () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+    const work = boundary === "admission" ? f.runtime.create(f.input).pipe(Effect.as(true)) : SessionPending.promoteNextQueued(f.db, f.events, f.alpha.id, undefined, undefined, f.runtime.promoteRoutine)
+    const fiber = yield* work.pipe(Effect.forkScoped)
+    yield* Deferred.await(entered)
+    yield* f.runtime.delegationRevoke({ sessionID: f.master.id, id: f.grant.id, revision: f.grant.revision, expectedAttachment: target })
+    yield* Deferred.succeed(release, undefined)
+    const settled = yield* Fiber.join(fiber).pipe(Effect.result)
+    expect(settled._tag === "Failure" || settled.success === false).toBe(true)
+    if (queued) expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: queued.inputID })).toBeUndefined()
+    expect((yield* SessionPending.list(f.db, f.alpha.id)).some((entry) => entry.type === "user" && Dots.routine(entry.data.metadata) !== undefined)).toBe(false)
+  }))
+  it.live("revocation after successful promotion retains the accepted instruction and never rewrites the native task", () => Effect.gen(function* () {
+    const f = yield* delegated
+    const result = yield* f.runtime.create(f.input)
+    expect(yield* SessionPending.promoteNextQueued(f.db, f.events, f.alpha.id, undefined, undefined, f.runtime.promoteRoutine)).toBe(true)
+    const message = yield* f.sessions.message({ sessionID: f.alpha.id, messageID: result.inputID })
+    yield* f.runtime.delegationRevoke({ sessionID: f.master.id, id: f.grant.id, revision: f.grant.revision, expectedAttachment: target })
+    expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: result.inputID })).toEqual(message)
+    expect(yield* f.runtime.currentRoutine(f.alpha.id)).toMatchObject({ delegation: f.input.delegation, instruction: f.input.instruction })
+    expect((yield* f.sessions.message({ sessionID: f.alpha.id, messageID: f.task.id }))?.type).toBe("user")
+    expect((yield* f.runtime.delegationStatus({ sessionID: f.master.id, targetSessionID: f.alpha.id, expectedAttachment: target })).grants[0]?.active).toBe(false)
+  }))
+  it.live("keeps a pending replacement human task eligible when earlier work completes before its promotion", () => Effect.gen(function* () {
+    const f = yield* delegated
+    const next = yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "The next approved native task", resume: false })
+    yield* f.events.publish(SessionEvent.Work.Completed, { sessionID: f.alpha.id, inputID: f.task.id, assistantMessageID: SessionMessage.ID.make("msg_previous_completed") })
+    const grant = yield* f.runtime.delegationCreate({ ...f.proposal, proposalID: "next_task", taskInputID: next.id })
+    const input = { ...f.input, exchangeID: "next_task_routine", delegation: { id: grant.id, revision: grant.revision }, taskInputID: next.id }
+    const receipt = yield* f.runtime.create(input)
+    yield* SessionPending.promoteSteers(f.db, f.events, f.alpha.id, undefined, undefined, f.runtime.promoteRoutine)
+    expect(yield* SessionPending.promoteNextQueued(f.db, f.events, f.alpha.id, undefined, undefined, f.runtime.promoteRoutine)).toBe(true)
+    expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: receipt.inputID })).toBeDefined()
+    yield* f.events.publish(SessionEvent.Work.Completed, { sessionID: f.alpha.id, inputID: receipt.inputID, assistantMessageID: SessionMessage.ID.make("msg_next_completed") })
+    expect((yield* f.runtime.create({ ...input, exchangeID: "after_task_completion" }).pipe(Effect.result))._tag).toBe("Failure")
+  }))
+  it.live("does not restore an older pending task grant while promoting steers before a newer human task", () => Effect.gen(function* () {
+    const f = yield* setup
+    const first = yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "First native task", resume: false })
+    yield* f.create("source")
+    const grant = yield* f.runtime.delegationCreate({ sessionID: f.master.id, proposalID: "pending_native", sourceExchangeID: "source", targetSessionID: f.alpha.id, taskInputID: first.id, expectedAttachment: target, expiresAt: f.clock.now + 60_000, scope: { operations: ["continue"] } })
+    const routine = yield* f.runtime.create({ sessionID: f.master.id, remoteSource: source, exchangeID: "pending_routine", targetSessionID: f.alpha.id, taskInputID: first.id, expectedAttachment: target, channel: "task", delivery: "steer", delegation: { id: grant.id, revision: grant.revision }, instruction: { operation: "continue" } })
+    const next = yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "Newer native task", resume: false })
+    yield* SessionPending.promoteSteers(f.db, f.events, f.alpha.id, undefined, undefined, f.runtime.promoteRoutine)
+    expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: routine.inputID })).toBeUndefined()
+    expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: next.id })).toBeDefined()
+  }))
 })
 
 const managed = Effect.fn(function* (fixture: Effect.Success<typeof setup>, parentID: Session.ID) {

@@ -367,6 +367,7 @@ describe("Session orchestration helpers", () => {
             parent_id: pageParentID,
             directory: "/page",
             title: id,
+            model,
             time_pinned: index < 11 ? 50 + index : null,
           })),
         ])

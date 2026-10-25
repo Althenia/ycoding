@@ -950,6 +950,11 @@ const layer = Layer.effectDiscard(
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
           .pipe(Effect.orDie)
+        const task = yield* db.update(SessionTaskTable)
+          .set({ revision: sql`${SessionTaskTable.revision} + 1` })
+          .where(eq(SessionTaskTable.session_id, event.data.sessionID))
+          .returning({ parentID: SessionTaskTable.parent_id }).get().pipe(Effect.orDie)
+        if (task) yield* incrementOrchestrationRevision(db, task.parentID)
       }),
     )
     yield* events.project(SessionEvent.ProfileBound, (event) =>
@@ -1106,6 +1111,15 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.InputConsumed, (event) => run(db, event))
+    yield* events.project(SessionEvent.DotsInstructionRejected, (event) =>
+      db.delete(SessionPendingTable).where(and(
+        eq(SessionPendingTable.id, event.data.inputID), eq(SessionPendingTable.session_id, event.data.sessionID),
+        eq(SessionPendingTable.type, "user"), sql`json_extract(${SessionPendingTable.data}, '$.metadata.inputOrigin') = 'plugin'`,
+        sql`json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.exchangeID') = ${event.data.exchangeID}`,
+        sql`json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.routine.delegation.id') = ${event.data.delegationID}`,
+        sql`json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.sessionID') = ${event.data.anchorSessionID}`,
+      )).run().pipe(Effect.orDie, Effect.asVoid),
+    )
     yield* events.project(SessionEvent.Compaction.AdmittedV1, (event) =>
       Effect.gen(function* () {
         if (event.durable === undefined)

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { TextareaRenderable } from "@opentui/core"
+import { InputRenderable, TextareaRenderable } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
 import { json, sessionSnapshot } from "../fixture/tui-client"
@@ -98,6 +98,11 @@ async function withDotsScreen(
         expect(await request.json()).toEqual(target)
         bound = true
         return json({ data: { enabled: true, state: "connected", target } })
+      }
+      if (url.pathname.endsWith("/dots/unbind")) {
+        expect(await request.json()).toEqual({ expectedTarget: target })
+        bound = false
+        return json({ data: { enabled: true, state: "disconnected" } })
       }
       if (url.pathname.endsWith("/dots/send")) {
         const body = await request.json()
@@ -295,6 +300,39 @@ test("enabled Dots is offered in the command palette", async () => {
     await wait(() => screen.frame().includes("Search"))
     await screen.input.typeText("Dots dest")
     await wait(() => screen.frame().includes("Select Dots destination"))
+  })
+}, 30000)
+
+test("native Unbind is discoverable and supports bind unbind rebind without sending", async () => {
+  await withDotsScreen(enabledStatus, async ({ screen, sent, prompts, requests, isBound, wait }) => {
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await screen.mouse.click(3, screen.lines().findIndex((line) => line.includes("Message YCoding…")))
+      screen.input.pressKey("p", { ctrl: true })
+      await wait(() => screen.frame().includes("Commands") && screen.renderer.currentFocusedEditor instanceof InputRenderable)
+      await screen.input.typeText("Select Dots destination")
+      await wait(() => screen.frame().includes("Select Dots destination") && !screen.frame().includes("Switch session"))
+      screen.input.pressEnter()
+      await wait(() => screen.frame().includes("Select ChatGPT profile for Dots"))
+      screen.input.pressEnter()
+      await wait(() => screen.frame().includes("Select Dot and conversation"))
+      screen.input.pressEnter()
+      await wait(() => screen.frame().includes("Confirm Dots destination"))
+      screen.input.pressEnter()
+      await wait(() => isBound() && screen.frame().includes("Dots · Fixture Dot / conversation"))
+      if (cycle === 1) break
+      screen.input.pressKey("p", { ctrl: true })
+      await wait(() => screen.frame().includes("Commands") && screen.renderer.currentFocusedEditor instanceof InputRenderable)
+      await screen.input.typeText("Unbind Dots destination")
+      await wait(() => screen.frame().includes("Unbind Dots destination") && !screen.frame().includes("Switch session"))
+      screen.input.pressEnter()
+      await wait(() => screen.frame().includes("Unbind Dots destination") && screen.frame().includes("keeps running"))
+      screen.input.pressEnter()
+      await wait(() => !isBound() && !screen.frame().includes("Dots · Fixture Dot / conversation"))
+    }
+    expect(requests.filter((request) => request.endsWith("/dots/bind"))).toHaveLength(2)
+    expect(requests.filter((request) => request.endsWith("/dots/unbind"))).toHaveLength(1)
+    expect(sent).toEqual([])
+    expect(prompts).toEqual([])
   })
 }, 30000)
 

@@ -1013,6 +1013,26 @@ body:has(.app) {
   margin: 0;
 }
 
+.question__assessment {
+  color: var(--yc-yellow-strong);
+  background: var(--yc-yellow-soft);
+  padding: var(--yc-space-3);
+  overflow-wrap: anywhere;
+}
+
+.question__assessment p {
+  margin: 0;
+  font-size: var(--yc-size-2xs);
+  line-height: var(--yc-leading-xs);
+}
+
+.question__grade {
+  display: block;
+  color: var(--yc-yellow-strong);
+  padding: var(--yc-space-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
 .request__actions {
   display: flex;
   flex-wrap: wrap;

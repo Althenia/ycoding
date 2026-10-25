@@ -36,9 +36,11 @@ function harness(options: { status?: Dots.Status; capture?: boolean; deny?: bool
   const permissions: Permission.AssertInput[] = []
   const guardrails: Array<{ action: string; resources: ReadonlyArray<string> }> = []
   const dots: DotsRuntime.Interface = {
+    withBinding: () => Effect.die("Unexpected delegation binding access"),
     attachment: () => Effect.die("Unexpected exchange attachment lookup"),
     targets: () => Effect.succeed([]),
     bind: () => Effect.die("agents never bind"),
+    unbind: () => Effect.die("agents never unbind"),
     status: () => Effect.succeed(options.status ?? { enabled: true, target, state: "connected" }),
     send: (input) =>
       Effect.sync(() => {

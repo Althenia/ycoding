@@ -359,7 +359,12 @@ function holdOf(tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, base
 
 function exchangeFingerprint(input: Record<string, unknown>) {
   const attachment = RemoteMcpSchemas.recordOf(input.expectedAttachment)
-  return JSON.stringify([input.exchangeID, attachment?.profile, attachment?.dotID, attachment?.threadID, attachment?.generation, input.targetSessionID, input.channel, input.delivery, input.text])
+  const ordinary = [input.exchangeID, attachment?.profile, attachment?.dotID, attachment?.threadID, attachment?.generation, input.targetSessionID, input.channel, input.delivery, input.text]
+  if (input.delegation === undefined) return JSON.stringify(ordinary)
+  const delegation = RemoteMcpSchemas.recordOf(input.delegation)
+  const instruction = RemoteMcpSchemas.recordOf(input.instruction)
+  const preferences = RemoteMcpSchemas.recordOf(instruction?.preferences)
+  return JSON.stringify([...ordinary, delegation?.id, delegation?.revision, input.taskInputID, instruction?.operation, preferences?.format, preferences?.detail])
 }
 
 function sameModel(current: Readonly<Record<string, unknown>> | undefined, target: Readonly<Record<string, unknown>> | undefined) {

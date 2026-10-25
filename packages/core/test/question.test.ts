@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { TestClock } from "effect/testing"
+import type { Form } from "@ycoding-ai/schema/form"
 import { Config } from "@ycoding-ai/core/config"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -44,9 +45,10 @@ const decisionChoice = (value: string, confidence: number) => (input: Decision.I
           name: item.name,
           type: "choice",
           answer: null,
-          choice: value,
+          choice: item.type === "choice" && item.grade === true ? null : value,
           score: null,
-          confidence,
+          confidence: item.type === "choice" && item.grade === true ? 0 : confidence,
+          ...(item.type === "choice" && item.grade === true ? { grades: item.choices.map((choice) => ({ choice: choice.value, confidence: choice.value === value ? confidence : 0.1, evidence: `Fixture support for ${choice.value}.` })) } : {}),
         })),
       },
     }),
@@ -60,6 +62,9 @@ const question: Question.Info = {
   options: [{ label: "One", description: "First option" }],
 }
 const recommended: Question.Info = { ...question, options: [{ label: "One (Recommended)", description: "First option" }] }
+const assessment = (selected: string, choices: string[]): Form.Assessment => ({ mode: "yolo", sourceSessionID: sessionID, fields: [{ key: "question_0", status: "assessed", reason: "Unique best-supported option.", recommendation: [selected], confidence: 0.9,
+  grades: choices.map((choice) => ({ choice, confidence: choice === selected ? 0.9 : 0.1, evidence: `Fixture support for ${choice}.` })),
+}] })
 
 const setupAutonomy = Effect.fn("QuestionTest.setupAutonomy")(function* (mode: "normal" | "goal") {
   const { db } = yield* Database.Service
@@ -276,7 +281,7 @@ describe("Question", () => {
           },
         ],
       })
-      expect(answers).toEqual({ status: "answered", answers: [["Two"]], automatic: true, via: "yolo", confidence: 0.9 })
+      expect(answers).toEqual({ status: "answered", answers: [["Two"]], automatic: true, via: "yolo", confidence: 0.9, assessment: assessment("Two", ["One", "Two"]) })
       expect(yield* service.list()).toEqual([])
     }),
   )
@@ -306,6 +311,36 @@ describe("Question", () => {
       expect(yield* service.list()).toEqual([])
     }),
   )
+
+  it.effect("public question multiselect uses one coherent set rather than combining independent high grades", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID, answers: "yolo" })
+    decisionBehavior = input => Effect.succeed(Schema.decodeUnknownSync(Decision.Output)({ provider: "agent", response: {
+      model: { providerID: "test", id: "decision-model" }, semantics: "model-estimate", version: 1,
+      answers: input.request.questions.map(item => item.type === "choice" ? { name: item.name, type: "choice", answer: null, choice: null, score: null, confidence: 0,
+        grades: [{ choice: "One", confidence: 0.95, evidence: "One engine is supported." }, { choice: "Two", confidence: 0.94, evidence: "The alternative engine is supported." }],
+      } : { name: item.name, type: "text", answer: null, choice: null, score: null, confidence: 0.92, text: JSON.stringify({ recommendation: ["One"], compatible: true, reason: "The engines are mutually exclusive." }) }),
+    } }))
+    const service = yield* Question.Service
+    expect(yield* service.ask({ sessionID, questions: [{ ...question, question: "Choose one of two mutually exclusive engines.", multiple: true, options: [{ label: "One", description: "First engine" }, { label: "Two", description: "Second engine" }] }] })).toMatchObject({
+      status: "answered", answers: [["One"]], automatic: true, via: "yolo", confidence: 0.92,
+      assessment: { mode: "yolo", fields: [{ status: "assessed", recommendation: ["One"], grades: [{ choice: "One" }, { choice: "Two" }] }] },
+    })
+  }))
+
+  it.effect("duplicate actual option IDs produce an unavailable assessment without consulting the evaluator", () => Effect.gen(function* () {
+    yield* setupAutonomy("normal")
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID, answers: "yolo" })
+    decisionBehavior = () => Effect.die("Duplicate IDs must not reach the evaluator")
+    const service = yield* Question.Service
+    const pending = yield* waitForAsk(service, { sessionID, questions: [{ ...question, options: [question.options[0], question.options[0]] }] })
+    expect(pending.request.assessment?.fields[0]?.status).toBe("unavailable")
+    expect(pending.request.assessment?.fields[0]?.reason).toContain("duplicated")
+    yield* service.reject(pending.request.id)
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+  }))
 
   it.effect("turning YOLO off while a sleeping answer is pending defers instead of applying it", () =>
     Effect.gen(function* () {
@@ -451,6 +486,7 @@ describe("Question", () => {
           automatic: true,
           via: "yolo",
           confidence: 0.9,
+          assessment: assessment("One", ["One"]),
         })
       }),
     )

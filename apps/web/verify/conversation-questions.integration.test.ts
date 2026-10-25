@@ -102,3 +102,59 @@ test("a native question answer reaches the owned Form reply once and remains rea
     expect(await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)).toContain("Which sessions should the workspace reload after reconnect?")
   } finally { await page.close() }
 }, 60_000)
+
+test("native question grades update without selecting, losing a focused draft, or hiding human attribution at narrow widths", async () => {
+  const page = await browser.openPage()
+  try {
+    for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
+      await page.setViewport(width, 900)
+      await page.navigate(`${origin}/verify/remote.html?view=chat&questionFlow=1&questionGrades=1&theme=${theme}`)
+      await wait(page, `!!document.querySelector('#pending-requests .question__option input') && document.querySelector('#pending-requests').innerText.includes('Assessing options')`)
+      await page.evaluate(`(() => { document.querySelector('.fixture__banner')?.remove(); document.querySelector('.fixture__controls')?.remove(); const fixture=document.querySelector('.fixture'); fixture.style.height='100dvh'; fixture.style.minHeight='0'; fixture.style.overflow='hidden'; })()`)
+      expect(await page.evaluate<string>(`document.querySelector('#pending-requests').innerText`)).toContain("Answers YOLO")
+      await page.evaluate(`(() => {const field=document.querySelector('#pending-requests .question__custom input'); field.value='Keep my draft'; field.dispatchEvent(new Event('input',{bubbles:true})); field.focus(); window.focusedQuestionDraft=field;})()`)
+      const assessment = { mode: "yolo", sourceSessionID: "ses_parent", fields: [{ key: "q0", status: "assessed", reason: "The narrower scope is supported.", recommendation: ["Active only"], grades: [
+        { choice: "Active only", confidence: 0.96, evidence: "Only the active Session requires an immediate refresh. ".repeat(6) },
+        { choice: "All advertised", confidence: 0.82, evidence: "Broader refresh increases request volume." },
+      ] }] }
+      await page.evaluate(`window.remoteQuestionAssessment(${JSON.stringify(assessment)})`)
+      await wait(page, `document.querySelector('#pending-requests').innerText.includes('confidence 0.96')`)
+      expect(await page.evaluate<boolean>(`document.activeElement===window.focusedQuestionDraft && window.focusedQuestionDraft.value==='Keep my draft'`)).toBe(true)
+      expect(await page.evaluate<number>(`document.querySelectorAll('#pending-requests .question__option input:checked').length`)).toBe(0)
+      expect(await page.evaluate<number>(`window.requestLog.filter(row=>row.operation==='session.form.reply').length`)).toBe(0)
+      expect(await page.evaluate<string>(`document.querySelector('#pending-requests').innerText`)).toContain("Recommended: Active only")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
+      expect(await page.evaluate<boolean>(`getComputedStyle(document.querySelector('.question__grade')).color===getComputedStyle(document.querySelector('.question__assessment')).color`)).toBe(true)
+      for (const [mode, status, reason] of [["yolo", "unavailable", "The evaluator timed out; choose an answer."], ["manual", "not_assessed", "Manual answers require your decision."], ["auto", "not_assessed", "Auto uses only explicit defaults or a unique Recommended option."]] as const) {
+        await page.evaluate(`window.remoteQuestionAssessment(${JSON.stringify({ mode, sourceSessionID: "ses_parent", fields: [{ key: "q0", status, reason }] })})`)
+        await wait(page, `document.querySelector('#pending-requests').innerText.includes(${JSON.stringify(reason)})`)
+        expect(await page.evaluate<boolean>(`document.activeElement===window.focusedQuestionDraft && window.focusedQuestionDraft.value==='Keep my draft'`)).toBe(true)
+        expect(await page.evaluate<number>(`document.querySelectorAll('#pending-requests .question__grade').length`)).toBe(0)
+      }
+      await page.evaluate(`window.remoteQuestionAssessment(${JSON.stringify(assessment)})`)
+      await wait(page, `document.querySelector('#pending-requests').innerText.includes('confidence 0.96')`)
+      await page.evaluate(`document.querySelector('#pending-requests .question__assessment').scrollIntoView({block:'start'})`)
+      await wait(page, `(() => {const root=document.querySelector('.workspace__scroll').getBoundingClientRect(); return ['#pending-requests .question__assessment','#pending-requests .question__grade'].every(selector=>{const box=document.querySelector(selector).getBoundingClientRect(); return box.top<root.bottom&&box.bottom>root.top&&box.top<innerHeight&&box.bottom>0})})()`)
+      expect(await page.evaluate<boolean>(`document.activeElement===window.focusedQuestionDraft && window.focusedQuestionDraft.value==='Keep my draft'`)).toBe(true)
+      await Bun.write(new URL(`../../../.cache/tmp/web-reading/question-grades-pending-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      await page.evaluate(`(() => {const form=document.querySelector('#pending-requests form'); form.querySelectorAll('.question__option input')[1].click(); form.requestSubmit(); form.requestSubmit();})()`)
+      await wait(page, `!document.querySelector('#pending-requests form') && document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by you')`)
+      const text = await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)
+      expect(text).toContain("All advertised")
+      expect(text).toContain("confidence 0.96")
+      expect(text).not.toContain("automatically answered")
+      expect(await page.evaluate<unknown[]>(`window.requestLog.filter(row=>row.operation==='session.form.reply').map(row=>row.input)`)).toEqual([{ formID: "frm_fixture", answer: { q0: "All advertised" } }])
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
+      await page.evaluate(`document.querySelector('[aria-label="Recorded question"]').scrollIntoView({block:'start'})`)
+      await wait(page, `(() => {const box=document.querySelector('[aria-label="Recorded question"]').getBoundingClientRect(), root=document.querySelector('.workspace__scroll').getBoundingClientRect(); return box.top<root.bottom&&box.bottom>root.top&&box.top<innerHeight&&box.bottom>0})()`)
+      await Bun.write(new URL(`../../../.cache/tmp/web-reading/question-grades-settled-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
+      for (const via of ["coordination", "yolo"] as const) {
+        await page.evaluate(`window.responseSnapshot(${JSON.stringify([{ id: "msg_coordinator_question", type: "assistant", content: [{ type: "tool", id: "call_coordinator_question", name: "question", state: { status: "completed", input: { questions: [{ header: "Scope", question: "Which sessions should reload?", options: [] }] }, structured: { answers: [["Active only"]], ...(via === "yolo" ? { assessment } : {}), source: { kind: "coordinator", coordinatorSessionID: "ses_coordinator", via } }, content: [] } }], time: { created: 1, completed: 2 } }])}, [], false)`)
+        await wait(page, `document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by coordinator ses_coordinator')`)
+        const attributed = await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)
+        expect(attributed).not.toContain("answered by you")
+        expect(attributed.includes("via Answers YOLO")).toBe(via === "yolo")
+      }
+    }
+  } finally { await page.close() }
+}, 60_000)

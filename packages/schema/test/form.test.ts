@@ -24,3 +24,26 @@ describe("Form reply source attribution", () => {
     expect(() => Schema.decodeUnknownSync(Form.Event.Replied.data)({ ...input, source: { ...input.source, via: "manual" } })).toThrow()
   })
 })
+
+describe("Form question assessments", () => {
+  const assessment: Form.Assessment = { mode: "yolo", sourceSessionID: "ses_source", fields: [{ key: "q0", status: "assessed", reason: "A bounded recommendation.",
+    grades: [{ choice: "local", confidence: 0.8, evidence: "Matches the stated scope." }], recommendation: ["local"], confidence: 0.8,
+  }] }
+
+  test("assessment events and pending snapshots retain the same canonical optional contract", () => {
+    const decoded = Schema.decodeUnknownSync(Form.Assessment)(assessment)
+    expect(Schema.encodeSync(Form.Assessment)(decoded)).toEqual(assessment)
+    const form = Schema.decodeUnknownSync(Form.Info)({ id: "frm_assessed", sessionID: "ses_owner", title: "Question", fields: [{ key: "q0", type: "string" }], assessment })
+    const event = Schema.decodeUnknownSync(Form.Event.Assessed.data)({ id: form.id, sessionID: form.sessionID, assessment })
+    expect(event.assessment).toEqual(Schema.decodeUnknownSync(Form.Assessment)(form.assessment))
+    expect(Form.Event.Definitions).toContain(Form.Event.Assessed)
+    expect(Schema.encodeSync(Form.FieldAssessment)(Schema.decodeUnknownSync(Form.FieldAssessment)({ key: "q0", status: "not_assessed", reason: "Manual is human-only." }))).toEqual({ key: "q0", status: "not_assessed", reason: "Manual is human-only." })
+  })
+
+  for (const confidence of [-0.01, 1.01, NaN, Infinity]) test(`rejects invalid confidence ${confidence}`, () => {
+    expect(() => Schema.decodeUnknownSync(Form.OptionGrade)({ choice: "a", confidence, evidence: "Evidence." })).toThrow()
+  })
+  for (const evidence of ["", " ", "x".repeat(501)]) test(`rejects invalid grade evidence of length ${evidence.length}`, () => {
+    expect(() => Schema.decodeUnknownSync(Form.OptionGrade)({ choice: "a", confidence: 0.9, evidence })).toThrow()
+  })
+})

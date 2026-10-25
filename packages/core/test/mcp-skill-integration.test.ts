@@ -224,6 +224,7 @@ describe("MCP skill model-facing integration", () => {
                 managed: unavailable,
                 get: unavailable,
                 launch: unavailable,
+                switchModel: unavailable,
                 list: unavailable,
                 page: () =>
                   Effect.succeed({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} }),

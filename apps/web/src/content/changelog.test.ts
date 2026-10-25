@@ -7,8 +7,61 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.1 Project ownership, autonomy modes and Antigravity first", () => {
+  test("lists v0.11.2 Projects, Dots delegation, child model selection and graded questions first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.2", date: "2026-10-25", tags: ["Changed", "Fixed"] })
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "Add session",
+      "Members",
+      "confirmed new Session",
+      "display name",
+      "Unbind",
+      "keeps running",
+      "explicit Dots task exchanges",
+      "separate human-only approval",
+      "Continue or scoped presentation",
+      "existing human-authored task",
+      "one directly owned child Session",
+      "current logical Step finishes",
+      "without interrupting or replaying work; idle children remain idle",
+      "profile binding, questions, task state, permission ceiling, ownership and launch retry identity",
+      "stale expected selection or incompatible context, provider connection, profile or variant leaves the selection unchanged",
+      "Reading the selected model does not prove that a provider request was made with it",
+      "cannot admit new work",
+      "answer native Forms, permissions, guardrail reviews or managed-child questions",
+      "control child Sessions",
+      "expose Dots credentials or live native controls",
+      "program-stamped",
+      "without replay",
+      "pending-request",
+      "human-only",
+      "chronological transcript placement",
+      "malformed metadata reads as unavailable",
+      "TUI hides only unnamed canonical Remote MCP attribution",
+      "model context",
+      "web attribution",
+      "native Dot headers",
+      "YOLO option assessments show the evaluator-reported confidence and evidence for each actual option",
+      "unique highest-confidence option at or above 0.8",
+      "separately validated compatible set",
+      "weak, ambiguous, invalid, refused, failed or timed-out assessments",
+      "Manual and Auto make no model call and show Not assessed",
+      "Settled views distinguish automatic YOLO answers from answers supplied by you",
+      "Antigravity",
+      "build time",
+      "Up/Down",
+      "distinguishing action",
+      "move through choices",
+      "Cancel and Confirm visible",
+      "settle a selection once",
+    ])
+      expect(text).toContain(fragment)
+    expect(after("0.11.2")?.version).toBe("0.11.1")
+  })
+
+  test("retains v0.11.1 Project ownership, autonomy modes and Antigravity", () => {
+    const entry = byVersion("0.11.1")
     expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-25", tags: ["Added", "Changed", "Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of ["Manual", "YOLO", "Auto", "Autonomous", "no model call", "hard and custom-rule reviews", "asleep marker", "recorded owner", "Only the Master assigns or transfers ownership", "executor children inherit no Project control", "inspect, assign and release", "human-only", "Projects tab", "five-Session roster", "Antigravity", "effort variants", "unverified", "tools.chatgpt.ycoding.session_catalog", "duplicate Code Mode paths", "focused test files", "recorded text offsets", "forks", "reported zero hit ratio", "fragmented UTF-8", "Open actions", "a decline never approves", "under Manual", "match dismissals", "pending reviews", "pairing code"])
@@ -1655,7 +1708,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 46)).toEqual([
+    expect(versions.slice(0, 47)).toEqual([
+      "0.11.2",
       "0.11.1",
       "0.11.0",
       "0.10.25",

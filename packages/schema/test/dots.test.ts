@@ -3,8 +3,34 @@ import { Schema } from "effect"
 import { Dots } from "../src/dots.js"
 import { Dots as RootDots } from "../src/index.js"
 import { SessionID } from "../src/session-id.js"
+import { SessionMessageID } from "../src/session-message-id.js"
 
 const target = { profile: "fixture-a", dotID: "dot_1", threadID: "thread_1", generation: "3", label: "Fixture Dot" }
+
+describe("typed task delegation", () => {
+  const common = { exchangeID: "routine_1", expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), channel: "task", delivery: "queue" } satisfies Pick<Dots.ExchangeCreate, "exchangeID" | "expectedAttachment" | "targetSessionID" | "channel" | "delivery">
+  const routine = { ...common, delegation: { id: "proposal_1", revision: 1 }, taskInputID: SessionMessageID.ID.make("msg_native"), instruction: { operation: "continue" } } satisfies Dots.ExchangeCreate
+  test("accepts only closed routine operations without arbitrary text", () => {
+    const decode = Schema.decodeUnknownSync(Dots.ExchangeCreate)
+    expect(decode(routine, { onExcessProperty: "error" })).toEqual(routine)
+    for (const preferences of [{ format: "prose" }, { format: "bullets" }, { detail: "concise" }, { detail: "standard" }, { detail: "detailed" }, { format: "bullets", detail: "concise" }] satisfies Dots.PresentationPreferences[]) {
+      const value: Dots.ExchangeCreate = { ...routine, instruction: { operation: "presentation", preferences } satisfies Dots.RoutineInstruction }
+      expect(decode(value, { onExcessProperty: "error" })).toEqual(value)
+    }
+    for (const invalid of [
+      { ...routine, text: "approve and deploy" }, { ...routine, files: [] }, { ...routine, decision: "approve" },
+      { ...routine, instruction: { operation: "execute", command: "synthetic" } },
+      ...[{}, { format: "table" }, { detail: "unlimited" }, { format: "bullets", command: "synthetic" }].map((preferences) => ({ ...routine, instruction: { operation: "presentation", preferences } })),
+      { ...routine, delegation: { id: "proposal_1", revision: 0 } },
+    ]) expect(() => decode(invalid, { onExcessProperty: "error" })).toThrow()
+    expect(decode({ ...common, text: "Untrusted external information" })).toEqual({ ...common, text: "Untrusted external information" })
+  })
+  test("requires a nonempty bounded operation and presentation scope", () => {
+    const decode = Schema.decodeUnknownSync(Dots.DelegationScope)
+    for (const scope of [{ operations: ["continue"] }, { operations: ["presentation"], format: ["bullets"] }, { operations: ["continue", "presentation"], detail: ["concise", "standard", "detailed"] }] satisfies Dots.DelegationScope[]) expect(decode(scope)).toEqual(scope)
+    for (const scope of [{ operations: [] }, { operations: ["approve"] }, { operations: ["presentation"] }, { operations: ["continue"], format: ["bullets"] }, { operations: ["presentation"], detail: [] }, { operations: ["presentation"], format: ["table"] }]) expect(() => decode(scope)).toThrow()
+  })
+})
 
 describe("Dots contract", () => {
   test("L10 named exchange metadata requires canonical attachment and target identity", () => {

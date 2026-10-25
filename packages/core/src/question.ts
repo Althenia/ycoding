@@ -5,6 +5,8 @@ import { Context, Deferred, Effect, Layer, Schema, Semaphore } from "effect"
 import { Config } from "./config"
 import { Database } from "./database/database"
 import { Question } from "@ycoding-ai/schema/question"
+import { Form } from "@ycoding-ai/schema/form"
+import { DecisionFailure } from "@ycoding-ai/schema/decision-failure"
 import { Decision } from "./decision"
 import { DecisionChoice } from "./decision-choice"
 import { EventRuntime } from "./event"
@@ -60,6 +62,7 @@ export type Outcome =
       readonly automatic?: true
       readonly via?: "auto-answer" | "yolo"
       readonly confidence?: number
+      readonly assessment?: Form.Assessment
     }
   | { readonly status: "timed_out"; readonly seconds: number }
   | { readonly status: "deferred"; readonly itemID: SessionReviewFold.ID }
@@ -207,14 +210,21 @@ const layer = Layer.effect(
       input: AskInput,
       requestID: ID,
       mode: { readonly autoAnswer: boolean; readonly yolo: boolean },
+      assessments: Form.FieldAssessment[],
     ): Effect.Effect<AutoOutcome> =>
       Effect.gen(function* () {
         const answers: Answer[] = []
         let confidence: number | undefined
+        let unsettled: Extract<AutoOutcome, { readonly type: "unsettled" }> | undefined
         for (const [index, question] of input.questions.entries()) {
           const labels = question.options.map((option) => option.label)
-          if (new Set(labels).size !== labels.length)
-            return { type: "unsettled", reason: "invalid-request" } as AutoOutcome
+          if (new Set(labels).size !== labels.length) {
+            const field = assessments.findIndex(field => field.key === `question_${index}`)
+            if (field !== -1) assessments.splice(field, 1, { key: `question_${index}`, status: "unavailable", reason: "Option IDs are duplicated; dismiss and recreate this question." })
+            unsettled ??= { type: "unsettled", reason: "invalid-request" }
+            answers.push([])
+            continue
+          }
           if (mode.autoAnswer) {
             const recommended = recommendedLabels(question)
             if (recommended) {
@@ -250,56 +260,34 @@ const layer = Layer.effect(
                 "The user cannot answer right now. Give the bounded free-text answer that best serves the stated question with the evidence given. Refuse when the evidence does not support an answer; refusal asks the user instead.",
               state,
             })
-            if (outcome.type === "unsettled") return outcome as AutoOutcome
-            answers.push([outcome.value])
-            confidence = Math.min(confidence ?? 1, outcome.confidence)
-            continue
-          }
-          if (question.multiple === true) {
-            const outcome = yield* DecisionChoice.grade(decision, {
-              ...call,
-              instructions:
-                "The user cannot answer right now. Grade every option independently for whether it should be selected for the stated question with the evidence given. Refuse when the evidence does not support grading; refusal asks the user instead.",
-              state,
-              choices,
-            })
-            if (outcome.type === "unsettled") return outcome as AutoOutcome
-            const selected = outcome.grades.filter(
-              (grade) => typeof grade.choice === "string" && grade.confidence >= DecisionChoice.ConfidenceThreshold,
-            )
-            if (selected.length === 0) return { type: "unsettled", reason: "low_confidence" } as AutoOutcome
-            answers.push(selected.map((grade) => String(grade.choice)))
-            confidence = Math.min(confidence ?? 1, ...selected.map((grade) => grade.confidence))
-            continue
-          }
-          const outcome = yield* DecisionChoice.chooseDetailed(decision, {
-            ...call,
-            instructions:
-              "The user cannot answer right now. Choose the option that best serves the stated question with the evidence given. Refuse when the evidence does not support a choice; refusal asks the user instead.",
-            state,
-            choices,
-          })
-          if (outcome.type === "judgment") {
-            answers.push([outcome.value])
-            confidence = Math.min(confidence ?? 1, outcome.confidence)
-            continue
-          }
-          if (question.custom !== false) {
-            const text = yield* DecisionChoice.answerText(decision, {
-              ...call,
-              invocationKey: `${requestID}:${index}:custom`,
-              instructions:
-                "The user cannot answer right now and no listed option was settled. Give a bounded custom free-text answer only when the evidence clearly supports one. Refuse otherwise; refusal asks the user instead.",
-              state,
-            })
-            if (text.type === "text") {
-              answers.push([text.value])
-              confidence = Math.min(confidence ?? 1, text.confidence)
+            if (outcome.type === "unsettled") {
+              unsettled ??= outcome
+              answers.push([])
               continue
             }
+            answers.push([outcome.value])
+            confidence = Math.min(confidence ?? 1, outcome.confidence)
+            continue
           }
-          return outcome as AutoOutcome
+          const outcome = yield* DecisionChoice.recommend(decision, {
+              ...call,
+              instructions:
+                "Answer the stated question from the supplied evidence. Refuse when the evidence does not support an answer; refusal asks the user instead.",
+              state,
+              choices,
+              multiple: question.multiple === true,
+          })
+          const field = assessments.findIndex((field) => field.key === call.name)
+          if (field !== -1) assessments.splice(field, 1, { key: call.name, ...outcome, reason: DecisionChoice.recommendationReason(outcome.reason) })
+          if (outcome.recommendation === undefined) {
+            unsettled ??= { type: "unsettled", reason: outcome.status === "assessed" ? "low_confidence" : Schema.is(DecisionFailure.Reason)(outcome.reason) ? outcome.reason : "error" }
+            answers.push([])
+            continue
+          }
+          answers.push(Array.from(outcome.recommendation))
+          confidence = Math.min(confidence ?? 1, outcome.confidence ?? 1)
         }
+        if (unsettled) return unsettled
         if (validateAnswers(input.questions, answers)) return { type: "unsettled", reason: "error" } as AutoOutcome
         return { type: "answered", answers, ...(confidence === undefined ? {} : { confidence }) } as AutoOutcome
       })
@@ -326,7 +314,13 @@ const layer = Layer.effect(
           const id = ID.ascending()
           const deferred = yield* Deferred.make<Outcome, RejectedError>()
           if (ticket.superseded()) return yield* new RejectedError()
-          const request: Request = { id, ...input }
+          const effective = snapshot ? yield* autonomy.effectiveDecisions(input.sessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined))) : undefined
+          const assessments: Form.FieldAssessment[] = input.questions.flatMap((question, index) => question.options.length === 0 ? [] : [{
+            key: `question_${index}`, status: yolo ? "pending" : "not_assessed",
+            reason: yolo ? "Answers evaluator is assessing the options." : mode === "auto" ? "Auto uses only a unique Recommended option; no model assessment." : "Manual answers require your decision; no model assessment.",
+          }])
+          const assessment: Form.Assessment | undefined = assessments.length === 0 ? undefined : { mode, sourceSessionID: effective?.inherited.answers ?? input.sessionID, fields: assessments }
+          const request: Request = { id, ...input, ...(assessment === undefined ? {} : { assessment }) }
           const entry: Pending = { request, epoch: ticket.epoch, deferred }
           pending.set(id, entry)
           const cancelPending = Effect.sync(() => {
@@ -334,7 +328,7 @@ const layer = Layer.effect(
           })
           if (auto && snapshot) {
             const outcome = yield* restore(
-              evaluateAuto(input, id, { autoAnswer, yolo }).pipe(
+              evaluateAuto(input, id, { autoAnswer, yolo }, assessments).pipe(
                 Effect.raceFirst(Deferred.await(deferred).pipe(Effect.as(undefined))),
               ),
             ).pipe(Effect.onInterrupt(() => cancelPending))
@@ -352,8 +346,10 @@ const layer = Layer.effect(
                   automatic: true,
                   via: outcome.confidence === undefined ? "auto-answer" : "yolo",
                   ...(outcome.confidence === undefined ? {} : { confidence: outcome.confidence }),
+                  ...(assessment === undefined || !yolo ? {} : { assessment }),
                 } as const
               if (unchanged) return yield* Deferred.await(deferred)
+              assessments.splice(0, assessments.length, ...assessments.map((field) => ({ ...field, status: "unavailable" as const, recommendation: undefined, reason: "Answers mode changed; assessment not applied." })))
             }
             if (pending.get(id) !== entry) return yield* restore(Deferred.await(deferred))
             const asleepNow = yield* autonomy

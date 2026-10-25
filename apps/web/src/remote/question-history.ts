@@ -9,7 +9,7 @@ export function questionHistory(part: Extract<AssistantPart, { kind: "tool" }>) 
     if (!question || typeof question !== "object" || !("question" in question) || typeof question.question !== "string") return []
     const answer: unknown = Array.isArray(answers) ? answers[index] : undefined
     return [{ title: "header" in question && typeof question.header === "string" ? question.header : "Question", text: question.question,
-      answer: part.structured?.timedOutAfterSeconds === undefined && Array.isArray(answer) && answer.every((value): value is string => typeof value === "string") ? answer.length ? answer.join(", ") : "Unanswered" : undefined }]
+      answer: part.structured?.timedOutAfterSeconds === undefined && part.structured?.deferredItemID === undefined && part.structured?.reviewFull !== true && Array.isArray(answer) && answer.every((value): value is string => typeof value === "string") ? answer.length ? answer.join(", ") : "Unanswered" : undefined }]
   })
 }
 
@@ -18,6 +18,8 @@ export function questionAnswerState(part: Extract<AssistantPart, { kind: "tool" 
   if (part.status === "failed") return "Question failed"
   if (part.status !== "completed") return "Awaiting answer"
   if (part.structured?.timedOutAfterSeconds !== undefined) return "Question timed out"
+  if (part.structured?.deferredItemID !== undefined) return "Awaiting your review decision"
+  if (part.structured?.reviewFull === true) return "Review box full; no answer recorded"
   if (part.name === "subagent_report") return "Question recorded"
   return "Answer not reported"
 }

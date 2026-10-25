@@ -6,7 +6,7 @@ import {
   decodePasteBytes,
   type KeyEvent,
 } from "@opentui/core"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show } from "solid-js"
+import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, runWithOwner } from "solid-js"
 import { escapeDisplayText } from "@ycoding-ai/client/tool-display"
 import { registerYCodingSpinner } from "../register-spinner"
 import { fileURLToPath } from "url"
@@ -28,7 +28,11 @@ import { expandPromptInputPastedText, realignPromptInputMentions } from "../../p
 import { parseSlashHead } from "../../prompt/parse"
 import { createDotsCapability, dotsInput } from "../../prompt/dots"
 import { DialogDots } from "../dialog-dots"
-import type { Dots } from "@ycoding-ai/schema/dots"
+import { DialogDotsDelegation } from "../dialog-dots-delegation"
+import { DialogConfirm } from "../../ui/dialog-confirm"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { Schema } from "effect"
+import { isDeepEqual } from "remeda"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { emptyPrompt, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
@@ -232,6 +236,33 @@ const stashed = new WeakMap<
 >()
 const activePrompts = new WeakMap<object, { clear: (sessionID: string | undefined, prompt: PromptInfo) => void }>()
 const fillEmptyPrompt = new WeakMap<PromptRef, (text: string, delivery?: "queue") => boolean>()
+type DelegationRequest = (
+  { kind: "create"; input: Dots.DelegationCreate; principal: Dots.DelegationInfo["principal"]; task: string; permissionID?: string } |
+  { kind: "revoke"; input: Dots.DelegationRevoke; grant: Dots.DelegationInfo }
+) & { state: "pending" | "unknown" | "rejected" }
+const delegationRequests = new WeakMap<object, Map<string, DelegationRequest>>()
+const decodeDelegationReview = Schema.decodeUnknownOption(Dots.DelegationReview)
+
+function sameDotsAttachment(left: Dots.Target | undefined, right: Dots.Target) {
+  return left?.profile === right.profile && left.dotID === right.dotID && left.threadID === right.threadID && left.generation === right.generation
+}
+
+function delegationSettled(request: DelegationRequest, grant: Dots.DelegationInfo) {
+  if (request.kind === "revoke") return grant.id === request.input.id && grant.revision === request.input.revision && !grant.active &&
+    isDeepEqual({ ...grant, active: true }, request.grant)
+  return grant.id === request.input.proposalID && grant.revision === 1 &&
+    grant.sourceExchangeID === request.input.sourceExchangeID && grant.targetSessionID === request.input.targetSessionID &&
+    grant.taskInputID === request.input.taskInputID && grant.expiresAt === request.input.expiresAt &&
+    isDeepEqual(grant.scope, request.input.scope) && isDeepEqual(grant.principal, request.principal)
+}
+
+function delegationReviewMatches(request: DelegationRequest, review: Dots.DelegationReview) {
+  return request.kind === "create" && review.proposalID === request.input.proposalID &&
+    review.sourceExchangeID === request.input.sourceExchangeID && review.targetSessionID === request.input.targetSessionID &&
+    review.taskInputID === request.input.taskInputID && review.task === request.task && review.expiresAt === request.input.expiresAt &&
+    sameDotsAttachment(review.expectedAttachment, request.input.expectedAttachment) &&
+    isDeepEqual(review.principal, request.principal) && isDeepEqual(review.scope, request.input.scope)
+}
 
 function goalComposerText(text: string) {
   const trimmed = text.trim()
@@ -275,15 +306,39 @@ export function Prompt(props: PromptProps) {
   const [dotsTarget, setDotsTarget] = createSignal<Dots.Target>()
   let dotsRetry: { fingerprint: string; id: string } | undefined
   let dotsDialogOpen = false
+  let delegationDialogOpen = false
+  const delegationPending = delegationRequests.get(client) ?? new Map<string, DelegationRequest>()
+  if (!delegationRequests.has(client)) {
+    delegationRequests.set(client, delegationPending)
+    runWithOwner(null, () => {
+      client.event.on("permission.asked", (event) => {
+        const request = delegationPending.get(event.data.sessionID)
+        if (event.data.action !== "dots_delegate" || request?.kind !== "create" || request.permissionID !== undefined) return
+        const review = decodeDelegationReview(event.data.metadata)
+        if (review._tag === "Some" && delegationReviewMatches(request, review.value)) request.permissionID = event.data.id
+      })
+      client.event.on("permission.replied", (event) => {
+        const request = delegationPending.get(event.data.sessionID)
+        if (request?.kind === "create" && request.permissionID === event.data.requestID && event.data.reply === "reject") request.state = "rejected"
+      })
+    })
+  }
+  const delegationLocked = (sessionID: string) => {
+    const state = delegationPending.get(sessionID)?.state
+    return state === "pending" || state === "unknown" ? state : undefined
+  }
   const dotsCapability = createDotsCapability({
     sessionID: () => props.sessionID,
     connected: () => client.connection.status() === "connected",
-    read: async (sessionID, signal) =>
-      (await client.api.dots.status({ sessionID }, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) })).enabled === true,
+    read: async (sessionID, signal) => {
+      const status = await client.api.dots.status({ sessionID }, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) })
+      if (!signal.aborted && !disposed && props.sessionID === sessionID) setDotsTarget(status.enabled ? status.target : undefined)
+      return status.enabled === true
+    },
     reset: () => {
       setDotsTarget(undefined)
       dotsRetry = undefined
-      if (dotsDialogOpen) dialog.clear()
+      if (dotsDialogOpen || delegationDialogOpen) dialog.clear()
     },
   })
 
@@ -333,6 +388,13 @@ export function Prompt(props: PromptProps) {
         if (status.enabled) setDotsTarget(status.target)
         return status
       },
+      unbind: async (expectedTarget) => {
+        requireCurrent()
+        const result = settle(await client.api.dots.unbind({ sessionID, expectedTarget }))
+        setDotsTarget(result.target)
+        dotsRetry = undefined
+        return result
+      },
       pause: async (expectedTarget) => {
         requireCurrent()
         return settle(await client.api.dots.pause({ sessionID, expectedTarget }))
@@ -344,6 +406,95 @@ export function Prompt(props: PromptProps) {
     })
     dotsDialogOpen = false
     if (!stale() && target) setDotsTarget(target)
+  }
+  async function unbindDots() {
+    const sessionID = props.sessionID
+    const expectedTarget = dotsTarget()
+    if (!sessionID || !expectedTarget || !dotsCapability.enabled()) return
+    const fence = dotsCapability.fence()
+    const stale = () => disposed || fence !== dotsCapability.fence() || props.sessionID !== sessionID
+    const confirmed = await DialogConfirm.show(dialog, "Unbind Dots destination", "Release this Session's local Dots attachment? The external Dot keeps running. Its conversation, credentials and subscriptions stay unchanged.", "Unbind")
+    if (!confirmed || stale()) return
+    const result = await client.api.dots.unbind({ sessionID, expectedTarget }).catch((error: unknown) => {
+      if (!stale()) toast.error(error)
+      return undefined
+    })
+    if (!result || stale()) return
+    setDotsTarget(result.target)
+    dotsRetry = undefined
+    if (!result.enabled) dotsCapability.disable()
+  }
+  async function selectDotsDelegation() {
+    const sessionID = props.sessionID
+    const expectedAttachment = dotsTarget()
+    if (!sessionID || !expectedAttachment || !dotsCapability.enabled() || client.connection.status() !== "connected") return
+    const fence = dotsCapability.fence()
+    const api = client.api
+    const stale = () => disposed || props.sessionID !== sessionID || fence !== dotsCapability.fence() || api !== client.api ||
+      client.connection.status() !== "connected" || !sameDotsAttachment(dotsTarget(), expectedAttachment)
+    const requireCurrent = () => {
+      if (stale()) throw new Error("Delegation context changed.")
+    }
+    const load = async () => {
+      requireCurrent()
+      const binding = await api.dots.status({ sessionID })
+      requireCurrent()
+      if (!binding.enabled) { dotsCapability.disable(); throw new Error("Dots is disabled.") }
+      if (!sameDotsAttachment(binding.target, expectedAttachment)) {
+        setDotsTarget(binding.target)
+        throw new Error("Dots binding changed.")
+      }
+      const result = Schema.decodeUnknownSync(Dots.DelegationStatus)(await api.dots.delegation.status({ sessionID, targetSessionID: sessionID, expectedAttachment }))
+      requireCurrent()
+      const pending = delegationPending.get(sessionID)
+      if (pending && pending.state !== "rejected" && result.grants.some((grant) => delegationSettled(pending, grant))) delegationPending.delete(sessionID)
+      return result
+    }
+    delegationDialogOpen = true
+    const choice = await DialogDotsDelegation.show(dialog, { load, locked: () => delegationLocked(sessionID), rejected: () => delegationPending.get(sessionID)?.state === "rejected" })
+    delegationDialogOpen = false
+    if (!choice || stale() || delegationLocked(sessionID)) return
+    if (choice.kind === "revoke") {
+      delegationDialogOpen = true
+      const confirmed = await DialogConfirm.show(dialog, "Revoke delegation", [
+        `Grant ${escapeDisplayText(choice.grant.id)}, revision ${choice.grant.revision}.`,
+        `Binding: ${escapeDisplayText(expectedAttachment.profile)} / ${escapeDisplayText(expectedAttachment.dotID)} / ${escapeDisplayText(expectedAttachment.threadID)} / ${escapeDisplayText(expectedAttachment.generation)}.`,
+        "Invalidate future admissions and unpromoted delegated inputs. Already executing native work continues.",
+      ].join("\n"), "Revoke")
+      delegationDialogOpen = false
+      if (!confirmed || stale() || delegationLocked(sessionID)) return
+    }
+    const request: DelegationRequest = choice.kind === "create"
+      ? { kind: "create", state: "pending", principal: choice.source.principal, task: choice.task.text, input: Schema.decodeUnknownSync(Dots.DelegationCreate)({
+        proposalID: `delegation_${crypto.randomUUID()}`, sourceExchangeID: choice.source.sourceExchangeID,
+        targetSessionID: sessionID, taskInputID: choice.task.taskInputID, expectedAttachment,
+        scope: choice.scope, expiresAt: Date.now() + choice.minutes * 60_000,
+      }) }
+      : { kind: "revoke", state: "pending", grant: choice.grant, input: { id: choice.grant.id, revision: choice.grant.revision, expectedAttachment } }
+    delegationPending.set(sessionID, request)
+    let dispatched = false
+    try {
+      const status = await load()
+      requireCurrent()
+      if (choice.kind === "create" && (!status.sources.some((source) => isDeepEqual(source, choice.source)) || !status.tasks.some((task) => isDeepEqual(task, choice.task))))
+        throw new Error("The source owner or native task changed.")
+      if (choice.kind === "revoke" && !status.grants.some((grant) => isDeepEqual(grant, choice.grant) && grant.active && grant.expiresAt > Date.now()))
+        throw new Error("The delegation changed.")
+      requireCurrent()
+      dispatched = true
+      const result = Schema.decodeUnknownSync(Dots.DelegationInfo)(request.kind === "create"
+        ? await api.dots.delegation.create({ sessionID, ...request.input })
+        : await api.dots.delegation.revoke({ sessionID, ...request.input }))
+      if (!delegationSettled(request, result)) throw new Error("Delegation outcome could not be verified.")
+      if (delegationPending.get(sessionID) === request) delegationPending.delete(sessionID)
+    } catch {
+      if (delegationPending.get(sessionID) === request && delegationPending.get(sessionID)?.state === "rejected") return
+      if (!dispatched && delegationPending.get(sessionID) === request) delegationPending.delete(sessionID)
+      if (dispatched) request.state = "unknown"
+      if (stale()) return
+      toast.show({ message: dispatched ? "Delegation outcome unknown. Refresh status; do not retry." : "Delegation context changed. Refresh status and select again.", variant: "warning" })
+      await selectDotsDelegation()
+    }
   }
   const connected = useConnected()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
@@ -911,6 +1062,22 @@ export function Prompt(props: PromptProps) {
         enabled: dotsCapability.enabled(),
         slash: { name: "dots", arguments: true as const },
         run: async () => { await selectDots() },
+      },
+      {
+        title: "Unbind Dots destination",
+        name: "session.dots.unbind",
+        category: "Session",
+        palette: props.sessionID !== undefined,
+        enabled: dotsCapability.enabled() && dotsTarget() !== undefined,
+        run: unbindDots,
+      },
+      {
+        title: "Dots coordinator delegation",
+        name: "session.dots.delegation",
+        category: "Session",
+        palette: props.sessionID !== undefined,
+        enabled: dotsCapability.enabled() && dotsTarget() !== undefined && client.connection.status() === "connected",
+        run: selectDotsDelegation,
       },
       {
         title: "Generate prompt",

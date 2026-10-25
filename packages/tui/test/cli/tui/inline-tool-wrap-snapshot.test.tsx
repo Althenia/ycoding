@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { For } from "solid-js"
 import { testRender, type JSX } from "@opentui/solid"
+import { ConfigProvider } from "../../../src/config"
+import { ThemeProvider } from "../../../src/context/theme"
+import { FormAssessment } from "../../../src/routes/session/form"
+import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import {
   formatSubagentRetry,
   InlineToolRow,
@@ -197,6 +201,86 @@ describe("TUI inline tool wrapping", () => {
     expect(parseQuestions([{}, { question: 1 }, { question: "Continue?" }])).toEqual([{ question: "Continue?" }])
     expect(parseQuestionAnswers([null, ["yes", 1], "no"])).toEqual([[], ["yes"], []])
     expect(parseQuestionAnswers({})).toBeUndefined()
+  })
+
+  test("preserves native question selection modes without accepting malformed flags", () => {
+    expect(
+      parseQuestions([
+        { question: "Choose compatible options", multiple: true },
+        { question: "Choose one option", multiple: false },
+        { question: "Use the default mode" },
+        { question: "Reject an invalid flag", multiple: "true" },
+      ]),
+    ).toEqual([
+      { question: "Choose compatible options", multiple: true },
+      { question: "Choose one option", multiple: false },
+      { question: "Use the default mode" },
+      { question: "Reject an invalid flag" },
+    ])
+  })
+
+  test("renders parsed multi-choice recommendations", async () => {
+    for (const fixture of [
+      { multiple: true, recommendation: ["Tests", "Docs"], label: "Recommended compatible set: Tests, Docs" },
+      { multiple: true, recommendation: ["Tests"], label: "Recommended compatible set: Tests" },
+      { multiple: false, recommendation: ["Tests"], label: "Recommended: Tests" },
+    ]) {
+      const questions = parseQuestions([
+        {
+          header: "Verification",
+          question: "Choose verification work",
+          options: [
+            { label: "Tests", description: "Run selected checks" },
+            { label: "Docs", description: "Review the contract" },
+          ],
+          multiple: fixture.multiple,
+        },
+      ])
+      const assessment = {
+        mode: "yolo",
+        sourceSessionID: "ses_assessment_fixture",
+        fields: [
+          {
+            key: "q0",
+            status: "assessed",
+            reason: "The selected checks fit the task.",
+            recommendation: fixture.recommendation,
+            grades: [
+              { choice: "Tests", confidence: 0.9, evidence: "Covers the behavior boundary." },
+              { choice: "Docs", confidence: 0.8, evidence: "Covers the stated contract." },
+            ],
+          },
+        ],
+      }
+      testSetup?.renderer.destroy()
+      testSetup = await testRender(
+        () => (
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <For each={questions}>
+                {(question, index) => (
+                  <FormAssessment
+                    value={assessment}
+                    fieldKey={`q${index()}`}
+                    grades
+                    multiple={question.multiple === true}
+                  />
+                )}
+              </For>
+            </ThemeProvider>
+          </ConfigProvider>
+        ),
+        { width: 100, height: 10 },
+      )
+      testSetup.renderer.start()
+      await testSetup.waitForFrame((frame) => frame.includes("Assessed · awaiting your decision"))
+      const frame = testSetup.captureCharFrame()
+      expect(frame).toContain("Assessed · awaiting your decision")
+      expect(frame).toContain(fixture.label)
+      expect(frame).toContain("Tests · confidence 0.9 · Covers the behavior boundary.")
+      expect(frame).toContain("Docs · confidence 0.8 · Covers the stated contract.")
+      if (!fixture.multiple) expect(frame).not.toContain("compatible set")
+    }
   })
 
   test("ignores diagnostics with malformed nested ranges", () => {

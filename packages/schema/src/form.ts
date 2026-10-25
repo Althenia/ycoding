@@ -24,6 +24,30 @@ export const Option = Schema.Struct({
 }).annotate({ identifier: "Form.Option" })
 export interface Option extends Schema.Schema.Type<typeof Option> {}
 
+export const OptionGrade = Schema.Struct({
+  choice: Schema.String,
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })),
+  evidence: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(500)),
+}).annotate({ identifier: "Form.OptionGrade" })
+export interface OptionGrade extends Schema.Schema.Type<typeof OptionGrade> {}
+
+export const FieldAssessment = Schema.Struct({
+  key: Schema.String,
+  status: Schema.Literals(["pending", "assessed", "unavailable", "not_assessed"]),
+  reason: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(500)),
+  grades: Schema.Array(OptionGrade).pipe(optional),
+  recommendation: Schema.Array(Schema.String).pipe(optional),
+  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+}).annotate({ identifier: "Form.FieldAssessment" })
+export interface FieldAssessment extends Schema.Schema.Type<typeof FieldAssessment> {}
+
+export const Assessment = Schema.Struct({
+  mode: Schema.Literals(["manual", "auto", "yolo"]),
+  sourceSessionID: Schema.String,
+  fields: Schema.Array(FieldAssessment),
+}).annotate({ identifier: "Form.Assessment" })
+export interface Assessment extends Schema.Schema.Type<typeof Assessment> {}
+
 // One visibility condition on a field. A field's `when` is a list of conditions that must all
 // hold (AND) against the current answers for the field to be active. Semantics:
 // - `value` must match the referenced field's type; against a multiselect answer, `eq` means
@@ -133,6 +157,7 @@ export const Info = Schema.Struct({
   ...InfoBase,
   fields: Fields,
   coordinationEscalation: Coordination.Escalation.pipe(optional),
+  assessment: Assessment.pipe(optional),
 }).annotate({ identifier: "Form.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 
@@ -183,6 +208,10 @@ const Deferred = ephemeral({
   type: "form.deferred",
   schema: { id: ID, sessionID: Schema.String, itemID: SessionReviewID },
 })
+const Assessed = ephemeral({
+  type: "form.assessed",
+  schema: { id: ID, sessionID: Schema.String, assessment: Assessment },
+})
 
 export const Event = {
   Created,
@@ -190,5 +219,6 @@ export const Event = {
   Cancelled,
   TimedOut,
   Deferred,
-  Definitions: inventory(Created, Replied, Cancelled, TimedOut, Deferred),
+  Assessed,
+  Definitions: inventory(Created, Replied, Cancelled, TimedOut, Deferred, Assessed),
 }

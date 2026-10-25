@@ -17,6 +17,15 @@ test("a timed-out question reads as timed out, never as an answer", () => {
   expect(questionAnswerState(timedOut)).toBe("Question timed out")
 })
 
+test("deferred and full-review outcomes never imply that an unanswered question was answered", () => {
+  const deferred = { ...part, structured: { answers: [[], []], deferredItemID: "rvw_pending" } }
+  expect(questionHistory(deferred).map(row => row.answer)).toEqual([undefined, undefined])
+  expect(questionAnswerState(deferred)).toBe("Awaiting your review decision")
+  const full = { ...part, structured: { answers: [[], []], reviewFull: true } }
+  expect(questionHistory(full).map(row => row.answer)).toEqual([undefined, undefined])
+  expect(questionAnswerState(full)).toBe("Review box full; no answer recorded")
+})
+
 test("missing or malformed answers never become a recorded answer and failure stays truthful", () => {
   expect(questionHistory({ ...part, structured: { answers: [[2], null] } }).map((row) => row.answer)).toEqual([undefined, undefined])
   expect(questionAnswerState(part)).toBe("Answer not reported")

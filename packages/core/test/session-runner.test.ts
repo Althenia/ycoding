@@ -25,7 +25,7 @@ import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Database } from "@ycoding-ai/core/database/database"
-import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
+import { makeGlobalNode, makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -701,7 +701,14 @@ const config = Layer.succeed(
       ]),
   }),
 )
-const compactionExecution = Layer.effect(
+const guardrailLayer = AppNodeBuilder.build(SessionGuardrail.node, [
+  [Config.node, config],
+  [Permission.node, permission],
+  [Location.node, Location.boundNode({ directory: runnerDirectory })],
+])
+const compactionExecution = makeGlobalNode({
+  service: SessionCompactionExecution.Service,
+  layer: Layer.effect(
   SessionCompactionExecution.Service,
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
@@ -835,7 +842,9 @@ const compactionExecution = Layer.effect(
     const start: SessionCompactionExecution.Interface["start"] = (input) => run(input).pipe(Effect.asVoid)
     return SessionCompactionExecution.Service.of({ start, run })
   }),
-)
+  ).pipe(Layer.provide(guardrailLayer)),
+  deps: [Database.node, SessionCompactionJob.node, SessionContextState.node],
+})
 let pluginFlushHook = Effect.void
 const pluginSupervisor = Layer.succeed(
   PluginSupervisor.Service,
@@ -874,34 +883,25 @@ const snapshotLayer = Layer.succeed(
     checkout: () => Effect.void,
   }),
 )
-const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
-  [Snapshot.node, snapshotLayer],
-  [LayerNodePlatform.llmClient, client],
-  [Catalog.node, promptCatalog],
-  [SessionRunnerModel.node, models],
-  [InstructionBuiltIns.node, systemContext],
-  [InstructionDiscovery.node, instructionContext],
-  [Location.node, Location.boundNode({ directory: runnerDirectory })],
-  [SkillInstructions.node, skillInstructions],
-  [ReferenceInstructions.node, referenceInstructions],
-  [Permission.node, permission],
-  [Config.node, config],
-  [McpInstructions.node, mcpInstructions],
-  [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
-  [PluginSupervisor.node, pluginSupervisor],
-  [
-    SessionCompaction.node,
-    Layer.succeed(SessionCompaction.Service, SessionCompaction.Service.of({ manifest: () => Effect.die("unused") })),
-  ],
-])
-const execution = Layer.effect(
+class FixtureRunner extends Context.Service<FixtureRunner, Deferred.Deferred<SessionRunner.Interface>>()("test/SessionRunner") {}
+const fixtureRunner = makeGlobalNode({
+  service: FixtureRunner,
+  layer: Layer.effect(FixtureRunner, Deferred.make<SessionRunner.Interface>()),
+  deps: [],
+})
+const execution = makeGlobalNode({
+  service: SessionExecution.Service,
+  layer: Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
-    const sessionRunner = yield* SessionRunner.Service
+    const ready = yield* FixtureRunner
     const compactionExecution = yield* SessionCompactionExecution.Service
     const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
       drain: (sessionID, force) =>
-        sessionRunner.drain({ sessionID, force }).pipe(SessionCompactionExecution.bind(compactionExecution)),
+        Deferred.await(ready).pipe(
+          Effect.flatMap((sessionRunner) => sessionRunner.drain({ sessionID, force })),
+          SessionCompactionExecution.bind(compactionExecution),
+        ),
     })
     return SessionExecution.Service.of({
       active: coordinator.active,
@@ -912,10 +912,13 @@ const execution = Layer.effect(
       withTransition: coordinator.withTransition,
     })
   }),
-).pipe(Layer.provide(runnerLayer))
+  ),
+  deps: [fixtureRunner, compactionExecution],
+})
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
+      fixtureRunner,
       Database.node,
       Job.node,
       EventRuntime.node,
@@ -957,6 +960,7 @@ const it = testEffect(
       [LayerNodePlatform.llmClient, client],
       [Project.node, projects],
       [Permission.node, permission],
+      [SessionGuardrail.node, guardrailLayer],
       [Catalog.node, promptCatalog],
       [SessionRunnerModel.node, models],
       [InstructionBuiltIns.node, systemContext],
@@ -989,6 +993,7 @@ const insertSession = (id: Session.ID) =>
       .values({
         id,
         project_id: Project.ID.global,
+        agent: Agent.ID.make("build"),
         directory: runnerDirectory,
         title: "test",
       })
@@ -999,6 +1004,9 @@ const insertSession = (id: Session.ID) =>
   })
 
 const setup = Effect.gen(function* () {
+  const ready = yield* FixtureRunner
+  const sessionRunner = yield* SessionRunner.Service
+  yield* Deferred.succeed(ready, sessionRunner)
   const { db } = yield* Database.Service
   const agents = yield* Agent.Service
   const catalog = yield* Catalog.Service

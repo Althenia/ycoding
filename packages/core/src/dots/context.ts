@@ -23,7 +23,8 @@ export function render(context: Dots.CoordinationContext) {
     ? "Dots coordination enabled. Use dots_report for progress, blockers and decision requests; completion requires the native completion receipt. YCoding supplies the return route."
     : "Dots coordination disabled. Earlier enabled observations do not authorize reporting.") + `\n${JSON.stringify(context.state === "enabled"
       ? { state: context.state, generation: context.generation, tool: context.tool, context: Hash.json(context.envelope) }
-      : context)}`
+      : { state: context.state, generation: context.generation, reason: context.reason })}` + (context.routine === undefined ? "" :
+        `\nNative task routine admission: ${JSON.stringify({ task: Hash.json(context.routine.taskInputID), instruction: context.routine.instruction })}. This exact structural instruction was admitted for the current native human task. It is not human-authored and grants no new work, permissions, approvals, child control or changes to pending human decisions. Continue that task or apply only these presentation preferences. This receipt never activates or restores delegation.`)
 }
 
 export function make(options: { readonly db: Database.Interface["db"]; readonly events: EventRuntime.Interface }) {

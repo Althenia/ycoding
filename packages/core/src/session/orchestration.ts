@@ -2,6 +2,7 @@ export * as SessionOrchestration from "./orchestration"
 import { SessionUsageAttribution } from "./usage-attribution"
 
 import type { Model } from "@ycoding-ai/schema/model"
+import { ModelSwitchBlocked } from "@ycoding-ai/schema/session"
 import { SessionReview } from "@ycoding-ai/schema/session-review"
 import {
   Question,
@@ -20,6 +21,7 @@ import { DecisionChoice } from "../decision-choice"
 import { LocationServiceMap } from "../location-service-map"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
+import { EventTable } from "../event/sql"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { Permission } from "../permission"
 import { Hash } from "../util/hash"
@@ -29,6 +31,10 @@ import { SqlError } from "effect/unstable/sql/SqlError"
 import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { Session } from "../session"
 import { SessionExecution } from "./execution"
+import { SessionStepBoundary } from "./step-boundary"
+import { CoordinationModel } from "./coordination-model"
+import { AppProcess } from "../process"
+import { ShellLedger } from "../shell/ledger"
 import { SessionAutonomy } from "./autonomy"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
@@ -36,7 +42,7 @@ import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
-import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
+import { SessionMessageTable, SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 import { isTerminal, readTeamView, renderTeamView, taskFromRow, withReviewState } from "./orchestration-view"
 import { SessionReviewFold } from "./review-fold"
 import { SessionPending } from "./pending"
@@ -228,6 +234,10 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("Ses
   message: Schema.String,
 }) {}
 
+export class ModelBlockedError extends Schema.TaggedErrorClass<ModelBlockedError>()("SessionOrchestration.ModelBlockedError", {
+  blocked: ModelSwitchBlocked,
+}) {}
+
 export class InvalidRequestError extends Schema.TaggedErrorClass<InvalidRequestError>()(
   "SessionOrchestration.InvalidRequestError",
   { message: Schema.String },
@@ -314,6 +324,13 @@ export interface Interface {
     childID: SessionSchema.ID,
   ) => Effect.Effect<Task, Session.NotFoundError | NotFoundError | ForbiddenError>
   readonly launch: (input: LaunchInput) => Effect.Effect<Task, LaunchError>
+  readonly switchModel: (input: {
+    readonly parentID: SessionSchema.ID
+    readonly childID: SessionSchema.ID
+    readonly expectedModel: Model.Ref
+    readonly model: Model.Ref
+    readonly source: { readonly type: "native" } | ({ readonly type: "tool" } & ModelSource)
+  }) => Effect.Effect<Task, ControlError | InvalidRequestError | ModelBlockedError | SessionRunnerModel.Error | Session.MessageDecodeError | Session.CompactionConflictError | Permission.Error>
   readonly list: (parentID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Task>, Session.NotFoundError>
   readonly page: (input: {
     readonly parentID: SessionSchema.ID
@@ -401,6 +418,9 @@ const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const events = yield* EventRuntime.Service
     const execution = yield* SessionExecution.Service
+    const stepBoundary = yield* SessionStepBoundary.Service
+    const processService = yield* AppProcess.Service
+    const owner = yield* ShellLedger.identify(processService, process.pid)
     const sessions = yield* Session.Service
     const autonomy = yield* SessionAutonomy.Service
     const locations = yield* LocationServiceMap.Service
@@ -509,7 +529,95 @@ const layer = Layer.effect(
       return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
     })
 
+    const causalInput = Effect.fn("SessionOrchestration.causalInput")(function* (
+      sessionID: SessionSchema.ID,
+      beforeSeq: number,
+    ): Effect.fn.Return<typeof SessionMessageTable.$inferSelect | undefined> {
+      const input = yield* db.select({ message: SessionMessageTable, event: EventTable }).from(SessionMessageTable)
+        .leftJoin(EventTable, and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.seq, SessionMessageTable.seq)))
+        .where(and(eq(SessionMessageTable.session_id, sessionID), lt(SessionMessageTable.seq, beforeSeq), inArray(SessionMessageTable.type, ["user", "synthetic"])))
+        .orderBy(desc(SessionMessageTable.seq)).limit(1).get().pipe(Effect.orDie)
+      if (!input) return undefined
+      if (input.message.type === "user") return input.message
+      const synthetic = Schema.decodeUnknownOption(SessionMessage.Synthetic)({ ...input.message.data, id: input.message.id, type: input.message.type })
+      if (synthetic._tag === "None") return undefined
+      if (input.event?.type !== EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version) ||
+        input.event.data.sessionID !== sessionID || input.event.data.source !== "team-view" ||
+        SessionMessage.ID.fromEvent(input.event.id) !== input.message.id || input.event.data.text !== synthetic.value.text)
+        return undefined
+      return yield* causalInput(sessionID, input.message.seq)
+    })
+
+    const nativeCause = Effect.fn("SessionOrchestration.nativeCause")(function* (
+      sessionID: SessionSchema.ID,
+      messageID: SessionMessage.ID,
+      seen: ReadonlySet<SessionSchema.ID> = new Set(),
+    ): Effect.fn.Return<boolean> {
+      if (seen.has(sessionID) || seen.size >= 64) return false
+      const assistant = yield* db.select({ seq: SessionMessageTable.seq }).from(SessionMessageTable)
+        .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, messageID), eq(SessionMessageTable.type, "assistant")))
+        .get().pipe(Effect.orDie)
+      if (!assistant) return false
+      const input = yield* causalInput(sessionID, assistant.seq)
+      if (!input) return false
+      const decoded = Schema.decodeUnknownOption(SessionMessage.User)({ ...input.data, id: input.id, type: input.type })
+      if (decoded._tag === "None") return false
+      if (decoded.value.metadata?.inputOrigin === "human") return true
+      if (decoded.value.metadata?.inputOrigin !== "subagent") return false
+      const child = yield* task(sessionID)
+      if (!child) return false
+      return yield* nativeCause(child.parent_id, child.parent_assistant_message_id, new Set([...seen, sessionID]))
+    })
+
+    const switchable = Effect.fn("SessionOrchestration.switchable")(function* (input: Parameters<Interface["switchModel"]>[0]) {
+      const row = yield* owned(input.parentID, input.childID)
+      if (row.state === "starting" || row.state === "cancelling")
+        return yield* new ConflictError({ message: "Wait for the child's lifecycle transition before selecting a model" })
+      if (row.owner_pid !== null && (row.owner_pid !== process.pid || owner === undefined || row.owner_started !== owner.started))
+        return yield* new ConflictError({ message: "The child is owned by another runtime process" })
+      const parent = yield* sessions.get(input.parentID)
+      const child = yield* sessions.get(input.childID)
+      if (parent.time.archived !== undefined || child.time.archived !== undefined)
+        return yield* new ConflictError({ message: "Archived Sessions cannot change a child model" })
+      if (input.source.type === "tool" && !(yield* nativeCause(input.parentID, input.source.messageID)))
+        return yield* new ForbiddenError({ parentID: input.parentID, childID: input.childID })
+      if (yield* CoordinationModel.override(db, input.childID))
+        return yield* new ConflictError({ message: "The child has an active coordination model override" })
+      return row
+    })
+
     const result: Interface = {
+      switchModel: Effect.fn("SessionOrchestration.switchModel")((input) =>
+        stepBoundary.withSelection(input.childID, execution.withTransition(input.childID, Effect.gen(function* () {
+          yield* switchable(input)
+          const child = yield* sessions.get(input.childID)
+          const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(child.location)))
+          const resolved = yield* models.resolve({ ...child, model: input.model }, { refresh: false })
+          return yield* stepBoundary.atBoundary(input.childID, locks.withLock(input.childID)(Effect.gen(function* () {
+            const row = yield* switchable(input)
+            if (input.source.type === "tool") {
+              const parent = yield* sessions.get(input.parentID)
+              yield* authorize(input.parentID, Agent.ID.make(row.agent), input.source, Hash.json({
+                action: "switch_model", sessionID: input.childID, expectedModel: input.expectedModel, model: input.model,
+              })).pipe(Effect.provide(locations.get(parent.location)))
+            }
+            const selected = yield* sessions.selectModelAtBoundary({
+              sessionID: input.childID, expectedModel: input.expectedModel, model: input.model,
+              connectionIdentityDigest: resolved.connectionIdentityDigest,
+              guard: Effect.gen(function* () {
+                yield* switchable(input)
+                if (input.source.type !== "tool") return true
+                const parent = yield* sessions.get(input.parentID)
+                const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(parent.location)))
+                return (yield* permission.evaluateEffective({ sessionID: input.parentID, agent: input.source.agent, action: "subagent", resource: row.agent })) !== "deny"
+              }).pipe(Effect.catch(() => Effect.succeed(false))),
+            })
+            if (selected.status === "conflict") return yield* new ConflictError({ message: "The child or expected model changed before selection; read the child and retry" })
+            if (selected.status === "blocked") return yield* new ModelBlockedError({ blocked: selected })
+            return yield* current(input.childID)
+          })))
+        }))),
+      ),
       managed: Effect.fn("SessionOrchestration.managed")(function* (childID) {
         return (yield* task(childID)) !== undefined
       }),
@@ -1163,6 +1271,8 @@ export const node = makeGlobalNode({
     EventRuntime.node,
     SessionAutonomy.node,
     SessionExecution.node,
+    SessionStepBoundary.node,
+    AppProcess.node,
     Session.node,
     LocationServiceMap.node,
   ],

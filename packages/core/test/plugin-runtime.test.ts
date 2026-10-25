@@ -49,6 +49,7 @@ describe("PluginRuntime", () => {
           managed: unavailable,
           get: unavailable,
           launch: unavailable,
+          switchModel: unavailable,
           list: unavailable,
           page: unavailable,
           send: unavailable,

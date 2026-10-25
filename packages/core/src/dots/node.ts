@@ -24,6 +24,7 @@ import { SessionExecution } from "../session/execution"
 import { SessionMcpEvents } from "../mcp-events/index"
 import { CoordinationService } from "../coordination/index"
 import type { SessionSchema } from "../session/schema"
+import type { SessionPending } from "../session/pending"
 import { SessionStore } from "../session/store"
 import type { Tools } from "../tool/tools"
 import { DotsAttachments } from "./attachments"
@@ -101,6 +102,7 @@ const pubsub = DotsPubSub.make({ http, open: (url, headers) => DotsSocket.open(u
 export const node: Node.LocationNode<DotsRuntime.Service> = withTransport(DotsRoom.make({ http, pubsub }))
 
 export interface RequestToolsInterface {
+  readonly promoteRoutine: SessionPending.PromotionGuard<DotsRuntime.Error>
   readonly registrations: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<Parameters<Tools.Interface["registerBatch"]>[0]>
@@ -154,21 +156,23 @@ export const requestToolsNode: Node.LocationNode<RequestTools> = makeLocationNod
         return enabled ? [...base, { tools: { dots_report: report } }] : base
       })
       const service = RequestTools.of({
+        promoteRoutine: exchanges.promoteRoutine,
         registrations,
         observation: (sessionID, permissions, toolsDisabled) => Effect.gen(function* (): Effect.fn.Return<DotsContext.State> {
           observed.add(sessionID)
+          const routine = yield* exchanges.currentRoutine(sessionID)
           const capabilities = Config.capabilities(yield* config.entries())
           if (!ConfigCapabilities.allowsDots(capabilities)) return { state: "disabled", reason: "capability_disabled" }
           if (!(yield* associated(sessionID))) return { state: "disabled", reason: "no_task" }
           const available = yield* registry.available(permissions, capabilities, yield* registrations(sessionID))
-          if (toolsDisabled || !available.has("dots_report")) return { state: "disabled", reason: "tool_unavailable" }
+          if (toolsDisabled || !available.has("dots_report")) return { state: "disabled", reason: "tool_unavailable", ...(routine === undefined ? {} : { routine }) }
           return yield* exchanges.resolveReport(sessionID).pipe(
-            Effect.map(({ record }) => ({ state: "enabled" as const, tool: "dots_report" as const, envelope: Dots.TaskEnvelope.make({
+            Effect.map(({ record }) => ({ state: "enabled" as const, tool: "dots_report" as const, ...(routine === undefined ? {} : { routine }), envelope: Dots.TaskEnvelope.make({
               coordinator: record.source.principal, scope: { epoch: record.source.epoch, grantID: record.grantID },
               exchangeID: record.exchangeID, messageID: record.inputID, targetSessionID: record.targetSessionID,
               kind: "task", origin: "plugin",
             }) })),
-            Effect.catch((error) => Effect.succeed({ state: "disabled" as const, reason: error.code === "exchange_not_found" ? "no_task" as const : "unavailable" as const })),
+            Effect.catch((error) => Effect.succeed({ state: "disabled" as const, reason: error.code === "exchange_not_found" ? "no_task" as const : "unavailable" as const, ...(routine === undefined ? {} : { routine }) })),
           )
         }),
       })

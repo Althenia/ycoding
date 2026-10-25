@@ -63,9 +63,10 @@ const decisionChoice = (value: string, confidence: number) => (input: Decision.I
           name: item.name,
           type: "choice",
           answer: null,
-          choice: value,
+          choice: item.type === "choice" && item.grade === true ? null : value,
           score: null,
-          confidence,
+          confidence: item.type === "choice" && item.grade === true ? 0 : confidence,
+          ...(item.type === "choice" && item.grade === true ? { grades: item.choices.map((choice) => ({ choice: choice.value, confidence: choice.value === value ? confidence : 0.1, evidence: `Fixture support for ${choice.value}.` })) } : {}),
         })),
       },
     }),
@@ -85,6 +86,11 @@ const seedSession = Effect.gen(function* () {
   yield* database.db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/tmp/ycoding-question"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
   yield* database.db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, directory: "/tmp/ycoding-question", title: "Questions", permission: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
 })
+
+const modelFreeAssessment = (mode: "manual" | "auto") => ({ mode, sourceSessionID: sessionID, fields: [{ key: "q0", status: "not_assessed", reason: mode === "auto" ? "Auto uses only explicit defaults or a unique Recommended option; no model assessment." : "Manual answers require your decision; no model assessment." }] })
+const gradedAssessment = { mode: "yolo", sourceSessionID: sessionID, fields: [{ key: "q0", status: "assessed", reason: "Unique best-supported option.", recommendation: ["Careful"], confidence: 0.9,
+  grades: plan.options.map((option) => ({ choice: option.label, confidence: option.label === "Careful" ? 0.9 : 0.1, evidence: `Fixture support for ${option.label}.` })),
+}] }
 
 describe("QuestionTool", () => {
   withForms.effect("holds a blocker for human review and missing evidence until the real Form is answered", () => Effect.gen(function* () {
@@ -110,7 +116,7 @@ describe("QuestionTool", () => {
     expect(pending.fields[1]).toMatchObject({ key: "q1", type: "string", options: [], custom: true })
     yield* forms.reply({ id: pending.id, answer: { q0: "Continue", q1: "Synthetic failing input" } })
     const settled = yield* Fiber.join(fiber)
-    expect(settled.output?.structured).toEqual({ answers: [["Continue"], ["Synthetic failing input"]] })
+    expect(settled.output?.structured).toEqual({ answers: [["Continue"], ["Synthetic failing input"]], assessment: modelFreeAssessment("manual") })
     expect(settled.result).toEqual({ type: "text", value: 'User has answered your questions: "The failure did not reproduce. Should I continue investigating or stop?"="Continue", "Paste the exact failing input."="Synthetic failing input". You can now continue with the user\'s answers in mind.' })
     expect(yield* forms.list({ sessionID })).toEqual([])
   }))
@@ -210,7 +216,7 @@ describe("QuestionTool", () => {
     const autonomy = yield* SessionAutonomy.Service
     const registry = yield* ToolRegistry.Service
     yield* autonomy.set({ sessionID, answers: "auto" })
-    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "recommended", name: "question", input: { questions: [recommendedPlan] } } })).output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer" })
+    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "recommended", name: "question", input: { questions: [recommendedPlan] } } })).output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer", assessment: modelFreeAssessment("auto") })
   }))
 
   autonomous.effect("YOLO answers go through the evaluator and reports its model confidence", () => Effect.gen(function* () {
@@ -220,7 +226,7 @@ describe("QuestionTool", () => {
     const registry = yield* ToolRegistry.Service
     yield* autonomy.set({ sessionID, answers: "yolo" })
     decisionBehavior = decisionChoice("Careful", 0.9)
-    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "yolo", name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Careful"]], automatic: true, via: "yolo", confidence: 0.9 })
+    expect((yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "yolo", name: "question", input: { questions: [plan] } } })).output?.structured).toEqual({ answers: [["Careful"]], automatic: true, via: "yolo", confidence: 0.9, assessment: gradedAssessment })
   }))
 
   autonomous.effect("automatic answers in an active goal retain machine attribution", () => Effect.gen(function* () {
@@ -234,7 +240,7 @@ describe("QuestionTool", () => {
     const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [recommendedPlan] } } })
     const text = `Answers were selected automatically, not provided or approved by the user: "${plan.question}"="Fast (Recommended)". Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
     expect(settled.result).toEqual({ type: "text", value: text })
-    expect(settled.output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer" })
+    expect(settled.output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer", assessment: modelFreeAssessment("auto") })
     expect(settled.output?.content).toEqual([{ type: "text", text }])
     expect(settled.result.value).not.toContain("User has answered")
   }))
@@ -255,7 +261,7 @@ describe("QuestionTool", () => {
     const registry = yield* ToolRegistry.Service
     const text = `User has answered your questions: "${plan.question}"="Careful". You can now continue with the user's answers in mind.`
     expect(yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "human-winner", name: "question", input: { questions: [plan] } } })).toEqual({
-      result: { type: "text", value: text }, output: { structured: { answers: [["Careful"]] }, content: [{ type: "text", text }] },
+      result: { type: "text", value: text }, output: { structured: { answers: [["Careful"]], assessment: modelFreeAssessment("auto") }, content: [{ type: "text", text }] },
     })
   }))
 })

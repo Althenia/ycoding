@@ -27,6 +27,7 @@ test("every recordable remote request operation decodes as closed local telemetr
       "session.dots.targets",
       "session.dots.status",
       "session.dots.bind",
+      "session.dots.unbind",
       "session.dots.send",
       "session.dots.pause",
       "session.dots.resume",

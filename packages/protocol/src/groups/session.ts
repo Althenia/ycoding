@@ -265,6 +265,11 @@ export const SessionSubagentAnswer = Schema.Struct({
   data: SessionOrchestration.AnswerData.pipe(Schema.optional),
 }).annotate({ identifier: "SessionSubagentAnswer" })
 
+export const SessionSubagentModel = Schema.Struct({
+  expectedModel: Model.Ref,
+  model: Model.Ref,
+}).annotate({ identifier: "SessionSubagentModel" })
+
 const SubagentPageLimit = PositiveInt.check(Schema.isLessThanOrEqualTo(10))
 export const SessionSubagentListQuery = Schema.Struct({
   limit: Schema.NumberFromString.pipe(Schema.decodeTo(SubagentPageLimit), Schema.optional),
@@ -636,6 +641,18 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(OpenApi.annotations({ identifier: "session.subagent.cancel", summary: "Cancel subagent" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.subagent.switchModel", "/api/session/:parentID/subagent/:childID/model", {
+        params: { parentID: Session.ID, childID: Session.ID },
+        payload: SessionSubagentModel,
+        success: Schema.Struct({ data: SessionOrchestration.Task }),
+        error: [SessionNotFoundError, ForbiddenError, ConflictError, InvalidRequestError, ModelSwitchBlockedError, UnknownError],
+      }).annotateMerge(OpenApi.annotations({
+        identifier: "session.subagent.switchModel",
+        summary: "Select a direct managed child's model",
+        description: "Native parent-only selection at the next logical-Step boundary. Compare expectedModel, preserve the existing profile binding, and refuse incompatible model, variant, profile or context without interrupting or waking the child. The response reports the committed selection, not an executing request. Remote and Dots callers have no access.",
+      })),
     )
     .add(
       HttpApiEndpoint.post("session.subagent.resume", "/api/session/:parentID/subagent/:childID/resume", {

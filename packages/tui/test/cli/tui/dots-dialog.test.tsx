@@ -25,12 +25,14 @@ async function fixture(options: {
   load?: () => Promise<readonly Dots.Target[]>
   confirm?: (target: Dots.Target) => Promise<void>
   status?: () => Promise<Dots.Status>
+  unbind?: (target: Dots.Target) => Promise<Dots.Status>
   mutate?: (action: "pause" | "resume", target: Dots.Target) => Promise<Dots.Status>
 } = {}) {
   const reads: number[] = []
   const commands: { action: "pause" | "resume"; target: Dots.Target }[] = []
   const confirmed: Dots.Target[] = []
   const completed: (Dots.Target | null)[] = []
+  const unbound: Dots.Target[] = []
   let editor!: TextareaRenderable
   function Open() {
     const dialog = useDialog()
@@ -42,6 +44,7 @@ async function fixture(options: {
       load: options.load ?? (async () => options.targets ?? [target]),
       confirm: async (value) => { confirmed.push(value); await options.confirm?.(value) },
       status: async () => { reads.push(1); return options.status ? options.status() : active },
+      unbind: async (value) => { unbound.push(value); return options.unbind ? options.unbind(value) : { enabled: true, state: "disconnected" } },
       pause: async (value) => { commands.push({ action: "pause", target: value }); return options.mutate ? options.mutate("pause", value) : { ...active, runtimeState: "paused" } },
       resume: async (value) => { commands.push({ action: "resume", target: value }); return options.mutate ? options.mutate("resume", value) : active },
     }).then((value) => completed.push(value)) })
@@ -51,8 +54,51 @@ async function fixture(options: {
     <Keymap.Provider><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}><ToastProvider><DialogProvider><Open /></DialogProvider></ToastProvider></ThemeProvider></Keymap.Provider>
   </ConfigProvider></ClipboardProvider></TestTuiContexts>, { width: options.width ?? 80, height: options.height ?? 24, kittyKeyboard: true })
   app.renderer.start()
-  return { ...app, reads, commands, confirmed, completed, get editor() { return editor } }
+  return { ...app, reads, commands, confirmed, completed, unbound, get editor() { return editor } }
 }
+
+test("Unbind requires confirmation, preserves the draft and passes the displayed identity", async () => {
+  const app = await fixture()
+  try {
+    await app.waitForFrame((frame) => frame.includes("Refresh status"))
+    for (let i = 0; i < 4; i++) app.mockInput.pressArrow("down")
+    await app.waitForFrame((frame) => frame.includes("Unbind Dot"))
+    app.mockInput.pressEnter()
+    await app.waitForFrame((frame) => frame.includes("Unbind Dots destination"))
+    expect(app.captureCharFrame()).toContain("keeps running")
+    app.mockInput.pressEnter()
+    await app.waitForFrame((frame) => frame.includes("Refresh status"))
+    expect(app.unbound).toEqual([])
+    for (let i = 0; i < 4; i++) app.mockInput.pressArrow("down")
+    app.mockInput.pressEnter()
+    await app.waitForFrame((frame) => frame.includes("Unbind Dots destination"))
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressEnter()
+    await app.waitForFrame(() => app.completed.length === 1)
+    expect(app.unbound).toEqual([target])
+    expect(app.completed).toEqual([null])
+    expect(app.editor.plainText).toBe("Composer draft retained")
+    expect(app.commands).toEqual([])
+  } finally { app.renderer.destroy() }
+})
+
+test("Unbind failures keep the binding and require authoritative refresh without retry", async () => {
+  const app = await fixture({ unbind: async () => { throw new Error("Synthetic stale destination") } })
+  try {
+    await app.waitForFrame((frame) => frame.includes("Refresh status"))
+    for (let i = 0; i < 4; i++) app.mockInput.pressArrow("down")
+    await app.waitForFrame((frame) => frame.includes("Unbind Dot"))
+    app.mockInput.pressEnter()
+    await app.waitForFrame((frame) => frame.includes("Unbind Dots destination"))
+    app.mockInput.pressArrow("down")
+    app.mockInput.pressEnter()
+    await app.waitForFrame((frame) => frame.includes("Unbind not confirmed"))
+    expect(app.unbound).toEqual([target])
+    expect(app.completed).toEqual([])
+    expect(app.editor.plainText).toBe("Composer draft retained")
+    expect(app.commands).toEqual([])
+  } finally { app.renderer.destroy() }
+})
 
 const primary = {
   profile: "fixture",

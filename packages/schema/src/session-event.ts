@@ -448,6 +448,16 @@ export const DotsExchangeCreated = Event.durable({
 })
 export type DotsExchangeCreated = typeof DotsExchangeCreated.Type
 
+export const DotsInstructionRejected = Event.durable({
+  type: "session.dots.instruction.rejected",
+  ...options,
+  schema: { sessionID: SessionID, inputID: SessionMessage.ID, anchorSessionID: SessionID,
+    exchangeID: Dots.ExchangeRead.fields.exchangeID, delegationID: Dots.DelegationRef.fields.id,
+    reason: Schema.Literal("delegation_invalid"),
+  },
+})
+export type DotsInstructionRejected = typeof DotsInstructionRejected.Type
+
 export const DotsReportRecorded = Event.durable({
   type: "session.dots.report.recorded",
   ...options,
@@ -1032,6 +1042,7 @@ export const Definitions = Event.inventory(
   InputAdmitted,
   InputConsumed,
   DotsExchangeCreated,
+  DotsInstructionRejected,
   DotsReportRecorded,
   Execution.Started,
   Execution.Succeeded,

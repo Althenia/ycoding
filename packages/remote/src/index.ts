@@ -112,6 +112,7 @@ export const remoteOperations = [
   "session.dots.targets",
   "session.dots.status",
   "session.dots.bind",
+  "session.dots.unbind",
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
@@ -199,6 +200,7 @@ export const remoteSessionOperations = [
   "session.dots.targets",
   "session.dots.status",
   "session.dots.bind",
+  "session.dots.unbind",
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
@@ -309,6 +311,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.dots.targets": "read",
   "session.dots.status": "read",
   "session.dots.bind": "mutation",
+  "session.dots.unbind": "mutation",
   "session.dots.send": "mutation",
   "session.dots.pause": "mutation",
   "session.dots.resume": "mutation",
@@ -903,19 +906,35 @@ function validDotsTarget(input: unknown): input is RemoteDotsTarget {
     ["profile", "dotID", "threadID", "generation", "label"].every((key) => typeof input[key] === "string" && input[key].trim().length > 0 && input[key].length <= 512)
 }
 
+function validDotsRoutine(input: Record<string, unknown>): boolean {
+  if (Object.keys(input).length !== 8 || !Object.keys(input).every((key) => ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "taskInputID", "instruction"].includes(key))) return false
+  const delegation = input.delegation
+  const instruction = input.instruction
+  if (!isRecord(delegation) || Object.keys(delegation).length !== 2 || typeof delegation.id !== "string" || !delegation.id ||
+    typeof delegation.revision !== "number" || !Number.isSafeInteger(delegation.revision) || delegation.revision < 1 ||
+    typeof input.taskInputID !== "string" || !/^msg_[A-Za-z0-9_-]+$/.test(input.taskInputID) || !isRecord(instruction)) return false
+  if (instruction.operation === "continue") return Object.keys(instruction).length === 1
+  if (instruction.operation !== "presentation" || Object.keys(instruction).length !== 2 || !isRecord(instruction.preferences)) return false
+  const preferences = instruction.preferences
+  return Object.keys(preferences).length > 0 && Object.keys(preferences).every((key) => key === "format" || key === "detail") &&
+    (preferences.format === undefined || preferences.format === "prose" || preferences.format === "bullets") &&
+    (preferences.detail === undefined || preferences.detail === "concise" || preferences.detail === "standard" || preferences.detail === "detailed")
+}
+
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
   if (operation === "session.dots.exchange.read") return isRecord(input) && Object.keys(input).length === 1 &&
     typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256
   if (operation === "session.dots.exchange.create") return isRecord(input) &&
-    Object.keys(input).length === 6 && typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256 &&
+    typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256 &&
     validDotsTarget(input.expectedAttachment) && isSessionID(input.targetSessionID) && input.channel === "task" &&
-    (input.delivery === "steer" || input.delivery === "queue") && typeof input.text === "string" && input.text.length > 0 && input.text.length <= 32768
+    (input.delivery === "steer" || input.delivery === "queue") &&
+    ((Object.keys(input).length === 6 && typeof input.text === "string" && input.text.length > 0 && input.text.length <= 32768) || validDotsRoutine(input))
   if (operation === "session.dots.status") return input === undefined
   if (operation === "session.dots.targets") return isRecord(input) &&
     typeof input.profile === "string" && input.profile.trim().length > 0 && input.profile.length <= 256 &&
     Object.keys(input).length === 1
   if (operation === "session.dots.bind") return validDotsTarget(input)
-  if (operation === "session.dots.pause" || operation === "session.dots.resume") return isRecord(input) &&
+  if (operation === "session.dots.pause" || operation === "session.dots.resume" || operation === "session.dots.unbind") return isRecord(input) &&
     validDotsTarget(input.expectedTarget) && Object.keys(input).length === 1
   if (operation === "session.dots.send") return isRecord(input) &&
     validDotsTarget(input.expectedTarget) &&

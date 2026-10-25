@@ -25,6 +25,7 @@ import {
 } from "../projection"
 import { capturedChangesVisible, latestPromptProcessing, promptReceipt, shellOutputPaging } from "../view-model"
 import { parentAnswer, questionAnswerState, questionHistory } from "../question-history"
+import { FormAssessment } from "./form-request"
 import { FormRequest } from "./form-request"
 import { humanReviewText, readGradedAnswers } from "../decision-grades"
 import { DecisionGrades, DecisionProvenance } from "./decision-grades"
@@ -311,11 +312,21 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
       <Show when={kind() === "tool"}>
         <For each={questions().map((_, index) => index)}>{(index) => {
           const question = () => questions()[index]!
+          const multiple = () => {
+            const input = toolOf(part())?.input?.questions
+            const item: unknown = Array.isArray(input) ? input[index] : undefined
+            return typeof item === "object" && item !== null && "multiple" in item && item.multiple === true
+          }
+          const answered = () => {
+            const answers = toolOf(part())?.structured?.answers
+            return question().answer !== undefined && Array.isArray(answers) && Array.isArray(answers[index]) && answers[index].length > 0
+          }
           return <section class="request request--form" aria-label="Recorded question">
             <header class="request__header"><Icon name="chat" size={16} /><span>{question().title}</span></header>
             <div class="request__body"><Markdown text={question().text} /></div>
             <p class="request__body"><strong>{question().answer === undefined ? questionAnswerState(toolOf(part())!) : "Answer"}</strong></p>
             <Show when={question().answer}>{(answer) => <div class="request__body"><Markdown text={answer()} /></div>}</Show>
+            <FormAssessment value={toolOf(part())?.structured?.assessment} source={toolOf(part())?.structured?.source} fieldKey={`q${index}`} grades multiple={multiple()} settled={answered() ? toolOf(part())?.structured?.automatic === true ? "automatic" : "human" : undefined} />
           </section>
         }}</For>
         <ToolPart part={() => toolOf(part())!} />

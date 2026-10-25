@@ -44,6 +44,7 @@ test("accepts request telemetry for every Session Dots control in closed samples
     "session.dots.targets",
     "session.dots.status",
     "session.dots.bind",
+    "session.dots.unbind",
     "session.dots.send",
     "session.dots.pause",
     "session.dots.resume",
@@ -57,7 +58,6 @@ test("accepts request telemetry for every Session Dots control in closed samples
   expect(Schema.is(Telemetry.Batch)({ samples: names.map((operation) => ({ ...request, operation })) })).toBe(true)
   for (const input of [
     { samples: [{ ...request, operation: "session.dots" }] },
-    { samples: [{ ...request, operation: "session.dots.unbind" }] },
     { samples: [{ ...request, operation: "dots.send" }] },
     { samples: [{ ...request, operation: "session.dots.cancel" }] },
     { samples: [{ ...request, operation: "session.dots.send", target: "dot_private" }] },

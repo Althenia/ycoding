@@ -10,10 +10,31 @@ export function makeDotsGroup<Id extends HttpApiMiddleware.AnyId, Service>(middl
     .add(
       HttpApiEndpoint.post("session.dots.exchange.create", "/api/session/:sessionID/dots/exchanges", {
         params: { sessionID: Session.ID },
-        payload: Schema.Struct({ ...Dots.ExchangeCreate.fields, remoteSource: McpEvents.RequestContext }),
+        payload: Schema.Union([
+          Schema.Struct({ ...Dots.ExchangeCreate.members[0].fields, remoteSource: McpEvents.RequestContext }),
+          Schema.Struct({ ...Dots.ExchangeCreate.members[1].fields, remoteSource: McpEvents.RequestContext }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+        ]),
         success: Schema.Struct({ data: Dots.Exchange }),
         error: [InvalidRequestError, SessionNotFoundError],
       }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.exchange.create", summary: "Admit an authenticated external task to an authorized Session" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.delegation.status", "/api/session/:sessionID/dots/delegation/status", {
+        params: { sessionID: Session.ID }, payload: Dots.DelegationStatusInput,
+        success: Schema.Struct({ data: Dots.DelegationStatus }), error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.delegation.status", summary: "Read native task delegation candidates and grants" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.delegation.create", "/api/session/:sessionID/dots/delegation", {
+        params: { sessionID: Session.ID }, payload: Dots.DelegationCreate,
+        success: Schema.Struct({ data: Dots.DelegationInfo }), error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.delegation.create", summary: "Ask a native human to activate a bounded task delegation" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.delegation.revoke", "/api/session/:sessionID/dots/delegation/revoke", {
+        params: { sessionID: Session.ID }, payload: Dots.DelegationRevoke,
+        success: Schema.Struct({ data: Dots.DelegationInfo }), error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.delegation.revoke", summary: "Revoke a task delegation for future admissions" })),
     )
     .add(
       HttpApiEndpoint.post("session.dots.exchange.read", "/api/session/:sessionID/dots/exchanges/read", {
@@ -92,6 +113,16 @@ export function makeDotsGroup<Id extends HttpApiMiddleware.AnyId, Service>(middl
         error: [InvalidRequestError, SessionNotFoundError],
       }).annotateMerge(
         OpenApi.annotations({ identifier: "session.dots.resume", summary: "Resume the Session's confirmed Dot runtime" }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.unbind", "/api/session/:sessionID/dots/unbind", {
+        params: { sessionID: Session.ID },
+        payload: Dots.Control,
+        success: Schema.Struct({ data: Dots.Status }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(
+        OpenApi.annotations({ identifier: "session.dots.unbind", summary: "Remove the Session's local Dots binding without remote changes" }),
       ),
     )
     .middleware(middleware)

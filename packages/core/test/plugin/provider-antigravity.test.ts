@@ -65,11 +65,12 @@ describe("AntigravityPlugin", () => {
     expect(antigravityUserAgent()).toStartWith("antigravity/hub/2.26.0 (aidev_client; os_type=")
   })
 
-  test("OAuth authorization rejects missing client configuration before creating a callback listener", async () => {
-    const child = Bun.spawn([
-      process.execPath,
-      "--eval",
-      `
+  test("OAuth authorization requires embedded credentials before creating a callback listener", async () => {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "--eval",
+        `
         import { mock } from "bun:test"
         mock.module("node:http", () => ({ createServer() { throw new Error("Unexpected OAuth callback listener") } }))
         const { ConfigProvider, Effect } = await import("effect")
@@ -84,7 +85,15 @@ describe("AntigravityPlugin", () => {
         )
         console.log(result.message)
       `,
-    ], { cwd: fileURLToPath(new URL("../..", import.meta.url)), stdout: "pipe", stderr: "pipe", timeout: 5_000 })
+      ],
+      {
+        cwd: fileURLToPath(new URL("../..", import.meta.url)),
+        env: { PATH: process.env.PATH, ...oauthEnvironment },
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 5_000,
+      },
+    )
     const [stdout, stderr, code] = await Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
@@ -92,58 +101,20 @@ describe("AntigravityPlugin", () => {
     ])
     expect(code, stderr).toBe(0)
     expect(stdout.trim()).toBe(
-      "Set YCODING_ANTIGRAVITY_CLIENT_ID and YCODING_ANTIGRAVITY_CLIENT_SECRET in the local server environment before connecting Antigravity.",
+      "Antigravity OAuth requires YCODING_ANTIGRAVITY_CLIENT_ID and YCODING_ANTIGRAVITY_CLIENT_SECRET at build time.",
     )
   })
 
-  it.effect("exchanges an authorization code for Google OAuth tokens", () =>
-    Effect.gen(function* () {
-      let seen: HttpClientRequest.HttpClientRequest | undefined
-      const client = http((request) => {
-        seen = request
-        return Response.json({ access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600 })
-      })
-      const credential = yield* exchangeAntigravityCode(client, "code-1", "verifier-1").pipe(withEnvironment(oauthEnvironment))
-      expect(seen?.url).toBe("https://oauth2.googleapis.com/token")
-      const form = new URLSearchParams(body(seen!))
-      expect(form.get("grant_type")).toBe("authorization_code")
-      expect(form.get("code")).toBe("code-1")
-      expect(form.get("code_verifier")).toBe("verifier-1")
-      expect(form.get("redirect_uri")).toBe("http://localhost:51121/oauth-callback")
-      expect(form.get("client_id")).toBe(oauthEnvironment.YCODING_ANTIGRAVITY_CLIENT_ID)
-      expect(form.get("client_secret")).toBe(oauthEnvironment.YCODING_ANTIGRAVITY_CLIENT_SECRET)
-      expect(credential.access).toBe("access-1")
-      expect(credential.refresh).toBe("refresh-1")
-      expect(credential.expires).toBeGreaterThan(0)
-    }),
-  )
-
-  it.effect("refresh preserves the stored project and refresh token when Google omits rotation", () =>
-    Effect.gen(function* () {
-      let seen: HttpClientRequest.HttpClientRequest | undefined
-      const client = http((request) => {
-        seen = request
-        return Response.json({ access_token: "access-2", expires_in: 3600 })
-      })
-      const refreshed = yield* antigravityOAuth(client).refresh!(account({ projectID: "project-1" })).pipe(withEnvironment(oauthEnvironment))
-      const form = new URLSearchParams(body(seen!))
-      expect(form.get("grant_type")).toBe("refresh_token")
-      expect(form.get("refresh_token")).toBe("google-refresh")
-      expect(form.get("client_id")).toBe(oauthEnvironment.YCODING_ANTIGRAVITY_CLIENT_ID)
-      expect(form.get("client_secret")).toBe(oauthEnvironment.YCODING_ANTIGRAVITY_CLIENT_SECRET)
-      expect(refreshed.access).toBe("access-2")
-      expect(refreshed.refresh).toBe("google-refresh")
-      expect(refreshed.metadata).toEqual({ projectID: "project-1" })
-    }),
-  )
-
   for (const [name, env] of [
+    ["complete runtime pair", oauthEnvironment],
+    ["both client values missing", {}],
     ["missing client ID", { YCODING_ANTIGRAVITY_CLIENT_SECRET: "fixture-client-secret" }],
     ["missing client secret", { YCODING_ANTIGRAVITY_CLIENT_ID: "fixture-client-id" }],
     ["empty client ID", { ...oauthEnvironment, YCODING_ANTIGRAVITY_CLIENT_ID: "" }],
     ["empty client secret", { ...oauthEnvironment, YCODING_ANTIGRAVITY_CLIENT_SECRET: "" }],
+    ["both client values empty", { YCODING_ANTIGRAVITY_CLIENT_ID: "", YCODING_ANTIGRAVITY_CLIENT_SECRET: "" }],
   ] as const) {
-    it.effect(`OAuth client configuration rejects ${name} before exchanging or refreshing tokens`, () =>
+    it.effect(`source without embedded credentials rejects ${name} before exchanging or refreshing tokens`, () =>
       Effect.gen(function* () {
         let calls = 0
         const client = http(() => {
@@ -156,7 +127,7 @@ describe("AntigravityPlugin", () => {
         ]) {
           const error = yield* request.pipe(withEnvironment(env), Effect.flip)
           expect(error.message).toBe(
-            "Set YCODING_ANTIGRAVITY_CLIENT_ID and YCODING_ANTIGRAVITY_CLIENT_SECRET in the local server environment before connecting Antigravity.",
+            "Antigravity OAuth requires YCODING_ANTIGRAVITY_CLIENT_ID and YCODING_ANTIGRAVITY_CLIENT_SECRET at build time.",
           )
         }
         expect(calls).toBe(0)
