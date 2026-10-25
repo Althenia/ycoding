@@ -7,11 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.0 Projects and shared machine names first", () => {
+  test("lists v0.11.1 Project ownership, autonomy modes and Antigravity first", () => {
     const entry = RELEASES[0]
-    expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-23", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry).toMatchObject({ version: "0.11.1", date: "2026-10-25", tags: ["Added", "Changed", "Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
-    for (const fragment of ["Projects", "Master", "member Sessions", "desktop Sessions panel", "phone sheet", "interruption", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified", "Manual", "YOLO", "Auto", "Autonomous", "no model call", "hard and custom-rule reviews", "match dismissals", "pending reviews", "ycoding update", "YCODING_VERSION=0.11.0", "tools.chatgpt.ycoding.session_catalog", "saved approvals", "duplicate Code Mode paths"])
+    for (const fragment of ["Manual", "YOLO", "Auto", "Autonomous", "no model call", "hard and custom-rule reviews", "asleep marker", "recorded owner", "Only the Master assigns or transfers ownership", "executor children inherit no Project control", "inspect, assign and release", "human-only", "Projects tab", "five-Session roster", "Antigravity", "effort variants", "unverified", "tools.chatgpt.ycoding.session_catalog", "duplicate Code Mode paths", "focused test files", "recorded text offsets", "forks", "reported zero hit ratio", "fragmented UTF-8", "Open actions", "a decline never approves", "under Manual", "match dismissals", "pending reviews", "pairing code"])
+      expect(text).toContain(fragment)
+    expect(after("0.11.1")?.version).toBe("0.11.0")
+  })
+
+  test("retains v0.11.0 Projects and shared machine names", () => {
+    const entry = byVersion("0.11.0")
+    expect(entry).toMatchObject({ version: "0.11.0", date: "2026-10-23", tags: ["Added", "Changed"] })
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["Projects", "Master", "member Sessions", "desktop Sessions panel", "phone sheet", "interruption", "native", "human-only", "notification", "pending", "account", "hostname", "first-person", "audit", "ChatGPT", "Claude", "hosted MCP", "OAuth", "fresh human decisions", "user:mcp_servers", "unverified"])
       expect(text).toContain(fragment)
     expect(after("0.11.0")?.version).toBe("0.10.25")
   })
@@ -1637,7 +1646,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 45)).toEqual([
+    expect(versions.slice(0, 46)).toEqual([
+      "0.11.1",
       "0.11.0",
       "0.10.25",
       "0.10.24",

@@ -243,9 +243,9 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   expect(workflow).not.toContain("      - tui-v*")
   expect(workflow).not.toContain("      - web-v*")
   expect(verify).toContain('release_notes="docs/releases/v$RELEASE_VERSION.md"')
-  expect(verify).toContain("bun run test:web")
-  expect(verify).toContain("bun run test:remote")
-  expect(verify).toContain("bun run test:integration:web")
+  expect(verify).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
+  expect(verify).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
+  expect(verify).toContain("bun test --cwd apps/web ./test/remote-session.test.ts")
   expect(verify).toContain("bun run test:integration:remote")
   expect(verify).toContain("bun run build:cloudflare")
   expect(tui).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
@@ -326,15 +326,94 @@ test("manual release runs prepare assets without publishing or deploying", () =>
 })
 
 test("release workflow verifies the web application and relay before the Cloudflare build", () => {
-  expect(workflow).toContain("bun run test:web")
-  expect(workflow).toContain("bun run test:remote")
+  expect(workflow).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
+  expect(workflow).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
   expect(workflow).toContain("bun run build:web")
-  expect(workflow).toContain("bun run test:cloudflare")
+  expect(workflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts")
   expect(workflow).toContain("bun run build:cloudflare")
   expect(workflow.indexOf("bun run build:web")).toBeLessThan(workflow.indexOf("bun run build:cloudflare"))
   // CLI, helper, and isolated-browser release checks stay in place.
   expect(workflow).toContain("bun run test:integration:browser")
   expect(workflow).toContain("isolated-browser-smoke.ts")
+})
+
+test("release source checks select named files without package-wide test commands", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  for (const script of ["test:web", "test:remote", "test:integration:web", "test:cloudflare", "test:extension"])
+    expect(verify).not.toContain(`bun run ${script}`)
+  const commands = verify.split("\n").filter((line) => /\bbun test\b/.test(line))
+  expect(commands.length).toBeGreaterThan(10)
+  for (const command of commands) {
+    expect(command).toMatch(/\S+\.test\.[jt]sx?\b/)
+    expect(command).not.toMatch(/\*|\?[^\s]*\.test/)
+    const args = command.replace(/^.*?\bbun test\s+/, "").match(/"[^"]+"|\S+/g) ?? []
+    for (const argument of args.filter((argument, index) =>
+      !argument.startsWith("-") && !["--cwd", "--timeout", "-t"].includes(args[index - 1] ?? ""),
+    )) expect(argument).toMatch(/\.test\.[jt]sx?"?$/)
+  }
+})
+
+test("release test manifests resolve every selected file in its owning directory", async () => {
+  for (const step of workflowJob(workflow, "verify-source").split("\n      - name:")) {
+    for (const command of step.split("\n").filter((line) => /\bbun test\b/.test(line))) {
+      const cwd = /--cwd\s+(\S+)/.exec(command)?.[1] ?? /\n        working-directory: (\S+)/.exec(step)?.[1] ?? "."
+      const files = command.match(/(?:\.\/|test\/|\$GITHUB_WORKSPACE\/script\/)[\w/.-]+\.test\.[jt]sx?/g) ?? []
+      expect(files.length).toBeGreaterThan(0)
+      for (const file of files) {
+        const selected = file.startsWith("$GITHUB_WORKSPACE/")
+          ? file.slice("$GITHUB_WORKSPACE/".length)
+          : path.join(cwd, file)
+        expect(await Bun.file(path.join(import.meta.dir, "..", selected)).exists(), selected).toBe(true)
+      }
+    }
+  }
+})
+
+test("release verification excludes dedicated Antigravity provider tests", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  for (const entry of [
+    "Verify Antigravity provider contracts",
+    "./test/plugin/provider-antigravity.test.ts",
+    "./test/provider-usage-antigravity.test.ts",
+  ]) expect(verify.includes(entry)).toBe(false)
+})
+
+test("release source gates include ownership, chronology and compact-footer regressions", () => {
+  const verify = workflowJob(workflow, "verify-source")
+  for (const file of [
+    "./src/styles/design-md.test.ts",
+    "./src/content/boundary.test.ts",
+    "./verify/project-notification-card.integration.test.ts",
+    "./verify/model-replay.integration.test.ts",
+    "./src/remote/ui/transcript-rows.test.ts",
+    "./test/build-output.test.ts",
+    "./test/import-boundaries.test.ts",
+    "./test/coordination-assignment.test.ts",
+    "./test/coordination-hierarchy-prompt.test.ts",
+    "./test/database-migration.test.ts",
+    "./test/coordination-decisions-native.test.ts",
+    "./test/coordination-decision-runtime.test.ts",
+    "./test/coordination-instructions.test.ts",
+    "./test/coordination-model-request.test.ts",
+    "./test/session-projector.test.ts",
+    "./test/session-footer-autonomy.test.tsx",
+    "./test/isolated-browser-dialog.test.tsx",
+    "./test/cli/tui/projects-layout.test.tsx",
+    "./test/decision-choice-redaction.test.ts",
+    "./script/migration.test.ts",
+    "./test/coordination-http.test.ts",
+    "./test/coordination.test.ts",
+    "./test/session-text.test.ts",
+    "./test/form-contract.test.ts",
+    "./test/screen/projects-tab.screen.test.tsx",
+    "./test/screen/projects-flow.screen.test.tsx",
+    "./test/screen/autonomy-summaries.screen.test.tsx",
+    "./test/screen/session-rail-design-match.test.tsx",
+    "./test/cli/tui/projects-screen.test.tsx",
+    "./test/cli/tui/session-rows-chronology.test.tsx",
+    "./test/screen/transcript-chronology.screen.test.tsx",
+    "./test/remote-coordination.integration.test.ts",
+  ]) expect(verify).toContain(file)
 })
 
 test("test workflow verifies the web application and relay before the Cloudflare build", () => {
@@ -347,9 +426,12 @@ test("test workflow verifies the web application and relay before the Cloudflare
 })
 
 test("web integration gates run against built artifacts in both workflows", () => {
-  for (const content of [workflow, testWorkflow]) {
-    expect(content).toContain("bun run test:integration:web")
-    expect(content.indexOf("bun run build:web")).toBeLessThan(content.indexOf("bun run test:integration:web"))
+  for (const [content, command] of [
+    [workflow, "bun test --cwd apps/web ./test/remote-session.test.ts"],
+    [testWorkflow, "bun run test:integration:web"],
+  ] as const) {
+    expect(content).toContain(command)
+    expect(content.indexOf("bun run build:web")).toBeLessThan(content.indexOf(command))
   }
 })
 
@@ -433,7 +515,7 @@ test("source verification legs start in parallel with the native builds", () => 
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
   expect(verify).toContain("uses: ./.github/actions/verify-browser-host")
-  expect(verify).toContain("run: bun run test:extension")
+  expect(verify).toContain("bun test --cwd extensions/chrome ./test/protocol.test.js ./test/service-worker.test.js ./test/design-md.test.js")
   expect(verify).toContain("run: bun run test:integration:extension")
   expect(verify).toContain('executable="$(bun script/chrome-for-testing.ts "$RUNNER_TEMP/chrome-for-testing")"')
   expect(verify).toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME=$executable")

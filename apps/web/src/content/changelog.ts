@@ -22,10 +22,35 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.1",
+    date: "2026-10-25",
+    title: "Project ownership, autonomy modes and Antigravity",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Permissions, guardrails and answers each have their own autonomy mode: Manual (the default), YOLO or Auto, set from one Autonomous control in the TUI, web, command palette and ycoding run. Manual makes no model call, Auto applies fixed rules only, and YOLO lets that category's evaluator settle what the rules leave open; hard and custom-rule reviews always need you. The separate YOLO and automatic-approval commands and flags are removed, and existing settings convert once." },
+      { tag: "Added", text: "Session footers show the effective Permissions, Guardrails and Answers modes, inherited-mode labels, and an asleep marker. The Autonomous dialog identifies each inherited mode's source. Failed refreshes show unknown modes instead of stale state." },
+      { tag: "Added", text: "Project members can have a recorded owner. The Master assigns a member to a subagent it launched or owns it directly, and the owner receives that member's requests, execution starts, progress and lifecycle notices even while idle; unowned members route to the Master. Only the Master assigns or transfers ownership, idling and failure never release it, and executor children inherit no Project control." },
+      { tag: "Added", text: "The project tool gains inspect, assign and release. Inspect reads one pending member request with bounded, redacted details and whether it can be approved or declined, only declined, escalated, or is human-only." },
+      { tag: "Added", text: "The Projects tab in the Session composer shows the roster and native actions, and compact layouts keep the draft and useful transcript space visible beside a five-Session roster." },
+      { tag: "Added", text: "Antigravity subscription accounts: connect a Google account you own and run its Antigravity models, with per-model quota in Usage. Effort-specific models appear as one model with selectable effort variants, and image, video and PDF input follow what the gateway reports. Google may change or restrict the gateway, and live inference against a subscription is unverified." },
+      { tag: "Changed", text: "ChatGPT and Claude account connector tools use readable Code Mode paths such as tools.chatgpt.ycoding.session_catalog instead of names containing the connector ID and a hash. Permission rules, saved approvals and capability settings still match the existing registered names, and duplicate Code Mode paths are rejected." },
+      { tag: "Changed", text: "Maintained agents select focused test files or cases at every checkpoint and no longer run full-repository, workspace-wide or entire-package test suites, while retaining affected non-test checks." },
+      { tag: "Fixed", text: "Interleaved transcript notices stay between their surrounding text through settlement, reconnect and forks, using recorded text offsets even when notice clocks or message IDs disagree. Historical text keeps unknown timing and deterministic ordering." },
+      { tag: "Fixed", text: "The Context rail distinguishes missing cache telemetry from a reported zero hit ratio, and Antigravity cached-input usage stays unreported when the gateway omits it while an explicit zero remains reported." },
+      { tag: "Fixed", text: "Antigravity streaming preserves multiline responses and fragmented UTF-8, including thinking, text, tool signatures and cache usage, and propagates cancellation and read failures." },
+      { tag: "Fixed", text: "Project notification cards keep long titles, status and Open actions in a compact header, with full-width bounded previews underneath. Long paths and hashes stay contained on desktop and mobile." },
+      { tag: "Fixed", text: "Human messages activate paused Projects, and pending decisions and failures reach the supervising Session while dispatch is paused. Supervisors can decline routine requests and escalate with an attributed reason chain; a decline never approves, human-only approvals, hard reviews, denies and permission ceilings stay enforced, and under Manual a decline is sent to you." },
+      { tag: "Fixed", text: "Project creation preserves fresh revisions and supports titled new Master Sessions, session pickers filter as you type, and Project membership no longer prevents normal Session data from loading. Scoped keymaps share one destruction listener and process warnings go to the TUI log." },
+      { tag: "Fixed", text: "Automatic titles preserve explicit names, and canonical system temporary paths no longer trigger outside-repository prompts; symlink escapes, denies, ceilings and destructive-action checks remain enforced." },
+      { tag: "Fixed", text: "Settled automatic guardrail approvals and match dismissals no longer fill the conversation, including while a Session loads. Model rejections appear in order within the loaded chat and pending reviews stay at the end." },
+      { tag: "Fixed", text: "Compact parent and child layouts keep the composer and pending-review controls visible with the autonomy footer, and Chrome connection dialogs keep the pairing code and actions visible in short terminals." },
+    ],
+  },
+  {
     version: "0.11.0",
     date: "2026-10-23",
     title: "Projects and shared machine names",
-    tags: ["Added", "Changed", "Fixed"],
+    tags: ["Added", "Changed"],
     changes: [
       { tag: "Added", text: "Projects pair a Master chat with member Sessions across directories. The TUI Projects screen and the web client show a pinned Master with live member state; the web adds a desktop Sessions panel and a phone sheet. Create, add, remove or delete Sessions and edit Project settings from the same view." },
       { tag: "Added", text: "The Master directs its members, directly or through its own subagents, and member updates appear inline in the Master chat with links to their Sessions. Sending a message to the Master activates its Project; interruption or a backend restart pauses it." },
@@ -34,10 +59,6 @@ export const RELEASES: readonly ReleaseEntry[] = [
       { tag: "Added", text: "Opt-in ChatGPT and Claude account connectors use hosted MCP with existing OAuth profiles and per-connector policies. Actions ask by default; Claude organization and user-interaction approvals require fresh human decisions. Hosted-service access and upstream authorization are required, including Claude's user:mcp_servers grant. Live account entitlement and catalog access remain unverified." },
       { tag: "Changed", text: "Machine display names are account-owned aliases shared across browsers. Rename an owned machine inline in Settings, even while it is offline, without changing its hostname or identity. Browser-local names are not imported, and failed saves preserve the draft and confirmed name." },
       { tag: "Changed", text: "Messages the Master sends to members use the same first-person user-message presentation as typed instructions, without a separate sender persona. Authenticated origin stays in audit metadata; message text cannot settle native controls." },
-      { tag: "Changed", text: "Permissions, guardrails and answers each have their own autonomy mode: Manual (the default), YOLO or Auto, set from one Autonomous control in the TUI, web, command palette and ycoding run. Manual makes no model call, Auto applies fixed rules only, and YOLO lets that category's evaluator settle what the rules leave open; hard and custom-rule reviews always need you. Existing settings convert once." },
-      { tag: "Changed", text: "ChatGPT and Claude account connector tools use readable Code Mode paths such as tools.chatgpt.ycoding.session_catalog instead of names containing the connector ID and a hash. Permission rules, saved approvals and capability settings still match the existing registered names, and duplicate Code Mode paths are rejected." },
-      { tag: "Fixed", text: "Settled automatic guardrail approvals and match dismissals no longer fill the conversation, including while a Session loads. Model rejections appear in order within the loaded chat and pending reviews stay at the end." },
-      { tag: "Fixed", text: "This 0.11.0 build replaces the first 0.11.0 build. ycoding update treats an installed 0.11.0 as current, so reinstall with the install script and YCODING_VERSION=0.11.0, or replace the Windows files from the release archive." },
     ],
   },
   {
