@@ -82,6 +82,7 @@ const currentMigrations = [
   { id: "20261023160000_projects-redesign" },
   { id: "20261024120000_session-decision-modes" },
   { id: ownerMigration().id },
+  { id: "20261025113826_mcp-event-attention" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

@@ -9,7 +9,6 @@ import { Config } from "@ycoding-ai/core/config"
 import { CoordinationService } from "@ycoding-ai/core/coordination/index"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -58,7 +57,7 @@ import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { Tool } from "@ycoding-ai/core/tool/tool"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -138,19 +137,37 @@ const fixtureTool = (name: string) =>
     output: Schema.Struct({}),
     execute: () => Effect.succeed({}),
   })
-const fixtureTools = Layer.effectDiscard(
-  ToolRegistry.Service.use((registry) =>
-    registry.register(
+const fixtureTools = AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode]), [
+  [Location.node, Location.boundNode({ directory: runnerDirectory })],
+  [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+]).pipe(
+  Layer.tap((context) => {
+    const registry = Context.get(context, ToolRegistry.Service)
+    return registry.register(
       Object.fromEntries(toolNamesFixture.map((name) => [name, fixtureTool(name)])),
       { codemode: false },
-    ),
-  ),
+    )
+  }),
 )
-const fixtureToolsNode = makeLocationNode({
-  name: "test/coordination-model-request-tools",
-  layer: fixtureTools,
-  deps: [ToolRegistry.node],
-})
+const fixtureAgents = AppNodeBuilder.build(Agent.node).pipe(
+  Layer.tap((context) => {
+    const agents = Context.get(context, Agent.Service)
+    return agents.transform((draft) => {
+      draft.update(Agent.ID.make("god"), (agent) => {
+        agent.mode = "primary"
+        agent.hidden = false
+      })
+      draft.update(Agent.ID.make("build"), (agent) => {
+        agent.mode = "primary"
+        agent.hidden = false
+      })
+      draft.update(Agent.ID.make("occam"), (agent) => {
+        agent.mode = "subagent"
+        agent.hidden = false
+      })
+    })
+  }),
+)
 const emptyInstructions = () => Effect.succeed(Instructions.empty)
 const systemContext = Layer.mock(InstructionBuiltIns.Service, { load: emptyInstructions })
 const instructionContext = Layer.mock(InstructionDiscovery.Service, { load: emptyInstructions })
@@ -204,6 +221,9 @@ const compactionExecution = Layer.succeed(
   }),
 )
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
+  [Agent.node, fixtureAgents],
+  [ToolRegistry.node, fixtureTools],
+  [ToolRegistry.toolsNode, fixtureTools],
   [Snapshot.node, snapshotLayer],
   [LayerNodePlatform.llmClient, client],
   [Catalog.node, promptCatalog],
@@ -241,7 +261,7 @@ const execution = Layer.effect(
       withTransition: coordinator.withTransition,
     })
   }),
-).pipe(Layer.provide(runnerLayer))
+).pipe(Layer.provide(runnerLayer), Layer.provide(compactionExecution))
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -257,7 +277,6 @@ const it = testEffect(
       ToolRegistry.node,
       ToolRegistry.toolsNode,
       PluginHooks.node,
-      fixtureToolsNode,
       SessionRunnerModel.node,
       SessionTodo.node,
       SessionAutonomy.node,
@@ -284,6 +303,9 @@ const it = testEffect(
       CoordinationService.node,
     ]),
     [
+      [Agent.node, fixtureAgents],
+      [ToolRegistry.node, fixtureTools],
+      [ToolRegistry.toolsNode, fixtureTools],
       [LayerNodePlatform.llmClient, client],
       [Project.node, projects],
       [Permission.node, permission],
@@ -326,21 +348,6 @@ const setup = Effect.gen(function* () {
   requests.length = 0
   response = replyText("Fixture response", "text-fixture")
   const { db } = yield* Database.Service
-  const agents = yield* Agent.Service
-  yield* agents.transform((draft) => {
-    draft.update(Agent.ID.make("god"), (agent) => {
-      agent.mode = "primary"
-      agent.hidden = false
-    })
-    draft.update(Agent.ID.make("build"), (agent) => {
-      agent.mode = "primary"
-      agent.hidden = false
-    })
-    draft.update(Agent.ID.make("occam"), (agent) => {
-      agent.mode = "subagent"
-      agent.hidden = false
-    })
-  })
   yield* db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: runnerDirectory, sandboxes: [] })
