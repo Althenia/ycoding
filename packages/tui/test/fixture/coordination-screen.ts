@@ -84,5 +84,12 @@ export async function waitForFrame(screen: Awaited<ReturnType<typeof mountCoordi
   throw new Error(`Missing ${text}:\n${screen.frame()}`)
 }
 
+export async function openProjectsTab(screen: Awaited<ReturnType<typeof mountCoordination>>["screen"], roster: string) {
+  await waitForFrame(screen, "⌃x p")
+  screen.input.pressKey("x", { ctrl: true })
+  screen.input.pressKey("p")
+  await waitForFrame(screen, roster)
+}
+
 export type { FixtureProject, FixtureSession }
 export { docsID, leadID }

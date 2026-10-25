@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { InputRenderable, RenderableEvents, type Renderable } from "@opentui/core"
 import { docsID, groupID, leadID, planningID, scratchID } from "../fixture/coordination-backend"
-import { mountCoordination, waitForFrame } from "../fixture/coordination-screen"
+import { mountCoordination, openProjectsTab, waitForFrame } from "../fixture/coordination-screen"
 import { json } from "../fixture/tui-client"
 
 type Mounted = Awaited<ReturnType<typeof mountCoordination>>
@@ -17,9 +17,7 @@ async function settle(screen: Screen, frames = 8) {
 async function openBoundaryCreation(view: Mounted, member: boolean) {
   const { screen } = view
   if (member) {
-    screen.input.pressKey("x", { ctrl: true })
-    screen.input.pressKey("p")
-    await waitForFrame(screen, "MEMBERS 4 + MASTER")
+    await openProjectsTab(screen, "MEMBERS 4 + MASTER")
     screen.input.pressKey("n")
   } else {
     view.router().navigate({ type: "projects", sessionID: leadID })
@@ -162,9 +160,7 @@ for (const [width, height] of [
           try {
             await screen.waitForEventStream()
             if (member) {
-              screen.input.pressKey("x", { ctrl: true })
-              screen.input.pressKey("p")
-              await waitForFrame(screen, "MEMBERS 4 + MASTER")
+              await openProjectsTab(screen, "MEMBERS 4 + MASTER")
               screen.input.pressKey("a")
               await waitForFrame(screen, "ADD SESSION")
             } else {
@@ -322,9 +318,7 @@ test("member chat Projects tab counts members without the Master and names the M
   const { screen } = await openMember(120)
   try {
     expect(screen.frame()).not.toContain("MEMBERS 4 + MASTER")
-    screen.input.pressKey("x", { ctrl: true })
-    screen.input.pressKey("p")
-    await waitForFrame(screen, "MEMBERS 4 + MASTER")
+    await openProjectsTab(screen, "MEMBERS 4 + MASTER")
     const frame = screen.frame()
     expect(frame).not.toContain("member 1 of 4")
     const rows = frame.split("\n")
@@ -344,9 +338,7 @@ test("member chat Projects tab counts members without the Master and names the M
 test("Master chat Projects tab counts four members beside the Master", async () => {
   const { screen } = await mountCoordination({ width: 80 })
   try {
-    screen.input.pressKey("x", { ctrl: true })
-    screen.input.pressKey("p")
-    await waitForFrame(screen, "MEMBERS 4 + MASTER")
+    await openProjectsTab(screen, "MEMBERS 4 + MASTER")
     expect(screen.frame()).not.toContain("MEMBERS 5")
   } finally {
     await screen.dispose()
@@ -463,9 +455,7 @@ test("creating a Project with a new Master in a chosen directory, then adding an
       ["POST", "/api/coordination", { name: "Fresh start", masterSessionID: "ses_new00000001", memberSessionIDs: [] }],
     ])
     await settle(screen)
-    screen.input.pressKey("x", { ctrl: true })
-    screen.input.pressKey("p")
-    await waitForFrame(screen, "MEMBERS 0 + MASTER")
+    await openProjectsTab(screen, "MEMBERS 0 + MASTER")
     screen.input.pressKey("a")
     await waitForFrame(screen, "ADD SESSION")
     screen.input.pressEnter()
@@ -529,9 +519,7 @@ test("a running Master with an idle member reads as one running Session in the P
   const { screen, router } = await runningMaster(120)
   try {
     await settle(screen)
-    screen.input.pressKey("x", { ctrl: true })
-    screen.input.pressKey("p")
-    await waitForFrame(screen, "MEMBERS 1 + MASTER")
+    await openProjectsTab(screen, "MEMBERS 1 + MASTER")
     const frame = screen.frame()
     expect(lineOf(frame, "Docs worker", "MEMBER", "idle")).not.toBe("")
     expect(frame).toContain("0 members running · no limit")
@@ -674,9 +662,7 @@ for (const [width, height] of [
       })
       try {
         if (member) {
-          screen.input.pressKey("x", { ctrl: true })
-          screen.input.pressKey("p")
-          await waitForFrame(screen, "MEMBERS 4 + MASTER")
+          await openProjectsTab(screen, "MEMBERS 4 + MASTER")
           screen.input.pressKey("n")
         } else {
           router().navigate({ type: "projects", sessionID: leadID })
@@ -733,9 +719,7 @@ for (const [width, height] of [
       const { screen, server, router } = await mountCoordination({ width, height })
       try {
         if (member) {
-          screen.input.pressKey("x", { ctrl: true })
-          screen.input.pressKey("p")
-          await waitForFrame(screen, "MEMBERS 4 + MASTER")
+          await openProjectsTab(screen, "MEMBERS 4 + MASTER")
           screen.input.pressKey("n")
         } else {
           router().navigate({ type: "projects", sessionID: leadID })

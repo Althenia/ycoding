@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { InputRenderable } from "@opentui/core"
 import { apiID, designID, docsID, groupID, infraID, leadID, planningID } from "../fixture/coordination-backend"
 import { json, sessionSnapshot } from "../fixture/tui-client"
-import { mountCoordination, waitForFrame } from "../fixture/coordination-screen"
+import { mountCoordination, openProjectsTab, waitForFrame } from "../fixture/coordination-screen"
 
 type Mounted = Awaited<ReturnType<typeof mountCoordination>>
 type Screen = Mounted["screen"]
@@ -34,9 +34,7 @@ async function openComposer(screen: Screen) {
 }
 
 async function openProjects(screen: Screen) {
-  screen.input.pressKey("x", { ctrl: true })
-  screen.input.pressKey("p")
-  await waitForFrame(screen, roster)
+  await openProjectsTab(screen, roster)
 }
 
 function refresh(mounted: Mounted, revision: number) {
