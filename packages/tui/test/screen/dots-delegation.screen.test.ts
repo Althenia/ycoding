@@ -1,41 +1,10 @@
-import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { expect, test } from "bun:test"
 import path from "node:path"
 import { Schema } from "effect"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { InputRenderable, type Renderable } from "@opentui/core"
 import { json, sessionSnapshot } from "../fixture/tui-client"
-
-const names = [
-  "TMPDIR",
-  "XDG_CACHE_HOME",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-  "XDG_STATE_HOME",
-  "YCODING_TEST_HOME",
-  "YCODING_TEST_XDG_ROOT",
-] as const
-const previous = new Map(names.map((name) => [name, process.env[name]]))
-let root = ""
-beforeAll(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "ycoding-dots-delegation-"))
-  process.env.TMPDIR = root
-  process.env.XDG_CACHE_HOME = path.join(root, "cache")
-  process.env.XDG_CONFIG_HOME = path.join(root, "config")
-  process.env.XDG_DATA_HOME = path.join(root, "data")
-  process.env.XDG_STATE_HOME = path.join(root, "state")
-  process.env.YCODING_TEST_HOME = root
-  process.env.YCODING_TEST_XDG_ROOT = root
-})
-afterAll(async () => {
-  for (const name of names) {
-    const value = previous.get(name)
-    if (value === undefined) delete process.env[name]
-    else process.env[name] = value
-  }
-  await rm(root, { recursive: true, force: true })
-})
+import { assertTestPaths } from "../preload"
 
 const sessionID = "ses_delegation_fixture"
 const directory = "/tmp/ycoding/delegation-fixture"
@@ -102,6 +71,8 @@ async function withDelegation(
   } = {},
 ) {
   const { renderScreen } = await import("./harness")
+  const { Global } = await import("@ycoding-ai/core/global")
+  assertTestPaths(Global.Path)
   const { useRoute } = await import("../../src/context/route")
   const { useClient } = await import("../../src/context/client")
   const { Keymap } = await import("../../src/context/keymap")

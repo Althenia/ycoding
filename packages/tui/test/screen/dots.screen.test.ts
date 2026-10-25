@@ -1,43 +1,9 @@
-import { afterAll, beforeAll, expect, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { InputRenderable, TextareaRenderable } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { dotsPeerLabel } from "@ycoding-ai/client/dots-peer"
 import { json, sessionSnapshot } from "../fixture/tui-client"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import path from "node:path"
-
-const names = [
-  "TMPDIR",
-  "XDG_CACHE_HOME",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-  "XDG_STATE_HOME",
-  "YCODING_TEST_HOME",
-  "YCODING_TEST_XDG_ROOT",
-] as const
-const previous = new Map(names.map((name) => [name, process.env[name]]))
-let root = ""
-
-beforeAll(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "ycoding-dots-screen-"))
-  process.env.TMPDIR = root
-  process.env.XDG_CACHE_HOME = path.join(root, "cache")
-  process.env.XDG_CONFIG_HOME = path.join(root, "config")
-  process.env.XDG_DATA_HOME = path.join(root, "data")
-  process.env.XDG_STATE_HOME = path.join(root, "state")
-  process.env.YCODING_TEST_HOME = root
-  process.env.YCODING_TEST_XDG_ROOT = root
-})
-
-afterAll(async () => {
-  for (const name of names) {
-    const value = previous.get(name)
-    if (value === undefined) delete process.env[name]
-    else process.env[name] = value
-  }
-  await rm(root, { recursive: true, force: true })
-})
+import { assertTestPaths } from "../preload"
 
 async function withDotsScreen(
   status: (bound: boolean, target: unknown) => Response | undefined,
@@ -54,8 +20,7 @@ async function withDotsScreen(
 ) {
   const { renderScreen } = await import("./harness")
   const { Global } = await import("@ycoding-ai/core/global")
-  expect(Global.Path.data.startsWith(root + path.sep)).toBe(true)
-  expect(Global.Path.tmp.startsWith(root + path.sep)).toBe(true)
+  assertTestPaths(Global.Path)
   const sessionID = "ses_dots_screen"
   const directory = "/tmp/ycoding/dots-screen"
   const location = { directory, project: { id: "proj_dots_screen", directory } }
@@ -237,7 +202,7 @@ test("L10 bound composer uses the chosen name without promoting raw IDs into its
   })
 }, 30_000)
 
-test("remote plugin task text renders with external source and exchange identity", async () => {
+test("named remote plugin task text renders with external source and exchange identity", async () => {
   await withDotsScreen(enabledStatus, async ({ screen, wait, prompts }) => {
     await wait(() => screen.frame().includes("Remote MCP"))
     expect(screen.frame()).toContain("external peer")
@@ -247,7 +212,7 @@ test("remote plugin task text renders with external source and exchange identity
     expect(prompts).toEqual([])
   }, [{
     id: "msg_remote_fixture", type: "user", text: "Investigate the synthetic module", time: { created: 1 },
-    metadata: { inputOrigin: "plugin", remoteMcp: { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }, dotsExchange: { sessionID: "ses_anchor", exchangeID: "exchange_fixture" } },
+    metadata: { inputOrigin: "plugin", remoteMcp: { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }, dotsExchange: { sessionID: "ses_anchor", targetSessionID: "ses_dots_screen", exchangeID: "exchange_fixture", attachment: { profile: "fixture", dotID: "dot_fixture", threadID: "thread_fixture", generation: "generation_fixture", label: "Fixture Dot" } } },
   }])
 }, 30_000)
 
