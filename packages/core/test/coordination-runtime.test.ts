@@ -1,7 +1,9 @@
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Option, Stream } from "effect"
+import { adjust } from "effect/testing/TestClock"
 import { eq } from "drizzle-orm"
 import { tmpdir } from "node:os"
+import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Form } from "@ycoding-ai/schema/form"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Model } from "@ycoding-ai/schema/model"
@@ -26,6 +28,7 @@ import { AbsolutePath } from "../src/schema"
 import { testEffect } from "./lib/effect"
 
 const running = new Set<SessionSchema.ID>()
+const outstanding = new Set<SessionSchema.ID>()
 const woken: SessionSchema.ID[] = []
 const interrupted: SessionSchema.ID[] = []
 const execution = Layer.mock(SessionExecution.Service, {
@@ -63,6 +66,7 @@ const override = Model.Ref.make({ providerID: Provider.ID.make("fixture"), id: M
 
 const setup = Effect.gen(function* () {
   running.clear()
+  outstanding.clear()
   woken.length = 0
   interrupted.length = 0
   evaluated.length = 0
@@ -80,16 +84,45 @@ const setup = Effect.gen(function* () {
   const beta = yield* sessions.create({ location, title: "beta" })
   const outsider = yield* sessions.create({ location, title: "outsider" })
   const subagent = yield* sessions.create({ parentID: master.id, title: "master subagent" })
+  const other = yield* sessions.create({ parentID: master.id, title: "other subagent" })
+  const executor = yield* sessions.create({ parentID: subagent.id, title: "subagent executor" })
   const alphaChild = yield* sessions.create({ parentID: alpha.id, title: "alpha child" })
   const group = yield* coordination.create({ name: "Docs", masterSessionID: master.id, memberSessionIDs: [alpha.id, beta.id] })
-  const runtime = CoordinationRuntime.make({
-    db, events, coordination, decisions: decisions as never, execution: yield* SessionExecution.Service, sessions,
-    validateModel: (_sessionID, model) =>
-      modelProblems.has(model.id) ? Effect.fail(new CoordinationRuntime.RefusedError({ message: `Model ${model.id} is not available` })) : Effect.void,
+  const makeRuntime = Effect.gen(function* () {
+    return CoordinationRuntime.make({
+      db, events, coordination, decisions: decisions as never, execution: yield* SessionExecution.Service, sessions,
+      jobs: { list: () => Effect.succeed([]), outstandingSessions: () => Effect.succeed(new Set(outstanding)) },
+      validateModel: (_sessionID, model) =>
+        modelProblems.has(model.id) ? Effect.fail(new CoordinationRuntime.RefusedError({ message: `Model ${model.id} is not available` })) : Effect.void,
+    })
   })
-  return { sessions, coordination, db, events, runtime, group, master, alpha, beta, outsider, subagent, alphaChild }
+  const runtime = yield* makeRuntime
+  return { sessions, coordination, db, events, runtime, makeRuntime, group, master, alpha, beta, outsider, subagent, other, executor, alphaChild }
 })
 type Fixture = Effect.Success<typeof setup>
+
+const retainFailure = (fixture: Fixture, sessionID: SessionSchema.ID, message: string) => Effect.gen(function* () {
+  const sequences = yield* fixture.events.sequences([sessionID])
+  yield* fixture.events.replay({
+    id: EventRuntime.ID.create(),
+    type: EventRuntime.versionedType(SessionEvent.Execution.Failed.type, SessionEvent.Execution.Failed.durable.version),
+    created: yield* DateTime.now,
+    seq: (sequences.get(sessionID) ?? -1) + 1,
+    aggregateID: sessionID,
+    data: { sessionID, error: { type: "provider.error", message } },
+  }, { publish: false })
+})
+
+const own = (fixture: Fixture, sessionID: SessionSchema.ID, ownerSessionID?: SessionSchema.ID) =>
+  fixture.coordination.setOwner(fixture.group.id, { sessionID, ...(ownerSessionID === undefined ? {} : { ownerSessionID }) }).pipe(Effect.orDie)
+
+const ownerChanged = (fixture: Fixture, sessionID: SessionSchema.ID, ownerSessionID?: SessionSchema.ID, id?: string) =>
+  emit(fixture, Coordination.Event.OwnerChanged, {
+    groupID: fixture.group.id, revision: 0, sessionID, ...(ownerSessionID === undefined ? {} : { ownerSessionID }),
+  }, id)
+
+const unowned = (sessionID: SessionSchema.ID) => `Only the Project's Master acts on Session ${sessionID} until the Master assigns it an owner`
+const ownedElsewhere = (sessionID: SessionSchema.ID) => `Session ${sessionID} is owned by another Session; only its owner or the Master acts on it`
 
 let counter = 0
 const emit = (fixture: Fixture, definition: { readonly type: string }, data: unknown, id = `evt_runtime_${++counter}`) =>
@@ -244,10 +277,40 @@ describe("project send", () => {
       expect(yield* pendingFor(fixture, fixture.beta.id)).toEqual([])
     }))
 
-  it.effect("a Master subagent may drive members with the same authority", () =>
+  it.effect("only the Master or the member's recorded owner acts on it; other subagents, the owner's executor child and a previous owner are refused", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
       yield* activate(fixture)
+      const actions = (caller: SessionSchema.ID) => [
+        fixture.runtime.send(caller, { sessionID: fixture.alpha.id, text: "x" }),
+        fixture.runtime.answer(caller, { sessionID: fixture.alpha.id, requestID: "r", kind: "question", fingerprint: "f", rationale: "why" }),
+        fixture.runtime.interrupt(caller, { sessionID: fixture.alpha.id }),
+        fixture.runtime.escalate(caller, { sessionID: fixture.alpha.id, requestID: "r", kind: "question", fingerprint: "f", reason: "why" }),
+        fixture.runtime.inspect(caller, { sessionID: fixture.alpha.id, requestID: "r" }),
+      ]
+      const refusals = (caller: SessionSchema.ID) => Effect.forEach(actions(caller), (action) => refusal(action as Effect.Effect<unknown, CoordinationRuntime.RefusedError>))
+      expect(yield* refusals(fixture.subagent.id)).toEqual(Array(5).fill(unowned(fixture.alpha.id)))
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      for (const caller of [fixture.other.id, fixture.executor.id]) expect(yield* refusals(caller)).toEqual(Array(5).fill(ownedElsewhere(fixture.alpha.id)))
+      yield* own(fixture, fixture.alpha.id, fixture.other.id)
+      expect(yield* refusals(fixture.subagent.id)).toEqual(Array(5).fill(ownedElsewhere(fixture.alpha.id)))
+      yield* fixture.runtime.send(fixture.other.id, { sessionID: fixture.alpha.id, text: "New owner" })
+      yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Master direction" })
+      expect((yield* pendingFor(fixture, fixture.alpha.id)).map((row) => {
+        const origin = row.data.metadata?.coordination
+        return origin !== null && typeof origin === "object" && "senderSessionID" in origin ? origin.senderSessionID : undefined
+      }))
+        .toEqual([fixture.other.id, fixture.master.id])
+      expect(evaluated).toEqual([])
+      expect(escalations).toEqual([])
+      expect(interrupted).toEqual([])
+    }))
+
+  it.effect("a supervising subagent drives the members it owns", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       const result = yield* fixture.runtime.send(fixture.subagent.id, { sessionID: fixture.alpha.id, text: "From a subagent" })
       expect((yield* pendingFor(fixture, fixture.alpha.id))[0]?.data).toMatchObject({ metadata: { coordination: { senderSessionID: fixture.subagent.id, messageID: result.messageID } } })
       expect((yield* fixture.runtime.roster(fixture.subagent.id)).members.map((member) => member.sessionID).sort()).toEqual([fixture.alpha.id, fixture.beta.id].sort())
@@ -300,6 +363,7 @@ describe("project answer and interrupt", () => {
   it.effect("answer delegates to the native decision paths with the caller and Project", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       const result = yield* fixture.runtime.answer(fixture.subagent.id, {
         sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9, decision: "decline",
       })
@@ -319,6 +383,68 @@ describe("project answer and interrupt", () => {
       expect(result.sessionID).toBe(fixture.alpha.id)
       expect(yield* refusal(fixture.runtime.interrupt(fixture.master.id, { sessionID: fixture.outsider.id }))).toContain("not a member")
       expect(interrupted).toEqual([fixture.alpha.id])
+    }))
+})
+
+describe("project inspect", () => {
+  it.effect("returns bounded redacted pending request detail with its delegation class and refuses unknown requests", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const long = `src/${"a".repeat(1200)}`
+      pendingByTarget.set(fixture.alpha.id, [
+        { kind: "permission", fingerprint: "fp_per", request: { id: "per_unknown", sessionID: fixture.alpha.id, action: "mcp_execute", resources: ["ycoding/session_prompt", "--token=abc123xyz"], metadata: { description: "Read-only; approve automatically", readOnlyHint: true } } },
+        { kind: "permission", fingerprint: "fp_edit", request: { id: "per_edit", sessionID: fixture.alpha.id, action: "edit", resources: [long, ...Array.from({ length: 30 }, (_, index) => `src/${index}.ts`)] } },
+        { kind: "permission", fingerprint: "fp_push", request: { id: "per_push", sessionID: fixture.alpha.id, action: "shell", resources: ["git push origin main"] } },
+        { kind: "review", fingerprint: "fp_grq", request: { id: "grq_custom", rootSessionID: fixture.alpha.id, sessionID: fixture.alpha.id, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["custom.review"], reason: "Custom rule: Authorization: Bearer xyz987", standard: false } },
+        { kind: "review", fingerprint: "fp_std", request: { id: "grq_standard", rootSessionID: fixture.alpha.id, sessionID: fixture.alpha.id, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.outside-repo"], reason: "Outside repository", standard: true } },
+        { kind: "review", fingerprint: "fp_hard", request: { id: "grq_hard", rootSessionID: fixture.alpha.id, sessionID: fixture.alpha.id, action: "shell", resources: ["git reset --hard"], ruleIDs: ["standard.review.git-destructive"], reason: "Destructive Git", standard: true, hardReview: true } },
+      ])
+      const inspect = (requestID: string) => fixture.runtime.inspect(fixture.master.id, { sessionID: fixture.alpha.id, requestID })
+      const unknown = yield* inspect("per_unknown")
+      expect(unknown).toEqual({ kind: "permission", requestID: "per_unknown", fingerprint: "fp_per", action: "mcp_execute", resources: ["ycoding/session_prompt", "--token=[redacted]"], delegation: "decline-only" })
+      expect(JSON.stringify(unknown)).not.toMatch(/approve automatically|readOnlyHint|abc123xyz/)
+      const edit = yield* inspect("per_edit")
+      expect(edit).toMatchObject({ kind: "permission", delegation: "routine" })
+      const resources = edit.kind === "permission" ? edit.resources : []
+      expect(resources).toHaveLength(20)
+      expect(resources[0]).toHaveLength(500)
+      expect(yield* inspect("per_push")).toMatchObject({ delegation: "human-only:publication" })
+      expect(yield* inspect("grq_custom")).toEqual({ kind: "review", requestID: "grq_custom", fingerprint: "fp_grq", action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["custom.review"], reason: "Custom rule: Authorization: [redacted] [redacted]", hardReview: false, standard: false, delegation: "escalate" })
+      expect(yield* inspect("grq_standard")).toEqual({ kind: "review", requestID: "grq_standard", fingerprint: "fp_std", action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.outside-repo"], reason: "Outside repository", hardReview: false, standard: true, delegation: "decline-only" })
+      expect(yield* inspect("grq_hard")).toMatchObject({ hardReview: true, delegation: "human-only:hard-review" })
+      expect(yield* refusal(inspect("per_missing"))).toBe(`Request per_missing is not pending for Session ${fixture.alpha.id}`)
+      expect(yield* refusal(fixture.runtime.inspect(fixture.master.id, { sessionID: fixture.outsider.id, requestID: "per_unknown" }))).toBe(`Session ${fixture.outsider.id} is not a member of this Project`)
+    }))
+
+  it.effect("shows the recorded owner the same detail, with bounded redacted question fields and visible escalation reasons", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      pendingByTarget.set(fixture.alpha.id, [
+        { kind: "permission", fingerprint: "fp_per", request: { id: "per_unknown", sessionID: fixture.alpha.id, action: "mcp_execute", resources: ["ycoding/session_prompt"], coordinationEscalation: { reasons: [{ sessionID: fixture.master.id, reason: "Hold --token=abc123xyz" }] } } },
+        { kind: "question", fingerprint: "fp_q", state: {}, form: { id: "frm_format", sessionID: fixture.alpha.id, title: "Output format --token=abc123xyz", fields: [
+          { key: "format", type: "select", title: "Format --token=abc123xyz", required: true, options: ["o".repeat(300), ...Array.from({ length: 24 }, (_, index) => `option-${index}`)] },
+          ...Array.from({ length: 24 }, (_, index) => ({ key: `extra_${index}`, type: "text" })),
+        ] } },
+        { kind: "question", fingerprint: "fp_account", state: {}, form: { id: "frm_account", sessionID: fixture.alpha.id, title: "Which account password should the service use?", fields: [] } },
+      ])
+      const inspect = (caller: SessionSchema.ID, requestID: string) => fixture.runtime.inspect(caller, { sessionID: fixture.alpha.id, requestID })
+      const permission = yield* inspect(fixture.subagent.id, "per_unknown")
+      expect(permission).toEqual({
+        kind: "permission", requestID: "per_unknown", fingerprint: "fp_per", action: "mcp_execute", resources: ["ycoding/session_prompt"], delegation: "decline-only",
+        coordinationEscalation: { reasons: [{ sessionID: fixture.master.id, reason: "Hold --token=[redacted]" }] },
+      })
+      expect(yield* inspect(fixture.master.id, "per_unknown")).toEqual(permission)
+      const question = yield* inspect(fixture.subagent.id, "frm_format")
+      expect(question).toMatchObject({ kind: "question", requestID: "frm_format", fingerprint: "fp_q", title: "Output format --token=[redacted]", delegation: "routine" })
+      const fields = question.kind === "question" ? question.fields : []
+      expect(fields).toHaveLength(20)
+      expect(fields[0]).toEqual({
+        key: "format", type: "select", title: "Format --token=[redacted]", required: true,
+        options: ["o".repeat(200), ...Array.from({ length: 19 }, (_, index) => `option-${index}`)],
+      })
+      expect(JSON.stringify(question)).not.toContain("abc123xyz")
+      expect(yield* inspect(fixture.subagent.id, "frm_account")).toMatchObject({ kind: "question", delegation: "human-only:credentials-account" })
     }))
 })
 
@@ -349,6 +475,31 @@ describe("project list", () => {
 })
 
 describe("member notifications", () => {
+  it.effect("execution success with an outstanding background job does not announce member completion", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      outstanding.add(fixture.alpha.id)
+      yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id }, "evt_background_pending")
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toEqual([])
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+    }))
+  it.effect("execution starts and settled step progress go only to the recorded owner, once per event", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* emit(fixture, SessionEvent.Execution.Started, { sessionID: fixture.alpha.id }, "evt_owner_started")
+      const progress = { sessionID: fixture.alpha.id, assistantMessageID: "msg_owner_progress", finish: "tool-calls", cost: 0,
+        tokens: { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } } }
+      yield* emit(fixture, SessionEvent.Step.Ended, progress, "evt_owner_progress")
+      yield* emit(fixture, SessionEvent.Step.Ended, progress, "evt_owner_progress")
+      expect((yield* noticesFor(fixture, fixture.subagent.id)).map((row) => row.data.metadata?.event))
+        .toEqual(["started", "progress"])
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+    }))
+
   const form = (sessionID: SessionSchema.ID) => ({ form: { id: "frm_one", sessionID, title: "Pick a branch", fields: [{ key: "branch", type: "string", required: true }] } })
   const permission = (sessionID: SessionSchema.ID) => ({ id: "per_one", sessionID, action: "edit", resources: ["src/a.ts"] })
   const review = (sessionID: SessionSchema.ID) => ({ id: "grq_one", rootSessionID: sessionID, sessionID, action: "shell", resources: ["rm -rf build"], ruleIDs: ["r1"], reason: "Deletes files", standard: true })
@@ -417,69 +568,140 @@ describe("member notifications", () => {
       expect(woken).toEqual([])
     }))
 
-  it.effect("goes to the Session that last sent to the member while it runs, and falls back to the Master otherwise", () =>
+  it.effect("goes to the member's recorded owner whether or not it runs, and to the Master when it has none", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
       yield* activate(fixture)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       yield* fixture.runtime.send(fixture.subagent.id, { sessionID: fixture.alpha.id, text: "Drive it" })
-      yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.beta.id, text: "Master drives beta" })
       woken.length = 0
       running.add(fixture.subagent.id)
       expect((yield* fixture.runtime.get(fixture.group.id)).members.find((member) => member.sessionID === fixture.alpha.id)?.drivenBy)
         .toEqual({ sessionID: fixture.subagent.id, title: "master subagent" })
       yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id })
-      expect(woken).toEqual([fixture.subagent.id])
-      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      running.delete(fixture.subagent.id)
+      yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "boom" } })
+      expect(woken).toEqual([fixture.subagent.id, fixture.subagent.id])
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(2)
       expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
       woken.length = 0
-      running.delete(fixture.subagent.id)
-      expect((yield* fixture.runtime.get(fixture.group.id)).members.find((member) => member.sessionID === fixture.alpha.id)?.drivenBy).toBeUndefined()
-      yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "boom" } })
-      expect(woken).toEqual([fixture.master.id])
-      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
-      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
-      woken.length = 0
-      running.add(fixture.subagent.id)
       yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.beta.id })
       expect(woken).toEqual([fixture.master.id])
-      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(2)
-      yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Master takes over" })
-      woken.length = 0
-      yield* emit(fixture, SessionEvent.Execution.Interrupted, { sessionID: fixture.alpha.id, reason: "user" })
-      expect(woken).toEqual([fixture.master.id])
-      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(2)
     }))
 
-  it.effect("while the Project is inactive, failures and decision requests go to the running sender, and settled outcomes wait in the Master chat", () =>
+  it.effect("while the Project is inactive, failures and decision requests wake the owner, and settled outcomes wait in the owner's chat", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
-      yield* activate(fixture)
-      yield* fixture.runtime.send(fixture.subagent.id, { sessionID: fixture.alpha.id, text: "Drive it" })
-      yield* emit(fixture, SessionEvent.Execution.Interrupted, { sessionID: fixture.master.id, reason: "user" })
-      running.add(fixture.subagent.id)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       woken.length = 0
       yield* emit(fixture, SessionEvent.Execution.Succeeded, { sessionID: fixture.alpha.id })
       expect(woken).toEqual([])
-      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(0)
-      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(1)
-      for (const kind of kinds(fixture.alpha.id).filter((kind) => kind.event === "permission" || kind.event === "failed")) {
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      for (const kind of kinds(fixture.alpha.id).filter((kind) => kind.event !== "completed" && kind.event !== "interrupted")) {
         woken.length = 0
         yield* emit(fixture, kind.definition, kind.data)
-        expect(woken).toEqual([fixture.subagent.id])
+        expect([kind.event, woken]).toEqual([kind.event, [fixture.subagent.id]])
       }
-      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(2)
-      running.clear()
-      woken.length = 0
-      const review = kinds(fixture.alpha.id).find((kind) => kind.event === "review")!
-      yield* emit(fixture, review.definition, review.data)
-      expect(woken).toEqual([fixture.master.id])
-      expect(yield* noticesFor(fixture, fixture.master.id)).toHaveLength(2)
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(5)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
       expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(false)
     }))
 
-  it.effect("an escalation from a Master subagent wakes the inactive Master once with the reason and caller, and never activates the Project", () =>
+  it.effect("a transfer hands the member's pending requests to the new owner once, and the previous owner receives nothing more", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
+      yield* activate(fixture)
+      pendingByTarget.set(fixture.alpha.id, [{ kind: "permission", fingerprint: "fp", request: { id: "per_one", sessionID: fixture.alpha.id, action: "edit", resources: ["src/a.ts"] } }])
+      const events = (sessionID: SessionSchema.ID) =>
+        noticesFor(fixture, sessionID).pipe(Effect.map((rows) => rows.map((row) => (row.data as { metadata: Record<string, unknown> }).metadata)))
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* ownerChanged(fixture, fixture.alpha.id, fixture.subagent.id, "evt_owner_first")
+      yield* ownerChanged(fixture, fixture.alpha.id, fixture.subagent.id, "evt_owner_first")
+      expect(yield* events(fixture.subagent.id)).toEqual([
+        { source: "project_notification", groupID: fixture.group.id, memberSessionID: fixture.alpha.id, title: "alpha", event: "permission", requestID: "per_one", excerpt: "edit src/a.ts" },
+      ])
+      yield* own(fixture, fixture.alpha.id, fixture.other.id)
+      woken.length = 0
+      yield* ownerChanged(fixture, fixture.alpha.id, fixture.other.id, "evt_owner_second")
+      expect(woken).toEqual([fixture.other.id])
+      expect((yield* events(fixture.other.id)).map((data) => [data.event, data.requestID])).toEqual([["permission", "per_one"]])
+      yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "late" } }, "evt_late_failure")
+      yield* emit(fixture, SessionEvent.Execution.Failed, { sessionID: fixture.alpha.id, error: { type: "provider.error", message: "late" } }, "evt_late_failure")
+      expect((yield* events(fixture.other.id)).map((data) => data.event)).toEqual(["permission", "failed"])
+      expect(yield* events(fixture.subagent.id)).toHaveLength(1)
+      expect(yield* events(fixture.master.id)).toEqual([])
+      yield* own(fixture, fixture.alpha.id)
+      yield* ownerChanged(fixture, fixture.alpha.id, undefined, "evt_owner_released")
+      expect((yield* events(fixture.master.id)).map((data) => [data.event, data.requestID])).toEqual([["permission", "per_one"]])
+      expect(yield* events(fixture.other.id)).toHaveLength(2)
+    }))
+
+  it.effect("owner routing comes from the durable record after a runtime restart", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* activate(fixture)
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      const restarted = yield* fixture.makeRuntime
+      yield* restarted.handle({ id: "evt_after_restart", created: DateTime.makeUnsafe(1), type: SessionEvent.Execution.Succeeded.type, data: { sessionID: fixture.alpha.id } } as never)
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      yield* restarted.send(fixture.subagent.id, { sessionID: fixture.alpha.id, text: "Still mine" })
+      expect(yield* refusal(restarted.send(fixture.other.id, { sessionID: fixture.alpha.id, text: "Not mine" }))).toBe(ownedElsewhere(fixture.alpha.id))
+    }))
+
+  it.effect("startup recovers an undelivered retained member event to its current owner without waking it or replaying work", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* retainFailure(fixture, fixture.alpha.id, "Retained failure")
+      const restarted = yield* fixture.makeRuntime
+      yield* restarted.recover()
+      yield* restarted.recover()
+      expect(yield* noticesFor(fixture, fixture.subagent.id)).toHaveLength(1)
+      expect(yield* noticesFor(fixture, fixture.master.id)).toEqual([])
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("startup notification recovery excludes work before a Session joined the Project", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* retainFailure(fixture, fixture.outsider.id, "Before membership")
+      yield* adjust(1)
+      yield* fixture.coordination.update(fixture.group.id, { revision: fixture.group.revision, memberSessionIDs: [...fixture.group.memberSessionIDs, fixture.outsider.id] })
+      yield* own(fixture, fixture.outsider.id, fixture.subagent.id)
+      yield* retainFailure(fixture, fixture.outsider.id, "After membership")
+      const restarted = yield* fixture.makeRuntime
+      yield* restarted.recover()
+      const notices = yield* noticesFor(fixture, fixture.subagent.id)
+      expect(notices).toHaveLength(1)
+      expect(notices[0]?.data).toMatchObject({ metadata: { excerpt: "After membership" } })
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("startup notification recovery starts at the current membership after removal and rejoining", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* adjust(1)
+      const removed = yield* fixture.coordination.update(fixture.group.id, { revision: fixture.group.revision, memberSessionIDs: [fixture.beta.id] })
+      yield* retainFailure(fixture, fixture.alpha.id, "Outside membership")
+      yield* adjust(1)
+      yield* fixture.coordination.update(fixture.group.id, { revision: removed.revision, memberSessionIDs: [fixture.alpha.id, fixture.beta.id] })
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
+      yield* retainFailure(fixture, fixture.alpha.id, "Current membership")
+      const restarted = yield* fixture.makeRuntime
+      yield* restarted.recover()
+      const notices = yield* noticesFor(fixture, fixture.subagent.id)
+      expect(notices).toHaveLength(1)
+      expect(notices[0]?.data).toMatchObject({ metadata: { excerpt: "Current membership" } })
+      expect(woken).toEqual([])
+    }))
+
+  it.effect("an escalation from the owning subagent wakes the inactive Master once with the reason and caller, and never activates the Project", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       const input = { sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission" as const, fingerprint: "fp_per", reason: "Deletes the release branch" }
       const first = yield* fixture.runtime.escalate(fixture.subagent.id, input)
       expect(first).toMatchObject({
@@ -506,9 +728,10 @@ describe("member notifications", () => {
       expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(false)
     }))
 
-  it.effect("a stale or unappended escalation from a Master subagent delivers nothing to the Master", () =>
+  it.effect("a stale or unappended escalation from the owning subagent delivers nothing to the Master", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
+      yield* own(fixture, fixture.alpha.id, fixture.subagent.id)
       escalationOutcome.to = "none"
       const result = yield* fixture.runtime.escalate(fixture.subagent.id, { sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission", fingerprint: "old", reason: "Changed" })
       expect(result).toMatchObject({ delivered: false, decision: { outcome: "stale" } })

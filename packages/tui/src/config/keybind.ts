@@ -104,7 +104,7 @@ export const Definitions = {
   session_child_cycle: keybind("right", "Go to next child session"),
   session_child_cycle_reverse: keybind("left", "Go to previous child session"),
   session_parent: keybind("up", "Go to parent session"),
-  project_members: keybind("<leader>p", "Focus Project members"),
+  project_members: keybind("<leader>p", "Open Projects tab"),
   session_pin_toggle: keybind("ctrl+f", "Pin or unpin session in the session list"),
   session_task_pin_toggle: keybind("p", "Pin or unpin the selected subagent task"),
   session_quick_switch_1: keybind("<leader>1", "Switch to session in quick slot 1"),

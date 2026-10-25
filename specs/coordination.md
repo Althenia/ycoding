@@ -27,25 +27,32 @@ The CLI operation set is `ycoding coordination list|get|create|update|delete`. R
 
 A human user message in the Master chat activates the Project. Interrupting the Master, including while idle, pauses it. A backend restart leaves Projects inactive. `pausedReason`, when present on an inactive Project, is `interrupted` or `restart`; activation clears it. Newly created inactive Projects omit it.
 
-While inactive, `send` fails with `Project is inactive; send a message in the master chat to resume`; `answer`, `escalate`, and `interrupt` remain available. Completed and interrupted notifications remain pending in the Master chat without starting a turn until another user message; failures, decision requests, and escalations still wake their receiver. There are no separate arm, stop, complete, lease, or dispatch-queue controls.
+While inactive, `send` fails with `Project is inactive; send a message in the master chat to resume`; `answer`, `escalate`, and `interrupt` remain available. Routine notifications remain pending in the recorded owner's chat without starting an execution; failures, decision requests, and escalations still wake their receiver. There are no separate arm, stop, complete, lease, or dispatch-queue controls.
 
 ## Master tool: `project`
 
-The Master and its subagent descendants receive the `project` tool, scoped to that Master's Project. Other Sessions cannot use it. Masters remain ordinary chat Sessions with their configured tools. Their instructions assign the Master and its supervising subagents a coordination-only role: delegate implementation, code reads and edits, checks and commits to members; react to member events, verify reported evidence, and carry undecidable requests upward with reasons. The Master may direct members itself or assign one or more members to each supervising subagent.
+The persisted Master and Sessions recorded as owners of at least one member receive the `project` tool. Executor children inherit no controller authority. `Coordination.accessOf` supplies the role and ownership scope used by tool availability, native authorization, recipient routing, and generated role instructions. Sessions outside a Project retain their configured behavior and tools.
+
+Each member has an optional `owner_session_id` referencing a Session with `ON DELETE SET NULL`. Existing members retain null ownership; no historical owner is inferred. A null owner routes events and requests to the Master. The Master may explicitly own a member or assign it to a managed child it launched. Only the Master assigns or transfers ownership. The Master or current recorded owner releases it with reason `completed` or `released`. Idling, failure, interruption, and execution settlement do not release ownership. Membership removal releases it; other membership edits retain surviving owners. Replacing the Master clears assignments from the former controller family. Public participants expose optional `owner: { sessionID, title }` independently of transient `drivenBy` state.
 
 | Action | Input | Output |
 | --- | --- | --- |
 | `list` | — | Project identity, active state, optional pause reason, concurrency, and members |
+| `inspect` | `sessionID`, `requestID` | Current pending request identity, bounded redacted action/resources or question fields, review rules and flags, escalation reasons, and `delegation`: `routine`, `decline-only`, `escalate`, or `human-only:<reason>`; metadata and tool descriptions are excluded |
 | `send` | `sessionID`, `text`, optional `delivery`, `messageID`, `model` | Admitted message ID, member state, and whether an existing admission reconciled |
 | `answer` | `sessionID`, `requestID`, `kind`, `fingerprint`, `rationale`, optional native `answer` and `confidence`, optional `decision` (`approve` default, or `decline`) | Native settlement result or visible escalation reason |
 | `escalate` | `sessionID`, `requestID`, `kind`, `fingerprint`, `reason` (1–500 characters) | `delivered`, optional notice `messageID`, and `decision` (`outcome`, optional `to: master \| human`, `coordinationEscalation`, `reason`, `reviewItemID`) |
 | `interrupt` | `sessionID` | Interrupt result and member state |
+| `assign` | `sessionID`, `ownerSessionID` | Recorded owner; Master-only assignment or transfer |
+| `release` | `sessionID`, `reason: completed \| released` | Cleared ownership; Master or current owner only |
 
 `list` returns member titles, recorded Locations, `lastActivity`, live state (`idle`, `running`, `waiting`, `failed`), and pending native request summaries with IDs and fingerprints. `waiting` indicates a question/form, permission request, or review. Optional `drivenBy: { sessionID, title }` identifies the Master subagent that last sent to that member while the subagent is still running.
 
 `send` defaults to `delivery: queue`; `steer` admits input for an active turn. It returns without awaiting member completion. An optional model reference is `{ providerID, id, variant?, profile? }` and applies to the turn the message starts, without changing the member's configured agent or model. Invalid model choices are refused at the target Location.
 
-A supplied `messageID` makes send retries idempotent. The same ID and text reconcile the existing admission; a different text, target, or incompatible existing identity fails. At a configured concurrency limit, sending to an idle member fails with `Project concurrency limit <n> reached`. Active member execution and admitted pending work count toward admission; work is refused, not placed in a Project dispatch queue.
+A supplied `messageID` makes send retries idempotent. The same ID and text reconcile the existing admission; a different text, target, or incompatible existing identity fails. Reconciliation requires current authority: a former owner cannot reuse an admitted identity after transfer. At a configured concurrency limit, sending to an idle member fails with `Project concurrency limit <n> reached`. Active member execution and admitted pending work count toward admission; work is refused, not placed in a Project dispatch queue.
+
+Transfers, membership changes, member controls, and event delivery serialize through one process-local Project ownership fence. Controls admitted before transfer complete under their original ownership; later controls recheck the recorded owner. Delivered history remains immutable. Pending requests retain native identities and are handed to the current owner with deterministic notice identities. Late events route to the owner current at delivery, and stale owner-change notifications cannot redirect them. Restart retains ownership while leaving the Project inactive. Role instruction updates revoke controller guidance when ownership ends.
 
 ## Provenance and transcript presentation
 
@@ -55,17 +62,19 @@ The backend admits `inputOrigin: coordination` with Project, Master, sender Sess
 
 ## Member notifications
 
-Member turn success, failure, interruption, question/form creation, permission asks, and guardrail reviews create compact synthetic notifications using the existing Session notification mechanism. Token deltas and tool progress do not notify. A deterministic message identity prevents duplicate delivery of the same event.
+Member execution start, settled logical-step progress, success with no unfinished background work in the member's family, failure, interruption, question/form creation, permission asks, and guardrail reviews create compact synthetic notifications using the existing Session notification mechanism. Running descendants, active child tasks, undelivered task notices, and outstanding or running jobs prevent completion notification. Token deltas and tool progress do not notify. A deterministic message identity prevents duplicate delivery of the same event.
 
-Notifications go to the Session that last sent to that member if it is a running Master subagent; otherwise they go to the Master. Failure, question/form, permission, review, and escalation notices wake that receiver even while the Project is inactive, without activating it; completed and interrupted notices wake the receiver only while the Project is active and otherwise wait in the Master chat. Notification text starts with `Project notification:` and carries JSON metadata:
+Notifications go directly to the recorded owner, including an idle owner, or to the Master when ownership is null. Supervisor-owned members do not duplicate routine notices to the Master. Failure, question/form, permission, review, and escalation notices wake that receiver even while the Project is inactive, without activating it; other notices wake the receiver only while the Project is active and otherwise wait in the owner's chat. Notification text starts with `Project notification:` and carries JSON metadata:
 
 ```text
 { source: "project_notification", groupID, memberSessionID, title,
-  event: "completed" | "failed" | "interrupted" | "question" | "permission" | "review" | "escalated",
+  event: "started" | "progress" | "completed" | "failed" | "interrupted" | "question" | "permission" | "review" | "escalated",
   requestID?, excerpt?, kind?, escalatedBy?: { sessionID, title } }
 ```
 
 The excerpt is at most 500 characters. An `escalated` notice carries the request `kind`, the escalating subagent as `escalatedBy`, and its reason as the excerpt. Notifications contain observations, not authority. The receiver rereads current member state and pending native requests before acting.
+
+Startup recovers retained execution and settled-Step notifications only from the member's current membership interval. It uses the current owner and existing notice identity without waking either Session or replaying work. Events before joining or while outside the Project are excluded.
 
 ## Delegated routine decisions
 
@@ -77,7 +86,7 @@ Hard reviews, destructive or irreversible actions, external writes, publication,
 
 Revalidate global policy, Project narrowing, membership, expiry, request state, queues, and deny/ceiling rules immediately before settlement. Project active state gates only `send`; `answer` (approve or decline), `escalate`, and `interrupt` work while the Project is inactive. Use native decision and validation paths and record the rationale and originating Session in their audit records. Every coordinated permission settlement publishes `permission.replied` with its reply, so clients remove the pending prompt. Native audit fields retain the `coordinator` actor name. Delegation does not change any category's autonomy mode or create another evaluator.
 
-`decision: decline` applies to permission asks and ordinary reviews, not questions (`invalid-decision`). It passes the same policy, membership, live-identity, and human-only checks as an approval, then rejects through the native path: the permission records `session.permission.assessed` with outcome `deny`, via `coordination`, reply `reject`, and the coordinator fields, and publishes `permission.replied` with reply `reject`; the review records `guardrail.replied` with reply `reject` and `session.guardrail.decided` with reply `reject` and the coordinator fields. The member receives the rationale as feedback. A decline never rejects a hard review, a human-only request, or a request whose effective category mode is Manual; those return the escalation reason.
+`decision: decline` applies to permission asks and ordinary reviews, not questions (`invalid-decision`). It passes the same policy, ownership, membership, live-identity, and human-only checks as an approval. An ordinary unclassified permission ask or standard ordinary review can be declined without a routine action classification; an unclassified custom-rule review still escalates with `unknown-semantics`. Native rejection records `session.permission.assessed` with outcome `deny`, via `coordination`, reply `reject`, and the coordinator fields, and publishes `permission.replied` with reply `reject`; reviews record `guardrail.replied` with reply `reject` and `session.guardrail.decided` with reply `reject` and coordinator fields. The member receives the rationale as feedback. Hard reviews, human-only requests, and requests whose effective category mode is Manual remain human-owned.
 
 Exact repeated decisions reconcile existing settlement; conflicting or stale requests fail. Denies remain denied. Hard reviews and human-only review-box items remain human-owned. Invalid policy, unavailable evaluators, uncertain results, unsupported requests, and new approval boundaries produce a visible escalation reason rather than automatic approval.
 
@@ -96,3 +105,10 @@ Default all-source behavior preserves existing focus, root, category, and permis
 Filtering hides no in-app history, pending controls, or human review-box entries and settles no requests. Quota and machine-level notifications retain their separate policy. Unknown source state never replaces an explicit selection with all sources. Existing delivery identities remain responsible for deduplication.
 
 TUI, web-system notifications, and phone Web Push use the same Master selection and category meanings. Phone delivery evaluates persisted subscription filters against Master identities supplied by the authenticated backend. A browser-supplied filter cannot make an unverified Session a Master. Restricted scopes require the source itself to be a verified Master; membership and saved selection IDs do not confer that identity. An unreadable Master list withholds restricted delivery without changing the saved filter.
+
+## Verification
+
+- `packages/core/test/coordination-assignment.test.ts` and `coordination-runtime.test.ts` enforce ownership, transfer ordering, stale-owner refusal, native delivery, deduplication, and restart recovery.
+- `packages/core/test/coordination-model-request.test.ts`, `coordination-hierarchy-prompt.test.ts`, and the native decision suites enforce role/tool consistency, ordinary-Session behavior, and permission, question, and review boundaries.
+- `packages/core/test/database-migration.test.ts` and `packages/core/script/migration.test.ts` enforce populated upgrades, null ownership, deletion actions, and identical fresh/upgraded constraints and indexes. The migration generator's `--check` validates generated schema and registry consistency.
+- `packages/schema/test/coordination.test.ts` and `event-manifest.test.ts` enforce wire shapes and event inventory. TUI Projects-tab, flow, and picker render tests enforce the displayed owner context and keyboard paths.

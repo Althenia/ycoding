@@ -59,11 +59,34 @@ export interface Interface {
   readonly delete: (groupID: Coordination.GroupID) => Effect.Effect<void, NotFoundError>
   readonly scopeOf: (sessionID: Session.ID) => Effect.Effect<Scope | undefined>
   readonly memberOf: (sessionID: Session.ID) => Effect.Effect<Scope | undefined>
+  readonly accessOf: (sessionID: Session.ID) => Effect.Effect<Access | undefined>
+  readonly withOwnership: <A, E, R>(groupID: Coordination.GroupID, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  readonly setOwner: (groupID: Coordination.GroupID, input: OwnerInput) => Effect.Effect<void, NotFoundError>
   readonly activate: (groupID: Coordination.GroupID) => Effect.Effect<void>
   readonly pause: (groupID: Coordination.GroupID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Coordination") {}
+
+export type Role = "master" | "supervisor"
+
+export interface Access {
+  readonly scope: Scope
+  readonly role: Role | "executor"
+  readonly ownedSessionIDs: ReadonlyArray<Session.ID>
+  readonly ownerSessionID?: Session.ID
+}
+
+export function canAct(access: Access, sessionID: Session.ID) {
+  return access.scope.memberSessionIDs.includes(sessionID) &&
+    (access.role === "master" || (access.role === "supervisor" && access.ownedSessionIDs.includes(sessionID)))
+}
+
+export interface OwnerInput {
+  readonly sessionID: Session.ID
+  readonly ownerSessionID?: Session.ID
+  readonly reason?: Coordination.ReleaseReason
+}
 
 type GroupRow = typeof CoordinationGroupTable.$inferSelect
 
@@ -75,6 +98,7 @@ export const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const events = yield* EventRuntime.Service
     const lock = KeyedMutex.makeUnsafe<string>()
+    const ownershipLock = KeyedMutex.makeUnsafe<Coordination.GroupID>()
     const active = new Set<Coordination.GroupID>()
     const existing = yield* db.select({ id: CoordinationGroupTable.id }).from(CoordinationGroupTable).all().pipe(Effect.orDie)
     const pausedReasons = new Map<Coordination.GroupID, Coordination.PausedReason>(existing.map(({ id }) => [id, "restart"]))
@@ -169,14 +193,29 @@ export const layer = Layer.effect(
     const updated = (groupID: Coordination.GroupID, revision: number) =>
       events.publish(Coordination.Event.Updated, { groupID, revision: Coordination.Revision.make(revision) }).pipe(Effect.asVoid)
 
-    const insertMembers = (groupID: Coordination.GroupID, sessionIDs: ReadonlyArray<Session.ID>) =>
+    const insertMembers = (
+      groupID: Coordination.GroupID,
+      sessionIDs: ReadonlyArray<Session.ID>,
+      owners: ReadonlyMap<Session.ID, Session.ID> = new Map(),
+    ) =>
       sessionIDs.length === 0
         ? Effect.void
         : db
             .insert(CoordinationMemberTable)
-            .values(sessionIDs.map((session_id) => ({ group_id: groupID, session_id })))
+            .values(sessionIDs.map((session_id) => ({ group_id: groupID, session_id, owner_session_id: owners.get(session_id) ?? null })))
             .run()
             .pipe(Effect.orDie, Effect.asVoid)
+
+    const ownersOf = (groupID: Coordination.GroupID) =>
+      db
+        .select({ session: CoordinationMemberTable.session_id, owner: CoordinationMemberTable.owner_session_id })
+        .from(CoordinationMemberTable)
+        .where(eq(CoordinationMemberTable.group_id, groupID))
+        .all()
+        .pipe(
+          Effect.orDie,
+          Effect.map((rows) => new Map(rows.flatMap((item) => (item.owner === null ? [] : [[item.session, item.owner] as const])))),
+        )
 
     const scopeFor = Effect.fnUntraced(function* (found: GroupRow | undefined) {
       if (!found) return undefined
@@ -191,6 +230,7 @@ export const layer = Layer.effect(
     })
 
     const service: Interface = {
+      withOwnership: (groupID, effect) => ownershipLock.withLock(groupID)(effect),
       create: Effect.fn("Coordination.create")((value) =>
         lock.withLock("projects")(
           Effect.gen(function* () {
@@ -271,6 +311,7 @@ export const layer = Layer.effect(
               {
                 commit: () =>
                   Effect.gen(function* () {
+                    const owners = masterSessionID === current.master_session_id ? yield* ownersOf(groupID) : new Map<Session.ID, Session.ID>()
                     yield* db.delete(CoordinationMemberTable).where(eq(CoordinationMemberTable.group_id, groupID)).run().pipe(Effect.orDie)
                     yield* db
                       .update(CoordinationGroupTable)
@@ -285,7 +326,7 @@ export const layer = Layer.effect(
                       .where(eq(CoordinationGroupTable.id, groupID))
                       .run()
                       .pipe(Effect.orDie)
-                    yield* insertMembers(groupID, memberSessionIDs)
+                    yield* insertMembers(groupID, memberSessionIDs, owners)
                   }),
               },
             )
@@ -353,6 +394,57 @@ export const layer = Layer.effect(
         return yield* scopeFor(yield* db.select().from(CoordinationGroupTable).where(eq(CoordinationGroupTable.id, member.group)).get().pipe(Effect.orDie))
       }),
 
+      accessOf: Effect.fn("Coordination.accessOf")(function* (sessionID) {
+        let current: Session.ID | null | undefined = sessionID
+        for (let depth = 0; current && depth < maxAncestors; depth++) {
+          const scope = (yield* service.scopeOf(current)) ?? (yield* service.memberOf(current))
+          if (scope !== undefined) {
+            const owners = yield* ownersOf(scope.groupID)
+            const ownedSessionIDs = [...owners].filter(([, owner]) => owner === sessionID).map(([member]) => member)
+            return {
+              scope,
+              role: sessionID === scope.masterSessionID ? "master" : ownedSessionIDs.length > 0 ? "supervisor" : "executor",
+              ownedSessionIDs,
+              ...(scope.memberSessionIDs.includes(sessionID) ? { ownerSessionID: owners.get(sessionID) ?? scope.masterSessionID } : {}),
+            } satisfies Access
+          }
+          const parent: { id: Session.ID | null } | undefined = yield* db.select({ id: SessionTable.parent_id })
+            .from(SessionTable).where(eq(SessionTable.id, current)).get().pipe(Effect.orDie)
+          current = parent?.id
+        }
+        return undefined
+      }),
+
+      setOwner: Effect.fn("Coordination.setOwner")((groupID, input) =>
+        lock.withLock("projects")(
+          Effect.gen(function* () {
+            const current = yield* row(groupID)
+            const member = yield* db.select().from(CoordinationMemberTable)
+              .where(and(eq(CoordinationMemberTable.group_id, groupID), eq(CoordinationMemberTable.session_id, input.sessionID)))
+              .get().pipe(Effect.orDie)
+            if (member === undefined) return yield* new NotFoundError({ message: `Session ${input.sessionID} is not a member of this Project` })
+            if (member.owner_session_id === (input.ownerSessionID ?? null)) return
+            yield* events.publish(
+              Coordination.Event.OwnerChanged,
+              {
+                groupID,
+                revision: Coordination.Revision.make(current.revision),
+                sessionID: input.sessionID,
+                ...(input.ownerSessionID === undefined ? {} : { ownerSessionID: input.ownerSessionID }),
+                ...(input.reason === undefined ? {} : { reason: input.reason }),
+              },
+              {
+                commit: () => db.update(CoordinationMemberTable)
+                  .set({ owner_session_id: input.ownerSessionID ?? null })
+                  .where(and(eq(CoordinationMemberTable.group_id, groupID), eq(CoordinationMemberTable.session_id, input.sessionID)))
+                  .run().pipe(Effect.orDie, Effect.asVoid),
+              },
+            )
+            yield* updated(groupID, current.revision)
+          }),
+        ),
+      ),
+
       activate: (groupID) =>
         active.has(groupID)
           ? Effect.void
@@ -371,7 +463,11 @@ export const layer = Layer.effect(
               return row(groupID).pipe(Effect.flatMap((found) => updated(groupID, found.revision)), Effect.ignore)
             }),
     }
-    return Service.of(service)
+    return Service.of({
+      ...service,
+      update: (groupID, input) => service.withOwnership(groupID, service.update(groupID, input)),
+      delete: (groupID) => service.withOwnership(groupID, service.delete(groupID)),
+    })
   }),
 )
 

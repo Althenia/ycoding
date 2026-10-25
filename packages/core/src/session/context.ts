@@ -130,7 +130,8 @@ const layer = Layer.effect(
         return yield* Effect.interrupt
 
       yield* plugins.flush
-      const scoped = (yield* coordination.scopeOf(sessionID)) !== undefined
+      const access = yield* coordination.accessOf(sessionID)
+      const scoped = access !== undefined && access.role !== "executor"
       const modelOverride = yield* CoordinationModel.override(db, sessionID)
       const agent = yield* agents.select(session.agent)
       if (!agent.info) return yield* new AgentNotFoundError({ sessionID: session.id, agent: session.agent ?? agent.id })
@@ -149,7 +150,7 @@ const layer = Layer.effect(
           skillInstructions.load(agent),
           referenceInstructions.load(),
           mcpInstructions.load(agent),
-          Effect.succeed(Instructions.when(scoped, CoordinationInstructions.make())),
+          Effect.succeed(Instructions.when(access !== undefined, CoordinationInstructions.make(access?.role ?? "executor"))),
           Effect.succeed(
             Instructions.when(
               InstructionBuiltIns.enabled("project-artifact-authoring", { capabilities, tools }),

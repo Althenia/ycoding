@@ -14,7 +14,7 @@ test("Project instructions describe member messaging and native decisions", () =
 test("Master instructions require supervision, evidence review and reasoned escalation", () => {
   for (const instruction of [
     "Coordinate and supervise only",
-    "Do not read or edit code, run checks, or create commits",
+    "Delegate implementation to executor Sessions",
     "concrete outcome, actions and checks, exclusions, and a stop condition",
     "Verify reported evidence before accepting work",
     "owning subagent → Master → human",
@@ -25,6 +25,9 @@ test("Master instructions require supervision, evidence review and reasoned esca
 test("the voice source is present only for a scoped Session", async () => {
   const active = await Effect.runPromise(Instructions.read(Instructions.when(true, CoordinationInstructions.make())))
   const inactive = await Effect.runPromise(Instructions.read(Instructions.when(false, CoordinationInstructions.make())))
-  expect(active).toEqual([{ key: Instructions.Key.make("ycoding/coordination-voice"), value: CoordinationInstructions.content }])
+  expect(active).toHaveLength(1)
+  expect(active[0]?.key).toBe(Instructions.Key.make("ycoding/coordination-voice"))
+  expect(active[0]?.value).toContain("Project role: Master")
+  expect(active[0]?.value).toContain(CoordinationInstructions.content)
   expect(inactive[0]?.value).toEqual(Instructions.removed)
 })

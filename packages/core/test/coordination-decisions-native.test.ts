@@ -902,6 +902,67 @@ describe("native coordinator Permission decline and escalation", () => {
     }),
   )
 
+  const unclassified = nativeHarness([{ escalate: 0.95 }])
+  unclassified.it.effect("a decline of an unclassified ask unblocks the waiting tool exactly once, and a stale fingerprint settles nothing", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID: nativeSessionID, permissions: "yolo" })
+      const service = yield* Permission.Service
+      const captured = yield* captureNativeEvents()
+      const running = yield* service
+        .assert({ sessionID: nativeSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"] })
+        .pipe(Effect.flip, Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.snapshot(pending[0]!.id)
+      const decline = (fingerprint: string) => service.reconsider({
+        requestID: pending[0]!.id, fingerprint, actor: "coordinator", source: coordinatorSource,
+        decision: "decline", validate: () => Effect.succeed(true),
+      })
+      expect(yield* decline(`${snapshot!.fingerprint}x`)).toMatchObject({ outcome: "stale", settled: false })
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+      expect(captured.permissionReplied).toEqual([])
+
+      expect(yield* decline(snapshot!.fingerprint)).toMatchObject({ outcome: "denied", settled: true, via: "coordination" })
+      const error = yield* Fiber.join(running)
+      expect(error).toBeInstanceOf(Permission.CorrectedError)
+      expect((error as Permission.CorrectedError).feedback).toContain("Assigned routine work.")
+      expect(yield* decline(snapshot!.fingerprint)).toMatchObject({ outcome: "stale", settled: false })
+      expect(captured.permissionReplied).toEqual([{ sessionID: nativeSessionID, requestID: pending[0]!.id, reply: "reject" }])
+      expect(captured.assessed.filter((event) => event.via === "coordination")).toEqual([
+        expect.objectContaining({
+          requestID: pending[0]!.id, outcome: "deny", reply: "reject", actor: "coordinator",
+          coordinatorSessionID: coordinatorSource.coordinatorSessionID, groupID: "cgrp_one", rationale: "Assigned routine work.",
+        }),
+      ])
+    }),
+  )
+
+  const unclassifiedManual = nativeHarness([{ allow: 0.99 }])
+  unclassifiedManual.it.effect("a decline of an unclassified ask under Manual permissions stays human-only", () =>
+    Effect.gen(function* () {
+      yield* nativeSetup
+      const service = yield* Permission.Service
+      const captured = yield* captureNativeEvents()
+      yield* service
+        .assert({ sessionID: nativeSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"] })
+        .pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
+        yield* Effect.yieldNow
+      const pending = yield* service.forSession(nativeSessionID)
+      const snapshot = yield* service.snapshot(pending[0]!.id)
+      expect(yield* service.reconsider({
+        requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator", source: coordinatorSource,
+        decision: "decline", validate: () => Effect.succeed(true),
+      })).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:manual-permissions" })
+      expect(unclassifiedManual.choices).toHaveLength(0)
+      expect(captured.permissionReplied).toEqual([])
+      expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
+    }),
+  )
+
   const human = nativeHarness([{ escalate: 0.95 }])
   human.it.effect("a decline never rejects a human-only ask or one the delegation no longer covers", () =>
     Effect.gen(function* () {
@@ -1114,7 +1175,8 @@ describe("native escalation chain through CoordinationDecisions", () => {
     const guardrail = yield* SessionGuardrail.Service
     return CoordinationDecisions.make({
       policy: () => Effect.succeed({ enabled: false, categories: [] }) as never,
-      scopeOf: (sessionID) => Effect.succeed(sessionID === masterSource.coordinatorSessionID || sessionID === driverSource.coordinatorSessionID ? (scope as never) : undefined),
+      accessOf: (sessionID) => Effect.succeed(sessionID === masterSource.coordinatorSessionID || sessionID === driverSource.coordinatorSessionID
+        ? { scope, role: sessionID === masterSource.coordinatorSessionID ? "master" : "supervisor", ownedSessionIDs: [nativeSessionID] } as never : undefined),
       permission,
       guardrail,
       form: { snapshot: () => Effect.succeed(undefined), snapshots: () => Effect.succeed([]), reconsider: () => Effect.die("unused"), escalate: () => Effect.die("unused") },

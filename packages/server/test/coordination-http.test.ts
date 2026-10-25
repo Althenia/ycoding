@@ -75,6 +75,21 @@ test("list returns summaries from the runtime", async () => {
   expect(await result.json()).toEqual({ data: [JSON.parse(JSON.stringify(summary))] })
 })
 
+test("the authenticated Project response retains recorded ownership and omits absent ownership", async () => {
+  const owner = { sessionID: "ses_supervisor", title: "Supervisor" }
+  const owned = Schema.decodeUnknownSync(Coordination.Info)({
+    ...info,
+    members: [{ ...info.members[0], owner }, participant("ses_unowned")],
+  })
+  await using http = fixture({}, { get: () => Effect.succeed(owned) })
+  const response = await http.json("/cgrp_http", "GET")
+  expect(response.status).toBe(200)
+  const body = await response.json()
+  expect(body.data.members[0].owner).toEqual(owner)
+  expect(body.data.members[1]).not.toHaveProperty("owner")
+  expect(http.authorized()).toBe(1)
+})
+
 test("settings exposes central revocation through the authenticated read route", async () => {
   await using http = fixture({})
   const result = await http.json("/settings", "GET")

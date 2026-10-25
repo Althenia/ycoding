@@ -606,7 +606,7 @@ export function reconcilePendingInputs(view: SessionView, pending: readonly Remo
   return { ...view, messages: visibleTranscript([...retained.filter((message) => !admitted.some((item) => item.id === message.id)), ...admitted]) }
 }
 
-const memberEventKinds = ["completed", "failed", "interrupted", "question", "permission", "review", "escalated"] as const
+const memberEventKinds = ["started", "progress", "completed", "failed", "interrupted", "question", "permission", "review", "escalated"] as const
 export type MemberEventKind = (typeof memberEventKinds)[number]
 
 export function classifySyntheticNotice(message: RemoteMessageView):

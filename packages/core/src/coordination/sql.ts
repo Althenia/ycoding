@@ -35,9 +35,13 @@ export const CoordinationMemberTable = sqliteTable(
       .$type<Session.ID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
+    owner_session_id: text()
+      .$type<Session.ID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
   },
   (table) => [
     primaryKey({ columns: [table.group_id, table.session_id] }),
+    index("coordination_member_owner_idx").on(table.owner_session_id),
     uniqueIndex("coordination_member_session_idx").on(table.session_id),
   ],
 )

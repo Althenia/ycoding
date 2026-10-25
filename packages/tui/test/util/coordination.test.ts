@@ -2,34 +2,28 @@ import { expect, test } from "bun:test"
 import { stringWidth } from "../../src/util/string-width"
 import {
   ageLabel,
-  chipsRow,
-  collapseLevel,
   concurrencyMeter,
   delegationSummary,
   externalNotificationAllowed,
   filterSessions,
   liveSummary,
   masterChoices,
-  masterSummary,
-  memberPosition,
   narrowingError,
   notificationFilterLabel,
   parseConcurrency,
   parseExpiry,
   parseList,
-  projectHint,
   projectListHeader,
   projectListLine,
   projectNarrowHeader,
   projectNarrowLine,
+  projectContextOf,
   projectOfSession,
   projectNotification,
   projectStatusLabel,
   roster,
   runningMembers,
   stateGlyph,
-  stateWord,
-  stripLine,
   toggleCategory,
   toggleMaster,
   updatedLabel,
@@ -113,11 +107,26 @@ test("a Session maps to its Project and role, and unrelated Sessions map to noth
   expect(projectOfSession(undefined, "lead")).toBeUndefined()
 })
 
-test("state glyphs and words follow the registry and always pair a glyph with its word", () => {
-  expect([stateGlyph("running", false), stateWord("running")]).toEqual(["●", "running"])
-  expect([stateGlyph("idle", false), stateWord("idle")]).toEqual(["○", "idle"])
-  expect([stateGlyph("waiting", false), stateWord("waiting")]).toEqual(["?", "waiting"])
-  expect([stateGlyph("failed", false), stateWord("failed")]).toEqual(["✗", "failed"])
+test("Project context: the persisted Master, a supervisor only while it owns a recorded member, members otherwise", () => {
+  const owned = project("owned", lead, [
+    participant("docs", "Docs worker", "member", "idle", { owner: { sessionID: "supervisor", title: "Docs supervisor" } }),
+    api,
+  ])
+  expect(projectContextOf([owned], "lead")).toEqual({ project: owned, role: "master" })
+  expect(projectContextOf([owned], "supervisor")).toEqual({ project: owned, role: "supervisor" })
+  expect(projectContextOf([owned], "docs")).toEqual({ project: owned, role: "member" })
+  expect(projectContextOf([owned], "api")).toEqual({ project: owned, role: "member" })
+  expect(projectContextOf([release], "supervisor")).toBeUndefined()
+  expect(projectContextOf([owned], "stranger")).toBeUndefined()
+  expect(projectContextOf(undefined, "lead")).toBeUndefined()
+  expect(projectOfSession([owned], "supervisor")).toBeUndefined()
+})
+
+test("state glyphs follow the registry", () => {
+  expect(stateGlyph("running", false)).toBe("●")
+  expect(stateGlyph("idle", false)).toBe("○")
+  expect(stateGlyph("waiting", false)).toBe("?")
+  expect(stateGlyph("failed", false)).toBe("✗")
   expect(stateGlyph("running", true)).toBe("⠋")
 })
 
@@ -142,18 +151,9 @@ test("the live summary lists each non-empty state with its count, master include
   ).toBe("✗1 ○2")
 })
 
-test("project status words and the master summary read from active state and roster", () => {
+test("project status words read from active state", () => {
   expect(projectStatusLabel(true)).toBe("● active")
   expect(projectStatusLabel(false)).toBe("○ paused")
-  expect(masterSummary(release)).toBe("4 members + Master · 3 running · 1 waiting")
-  expect(masterSummary(project("solo", lead, []))).toBe("0 members + Master · 1 running")
-  expect(masterSummary(project("one", lead, [docs]))).toBe("1 member + Master · 1 running")
-  expect(masterSummary(project("idle", participant("p", "Planner", "master"), [docs]))).toBe(
-    "1 member + Master · 0 running",
-  )
-  expect(masterSummary(project("held", participant("w", "Waiter", "master", "waiting"), [docs]))).toBe(
-    "1 member + Master · 0 running · 1 waiting",
-  )
 })
 
 test("ages read as now, seconds, minutes, hours and the updated stamp", () => {
@@ -165,55 +165,6 @@ test("ages read as now, seconds, minutes, hours and the updated stamp", () => {
   expect(ageLabel(-5)).toBe("now")
   expect(updatedLabel(3_000)).toBe("updated 3s ago")
   expect(updatedLabel(undefined)).toBe("")
-})
-
-test("the strip names the role, Project, status and counts, and collapses in a fixed order", () => {
-  const master = { project: release, role: "master" as const, sessionID: "lead" }
-  const wide = stripLine({ ...master, width: 120 })
-  expect(wide).toBe(
-    "Projects › Release train   ·   Master of Release train   ·   ● active   ·   4 members + Master · 3 running · 1 waiting",
-  )
-  const narrow = stripLine({ ...master, width: 80 })
-  expect(narrow).toBe("Master of Release train · ● active · 3 running · ? 1")
-  const squeezed = stripLine({ ...master, width: 50 })
-  expect(squeezed.length).toBeLessThanOrEqual(50)
-  expect(squeezed).toContain("Master of Releas")
-  expect(squeezed).toContain("…")
-  expect(squeezed).toContain("3 running")
-  expect(squeezed).toContain("● active")
-  const member = stripLine({ project: release, role: "member", sessionID: "docs", width: 120 })
-  expect(member).toBe(
-    "Projects › Release train   ·   Member of Release train · master: Lead   ·   member 1 of 4   ·   ○ idle",
-  )
-  expect(stripLine({ project: release, role: "member", sessionID: "docs", width: 80 })).toBe(
-    "Member of Release train · master: Lead · ○ idle",
-  )
-})
-
-test("the position of a member counts members only and skips the master", () => {
-  expect(memberPosition(release, "docs")).toEqual({ index: 1, total: 4 })
-  expect(memberPosition(release, "design")).toEqual({ index: 4, total: 4 })
-  expect(memberPosition(release, "lead")).toBeUndefined()
-})
-
-test("collapse order drops the updated stamp, then the breadcrumb, then the chips row, and keeps the tray", () => {
-  expect(collapseLevel(160)).toEqual({ pane: true, updated: true, breadcrumb: true, chips: false })
-  expect(collapseLevel(120)).toEqual({ pane: true, updated: true, breadcrumb: true, chips: false })
-  expect(collapseLevel(110)).toEqual({ pane: true, updated: false, breadcrumb: true, chips: false })
-  expect(collapseLevel(99)).toEqual({ pane: false, updated: false, breadcrumb: false, chips: true })
-  expect(collapseLevel(80)).toEqual({ pane: false, updated: false, breadcrumb: false, chips: true })
-  expect(collapseLevel(60)).toEqual({ pane: false, updated: false, breadcrumb: false, chips: false })
-})
-
-test("the chips row shows the master first, first words, and an overflow count", () => {
-  const row = chipsRow(release, 80)
-  expect(row.chips.map((chip) => chip.label)).toEqual(["MASTER Lead", "Docs", "Api", "Infra", "Design"])
-  expect(row.chips.map((chip) => chip.state)).toEqual(["running", "idle", "running", "waiting", "running"])
-  expect(row.overflow).toBe(0)
-  const tight = chipsRow(release, 34)
-  expect(tight.chips[0]!.label).toBe("MASTER Lead")
-  expect(tight.overflow).toBe(5 - tight.chips.length)
-  expect(tight.overflow).toBeGreaterThan(0)
 })
 
 test("concurrency accepts a positive whole number, or no limit", () => {
@@ -380,17 +331,6 @@ test("the narrow list keeps the member count under its header and inside the pan
   expect(header).not.toContain("…")
   expect(stringWidth(header)).toBeLessThanOrEqual(26)
   expect(stringWidth(line)).toBeLessThanOrEqual(26)
-})
-
-test("the Project hint row drops leading navigation hints before it truncates", () => {
-  expect(projectHint({ role: "member", width: 120 })).toBe(
-    "↑ master · ←→ member · ctrl+x p members · enter send · esc interrupt",
-  )
-  expect(projectHint({ role: "master", width: 120 })).toBe("ctrl+x p members · enter send · esc interrupt")
-  const narrow = projectHint({ role: "member", width: 60 })
-  expect(stringWidth(narrow)).toBeLessThanOrEqual(60)
-  expect(narrow).toBe("←→ member · ctrl+x p members · enter send · esc interrupt")
-  expect(projectHint({ role: "member", width: 20 })).toBe("ctrl+x p members · enter send · esc interrupt")
 })
 
 test("Session search matches every word against the title and the directory", () => {

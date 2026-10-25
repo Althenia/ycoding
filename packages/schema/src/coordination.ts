@@ -112,7 +112,11 @@ export const Participant = Schema.Struct({
   lastActivity: NonNegativeInt,
   pending: Schema.Array(PendingRequest).check(Schema.isMaxLength(maxPending)),
   drivenBy: Schema.Struct({ sessionID: SessionID, title: Schema.String }).pipe(optional),
+  owner: Schema.Struct({ sessionID: SessionID, title: Schema.String }).pipe(optional),
 }).annotate({ identifier: "Coordination.Participant" })
+
+export const ReleaseReason = Schema.Literals(["completed", "released"])
+export type ReleaseReason = typeof ReleaseReason.Type
 
 const Time = Schema.Struct({ created: NonNegativeInt, updated: NonNegativeInt })
 
@@ -196,6 +200,19 @@ export namespace Event {
     schema: { ...Base },
   })
   export type Deleted = typeof Deleted.Type
+
+  export const OwnerChanged = durable({
+    type: "coordination.member.owner.changed",
+    identifier: "Coordination.Event.OwnerChanged",
+    ...groupEvent,
+    schema: {
+      ...Base,
+      sessionID: SessionID,
+      ownerSessionID: SessionID.pipe(optional),
+      reason: ReleaseReason.pipe(optional),
+    },
+  })
+  export type OwnerChanged = typeof OwnerChanged.Type
 }
 
-export const DurableDefinitions = inventory(Event.Created, Event.Changed, Event.Deleted)
+export const DurableDefinitions = inventory(Event.Created, Event.Changed, Event.Deleted, Event.OwnerChanged)

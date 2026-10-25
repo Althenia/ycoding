@@ -426,16 +426,25 @@ describe("project tool and model request materialization", () => {
     }),
   )
 
-  it.effect("a subagent of the Master gets the project tool; a member and a member's subagent do not", () =>
+  it.effect("executor children never gain the project tool from ancestry; recorded owners gain it until ownership is released", () =>
     Effect.gen(function* () {
-      yield* setupProject
+      const fixture = yield* setupProject
       const masterChild = Session.ID.make("ses_coord_master_child")
       const memberChild = Session.ID.make("ses_coord_member_child")
       yield* insertSession(masterChild, otherSessionID)
       yield* insertSession(memberChild, sessionID)
       const masterRequest = yield* requestFor(masterChild, "Drive the member")
-      expect(toolNames(masterRequest)).toContain("project")
-      expect(JSON.stringify(masterRequest?.system)).toContain("Coordinate and supervise only")
+      expect(toolNames(masterRequest)).not.toContain("project")
+      expect(JSON.stringify(masterRequest?.system)).not.toContain("Coordinate and supervise only")
+      yield* fixture.coordination.setOwner(fixture.group.id, { sessionID, ownerSessionID: masterChild })
+      const supervising = yield* requestFor(masterChild, "Supervise the member")
+      expect(toolNames(supervising)).toContain("project")
+      expect(JSON.stringify(supervising)).toContain("Project role: supervisor")
+      const executor = Session.ID.make("ses_coord_owned_executor")
+      yield* insertSession(executor, masterChild)
+      expect(toolNames(yield* requestFor(executor, "Implement the assignment"))).not.toContain("project")
+      yield* fixture.coordination.setOwner(fixture.group.id, { sessionID })
+      expect(toolNames(yield* requestFor(masterChild, "After release"))).not.toContain("project")
       const memberRequest = yield* requestFor(sessionID, "Member work")
       expect(toolNames(memberRequest)).not.toContain("project")
       expect(JSON.stringify(memberRequest?.system)).not.toContain("Coordinate and supervise only")

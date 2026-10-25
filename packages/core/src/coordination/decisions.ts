@@ -26,7 +26,7 @@ export const layerWith = (getLocation: (location: Location.Ref) => Layer.Layer<P
         const guardrail = yield* SessionGuardrail.Service
         return yield* run(CoordinationDecisions.make({
           policy: settings.read,
-          scopeOf: coordination.scopeOf,
+          accessOf: coordination.accessOf,
           permission,
           form,
           guardrail,

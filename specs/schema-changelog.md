@@ -2,6 +2,12 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-25: Persist Project member ownership
+
+- Add optional `owner: { sessionID, title }` to `Coordination.Participant` and the public durable event `coordination.member.owner.changed.1` with Project revision, member identity, optional owner identity, and optional release reason `completed` or `released`.
+- Store nullable `coordination_member.owner_session_id` with `ON DELETE SET NULL`. Existing members remain unowned. Fresh and upgraded schemas preserve the same constraints and indexes.
+- Generate role instructions and control scope from recorded ownership. Add native `project inspect`, `assign`, and `release` actions without changing owner-authenticated HTTP operation shapes.
+
 ## 2026-10-25: Retain text delivery boundaries in transcript projections
 
 - Add optional `time: { created, completed? }` and `breaks: { offset, after }[]` to `Session.Message.Assistant.Text`, and optional `breaks` to `session.text.ended.1`.

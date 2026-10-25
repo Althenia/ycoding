@@ -82,6 +82,7 @@ async function renderEconomics(width = 120) {
                   siblingEconomics={{ ses_paid: "$0.13 · 1.6K" }}
                 />
                 <picker.SubagentMetadata
+                  width={width}
                   model="openai/gpt-5.6-terra#high"
                   status="attached"
                 />

@@ -1,7 +1,7 @@
 import { createEffect, createMemo, For, onCleanup, Show, useContext, createContext } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
-import { type JSX } from "@opentui/solid"
+import { type JSX, useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../../../context/theme"
 import { Keymap } from "../../../context/keymap"
 import { useData } from "../../../context/data"
@@ -9,6 +9,7 @@ import { groupSessionShells } from "../../../util/session"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
 import { SideChatsTab } from "./side-chats-tab"
+import { ProjectsTab, type ProjectsTabProps } from "./projects-tab"
 import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 
 interface ComposerHint {
@@ -40,6 +41,9 @@ export type ComposerProps = {
   sessionID: string
   open: boolean
   defaultTab?: string
+  tabRequest?: number
+  projects?: ProjectsTabProps
+  onActiveTab?: (id: string) => void
   onClose?: () => void
   prompt?: JSX.Element
   onSubagentAnswer?: (task: SessionOrchestrationTask) => void
@@ -48,13 +52,16 @@ export type ComposerProps = {
 export function Composer(props: ComposerProps) {
   const { theme } = useTheme().contextual("elevated")
   const data = useData()
+  const dimensions = useTerminalDimensions()
+  const compactProjects = () => store.active === "projects" && dimensions().height <= 24
 
   const [store, setStore] = createStore({
     tabs: {} as Record<string, Tab>,
     active: "",
   })
 
-  const tabList = createMemo(() => Object.values(store.tabs))
+  const tabList = createMemo(() => Object.values(store.tabs).toSorted((a, b) => tabOrder(a.id) - tabOrder(b.id)))
+  const firstTab = (tabs: readonly Tab[]) => tabs.find((tab) => tab.id !== "projects") ?? tabs[0]
   const activeTab = createMemo(() => tabList().find((t) => t.id === store.active))
   const footerHints = createMemo(() => activeTab()?.hints?.() ?? [])
   const shells = createMemo(() =>
@@ -65,23 +72,25 @@ export function Composer(props: ComposerProps) {
   )
   const subagents = createMemo(() => data.session.subagent.summary(props.sessionID)?.active ?? 0)
 
-  // Set active tab when opened
-  let defaultTabApplied = false
+  let appliedRequest: string | undefined
 
   createEffect(() => {
     if (!props.open) {
-      defaultTabApplied = false
+      appliedRequest = undefined
       if (store.active) setStore("active", "")
       return
     }
-    if (defaultTabApplied) return
+    const request = `${props.defaultTab ?? ""}:${props.tabRequest ?? 0}`
+    if (appliedRequest === request) return
     const tabs = tabList()
     if (tabs.length === 0) return
     const match = props.defaultTab && tabs.find((t) => t.id === props.defaultTab)
     if (props.defaultTab && !match) return
-    setStore("active", match ? match.id : tabs[0].id)
-    defaultTabApplied = true
+    setStore("active", match ? match.id : firstTab(tabs).id)
+    appliedRequest = request
   })
+
+  createEffect(() => props.onActiveTab?.(store.active))
 
   function close() {
     const tab = activeTab()
@@ -92,8 +101,13 @@ export function Composer(props: ComposerProps) {
   const ctx = {
     register(tab: Tab) {
       setStore("tabs", tab.id, tab)
-      if (!store.active) setStore("active", tab.id)
-      return () => setStore("tabs", tab.id, undefined!)
+      if (!store.active && tab.id !== "projects") setStore("active", tab.id)
+      return () => {
+        setStore("tabs", tab.id, undefined!)
+        if (store.active !== tab.id) return
+        const fallback = tabList().find((item) => item.id !== tab.id && item.id !== "projects")
+        setStore("active", props.open && fallback ? fallback.id : "")
+      }
     },
     active(id: string) {
       return props.open && store.active === id
@@ -138,8 +152,8 @@ export function Composer(props: ComposerProps) {
           backgroundColor={theme.background.default}
           paddingLeft={3}
           paddingRight={4}
-          paddingTop={3}
-          paddingBottom={1}
+          paddingTop={compactProjects() ? 0 : 3}
+          paddingBottom={compactProjects() ? 0 : 1}
         >
           <box gap={1}>
             <box flexDirection="row" paddingLeft={0}>
@@ -182,30 +196,53 @@ export function Composer(props: ComposerProps) {
                 </box>
               </Show>
             </box>
+            <Show when={props.projects}>
+              {(projects) => (
+                <ProjectsTab
+                  project={projects().project}
+                  currentSessionID={projects().currentSessionID}
+                  sessions={projects().sessions}
+                  service={projects().service}
+                  now={projects().now}
+                  loadedAt={projects().loadedAt}
+                  onOpen={projects().onOpen}
+                  onSettings={projects().onSettings}
+                />
+              )}
+            </Show>
             <SubagentsTab sessionID={props.sessionID} onAnswer={props.onSubagentAnswer} />
             <ShellTab sessionID={props.sessionID} />
             <SideChatsTab sessionID={props.sessionID} />
-            <box flexDirection="row" flexShrink={0}>
-              <For each={footerHints()}>
-                {(hint) => (
-                  <>
-                    <text>
-                      <span style={{ fg: theme.text.default }}>
-                        <b>{hint.label}</b>{" "}
-                      </span>
-                      <span style={{ fg: theme.text.subdued }}>{hint.shortcut}</span>
-                    </text>
-                    <Show when={hint.gapAfter} keyed>
-                      {(gap) => <box width={gap} />}
-                    </Show>
-                  </>
-                )}
-              </For>
-            </box>
+            <Show when={activeTab()?.hints}>
+              <box flexDirection="row" flexShrink={0}>
+                <For each={footerHints()}>
+                  {(hint) => (
+                    <>
+                      <text>
+                        <span style={{ fg: theme.text.default }}>
+                          <b>{hint.label}</b>{" "}
+                        </span>
+                        <span style={{ fg: theme.text.subdued }}>{hint.shortcut}</span>
+                      </text>
+                      <Show when={hint.gapAfter} keyed>
+                        {(gap) => <box width={gap} />}
+                      </Show>
+                    </>
+                  )}
+                </For>
+              </box>
+            </Show>
           </box>
         </box>
         <Show when={props.prompt}>{(prompt) => <box width="100%">{prompt()}</box>}</Show>
       </box>
     </ComposerContext.Provider>
   )
+}
+
+const TAB_ORDER = ["projects", "subagents", "shell", "side-chats"]
+
+function tabOrder(id: string) {
+  const index = TAB_ORDER.indexOf(id)
+  return index === -1 ? TAB_ORDER.length : index
 }

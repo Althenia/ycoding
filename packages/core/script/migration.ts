@@ -6,6 +6,7 @@ import os from "os"
 import path from "path"
 import { pathToFileURL } from "url"
 import { parseArgs } from "util"
+import { Schema } from "effect"
 
 const root = path.resolve(import.meta.dirname, "../../..")
 const snapshot = path.join(root, "packages/core/schema.json")
@@ -13,7 +14,7 @@ const tsDir = path.join(root, "packages/core/src/database/migration")
 const registry = path.join(root, "packages/core/src/database/migration.gen.ts")
 const schema = path.join(root, "packages/core/src/database/schema.gen.ts")
 const args = parseArgs({
-  args: process.argv.slice(2),
+  args: import.meta.main ? process.argv.slice(2) : [],
   options: {
     check: { type: "boolean" },
     reset: { type: "boolean" },
@@ -21,16 +22,17 @@ const args = parseArgs({
   },
 })
 
-if (args.values.check) {
-  await check()
-  process.exit(0)
+if (import.meta.main) {
+  if (args.values.check) {
+    await check()
+    process.exit(0)
+  }
+  if (args.values.reset) {
+    await reset()
+    process.exit(0)
+  }
+  await generate()
 }
-if (args.values.reset) {
-  await reset()
-  process.exit(0)
-}
-
-await generate()
 
 async function reset() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-core-migration-reset-"))
@@ -60,6 +62,9 @@ async function generate() {
 
     const generated = await generatedMigrations(incremental)
     if (generated.length > 1) throw new Error(`Expected one generated migration, found ${generated.length}.`)
+    await fs.mkdir(full)
+    await drizzle(temporary, full, "schema")
+    const fullSql = await generatedSql(full)
     const name = generated[0]
     if (name) {
       const target = path.join(tsDir, `${name}.ts`)
@@ -67,15 +72,18 @@ async function generate() {
       await Bun.write(
         target,
         await formatTypescript(
-          renderMigration(name, await Bun.file(path.join(incremental, name, "migration.sql")).text()),
+          renderMigration(
+            name,
+            await Bun.file(path.join(incremental, name, "migration.sql")).text(),
+            await Bun.file(path.join(incremental, name, "snapshot.json")).json(),
+            fullSql,
+          ),
         ),
       )
       await fs.copyFile(path.join(incremental, name, "snapshot.json"), snapshot)
     }
 
-    await fs.mkdir(full)
-    await drizzle(temporary, full, "schema")
-    await Bun.write(schema, await formatTypescript(renderSchema(await generatedSql(full))))
+    await Bun.write(schema, await formatTypescript(renderSchema(fullSql)))
     await Bun.write(registry, await formatTypescript(renderRegistry(await typescriptMigrations())))
   } finally {
     await fs.rm(temporary, { recursive: true, force: true })
@@ -146,7 +154,41 @@ async function typescriptMigrations() {
     .sort()
 }
 
-function renderMigration(name: string, sql: string) {
+export function renderMigration(name: string, sql: string, snapshot: unknown, fullSql: string) {
+  const parts = sql.split("--> statement-breakpoint").map((statement) => statement.trim()).filter(Boolean)
+  const additions = parts.flatMap((statement) => {
+    const match = /^ALTER TABLE `([^`]+)` ADD `([^`]+)` (.+);$/is.exec(statement)
+    return match ? [{ table: match[1], column: match[2], reference: /\bREFERENCES\b/i.test(match[3]) }] : []
+  })
+  const rebuild = new Set(additions.filter((item) => item.reference).map((item) => item.table))
+  const done = new Set<string>()
+  const full = fullSql.split("--> statement-breakpoint").map((statement) => statement.trim()).filter(Boolean)
+  const ddl = Schema.decodeUnknownSync(Schema.Struct({ ddl: Schema.Array(Schema.Unknown) }))(snapshot).ddl
+  const statements = parts.flatMap((statement) => {
+    const added = additions.find((item) => statement.startsWith(`ALTER TABLE \`${item.table}\` ADD \`${item.column}\``))
+    if (added && rebuild.has(added.table)) {
+      if (done.has(added.table)) return []
+      done.add(added.table)
+      const definition = full.find((item) => item.startsWith(`CREATE TABLE \`${added.table}\` (`))
+      const columns = ddl.flatMap((value) => {
+        if (value === null || typeof value !== "object" || !("entityType" in value) || value.entityType !== "columns") return []
+        const column = Schema.decodeUnknownSync(Schema.Struct({ table: Schema.String, name: Schema.String }))(value)
+        return column.table === added.table && !additions.some((item) => item.table === added.table && item.column === column.name)
+          ? [`\`${column.name}\``] : []
+      }).join(", ")
+      if (!definition || !columns) throw new Error(`Missing table metadata for ${added.table}`)
+      const indexes = full.filter((item) => /^CREATE (?:UNIQUE )?INDEX\b/.test(item) && item.includes(` ON \`${added.table}\` (`))
+      return [
+        definition.replace(`CREATE TABLE \`${added.table}\``, `CREATE TABLE \`__new_${added.table}\``),
+        `INSERT INTO \`__new_${added.table}\` (${columns}) SELECT ${columns} FROM \`${added.table}\`;`,
+        `DROP TABLE \`${added.table}\`;`,
+        `ALTER TABLE \`__new_${added.table}\` RENAME TO \`${added.table}\`;`,
+        ...indexes,
+      ]
+    }
+    if (/^CREATE (?:UNIQUE )?INDEX\b/.test(statement) && [...rebuild].some((table) => statement.includes(` ON \`${table}\` (`))) return []
+    return [statement]
+  }).join("--> statement-breakpoint")
   return `import { Effect } from "effect"
 import type { DatabaseMigration } from "../migration"
 
@@ -154,7 +196,7 @@ export default {
   id: ${JSON.stringify(name)},
   up(tx) {
     return Effect.gen(function* () {
-${renderStatements(sql)}
+${renderStatements(statements)}
     })
   },
 } satisfies DatabaseMigration.Migration

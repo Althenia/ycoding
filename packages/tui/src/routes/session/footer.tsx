@@ -8,6 +8,7 @@ import { Keymap } from "../../context/keymap"
 import { useRoute } from "../../context/route"
 import { groupSessionShells } from "../../util/session"
 import { autonomyModeWord, autonomyRows } from "../../util/session-autonomy"
+import type { ProjectContext } from "../../util/coordination"
 
 export function FooterAutonomy(props: { autonomy?: SessionAutonomyView }) {
   const { theme } = useTheme()
@@ -41,7 +42,9 @@ export function Footer(props: {
   branch?: string
   sessionID: string
   subagent?: boolean
-  project?: boolean
+  project?: ProjectContext
+  onProjectIdentity?: () => void
+  onProjectTab?: () => void
 }) {
   const { theme } = useTheme()
   const data = useData()
@@ -90,6 +93,9 @@ export function Footer(props: {
       paddingRight={3}
       backgroundColor={theme.background.chrome}
     >
+      <Show when={props.project}>
+        {(owner) => <ProjectFooterLine owner={owner()} onIdentity={props.onProjectIdentity} onTab={props.onProjectTab} />}
+      </Show>
       <box
         width="100%"
         height={compact() ? 2 : props.subagent || props.project ? 1 : 2}
@@ -121,6 +127,30 @@ export function Footer(props: {
           </Show>
         </box>
       </box>
+    </box>
+  )
+}
+
+export function ProjectFooterLine(props: { owner: ProjectContext; onIdentity?: () => void; onTab?: () => void }) {
+  const { theme } = useTheme()
+  const shortcut = Keymap.useShortcut("project.members")
+  const master = () => `${props.owner.project.name} · master ${props.owner.project.master.title}`
+  return (
+    <box id="session.footer.project" width="100%" height={1} flexShrink={0} flexDirection="row">
+      <text fg={theme.text.subdued} wrapMode="none" truncate flexGrow={1} minWidth={0} onMouseUp={props.onIdentity}>
+        {props.owner.role === "master"
+          ? `◇ Master of ${props.owner.project.name}`
+          : props.owner.role === "supervisor"
+            ? `↑ Supervisor in ${master()}`
+            : `↑ Member of ${master()}`}
+      </text>
+      <Show when={shortcut()}>
+        {(key) => (
+          <text fg={theme.text.feedback.info.default} wrapMode="none" flexShrink={0} marginLeft={3} onMouseUp={props.onTab}>
+            [{key()}] Project
+          </text>
+        )}
+      </Show>
     </box>
   )
 }

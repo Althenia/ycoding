@@ -91,10 +91,10 @@ test("escalation chains carry one to four bounded per-Session reasons on live re
   expect(EventManifest.Durable.has("coordination.request.escalated.1")).toBe(false)
 })
 
-test("Project IDs retain cgrp_ and only Project lifecycle facts remain in the event inventory", () => {
+test("Project IDs retain cgrp_ and only Project lifecycle and member ownership facts are in the event inventory", () => {
   expect(Coordination.GroupID.create()).toMatch(/^cgrp_/)
   expect(() => Schema.decodeUnknownSync(Coordination.GroupID)("ses_member")).toThrow()
   expect(Coordination.DurableDefinitions.map((event) => event.type)).toEqual([
-    "coordination.group.created", "coordination.group.changed", "coordination.group.deleted",
+    "coordination.group.created", "coordination.group.changed", "coordination.group.deleted", "coordination.member.owner.changed",
   ])
 })

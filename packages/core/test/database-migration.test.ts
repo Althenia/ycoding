@@ -42,6 +42,11 @@ const previousMigrations = [
   { id: "20260803004514_session-file-change-ledger" },
   { id: "20260803011247_session-usage" },
 ]
+const ownerMigration = () => {
+  const migration = migrations.find((item) => item.id.endsWith("_coordination-member-owner"))
+  if (!migration) throw new Error("Ownership migration is missing")
+  return migration
+}
 const currentMigrations = [
   ...previousMigrations,
   { id: "20260804120956_selective-compaction-harness" },
@@ -76,6 +81,7 @@ const currentMigrations = [
   { id: "20261023093249_coordination-groups" },
   { id: "20261023160000_projects-redesign" },
   { id: "20261024120000_session-decision-modes" },
+  { id: ownerMigration().id },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -335,6 +341,66 @@ describe("DatabaseMigration", () => {
       yield* db.run(sql`INSERT INTO coordination_member (group_id, session_id) VALUES ('cgrp_after', 'ses_project_member')`)
       expect(yield* db.get(sql`SELECT master_session_id, concurrency FROM coordination_group WHERE id = 'cgrp_after'`)).toEqual({ master_session_id: "ses_project_master", concurrency: 2 })
       expect(yield* db.get(sql`SELECT session_id FROM coordination_member`)).toEqual({ session_id: "ses_project_member" })
+    }))
+  })
+
+  test("adds member ownership with existing members unowned, and clears it when the owning Session is deleted", async () => {
+    await run(Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* seedPreviousDatabase(db)
+      const migration = ownerMigration()
+      yield* DatabaseMigration.applyOnly(db, migrations.filter((item) => item.id < migration.id))
+      yield* seedSession(db, "ses_owner_master")
+      yield* seedSession(db, "ses_owner_member")
+      yield* seedSession(db, "ses_owner_supervisor")
+      yield* db.run(sql`INSERT INTO coordination_group (id, name, revision, master_session_id, concurrency, time_created, time_updated) VALUES ('cgrp_owner', 'Docs', 0, 'ses_owner_master', 2, 1, 1)`)
+      yield* db.run(sql`INSERT INTO coordination_member (group_id, session_id) VALUES ('cgrp_owner', 'ses_owner_member')`)
+      yield* DatabaseMigration.applyOnly(db, [migration])
+      expect(yield* db.all(sql`SELECT session_id, owner_session_id FROM coordination_member`)).toEqual([
+        { session_id: "ses_owner_member", owner_session_id: null },
+      ])
+      expect(yield* db.get(sql`PRAGMA foreign_keys`)).toEqual({ foreign_keys: 1 })
+      expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+      yield* db.run(sql`UPDATE coordination_member SET owner_session_id = 'ses_owner_supervisor' WHERE session_id = 'ses_owner_member'`)
+      yield* db.run(sql`DELETE FROM session WHERE id = 'ses_owner_supervisor'`)
+      expect(yield* db.all(sql`SELECT session_id, owner_session_id FROM coordination_member`)).toEqual([
+        { session_id: "ses_owner_member", owner_session_id: null },
+      ])
+    }))
+  })
+
+  test("upgrading populated Projects keeps every group and member value, adds no owner, and keeps foreign keys enforced", async () => {
+    await run(Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* seedPreviousDatabase(db)
+      const migration = ownerMigration()
+      yield* DatabaseMigration.applyOnly(db, migrations.filter((item) => item.id < migration.id))
+      yield* Effect.forEach(
+        ["ses_up_master_a", "ses_up_master_b", "ses_up_member_1", "ses_up_member_2", "ses_up_member_3", "ses_up_supervisor"],
+        (id) => seedSession(db, id),
+      )
+      yield* db.run(sql`INSERT INTO coordination_group (id, name, revision, master_session_id, concurrency, time_created, time_updated) VALUES ('cgrp_up_a', 'Docs', 3, 'ses_up_master_a', 2, 10, 20)`)
+      yield* db.run(sql`INSERT INTO coordination_group (id, name, revision, master_session_id, concurrency, time_created, time_updated) VALUES ('cgrp_up_b', 'Release', 7, 'ses_up_master_b', 1, 30, 40)`)
+      yield* db.run(sql`INSERT INTO coordination_member (group_id, session_id) VALUES ('cgrp_up_a', 'ses_up_member_1'), ('cgrp_up_a', 'ses_up_member_2'), ('cgrp_up_b', 'ses_up_member_3')`)
+      const referencing = sql`SELECT m.name FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type = 'table' AND f."table" = 'coordination_member'`
+      const groups = yield* db.all(sql`SELECT * FROM coordination_group ORDER BY id`)
+      const members = yield* db.all<Record<string, unknown>>(sql`SELECT * FROM coordination_member ORDER BY session_id`)
+      expect(yield* db.all(referencing)).toEqual([])
+
+      yield* DatabaseMigration.applyOnly(db, [migration])
+
+      const unowned = members.map((row) => ({ ...row, owner_session_id: null }))
+      expect(yield* db.all(sql`SELECT * FROM coordination_group ORDER BY id`)).toEqual(groups)
+      expect(yield* db.all(sql`SELECT * FROM coordination_member ORDER BY session_id`)).toEqual(unowned)
+      expect(yield* db.all(referencing)).toEqual([])
+      expect(yield* db.get(sql`PRAGMA foreign_keys`)).toEqual({ foreign_keys: 1 })
+      expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+
+      yield* db.run(sql`UPDATE coordination_member SET owner_session_id = 'ses_up_supervisor' WHERE session_id = 'ses_up_member_2'`)
+      yield* db.run(sql`DELETE FROM session WHERE id = 'ses_up_supervisor'`)
+      expect(yield* db.all(sql`SELECT * FROM coordination_member ORDER BY session_id`)).toEqual(unowned)
+      expect(yield* db.all(sql`SELECT * FROM coordination_group ORDER BY id`)).toEqual(groups)
+      expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
     }))
   })
 

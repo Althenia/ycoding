@@ -2,10 +2,11 @@
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import path from "node:path"
-import { createEffect } from "solid-js"
+import { createEffect, Show } from "solid-js"
 import { Composer } from "../../src/routes/session/composer"
 import { Footer, FooterAutonomy } from "../../src/routes/session/footer"
 import { Header } from "../../src/routes/session/header"
+import { railWidth } from "../../src/routes/session/rail"
 import { ConfigProvider } from "../../src/config"
 import { ClientProvider } from "../../src/context/client"
 import { DataProvider, useData } from "../../src/context/data"
@@ -129,6 +130,31 @@ test("captures populated subagent picker states at reference terminal dimensions
   }
 }, 120_000)
 
+test("sizes picker metadata to the measured composer width with and without the docked rail", async () => {
+  const width = 120
+  const rail = Math.round(railWidth(width))
+  for (const docked of [false, true]) {
+    const capture = await boot({ width, height: 40 }, docked ? rail : undefined)
+    try {
+      await waitFor(capture.frame, "ACTIVE")
+      const lines = capture.rows()
+      const column = docked ? width - rail : width
+      const rows = lines.flatMap((line, index) => (line.includes("test-triage") || line.includes("docs-sync") ? [index] : []))
+      expect(rows).toHaveLength(2)
+      for (const row of rows) {
+        expect(lines[row]!.slice(column).trim()).toBe("")
+        expect(lines[row]!.trimEnd().length).toBe(column - 5)
+        expect(lines[row]).toContain("anthropic/claude-sonnet-5")
+      }
+      const docs = lines.find((line) => line.includes("docs-sync")) ?? ""
+      if (docked) expect(docs).not.toContain("% hit")
+      else expect(docs).toContain("anthropic/claude-sonnet-5 · attached · 74% hit")
+    } finally {
+      await capture.dispose()
+    }
+  }
+}, 60_000)
+
 test("renders populated subagents in the parent-session rail", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
@@ -177,7 +203,7 @@ function SessionFooter() {
   )
 }
 
-async function boot(viewport: { width: number; height: number }) {
+async function boot(viewport: { width: number; height: number }, rail?: number) {
   const events = createEventStream()
   const calls = createFetch(route, events)
   const app = await testRender(
@@ -192,18 +218,21 @@ async function boot(viewport: { width: number; height: number }) {
                   <RouteProvider initialRoute={{ type: "session", sessionID }}>
                     <Keymap.Provider>
                       <ToastProvider><DialogProvider>
-                        <box width={viewport.width} height={viewport.height} flexDirection="column">
-                          <Header
-                            path="~/Workspace/Personal/YCoding"
-                            branch="main"
-                            agent="Build"
-                            model="Claude Opus 5"
-                            variant="max"
-                            state={{ type: "awaiting-input", count: 1 }}
-                          />
-                          <box flexGrow={1} />
-                          <Composer sessionID={sessionID} open={true} defaultTab="subagents" />
-                          <SessionFooter />
+                        <box width={viewport.width} height={viewport.height} flexDirection="row">
+                          <box flexGrow={1} minWidth={0} flexDirection="column">
+                            <Header
+                              path="~/Workspace/Personal/YCoding"
+                              branch="main"
+                              agent="Build"
+                              model="Claude Opus 5"
+                              variant="max"
+                              state={{ type: "awaiting-input", count: 1 }}
+                            />
+                            <box flexGrow={1} />
+                            <Composer sessionID={sessionID} open={true} defaultTab="subagents" />
+                            <SessionFooter />
+                          </box>
+                          <Show when={rail}>{(width) => <box width={width()} flexShrink={0} />}</Show>
                         </box>
                       </DialogProvider></ToastProvider>
                     </Keymap.Provider>

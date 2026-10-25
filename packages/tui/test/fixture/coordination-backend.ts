@@ -21,6 +21,7 @@ export type FixtureSession = {
   updated: number
   pending?: number
   drivenBy?: { sessionID: string; title: string }
+  owner?: { sessionID: string; title: string }
 }
 export type FixtureProject = {
   id: string
@@ -173,6 +174,7 @@ export function backend(overrides: { projects?: FixtureProject[]; sessions?: Rec
         summary: "Keep the old table names?",
       })),
       ...(session.drivenBy === undefined ? {} : { drivenBy: session.drivenBy }),
+      ...(session.owner === undefined ? {} : { owner: session.owner }),
     }
   }
   const info = (project: FixtureProject) => ({

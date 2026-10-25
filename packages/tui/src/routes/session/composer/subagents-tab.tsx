@@ -1,7 +1,7 @@
 import type { SessionCacheDiagnostics, SessionOrchestrationTask } from "@ycoding-ai/client"
 import { createMemo, For, Show, createEffect, createSignal, onMount, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
-import { TextAttributes, ScrollBoxRenderable } from "@opentui/core"
+import { TextAttributes, ScrollBoxRenderable, type BoxRenderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useRoute, useRouteData } from "../../../context/route"
 import { useData } from "../../../context/data"
@@ -18,7 +18,6 @@ import { escapeTerminalText } from "../../../util/terminal-text"
 import { useDialog } from "../../../ui/dialog"
 import { TaskCostDialog } from "../usage-cost"
 import { accountingPresentation } from "../../../util/usage-accounting"
-import { railPlacement, railWidth } from "../rail"
 import { useComposerTab } from "./index"
 
 export { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
@@ -153,8 +152,7 @@ export function cancelManagedSubagent(client: CancelClient, parentID: string, ch
 const STATUS_WIDTH = 16
 const AGENT_WIDTH = 16
 const TITLE_MIN_WIDTH = 8
-/** Composer padding (3 left, 4 right) plus the row's own right padding. */
-const COMPOSER_INSET = 8
+const ROW_INSET = 1
 
 // Outlives the tab so a reply that settles after the tab closes or the Session changes can neither be replayed nor lost.
 const [recovery, setRecovery] = createStore<Record<string, "sending" | "sent" | { failed: string }>>({})
@@ -167,9 +165,9 @@ function recoveryNote(state: "sending" | "sent" | { failed: string } | undefined
 }
 
 /**
- * The picker row shares its terminal with the docked rail, so the widest row it can own is the
- * terminal minus the rail and the composer insets. Trailing fields drop whole rather than collide,
- * and the model truncates only when it cannot fit on its own.
+ * The budget is the picker's measured row width, so a full-width composer and one beside the docked
+ * rail each get exactly the columns they render. Trailing fields drop whole rather than collide, and
+ * the model truncates only when it cannot fit on its own.
  */
 function subagentMetadata(input: {
   width: number
@@ -180,8 +178,7 @@ function subagentMetadata(input: {
 }) {
   const budget =
     input.width -
-    (railPlacement(input.width) === "docked" ? Math.round(railWidth(input.width)) : 0) -
-    COMPOSER_INSET -
+    ROW_INSET -
     STATUS_WIDTH -
     AGENT_WIDTH -
     TITLE_MIN_WIDTH -
@@ -196,12 +193,17 @@ function subagentMetadata(input: {
   return Locale.truncateWidth(fields[0] ?? "", budget)
 }
 
-export function SubagentMetadata(props: { model?: string; cacheHit?: string; elapsed?: string; status?: string }) {
+export function SubagentMetadata(props: {
+  width: number
+  model?: string
+  cacheHit?: string
+  elapsed?: string
+  status?: string
+}) {
   const { theme } = useTheme()
-  const dimensions = useTerminalDimensions()
   const metadata = createMemo(() =>
     subagentMetadata({
-      width: dimensions().width,
+      width: props.width,
       model: props.model,
       status: props.status,
       cacheHit: props.cacheHit,
@@ -243,6 +245,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
   const entries = createMemo(() => allEntries())
   const sections = createMemo(() => subagentSections(entries()))
   const [now, setNow] = createSignal(Date.now())
+  const [rowWidth, setRowWidth] = createSignal(0)
 
   createEffect(() => {
     if (!composer.active("subagents")) return
@@ -265,6 +268,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
   let activeRouteSessionID = ""
   let wasActive = false
   let scroll: ScrollBoxRenderable | undefined
+  let frame: BoxRenderable | undefined
 
   const selected = createMemo(() => store.selected)
   const selectedEntry = createMemo(() => entries()[selected()])
@@ -489,6 +493,15 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
 
   return (
     <Show when={composer.active("subagents")}>
+      <box
+        width="100%"
+        flexShrink={0}
+        ref={(value: BoxRenderable) => {
+          frame = value
+          setRowWidth(value.width)
+        }}
+        onSizeChange={() => setRowWidth(frame?.width ?? 0)}
+      >
       <scrollbox
         scrollbarOptions={{ visible: false }}
         width="100%"
@@ -497,6 +510,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
         paddingTop={dimensions().height <= 24 ? 1 : 2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
+        <Show when={rowWidth() > 0}>
         <Show
           when={entries().length > 0}
           fallback={
@@ -564,6 +578,7 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
                             </text>
                           </box>
                           <SubagentMetadata
+                            width={rowWidth()}
                             model={entry.model}
                             cacheHit={formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID))}
                             elapsed={formatSubagentEntryElapsed(entry, now())}
@@ -610,7 +625,9 @@ export function SubagentsTab(props: { sessionID: string; onAnswer?: (task: Sessi
             </Show>
           </box>
         </Show>
+        </Show>
       </scrollbox>
+      </box>
       <text fg={theme.text.subdued}>c inclusive task cost details · totals include descendants</text>
     </Show>
   )

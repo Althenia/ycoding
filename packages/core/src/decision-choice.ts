@@ -393,10 +393,10 @@ export function redactText(value: string): string {
   return secrets
     .reduce((text, [, secret]) => text.replaceAll(secret!, "[redacted]"), value)
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, "[redacted]")
+    .replace(/\bBearer\s+[^\s"']+/gi, "Bearer [redacted]")
     .replace(
       /(\b[\w-]*(?:password|secret|token|api[-_]?key|authorization|credential)[\w-]*["']?\s*(?:=|:|\s)\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s;]+)/gi,
       "$1[redacted]",
     )
-    .replace(/\bBearer\s+[^\s"']+/gi, "Bearer [redacted]")
     .replace(/(https?:\/\/)[^\s/@]+@/gi, "$1[redacted]@")
 }

@@ -249,50 +249,25 @@ const completionCandidate = Effect.fnUntraced(function* (db: DatabaseService, se
   }
 })
 
-const unfinished = Effect.fnUntraced(function* (
-  db: DatabaseService,
-  jobs: Pick<Job.Interface, "list" | "outstandingSessions">,
-  sessionID: SessionSchema.ID,
-  active: Effect.Effect<ReadonlySet<SessionSchema.ID>>,
-) {
-  const family = yield* db
+const family = (db: DatabaseService, sessionID: SessionSchema.ID) =>
+  db
     .all<{ id: SessionSchema.ID }>(
       sql`WITH RECURSIVE family(id) AS (
     SELECT ${SessionTable.id} FROM ${SessionTable} WHERE ${SessionTable.id} = ${sessionID}
     UNION SELECT child.id FROM session child JOIN family ON child.parent_id = family.id
   ) SELECT id FROM family`,
     )
-    .pipe(Effect.orDie)
-  const ids = family.map((row) => row.id)
-  const running = yield* active
-  if (
-    ids.length === 0 ||
-    !running.has(sessionID) ||
-    Array.from(running).some((id) => id !== sessionID && ids.includes(id))
-  )
-    return true
-  const pending = yield* db
-    .select({ id: SessionPendingTable.id })
-    .from(SessionPendingTable)
-    .where(inArray(SessionPendingTable.session_id, ids))
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie)
-  if (pending) return true
-  if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return true
-  const state = yield* db
-    .select({ id: SessionTable.id })
-    .from(SessionTable)
-    .where(
-      and(
-        inArray(SessionTable.id, ids),
-        sql`(${SessionTable.revert} IS NOT NULL OR json_extract(${SessionTable.autonomy}, '$.goal.status') = 'active')`,
-      ),
-    )
-    .limit(1)
-    .get()
-    .pipe(Effect.orDie)
-  if (state) return true
+    .pipe(Effect.orDie, Effect.map((rows) => rows.map((row) => row.id)))
+
+export const backgroundWork = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  jobs: Pick<Job.Interface, "list" | "outstandingSessions">,
+  sessionID: SessionSchema.ID,
+  active: ReadonlySet<SessionSchema.ID>,
+  known?: ReadonlyArray<SessionSchema.ID>,
+) {
+  const ids = known ?? (yield* family(db, sessionID))
+  if (Array.from(active).some((id) => id !== sessionID && ids.includes(id))) return true
   const task = yield* db
     .select({ id: SessionTaskTable.session_id })
     .from(SessionTaskTable)
@@ -318,4 +293,24 @@ const unfinished = Effect.fnUntraced(function* (
   return (yield* jobs.list()).some(
     (job) => job.status === "running" && ids.some((id) => id === job.metadata?.sessionID),
   )
+})
+
+const unfinished = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  jobs: Pick<Job.Interface, "list" | "outstandingSessions">,
+  sessionID: SessionSchema.ID,
+  active: Effect.Effect<ReadonlySet<SessionSchema.ID>>,
+) {
+  const ids = yield* family(db, sessionID)
+  const running = yield* active
+  if (ids.length === 0 || !running.has(sessionID)) return true
+  if (yield* backgroundWork(db, jobs, sessionID, running, ids)) return true
+  const pending = yield* db.select({ id: SessionPendingTable.id }).from(SessionPendingTable)
+    .where(inArray(SessionPendingTable.session_id, ids)).limit(1).get().pipe(Effect.orDie)
+  if (pending) return true
+  if ((yield* SessionReviewFold.openCount(db, sessionID)) > 0) return true
+  const state = yield* db.select({ id: SessionTable.id }).from(SessionTable)
+    .where(and(inArray(SessionTable.id, ids), sql`(${SessionTable.revert} IS NOT NULL OR json_extract(${SessionTable.autonomy}, '$.goal.status') = 'active')`))
+    .limit(1).get().pipe(Effect.orDie)
+  return state !== undefined
 })

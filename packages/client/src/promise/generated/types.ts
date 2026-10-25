@@ -2293,6 +2293,23 @@ export type CoordinationEventDeleted = {
   data: { groupID: CoordinationGroupID; revision: CoordinationRevision }
 }
 
+export type CoordinationEventOwnerChanged = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "coordination.member.owner.changed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    groupID: CoordinationGroupID
+    revision: CoordinationRevision
+    sessionID: string
+    ownerSessionID?: string
+    reason?: "completed" | "released"
+  }
+}
+
 export type CoordinationEventUpdated = {
   id: string
   created: number
@@ -3154,6 +3171,7 @@ export type CoordinationParticipant = {
   lastActivity: number
   pending: Array<CoordinationPendingRequest>
   drivenBy?: { sessionID: string; title: string }
+  owner?: { sessionID: string; title: string }
 }
 
 export type PtyCreated = {
@@ -4731,6 +4749,7 @@ export type ServerEvent =
   | CoordinationEventCreated
   | CoordinationEventChanged
   | CoordinationEventDeleted
+  | CoordinationEventOwnerChanged
   | CoordinationEventUpdated
   | CoordinationEventRequestEscalated
   | FilesystemChanged

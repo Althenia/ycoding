@@ -153,7 +153,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const terminalResponseRecovery = input.terminalResponseRecovery === true
         const toolsDisabled = terminalResponseRecovery || stepLimitReached
         const basePermissions = SessionContext.toolPermissions(agent.info, session.permissionCeiling ?? [])
-        const scoped = (yield* coordination.scopeOf(session.id)) !== undefined
+        const access = yield* coordination.accessOf(session.id)
+        const scoped = access !== undefined && access.role !== "executor"
         const permissions = [...basePermissions, ...CoordinationAccess.rules(scoped)]
         const executableTools = toolsDisabled
           ? undefined

@@ -36,50 +36,62 @@ const contrast = (first: number[], second: number[]) => {
 async function openMember(width: number) {
   const mounted = await mountCoordination({ width })
   mounted.router().navigate({ type: "session", sessionID: docsID })
-  await waitForFrame(mounted.screen, "Member of Release train")
+  await waitForFrame(mounted.screen, "↑ Member of")
   await settle(mounted.screen)
   return mounted
 }
 
 for (const width of [120, 80, 60]) {
-  test(`member chat shows one navigation hint row at ${width} columns`, async () => {
+  test(`member chat keeps the normal footer and one Project identity line at ${width} columns`, async () => {
     const { screen } = await openMember(width)
     try {
-      const lines = screen.frame().split("\n")
+      const frame = screen.frame()
+      const lines = frame.split("\n")
+      const identity = lines.filter((line) => line.includes("↑ Member of"))
+      expect(identity).toHaveLength(1)
+      expect(identity[0]).toContain(width >= 80 ? "↑ Member of Release train" : "↑ Member of Rel")
+      expect(identity[0]).toContain("master Lead")
+      expect(identity[0]!.trimEnd().length).toBeLessThanOrEqual(width)
+      if (width >= 80) expect(identity[0]).toContain("[ctrl+x p] Project")
       const filled = lines.filter((line) => line.trim() !== "")
-      const hints = lines.filter((line) => line.includes("enter send"))
-      expect(hints).toHaveLength(1)
-      expect(filled.at(-1)).toBe(hints[0]!)
-      expect(hints[0]!.trimEnd().length).toBeLessThanOrEqual(width)
-      expect(hints[0]).not.toContain("…")
-      expect(hints[0]).toContain("esc interrupt")
-      expect(lines.filter((line) => line.includes("←→"))).toEqual([hints[0]!])
-      expect(lines.filter((line) => line.includes("ctrl+x p members"))).toEqual([hints[0]!])
-      expect(lineOf(screen.frame(), "Member of Release train")).not.toMatch(/[↑←→]/)
+      expect(filled.at(-2)).toContain("commands")
+      for (const label of ["Permissions Manual", "Guardrails Manual", "Answers Manual"]) expect(filled.at(-1)).toContain(label)
+      for (const absent of ["ctrl+x p members", "enter send · esc interrupt", "members ›"]) expect(frame).not.toContain(absent)
     } finally {
       await screen.dispose()
     }
   }, 30_000)
 }
 
-test("Master chat shows the members shortcut in the hint row only", async () => {
+test("Master chat shows the Project shortcut once, on its identity line", async () => {
   const { screen } = await mountCoordination({ width: 80 })
   try {
     await settle(screen)
     const lines = screen.frame().split("\n")
-    expect(lines.filter((line) => line.includes("ctrl+x p members"))).toHaveLength(1)
-    expect(lines.filter((line) => line.includes("ctrl+x p members"))[0]).toContain("enter send")
-    expect(lines.filter((line) => line.includes("members ›"))).toHaveLength(1)
+    const shortcut = lines.filter((line) => line.includes("[ctrl+x p] Project"))
+    expect(shortcut).toHaveLength(1)
+    expect(shortcut[0]).toContain("◇ Master of Release train")
+    expect(lines.filter((line) => line.includes("members ›"))).toHaveLength(0)
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("member chat counts members without the Master and names the Master apart", async () => {
+test("member chat Projects tab counts members without the Master and names the Master apart", async () => {
   const { screen } = await openMember(120)
   try {
+    expect(screen.frame()).not.toContain("MEMBERS 4 + MASTER")
+    screen.input.pressKey("x", { ctrl: true })
+    screen.input.pressKey("p")
+    await waitForFrame(screen, "MEMBERS 4 + MASTER")
     const frame = screen.frame()
-    expect(frame).toContain("member 1 of 4")
+    expect(frame).not.toContain("member 1 of 4")
+    const rows = frame.split("\n")
+    const at = (title: string) => rows.findIndex((line) => line.includes(title) && /\b(MASTER|MEMBER)\b/.test(line))
+    expect(at("Lead")).toBeGreaterThan(-1)
+    expect(at("Lead")).toBeLessThan(at("Docs worker"))
+    expect(at("Docs worker")).toBeLessThan(at("Api worker"))
+    expect(rows[at("Docs worker")]).toContain("● Docs worker")
     expect(frame).toContain("MEMBERS 4 + MASTER")
     expect(frame).not.toContain("MEMBERS 5")
     expect(frame).toContain("2/2 members running")
@@ -88,7 +100,7 @@ test("member chat counts members without the Master and names the Master apart",
   }
 }, 30_000)
 
-test("Master chat strip and tray count four members beside the Master", async () => {
+test("Master chat Projects tab counts four members beside the Master", async () => {
   const { screen } = await mountCoordination({ width: 80 })
   try {
     screen.input.pressKey("x", { ctrl: true })
@@ -253,26 +265,35 @@ const runningMaster = (width: number) =>
     },
   })
 
-test("a running Master with an idle member reads as one running Session, not zero", async () => {
-  const { screen } = await runningMaster(120)
+test("a running Master with an idle member reads as one running Session in the Projects tab and list", async () => {
+  const { screen, router } = await runningMaster(120)
   try {
     await settle(screen)
+    screen.input.pressKey("x", { ctrl: true })
+    screen.input.pressKey("p")
+    await waitForFrame(screen, "MEMBERS 1 + MASTER")
     const frame = screen.frame()
-    expect(lineOf(frame, "Master of Release train")).toContain("1 member + Master · 1 running")
-    expect(lineOf(frame, "Master of Release train")).not.toContain("0 running")
-    expect(frame).toContain("MEMBERS 1 + MASTER")
+    expect(lineOf(frame, "Docs worker", "MEMBER", "idle")).not.toBe("")
     expect(frame).toContain("0 members running · no limit")
-    expect(lineOf(frame, "MASTER", "running")).toContain("MASTER ● running")
+    expect(lineOf(frame, "Lead", "MASTER")).toContain("MASTER ● running")
+    router().navigate({ type: "projects", sessionID: leadID })
+    await waitForFrame(screen, "preview")
+    const list = lineOf(screen.frame(), "Release train", "›")
+    expect(list).toContain("● active")
+    expect(list).toContain("●1 ○1")
+    expect(list).not.toContain("●0")
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("the narrow Master strip counts the running Master too", async () => {
+test("the narrow Master identity line names the Project without aggregate counts", async () => {
   const { screen } = await runningMaster(80)
   try {
     await settle(screen)
-    expect(lineOf(screen.frame(), "Master of Release train")).toContain("● active · 1 running")
+    const identity = lineOf(screen.frame(), "Master of Release train")
+    expect(identity).toContain("◇ Master of Release train")
+    expect(identity).not.toMatch(/\d+ running/)
   } finally {
     await screen.dispose()
   }

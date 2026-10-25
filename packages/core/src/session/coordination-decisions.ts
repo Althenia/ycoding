@@ -3,7 +3,7 @@ export * as CoordinationDecisions from "./coordination-decisions"
 import type { Coordination } from "@ycoding-ai/schema/coordination"
 import { Context, Effect, Layer } from "effect"
 import { ConfigCoordination } from "../config/coordination"
-import type { CoordinationService } from "../coordination/index"
+import { CoordinationService } from "../coordination/index"
 import type { Form } from "../form"
 import type { Permission } from "../permission"
 import { CoordinationEscalation } from "./coordination-escalation"
@@ -66,7 +66,7 @@ export interface Result {
 
 export interface Dependencies {
   readonly policy: () => Effect.Effect<ConfigCoordination.Resolved>
-  readonly scopeOf: (sessionID: SessionSchema.ID) => Effect.Effect<CoordinationService.Scope | undefined>
+  readonly accessOf: (sessionID: SessionSchema.ID) => Effect.Effect<CoordinationService.Access | undefined>
   readonly permission: Pick<Permission.Interface, "snapshot" | "snapshots" | "reconsider" | "escalate">
   readonly form: Pick<Form.Interface, "snapshot" | "snapshots" | "reconsider" | "escalate">
   readonly guardrail: Pick<SessionGuardrail.Interface, "requestSnapshot" | "requestSnapshots" | "reconsider" | "escalate">
@@ -167,10 +167,14 @@ export function routineEligible(input: {
 
 export function make(deps: Dependencies): Interface {
   const authorize = Effect.fnUntraced(function* (input: PendingInput, inspectMaster = false) {
-    const scope = yield* deps.scopeOf(input.coordinatorSessionID)
-    if (scope === undefined || scope.groupID !== input.groupID) return { ok: false as const, reason: "delegation-unavailable" }
-    if (!(inspectMaster && input.targetSessionID === scope.masterSessionID) &&
+    const access = yield* deps.accessOf(input.coordinatorSessionID)
+    if (access === undefined || access.role === "executor" || access.scope.groupID !== input.groupID) return { ok: false as const, reason: "delegation-unavailable" }
+    const scope = access.scope
+    const masterRead = inspectMaster && access.role === "master" && input.targetSessionID === scope.masterSessionID
+    if (!masterRead &&
       (!scope.memberSessionIDs.includes(input.targetSessionID) || input.coordinatorSessionID === input.targetSessionID))
+      return { ok: false as const, reason: "delegation-out-of-scope" }
+    if (!masterRead && !CoordinationService.canAct(access, input.targetSessionID))
       return { ok: false as const, reason: "delegation-out-of-scope" }
     return { ok: true as const, scope }
   })
@@ -214,6 +218,8 @@ export function make(deps: Dependencies): Interface {
       rationale: input.rationale,
     }
     const stale: Result = { ...base, outcome: "stale", settled: false }
+    const authority = yield* authorize(input)
+    if (!authority.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: authority.reason }
     const rationale = input.rationale.trim()
     if (rationale.length === 0 || rationale.length > 500)
       return { ...base, outcome: "escalated" as const, settled: false, reason: "rationale-required" }
@@ -230,6 +236,7 @@ export function make(deps: Dependencies): Interface {
     )
       return { ...base, outcome: "escalated" as const, settled: false, reason: "low-confidence" }
     const source = { coordinatorSessionID: input.coordinatorSessionID, groupID: input.groupID, rationale }
+    const declining = input.decision === "decline"
 
     if (input.kind === "permission") {
       const snapshot = yield* deps.permission.snapshot(input.requestID as Permission.ID)
@@ -242,7 +249,7 @@ export function make(deps: Dependencies): Interface {
         metadata: snapshot.request.metadata,
       })
       if (human !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: human }
-      if (!routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
+      if (!declining && !routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
         return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
@@ -257,7 +264,7 @@ export function make(deps: Dependencies): Interface {
             Effect.map(
               (checked) =>
                 checked.ok &&
-                routineEligible({ kind: input.kind, action: request.action, resources: request.resources }) &&
+                (declining || routineEligible({ kind: input.kind, action: request.action, resources: request.resources })) &&
                 humanOnlyReason({ kind: input.kind, action: request.action, resources: request.resources, metadata: request.metadata }) ===
                   undefined,
             ),
@@ -280,7 +287,8 @@ export function make(deps: Dependencies): Interface {
         ruleIDs: snapshot.request.ruleIDs,
       })
       if (human !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: human }
-      if (!routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
+      const unclassifiedDecline = declining && snapshot.request.standard
+      if (!unclassifiedDecline && !routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
         return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
       if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
@@ -297,7 +305,7 @@ export function make(deps: Dependencies): Interface {
               Effect.map(
                 (checked) =>
                   checked.ok &&
-                  routineEligible({ kind: input.kind, action: request.action, resources: request.resources }) &&
+                  ((declining && request.standard) || routineEligible({ kind: input.kind, action: request.action, resources: request.resources })) &&
                   humanOnlyReason({
                     kind: input.kind,
                     action: request.action,

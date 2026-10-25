@@ -39,6 +39,7 @@ async function renderMetadata(input: {
                 <text>Task</text>
               </box>
               <module.SubagentMetadata
+                width={input.width ?? 120}
                 model={input.model}
                 cacheHit={input.cacheHit}
                 elapsed={input.elapsed}

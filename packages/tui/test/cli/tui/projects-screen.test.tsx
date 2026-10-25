@@ -110,13 +110,15 @@ async function capture(screen: Awaited<ReturnType<typeof mount>>["screen"], name
 test("real Session navigation opens member chat and empty Up returns to Master", async () => {
   const { screen, router } = await mount()
   try {
-    expect(screen.frame()).toContain("MASTER")
+    expect(screen.frame()).toContain("◇ Master of Release train")
+    expect(screen.frame()).toMatch(/\bSESSION\b/)
+    expect(screen.frame()).not.toContain("MEMBERS 4 + MASTER")
     expect(screen.frame()).toContain("Docs worker finished")
     expect(screen.frame()).toContain("[o] Open")
     await capture(screen, "master-120x40")
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("p")
-    await waitFor(screen, "esc chat")
+    await waitFor(screen, "MEMBERS 4 + MASTER")
     screen.input.pressArrow("down")
     screen.input.pressKey("o")
     await waitFor(screen, "Member of Release train")
@@ -154,28 +156,63 @@ test("real Projects route list, creation and Settings render", async () => {
     await screen.dispose()
   }
 }, 30_000)
-test("80-column Session collapses into chips and a keyboard-operated members tray", async () => {
+test("80-column Session opens a keyboard-operated Project roster in the composer Projects tab", async () => {
   const { screen } = await mount(80)
   try {
-    expect(screen.frame()).toContain("ctrl+x p members")
+    expect(screen.frame()).toContain("[ctrl+x p] Project")
+    expect(screen.frame()).not.toContain("members ›")
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("p")
-    await waitFor(screen, "MEMBERS 4")
+    await waitFor(screen, "MEMBERS 4 + MASTER")
+    const rows = screen.frame().split("\n")
+    for (const title of ["Lead", "Docs worker", "Api worker", "Infra worker", "Design review"])
+      expect(rows.filter((line) => line.includes(title) && /\b(MASTER|MEMBER)\b/.test(line))).toHaveLength(1)
+    expect(rows.find((line) => line.includes("Lead") && line.includes("MASTER"))).toContain("[o] Open")
     expect(screen.frame()).toContain("Design review")
     expect(screen.frame()).toContain("[o] Open")
+    expect(screen.frame()).toContain("Projects")
+    await waitFor(screen, "main   subagents 0")
+    expect(screen.frame().split("\n").find((line) => line.includes("main   subagents 0"))).toMatch(/shells 0.*usage.*commands/)
     await capture(screen, "tray-80x24")
     screen.input.pressEscape()
-    await waitFor(screen, "ctrl+x p members")
+    for (let i = 0; i < 100 && screen.frame().includes("MEMBERS 4 + MASTER"); i++) await screen.renderOnce()
+    expect(screen.frame()).not.toContain("MEMBERS 4 + MASTER")
+    expect(screen.frame()).toContain("[ctrl+x p] Project")
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("60-column Project chat keeps both footer rows without the chips", async () => {
+test("24-row Project chat keeps a useful transcript viewport and the draft while the Projects tab shows every Session", async () => {
+  const { screen } = await mount(80)
+  try {
+    await screen.input.typeText("keep this draft")
+    await waitFor(screen, "keep this draft")
+    screen.input.pressKey("x", { ctrl: true })
+    screen.input.pressKey("p")
+    await waitFor(screen, "MEMBERS 4 + MASTER")
+    const rows = screen.frame().split("\n")
+    for (const title of ["Lead", "Docs worker", "Api worker", "Infra worker", "Design review"])
+      expect(rows.filter((line) => line.includes(title) && /\b(MASTER|MEMBER)\b/.test(line))).toHaveLength(1)
+    expect(screen.frame()).toContain("Docs worker finished")
+    expect(screen.frame()).toContain("keep this draft")
+    expect(screen.scrollbox()!.viewport.height).toBeGreaterThanOrEqual(4)
+    await waitFor(screen, "main   subagents 0")
+    expect(screen.frame().split("\n").find((line) => line.includes("main   subagents 0"))).toMatch(/shells 0.*usage.*commands/)
+    screen.input.pressEscape()
+    for (let i = 0; i < 100 && screen.frame().includes("MEMBERS 4 + MASTER"); i++) await screen.renderOnce()
+    await waitFor(screen, "keep this draft")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("60-column Project chat keeps both footer rows and its identity line without the chips", async () => {
   const { screen } = await mount(60)
   try {
     expect(screen.frame()).toContain("subagents")
     expect(screen.frame()).toContain("commands")
+    expect(screen.frame()).toContain("Master of Release train")
     expect(screen.frame()).not.toContain("MASTER Lead")
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("p")

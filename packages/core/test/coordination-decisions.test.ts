@@ -35,6 +35,8 @@ function harness(
     policy?: () => Effect.Effect<never>
     permissionRequest?: Record<string, unknown>
     guardrailRequest?: Record<string, unknown>
+    settledPermissionRequest?: Record<string, unknown>
+    settledGuardrailRequest?: Record<string, unknown>
   } = {},
 ) {
   const calls: string[] = []
@@ -56,6 +58,11 @@ function harness(
     [targetSessionID]: role({ role: "worker", delegatedDecisions: undefined }),
   }
   const parents = overrides.parents ?? {}
+  const accessOf = (sessionID: string) => {
+    const scope = roles[sessionID] ?? roles[parents[sessionID] ?? ""]
+    if (scope === undefined) return Effect.succeed(undefined)
+    return Effect.succeed({ scope, role: sessionID === coordinatorSessionID ? "master" : sessionID === targetSessionID ? "executor" : "supervisor", ownedSessionIDs: [targetSessionID] } as never)
+  }
   const permissionRequest = overrides.permissionRequest ?? { id: "per_one", sessionID: targetSessionID, action: "read", resources: ["src/run"] }
   const guardrailRequest = overrides.guardrailRequest ?? {
     id: "grq_one",
@@ -75,7 +82,7 @@ function harness(
   }
   const decisions = CoordinationDecisions.make({
     policy: overrides.policy ?? (defaultPolicy as never),
-    scopeOf: (sessionID) => Effect.succeed((roles[sessionID] ?? roles[parents[sessionID] ?? ""]) as never),
+    accessOf,
     now: Effect.succeed(overrides.now ?? 50),
     permission: {
       snapshot: (requestID) => Effect.succeed(requestID === "per_one" ? { request: permissionRequest as never, fingerprint: "fp_per" } : undefined),
@@ -85,7 +92,7 @@ function harness(
         Effect.gen(function* () {
           calls.push("permission")
           if (input.decision === "decline") declines.push("permission")
-          const valid = yield* input.validate(permissionRequest as never)
+          const valid = yield* input.validate((overrides.settledPermissionRequest ?? permissionRequest) as never)
           return valid
             ? { outcome: "allowed" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "yolo" as const }
             : { outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: "delegation-invalid" }
@@ -100,7 +107,7 @@ function harness(
         Effect.gen(function* () {
           calls.push("guardrail")
           if (input.decision === "decline") declines.push("review")
-          const valid = yield* input.validate(guardrailRequest as never)
+          const valid = yield* input.validate((overrides.settledGuardrailRequest ?? guardrailRequest) as never)
           return valid
             ? { outcome: "denied" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: true, via: "yolo" as const }
             : { outcome: "escalated" as const, requestID: input.requestID, fingerprint: input.fingerprint, settled: false, reason: "delegation-invalid" }
@@ -249,7 +256,7 @@ describe("CoordinationDecisions.evaluate", () => {
     let validate: ((snapshot: never) => Effect.Effect<boolean>) | undefined
     const decisionsWithCapture = CoordinationDecisions.make({
       policy: defaultPolicy as never,
-      scopeOf: (sessionID) => Effect.succeed(roles[sessionID] as never),
+      accessOf: (sessionID) => Effect.succeed(roles[sessionID] === undefined ? undefined : { scope: roles[sessionID], role: "master", ownedSessionIDs: [] } as never),
       now: Effect.succeed(50),
       permission: {
         snapshot: () => Effect.succeed({ request: { id: "per_one", sessionID: targetSessionID, action: "read", resources: ["src/run"] } as never, fingerprint: "fp_per" }),
@@ -413,6 +420,73 @@ describe("CoordinationDecisions decline", () => {
     expect(await evaluate(decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ kind: "review", actor: "coordinator" })
     expect(calls).toEqual(["permission", "guardrail"])
     expect(declines).toEqual(["permission", "review"])
+  })
+
+  test("an ordinary unclassified tool request can be declined natively but never approved", async () => {
+    const unknown = { id: "per_one", sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], metadata: { readOnlyHint: true, description: "Read-only session prompt" } }
+    const delegated = { categories: ["permission", "review"], actions: ["mcp_execute"], resources: ["ycoding/*"], expiresAt: 100 }
+    const scoped = (request: Record<string, unknown>, kind: "permissionRequest" | "guardrailRequest" = "permissionRequest") => harness({
+      [kind]: request,
+      roles: { [coordinatorSessionID]: role({ delegatedDecisions: delegated }), [targetSessionID]: role({ role: "worker", delegatedDecisions: undefined }) },
+      policy: (() => Effect.succeed({ enabled: true, ...delegated })) as never,
+    })
+    const declined = scoped(unknown)
+    expect(await evaluate(declined.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ kind: "permission", actor: "coordinator", rationale: "Assigned routine work." })
+    expect(declined.calls).toEqual(["permission"])
+    expect(declined.declines).toEqual(["permission"])
+    const approved = scoped(unknown)
+    expect(await evaluate(approved.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per" })).toMatchObject({ outcome: "escalated", settled: false, reason: "unknown-semantics" })
+    expect(approved.calls).toEqual([])
+    const reviewed = scoped({ id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.outside-repo"], reason: "outside", standard: true }, "guardrailRequest")
+    expect(await evaluate(reviewed.decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ kind: "review", actor: "coordinator" })
+    expect(reviewed.declines).toEqual(["review"])
+    const credentials = scoped({ ...unknown, resources: ["ycoding/rotate_api_key"] })
+    expect(await evaluate(credentials.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "human-only:credentials-account" })
+    const required = scoped({ ...unknown, metadata: { requireHuman: true } })
+    expect(await evaluate(required.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "human-only:request" })
+    for (const item of [credentials, required]) expect(item.calls).toEqual([])
+    const custom = scoped({ id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["custom.review"], reason: "custom", standard: false }, "guardrailRequest")
+    expect(await evaluate(custom.decisions, { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" })).toMatchObject({ outcome: "escalated", settled: false, reason: "unknown-semantics" })
+    expect(custom.calls).toEqual([])
+    const outOfScope = harness({ permissionRequest: unknown })
+    expect(await evaluate(outOfScope.decisions, { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" })).toMatchObject({ outcome: "escalated", reason: "delegation-out-of-scope" })
+    expect(outOfScope.calls).toEqual([])
+  })
+
+  test("an unclassified decline still fails every policy, membership, fingerprint, hard-review and settlement-time gate", async () => {
+    const unknown = { id: "per_one", sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"] }
+    const review = { id: "grq_one", rootSessionID: targetSessionID, sessionID: targetSessionID, action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.outside-repo"], reason: "outside", standard: true }
+    const delegated = { categories: ["permission", "review"], actions: ["mcp_execute"], resources: ["ycoding/*"], expiresAt: 100 }
+    const scoped = (overrides: Parameters<typeof harness>[0] = {}) => harness({
+      permissionRequest: unknown,
+      guardrailRequest: review,
+      roles: { [coordinatorSessionID]: role({ delegatedDecisions: delegated }), [targetSessionID]: role({ role: "worker", delegatedDecisions: undefined }) },
+      policy: (() => Effect.succeed({ enabled: true, ...delegated })) as never,
+      ...overrides,
+    })
+    const decline = { kind: "permission", requestID: "per_one", fingerprint: "fp_per", decision: "decline" }
+    const cases = [
+      [scoped({ now: 100 }), decline, "delegation-expired"],
+      [scoped({ policy: (() => Effect.succeed({ enabled: false, ...delegated })) as never }), decline, "delegation-revoked"],
+      [scoped({ roles: { [coordinatorSessionID]: role({ delegatedDecisions: delegated, memberSessionIDs: [] }) } }), decline, "delegation-out-of-scope"],
+      [scoped({ permissionRequest: { ...unknown, resources: ["other/session_prompt"] } }), decline, "delegation-out-of-scope"],
+      [scoped({ guardrailRequest: { ...review, hardReview: true } }), { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" }, "human-only:hard-review"],
+      [scoped(), { kind: "review", requestID: "grq_one", fingerprint: "fp_grq" }, "unknown-semantics"],
+    ] as const
+    for (const [item, input, reason] of cases) {
+      expect(await evaluate(item.decisions, input)).toMatchObject({ outcome: "escalated", settled: false, reason })
+      expect(item.calls).toEqual([])
+    }
+    const stale = scoped()
+    expect(await evaluate(stale.decisions, { ...decline, fingerprint: "fp_old" })).toMatchObject({ settled: false })
+    expect(stale.calls).toEqual([])
+    for (const [item, input] of [
+      [scoped({ settledPermissionRequest: { ...unknown, metadata: { requireHuman: true } } }), decline],
+      [scoped({ settledGuardrailRequest: { ...review, ruleIDs: ["custom.review"], standard: false } }), { kind: "review", requestID: "grq_one", fingerprint: "fp_grq", decision: "decline" }],
+    ] as const) {
+      expect(await evaluate(item.decisions, input)).toMatchObject({ outcome: "escalated", settled: false, reason: "delegation-invalid" })
+      expect(item.declines).toHaveLength(1)
+    }
   })
 
   test("hard, human-only, out-of-policy and question declines escalate without native settlement", async () => {

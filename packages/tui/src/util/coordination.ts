@@ -32,6 +32,7 @@ export type ProjectMemberView = {
   readonly lastActivity: number
   readonly pending: number
   readonly drivenBy?: string
+  readonly owner?: { readonly sessionID: string; readonly title: string }
 }
 
 export type ProjectView = {
@@ -148,11 +149,16 @@ export function projectOfSession(projects: ReadonlyArray<ProjectView> | undefine
   }
 }
 
-export function memberPosition(project: ProjectView, sessionID: string) {
-  const index = project.members.findIndex((member) => member.sessionID === sessionID)
-  if (index < 0) return undefined
-  return { index: index + 1, total: project.members.length }
+export function projectContextOf(projects: ReadonlyArray<ProjectView> | undefined, sessionID: string) {
+  for (const project of projects ?? []) {
+    if (project.master.sessionID === sessionID) return { project, role: "master" as const }
+    if (project.members.some((member) => member.owner?.sessionID === sessionID))
+      return { project, role: "supervisor" as const }
+    if (project.members.some((member) => member.sessionID === sessionID)) return { project, role: "member" as const }
+  }
 }
+
+export type ProjectContext = NonNullable<ReturnType<typeof projectContextOf>>
 
 const glyphs: Record<MemberState, string> = { running: "●", idle: "○", waiting: "?", failed: "✗" }
 
@@ -160,16 +166,8 @@ export function stateGlyph(state: MemberState, animated: boolean) {
   return state === "running" && animated ? "⠋" : glyphs[state]
 }
 
-export function stateWord(state: MemberState) {
-  return state
-}
-
 export function runningMembers(project: ProjectView) {
   return project.members.filter((member) => member.state === "running").length
-}
-
-function rosterCount(project: ProjectView, state: MemberState) {
-  return roster(project).filter((member) => member.state === state).length
 }
 
 export function concurrencyMeter(project: ProjectView) {
@@ -193,21 +191,6 @@ export function liveSummary(project: ProjectView, animated: boolean) {
 
 export function projectStatusLabel(active: boolean) {
   return active ? "● active" : "○ paused"
-}
-
-export function masterSummary(project: ProjectView) {
-  const count = project.members.length
-  const waiting = rosterCount(project, "waiting")
-  return [
-    `${count} member${count === 1 ? "" : "s"} + Master`,
-    `${rosterCount(project, "running")} running`,
-    ...(waiting === 0 ? [] : [`${waiting} waiting`]),
-  ].join(" · ")
-}
-
-function compactCounts(project: ProjectView) {
-  const waiting = rosterCount(project, "waiting")
-  return [`${rosterCount(project, "running")} running`, ...(waiting === 0 ? [] : [`? ${waiting}`])].join(" · ")
 }
 
 export function ageLabel(elapsed: number) {
@@ -235,35 +218,6 @@ export function relativeAge(elapsed: number) {
 
 export function relativeFuture(remaining: number) {
   return `in ${span(Math.max(0, remaining))}`
-}
-
-export function collapseLevel(width: number) {
-  return { pane: width >= 100, updated: width >= 120, breadcrumb: width >= 100, chips: width < 100 && width >= 70 }
-}
-
-export function stripLine(input: { project: ProjectView; role: ProjectRole; sessionID: string; width: number }) {
-  const level = collapseLevel(input.width)
-  const separator = level.breadcrumb ? "   ·   " : " · "
-  const compose = (name: string) => {
-    const parts: string[] = []
-    if (level.breadcrumb) parts.push(`Projects › ${name}`)
-    if (input.role === "master") {
-      parts.push(`Master of ${name}`, projectStatusLabel(input.project.active))
-      parts.push(level.breadcrumb ? masterSummary(input.project) : compactCounts(input.project))
-      return parts.join(separator)
-    }
-    const member = roster(input.project).find((item) => item.sessionID === input.sessionID)
-    const position = memberPosition(input.project, input.sessionID)
-    parts.push(`Member of ${name} · master: ${input.project.master.title}`)
-    if (level.breadcrumb && position) parts.push(`member ${position.index} of ${position.total}`)
-    if (member) parts.push(`${stateGlyph(member.state, false)} ${stateWord(member.state)}`)
-    return parts.join(separator)
-  }
-  const full = compose(input.project.name)
-  const overflow = stringWidth(full) - input.width
-  if (overflow <= 0) return full
-  const nameWidth = Math.max(4, stringWidth(input.project.name) - overflow)
-  return Locale.truncateWidth(compose(Locale.truncateWidth(input.project.name, nameWidth)), input.width)
 }
 
 const listColumns = { name: 16, status: 9, master: 8, members: 7 }
@@ -312,48 +266,12 @@ export function projectNarrowLine(project: ProjectView) {
   return `${cell(project.name, narrowNameColumn)} ${project.members.length}`
 }
 
-export function projectHint(input: { role: ProjectRole; width: number }) {
-  const parts = [
-    ...(input.role === "member" ? ["↑ master", "←→ member"] : []),
-    "ctrl+x p members",
-    "enter send",
-    "esc interrupt",
-  ]
-  const fitted = parts.findIndex((_, index) => stringWidth(parts.slice(index).join(" · ")) <= input.width)
-  return parts.slice(fitted < 0 ? parts.length - 3 : Math.min(fitted, parts.length - 3)).join(" · ")
-}
-
 export function filterSessions(sessions: ReadonlyArray<ProjectSessionChoice>, query: string) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   return sessions.filter((session) => {
     const haystack = `${session.title} ${session.directory}`.toLowerCase()
     return words.every((word) => haystack.includes(word))
   })
-}
-
-function firstWord(title: string) {
-  return title.trim().split(/\s+/)[0] || title
-}
-
-export function chipsRow(project: ProjectView, width: number) {
-  const members = roster(project)
-  const words = members.map((member) => firstWord(member.title))
-  const chips = members.map((member, index) => {
-    const name = words.filter((word) => word === words[index]).length > 1 ? member.title : words[index]!
-    const label = member.role === "master" ? `MASTER ${name}` : name
-    return { sessionID: member.sessionID, label, state: member.state, width: stringWidth(label) + 2 }
-  })
-  const separator = 3
-  const overflowWidth = (hidden: number) => (hidden > 0 ? separator + stringWidth(`+${hidden}`) : 0)
-  const visible: typeof chips = []
-  let used = 0
-  for (const [index, chip] of chips.entries()) {
-    const next = used + (visible.length > 0 ? separator : 0) + chip.width
-    if (visible.length > 0 && next + overflowWidth(chips.length - index - 1) > width) break
-    visible.push(chip)
-    used = next
-  }
-  return { chips: visible, overflow: chips.length - visible.length }
 }
 
 const concurrencyRule = "Concurrency must be a whole number of at least 1, or no limit"

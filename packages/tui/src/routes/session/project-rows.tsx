@@ -63,6 +63,7 @@ export function createRowList(input: {
   labelWidth: Accessor<number>
   contentWidth: Accessor<number>
   busy?: Accessor<boolean>
+  mode?: string
 }) {
   const { theme } = useTheme()
   const [cursorKey, setCursorKey] = createSignal<string>()
@@ -125,6 +126,7 @@ export function createRowList(input: {
     if (current && current.draft !== current.initial) row?.edit?.onInput?.(current.initial)
   }
   Keymap.createLayer(() => ({
+    mode: input.mode,
     priority: 20,
     target: editor,
     enabled: editing() !== undefined,

@@ -4,6 +4,7 @@ import { useClient } from "./client"
 import { useConfig } from "../config"
 import {
   externalNotificationAllowed,
+  projectContextOf,
   projectOfSession,
   roster,
   type DelegatedDecisionsView,
@@ -40,6 +41,7 @@ function memberView(participant: CoordinationParticipant, role: ProjectMemberVie
     lastActivity: participant.lastActivity,
     pending: participant.pending.length,
     ...(participant.drivenBy === undefined ? {} : { drivenBy: participant.drivenBy.title }),
+    ...(participant.owner === undefined ? {} : { owner: participant.owner }),
   }
 }
 
@@ -244,6 +246,7 @@ function createCoordination() {
   const externalAllowed = (sessionID: string, kind: ExternalNotificationKind) =>
     externalNotificationAllowed(filter(), projects(), sessionID, kind)
   const projectOf = (sessionID: string) => projectOfSession(projects(), sessionID)
+  const contextOf = (sessionID: string) => projectContextOf(projects(), sessionID)
 
   const cleanups = [
     client.event.listen(({ details }) => {
@@ -272,6 +275,7 @@ function createCoordination() {
     setFilter,
     externalAllowed,
     projectOf,
+    contextOf,
     refresh,
   }
 }
