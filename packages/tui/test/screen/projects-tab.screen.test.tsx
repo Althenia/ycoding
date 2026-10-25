@@ -50,21 +50,15 @@ function refresh(mounted: Mounted, revision: number) {
 
 function expectFooterIdentity(screen: Screen, identity: string, width: number) {
   const all = lines(screen)
-  const matches = all.flatMap((line, index) => (line.includes(identity) ? [index] : []))
+  const matches = all.flatMap((line, index) => (line.includes(identity.startsWith("◇") ? "◇" : "↑") && /shells \d|sh\d/.test(line) ? [index] : []))
   expect(matches).toHaveLength(1)
   const filled = all.flatMap((line, index) => (line.trim() === "" ? [] : [index]))
   expect(all.slice(0, 3).some((line) => line.includes(identity))).toBe(false)
   expect(all[matches[0]!]!.trimEnd().length).toBeLessThanOrEqual(width)
-  if (width >= 80) expect(all[matches[0]!]).toContain("[ctrl+x p] Project")
-  const status = all.findIndex(
-    (line, index) => index > matches[0]! && line.includes("subagents") && line.includes("shells"),
-  )
-  expect(status).toBeGreaterThan(matches[0]!)
-  expect(status - matches[0]!).toBeLessThanOrEqual(2)
-  expect(all[status]).toContain("usage")
-  const autonomy = all.findIndex((line, index) => index > status && ["Permissions", "Guardrails", "Answers"].every((label) => line.includes(label)))
-  expect(autonomy).toBeGreaterThan(status)
-  expect(filled.slice(-3)).toEqual([matches[0], status, autonomy])
+  const footer = all[matches[0]]
+  expect(footer).toMatch(/usage|\bu\b/i)
+  for (const mode of [/Permissions Manual|P Manual|P:M/, /Guardrails Manual|G Manual|G:M/, /Answers Manual|A Manual|A:M/]) expect(footer).toMatch(mode)
+  expect(filled.at(-1)).toBe(matches[0])
   expect(all.slice(0, matches[0]!).some((line) => line.includes("Message YCoding…"))).toBe(true)
 }
 
@@ -110,7 +104,7 @@ for (const width of [120, 80]) {
       await until(screen, () => tabBar(screen) === "", "composer closed")
 
       mounted.router().navigate({ type: "session", sessionID: docsID })
-      await waitForFrame(screen, "Member of Release train")
+      await waitForFrame(screen, "↑ Member")
       await settle(screen)
       expectFooterIdentity(screen, "↑ Member of Release train · master Lead", width)
       await openProjects(screen)
@@ -130,7 +124,7 @@ test("a Session outside every Project has no Projects tab or entry, even with a 
     mounted.router().navigate({ type: "session", sessionID: planningID })
     await waitForFrame(screen, "plan · main · Build")
     await settle(screen)
-    expect(screen.frame()).not.toContain("[ctrl+x p] Project")
+    expect(screen.frame()).not.toMatch(/⌃x p project/)
     await openComposer(screen)
     expect(tabBar(screen)).not.toContain("Projects")
     screen.input.pressEscape()
@@ -224,7 +218,7 @@ test("a Master that becomes a member of the same Project keeps Projects selected
     project.memberSessionIDs = [lead, apiID, infraID, designID]
     project.revision = 8
     refresh(mounted, 8)
-    await waitForFrame(screen, "↑ Member of Release train · master Docs worker")
+    await waitForFrame(screen, "↑ Member")
     expect(screen.frame()).toContain(roster)
     expect(tabBar(screen)).toContain("Projects")
   } finally {
@@ -232,7 +226,7 @@ test("a Master that becomes a member of the same Project keeps Projects selected
   }
 }, 40_000)
 
-test("a Project member opened as a subagent keeps its identity line above the subagent footer", async () => {
+test("a Project member opened as a subagent keeps its identity in the single footer row", async () => {
   const child = {
     id: docsID,
     parentID: leadID,
@@ -255,13 +249,14 @@ test("a Project member opened as a subagent keeps its identity line above the su
   const screen = mounted.screen
   try {
     mounted.router().navigate({ type: "session", sessionID: docsID })
-    await waitForFrame(screen, "↑ Member of Release train · master Lead")
+    await waitForFrame(screen, "↑ Member")
     await settle(screen)
     const all = lines(screen)
-    const identity = all.findIndex((line) => line.includes("↑ Member of Release train · master Lead"))
-    expect(all.filter((line) => line.includes("Member of Release train"))).toHaveLength(1)
+    const identity = all.findIndex((line) => line.includes("↑ Member"))
+    expect(all.filter((line) => line.includes("↑ Member"))).toHaveLength(1)
     expect(identity).toBeGreaterThan(all.length / 2)
-    expect(all.slice(identity + 1).some((line) => line.includes("→ next"))).toBe(true)
+    expect(all[identity]).toContain("→ next")
+    expect(all.filter((line) => line.trim() !== "").at(-1)).toBe(all[identity])
   } finally {
     await screen.dispose()
   }
@@ -279,13 +274,13 @@ test("a supervisor owning a recorded member gets the Project identity and Projec
     mounted.server.state.sessions[docsID]!.owner = { sessionID: supervisorID, title: "Docs supervisor" }
     refresh(mounted, 8)
     mounted.router().navigate({ type: "session", sessionID: supervisorID })
-    await waitForFrame(screen, "↑ Supervisor in Release train · master Lead")
+    await waitForFrame(screen, "↑ Super")
     await settle(screen)
     const all = lines(screen)
-    const identity = all.findIndex((line) => line.includes("↑ Supervisor in Release train · master Lead"))
-    expect(all.filter((line) => line.includes("Supervisor in Release train"))).toHaveLength(1)
+    const identity = all.findIndex((line) => line.includes("↑ Super"))
+    expect(all.filter((line) => line.includes("↑ Super"))).toHaveLength(1)
     expect(identity).toBeGreaterThan(all.length / 2)
-    expect(all[identity]).toContain("[ctrl+x p] Project")
+    expect(all[identity]).toContain("Project")
     expect(screen.frame()).not.toContain("Member of Release train")
     await openProjects(screen)
     const bar = tabBar(screen)
@@ -299,7 +294,7 @@ test("a supervisor owning a recorded member gets the Project identity and Projec
     await until(screen, () => !screen.frame().includes(roster), "Projects tab removed")
     await until(screen, () => tabBar(screen) !== "" && !tabBar(screen).includes("Projects"), "Subagents fallback")
     expect(screen.frame()).not.toContain("Supervisor in Release train")
-    expect(screen.frame()).not.toContain("[ctrl+x p] Project")
+    expect(screen.frame()).not.toContain("⌃x p project")
     screen.input.pressEscape()
     await until(screen, () => tabBar(screen) === "", "composer closed")
     expect(mounted.router().data).toMatchObject({ type: "session", sessionID: leadID })
@@ -325,7 +320,7 @@ test("a child of the Master that owns no recorded member has no Project identity
     await settle(screen)
     expect(screen.frame()).not.toContain("of Release train")
     expect(screen.frame()).not.toContain("Supervisor in")
-    expect(screen.frame()).not.toContain("[ctrl+x p] Project")
+    expect(screen.frame()).not.toContain("⌃x p project")
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("p")
     await settle(screen)

@@ -580,18 +580,41 @@ test.each([
     expect(lines).toHaveLength(height + 1)
     expect(lines.every((line) => line.length <= width)).toBe(true)
     const back = lines.findIndex((line) => line.includes("Back to main"))
-    const indicators = lines.findIndex((line) => line.includes("Permissions Manual"))
-    expect(back).toBe(height - 3)
+    expect(back).toBe(height - 2)
     expect(lines[back]).toContain("commands")
-    expect(indicators).toBe(height - 1)
-    for (const title of ["Permissions", "Guardrails", "Answers"]) expect(lines[indicators]).toContain(`${title} Manual`)
-    const footer = screen.spans().lines.slice(-4, -1)
-    expect(footer).toHaveLength(3)
-    expect(footer.slice(1).every((line) => line.spans.every((span) => span.bg.toInts().join(",") === "15,17,21,255"))).toBe(true)
+    for (const mode of [/Permissions Manual|P Manual|P:M/, /Guardrails Manual|G Manual|G:M/, /Answers Manual|A Manual|A:M/]) expect(lines[back]).toMatch(mode)
+    for (const row of [height - 3, height - 1]) {
+      expect(lines[row].trim()).toBe("")
+      expect(screen.spans().lines[row].spans.every((span) => span.bg.toInts().join(",") === "15,17,21,255")).toBe(true)
+    }
   } finally {
     await screen.dispose()
   }
 }, 120_000)
+
+for (const width of [40, 80, 200]) {
+  test(`subagent modes and navigation share one footer row at ${width} columns`, async () => {
+    const state = fixture()
+    const screen = await renderScreen({
+      width, height: 24, args: { sessionID: ordinaryID }, route: state.route, sessionReady: true,
+      settle: (screen) => /Permissions Manual|P Manual|P:M/.test(screen.captureCharFrame().trimEnd().split("\n").at(-1) ?? ""),
+    })
+    try {
+      await waitFor(() => /Permissions Manual|P Manual|P:M/.test(screen.lines().filter((line) => line.trim() !== "").at(-1) ?? ""), "loaded subagent modes")
+      const footer = screen.lines().filter((line) => line.trim() !== "").at(-1)!
+      for (const mode of [/Permissions Manual|P Manual|P:M/, /Guardrails Manual|G Manual|G:M/, /Answers Manual|A Manual|A:M/]) expect(footer).toMatch(mode)
+      expect(footer).toContain("next")
+      expect(footer.trimEnd().length).toBeLessThanOrEqual(width)
+      expect(screen.lines().filter((line) => /Permissions Manual|P Manual|P:M/.test(line))).toEqual([footer])
+      const band = screen.lines().slice(-4, -1)
+      expect(band[0].trim()).toBe("")
+      expect(band[1]).toBe(footer)
+      expect(band[2].trim()).toBe("")
+    } finally {
+      await screen.dispose()
+    }
+  }, 40_000)
+}
 
 test("subagent chat hydrates its todos and renders live status changes without the parent rail", async () => {
   const todos: SessionTodoInfo[] = [

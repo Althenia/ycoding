@@ -88,6 +88,27 @@ function notice(screen: Screen, created: number, description: string, id: string
   emit(screen, "session.synthetic", created, { text: description, description }, id)
 }
 
+test("generic working activity stays in the header without a duplicate transcript row", async () => {
+  const screen = await mount()
+  try {
+    await screen.waitForEventStream()
+    emit(screen, "session.execution.started", 999, {})
+    emit(screen, "session.step.started", 1_000, { assistantMessageID: step, agent: "build", model })
+    await until(screen, () => screen.lines().slice(0, 3).join(" ").includes("⋯"), "header activity indicator")
+    expect(screen.frame()).not.toContain("⋯ Working")
+    expect(screen.renderer.root.findDescendantById("session-live-tail")).toBeUndefined()
+    emit(screen, "session.text.started", 1_001, { assistantMessageID: step, ordinal: 0 })
+    emit(screen, "session.text.delta", 1_002, { assistantMessageID: step, ordinal: 0, delta: "Streamed answer" })
+    await until(screen, () => screen.frame().includes("⋯ Typing"), "text-specific typing state")
+    emit(screen, "session.text.ended", 1_003, { assistantMessageID: step, ordinal: 0, text: "Streamed answer" })
+    await until(screen, () => !screen.frame().includes("⋯ Typing"), "closed text state")
+    expect(screen.frame()).not.toContain("⋯ Working")
+    emit(screen, "session.execution.succeeded", 1_004, {})
+  } finally {
+    await screen.dispose()
+  }
+}, 40_000)
+
 test("a text part started after a mid-step notice streams below it and stays there through reconcile and completion", async () => {
   const screen = await mount()
   try {

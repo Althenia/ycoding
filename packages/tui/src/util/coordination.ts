@@ -179,13 +179,17 @@ export function concurrencyMeter(project: ProjectView) {
   return `${bar} ${running}/${project.concurrency} members running${running >= project.concurrency ? " · at limit" : ""}`
 }
 
-export function liveSummary(project: ProjectView, animated: boolean) {
+function liveStates(project: ProjectView, animated: boolean) {
   const states: MemberState[] = ["running", "waiting", "failed", "idle"]
-  return states
-    .flatMap((state) => {
-      const count = roster(project).filter((member) => member.state === state).length
-      return count === 0 ? [] : [`${stateGlyph(state, animated)}${count}`]
-    })
+  return states.flatMap((state) => {
+    const count = roster(project).filter((member) => member.state === state).length
+    return count === 0 ? [] : [{ state, text: `${stateGlyph(state, animated)}${count}` }]
+  })
+}
+
+export function liveSummary(project: ProjectView, animated: boolean) {
+  return liveStates(project, animated)
+    .map((item) => item.text)
     .join(" ")
 }
 
@@ -244,18 +248,36 @@ export function projectListHeader(columns: ProjectListColumns = { status: true, 
   ].join(" ")
 }
 
+export type ProjectListSegment =
+  | { readonly kind: "cell" | "marker"; readonly text: string }
+  | { readonly kind: "status"; readonly text: string; readonly active: boolean }
+  | { readonly kind: "state"; readonly text: string; readonly state: MemberState }
+
 export function projectListLine(
   project: ProjectView,
   animated: boolean,
   columns: ProjectListColumns = { status: true, master: true },
-) {
+): ProjectListSegment[] {
   return [
-    cell(project.name, listColumns.name),
-    ...(columns.status ? [cell(projectStatusLabel(project.active), listColumns.status)] : []),
-    ...(columns.master ? [cell(project.master.title, listColumns.master)] : []),
-    cell(String(project.members.length), listColumns.members),
-    `${liveSummary(project, animated)} ›`,
-  ].join(" ")
+    { kind: "cell", text: `${cell(project.name, listColumns.name)} ` },
+    ...(columns.status
+      ? [
+          {
+            kind: "status" as const,
+            text: `${cell(projectStatusLabel(project.active), listColumns.status)} `,
+            active: project.active,
+          },
+        ]
+      : []),
+    ...(columns.master ? [{ kind: "cell" as const, text: `${cell(project.master.title, listColumns.master)} ` }] : []),
+    { kind: "cell", text: `${cell(String(project.members.length), listColumns.members)} ` },
+    ...liveStates(project, animated).map((item, index) => ({
+      kind: "state" as const,
+      state: item.state,
+      text: index === 0 ? item.text : ` ${item.text}`,
+    })),
+    { kind: "marker", text: " ›" },
+  ]
 }
 
 export function projectNarrowHeader() {

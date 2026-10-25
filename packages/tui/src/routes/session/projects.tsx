@@ -35,13 +35,22 @@ import {
   type DelegatedDecisionsView,
   type GlobalDelegationView,
   type NotificationFilter,
+  type ProjectListColumns,
+  type ProjectListSegment,
   type ProjectView,
   type ProjectService,
   type ProjectSessionChoice,
 } from "../../util/coordination"
-import { createRowList, Panel, type Row } from "./project-rows"
+import { createRowList, infoInk, Panel, quietInk, type Row } from "./project-rows"
 import { SessionPickerDetail, sessionPickerRows } from "./project-session-picker"
-import { ProjectMembers, ProjectMeter, ProjectState, useProjectClock } from "./project-members"
+import {
+  memberStateColor,
+  ProjectMembers,
+  ProjectMeter,
+  ProjectState,
+  projectActiveColor,
+  useProjectClock,
+} from "./project-members"
 
 export function ProjectsScreen() {
   const route = useRouteData("projects")
@@ -506,20 +515,20 @@ export function ProjectsScreenContent(props: {
   function List() {
     return (
       <Panel title={`PROJECTS ${props.projects()?.length ?? 0}`} active={view() === "list"} flexGrow={1}>
-        <text fg={theme.text.subdued} height={1} wrapMode="none" truncate>
+        <text fg={quietInk(theme)} height={1} wrapMode="none" truncate>
           {"  "}
           {view() !== "list" ? projectNarrowHeader() : projectListHeader(listColumns())}
         </text>
         <scrollbox flexGrow={1} minHeight={0}>
           <Show when={props.error?.()}>
             <text fg={theme.text.feedback.error.default}>{props.error?.()}</text>
-            <text onMouseUp={props.onRefresh}>[r] Retry</text>
+            <text fg={theme.text.default} onMouseUp={props.onRefresh}>[r] Retry</text>
           </Show>
           <Show when={!props.error?.() && props.projects() === undefined}>
-            <text>Loading projects…</text>
+            <text fg={theme.text.default}>Loading projects…</text>
           </Show>
           <Show when={props.projects()?.length === 0}>
-            <text>No projects</text>
+            <text fg={theme.text.default}>No projects</text>
           </Show>
           <For each={props.projects()}>
             {(item, index) => (
@@ -533,18 +542,28 @@ export function ProjectsScreenContent(props: {
                   props.onOpen(item.master.sessionID)
                 }}
               >
-                <text
-                  fg={cursor() === index() ? theme.text.action.primary.focused : theme.text.default}
-                  wrapMode="none"
-                  truncate
-                  flexGrow={1}
-                  minWidth={0}
+                <Show
+                  when={view() === "list"}
+                  fallback={
+                    <text
+                      fg={cursor() === index() ? theme.text.action.primary.focused : theme.text.default}
+                      wrapMode="none"
+                      truncate
+                      flexGrow={1}
+                      minWidth={0}
+                    >
+                      {cursor() === index() ? "▸ " : "  "}
+                      {projectNarrowLine(item)}
+                    </text>
+                  }
                 >
-                  {cursor() === index() ? "▸ " : "  "}
-                  {view() !== "list"
-                    ? projectNarrowLine(item)
-                    : projectListLine(item, config.data.animations !== false, listColumns())}
-                </text>
+                  <ProjectListLine
+                    project={item}
+                    animated={config.data.animations !== false}
+                    columns={listColumns()}
+                    selected={cursor() === index()}
+                  />
+                </Show>
               </box>
             )}
           </For>
@@ -557,20 +576,20 @@ export function ProjectsScreenContent(props: {
             }
             onMouseUp={startNew}
           >
-            <text fg={theme.text.feedback.info.default}>
+            <text fg={infoInk(theme)}>
               {cursor() === (props.projects()?.length ?? 0) ? "▸ " : "  "}[n] + New project
             </text>
           </box>
         </scrollbox>
         <Show when={view() === "list" && project()}>
           <box flexDirection="row" gap={2}>
-            <text fg={theme.text.feedback.info.default} onMouseUp={openSelected}>
+            <text fg={infoInk(theme)} onMouseUp={openSelected}>
               [Enter] Open master
             </text>
-            <text fg={theme.text.feedback.info.default} onMouseUp={removeProject}>
+            <text fg={infoInk(theme)} onMouseUp={removeProject}>
               [D] Delete
             </text>
-            <text fg={theme.text.feedback.info.default} onMouseUp={() => setView("settings")}>
+            <text fg={infoInk(theme)} onMouseUp={() => setView("settings")}>
               [s] Settings
             </text>
           </box>
@@ -582,18 +601,18 @@ export function ProjectsScreenContent(props: {
     <box width={dimensions().width} height={dimensions().height} backgroundColor={theme.background.default}>
       <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3}>
         <BrandMark width={2} height={1} />
-        <text>
+        <text fg={theme.text.default}>
           {" "}
           Projects
           {view() === "new" ? " › New project" : view() === "settings" ? ` › ${project()?.name ?? ""} › Settings` : ""}
         </text>
         <box flexGrow={1} />
         <Show when={view() !== "new" && dimensions().width >= 120}>
-          <text fg={theme.text.subdued}>
+          <text fg={quietInk(theme)}>
             {updatedLabel(props.loadedAt?.() === undefined ? undefined : now() - props.loadedAt!()!)}
           </text>
         </Show>
-        <text onMouseUp={back}> esc {view() === "new" ? "cancel" : "back"}</text>
+        <text fg={theme.text.default} onMouseUp={back}> esc {view() === "new" ? "cancel" : "back"}</text>
       </box>
       <box flexGrow={1} minHeight={0} paddingLeft={3} paddingRight={3} gap={2}>
         <Show when={view() === "list"}>
@@ -601,42 +620,61 @@ export function ProjectsScreenContent(props: {
             <box flexGrow={1} minHeight={0} gap={1}>
               <List />
               <Panel title="LEGEND" height={7}>
-                <text>LIVE ● running ○ idle ? waiting on you ✗ failed</text>
-                <text>STATUS ● active ○ paused</text>
-                <text>[k] action · (k) unavailable · › opens · ✎ editable</text>
-                <text>▸ filled band = cursor · ● = this Session</text>
-                <text>MEMBERS excludes the Master · LIVE includes it</text>
+                <box flexDirection="row" height={1}>
+                  <text fg={theme.text.default}>LIVE </text>
+                  <text fg={memberStateColor(theme, "running")}>● running</text>
+                  <text fg={theme.text.default}> </text>
+                  <text fg={memberStateColor(theme, "idle")}>○ idle</text>
+                  <text fg={theme.text.default}> </text>
+                  <text fg={memberStateColor(theme, "waiting")}>? waiting on you</text>
+                  <text fg={theme.text.default}> </text>
+                  <text fg={memberStateColor(theme, "failed")}>✗ failed</text>
+                </box>
+                <box flexDirection="row" height={1}>
+                  <text fg={theme.text.default}>STATUS </text>
+                  <text fg={projectActiveColor(theme, true)}>● active</text>
+                  <text fg={theme.text.default}> </text>
+                  <text fg={projectActiveColor(theme, false)}>○ paused</text>
+                </box>
+                <text fg={theme.text.default}>[k] action · (k) unavailable · › opens · ✎ editable</text>
+                <text fg={theme.text.default}>▸ filled band = cursor · ● = this Session</text>
+                <text fg={theme.text.default}>MEMBERS excludes the Master · LIVE includes it</text>
               </Panel>
             </box>
             <Show when={wide() && project()}>
               {(selected) => (
                 <Panel title={`${selected().name} · preview`} width={42}>
-                  <text>{selected().name}</text>
-                  <text>Master {selected().master.title}</text>
-                  <text wrapMode="none" truncate>
+                  <text fg={theme.text.default}>{selected().name}</text>
+                  <text fg={theme.text.default}>Master {selected().master.title}</text>
+                  <text fg={theme.text.default} wrapMode="none" truncate>
                     {selected().master.directory}
                   </text>
-                  <text>Status {projectStatusLabel(selected().active)}</text>
+                  <box flexDirection="row" height={1}>
+                    <text fg={theme.text.default}>Status </text>
+                    <text fg={projectActiveColor(theme, selected().active)}>
+                      {projectStatusLabel(selected().active)}
+                    </text>
+                  </box>
                   <ProjectMeter project={selected()} />
-                  <text> </text>
-                  <text>MEMBERS {selected().members.length} + MASTER</text>
+                  <text fg={theme.text.default}> </text>
+                  <text fg={theme.text.default}>MEMBERS {selected().members.length} + MASTER</text>
                   <For each={roster(selected())}>
                     {(member) => (
                       <box marginTop={1}>
                         <box flexDirection="row" gap={1}>
-                          <text>
+                          <text fg={theme.text.default}>
                             {member.role === "master" ? "MASTER" : "MEMBER"} {member.title}
                           </text>
                           <ProjectState state={member.state} word />
                         </box>
                         <Show when={member.drivenBy}>
-                          <text fg={theme.text.subdued}>↳ driven by {member.drivenBy}</text>
+                          <text fg={quietInk(theme)}>↳ driven by {member.drivenBy}</text>
                         </Show>
                       </box>
                     )}
                   </For>
                   <box flexGrow={1} />
-                  <text fg={theme.text.feedback.info.default} onMouseUp={openSelected}>
+                  <text fg={infoInk(theme)} onMouseUp={openSelected}>
                     [Enter] Open master chat
                   </text>
                 </Panel>
@@ -661,14 +699,14 @@ export function ProjectsScreenContent(props: {
                             }
                             onMouseUp={() => setSection(index())}
                           >
-                            <text>
+                            <text fg={theme.text.default}>
                               {section() === index() ? "▸ " : "  "}
                               {label}
                             </text>
                           </box>
                         )}
                       </For>
-                      <text>tab switch section</text>
+                      <text fg={theme.text.default}>tab switch section</text>
                     </Panel>
                   }
                 >
@@ -712,32 +750,64 @@ export function ProjectsScreenContent(props: {
           <Show when={view() === "settings" && project()}>
             {(current) => (
               <Panel title="OTHER SECTIONS" height={8}>
-                <text>
+                <text fg={theme.text.default}>
                   Members MASTER {current().master.title} ·{" "}
                   {current()
                     .members.map((member) => member.title)
                     .join(", ")}
                 </text>
-                <text> [a] Add [n] New session [x] Remove [D] Delete</text>
-                <text>Delegation {delegationSummary(current().delegatedDecisions, props.globalDelegation())}</text>
-                <text>Notifications {notificationFilterLabel(props.filter(), masterChoices(props.projects()))}</text>
-                <text> question · permission · review · failure · completion</text>
+                <text fg={theme.text.default}> [a] Add [n] New session [x] Remove [D] Delete</text>
+                <text fg={theme.text.default}>Delegation {delegationSummary(current().delegatedDecisions, props.globalDelegation())}</text>
+                <text fg={theme.text.default}>Notifications {notificationFilterLabel(props.filter(), masterChoices(props.projects()))}</text>
+                <text fg={theme.text.default}> question · permission · review · failure · completion</text>
               </Panel>
             )}
           </Show>
         </Show>
         <Show when={busy()}>
-          <text>Saving…</text>
+          <text fg={theme.text.default}>Saving…</text>
         </Show>
         <Show when={failure()}>
           <text fg={theme.text.feedback.error.default}>{failure()}</text>
         </Show>
       </box>
       <box height={1} flexShrink={0} paddingLeft={3}>
-        <text fg={theme.text.subdued} wrapMode="none" truncate>
+        <text fg={quietInk(theme)} wrapMode="none" truncate>
           {hint()}
         </text>
       </box>
+    </box>
+  )
+}
+
+function ProjectListLine(props: {
+  project: ProjectView
+  animated: boolean
+  columns: ProjectListColumns
+  selected: boolean
+}) {
+  const { theme } = useTheme()
+  const plain = () => (props.selected ? theme.text.action.primary.focused : theme.text.default)
+  const color = (segment: ProjectListSegment) =>
+    segment.kind === "state"
+      ? memberStateColor(theme, segment.state, props.selected)
+      : segment.kind === "status"
+        ? projectActiveColor(theme, segment.active, props.selected)
+        : segment.kind === "marker" && !props.selected
+          ? quietInk(theme)
+          : plain()
+  return (
+    <box flexDirection="row" flexGrow={1} minWidth={0} overflow="hidden">
+      <text fg={plain()} wrapMode="none" flexShrink={0}>
+        {props.selected ? "▸ " : "  "}
+      </text>
+      <For each={projectListLine(props.project, props.animated, props.columns)}>
+        {(segment) => (
+          <text fg={color(segment)} wrapMode="none" flexShrink={0}>
+            {segment.text}
+          </text>
+        )}
+      </For>
     </box>
   )
 }

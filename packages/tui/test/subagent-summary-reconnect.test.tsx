@@ -72,7 +72,7 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
   app.renderer.start()
 
   try {
-    await app.waitForFrame((frame) => frame.includes("subagents 1"))
+    await app.waitForFrame((frame) => /subagents 1|sa1/.test(frame))
     expect(data.session.subagent.summary(parentID)?.active).toBe(1)
 
     data.session.subagent.invalidate(parentID)
@@ -86,7 +86,7 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
     releaseStale()
     await pendingStale
 
-    await app.waitForFrame((frame) => frame.includes("subagents 0"))
+    await app.waitForFrame((frame) => /subagents 0|sa0/.test(frame))
     expect(data.session.subagent.summary(parentID)).toEqual({ total: 0, active: 0, running: 0, waiting: 0 })
 
     active = 1
@@ -94,7 +94,7 @@ test("refreshes a resident subagent summary after reconnect and rejects the pre-
     events.disconnect()
     await waitFor(() => activeRequests === 3, "second reconnected active-session snapshot")
     await waitFor(() => subagentRequests === 4, "waiting subagent refresh")
-    await app.waitForFrame((frame) => frame.includes("subagents 1"))
+    await app.waitForFrame((frame) => /subagents 1|sa1/.test(frame))
     expect(data.session.subagent.summary(parentID)).toEqual({ total: 1, active: 1, running: 0, waiting: 1 })
   } finally {
     releaseStale()

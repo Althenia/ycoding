@@ -164,11 +164,11 @@ jobs:
 
       - name: Verify footer state and short-terminal controls
         if: matrix.suite == 'tui'
-        run: bun test --cwd packages/tui --timeout 40000 ./test/session-footer-autonomy.test.tsx ./test/isolated-browser-dialog.test.tsx ./test/cli/tui/projects-layout.test.tsx
+        run: bun test --cwd packages/tui --timeout 40000 ./test/session-footer-autonomy.test.tsx ./test/isolated-browser-dialog.test.tsx ./test/cli/tui/projects-layout.test.tsx ./test/theme-v1-parity.test.ts
 
       - name: Verify compact Project and transcript layouts
         if: matrix.suite == 'tui'
-        run: bun test --cwd packages/tui --timeout 40000 ./test/screen/projects-tab.screen.test.tsx ./test/screen/projects-flow.screen.test.tsx ./test/screen/autonomy-summaries.screen.test.tsx ./test/screen/session-rail-design-match.test.tsx ./test/screen/subagent-picker-capture.test.tsx ./test/cli/tui/projects-screen.test.tsx ./test/cli/tui/session-rows-chronology.test.tsx ./test/screen/transcript-chronology.screen.test.tsx ./test/cli/tui/sidebar-cache.test.tsx ./test/design-md.test.ts
+        run: bun test --cwd packages/tui --timeout 40000 ./test/screen/projects-tab.screen.test.tsx ./test/screen/projects-flow.screen.test.tsx ./test/screen/session-chrome-row.screen.test.tsx ./test/screen/autonomy-summaries.screen.test.tsx ./test/screen/session-rail-design-match.test.tsx ./test/screen/subagent-picker-capture.test.tsx ./test/cli/tui/projects-screen.test.tsx ./test/cli/tui/session-rows-chronology.test.tsx ./test/screen/transcript-chronology.screen.test.tsx ./test/cli/tui/sidebar-cache.test.tsx ./test/design-md.test.ts
 
       - name: Verify installer and web assets
         if: matrix.suite == 'web'

@@ -150,9 +150,10 @@ test("keeps subagent and shell footer counts as independent segments", async () 
   app.renderer.start()
 
   try {
-    await app.waitForFrame((frame) => frame.includes("subagents"))
-    const line = app.captureCharFrame().split("\n").find((row) => row.includes("subagents"))
-    expect(line).toContain("subagents 2   shells 0")
+    await app.waitForFrame((frame) => /subagents 2|sa2/.test(frame))
+    const line = app.captureCharFrame().split("\n").find((row) => /subagents 2|sa2/.test(row))
+    expect(line).toMatch(/subagents 2|sa2/)
+    expect(line).toMatch(/shells 0|sh0/)
   } finally {
     app.renderer.destroy()
   }

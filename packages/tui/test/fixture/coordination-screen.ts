@@ -65,7 +65,10 @@ export async function mountCoordination(
       router = useRoute()
       data = value
     },
-    settle: "Master of Release train",
+    settle: (screen) => {
+      const frame = screen.captureCharFrame()
+      return frame.includes("Draft the release")
+    },
     sessionReady: true,
     kittyKeyboard: true,
   })

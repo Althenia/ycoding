@@ -89,6 +89,9 @@ async function waitFor(screen: Awaited<ReturnType<typeof renderScreen>>, check: 
 const modeWords = /YOLO|permissions auto|guardrails auto|goal|asleep|answers auto/
 
 const footerPattern = /main\s+subagents 1\s+shells 0\s+.*⌃x shift\+u usage\s+⌃p commands/
+const footerRow = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.lines().filter((line) => line.trim() !== "").at(-1) ?? ""
+const modePattern = (title: "Permissions" | "Guardrails" | "Answers", mode: "Manual" | "Auto" | "YOLO" | "unknown") =>
+  new RegExp(`${title} ${mode}|${title[0]} ${mode}|${title[0]}:${{ Manual: "M", Auto: "A", YOLO: "Y", unknown: "\\?" }[mode]}`)
 
 for (const width of [40, 60, 79, 80, 110, 200]) {
   test(`the footer shows three effective modes and preserves controls and composer at ${width} columns`, async () => {
@@ -98,26 +101,26 @@ for (const width of [40, 60, 79, 80, 110, 200]) {
       height: 24,
       args: { sessionID },
       route,
-      settle: width < 60 ? "commands" : "waiting · 1 subagent",
+      settle: "Message YCoding",
+      sessionReady: true,
       config: { animations: false },
     })
     try {
-      await waitFor(screen, () => /main\s+subagents 1\s+shells 0/.test(screen.frame()) && screen.frame().includes("Permissions Auto"), "loaded footer")
+      await waitFor(screen, () => /subagents 1|sa1/.test(footerRow(screen)) && modePattern("Permissions", "Auto").test(footerRow(screen)), "loaded footer")
       const lines = screen.lines()
       const header = lines.find((line) => line.includes("waiting · 1 subagent"))!
       if (width >= 60) expect(header).toContain("review 1")
-      expect(lines.some((line) => /main\s+subagents 1\s+shells 0/.test(line))).toBe(true)
+      expect(footerRow(screen)).toMatch(/subagents 1|sa1/)
+      expect(footerRow(screen)).toMatch(/shells 0|sh0/)
       if (header) expect(header).not.toMatch(modeWords)
-      const footer = lines.find((line) => line.includes("commands"))!
+      const footer = footerRow(screen)
       expect(footer.trimEnd().length).toBeLessThanOrEqual(width)
-      expect(footer).not.toMatch(/goal|YOLO|permissions auto|guardrails auto|answers auto|review/)
-      if (width >= 80) expect(footer).toMatch(footerPattern)
-      else {
-        expect(footer).toMatch(/^\s+⌃x shift\+u usage\s+⌃p commands\s*$/)
-      }
+      expect(footer).not.toMatch(/goal|review box/)
+      expect(footer).toContain("⌃p")
+      if (width >= 160) expect(footer).toMatch(footerPattern)
       expect(screen.frame()).not.toContain("goal off")
-      for (const label of ["Permissions Auto", "Guardrails Auto", "Answers Auto"])
-        expect(lines.slice(-5).join("\n")).toContain(label)
+      for (const title of ["Permissions", "Guardrails", "Answers"] as const) expect(footer).toMatch(modePattern(title, "Auto"))
+      expect(lines.filter((line) => modePattern("Permissions", "Auto").test(line))).toEqual([footer])
       expect(screen.frame()).not.toContain("AUTONOMY")
       await screen.input.typeText("Editable draft")
       await waitFor(screen, () => screen.frame().includes("Editable draft"), "composer draft")
@@ -182,9 +185,9 @@ for (const width of [60, 200]) {
       screen.input.pressEscape()
       await waitFor(screen, () => !screen.frame().includes("1 all Manual"), "closed dialog")
       const footer = screen.lines().slice(-5).join("\n")
-      expect(footer).toContain("Permissions YOLO")
-      expect(footer).toContain("Guardrails Manual")
-      expect(footer).toContain("Answers Auto")
+      expect(footer).toMatch(modePattern("Permissions", "YOLO"))
+      expect(footer).toMatch(modePattern("Guardrails", "Manual"))
+      expect(footer).toMatch(modePattern("Answers", "Auto"))
       await openAutonomous(screen)
       expect(screen.frame()).toMatch(/Permissions\s+YOLO/)
       expect(screen.frame()).toMatch(/Guardrails\s+Manual/)
@@ -291,7 +294,7 @@ test("the sidebar toggle command preserves the Review row without an AUTONOMY se
     await waitFor(screen, () => /Review\s+1 waiting/.test(screen.frame()), "overlay Review row")
     expect(screen.frame()).not.toContain("AUTONOMY")
     expect(screen.frame()).toMatch(/Review\s+1 waiting/)
-    expect(screen.frame()).toMatch(/Answers Auto/)
+    expect(footerRow(screen)).toMatch(modePattern("Answers", "Auto"))
     expect(screen.frame()).not.toMatch(/YOLO\s+(on|off|unknown)/)
   } finally {
     await screen.dispose()
@@ -315,12 +318,9 @@ test("a sleeping Session shows an explicit footer marker without replacing effec
   })
   try {
     expect(screen.frame()).toContain("asleep")
-    const footer = screen.lines().slice(-5).join("\n")
-    expect(footer).toContain("asleep")
-    expect(footer).toContain("Permissions Auto")
-    expect(footer).toContain("Guardrails Auto")
-    expect(footer).toContain("Answers Auto")
-    expect(screen.lines().find((line) => line.includes("commands"))).not.toMatch(/asleep|YOLO|permissions auto|guardrails auto/)
+    expect(footerRow(screen)).toMatch(/asleep|sl\*/)
+    for (const title of ["Permissions", "Guardrails", "Answers"] as const) expect(footerRow(screen)).toMatch(modePattern(title, "Auto"))
+    expect(footerRow(screen)).toContain("⌃p")
   } finally {
     await screen.dispose()
   }
@@ -354,8 +354,8 @@ test("an inherited effective mode is marked in the footer with its source in the
   )
   const screen = await renderScreen({ width: 200, height: 50, args: { sessionID }, route, settle: "waiting · 1 subagent", config: { animations: false } })
   try {
-    await waitFor(screen, () => /Guardrails YOLO · inherited/.test(screen.frame()), "inherited guardrails indicator")
-    expect(screen.lines().slice(-5).join("\n")).toContain("Guardrails YOLO · inherited")
+    await waitFor(screen, () => /Guardrails YOLO +· inherited/.test(footerRow(screen)), "inherited guardrails indicator")
+    expect(footerRow(screen)).toMatch(/Guardrails YOLO +· inherited/)
     expect(screen.frame()).toMatch(/Permissions Manual/)
     expect(screen.frame()).not.toContain("Guardrails Manual")
     await openAutonomous(screen)
@@ -371,7 +371,7 @@ for (const read of ["pending", "failed", "malformed"] as const) {
     const backend = fixture()
     const gate = Promise.withResolvers<Response>()
     const screen = await renderScreen({
-      width: 60, height: 24, args: { sessionID }, settle: "commands", config: { animations: false },
+      width: 60, height: 24, args: { sessionID }, settle: "Message YCoding", config: { animations: false },
       route: (url, request) => {
         if (url.pathname.endsWith("/autonomy")) {
           if (read === "pending") return gate.promise
@@ -383,8 +383,8 @@ for (const read of ["pending", "failed", "malformed"] as const) {
     })
     try {
       const footer = screen.lines().slice(-6).join("\n")
-      for (const title of ["Permissions", "Guardrails", "Answers"])
-        expect(footer).toContain(`${title} unknown`)
+      for (const title of ["Permissions", "Guardrails", "Answers"] as const)
+        expect(footer).toMatch(modePattern(title, "unknown"))
       expect(footer).not.toMatch(/Manual|asleep/)
     } finally {
       gate.resolve(json({ data: backend.state.autonomy }))
@@ -398,26 +398,26 @@ test("disconnect makes footer modes unknown and reconnect reloads effective mode
   const reconnect = Promise.withResolvers<Response>()
   let holdEvents = false
   const screen = await renderScreen({
-    width: 60, height: 24, args: { sessionID }, settle: "commands", config: { animations: false },
+    width: 60, height: 24, args: { sessionID }, settle: "Message YCoding", config: { animations: false },
     route: (url, request) => url.pathname === "/api/event" && holdEvents ? reconnect.promise : backend.route(url, request),
   })
   try {
-    await waitFor(screen, () => screen.frame().includes("Permissions Auto"), "loaded footer")
+    await waitFor(screen, () => modePattern("Permissions", "Auto").test(footerRow(screen)), "loaded footer")
     await screen.waitForEventStream()
     holdEvents = true
     screen.events.disconnect()
-    await waitFor(screen, () => screen.frame().includes("Permissions unknown"), "disconnected footer")
+    await waitFor(screen, () => modePattern("Permissions", "unknown").test(footerRow(screen)), "disconnected footer")
     expect(screen.lines().slice(-6).join("\n")).not.toContain("Auto")
     backend.state.autonomy = AutonomyFixture.autonomyView(
       {},
       { answers: "yolo", asleep: true, inherited: { answers: "ses_root" } },
     )
     reconnect.resolve(screen.events.connect())
-    await waitFor(screen, () => screen.frame().includes("Answers YOLO · inherited"), "reconnected footer")
+    await waitFor(screen, () => /(?:Answers|A) YOLO(?: +· inherited| *\*)|A:Y *\*/.test(footerRow(screen)), "reconnected footer")
     const footer = screen.lines().slice(-6).join("\n")
-    expect(footer).toContain("Permissions Manual")
-    expect(footer).toContain("Guardrails Manual")
-    expect(footer).toContain("asleep")
+    expect(footer).toMatch(modePattern("Permissions", "Manual"))
+    expect(footer).toMatch(modePattern("Guardrails", "Manual"))
+    expect(footer).toMatch(/asleep|sl\*/)
     expect(footer).not.toContain("review box")
   } finally {
     reconnect.resolve(screen.events.connect())
@@ -433,7 +433,7 @@ test("a failed refresh clears previously loaded footer modes and the Autonomous 
   )
   let failRead = false
   const screen = await renderScreen({
-    width: 60, height: 24, args: { sessionID }, settle: "commands", config: { animations: false },
+    width: 60, height: 24, args: { sessionID }, settle: "Message YCoding", config: { animations: false },
     route: (url, request) => {
       if (url.pathname.endsWith("/wait")) return new Response(null, { status: 204 })
       if (url.pathname.endsWith("/autonomy") && failRead) return new Response("unavailable", { status: 500 })
@@ -441,17 +441,17 @@ test("a failed refresh clears previously loaded footer modes and the Autonomous 
     },
   })
   try {
-    await waitFor(screen, () => screen.frame().includes("Permissions Auto · inherited"), "loaded inherited mode")
-    expect(screen.lines().slice(-6).join("\n")).toContain("asleep")
+    await waitFor(screen, () => /(?:Permissions|P) Auto(?: +· inherited| *\*)|P:A *\*/.test(footerRow(screen)), "loaded inherited mode")
+    expect(footerRow(screen)).toMatch(/asleep|sl\*/)
     await screen.waitForEventStream()
     failRead = true
     screen.events.emit({
       id: "evt_autonomy_refresh_failure", created: 20, type: "session.execution.succeeded",
       durable: { aggregateID: sessionID, seq: 1, version: 1 }, location: { directory }, data: { sessionID },
     })
-    await waitFor(screen, () => screen.frame().includes("Permissions unknown"), "failed refresh")
+    await waitFor(screen, () => modePattern("Permissions", "unknown").test(footerRow(screen)), "failed refresh")
     const footer = screen.lines().slice(-6).join("\n")
-    for (const title of ["Permissions", "Guardrails", "Answers"]) expect(footer).toContain(`${title} unknown`)
+    for (const title of ["Permissions", "Guardrails", "Answers"] as const) expect(footer).toMatch(modePattern(title, "unknown"))
     expect(footer).not.toMatch(/Manual|Auto|asleep|inherited|disabled/)
     expect(screen.frame()).not.toContain("item waiting for your review")
     await openAutonomous(screen)
@@ -466,10 +466,10 @@ test("a failed refresh clears previously loaded footer modes and the Autonomous 
       id: "evt_autonomy_refresh_recovered", created: 21, type: "session.execution.succeeded",
       durable: { aggregateID: sessionID, seq: 2, version: 1 }, location: { directory }, data: { sessionID },
     })
-    await waitFor(screen, () => screen.frame().includes("Answers Auto"), "recovered current modes")
+    await waitFor(screen, () => modePattern("Answers", "Auto").test(footerRow(screen)), "recovered current modes")
     const recovered = screen.lines().slice(-6).join("\n")
-    expect(recovered).toContain("Permissions Manual")
-    expect(recovered).toContain("Guardrails Manual")
+    expect(recovered).toMatch(modePattern("Permissions", "Manual"))
+    expect(recovered).toMatch(modePattern("Guardrails", "Manual"))
     expect(recovered).not.toMatch(/unknown|asleep|inherited/)
     expect(backend.state.puts).toEqual([])
   } finally {
@@ -479,7 +479,7 @@ test("a failed refresh clears previously loaded footer modes and the Autonomous 
 
 test("saved category modes reload into a newly mounted Session footer", async () => {
   const backend = fixture()
-  const options = { width: 80, height: 24, args: { sessionID }, route: backend.route, settle: "commands", config: { animations: false } }
+  const options = { width: 80, height: 24, args: { sessionID }, route: backend.route, settle: "Message YCoding", config: { animations: false } }
   const first = await renderScreen(options)
   try {
     await openAutonomous(first)
@@ -491,9 +491,9 @@ test("saved category modes reload into a newly mounted Session footer", async ()
   }
   const reloaded = await renderScreen(options)
   try {
-    await waitFor(reloaded, () => reloaded.frame().includes("Permissions YOLO"), "reloaded modes")
+    await waitFor(reloaded, () => modePattern("Permissions", "YOLO").test(footerRow(reloaded)), "reloaded modes")
     const footer = reloaded.lines().slice(-5).join("\n")
-    for (const title of ["Permissions", "Guardrails", "Answers"]) expect(footer).toContain(`${title} YOLO`)
+    for (const title of ["Permissions", "Guardrails", "Answers"] as const) expect(footer).toMatch(modePattern(title, "YOLO"))
     expect(backend.state.puts).toHaveLength(1)
   } finally {
     await reloaded.dispose()

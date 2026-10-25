@@ -30,6 +30,7 @@ import {
   type NotificationFilter,
   type ProjectMemberView,
   type ProjectSessionChoice,
+  type ProjectListColumns,
   type ProjectView,
 } from "../../src/util/coordination"
 
@@ -311,15 +312,34 @@ test("the filter label names the selection honestly, including an unavailable ma
 
 const columnOf = (text: string, needle: string) => stringWidth(text.slice(0, text.indexOf(needle)))
 
+const listText = (value: ProjectView, columns?: ProjectListColumns) =>
+  projectListLine(value, false, columns)
+    .map((segment) => segment.text)
+    .join("")
+
+test("list row segments carry the state or status each colored cell reports", () => {
+  const segments = projectListLine(release, false)
+  expect(segments.filter((segment) => segment.kind === "status")).toEqual([
+    { kind: "status", text: expect.stringContaining("● active"), active: true },
+  ])
+  expect(segments.flatMap((segment) => (segment.kind === "state" ? [[segment.state, segment.text.trim()]] : []))).toEqual([
+    ["running", "●3"],
+    ["waiting", "?1"],
+    ["idle", "○1"],
+  ])
+  expect(segments.at(-1)).toEqual({ kind: "marker", text: " ›" })
+  expect(listText(release, { status: false, master: false })).not.toContain("● active")
+})
+
 test("the list header and every row start each column at one offset", () => {
   const header = projectListHeader()
-  const line = projectListLine(release, false)
+  const line = listText(release)
   expect(columnOf(header, "STATUS")).toBe(columnOf(line, "● active"))
   expect(columnOf(header, "MASTER")).toBe(columnOf(line, "Lead"))
   expect(columnOf(header, "MEMBERS")).toBe(columnOf(line, "4 "))
   expect(columnOf(header, "LIVE")).toBe(columnOf(line, "●3"))
   const wide = project("w", lead, [docs], { name: "项目发布计划名称很长很长很长很长很长" })
-  const wideLine = projectListLine(wide, false)
+  const wideLine = listText(wide)
   expect(columnOf(header, "STATUS")).toBe(columnOf(wideLine, "● active"))
   expect(columnOf(header, "LIVE")).toBe(columnOf(wideLine, "●1"))
 })

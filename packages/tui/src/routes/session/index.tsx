@@ -78,7 +78,7 @@ import { DialogFork } from "./dialog-fork"
 import { DialogTimeline } from "./dialog-timeline"
 import { Sidebar } from "./sidebar"
 import { Composer } from "./composer"
-import { Footer, FooterAutonomy, ProjectFooterLine } from "./footer"
+import { Footer } from "./footer"
 import {
   hydrateSubagentPage,
   navigateSubagentSibling,
@@ -634,7 +634,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (data.session.status(route.sessionID) !== "running" || disabled()) return
     const assistant = headerMessage()
     const part = assistant?.content.findLast((item) => item.type === "text")
-    return assistant?.time.completed === undefined && part?.type === "text" && part.time?.completed === undefined ? "Typing" : "Working"
+    return assistant?.time.completed === undefined && part?.type === "text" && part.time?.completed === undefined ? "Typing" : undefined
   })
   const currentHeaderModel = createMemo(() => headerModelRef(session()?.model, headerMessage()?.model))
   const headerModel = createMemo(() => {
@@ -1828,7 +1828,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           {(ownerLocation) => <SessionIsolatedBrowserCommand sessionID={route.sessionID} location={ownerLocation()} />}
         </Show>
       <Header
-        projectTitle={coordination?.projectOf(route.sessionID) ? session()?.title : undefined}
         path={location()?.directory}
         branch={branch()}
         agent={headerAgent()}
@@ -2000,7 +1999,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
             <box
               flexShrink={0}
               paddingBottom={
-                forms().length > 0 || permissions().length > 0 || guardrails().length > 0
+                disabled() || (projectsTabActive() && dimensions().height <= 24)
                   ? 0
                   : Math.max(1, Math.min(4, Math.floor(dimensions().height / 16)))
               }
@@ -2149,7 +2148,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   />
                 }}
               </Show>
-              <Show when={subagent() && !blockedQuestion()}>
+              <Show when={subagent() && !blockedQuestion() && !disabled() && !reviewActive() && !answeringChild()}>
                 <SubagentEconomicsSurface economics={economics()} />
               </Show>
             </box>
@@ -2178,31 +2177,22 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       </box>
       <Switch>
         <Match when={btw() && parentID()}>
-          {(id) => <BtwFooter sessionID={route.sessionID} parentID={id()} />}
+          {(id) => <BtwFooter sessionID={route.sessionID} parentID={id()} autonomy={autonomy()} />}
         </Match>
         <Match when={subagent()}>
-          <Show when={projectOwner()}>
-            {(owner) => (
-              <box paddingLeft={3} paddingRight={3} flexShrink={0}>
-                <ProjectFooterLine owner={owner()} onIdentity={openProjectIdentity} onTab={openProjectsTab} />
-              </box>
-            )}
-          </Show>
-          <SubagentFooter reviewing={disabled()} />
+          <SubagentFooter reviewing={disabled()} autonomy={autonomy()} project={projectOwner()} onProjectIdentity={openProjectIdentity} onProjectTab={openProjectsTab} />
         </Match>
         <Match when={true}>
           <Footer
             branch={branch()}
             sessionID={route.sessionID}
+            autonomy={autonomy()}
             project={projectOwner()}
             onProjectIdentity={openProjectIdentity}
             onProjectTab={openProjectsTab}
           />
         </Match>
       </Switch>
-      <box backgroundColor={theme.background.chrome} paddingLeft={3} paddingRight={3} flexShrink={0}>
-        <FooterAutonomy autonomy={autonomy()} />
-      </box>
     </context.Provider>
   )
 

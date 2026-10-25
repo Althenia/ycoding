@@ -2,10 +2,11 @@
 import { InputRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { createSignal } from "solid-js"
+import { createSignal, type JSX } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
-import { ThemeProvider } from "../../../src/context/theme"
+import { ThemeProvider, useTheme } from "../../../src/context/theme"
+import { readableTint } from "../../../src/theme/component"
 import { ProjectsScreenContent } from "../../../src/routes/session/projects"
 import { ProjectMembers } from "../../../src/routes/session/project-members"
 import { DialogProvider } from "../../../src/ui/dialog"
@@ -18,7 +19,7 @@ const member = (
   id: string,
   title: string,
   role: "master" | "member",
-  state: "running" | "idle" | "waiting" = "idle",
+  state: "running" | "idle" | "waiting" | "failed" = "idle",
 ) => ({ sessionID: id, title, role, state, directory: `/repo/${id}`, lastActivity: 0, pending: 0 })
 export const release: ProjectView = {
   id: "cgrp_release",
@@ -35,12 +36,28 @@ export const release: ProjectView = {
   ],
 }
 
+const probe: { theme?: ReturnType<typeof useTheme>["theme"] } = {}
+function Canvas(props: { paint?: boolean; children: JSX.Element }) {
+  const { theme } = useTheme()
+  probe.theme = theme
+  return props.paint ? (
+    <box backgroundColor={theme.background.default} width="100%" height="100%">
+      {props.children}
+    </box>
+  ) : (
+    props.children
+  )
+}
+
 async function mount(
   input: {
     projects?: ProjectView[]
     error?: string
     width?: number
     members?: boolean
+    project?: ProjectView
+    compact?: boolean
+    paneWidth?: number
     settings?: boolean
     mode?: "dark" | "light"
     service?: Partial<ProjectService>
@@ -86,9 +103,11 @@ async function mount(
             <ThemeProvider mode={input.mode ?? "dark"} source={{ discover: () => Promise.resolve({}) }}>
               <ToastProvider>
                 <DialogProvider>
+                  <Canvas paint={input.members}>
                   {input.members ? (
+                    <box width={input.paneWidth ?? "100%"} height="100%">
                     <ProjectMembers
-                      project={release}
+                      project={input.project ?? release}
                       currentSessionID="ses_lead"
                       focused={focused()}
                       onFocus={() => focus(true)}
@@ -99,8 +118,9 @@ async function mount(
                       service={service}
                       now={() => 60_000}
                       loadedAt={() => 57_000}
-                      compact={(input.width ?? 120) < 100}
+                      compact={input.compact ?? (input.width ?? 120) < 100}
                     />
+                    </box>
                   ) : (
                     <ProjectsScreenContent
                       projects={() => input.projects}
@@ -120,6 +140,7 @@ async function mount(
                       loadedAt={() => 57_000}
                     />
                   )}
+                  </Canvas>
                 </DialogProvider>
               </ToastProvider>
             </ThemeProvider>
@@ -131,7 +152,7 @@ async function mount(
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes(input.members ? "MEMBERS 3" : "Projects"))
-  return { app, calls }
+  return { app, calls, theme: probe.theme! }
 }
 type App = Awaited<ReturnType<typeof mount>>["app"]
 async function key(app: App, name: string) {
@@ -498,6 +519,211 @@ test("the Name field draws typed text and its cursor with readable contrast", as
     expect(contrast(span.fg.toInts(), span.bg.toInts())).toBeGreaterThanOrEqual(4.5)
     const editor = app.renderer.currentFocusedEditor as InputRenderable
     expect(contrast(editor.cursorColor.toInts(), span.bg.toInts())).toBeGreaterThanOrEqual(3)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+const paused: ProjectView = {
+  id: "cgrp_docs",
+  name: "Docs sprint",
+  revision: 1,
+  active: false,
+  concurrency: null,
+  created: 0,
+  master: member("ses_docs_lead", "Scribe", "master", "idle"),
+  members: [
+    member("ses_docs_a", "Draft worker", "member", "failed"),
+    member("ses_docs_b", "Review worker", "member", "waiting"),
+  ],
+}
+const spansOf = (app: App, ...needles: string[]) =>
+  app
+    .captureSpans()
+    .lines.map((line) => line.spans)
+    .find((spans) => needles.every((needle) => spans.map((item) => item.text).join("").includes(needle))) ?? []
+const spanOf = (app: App, line: string[], needle: string) => {
+  const found = spansOf(app, ...line).find((item) => item.text.includes(needle))
+  if (!found) throw new Error(`Missing ${needle} on ${line.join(" ")}:\n${app.captureCharFrame()}`)
+  return found
+}
+const readable = (item: { fg: { toInts(): number[] }; bg: { toInts(): number[] } }) =>
+  contrast(item.fg.toInts(), item.bg.toInts())
+const expectReadable = (item: { text: string; fg: { toInts(): number[] }; bg: { toInts(): number[] } }) =>
+  /^[\s│┃─╭╮╰╯┌┐└┘├┤█░▌▐▀▄]+$/.test(item.text) ||
+  expect({ text: item.text, readable: readable(item) >= 4.5 }).toEqual({ text: item.text, readable: true })
+const colorIs = (item: { fg: { toInts(): number[] } }, color: { toInts(): number[] }) =>
+  item.fg.toInts().join() === color.toInts().join()
+
+for (const mode of ["dark", "light"] as const) {
+  test(`Project list, legend and preview color each state with readable ink in ${mode} mode`, async () => {
+    const { app, theme } = await mount({ projects: [release, paused], width: 160, mode })
+    try {
+      const semantic = {
+        running: readableTint(theme.text.feedback.success.default, theme.background.default),
+        waiting: readableTint(theme.text.feedback.warning.default, theme.background.default),
+        failed: readableTint(theme.text.feedback.error.default, theme.background.default),
+        idle: readableTint(theme.text.subdued, theme.background.default),
+      }
+      const other = ["Docs sprint", "○ paused"]
+      expect(colorIs(spanOf(app, other, "○ paused"), semantic.idle)).toBe(true)
+      expect(colorIs(spanOf(app, other, "?1"), semantic.waiting)).toBe(true)
+      expect(colorIs(spanOf(app, other, "✗1"), semantic.failed)).toBe(true)
+      expect(colorIs(spanOf(app, other, "○1"), semantic.idle)).toBe(true)
+      expectReadable(spanOf(app, other, "›"))
+      for (const item of app.captureSpans().lines.flatMap((line) => line.spans)) expectReadable(item)
+
+      const selected = ["Release train", "● active"]
+      const fill = theme.background.action.primary.focused.toInts().join()
+      for (const item of spansOf(app, ...selected).filter((item) => item.text.trim() && item.bg.toInts().join() === fill))
+        expectReadable(item)
+      expect(spanOf(app, selected, "● active").bg.toInts().join()).toBe(fill)
+      for (const text of ["● active", "●2", "?1", "○"])
+        expect(colorIs(spanOf(app, selected, text), theme.text.action.primary.focused)).toBe(true)
+
+      const legendLive = ["LIVE", "running"]
+      const legend = [
+        colorIs(spanOf(app, legendLive, "● running"), semantic.running),
+        colorIs(spanOf(app, legendLive, "○ idle"), semantic.idle),
+        colorIs(spanOf(app, legendLive, "? waiting on you"), semantic.waiting),
+        colorIs(spanOf(app, legendLive, "✗ failed"), semantic.failed),
+        colorIs(spanOf(app, ["STATUS", "paused"], "● active"), semantic.running),
+        colorIs(spanOf(app, ["STATUS", "paused"], "○ paused"), semantic.idle),
+      ]
+      expect(legend).toEqual([true, true, true, true, true, true])
+
+      expect(colorIs(spanOf(app, ["Status", "active"], "● active"), semantic.running)).toBe(true)
+      expect(colorIs(spanOf(app, ["MASTER", "Lead"], "running"), semantic.running)).toBe(true)
+      expect(colorIs(spanOf(app, ["MEMBER", "waiting"], "waiting"), semantic.waiting)).toBe(true)
+      expect(colorIs(spanOf(app, ["MEMBER", "idle"], "idle"), semantic.idle)).toBe(true)
+
+      for (const title of ["PROJECTS 2", "LEGEND", "Release train · preview"])
+        expectReadable(spanOf(app, [title], title))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test(`Project members color each state and keep selected rows readable in ${mode} mode`, async () => {
+    const { app, theme } = await mount({ members: true, mode })
+    try {
+      const semantic = {
+        running: readableTint(theme.text.feedback.success.default, theme.background.default),
+        waiting: readableTint(theme.text.feedback.warning.default, theme.background.default),
+        idle: readableTint(theme.text.subdued, theme.background.default),
+      }
+      for (const [state] of [["running"], ["waiting"], ["idle"]] as const)
+        expect(colorIs(spanOf(app, ["MEMBER", state], state), semantic[state])).toBe(true)
+      expect(app.captureCharFrame()).not.toContain("›")
+      for (const item of spansOf(app, "▸", "Lead").filter((item) => item.text.trim())) expectReadable(item)
+      expectReadable(spanOf(app, ["MEMBERS 3"], "MEMBERS 3"))
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+}
+
+const longTitles = [
+  "Reconcile the quarterly billing exports with the ledger snapshots",
+  "Migrate the notification preferences service to the new queue",
+]
+const longRoster: ProjectView = {
+  ...release,
+  master: member("ses_lead", "Lead", "master", "running"),
+  members: [
+    { ...member("ses_ledger", longTitles[0]!, "member"), directory: "/repo/services/finance/ledger-reconciliation" },
+    { ...member("ses_queue", longTitles[1]!, "member", "waiting"), directory: "/repo/services/notifications" },
+    member("ses_docs", "Docs worker", "member"),
+  ],
+}
+const widest = (frame: string) => Math.max(...frame.split("\n").map((line) => line.trimEnd().length))
+
+for (const compact of [true, false]) {
+  test(`unselected members carry no trailing chevron in the ${compact ? "compact" : "docked"} roster`, async () => {
+    const { app } = await mount({ members: true, project: longRoster, compact, width: compact ? 200 : 120 })
+    try {
+      expect(app.captureCharFrame()).not.toContain("›")
+      expect(app.captureCharFrame()).toContain("[o] Open")
+      await key(app, "DOWN")
+      expect(app.captureCharFrame()).not.toContain("›")
+      expect(lineOf(app.captureCharFrame(), "[o] Open")).toContain("▸")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+}
+
+test("a wide compact roster gives titles and directories the spare pane width and keeps roles apart", async () => {
+  const { app } = await mount({ members: true, project: longRoster, compact: true, width: 200 })
+  try {
+    const frame = app.captureCharFrame()
+    for (const title of longTitles) {
+      const line = lineOf(frame, title)
+      expect(line).not.toBe("")
+      expect(line).toMatch(new RegExp(`${title}\\s{2,}MEMBER`))
+    }
+    expect(lineOf(frame, "Docs worker")).toMatch(/Docs worker\s{2,}MEMBER/)
+    expect(lineOf(frame, longTitles[0]!)).toContain("/repo/services/finance/ledger-reconciliation")
+    expect(frame).not.toContain("…")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a narrow compact roster truncates long titles inside the pane and keeps role, state and Open", async () => {
+  const { app } = await mount({ members: true, project: longRoster, compact: true, width: 80 })
+  try {
+    const frame = app.captureCharFrame()
+    expect(widest(frame)).toBeLessThanOrEqual(80)
+    const line = lineOf(frame, "Reconcile")
+    expect(line).toContain("…")
+    expect(line).toMatch(/…\s+MEMBER/)
+    expect(lineOf(frame, "MEMBER", "waiting")).toContain("waiting")
+    expect(lineOf(frame, "[o] Open")).toContain("▸")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("the docked roster fits its pane and reserves room for Open on the selected title", async () => {
+  const { app } = await mount({ members: true, project: longRoster, compact: false, width: 120 })
+  try {
+    await key(app, "DOWN")
+    const frame = app.captureCharFrame()
+    const selected = lineOf(frame, "[o] Open")
+    expect(selected).toContain("Reconcile")
+    expect(selected).toMatch(/…\s+\[o\] Open/)
+    expect(selected.trimEnd().length).toBeLessThanOrEqual(33)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a roster docked narrower than the terminal sizes its columns to the pane, not the terminal", async () => {
+  const { app } = await mount({ members: true, project: longRoster, compact: true, width: 200, paneWidth: 90 })
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    const line = lineOf(frame, "Reconcile")
+    expect(widest(frame.split("\n").map((row) => row.slice(0, 90)).join("\n"))).toBeLessThanOrEqual(90)
+    expect(frame.split("\n").every((row) => row.slice(90).trim() === "")).toBe(true)
+    expect(line).toContain("…")
+    expect(line).toMatch(/…\s+MEMBER/)
+    expect(lineOf(frame, "[o] Open").indexOf("[o] Open")).toBeLessThan(90)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("roster selection and opening follow the keyboard and mouse after the layout change", async () => {
+  const { app, calls } = await mount({ members: true, project: longRoster, compact: true, width: 200 })
+  try {
+    await key(app, "DOWN")
+    await key(app, "DOWN")
+    expect(lineOf(app.captureCharFrame(), "▸", longTitles[1]!)).toContain(longTitles[1]!)
+    app.mockInput.pressKey("o")
+    await app.renderOnce()
+    expect(calls).toContainEqual(["open", "ses_queue"])
   } finally {
     app.renderer.destroy()
   }

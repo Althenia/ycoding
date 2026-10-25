@@ -250,10 +250,12 @@ test("surfaces a pending subagent guardrail review that arrives as a live event"
   const screen = await settle("1 of 1", childID)
   try {
     expect(screen.frame()).not.toContain("Guardrail blocked")
+    await waitForFrameText(screen, "SUBAGENT ECONOMICS")
     await screen.waitForEventStream()
     screen.events.emit(asked(childRequest, "evt_child_asked"))
     await waitForFrameText(screen, "Guardrail blocked")
     await waitForFrameText(screen, "needs approval")
+    expect(screen.frame()).not.toContain("SUBAGENT ECONOMICS")
   } finally {
     await screen.dispose()
   }

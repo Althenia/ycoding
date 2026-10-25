@@ -70,7 +70,10 @@ async function mount(width = 120) {
     data: () => {
       router = useRoute()
     },
-    settle: "Master of Release train",
+    settle: (screen) => {
+      const frame = screen.captureCharFrame()
+      return frame.includes("Docs worker finished")
+    },
     sessionReady: true,
     kittyKeyboard: true,
   })
@@ -110,7 +113,7 @@ async function capture(screen: Awaited<ReturnType<typeof mount>>["screen"], name
 test("real Session navigation opens member chat and empty Up returns to Master", async () => {
   const { screen, router } = await mount()
   try {
-    expect(screen.frame()).toContain("◇ Master of Release train")
+    expect(screen.frame()).toContain("◇ Master")
     expect(screen.frame()).toMatch(/\bSESSION\b/)
     expect(screen.frame()).not.toContain("MEMBERS 4 + MASTER")
     expect(screen.frame()).toContain("Docs worker finished")
@@ -121,11 +124,11 @@ test("real Session navigation opens member chat and empty Up returns to Master",
     await waitFor(screen, "MEMBERS 4 + MASTER")
     screen.input.pressArrow("down")
     screen.input.pressKey("o")
-    await waitFor(screen, "Member of Release train")
+    await waitFor(screen, "↑ Member")
     expect(router().data).toMatchObject({ type: "session", sessionID: docsID })
     await capture(screen, "member-120x40")
     screen.input.pressArrow("up")
-    await waitFor(screen, "Master of Release train")
+    await waitFor(screen, "◇ Master")
     expect(router().data).toMatchObject({ type: "session", sessionID: leadID })
   } finally {
     await screen.dispose()
@@ -159,7 +162,7 @@ test("real Projects route list, creation and Settings render", async () => {
 test("80-column Session opens a keyboard-operated Project roster in the composer Projects tab", async () => {
   const { screen } = await mount(80)
   try {
-    expect(screen.frame()).toContain("[ctrl+x p] Project")
+    expect(screen.frame()).toContain("⌃x p")
     expect(screen.frame()).not.toContain("members ›")
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("p")
@@ -171,13 +174,15 @@ test("80-column Session opens a keyboard-operated Project roster in the composer
     expect(screen.frame()).toContain("Design review")
     expect(screen.frame()).toContain("[o] Open")
     expect(screen.frame()).toContain("Projects")
-    await waitFor(screen, "main   subagents 0")
-    expect(screen.frame().split("\n").find((line) => line.includes("main   subagents 0"))).toMatch(/shells 0.*usage.*commands/)
+    const footer = screen.lines().filter((line) => line.trim() !== "").at(-1)!
+    expect(footer).toMatch(/subagents 0|sa0/)
+    expect(footer).toMatch(/shells 0|sh0/)
+    expect(footer).toContain("⌃p")
     await capture(screen, "tray-80x24")
     screen.input.pressEscape()
     for (let i = 0; i < 100 && screen.frame().includes("MEMBERS 4 + MASTER"); i++) await screen.renderOnce()
     expect(screen.frame()).not.toContain("MEMBERS 4 + MASTER")
-    expect(screen.frame()).toContain("[ctrl+x p] Project")
+    expect(screen.frame()).toContain("⌃x p")
   } finally {
     await screen.dispose()
   }
@@ -197,8 +202,10 @@ test("24-row Project chat keeps a useful transcript viewport and the draft while
     expect(screen.frame()).toContain("Docs worker finished")
     expect(screen.frame()).toContain("keep this draft")
     expect(screen.scrollbox()!.viewport.height).toBeGreaterThanOrEqual(4)
-    await waitFor(screen, "main   subagents 0")
-    expect(screen.frame().split("\n").find((line) => line.includes("main   subagents 0"))).toMatch(/shells 0.*usage.*commands/)
+    const footer = screen.lines().filter((line) => line.trim() !== "").at(-1)!
+    expect(footer).toMatch(/subagents 0|sa0/)
+    expect(footer).toMatch(/shells 0|sh0/)
+    expect(footer).toContain("⌃p")
     screen.input.pressEscape()
     for (let i = 0; i < 100 && screen.frame().includes("MEMBERS 4 + MASTER"); i++) await screen.renderOnce()
     await waitFor(screen, "keep this draft")
@@ -207,12 +214,15 @@ test("24-row Project chat keeps a useful transcript viewport and the draft while
   }
 }, 30_000)
 
-test("60-column Project chat keeps both footer rows and its identity line without the chips", async () => {
+test("60-column Project chat keeps identity, counts and modes on one footer row", async () => {
   const { screen } = await mount(60)
   try {
-    expect(screen.frame()).toContain("subagents")
-    expect(screen.frame()).toContain("commands")
-    expect(screen.frame()).toContain("Master of Release train")
+    const footer = screen.lines().filter((line) => line.trim() !== "").at(-1)!
+    expect(footer).toContain("◇ Master")
+    expect(footer).toMatch(/subagents 0|sa0/)
+    expect(footer).toMatch(/shells 0|sh0/)
+    expect(footer).toMatch(/Permissions Manual|P Manual|P:M/)
+    expect(footer).toContain("⌃p")
     expect(screen.frame()).not.toContain("MASTER Lead")
     screen.input.pressKey("x", { ctrl: true })
     screen.input.pressKey("p")

@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
-import type { SessionCacheDiagnostics, SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import type { SessionAutonomyView, SessionCacheDiagnostics, SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
 import { useRoute, useRouteData } from "../../context/route"
 import { useData } from "../../context/data"
 import { useTheme } from "../../context/theme"
@@ -8,6 +8,10 @@ import { Locale } from "../../util/locale"
 import { useTerminalDimensions } from "@opentui/solid"
 import { formatCacheDiagnostics, formatDiagnosticsModel } from "../../util/cache-diagnostics"
 import { Keymap } from "../../context/keymap"
+import { stringWidth } from "../../util/string-width"
+import type { ProjectContext } from "../../util/coordination"
+import { FooterAutonomy, ProjectFooterLine } from "./footer"
+import { readableTint } from "../../theme/component"
 
 type SubagentPagination = {
   page(parentID: string): {
@@ -331,7 +335,13 @@ export function SubagentFooterContent(props: {
   )
 }
 
-export function SubagentFooter(props: { reviewing?: boolean }) {
+export function SubagentFooter(props: {
+  reviewing?: boolean
+  autonomy?: SessionAutonomyView
+  project?: ProjectContext
+  onProjectIdentity?: () => void
+  onProjectTab?: () => void
+}) {
   const dimensions = useTerminalDimensions()
   const route = useRouteData("session")
   const navigation = useRoute()
@@ -369,73 +379,58 @@ export function SubagentFooter(props: { reviewing?: boolean }) {
     return `${total.split(" / ")[0]} (${percent})`
   })
   const blocked = createMemo(() => currentTask()?.state === "waiting" && Boolean(currentTask()?.question))
-  const { theme } = useTheme().contextual("elevated")
+  const { theme } = useTheme()
+  const projectShortcut = Keymap.useShortcut("project.members")
+  const gap = () => dimensions().width < 60 ? 1 : 2
+  const identity = () => dimensions().width >= 60
+    ? Locale.truncateWidth(`${agent()} (${current()} of ${total()})`, dimensions().width < 100 ? 10 : 21)
+    : ""
+  const projectWidth = () => props.project && dimensions().width >= 60 ? dimensions().width >= 140 ? 24 : 12 : 0
+  const projectHint = () => props.project && projectShortcut() && dimensions().width >= 80
+    ? `[${projectShortcut()!.replaceAll("ctrl+", "⌃")}] Project`
+    : ""
+  const detail = () => dimensions().width >= 200
+    ? [economics()?.speed, context(), economics()?.cacheHit ? `${economics()?.cacheHit} hit` : undefined, economics()?.spent, "durable", "resumable"].filter(Boolean).join(" · ")
+    : ""
+  const action = () => blocked()
+    ? dimensions().width < 60 ? props.reviewing ? "review" : "reply" : props.reviewing ? "Review pending" : "Enter answer"
+    : dimensions().width < 60 ? "next" : "→ next"
+  const modeWidth = () => {
+    const items = [identity(), projectWidth() ? "project" : "", detail(), projectHint(), action()].filter(Boolean).length
+    return Math.max(19, dimensions().width - 6 - stringWidth(identity() + detail() + projectHint() + action()) - projectWidth() - gap() * (items + (dimensions().width >= 40 ? 1 : 0)))
+  }
+  const quiet = () => readableTint(theme.text.subdued, theme.background.chrome)
+  const nextSibling = () => {
+    if (blocked()) return
+    const id = parentID()
+    if (!id) return
+    void navigateSubagentSibling({
+      pagination: data.session.subagent,
+      parentID: id,
+      currentSessionID: route.sessionID,
+      direction: 1,
+    }).then((sibling) => {
+      if (sibling) navigation.navigate({ type: "session", sessionID: sibling })
+    }).catch(() => undefined)
+  }
 
   return (
-    <box height={1} paddingLeft={3} paddingRight={3} alignItems="flex-start" flexDirection="row" flexShrink={0}>
-      <Show
-        when={blocked()}
-        fallback={
-          <>
-            <box width={21} flexShrink={0}>
-              <text fg={theme.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
-            </box>
-            <Show when={dimensions().width >= 110}><box width={13} flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">{context()}</text>
-            </box></Show>
-            <Show when={dimensions().width >= 110}><box width={10} flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
-            </box></Show>
-            <Show when={economics()?.speed}>{(speed) => <box paddingRight={1} flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">{speed()}</text>
-            </box>}</Show>
-            <Show when={dimensions().width >= 100}><box flexShrink={0}>
-              <text fg={theme.text.subdued} wrapMode="none">{economics()?.spent} · durable · resumable</text>
-            </box></Show>
-            <box flexGrow={1} />
-            <text
-              fg={theme.text.action.primary.default}
-              wrapMode="none"
-              onMouseUp={() => {
-                const id = parentID()
-                if (!id) return
-                void navigateSubagentSibling({
-                  pagination: data.session.subagent,
-                  parentID: id,
-                  currentSessionID: route.sessionID,
-                  direction: 1,
-                })
-                  .then((sibling) => {
-                    if (sibling) navigation.navigate({ type: "session", sessionID: sibling })
-                  })
-                  .catch(() => undefined)
-              }}
-            >
-              → next
-            </text>
-          </>
-        }
-      >
-        <>
-          <box width={23} flexShrink={0}>
-            <text fg={theme.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
-          </box>
-          <box width={14} flexShrink={0}>
-            <text fg={theme.text.subdued} wrapMode="none">{context()}</text>
-          </box>
-          <box width={10} flexShrink={0}>
-            <text fg={theme.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
-          </box>
-          <box width={8} flexShrink={0}>
-            <text fg={theme.text.subdued} wrapMode="none">{economics()?.spent}</text>
-          </box>
-          <text fg={theme.text.feedback.warning.default} wrapMode="none">awaiting input</text>
-          <box flexGrow={1} />
-          <text fg={theme.text.action.primary.default} wrapMode="none">
-            {props.reviewing ? "Review pending" : "Enter answer"}
-          </text>
-        </>
+    <box width="100%" height={3} paddingLeft={3} paddingRight={3} alignItems="center" flexDirection="row" flexShrink={0} gap={gap()} backgroundColor={theme.background.chrome}>
+      <Show when={identity()}>{(label) => <text fg={theme.text.default} wrapMode="none" flexShrink={0}>{label()}</text>}</Show>
+      <Show when={props.project && projectWidth() > 0 ? props.project : undefined}>
+        {(project) => <box width={projectWidth()} flexShrink={0}><ProjectFooterLine owner={project()} width={projectWidth()} onIdentity={props.onProjectIdentity} /></box>}
       </Show>
+      <FooterAutonomy autonomy={props.autonomy} width={modeWidth()} />
+      <Show when={detail()}>{(label) => <text fg={quiet()} wrapMode="none" flexShrink={0}>{label()}</text>}</Show>
+      <Show when={dimensions().width >= 40}><box flexGrow={1} minWidth={0} /></Show>
+      <Show when={projectHint()}>
+        <text fg={theme.text.default} wrapMode="none" flexShrink={0} onMouseUp={props.onProjectTab}>
+          [{projectShortcut()?.replaceAll("ctrl+", "⌃")}] <span style={{ fg: quiet() }}>Project</span>
+        </text>
+      </Show>
+      <text fg={readableTint(blocked() ? theme.text.feedback.warning.default : theme.text.action.primary.default, theme.background.chrome)} wrapMode="none" flexShrink={0} onMouseUp={nextSibling}>
+        {action()}
+      </text>
     </box>
   )
 }

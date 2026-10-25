@@ -14,6 +14,11 @@ describe("release entries", () => {
     for (const fragment of ["Manual", "YOLO", "Auto", "Autonomous", "no model call", "hard and custom-rule reviews", "asleep marker", "recorded owner", "Only the Master assigns or transfers ownership", "executor children inherit no Project control", "inspect, assign and release", "human-only", "Projects tab", "five-Session roster", "Antigravity", "effort variants", "unverified", "tools.chatgpt.ycoding.session_catalog", "duplicate Code Mode paths", "focused test files", "recorded text offsets", "forks", "reported zero hit ratio", "fragmented UTF-8", "Open actions", "a decline never approves", "under Manual", "match dismissals", "pending reviews", "pairing code"])
       expect(text).toContain(fragment)
     expect(after("0.11.1")?.version).toBe("0.11.0")
+    for (const fragment of ["single row", "normal header band", "semantic colors", "light and dark themes", "Typing indicator"]) expect(text).toContain(fragment)
+    for (const fragment of ["three-row band", "category and mode is one filled chip", "Manual is green, Auto red and YOLO yellow"]) expect(text).toContain(fragment)
+    for (const fragment of ["horizontal padding", "headers omit repeated titles", "available width without unselected-row chevrons"]) expect(text).toContain(fragment)
+    expect(text).toContain("Project name and role without the Master Session title")
+    for (const fragment of ["OAuth client ID and secret", "runtime environment", "not bundled"]) expect(text).toContain(fragment)
   })
 
   test("retains v0.11.0 Projects and shared machine names", () => {

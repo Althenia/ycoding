@@ -1,9 +1,11 @@
+import { RGBA } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { DEFAULT_THEMES } from "../src/theme"
 import { ThemeFile, type ResolvedThemeView } from "../src/theme"
 import { resolveThemeFile } from "../src/theme/resolve"
 import { selectThemeMode } from "../src/theme/select"
+import { readableForeground, readableTint } from "../src/theme/component"
 
 const THEME_NAMES = [
   "aura",
@@ -243,5 +245,31 @@ test("the explicit semantic selectors preserve every frozen legacy role", () => 
     }
     expect(entry.thinkingOpacity).toBe(0.6)
     expect("thinkingOpacity" in resolved).toBe(false)
+  }
+})
+
+const ratio = (ink: RGBA, fill: RGBA) => {
+  const linear = (value: number) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+  const light = (color: RGBA) => 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b)
+  return (Math.max(light(ink), light(fill)) + 0.05) / (Math.min(light(ink), light(fill)) + 0.05)
+}
+
+test("readableTint keeps passing, translucent and unfilled inks and darkens failing hues toward readable ink", () => {
+  const white = RGBA.fromInts(255, 255, 255)
+  const black = RGBA.fromInts(21, 24, 29)
+  const passing = RGBA.fromInts(26, 26, 26)
+  expect(readableTint(passing, white)).toBe(passing)
+  const translucent = RGBA.fromInts(214, 140, 39, 128)
+  expect(readableTint(translucent, white)).toBe(translucent)
+  expect(readableTint(RGBA.fromInts(214, 140, 39), RGBA.fromInts(255, 255, 255, 0))).toEqual(RGBA.fromInts(214, 140, 39))
+  for (const [ink, fill] of [
+    [RGBA.fromInts(214, 140, 39), white],
+    [RGBA.fromInts(61, 154, 87), white],
+    [RGBA.fromInts(80, 80, 120), black],
+  ] as const) {
+    const tinted = readableTint(ink, fill)
+    expect(ratio(tinted, fill)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(readableForeground(ink, fill), fill)).toBeGreaterThanOrEqual(4.5)
+    expect(Math.abs(tinted.r - tinted.g) + Math.abs(tinted.g - tinted.b)).toBeGreaterThan(0)
   }
 })

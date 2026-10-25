@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, onCleanup, Show, type Accessor } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
-import type { ScrollBoxRenderable } from "@opentui/core"
+import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core"
 import { useConfig } from "../../config"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
@@ -13,6 +13,7 @@ import { SplitBorder } from "../../ui/border"
 import { SPINNER_FRAMES } from "../../component/spinner-frames"
 import { progressBar } from "../../util/provider-usage"
 import { Locale } from "../../util/locale"
+import { stringWidth } from "../../util/string-width"
 import { errorMessage } from "../../util/error"
 import {
   ageLabel,
@@ -26,7 +27,8 @@ import {
   type ProjectService,
   type ProjectSessionChoice,
 } from "../../util/coordination"
-import { createRowList, type Row } from "./project-rows"
+import { readableTint } from "../../theme/component"
+import { createRowList, infoInk, quietInk, type Row } from "./project-rows"
 import { SessionPickerDetail, sessionPickerRows } from "./project-session-picker"
 
 export function useProjectClock() {
@@ -36,17 +38,32 @@ export function useProjectClock() {
   return now
 }
 
+type Theme = ReturnType<typeof useTheme>["theme"]
+
+function stateInk(theme: Theme, state: MemberState) {
+  return state === "running"
+    ? theme.text.feedback.success.default
+    : state === "waiting"
+      ? theme.text.feedback.warning.default
+      : state === "failed"
+        ? theme.text.feedback.error.default
+        : theme.text.subdued
+}
+
+export function memberStateColor(theme: Theme, state: MemberState, selected = false) {
+  return selected ? theme.text.action.primary.focused : readableTint(stateInk(theme, state), theme.background.default)
+}
+
+export function projectActiveColor(theme: Theme, active: boolean, selected = false) {
+  return selected
+    ? theme.text.action.primary.focused
+    : readableTint(active ? theme.text.feedback.success.default : theme.text.subdued, theme.background.default)
+}
+
 export function ProjectState(props: { state: MemberState; word?: boolean; selected?: boolean }) {
   const config = useConfig()
   const { theme } = useTheme()
-  const color = () =>
-    props.selected
-      ? theme.text.action.primary.focused
-      : props.state === "waiting"
-        ? theme.text.feedback.warning.default
-        : props.state === "failed"
-          ? theme.text.feedback.error.default
-          : theme.text.subdued
+  const color = () => memberStateColor(theme, props.state, props.selected)
   return (
     <box flexDirection="row" flexShrink={0}>
       <Show
@@ -78,11 +95,14 @@ export function ProjectMeter(props: { project: ProjectView; wrap?: boolean }) {
           Math.min(props.project.concurrency, 8),
         )
   return (
-    <text fg={theme.text.subdued} wrapMode={props.wrap ? "word" : "none"} truncate={!props.wrap}>
+    <text fg={quietInk(theme)} wrapMode={props.wrap ? "word" : "none"} truncate={!props.wrap}>
       {bar() ? `${bar()} ${value().split(" ").slice(1).join(" ")}` : value()}
     </text>
   )
 }
+
+const ROLE_CELLS = 17
+const OPEN_CELLS = 9
 
 export function ProjectMembers(props: {
   project: ProjectView
@@ -118,6 +138,7 @@ export function ProjectMembers(props: {
   const [directory, setDirectory] = createSignal("")
   const [title, setTitle] = createSignal("")
   let memberScroll: ScrollBoxRenderable | undefined
+  let pane: BoxRenderable | undefined
   const members = () => roster(props.project)
   const current = () => members()[Math.min(index(), members().length - 1)]!
   const moveMember = (next: number) => {
@@ -136,6 +157,22 @@ export function ProjectMembers(props: {
   const canRemove = () => current()?.role === "member"
   const inlineActions = () => props.tab === true && dimensions().width >= 70
   const width = () => (props.compact || props.settings ? dimensions().width - (props.settings ? 34 : 0) : 32)
+  const [measured, setMeasured] = createSignal(0)
+  const inner = () => Math.max(20, (measured() || width()) - 2 - (props.compact || props.settings ? 0 : 1))
+  const lead = (member: { sessionID: string }) => 2 + (member.sessionID === props.currentSessionID ? 2 : 0)
+  const ageText = (member: { lastActivity: number }) => ageLabel(props.now() - member.lastActivity)
+  const showPath = () => !props.compact || (measured() || width()) >= 80
+  const pathNeed = () =>
+    Math.max(...members().map((member) => 2 + stringWidth(path(member.directory)) + 3 + stringWidth(ageText(member))))
+  const titleNeed = () =>
+    Math.max(...members().map((member) => lead(member) + stringWidth(member.title))) + 2
+  const spare = () => inner() - ROLE_CELLS - OPEN_CELLS
+  const titleCells = () => {
+    if (!props.compact) return inner() - OPEN_CELLS
+    if (!showPath() || titleNeed() + pathNeed() <= spare()) return Math.min(titleNeed(), Math.max(14, spare()))
+    return Math.min(titleNeed(), Math.max(20, Math.floor(spare() * 0.55)))
+  }
+  const pathCells = () => (props.compact ? Math.max(14, spare() - titleCells()) : inner())
   const path = (value: string) => (value.startsWith(paths.home + "/") ? "~" + value.slice(paths.home.length) : value)
   const run = async (name: string, call: () => Promise<unknown>, done?: () => void) => {
     if (busy()) return
@@ -364,13 +401,17 @@ export function ProjectMembers(props: {
       minHeight={0}
       border={props.compact || props.settings ? [] : ["left"]}
       customBorderChars={SplitBorder.customBorderChars}
-      borderColor={props.focused ? theme.text.feedback.info.default : theme.border.default}
+      borderColor={props.focused ? infoInk(theme) : theme.border.default}
       paddingLeft={1}
       paddingRight={1}
       onMouseDown={props.onFocus}
+      ref={(value: BoxRenderable) => {
+        pane = value
+      }}
+      onSizeChange={() => setMeasured(pane?.width ?? 0)}
     >
       <box flexDirection="row" flexShrink={0}>
-        <text fg={props.focused ? theme.text.feedback.info.default : theme.text.subdued}>
+        <text fg={props.focused ? infoInk(theme) : quietInk(theme)}>
           {props.focused ? "▸ " : "  "}
           {mode() === "members"
             ? `MEMBERS ${props.project.members.length} + MASTER`
@@ -421,7 +462,7 @@ export function ProjectMembers(props: {
                     props.onOpen(member.sessionID)
                   }}
                 >
-                  <box flexDirection="row" flexShrink={0} width={props.compact ? 20 : undefined}>
+                  <box flexDirection="row" flexShrink={0} width={props.compact ? titleCells() : undefined}>
                     <text
                       fg={index() === position() ? theme.text.action.primary.focused : theme.text.default}
                       wrapMode="none"
@@ -429,49 +470,45 @@ export function ProjectMembers(props: {
                     >
                       {index() === position() ? "▸ " : "  "}
                       {member.sessionID === props.currentSessionID ? "● " : ""}
-                      {Locale.truncateWidth(member.title, props.compact ? 20 : 20)}
+                      {Locale.truncateWidth(member.title, titleCells() - lead(member) - (props.compact ? 2 : 1))}
                     </text>
-                    <Show when={!props.compact}>
+                    <Show when={!props.compact && index() === position() && props.focused}>
                       <box flexGrow={1} />
-                      <text fg={theme.text.action.primary.focused}>
-                        {index() === position() && props.focused ? "[o] Open" : "›"}
-                      </text>
+                      <text fg={theme.text.action.primary.focused}>[o] Open</text>
                     </Show>
                   </box>
                   <box
                     flexDirection="row"
                     paddingLeft={props.compact ? 0 : 2}
                     gap={1}
-                    width={props.compact ? 17 : undefined}
+                    width={props.compact ? ROLE_CELLS : undefined}
                     flexShrink={0}
                   >
-                    <text fg={index() === position() ? theme.text.action.primary.focused : theme.text.subdued}>
+                    <text fg={index() === position() ? theme.text.action.primary.focused : quietInk(theme)}>
                       {member.role === "master" ? "MASTER" : "MEMBER"}
                     </text>
                     <ProjectState state={member.state} word selected={index() === position()} />
                   </box>
-                  <Show when={!props.compact || dimensions().width >= 80}>
+                  <Show when={showPath()}>
                     <text
                       flexShrink={props.compact ? 1 : 0}
                       height={1}
                       paddingLeft={2}
-                      fg={index() === position() ? theme.text.action.primary.focused : theme.text.subdued}
+                      fg={index() === position() ? theme.text.action.primary.focused : quietInk(theme)}
                       wrapMode="none"
                       truncate
                     >
-                      {Locale.truncateLeft(path(member.directory), props.compact ? 14 : 18)} ·{" "}
-                      {ageLabel(props.now() - member.lastActivity)}
+                      {Locale.truncateLeft(path(member.directory), Math.max(8, pathCells() - 5 - stringWidth(ageText(member))))} ·{" "}
+                      {ageText(member)}
                     </text>
                   </Show>
-                  <Show when={props.compact}>
+                  <Show when={props.compact && index() === position() && props.focused}>
                     <box flexGrow={1} />
-                    <text fg={theme.text.action.primary.focused}>
-                      {index() === position() && props.focused ? "[o] Open" : "›"}
-                    </text>
+                    <text fg={theme.text.action.primary.focused}>[o] Open</text>
                   </Show>
                 </box>
                 <Show when={member.drivenBy}>
-                  <text fg={theme.text.subdued} paddingLeft={2} wrapMode="none" truncate>
+                  <text fg={quietInk(theme)} paddingLeft={2} wrapMode="none" truncate>
                     ↳ driven by {member.drivenBy}
                   </text>
                 </Show>
@@ -487,34 +524,34 @@ export function ProjectMembers(props: {
           gap={inlineActions() ? 2 : 0}
         >
           <box flexDirection="row" gap={2} flexShrink={0}>
-            <text fg={theme.text.feedback.info.default} onMouseUp={add}>
+            <text fg={infoInk(theme)} onMouseUp={add}>
               [a] Add
             </text>
-            <text fg={theme.text.feedback.info.default} onMouseUp={newSession}>
+            <text fg={infoInk(theme)} onMouseUp={newSession}>
               [n] New session
             </text>
           </box>
           <box flexDirection="row" gap={2} flexShrink={0}>
             <text
-              fg={canRemove() ? theme.text.feedback.info.default : theme.text.subdued}
+              fg={canRemove() ? infoInk(theme) : quietInk(theme)}
               onMouseUp={() => remove(false)}
             >
               {canRemove() ? "[x]" : "(x)"} Remove
             </text>
             <text
-              fg={canRemove() ? theme.text.feedback.info.default : theme.text.subdued}
+              fg={canRemove() ? infoInk(theme) : quietInk(theme)}
               onMouseUp={() => remove(true)}
             >
               {canRemove() ? "[D]" : "(D)"} Delete
             </text>
           </box>
           <Show when={props.onSettings}>
-            <text fg={theme.text.feedback.info.default} flexShrink={0} onMouseUp={props.onSettings}>
+            <text fg={infoInk(theme)} flexShrink={0} onMouseUp={props.onSettings}>
               [s] Settings
             </text>
           </Show>
           <Show when={!canRemove() && !props.tab}>
-            <text fg={theme.text.subdued} height={1} wrapMode="none" truncate>
+            <text fg={quietInk(theme)} height={1} wrapMode="none" truncate>
               master: change it in Settings
             </text>
           </Show>
@@ -522,7 +559,7 @@ export function ProjectMembers(props: {
       </Show>
       <box flexShrink={0}>
         <Show when={busy()}>
-          <text height={1} fg={theme.text.subdued}>
+          <text height={1} fg={quietInk(theme)}>
             Saving…
           </text>
         </Show>
@@ -530,12 +567,12 @@ export function ProjectMembers(props: {
           <text fg={theme.text.feedback.error.default}>{failure()}</text>
         </Show>
         <Show when={!props.tab && (props.compact || props.settings || dimensions().width >= 120)}>
-          <text height={1} fg={theme.text.subdued}>
+          <text height={1} fg={quietInk(theme)}>
             {updatedLabel(props.loadedAt() === undefined ? undefined : props.now() - props.loadedAt()!)}
           </text>
         </Show>
         <Show when={props.focused && props.settings}>
-          <text height={1} fg={theme.text.subdued} wrapMode="none" truncate>
+          <text height={1} fg={quietInk(theme)} wrapMode="none" truncate>
             {hint()}
           </text>
         </Show>

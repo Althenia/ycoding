@@ -58,13 +58,33 @@ export type ComponentTheme = ReturnType<typeof createComponentTheme>
 export function readableForeground(preferred: RGBA, background: RGBA): RGBA {
   if (background.a < 1) return preferred
   const fill = luminance(background)
-  if (preferred.a === 1) {
-    const ink = luminance(preferred)
-    if ((Math.max(fill, ink) + 0.05) / (Math.min(fill, ink) + 0.05) >= 4.5) return preferred
-  }
+  if (preferred.a === 1 && contrastRatio(luminance(preferred), fill) >= 4.5) return preferred
   return (fill + 0.05) / 0.05 >= 1.05 / (fill + 0.05)
     ? RGBA.fromInts(0, 0, 0)
     : RGBA.fromInts(255, 255, 255)
+}
+
+export function readableTint(preferred: RGBA, background: RGBA): RGBA {
+  if (background.a < 1 || preferred.a < 1) return preferred
+  const fill = luminance(background)
+  if (contrastRatio(luminance(preferred), fill) >= 4.5) return preferred
+  const limit = readableForeground(preferred, background)
+  const steps = 40
+  for (let step = 1; step < steps; step++) {
+    const mix = step / steps
+    const candidate = RGBA.fromValues(
+      preferred.r + (limit.r - preferred.r) * mix,
+      preferred.g + (limit.g - preferred.g) * mix,
+      preferred.b + (limit.b - preferred.b) * mix,
+      1,
+    )
+    if (contrastRatio(luminance(candidate), fill) >= 4.5) return candidate
+  }
+  return limit
+}
+
+function contrastRatio(ink: number, fill: number) {
+  return (Math.max(fill, ink) + 0.05) / (Math.min(fill, ink) + 0.05)
 }
 
 function luminance(color: RGBA) {

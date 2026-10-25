@@ -36,26 +36,25 @@ const contrast = (first: number[], second: number[]) => {
 async function openMember(width: number) {
   const mounted = await mountCoordination({ width })
   mounted.router().navigate({ type: "session", sessionID: docsID })
-  await waitForFrame(mounted.screen, "↑ Member of")
+  await waitForFrame(mounted.screen, "Draft the release")
   await settle(mounted.screen)
   return mounted
 }
 
 for (const width of [120, 80, 60]) {
-  test(`member chat keeps the normal footer and one Project identity line at ${width} columns`, async () => {
+  test(`member chat keeps identity, modes and actions in one footer row at ${width} columns`, async () => {
     const { screen } = await openMember(width)
     try {
       const frame = screen.frame()
       const lines = frame.split("\n")
-      const identity = lines.filter((line) => line.includes("↑ Member of"))
+      const identity = lines.filter((line) => line.includes("↑") && /shells \d|sh\d/.test(line))
       expect(identity).toHaveLength(1)
-      expect(identity[0]).toContain(width >= 80 ? "↑ Member of Release train" : "↑ Member of Rel")
-      expect(identity[0]).toContain("master Lead")
+      if (width >= 120) expect(identity[0]).toContain("↑ Member")
       expect(identity[0]!.trimEnd().length).toBeLessThanOrEqual(width)
-      if (width >= 80) expect(identity[0]).toContain("[ctrl+x p] Project")
       const filled = lines.filter((line) => line.trim() !== "")
-      expect(filled.at(-2)).toContain("commands")
-      for (const label of ["Permissions Manual", "Guardrails Manual", "Answers Manual"]) expect(filled.at(-1)).toContain(label)
+      expect(filled.at(-1)).toBe(identity[0])
+      for (const label of [/Permissions Manual|P Manual|P:M/, /Guardrails Manual|G Manual|G:M/, /Answers Manual|A Manual|A:M/]) expect(identity[0]).toMatch(label)
+      expect(identity[0]).toMatch(/usage|\bu\b/i)
       for (const absent of ["ctrl+x p members", "enter send · esc interrupt", "members ›"]) expect(frame).not.toContain(absent)
     } finally {
       await screen.dispose()
@@ -63,14 +62,15 @@ for (const width of [120, 80, 60]) {
   }, 30_000)
 }
 
-test("Master chat shows the Project shortcut once, on its identity line", async () => {
-  const { screen } = await mountCoordination({ width: 80 })
+test("Master chat keeps the Project shortcut beside Usage in its single footer row", async () => {
+  const { screen } = await mountCoordination({ width: 200 })
   try {
     await settle(screen)
     const lines = screen.frame().split("\n")
-    const shortcut = lines.filter((line) => line.includes("[ctrl+x p] Project"))
+    const shortcut = lines.filter((line) => line.includes("project") && line.includes("usage"))
     expect(shortcut).toHaveLength(1)
     expect(shortcut[0]).toContain("◇ Master of Release train")
+    expect(shortcut[0].indexOf("project")).toBeLessThan(shortcut[0].indexOf("usage"))
     expect(lines.filter((line) => line.includes("members ›"))).toHaveLength(0)
   } finally {
     await screen.dispose()
@@ -176,7 +176,8 @@ test("creating a Project from an existing Session through the real Projects rout
       masterSessionID: scratchID,
       memberSessionIDs: [],
     })
-    await waitForFrame(screen, "Master of Ship it")
+    await waitForFrame(screen, "◇ Master")
+    expect(router().data).toMatchObject({ type: "session", sessionID: scratchID })
   } finally {
     await screen.dispose()
   }
@@ -202,7 +203,8 @@ test("creating a Project with a new Master in a chosen directory, then adding an
     screen.input.pressEnter()
     await settle(screen)
     screen.input.pressKey("c")
-    await waitForFrame(screen, "Master of Fresh start")
+    await waitForFrame(screen, "◇ Master")
+    expect(router().data).toMatchObject({ type: "session", sessionID: "ses_new00000001" })
     const creates = () => server.state.writes.map((write) => [write.method, write.path, write.body] as const)
     expect(creates().slice(0, 2)).toEqual([
       ["POST", "/api/session", { location: { directory: "/home/dev/fresh" }, title: "Fresh start" }],
@@ -291,8 +293,8 @@ test("the narrow Master identity line names the Project without aggregate counts
   const { screen } = await runningMaster(80)
   try {
     await settle(screen)
-    const identity = lineOf(screen.frame(), "Master of Release train")
-    expect(identity).toContain("◇ Master of Release train")
+    const identity = lineOf(screen.frame(), "◇ Master")
+    expect(identity).toContain("◇ Master")
     expect(identity).not.toMatch(/\d+ running/)
   } finally {
     await screen.dispose()

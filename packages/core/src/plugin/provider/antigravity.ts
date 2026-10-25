@@ -1,7 +1,7 @@
 import { createServer } from "node:http"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { Clock, Deferred, Effect, Option, Schedule, Schema, Semaphore, Stream } from "effect"
+import { Clock, Config, Deferred, Effect, Option, Redacted, Schedule, Schema, Semaphore, Stream } from "effect"
 import { Sse } from "effect/unstable/encoding"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { AISDK } from "../../aisdk"
@@ -17,8 +17,6 @@ import type { PluginInternal } from "../internal"
 const integrationID = Integration.ID.make("antigravity")
 const providerID = Provider.ID.make("antigravity")
 const methodID = Integration.MethodID.make("google")
-const clientID = process.env.YCODING_ANTIGRAVITY_CLIENT_ID ?? ""
-const clientSecret = process.env.YCODING_ANTIGRAVITY_CLIENT_SECRET ?? ""
 const callbackPort = 51121
 const redirectURI = `http://localhost:${callbackPort}/oauth-callback`
 export const antigravityBaseURL = "https://daily-cloudcode-pa.googleapis.com"
@@ -156,9 +154,23 @@ type Pkce = { verifier: string; challenge: string }
 const projectIDOf = (value: string | { id?: string } | undefined) =>
   typeof value === "string" ? value || undefined : value?.id
 
+const oauthClient = Effect.gen(function* () {
+  const clientID = yield* Config.nonEmptyString("YCODING_ANTIGRAVITY_CLIENT_ID")
+  const clientSecret = yield* Config.schema(
+    Schema.Redacted(Schema.NonEmptyString),
+    "YCODING_ANTIGRAVITY_CLIENT_SECRET",
+  )
+  return { clientID, clientSecret }
+}).pipe(
+  Effect.mapError(() => new Error(
+    "Set YCODING_ANTIGRAVITY_CLIENT_ID and YCODING_ANTIGRAVITY_CLIENT_SECRET in the local server environment before connecting Antigravity.",
+  )),
+)
+
 const tokenRequest = Effect.fnUntraced(function* (http: HttpClient.HttpClient, form: URLSearchParams) {
-  form.set("client_id", clientID)
-  form.set("client_secret", clientSecret)
+  const client = yield* oauthClient
+  form.set("client_id", client.clientID)
+  form.set("client_secret", Redacted.value(client.clientSecret))
   const response = yield* http.execute(
     HttpClientRequest.post("https://oauth2.googleapis.com/token").pipe(
       HttpClientRequest.acceptJson,
@@ -457,6 +469,7 @@ export function antigravityOAuth(http: HttpClient.HttpClient) {
     method: { id: methodID, type: "oauth", label: "Google account (Antigravity subscription)" },
     authorize: (_inputs: Integration.Inputs) =>
       Effect.gen(function* () {
+        const client = yield* oauthClient
         const pkce = yield* Effect.promise(generatePKCE)
         const state = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url")
         const code = yield* Deferred.make<string, Error>()
@@ -494,7 +507,7 @@ export function antigravityOAuth(http: HttpClient.HttpClient) {
         })
         yield* Effect.addFinalizer(() => Effect.sync(() => server.close()))
         const url = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
-          client_id: clientID,
+          client_id: client.clientID,
           response_type: "code",
           redirect_uri: redirectURI,
           scope: scopes.join(" "),

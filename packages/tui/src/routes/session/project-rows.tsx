@@ -1,6 +1,7 @@
 import { InputRenderable, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { createMemo, createSignal, Index, Show, type Accessor, type JSX } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { readableTint } from "../../theme/component"
 import { Keymap } from "../../context/keymap"
 import { Locale } from "../../util/locale"
 import { stringWidth } from "../../util/string-width"
@@ -22,6 +23,14 @@ export type Row = {
   edit?: { initial: string; commit: (text: string) => void; onInput?: (text: string) => void }
 }
 
+export function quietInk(theme: ReturnType<typeof useTheme>["theme"]) {
+  return readableTint(theme.text.subdued, theme.background.default)
+}
+
+export function infoInk(theme: ReturnType<typeof useTheme>["theme"]) {
+  return readableTint(theme.text.feedback.info.default, theme.background.default)
+}
+
 export function Panel(props: {
   title: string
   active?: boolean
@@ -35,8 +44,9 @@ export function Panel(props: {
     <box
       border
       borderStyle="single"
-      borderColor={props.active ? theme.text.feedback.info.default : theme.border.default}
+      borderColor={props.active ? infoInk(theme) : theme.border.default}
       title={`${props.active ? "▸ " : ""}${props.title}`}
+      titleColor={props.active ? infoInk(theme) : quietInk(theme)}
       width={props.width}
       height={props.height}
       flexGrow={props.flexGrow}
@@ -138,13 +148,13 @@ export function createRowList(input: {
 
   const toneColor = (tone: Tone | undefined) =>
     tone === "success"
-      ? theme.text.feedback.success.default
+      ? readableTint(theme.text.feedback.success.default, theme.background.default)
       : tone === "warning"
-        ? theme.text.feedback.warning.default
+        ? readableTint(theme.text.feedback.warning.default, theme.background.default)
         : tone === "error"
-          ? theme.text.feedback.error.default
+          ? readableTint(theme.text.feedback.error.default, theme.background.default)
           : tone === "subdued"
-            ? theme.text.subdued
+            ? quietInk(theme)
             : theme.text.default
 
   function RowLine(line: { row: Row }) {
@@ -161,7 +171,7 @@ export function createRowList(input: {
       selected() && input.active()
         ? theme.text.action.primary.focused
         : unavailable()
-          ? theme.text.subdued
+          ? quietInk(theme)
           : theme.text.default
     const column = () => Math.min(input.labelWidth(), Math.max(8, input.contentWidth() - 12))
     const labelText = () => {
@@ -179,7 +189,7 @@ export function createRowList(input: {
         when={row().kind !== "heading"}
         fallback={
           <box marginTop={1} height={1} flexShrink={0}>
-            <text fg={theme.text.subdued} attributes={TextAttributes.BOLD}>
+            <text fg={quietInk(theme)} attributes={TextAttributes.BOLD}>
               {row().label}
             </text>
           </box>
@@ -197,7 +207,7 @@ export function createRowList(input: {
             activate(row())
           }}
         >
-          <text flexShrink={0} fg={selected() ? foreground() : theme.text.subdued}>
+          <text flexShrink={0} fg={selected() ? foreground() : quietInk(theme)}>
             {selected() ? "▸ " : "  "}
           </text>
           <text
@@ -206,7 +216,7 @@ export function createRowList(input: {
               selected()
                 ? foreground()
                 : row().kind === "info" || unavailable()
-                  ? theme.text.subdued
+                  ? quietInk(theme)
                   : theme.text.default
             }
             attributes={selected() ? TextAttributes.BOLD : undefined}
