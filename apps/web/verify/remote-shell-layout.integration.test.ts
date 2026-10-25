@@ -741,7 +741,9 @@ describe("remote shell layout", () => {
           const input = document.querySelector('.composer__input'); input.value = 'Keep this viewport draft'; input.dispatchEvent(new InputEvent('input', { bubbles:true })); input.focus();
           window.metadataOriginal = { input, autonomous:document.querySelector('.composer__summary .session-status__autonomous-trigger'), goal:document.querySelector('.composer__summary .session-status__goal-trigger') };
         })()`)
-        const reads = await page.evaluate<string>(`JSON.stringify(window.requestLog.map(request => request.operation))`)
+        const composerReads = () => page.evaluate<readonly string[]>(`window.requestLog.filter(request => request.operation === 'session.catalog' || request.operation === 'session.dots.status').map(request => request.operation).sort()`)
+        const reads = await composerReads()
+        expect(reads).toEqual(["session.catalog", "session.dots.status"])
         const placement = () => page.evaluate<{ readonly detached: boolean; readonly emptyHeight: number; readonly primary: number; readonly slots: number; readonly modes: number; readonly goals: number; readonly same: boolean; readonly focused: boolean; readonly draft: string; readonly visible: boolean; readonly targets: boolean; readonly scrollOwner: boolean }>(`(() => {
           const mount = document.querySelector('.conversation-metadata'), composer = document.querySelector('.composer'), row = composer.querySelector('.composer__row').getBoundingClientRect(), nav = document.querySelector('.bottom-nav').getBoundingClientRect();
           return { detached:mount?.querySelector('.session-status--metadata') !== null && mount !== null, emptyHeight:mount?.getBoundingClientRect().height ?? -1,
@@ -754,6 +756,10 @@ describe("remote shell layout", () => {
             scrollOwner:mount?.parentElement.classList.contains('workspace__scroll') === true && !['auto','scroll'].includes(getComputedStyle(mount).overflowY) };
         })()`)
         expect(await placement()).toMatchObject({ detached:false, emptyHeight:0, primary:2, slots:1, modes:1, goals:1, same:true, focused:true, draft:"Keep this viewport draft", visible:true, targets:true, scrollOwner:true })
+        const inventoryReads = await page.evaluate<number>(`window.requestLog.filter(request => request.operation === 'workspace.list').length`)
+        await page.evaluate(`window.remoteInvalidateSessions()`)
+        for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`window.requestLog.filter(request => request.operation === 'workspace.list').length > ${inventoryReads}`); attempt += 1) await Bun.sleep(25)
+        expect(await page.evaluate<number>(`window.requestLog.filter(request => request.operation === 'workspace.list').length`)).toBeGreaterThan(inventoryReads)
         for (const [width, height, detached] of [[320, 380, true], [390, 480, true], [844, 390, true], [390, 481, false], [390, 844, false], [320, 380, true]] as const) {
           await page.setViewport(width, height)
           await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
@@ -769,7 +775,7 @@ describe("remote shell layout", () => {
             })()`), `${theme} landscape goal words remain reachable`).toBe(true)
           }
         }
-        expect(await page.evaluate<string>(`JSON.stringify(window.requestLog.map(request => request.operation))`)).toBe(reads)
+        expect(await composerReads()).toEqual(reads)
         expect(await page.evaluate<string>(`document.querySelector('.conversation-metadata').innerText`)).toContain("Waiting for your decision")
         expect(await page.evaluate<string>(`document.querySelector('.conversation-metadata').innerText`)).toContain("Permissions Auto")
         expect(await page.evaluate<string>(`document.querySelector('.conversation-metadata').innerText`)).toContain("Guardrails Auto")
@@ -804,7 +810,7 @@ describe("remote shell layout", () => {
         expect(await placement()).toMatchObject({ detached:false, emptyHeight:0, same:true, focused:true, draft:"Keep this viewport draft" })
         await page.evaluate(`Object.defineProperty(window, 'visualViewport', { configurable:true, value:window.metadataNativeViewport }); window.dispatchEvent(new Event('resize'))`)
         expect(await page.evaluate<number>(`window.metadataViewportStub.listenerCount()`)).toBe(0)
-        expect(await page.evaluate<string>(`JSON.stringify(window.requestLog.map(request => request.operation))`)).toBe(reads)
+        expect(await composerReads()).toEqual(reads)
         await page.setViewport(320, 380)
         await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
         await page.evaluate(`document.querySelector('.composer__dock-toggle').click()`)

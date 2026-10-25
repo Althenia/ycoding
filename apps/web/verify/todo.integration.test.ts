@@ -71,16 +71,40 @@ test("terminal Todo exit keeps its flow slot and focus blocked until one bounded
       await page.setViewport(width!, height!)
       await page.setColorScheme(theme)
       await page.setReducedMotion(reduced)
+      await page.setAnimationPlaybackRate(reduced ? 1 : 0)
       await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.todo.expanded')`)
       await page.navigate(`http://127.0.0.1:${port}/verify/todo-fixture.html?theme=${theme}`)
       expect(await page.evaluate<boolean>(`matchMedia('(prefers-reduced-motion: reduce)').matches`)).toBe(reduced)
       for (let attempt = 0; attempt < 40 && !await page.evaluate<boolean>(`!!document.querySelector('.todo-panel__toggle')`); attempt++) await Bun.sleep(50)
+      await page.evaluate(`document.fonts.ready`)
       await page.evaluate(`document.querySelector('.todo-panel__toggle').click()`)
-      await Bun.sleep(reduced ? 0 : 260)
-      const before = await page.evaluate<{ height: number; bottom: number; scroll: number }>(`(() => { const root = document.querySelector('[data-testid="transcript"]'); root.scrollTop = 180; const panel = document.querySelector('.todo-panel'); window.todoRemovals = 0; new MutationObserver(() => { if (!panel.isConnected) window.todoRemovals++ }).observe(panel.parentElement, { childList:true }); return { height: panel.getBoundingClientRect().height, bottom: document.querySelector('.composer').getBoundingClientRect().bottom, scroll: root.scrollTop }; })()`)
-      await page.evaluate(`window.updateTodos([{content:'Finished',status:'completed',priority:'high'}])`)
-      const pending = await page.evaluate<{ present: boolean; inert: boolean; hidden: boolean; focusable: boolean; height: number; bottom: number; scroll: number }>(`(() => { const panel = document.querySelector('.todo-panel'); return { present: !!panel, inert: panel?.inert ?? false, hidden: panel?.getAttribute('aria-hidden') === 'true', focusable: !!panel?.querySelector('button:not(:disabled)'), height: panel?.getBoundingClientRect().height ?? 0, bottom: document.querySelector('.composer').getBoundingClientRect().bottom, scroll: document.querySelector('[data-testid="transcript"]').scrollTop }; })()`)
-      if (reduced) expect(pending.present).toBe(false)
+      await page.evaluate(`(async () => { const animations = document.querySelector('.todo-panel__drawer').getAnimations(); await Promise.all(animations.map(animation => animation.ready)); animations.forEach(animation => animation.finish()); await Promise.all(animations.map(animation => animation.finished)); })()`)
+      const exit = await page.evaluate<{
+        readonly before: { readonly height: number; readonly bottom: number; readonly scroll: number }
+        readonly pending: { readonly present: boolean; readonly inert: boolean; readonly hidden: boolean; readonly focusable: boolean; readonly height: number; readonly bottom: number; readonly scroll: number }
+        readonly transitions: readonly { readonly property: string; readonly duration: number }[]
+        readonly midpoint: { readonly present: boolean; readonly height: number; readonly opacity: number } | null
+      }>(`(() => {
+        const root = document.querySelector('[data-testid="transcript"]'), panel = document.querySelector('.todo-panel'); root.scrollTop = 180;
+        const before = { height:panel.getBoundingClientRect().height, bottom:document.querySelector('.composer').getBoundingClientRect().bottom, scroll:root.scrollTop };
+        window.todoRemovals = 0; new MutationObserver(() => { if (!panel.isConnected) window.todoRemovals++ }).observe(panel.parentElement, { childList:true });
+        window.updateTodos([{content:'Finished',status:'completed',priority:'high'}]);
+        const current = document.querySelector('.todo-panel');
+        const pending = { present:!!current, inert:current?.inert ?? false, hidden:current?.getAttribute('aria-hidden') === 'true', focusable:!!current?.querySelector('button:not(:disabled)'), height:current?.getBoundingClientRect().height ?? 0, bottom:document.querySelector('.composer').getBoundingClientRect().bottom, scroll:root.scrollTop };
+        const animations = current?.getAnimations() ?? [], transitions = animations.map(animation => ({ property:animation.transitionProperty, duration:animation.effect.getTiming().duration }));
+        animations.forEach(animation => { animation.pause(); animation.currentTime = 110 });
+        const midpoint = current ? { present:current.isConnected, height:current.getBoundingClientRect().height, opacity:Number(getComputedStyle(current).opacity) } : null;
+        animations.forEach(animation => animation.play());
+        return { before, pending, transitions, midpoint };
+      })()`)
+      await page.setAnimationPlaybackRate(1)
+      const before = exit.before
+      const pending = exit.pending
+      if (reduced) {
+        expect(pending.present).toBe(false)
+        expect(exit.transitions).toEqual([])
+        expect(exit.midpoint).toBeNull()
+      }
       else {
         expect(pending.present).toBe(true)
         expect(pending.inert).toBe(true)
@@ -90,8 +114,12 @@ test("terminal Todo exit keeps its flow slot and focus blocked until one bounded
         expect(Math.abs(pending.height - before.height)).toBeLessThanOrEqual(2)
         expect(Math.abs(pending.bottom - before.bottom)).toBeLessThanOrEqual(2)
         expect(Math.abs(pending.scroll - before.scroll)).toBeLessThanOrEqual(2)
-        await Bun.sleep(90)
-        const midHeight = await page.evaluate<number>(`document.querySelector('.todo-panel')?.getBoundingClientRect().height ?? 0`)
+        expect(exit.transitions).toEqual([{ property:"max-height", duration:220 }, { property:"opacity", duration:220 }])
+        expect(exit.midpoint?.present).toBe(true)
+        expect(exit.midpoint?.opacity).toBeGreaterThan(0)
+        expect(exit.midpoint?.opacity).toBeLessThan(1)
+        const midHeight = exit.midpoint!.height
+        expect(midHeight).toBeGreaterThan(0)
         expect(midHeight).toBeLessThan(before.height)
         if (theme === "light" && width === 390) console.info("todo exit geometry", JSON.stringify({ before, pending, midHeight }))
       }
