@@ -89,8 +89,20 @@ test.each(cases)("Project cards use bounded full-width previews at $width in $th
     if (await page.evaluate<boolean>(`matchMedia('(hover:hover)').matches`)) {
       await page.mouse("mouseMoved", 0, 0)
       expect(await page.evaluate<boolean>(`document.querySelector('${link}').matches(':hover')`)).toBe(false)
-      const target = await page.evaluate<{ x: number; y: number }>(`(() => { const r = document.querySelector('${link}').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
-      expect(await page.evaluate<boolean>(`document.querySelector('${link}').contains(document.elementFromPoint(${target.x}, ${target.y}))`)).toBe(true)
+      const target = await page.evaluate<{ x: number; y: number; hit: boolean; element: string | null; ancestors: unknown[] }>(`(() => {
+        const link = document.querySelector('${link}')
+        const r = link.getBoundingClientRect()
+        const x = r.x + r.width / 2, y = r.y + r.height / 2
+        const hit = document.elementFromPoint(x, y)
+        const ancestors = []
+        for (let node = link; node; node = node.parentElement) {
+          const rect = node.getBoundingClientRect()
+          ancestors.push({ tag: node.tagName, class: node.className, x: rect.x, y: rect.y, width: rect.width, height: rect.height, scrollTop: node.scrollTop, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight })
+        }
+        return { x, y, hit: link.contains(hit), element: hit ? hit.tagName + '.' + hit.className : null, ancestors }
+      })()`)
+      if (!target.hit) throw new Error(`Project link is not hit-testable: ${JSON.stringify(target)}`)
+      expect(target.hit).toBe(true)
       await page.mouse("mouseMoved", target.x, target.y)
       await wait(page, `document.querySelector('${link}').matches(':hover')`)
       if (process.env.YCODING_CARD_CAPTURE_DIR) await Bun.write(`${process.env.YCODING_CARD_CAPTURE_DIR}/${theme}-${width}-hover.png`, Buffer.from(await page.screenshot(), "base64"))

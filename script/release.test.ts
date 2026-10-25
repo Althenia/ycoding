@@ -239,7 +239,7 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0]
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
   expect(workflow).toContain("      - v*")
-  expect(Bun.YAML.parse(workflow).on.push.tags).toEqual(["v*"])
+  expect(Bun.YAML.parse(workflow)).toHaveProperty("on.push.tags", ["v*"])
   expect(workflow).not.toContain("      - tui-v*")
   expect(workflow).not.toContain("      - web-v*")
   expect(verify).toContain('release_notes="docs/releases/v$RELEASE_VERSION.md"')
@@ -512,7 +512,7 @@ test("source verification legs start in parallel with the native builds", () => 
     ["Verify installer and web assets", "matrix.suite == 'web'"],
     ["Verify approved browser host", "matrix.suite == 'browser' || matrix.suite == 'extension'"],
     ["Verify isolated-browser integration suites", "matrix.suite == 'browser'"],
-    ["Provision Chrome for Testing", "matrix.suite == 'extension'"],
+    ["Provision Chrome for Testing", "matrix.suite == 'browser' || matrix.suite == 'extension'"],
     ["Verify Chrome extension integration suite", "matrix.suite == 'extension'"],
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
@@ -520,11 +520,18 @@ test("source verification legs start in parallel with the native builds", () => 
   expect(verify).toContain("bun test --cwd extensions/chrome ./test/protocol.test.js ./test/service-worker.test.js ./test/design-md.test.js")
   expect(verify).toContain("run: bun run test:integration:extension")
   expect(verify).toContain('executable="$(bun script/chrome-for-testing.ts "$RUNNER_TEMP/chrome-for-testing")"')
-  expect(verify).toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME=$executable")
+  expect(verify).toContain('echo "executable=$executable" >> "$GITHUB_OUTPUT"')
+  expect(verify).toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME: ${{ steps.test-browser.outputs.executable }}")
+  expect(verify).toContain("YCODING_WEB_CHROME: ${{ steps.test-browser.outputs.executable }}")
+  expect(verify).not.toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME=$executable")
+  expect(verify).not.toContain("YCODING_WEB_CHROME: /Applications/Google Chrome.app")
   expect(verify).not.toContain("puppeteer")
   expect(verify).toContain('"$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"')
   expect(verify.indexOf("- name: Provision Chrome for Testing")).toBeLessThan(
     verify.indexOf("- name: Verify Chrome extension integration suite"),
+  )
+  expect(verify.indexOf("- name: Provision Chrome for Testing")).toBeLessThan(
+    verify.indexOf("- name: Verify responsive Project cards and model profiles"),
   )
 })
 

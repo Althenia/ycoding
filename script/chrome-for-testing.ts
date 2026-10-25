@@ -1,7 +1,8 @@
 import { access, constants, mkdir, rm } from "node:fs/promises"
 import path from "node:path"
 
-export const metadataURL = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+export const pinnedVersion = "155.0.8059.39"
+export const metadataURL = `https://googlechromelabs.github.io/chrome-for-testing/${pinnedVersion}.json`
 export const minimumMajor = 152
 const platform = "mac-arm64"
 const executable = "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
@@ -10,10 +11,8 @@ const maxArchiveBytes = 512 * 1024 * 1024
 
 export async function provision(input: { readonly destination: string; readonly metadataURL?: string }) {
   const metadata = await download(input.metadataURL ?? metadataURL, maxMetadataBytes)
-  const stable = readStable(metadata)
-  if (Number(stable.version.split(".")[0]) < minimumMajor)
-    throw new Error(`Chrome for Testing ${stable.version} is older than the required major ${minimumMajor}`)
-  const archive = await download(stable.url, maxArchiveBytes)
+  const pinned = readPinned(metadata)
+  const archive = await download(pinned.url, maxArchiveBytes)
 
   await rm(input.destination, { recursive: true, force: true })
   await mkdir(input.destination, { recursive: true })
@@ -29,8 +28,8 @@ export async function provision(input: { readonly destination: string; readonly 
   })
   const reported = Bun.spawnSync([binary, "--version"], { stdout: "pipe", stderr: "pipe" })
   const version = /(\d+\.\d+\.\d+\.\d+)/.exec(reported.stdout.toString())?.[1]
-  if (reported.exitCode !== 0 || version !== stable.version)
-    throw new Error(`Chrome for Testing reported ${version ?? "no version"} instead of ${stable.version}`)
+  if (reported.exitCode !== 0 || version !== pinned.version)
+    throw new Error(`Chrome for Testing reported ${version ?? "no version"} instead of ${pinned.version}`)
   return binary
 }
 
@@ -45,15 +44,16 @@ async function download(url: string, limit: number) {
   return bytes
 }
 
-function readStable(bytes: Uint8Array) {
-  const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes))
-  const stable = record(record(record(parsed).channels).Stable)
-  const downloads = record(stable.downloads).chrome
+function readPinned(bytes: Uint8Array) {
+  const root = record(JSON.parse(new TextDecoder().decode(bytes)))
+  if (root.version !== pinnedVersion)
+    throw new Error(`Chrome for Testing metadata is for ${typeof root.version === "string" ? root.version : "no version"} instead of the pinned ${pinnedVersion}`)
+  if (Number(pinnedVersion.split(".")[0]) < minimumMajor)
+    throw new Error(`Chrome for Testing ${pinnedVersion} is older than the required major ${minimumMajor}`)
+  const downloads = record(root.downloads).chrome
   const entry = Array.isArray(downloads) ? downloads.map(record).find((item) => item.platform === platform) : undefined
-  if (typeof stable.version !== "string" || !/^\d+\.\d+\.\d+\.\d+$/.test(stable.version))
-    throw new Error("Chrome for Testing metadata has no valid Stable version")
   if (typeof entry?.url !== "string") throw new Error(`Chrome for Testing metadata has no ${platform} download`)
-  return { version: stable.version, url: entry.url }
+  return { version: pinnedVersion, url: entry.url }
 }
 
 function record(value: unknown): Record<string, unknown> {
