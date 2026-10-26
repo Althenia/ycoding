@@ -1006,6 +1006,56 @@ it.live("persists directory-scoped Always on the root Session family across a se
   ),
 )
 
+it.live("delegated guardrail settlement writes no human rejection hold or incident", () =>
+  Effect.acquireRelease(
+    Effect.promise(() => tmpdir()),
+    (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+  ).pipe(
+    Effect.flatMap((directory) => Effect.gen(function* () {
+      yield* Effect.provide(Effect.gen(function* () {
+        yield* seedApprovalFamily
+        const guardrail = yield* SessionGuardrail.Service
+        const database = yield* Database.Service
+        const source = { kind: "dots-delegation", anchorSessionID: Session.ID.make("ses_anchor"), delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" } as const
+        const fiber = yield* guardrail.assert({ sessionID: approvalRootID, action: "file_mutation", resources: [`${home}/delegated/a.txt`] }).pipe(Effect.forkScoped)
+        let snapshot = (yield* guardrail.requestSnapshots(approvalRootID))[0]
+        for (let attempt = 0; snapshot === undefined && attempt < 200; attempt++) {
+          yield* Effect.sleep("10 millis")
+          snapshot = (yield* guardrail.requestSnapshots(approvalRootID))[0]
+        }
+        if (!snapshot) return yield* Effect.die("guardrail request was not retained")
+        expect(snapshot.request.hardReview).not.toBe(true)
+        expect((yield* guardrail.replyDelegated({ sessionID: approvalRootID, requestID: snapshot.request.id, reply: "reject", fingerprint: "0".repeat(64), source, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+        expect(yield* guardrail.requestSnapshots(approvalRootID)).toHaveLength(1)
+        yield* guardrail.replyDelegated({ sessionID: approvalRootID, requestID: snapshot.request.id, reply: "reject", fingerprint: snapshot.fingerprint, source, validate: () => Effect.succeed(true) })
+        expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+        expect(yield* database.db.select().from(ModelIncidentTable).all().pipe(Effect.orDie)).toEqual([])
+        const again = yield* guardrail.assert({ sessionID: approvalRootID, action: "file_mutation", resources: [`${home}/delegated/a.txt`] }).pipe(Effect.forkScoped)
+        let second = (yield* guardrail.requestSnapshots(approvalRootID))[0]
+        for (let attempt = 0; second === undefined && attempt < 200; attempt++) {
+          yield* Effect.sleep("10 millis")
+          second = (yield* guardrail.requestSnapshots(approvalRootID))[0]
+        }
+        if (!second) return yield* Effect.die("second guardrail request was not retained")
+        yield* guardrail.reply({ sessionID: approvalRootID, requestID: second.request.id, reply: "reject" })
+        expect(Exit.isFailure(yield* Fiber.await(again))).toBe(true)
+        const heldFiber = yield* guardrail.assert({ sessionID: approvalRootID, action: "file_mutation", resources: [`${home}/delegated/a.txt`] }).pipe(Effect.forkScoped)
+        let held = (yield* guardrail.requestSnapshots(approvalRootID))[0]
+        for (let attempt = 0; held === undefined && attempt < 200; attempt++) {
+          yield* Effect.sleep("10 millis")
+          held = (yield* guardrail.requestSnapshots(approvalRootID))[0]
+        }
+        if (!held) return yield* Effect.die("held guardrail request was not retained")
+        expect(yield* guardrail.delegatedEligible({ sessionID: approvalRootID, requestID: held.request.id, fingerprint: held.fingerprint, reply: "once" })).toBe(false)
+        expect((yield* guardrail.replyDelegated({ sessionID: approvalRootID, requestID: held.request.id, reply: "once", fingerprint: held.fingerprint, source, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+        expect(yield* guardrail.requestSnapshots(approvalRootID)).toHaveLength(1)
+        yield* guardrail.reply({ sessionID: approvalRootID, requestID: held.request.id, reply: "reject" })
+        expect(Exit.isFailure(yield* Fiber.await(heldFiber))).toBe(true)
+      }).pipe(Effect.scoped), approvalRuntime(path.join(directory.path, "guardrail-delegated.db")))
+    })),
+  )
+)
+
 describe("SessionGuardrail reusable approvals", () => {
   exact.it.effect("reuses Always for every outside directory of the reviewed request across the root family", () =>
     Effect.gen(function* () {

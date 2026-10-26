@@ -54,7 +54,7 @@ async function withDelegation(
     replyEvent: (requestID: string, reply: "once" | "reject") => void
     observedReplies: () => number
     mismatchedRejection: (
-      field: "proposal" | "principal" | "task" | "target" | "source" | "scope" | "expiry" | "attachment",
+      field: "proposal" | "principal" | "target" | "source" | "scope" | "expiry" | "attachment",
     ) => void
   }) => Promise<void>,
   options: {
@@ -64,6 +64,10 @@ async function withDelegation(
     unknown?: "create" | "revoke"
     committedUnknown?: "match" | "mismatch"
     grant?: boolean
+    secondGrant?: boolean
+    secondTarget?: boolean
+    twoSources?: boolean
+    noTask?: boolean
     width?: number
     height?: number
     mode?: "manual" | "auto" | "yolo"
@@ -97,6 +101,8 @@ async function withDelegation(
   let observedReplies = 0
   const mutations: string[] = []
   let currentAttachment = attachment
+  const secondSession = { ...session, id: "ses_second_fixture", title: "Second fixture" }
+  let secondStatus = Schema.decodeUnknownSync(Dots.DelegationStatus)({ sources: candidates().sources, tasks: [], grants: [] })
   let status = Schema.decodeUnknownSync(Dots.DelegationStatus)(candidates())
   let statusReads = 0
   let finish: ((reply: string) => void) | undefined
@@ -107,13 +113,27 @@ async function withDelegation(
     revision: 7,
     sourceExchangeID: "exchange_fixture",
     targetSessionID: sessionID,
-    taskInputID: task.taskInputID,
+    basis: "session",
     principal,
-    scope: { operations: ["continue"] },
+    scope: { operations: ["task"] },
     expiresAt: Date.now() + 900000,
     active: true,
   })
   if (options.grant) status = { ...status, grants: [grant] }
+  if (options.secondGrant)
+    status = { ...status, grants: [grant, { ...grant, id: "grant_second_binding", revision: 3 }] }
+  if (options.twoSources)
+    status = {
+      ...status,
+      sources: [
+        ...status.sources,
+        {
+          sourceExchangeID: "exchange_second",
+          principal: { ...principal, clientID: "client_second", grantID: "oauth_grant_second" },
+        },
+      ],
+    }
+  if (options.noTask) status = { ...status, tasks: [] }
   const screen = await renderScreen({
     width: options.width ?? 120,
     height: options.height ?? 40,
@@ -140,18 +160,25 @@ async function withDelegation(
     route: async (url, request) => {
       if (request.method !== "GET" && !url.pathname.endsWith("/delegation/status")) mutations.push(url.pathname)
       if (url.pathname.endsWith("/dots/delegation/status")) {
-        expect(await request.json()).toEqual({ targetSessionID: sessionID, expectedAttachment: attachment })
+        const body = await request.json()
+        expect(body.expectedAttachment).toEqual(attachment)
         statusReads++
+        if (body.targetSessionID === secondSession.id) return json({ data: secondStatus })
+        expect(body.targetSessionID).toBe(sessionID)
         const gate = statusGate
         statusGate = undefined
         await gate?.()
         return json({ data: status })
       }
       if (url.pathname.endsWith("/dots/delegation/revoke")) {
-        revokes.push(Schema.decodeUnknownSync(Dots.DelegationRevoke)(await request.json()))
+        const revoke = Schema.decodeUnknownSync(Dots.DelegationRevoke)(await request.json())
+        revokes.push(revoke)
         if (options.unknown === "revoke") return json({ message: "Unknown dispatch" }, { status: 500 })
-        status = { ...status, grants: [{ ...grant, active: false }] }
-        return json({ data: status.grants[0] })
+        status = {
+          ...status,
+          grants: status.grants.map((item) => (item.id === revoke.id ? { ...item, active: false } : item)),
+        }
+        return json({ data: status.grants.find((item) => item.id === revoke.id) })
       }
       if (url.pathname.endsWith("/dots/delegation")) {
         const proposal = Schema.decodeUnknownSync(Dots.DelegationCreate)(await request.json())
@@ -161,15 +188,18 @@ async function withDelegation(
             status = {
               ...status,
               grants: [
-                {
-                  ...grant,
+                Schema.decodeUnknownSync(Dots.DelegationInfo)({
                   id: proposal.proposalID,
                   revision: 1,
+                  sourceExchangeID: proposal.sourceExchangeID,
+                  targetSessionID: proposal.targetSessionID,
+                  ...("basis" in proposal ? { basis: "session" } : { taskInputID: task.taskInputID }),
                   scope: proposal.scope,
                   expiresAt: proposal.expiresAt,
+                  active: true,
                   principal:
                     options.committedUnknown === "mismatch" ? { ...principal, clientID: "other_client" } : principal,
-                },
+                }),
               ],
             }
           return json({ message: "Unknown dispatch" }, { status: 500 })
@@ -180,14 +210,19 @@ async function withDelegation(
           finish = resolve
         })
         if (reply === "reject") return json({ message: "Denied" }, { status: 400 })
-        const activated = {
-          ...grant,
+        const activated = Schema.decodeUnknownSync(Dots.DelegationInfo)({
           id: proposal.proposalID,
           revision: 1,
+          sourceExchangeID: proposal.sourceExchangeID,
+          targetSessionID: proposal.targetSessionID,
+          ...("basis" in proposal ? { basis: "session" } : { taskInputID: task.taskInputID }),
+          principal,
           scope: proposal.scope,
           expiresAt: proposal.expiresAt,
-        }
-        status = { ...status, grants: [activated] }
+          active: true,
+        })
+        if (proposal.targetSessionID === secondSession.id) secondStatus = { ...secondStatus, grants: [activated] }
+        else status = { ...status, grants: [activated] }
         return json({ data: activated })
       }
       if (url.pathname.includes("/permission/per_delegation_") && url.pathname.endsWith("/reply")) {
@@ -217,7 +252,7 @@ async function withDelegation(
               },
             })
       if (url.pathname === "/api/location") return json(location)
-      if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
+      if (url.pathname === "/api/session") return json({ data: options.secondTarget ? [session, secondSession] : [session], cursor: {} })
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
       if (url.pathname.endsWith("/snapshot")) return sessionSnapshot(sessionID, [], { session })
       if (url.pathname.endsWith("/autonomy"))
@@ -248,9 +283,11 @@ async function withDelegation(
     await wait(
       () =>
         screen.lines().some((line) => line.trim().startsWith(title)) &&
-        !screen.frame().includes("Reading delegation status"),
+        !screen.frame().includes("Reading delegation status") &&
+        !screen.frame().includes("Reading binding status"),
     )
-    const row = screen.lines().findIndex((line) => line.trim().startsWith(title))
+    const exact = screen.lines().findIndex((line) => line.trim() === title)
+    const row = exact >= 0 ? exact : screen.lines().findIndex((line) => line.trim().startsWith(title))
     await screen.mouse.click(screen.lines()[row].indexOf(title) - 1, row)
     await screen.renderOnce()
   }
@@ -259,41 +296,50 @@ async function withDelegation(
     await wait(
       () => screen.frame().includes("Commands") && screen.renderer.currentFocusedEditor instanceof InputRenderable,
     )
-    await screen.input.typeText("Dots coordinator delegation")
+    await screen.input.typeText("Coordinator bindings")
     await screen.renderOnce()
     screen.input.pressEnter()
-    await wait(() => screen.frame().includes("Coordinator delegation"))
+    await wait(() => screen.frame().includes("Coordinator bindings"))
   }
-  const prepare = async (presentation = false) => {
-    await select("Source exchange")
-    await select("client_fixture")
-    await select("Existing native task")
-    await select("msg_native_task")
-    if (presentation) {
-      await select("Format · bullets")
-      await select("Detail · concise")
-    } else await select("Instruction · Continue")
+  const prepare = async (decision = false) => {
+    await select("[ ] Native delegation")
+    await select("Tasks [off]")
+    if (decision) await select("Ordinary decisions [off]")
     await select("Expiry")
     await select("15 minutes")
+    await select("Review binding")
   }
   const ask = (invalid = false, proposal?: Dots.DelegationCreate) => {
     permission = true
     const requestID = `per_delegation_${permissionIDs.length + 1}`
     permissionIDs.push(requestID)
-    const value = Schema.decodeUnknownSync(Dots.DelegationReview)({
-      kind: "dots-task-delegation",
-      proposalID: proposal?.proposalID ?? "proposal_fixture",
-      sourceExchangeID: "exchange_fixture",
-      principal,
-      targetSessionID: sessionID,
-      taskInputID: task.taskInputID,
-      task: task.text,
-      expectedAttachment: attachment,
-      scope: proposal?.scope ?? { operations: ["continue"] },
-      expiresAt: proposal?.expiresAt ?? Date.now() + 900000,
-      lifetime: "binding",
-      fingerprint: "fingerprint_fixture",
-    })
+    const value = proposal && "basis" in proposal
+      ? Schema.decodeUnknownSync(Dots.SessionDelegationReview)({
+          kind: "dots-session-delegation",
+          proposalID: proposal.proposalID,
+          sourceExchangeID: "exchange_fixture",
+          principal,
+          targetSessionID: proposal.targetSessionID,
+          expectedAttachment: attachment,
+          scope: proposal.scope,
+          expiresAt: proposal.expiresAt,
+          lifetime: "binding",
+          fingerprint: "fingerprint_fixture",
+        })
+      : Schema.decodeUnknownSync(Dots.DelegationReview)({
+          kind: "dots-task-delegation",
+          proposalID: proposal?.proposalID ?? "proposal_fixture",
+          sourceExchangeID: "exchange_fixture",
+          principal,
+          targetSessionID: proposal?.targetSessionID ?? sessionID,
+          taskInputID: task.taskInputID,
+          task: task.text,
+          expectedAttachment: attachment,
+          scope: proposal?.scope ?? { operations: ["continue"] },
+          expiresAt: proposal?.expiresAt ?? Date.now() + 900000,
+          lifetime: "binding",
+          fingerprint: "fingerprint_fixture",
+        })
     screen.events.emit({
       id: `evt_delegation_permission_${requestID}`,
       type: "permission.asked",
@@ -370,16 +416,14 @@ async function withDelegation(
       mismatchedRejection: (field) => {
         const proposal = creates.at(-1)!
         const requestID = `per_negative_${field}`
-        const review = Schema.decodeUnknownSync(Dots.DelegationReview)({
-          kind: "dots-task-delegation",
+        const review = Schema.decodeUnknownSync(Dots.SessionDelegationReview)({
+          kind: "dots-session-delegation",
           proposalID: field === "proposal" ? "other_proposal" : proposal.proposalID,
           sourceExchangeID: field === "source" ? "other_exchange" : proposal.sourceExchangeID,
           principal: field === "principal" ? { ...principal, ownerID: "other_owner" } : principal,
           targetSessionID: field === "target" ? "ses_other_target" : sessionID,
-          taskInputID: field === "task" ? "msg_other_task" : proposal.taskInputID,
-          task: task.text,
           expectedAttachment: field === "attachment" ? { ...attachment, generation: "other_generation" } : attachment,
-          scope: field === "scope" ? { operations: ["presentation"], format: ["bullets"] } : proposal.scope,
+          scope: field === "scope" ? { operations: ["task", "decision"] } : proposal.scope,
           expiresAt: proposal.expiresAt + (field === "expiry" ? 1 : 0),
           lifetime: "binding",
           fingerprint: "fingerprint_fixture",
@@ -432,21 +476,23 @@ async function withDelegation(
 test("native proposal has no defaults and requests only native permission after explicit choices", async () => {
   await withDelegation(async ({ screen, open, select, prepare, wait, creates, replies, mutations }) => {
     await open()
-    await wait(() => screen.frame().includes("Source exchange · not selected"))
-    expect(screen.frame()).toContain("Source exchange · not selected")
-    expect(screen.frame()).toContain("Existing native task · not selected")
+    await wait(() => screen.frame().includes("[ ] Native delegation"))
+    expect(screen.frame()).toContain("Tasks [off]")
+    expect(screen.frame()).toContain("Ordinary decisions [off]")
     expect(screen.frame()).toContain("Expiry · not selected")
-    expect(screen.frame()).not.toContain("Request native approval")
+    expect(screen.frame()).not.toContain("Review binding")
     expect(creates).toEqual([])
     await prepare()
     expect(creates).toEqual([])
-    await select("Request native approval")
+    await select("Bind")
     await wait(() => screen.frame().includes("Permission required"))
-    expect(screen.frame()).not.toContain("Source exchange ·")
+    expect(screen.frame()).not.toContain("Coordinator bindings")
     expect(screen.frame()).not.toContain("Always")
     expect(replies).toEqual([])
     expect(creates).toHaveLength(1)
-    expect(creates[0].scope).toEqual({ operations: ["continue"] })
+    expect("basis" in creates[0] && creates[0].basis).toBe("session")
+    expect(String(creates[0].targetSessionID)).toBe(sessionID)
+    expect(creates[0].scope).toEqual({ operations: ["task"] })
     expect(creates[0].expectedAttachment).toEqual(attachment)
     expect(creates[0].expiresAt).toBeGreaterThan(Date.now())
     expect(creates[0].expiresAt).toBeLessThanOrEqual(Date.now() + 3600000)
@@ -457,15 +503,15 @@ test("native proposal has no defaults and requests only native permission after 
 }, 30000)
 
 for (const mode of ["auto", "yolo"] as const)
-  test(`presentation allowlists still require native approval under ${mode}`, async () => {
+  test(`decision authority still requires native approval under ${mode}`, async () => {
     await withDelegation(
       async ({ screen, open, select, prepare, wait, creates, replies }) => {
         await open()
         await prepare(true)
-        await select("Request native approval")
+        await select("Bind")
         await wait(() => screen.frame().includes("Permission required"))
         expect(replies).toEqual([])
-        expect(creates[0].scope).toEqual({ operations: ["presentation"], format: ["bullets"], detail: ["concise"] })
+        expect(creates[0].scope).toEqual({ operations: ["task", "decision"] })
         screen.input.pressEscape()
         await wait(() => replies.length === 1)
       },
@@ -480,18 +526,18 @@ for (const action of ["create", "revoke"] as const)
         await open()
         if (action === "create") {
           await prepare()
-          await select("Request native approval")
+          await select("Bind")
         }
         if (action === "revoke") {
-          await select("Revoke delegation")
+          await select("Unbind")
           screen.input.pressEnter()
         }
         await wait(() => screen.frame().includes("outcome unknown"))
         const before = statusReads()
         await select("Refresh status")
         await wait(() => statusReads() > before)
-        expect(screen.frame()).not.toContain("Request native approval")
-        expect(screen.frame()).not.toContain("Revoke delegation")
+        expect(screen.frame()).not.toContain("Review binding")
+        expect(screen.frame()).not.toContain("Unbind")
         screen.input.pressEscape()
         await open()
         expect(screen.frame()).toContain("outcome unknown")
@@ -505,7 +551,7 @@ test("revoke carries the exact grant revision and binding without interrupting n
   await withDelegation(
     async ({ screen, open, select, wait, revokes, mutations }) => {
       await open()
-      await select("Revoke delegation")
+      await select("Unbind")
       expect(screen.frame()).toContain("Already executing")
       expect(revokes).toEqual([])
       screen.input.pressEnter()
@@ -517,6 +563,61 @@ test("revoke carries the exact grant revision and binding without interrupting n
   )
 }, 30000)
 
+test("targeted revoke of one simultaneous grant leaves the other grant active", async () => {
+  await withDelegation(
+    async ({ screen, open, select, wait, revokes }) => {
+      await open()
+      await wait(() => screen.frame().includes("grant_second_binding"))
+      await select("Grant: grant_second_binding")
+      expect(screen.frame()).toContain("grant_second_binding")
+      expect(revokes).toEqual([])
+      screen.input.pressEnter()
+      await wait(() => revokes.length === 1)
+      expect(revokes).toEqual([{ id: "grant_second_binding", revision: 3, expectedAttachment: attachment }])
+      await open()
+      await wait(() => screen.frame().includes("Grant: grant_distinct_from_proposal"))
+      expect(screen.frame()).not.toContain("grant_second_binding")
+      expect(revokes).toHaveLength(1)
+    },
+    { grant: true, secondGrant: true, height: 60 },
+  )
+}, 30000)
+
+test("multiple source principals stay unselected until an explicit choice", async () => {
+  await withDelegation(
+    async ({ screen, open, select, wait, creates }) => {
+      await open()
+      await select("[ ] Native delegation")
+      await wait(() => screen.frame().includes("client_second"))
+      expect(screen.frame()).toContain("client_fixture")
+      screen.input.pressEnter()
+      await wait(() => screen.frame().includes("[ ] Native delegation"))
+      expect(screen.frame()).toContain("Choose source exchange")
+      expect(screen.frame()).not.toContain("Review binding")
+      expect(creates).toEqual([])
+    },
+    { twoSources: true },
+  )
+}, 30000)
+
+test("session binding does not require a current native task", async () => {
+  await withDelegation(
+    async ({ screen, open, select, prepare, wait, creates, replies }) => {
+      await open()
+      await prepare()
+      await select("Bind")
+      await wait(() => screen.frame().includes("Permission required"))
+      expect(creates).toHaveLength(1)
+      expect("basis" in creates[0] && creates[0].basis).toBe("session")
+    expect(String(creates[0].targetSessionID)).toBe(sessionID)
+      expect(creates[0]).not.toHaveProperty("taskInputID")
+      screen.input.pressEscape()
+      await wait(() => replies.length === 1)
+    },
+    { noTask: true },
+  )
+}, 30000)
+
 test("owner and attachment changes reject the captured proposal before dispatch", async () => {
   for (const change of ["owner", "attachment"])
     await withDelegation(async ({ screen, open, select, prepare, wait, creates, setSources, setAttachment }) => {
@@ -525,9 +626,9 @@ test("owner and attachment changes reject the captured proposal before dispatch"
       if (change === "owner")
         setSources([{ sourceExchangeID: "exchange_fixture", principal: { ...principal, ownerID: "other_owner" } }])
       if (change === "attachment") setAttachment({ ...attachment, generation: "replacement_generation" })
-      await select("Request native approval")
+      await select("Bind")
       if (change === "owner") await wait(() => screen.frame().includes("context changed"))
-      if (change === "attachment") await wait(() => !screen.frame().includes("Coordinator delegation"))
+      if (change === "attachment") await wait(() => !screen.frame().includes("Coordinator bindings"))
       expect(creates).toEqual([])
     })
 }, 30000)
@@ -537,7 +638,7 @@ for (const option of [{ enabled: false }, { bound: false }, { unavailable: true 
     await withDelegation(async ({ screen, creates, revokes, wait }) => {
       screen.input.pressKey("p", { ctrl: true })
       await wait(() => screen.renderer.currentFocusedEditor instanceof InputRenderable)
-      await screen.input.typeText("Dots coordinator delegation")
+      await screen.input.typeText("Coordinator bindings")
       await wait(() => screen.frame().includes("No results found"))
       expect(creates).toEqual([])
       expect(revokes).toEqual([])
@@ -548,12 +649,12 @@ test("known activation survives the native permission composer remount without r
   await withDelegation(async ({ screen, open, select, prepare, wait, creates, replies }) => {
     await open()
     await prepare()
-    await select("Request native approval")
+    await select("Bind")
     await wait(() => screen.frame().includes("Permission required"))
     screen.input.pressEnter()
     await wait(() => replies.length === 1 && !screen.frame().includes("Permission required"))
     await open()
-    await wait(() => screen.frame().includes("Revoke delegation"))
+    await wait(() => screen.frame().includes("Bound · Native delegation"))
     expect(screen.frame()).not.toContain("outcome unknown")
     expect(creates).toHaveLength(1)
   })
@@ -563,18 +664,19 @@ test("exact native Deny settles rejection and permits only a new explicit propos
   await withDelegation(async ({ screen, open, prepare, select, wait, creates, replies }) => {
     await open()
     await prepare()
-    await select("Request native approval")
+    await select("Bind")
     await wait(() => screen.frame().includes("Permission required"))
-    expect(screen.frame()).not.toContain("Coordinator delegation")
+    expect(screen.frame()).not.toContain("Coordinator bindings")
     screen.input.pressEscape()
     await wait(() => replies.length === 1 && !screen.frame().includes("Permission required"))
     await open()
-    await wait(() => screen.frame().includes("Native delegation denied"))
+    await wait(() => screen.frame().includes("[ ] Native delegation"))
     expect(screen.frame()).not.toContain("Mutations locked")
-    expect(screen.frame()).not.toContain("Request native approval")
+    expect(screen.frame()).not.toContain("Bound · Native delegation")
+    expect(screen.frame()).not.toContain("Review binding")
     expect(creates).toHaveLength(1)
     await prepare()
-    await select("Request native approval")
+    await select("Bind")
     await wait(() => screen.frame().includes("Permission required"))
     expect(creates).toHaveLength(2)
     expect(creates[1].proposalID).not.toBe(creates[0].proposalID)
@@ -589,12 +691,11 @@ test("unrelated or mismatched native rejection cannot unlock an uncertain propos
     async ({ screen, open, prepare, select, wait, creates, mismatchedRejection, observedReplies }) => {
       await open()
       await prepare()
-      await select("Request native approval")
+      await select("Bind")
       await wait(() => screen.frame().includes("outcome unknown"))
       for (const field of [
         "proposal",
         "principal",
-        "task",
         "target",
         "source",
         "scope",
@@ -605,11 +706,11 @@ test("unrelated or mismatched native rejection cannot unlock an uncertain propos
         mismatchedRejection(field)
         await wait(() => observedReplies() > before)
         screen.input.pressEscape()
-        await wait(() => !screen.frame().includes("Coordinator delegation"))
+        await wait(() => !screen.frame().includes("Coordinator bindings"))
         await open()
         await wait(() => screen.frame().includes("outcome unknown"))
-        expect(screen.frame()).not.toContain("Native delegation denied")
-        expect(screen.frame()).not.toContain("Request native approval")
+        expect(screen.frame()).not.toContain("Bound · Native delegation")
+        expect(screen.frame()).not.toContain("Review binding")
       }
       expect(creates).toHaveLength(1)
     },
@@ -622,13 +723,13 @@ test("late rejection of an earlier native permission cannot settle the next prop
     async ({ screen, open, prepare, select, wait, creates, replies, permissionIDs, replyEvent, observedReplies }) => {
       await open()
       await prepare()
-      await select("Request native approval")
+      await select("Bind")
       await wait(() => screen.frame().includes("Permission required"))
       screen.input.pressEscape()
       await wait(() => replies.length === 1 && !screen.frame().includes("Permission required"))
       await open()
       await prepare()
-      await select("Request native approval")
+      await select("Bind")
       await wait(() => screen.frame().includes("Permission required"))
       const before = observedReplies()
       replyEvent(permissionIDs[0], "reject")
@@ -636,8 +737,8 @@ test("late rejection of an earlier native permission cannot settle the next prop
       await wait(() => observedReplies() >= before + 2 && !screen.frame().includes("Permission required"))
       await open()
       await wait(() => screen.frame().includes("Delegation pending"))
-      expect(screen.frame()).not.toContain("Native delegation denied")
-      expect(screen.frame()).not.toContain("Request native approval")
+      expect(screen.frame()).not.toContain("Bound · Native delegation")
+      expect(screen.frame()).not.toContain("Review binding")
       expect(creates).toHaveLength(2)
       expect(replies).toHaveLength(1)
     },
@@ -650,30 +751,36 @@ for (const match of ["match", "mismatch"] as const)
       async ({ screen, open, prepare, select, wait, creates }) => {
         await open()
         await prepare()
-        await select("Request native approval")
-        await wait(() => screen.frame().includes(match === "match" ? "Revoke delegation" : "outcome unknown"))
+        await select("Bind")
+        await wait(() => screen.frame().includes(match === "match" ? "Bound · Native delegation" : "outcome unknown"))
         expect(creates).toHaveLength(1)
         if (match === "match") expect(screen.frame()).not.toContain("Mutations locked")
         if (match === "mismatch") {
           await select("Refresh status")
-          expect(screen.frame()).not.toContain("Revoke delegation")
+          expect(screen.frame()).not.toContain("Unbind")
         }
       },
       { unknown: "create", committedUnknown: match },
     )
   }, 30000)
 
-test("optional presentation fields remain absent and removing every operation blocks submission", async () => {
-  await withDelegation(async ({ screen, open, prepare, select, wait, creates, replies }) => {
+test("session scope carries no presentation fields and removing Tasks blocks submission", async () => {
+  await withDelegation(async ({ screen, open, select, wait, creates, replies }) => {
     await open()
-    await prepare(true)
-    await select("Detail · concise")
-    await select("Format · bullets")
-    expect(screen.frame()).not.toContain("Request native approval")
-    await select("Format · prose")
-    await select("Request native approval")
+    await select("[ ] Native delegation")
+    await select("Tasks [off]")
+    await select("Ordinary decisions [off]")
+    await select("Tasks [allowed]")
+    await wait(() => screen.frame().includes("decision-only grant can never"))
+    expect(screen.frame()).not.toContain("Review binding")
+    await select("Tasks [off]")
+    await select("Ordinary decisions [allowed]")
+    await select("Expiry")
+    await select("15 minutes")
+    await select("Review binding")
+    await select("Bind")
     await wait(() => screen.frame().includes("Permission required"))
-    expect(creates[0].scope).toEqual({ operations: ["presentation"], format: ["prose"] })
+    expect(creates[0].scope).toEqual({ operations: ["task"] })
     screen.input.pressEscape()
     await wait(() => replies.length === 1)
   })
@@ -681,13 +788,15 @@ test("optional presentation fields remain absent and removing every operation bl
 
 for (const minutes of [30, 60])
   test(`expiry preset ${minutes} minutes is explicit and bounded`, async () => {
-    await withDelegation(async ({ screen, open, prepare, select, wait, creates, replies }) => {
+    await withDelegation(async ({ screen, open, select, wait, creates, replies }) => {
       await open()
-      await prepare()
+      await select("[ ] Native delegation")
+      await select("Tasks [off]")
       await select("Expiry")
       await select(`${minutes} minutes`)
+      await select("Review binding")
       const before = Date.now()
-      await select("Request native approval")
+      await select("Bind")
       await wait(() => screen.frame().includes("Permission required"))
       expect(creates[0].expiresAt).toBeGreaterThanOrEqual(before + minutes * 60000)
       expect(creates[0].expiresAt).toBeLessThanOrEqual(Date.now() + minutes * 60000)
@@ -695,6 +804,35 @@ for (const minutes of [30, 60])
       await wait(() => replies.length === 1)
     })
   }, 30000)
+
+test("two Sessions bind sequentially and a denied target does not roll back the approved one", async () => {
+  await withDelegation(
+    async ({ screen, open, select, wait, creates, replies }) => {
+      await open()
+      await select("[ ] Native delegation")
+      await select("[ ] Second fixture")
+      await select("Tasks [off]")
+      await select("Expiry")
+      await select("15 minutes")
+      await select("Review binding")
+      await select("Bind")
+      await wait(() => screen.frame().includes("Permission required"))
+      screen.input.pressEscape()
+      await wait(() => replies.length === 1)
+      await wait(() => creates.length === 2 && screen.frame().includes("Permission required"))
+      screen.input.pressEnter()
+      await wait(() => replies.length === 2 && !screen.frame().includes("Permission required"))
+      expect(creates).toHaveLength(2)
+      expect(creates.map((item) => String(item.targetSessionID))).toEqual([sessionID, "ses_second_fixture"])
+      expect(creates[1].proposalID).not.toBe(creates[0].proposalID)
+      await open()
+      await wait(() => screen.frame().includes("Bound · Second fixture"))
+      expect(screen.frame()).toContain("[ ] Native delegation")
+      expect(creates).toHaveLength(2)
+    },
+    { secondTarget: true, height: 60 },
+  )
+}, 30000)
 
 test("closing or disconnecting during a status read cannot reopen obsolete UI", async () => {
   for (const disconnect of [false, true])
@@ -705,10 +843,10 @@ test("closing or disconnecting during a status read cannot reopen obsolete UI", 
       await opening
       if (disconnect) screen.events.disconnect()
       if (!disconnect) screen.input.pressEscape()
-      await wait(() => !screen.frame().includes("Coordinator delegation"))
+      await wait(() => !screen.frame().includes("Coordinator bindings"))
       gate.release()
       await screen.renderOnce()
-      expect(screen.frame()).not.toContain("Coordinator delegation")
+      expect(screen.frame()).not.toContain("Coordinator bindings")
       expect(creates).toEqual([])
     })
 }, 30000)
@@ -718,14 +856,14 @@ test("leaving the Session during preflight prevents dispatch and late dialog upd
     await open()
     await prepare()
     const gate = holdStatus()
-    await select("Request native approval")
+    await select("Bind")
     await gate.requested
     leaveSession()
-    await wait(() => !screen.frame().includes("Native delegation"))
+    await wait(() => !screen.frame().includes("ses_delegation_fixture"))
     gate.release()
     await screen.renderOnce()
     expect(creates).toEqual([])
-    expect(screen.frame()).not.toContain("Coordinator delegation")
+    expect(screen.frame()).not.toContain("Coordinator bindings")
     expect(screen.frame()).not.toContain("Delegation context changed")
   })
 }, 30000)

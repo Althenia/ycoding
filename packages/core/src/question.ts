@@ -13,6 +13,8 @@ import { EventRuntime } from "./event"
 import { SessionSchema } from "./session/schema"
 import { SessionAutonomy } from "./session/autonomy"
 import { SessionReviewFold } from "./session/review-fold"
+import { Hash } from "./util/hash"
+import { SessionEvent } from "./session/event"
 
 export const ID = Question.ID
 export type ID = typeof ID.Type
@@ -63,6 +65,7 @@ export type Outcome =
       readonly via?: "auto-answer" | "yolo"
       readonly confidence?: number
       readonly assessment?: Form.Assessment
+      readonly source?: Form.ReplySource
     }
   | { readonly status: "timed_out"; readonly seconds: number }
   | { readonly status: "deferred"; readonly itemID: SessionReviewFold.ID }
@@ -100,6 +103,18 @@ export interface AskInput {
   readonly tool?: Tool
 }
 
+export function fingerprint(request: Pick<Request, "sessionID" | "questions">) {
+  return Hash.json({ sessionID: request.sessionID, questions: request.questions })
+}
+
+export interface DelegatedReplyInput {
+  readonly requestID: ID
+  readonly answers: ReadonlyArray<Answer>
+  readonly fingerprint: string
+  readonly source: Form.DelegatedReplySource
+  readonly validate: (request: Request) => Effect.Effect<boolean>
+}
+
 export interface ReplyInput {
   readonly requestID: ID
   readonly answers: ReadonlyArray<Answer>
@@ -109,6 +124,7 @@ export interface Interface {
   readonly ask: (input: AskInput) => Effect.Effect<Outcome, RejectedError | SessionReviewFold.FullError>
   readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | InvalidAnswerError>
+  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, NotFoundError | InvalidAnswerError>
   readonly reject: (requestID: ID) => Effect.Effect<void, NotFoundError>
   readonly cancelPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
@@ -393,6 +409,30 @@ const layer = Layer.effect(
       ),
     )
 
+    const replyDelegated = Effect.fn("Question.replyDelegated")((input: DelegatedReplyInput) =>
+      exclusive(
+        Effect.gen(function* () {
+          const existing = pending.get(input.requestID)
+          if (!existing || fingerprint(existing.request) !== input.fingerprint || !(yield* input.validate(existing.request)))
+            return yield* new NotFoundError({ requestID: input.requestID })
+          const invalid = validateAnswers(existing.request.questions, input.answers)
+          if (invalid) return yield* new InvalidAnswerError({ requestID: input.requestID, message: invalid })
+          yield* events.publish(Event.Replied, {
+            sessionID: existing.request.sessionID,
+            requestID: existing.request.id,
+            answers: input.answers.map((answer) => [...answer]),
+          })
+          yield* events.publish(SessionEvent.DotsDecisionSettled, {
+            sessionID: existing.request.sessionID,
+            source: input.source,
+            target: { kind: "question", requestID: existing.request.id, fingerprint: input.fingerprint },
+          })
+          yield* Deferred.succeed(existing.deferred, { status: "answered", answers: input.answers, source: input.source })
+          pending.delete(input.requestID)
+        }),
+      ),
+    )
+
     const reject = Effect.fn("Question.reject")((requestID: ID) =>
       exclusive(
         Effect.gen(function* () {
@@ -426,7 +466,7 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request)
     })
 
-    return Service.of({ ask, deferPending, reply, reject, cancelPending, list })
+    return Service.of({ ask, deferPending, reply, replyDelegated, reject, cancelPending, list })
   }),
 )
 

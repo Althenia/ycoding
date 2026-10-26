@@ -3508,15 +3508,7 @@ export function make(options: ClientOptions) {
             {
               method: "POST",
               path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation`,
-              body: {
-                expectedAttachment: input["expectedAttachment"],
-                targetSessionID: input["targetSessionID"],
-                proposalID: input["proposalID"],
-                sourceExchangeID: input["sourceExchangeID"],
-                taskInputID: input["taskInputID"],
-                scope: input["scope"],
-                expiresAt: input["expiresAt"],
-              },
+              body: input["payload"],
               successStatus: 200,
               declaredStatuses: [400, 404, 401],
               empty: false,

@@ -9,6 +9,7 @@ import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { Database } from "@ycoding-ai/core/database/database"
 import { Project } from "@ycoding-ai/core/project"
@@ -928,4 +929,27 @@ describe("Form", () => {
       }),
     )
   })
+})
+
+describe("Form delegated settlement", () => {
+  const delegatedSource = { kind: "dots-delegation", anchorSessionID: SessionSchema.ID.make("ses_anchor"), delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" } as const
+  it.effect("settles with delegated source only on exact fingerprint and live validation", () =>
+    Effect.gen(function* () {
+      const service = yield* Form.Service
+      const events = yield* EventRuntime.Service
+      const receipts: unknown[] = []
+      const replied: unknown[] = []
+      const unsubscribe = yield* events.listen((event) => Effect.sync(() => { if (event.type === SessionEvent.DotsDecisionSettled.type) receipts.push(event.data); if (event.type === Form.Event.Replied.type) replied.push(event.data) }))
+      yield* Effect.addFinalizer(() => unsubscribe)
+      yield* service.create(input)
+      const snapshot = yield* service.snapshot(formID)
+      expect(snapshot?.state).toEqual({ status: "pending" })
+      expect((yield* service.replyDelegated({ id: formID, answer: { name: "Ada" }, fingerprint: "0".repeat(64), source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect((yield* service.state(formID)).status).toBe("pending")
+      yield* service.replyDelegated({ id: formID, answer: { name: "Ada" }, fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) })
+      const settled = yield* service.snapshot(formID)
+      expect(settled?.state).toEqual({ status: "answered", answer: { name: "Ada" } })
+      expect(replied).toEqual([{ id: formID, sessionID: input.sessionID, answer: { name: "Ada" }, source: delegatedSource }])
+      expect(receipts).toEqual([{ sessionID: input.sessionID, source: delegatedSource, target: { kind: "form", formID, fingerprint: snapshot!.fingerprint } }])
+    }))
 })

@@ -200,7 +200,7 @@ describe("remote command surface", () => {
   test("controls relay MCP on the same server state without enabling Remote", async () => {
     await withHome(async (root) => {
       let remote: "off" | "on" = "off"
-      let mcp: { state: "off" | "on" | "error"; message?: string; url?: string } = { state: "off" }
+      let mcp: { state: "off" | "on" | "error"; message?: string; url?: string; clientCapabilities?: Array<{ protocolVersion?: string; form?: boolean; observedAt: number }> } = { state: "off" }
       const url = "https://relay.example/api/mcp/devices/dev_fixture"
       const remoteWrites: boolean[] = []
       const mcpWrites: boolean[] = []
@@ -239,6 +239,7 @@ describe("remote command surface", () => {
         const idle = await run(env, ["remote", "mcp", "status", "--server", server.base])
         expect(idle.exitCode, idle.output).toBe(0)
         expect(idle.stdout).toContain("Relay MCP  off")
+        expect(idle.stdout).toContain("Client forms  unreported")
 
         remote = "on"
         const enabled = await run(env, ["remote", "mcp", "on", "--server", server.base])
@@ -252,6 +253,13 @@ describe("remote command surface", () => {
         expect(status.exitCode, status.output).toBe(0)
         expect(status.stdout).toContain("Relay MCP  on")
         expect(status.stdout).toContain(url)
+        for (const observation of [{ protocolVersion: "2026-07-28", form: false, observedAt: 0 }, { protocolVersion: "2026-07-28", form: true, observedAt: 1 }, { protocolVersion: "2025-11-25", form: true, observedAt: 2 }]) {
+          mcp = { ...mcp, clientCapabilities: [observation] }
+          const diagnostic = await run(env, ["remote", "mcp", "status", "--server", server.base])
+          expect(diagnostic.exitCode, diagnostic.output).toBe(0)
+          expect(diagnostic.stdout).toContain(`Client forms  ${observation.form && observation.protocolVersion === "2026-07-28" ? "supported" : "unsupported"}`)
+          expect(diagnostic.stdout).toContain(`observed ${observation.observedAt}`)
+        }
 
         const disabled = await run(env, ["remote", "mcp", "off", "--server", server.base])
         expect(disabled.exitCode, disabled.output).toBe(0)

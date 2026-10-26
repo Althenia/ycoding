@@ -4,6 +4,9 @@ import { Dots } from "../src/dots.js"
 import { Dots as RootDots } from "../src/index.js"
 import { SessionID } from "../src/session-id.js"
 import { SessionMessageID } from "../src/session-message-id.js"
+import { Form } from "../src/form.js"
+import { Permission } from "../src/permission.js"
+import { Question } from "../src/question.js"
 
 const target = { profile: "fixture-a", dotID: "dot_1", threadID: "thread_1", generation: "3", label: "Fixture Dot" }
 
@@ -29,6 +32,49 @@ describe("typed task delegation", () => {
     const decode = Schema.decodeUnknownSync(Dots.DelegationScope)
     for (const scope of [{ operations: ["continue"] }, { operations: ["presentation"], format: ["bullets"] }, { operations: ["continue", "presentation"], detail: ["concise", "standard", "detailed"] }] satisfies Dots.DelegationScope[]) expect(decode(scope)).toEqual(scope)
     for (const scope of [{ operations: [] }, { operations: ["approve"] }, { operations: ["presentation"] }, { operations: ["continue"], format: ["bullets"] }, { operations: ["presentation"], detail: [] }, { operations: ["presentation"], format: ["table"] }]) expect(() => decode(scope)).toThrow()
+  })
+})
+
+describe("session-basis delegated task and decision", () => {
+  const common = { exchangeID: "delegated_1", expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), channel: "task", delivery: "queue" } satisfies Pick<Dots.ExchangeCreate, "exchangeID" | "expectedAttachment" | "targetSessionID" | "channel" | "delivery">
+  const fingerprint = "f".repeat(64)
+  const taskExchange = { ...common, delegation: { id: "proposal_session", revision: 1 }, instruction: { operation: "task", text: "Inspect the synthetic module" } } satisfies Dots.ExchangeCreate
+  const decision = { ...common, delegation: { id: "proposal_session", revision: 1 }, instruction: { operation: "decision", target: { kind: "permission", requestID: Permission.ID.make("per_1"), fingerprint }, reply: "once" } } satisfies Dots.ExchangeCreate
+  const question = { ...common, delegation: { id: "proposal_session", revision: 1 }, instruction: { operation: "decision", target: { kind: "question", requestID: Question.ID.make("que_1"), fingerprint: "a".repeat(64) }, answers: [["main"]] } } satisfies Dots.ExchangeCreate
+  const form = { ...common, delegation: { id: "proposal_session", revision: 1 }, instruction: { operation: "decision", target: { kind: "form", formID: Form.ID.make("frm_1"), fingerprint: "b".repeat(64) }, answers: { approved: true } } } satisfies Dots.ExchangeCreate
+  test("accepts session scope and closed delegated instructions only", () => {
+    const scope = (value: unknown) => Schema.decodeUnknownSync(Dots.SessionDelegationScope)(value)
+    expect(scope({ operations: ["task"] })).toEqual({ operations: ["task"] })
+    expect(scope({ operations: ["task", "decision"] })).toEqual({ operations: ["task", "decision"] })
+    for (const invalid of [{ operations: [] }, { operations: ["decision"] }, { operations: ["continue"] }, { operations: ["task", "task"] }, { operations: ["task"], format: ["bullets"] }] as unknown[])
+      expect(() => scope(invalid)).toThrow()
+    const decode = (value: unknown) => Schema.decodeUnknownSync(Dots.ExchangeCreate)(value, { onExcessProperty: "error" })
+    expect(decode(taskExchange)).toEqual(taskExchange)
+    expect(decode(decision)).toEqual(decision)
+    expect(decode(question)).toEqual(question)
+    expect(decode(form)).toEqual(form)
+    for (const invalid of [
+      { ...taskExchange, taskInputID: "msg_native" },
+      { ...taskExchange, instruction: { operation: "task", text: "" } },
+      { ...taskExchange, instruction: { operation: "task", text: "x", files: [] } },
+      { ...decision, instruction: { operation: "decision", target: { kind: "permission", requestID: "per_1", fingerprint }, reply: "always" } },
+      { ...decision, instruction: { operation: "decision", target: { kind: "recovery", requestID: "rvw_1", fingerprint }, reply: "once" } },
+      { ...decision, instruction: { operation: "decision", target: { kind: "guardrail", requestID: "grq_1", fingerprint }, answers: {} } },
+      { ...question, instruction: { operation: "decision", target: { kind: "question", requestID: "frm_1", fingerprint: "a".repeat(64) }, answers: [["main"]] } },
+    ] as unknown[]) expect(() => decode(invalid)).toThrow()
+  })
+  test("session delegation create forbids taskInputID and routine operations", () => {
+    const decode = (value: unknown) => Schema.decodeUnknownSync(Dots.DelegationCreate)(value, { onExcessProperty: "error" })
+    const value = { expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), proposalID: "proposal_session", sourceExchangeID: "source_1", basis: "session", scope: { operations: ["task", "decision"] }, expiresAt: 1893456000000 } satisfies Dots.SessionDelegationCreate
+    expect(decode(value)).toEqual(value)
+    for (const invalid of [
+      { ...value, taskInputID: "msg_native" },
+      { ...value, scope: { operations: ["continue"] } },
+      { ...value, basis: "native_task" },
+    ] as unknown[]) expect(() => decode(invalid)).toThrow()
+    const routineValue = { expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), proposalID: "proposal_routine", sourceExchangeID: "source_1", taskInputID: SessionMessageID.ID.make("msg_native"), scope: { operations: ["continue"] }, expiresAt: 1893456000000 } satisfies Dots.DelegationCreate
+    expect(decode(routineValue)).toEqual(routineValue)
+    expect(() => decode({ ...routineValue, basis: "session" } as unknown)).toThrow()
   })
 })
 

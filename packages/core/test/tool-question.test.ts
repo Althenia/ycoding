@@ -264,4 +264,25 @@ describe("QuestionTool", () => {
       result: { type: "text", value: text }, output: { structured: { answers: [["Careful"]], assessment: modelFreeAssessment("auto") }, content: [{ type: "text", text }] },
     })
   }))
+
+  autonomous.effect("a delegated reply is attributed to the delegated external client, never the user", () => Effect.gen(function* () {
+    deny = false
+    decisionBehavior = () => Effect.die("Questions must not request judgments")
+    yield* seedSession
+    const forms = yield* Form.Service
+    const events = yield* EventRuntime.Service
+    const source = { kind: "dots-delegation", anchorSessionID: Session.ID.make("ses_anchor"), delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" } as const
+    const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
+      ? Effect.gen(function* () {
+          const form = Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form
+          yield* forms.replyDelegated({ id: form.id, answer: { q0: "Careful" }, fingerprint: Form.fingerprint(form), source, validate: () => Effect.succeed(true) })
+        }).pipe(Effect.orDie)
+      : Effect.void)
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const registry = yield* ToolRegistry.Service
+    const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "delegated-winner", name: "question", input: { questions: [plan] } } })
+    expect(settled.result.value).toContain("delegated external client answered")
+    expect(settled.result.value).not.toContain("User has answered")
+    expect(settled.output?.structured).toMatchObject({ answers: [["Careful"]], source })
+  }))
 })

@@ -1,6 +1,8 @@
 import type { CoordinationInfo, CoordinationParticipant, CoordinationUpdateInput } from "@ycoding-ai/client"
+import path from "path"
 import { createContext, createMemo, createSignal, onCleanup, onMount, useContext, type ParentProps } from "solid-js"
 import { useClient } from "./client"
+import { useTuiPaths } from "./runtime"
 import { useConfig } from "../config"
 import {
   externalNotificationAllowed,
@@ -46,6 +48,12 @@ function memberView(participant: CoordinationParticipant, role: ProjectMemberVie
   }
 }
 
+function absoluteDirectory(input: string, home: string) {
+  const expanded = input === "~" ? home : input.startsWith("~/") ? path.join(home, input.slice(2)) : input
+  if (!path.isAbsolute(expanded)) throw new Error("Choose an absolute directory")
+  return expanded
+}
+
 function projectView(info: CoordinationInfo): ProjectView {
   return {
     id: info.id,
@@ -64,6 +72,7 @@ function projectView(info: CoordinationInfo): ProjectView {
 function createCoordination() {
   const client = useClient()
   const config = useConfig()
+  const paths = useTuiPaths()
   const [projects, setProjects] = createSignal<ProjectView[]>()
   const [roots, setRoots] = createSignal<readonly RootSession[]>([])
   const [error, setError] = createSignal<string>()
@@ -181,7 +190,8 @@ function createCoordination() {
     })
     return created.id
   }
-  const createForProject = async (key: string, directory: string, title?: string) => {
+  const createForProject = async (key: string, input: string, title?: string) => {
+    const directory = absoluteDirectory(input, paths.home)
     const prior = creations.get(key)
     if (prior?.sessionID) return prior.sessionID
     if (prior)

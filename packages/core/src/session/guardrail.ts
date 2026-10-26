@@ -3,6 +3,7 @@ export * as SessionGuardrail from "./guardrail"
 import path from "path"
 import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { Form } from "@ycoding-ai/schema/form"
 import { Session } from "@ycoding-ai/schema/session"
 import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { Clock, Context, Deferred, Duration, Effect, Layer, Option, Schema } from "effect"
@@ -150,7 +151,18 @@ export interface ReviewPolicy {
   readonly decideHardReviews: boolean
 }
 
+export interface DelegatedReplyInput {
+  readonly sessionID: Session.ID
+  readonly requestID: Guardrail.RequestID
+  readonly reply: "once" | "reject"
+  readonly fingerprint: string
+  readonly source: Form.DelegatedReplySource
+  readonly validate: (request: Guardrail.Request) => Effect.Effect<boolean>
+}
+
 export interface Interface {
+  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, RequestNotFoundError | SessionErrors.NotFoundError>
+  readonly delegatedEligible: (input: { readonly sessionID: Session.ID; readonly requestID: Guardrail.RequestID; readonly fingerprint: string; readonly reply: "once" | "reject" }) => Effect.Effect<boolean, SessionErrors.NotFoundError>
   readonly reviewPolicy: ReviewPolicy
   readonly evaluate: (input: EvaluateInput) => Effect.Effect<Evaluation, SessionErrors.NotFoundError>
   readonly assert: (input: EvaluateInput) => Effect.Effect<Reservation, AssertError>
@@ -1054,6 +1066,49 @@ export const layer = Layer.effect(
         return yield* Effect.void
       })
 
+    const delegatedGate = (item: Pending, reply: "once" | "reject") =>
+      !item.decisionModel && item.request.standard && item.request.hardReview !== true && item.request.ruleIDs.every((rule) => rule.startsWith("standard.")) &&
+      (reply === "reject" || !rejections.has(`${item.request.sessionID}\0${requestFingerprint(item.request)}`))
+    const delegatedEligible = Effect.fn("SessionGuardrail.delegatedEligible")(function* (input: { readonly sessionID: Session.ID; readonly requestID: Guardrail.RequestID; readonly fingerprint: string; readonly reply: "once" | "reject" }) {
+      const rootSessionID = yield* root(input.sessionID)
+      return yield* withRootLock(rootSessionID, Effect.sync(() => {
+        const item = pending.get(input.requestID)
+        return item !== undefined && item.request.rootSessionID === rootSessionID && item.request.sessionID === input.sessionID &&
+          requestFingerprint(item.request) === input.fingerprint && delegatedGate(item, input.reply)
+      }))
+    })
+    const replyDelegated = Effect.fn("SessionGuardrail.replyDelegated")(function* (input: DelegatedReplyInput) {
+      if (!pending.has(input.requestID)) return yield* new RequestNotFoundError({ requestID: input.requestID })
+      const rootSessionID = yield* root(input.sessionID)
+      return yield* withRootLock(rootSessionID, Effect.gen(function* () {
+        const item = pending.get(input.requestID)
+        if (!item || rootSessionID !== item.request.rootSessionID || item.request.sessionID !== input.sessionID ||
+          requestFingerprint(item.request) !== input.fingerprint || !delegatedGate(item, input.reply) || !(yield* input.validate(item.request)))
+          return yield* new RequestNotFoundError({ requestID: input.requestID })
+        removePendingUnlocked(input.requestID)
+        yield* events.publish(Guardrail.Event.Replied, {
+          rootSessionID: item.request.rootSessionID,
+          sessionID: item.request.sessionID,
+          requestID: item.request.id,
+          reply: input.reply,
+        }).pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
+        yield* events.publish(SessionEvent.DotsDecisionSettled, {
+          sessionID: item.request.sessionID,
+          source: input.source,
+          target: { kind: "guardrail", requestID: item.request.id, fingerprint: input.fingerprint },
+          reply: input.reply,
+        }).pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
+        if (input.reply === "reject") {
+          yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id, message: "The delegated external client declined this request." }))
+          return yield* Effect.void
+        }
+        approvals.set(item.request.rootSessionID, (approvals.get(item.request.rootSessionID) ?? 0) + 1)
+        advanceUnlocked(item.request.rootSessionID)
+        yield* Deferred.succeed(item.deferred, undefined)
+        return yield* Effect.void
+      }))
+    })
+
     const requestSnapshot = Effect.fn("SessionGuardrail.requestSnapshot")(function* (
       sessionID: Session.ID,
       requestID: Guardrail.RequestID,
@@ -1556,7 +1611,7 @@ export const layer = Layer.effect(
       withSnapshot(sessionID, Effect.succeed),
     )
 
-    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), requestSnapshot, reconsider, escalate, requestSnapshots, deferPending, forSession, status, snapshot, withSnapshot })
+    return Service.of({ reviewPolicy, evaluate, assert, reply: (input) => reply(input), replyDelegated, delegatedEligible, requestSnapshot, reconsider, escalate, requestSnapshots, deferPending, forSession, status, snapshot, withSnapshot })
   }),
 )
 

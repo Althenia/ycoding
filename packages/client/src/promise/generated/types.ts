@@ -416,6 +416,20 @@ export type DotsRoutineInstruction =
       preferences: { format?: "prose" | "bullets"; detail?: "concise" | "standard" | "detailed" }
     }
 
+export type FormDelegatedReplySource = {
+  kind: "dots-delegation"
+  anchorSessionID: string
+  delegationID: string
+  revision: number
+  exchangeID: string
+}
+
+export type DotsDecisionTarget =
+  | { kind: "permission"; requestID: string; fingerprint: string }
+  | { kind: "guardrail"; requestID: string; fingerprint: string }
+  | { kind: "form"; formID: string; fingerprint: string }
+  | { kind: "question"; requestID: string; fingerprint: string }
+
 export type DotsReportEnvelope = {
   coordinator: { ownerID: string; deviceID: string; clientID: string }
   scope: { epoch: string; grantID: string }
@@ -667,15 +681,6 @@ export type QuestionTool = { messageID: string; callID: string }
 
 export type FormMetadata1 = { [x: string]: any }
 
-export type FormReplySource = {
-  kind: "coordinator"
-  coordinatorSessionID: string
-  groupID?: string
-  via?: "auto-answer" | "yolo" | "coordination"
-  confidence?: number
-  rationale?: string
-}
-
 export type ProviderUsagePaceMilestone = "almost-out" | "cutting-it-close" | "will-run-out"
 
 export type SessionStatus =
@@ -837,6 +842,8 @@ export type CoordinationPausedReason = "interrupted" | "restart"
 export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
 
 export type McpEventsPrincipal = { ownerID: string; deviceID: string; clientID: string; grantID: string; epoch: string }
+
+export type DotsSessionDelegationScope = { operations: ["task" | "decision", ...Array<"task" | "decision">] }
 
 export type DotsState = "disconnected" | "connecting" | "connected" | "failed"
 
@@ -2170,27 +2177,32 @@ export type SessionPendingSyntheticMessage = {
   delivery: "steer" | "queue"
 }
 
-export type SessionDotsExchangeCreated = {
+export type FormReplySource =
+  | {
+      kind: "coordinator"
+      coordinatorSessionID: string
+      groupID?: string
+      via?: "auto-answer" | "yolo" | "coordination"
+      confidence?: number
+      rationale?: string
+    }
+  | FormDelegatedReplySource
+
+export type SessionDotsDecisionSettled = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "session.dots.exchange.created"
+  type: "session.dots.decision.settled"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: {
-    exchangeID: string
-    sessionID: string
-    targetSessionID: string
-    inputID: string
-    expectedAttachment: DotsTarget
-    accountDigest: string
-    fingerprint: string
-    source: McpEventsRequestContext
-    grantID: string
-    routine?: { delegation: { id: string; revision: number }; taskInputID: string; instruction: DotsRoutineInstruction }
-    scope: { rootSessionID: string; groupID?: string; ownerSessionID?: string }
-  }
+  data: { sessionID: string; source: FormDelegatedReplySource; target: DotsDecisionTarget; reply?: "once" | "reject" }
+}
+
+export type DotsDecisionOutcome = {
+  target: DotsDecisionTarget
+  state: "pending" | "settled" | "stale" | "unknown"
+  reply?: "once" | "reject"
 }
 
 export type SessionDotsReportRecorded = {
@@ -2212,29 +2224,6 @@ export type SessionDotsReportRecorded = {
 }
 
 export type DotsExchangeOutput = { deliveryID: string; messageID: string; text: string; envelope: DotsReportEnvelope }
-
-export type DotsCoordinationContext =
-  | {
-      state: "enabled"
-      generation: number
-      tool: "dots_report"
-      envelope: DotsTaskEnvelope
-      routine?: {
-        delegation: { id: string; revision: number }
-        taskInputID: string
-        instruction: DotsRoutineInstruction
-      }
-    }
-  | {
-      state: "disabled"
-      generation: number
-      reason: "capability_disabled" | "no_task" | "task_settled" | "unavailable" | "tool_unavailable"
-      routine?: {
-        delegation: { id: string; revision: number }
-        taskInputID: string
-        instruction: DotsRoutineInstruction
-      }
-    }
 
 export type SessionShellStarted = {
   id: string
@@ -2676,18 +2665,14 @@ export type McpEventsEventDefinition = {
   payloadSchema: McpEventsJsonSchemaObject
 }
 
-export type DotsDelegationInfo = {
+export type DotsSessionDelegationInfo = {
   id: string
   revision: number
   sourceExchangeID: string
   targetSessionID: string
-  taskInputID: string
+  basis: "session"
   principal: McpEventsPrincipal
-  scope: {
-    operations: ["continue" | "presentation", ...Array<"continue" | "presentation">]
-    format?: ["prose" | "bullets", ...Array<"prose" | "bullets">]
-    detail?: ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-  }
+  scope: DotsSessionDelegationScope
   expiresAt: number
   active: boolean
 }
@@ -3233,6 +3218,25 @@ export type SessionReviewDecision =
   | { kind: "recovery"; choice: "continue" | "stop" }
   | { kind: "question" | "subagent_question"; dismissed: true }
 
+export type DotsDelegatedInstruction =
+  | { operation: "task"; text: string }
+  | {
+      operation: "decision"
+      target: { kind: "permission"; requestID: string; fingerprint: string }
+      reply: "once" | "reject"
+    }
+  | {
+      operation: "decision"
+      target: { kind: "guardrail"; requestID: string; fingerprint: string }
+      reply: "once" | "reject"
+    }
+  | { operation: "decision"; target: { kind: "form"; formID: string; fingerprint: string }; answers: FormAnswer }
+  | {
+      operation: "decision"
+      target: { kind: "question"; requestID: string; fingerprint: string }
+      answers: Array<QuestionAnswer>
+    }
+
 export type FormState =
   | { status: "pending" }
   | { status: "answered"; answer: FormAnswer }
@@ -3248,34 +3252,6 @@ export type FormReplied = {
   type: "form.replied"
   location?: LocationRef
   data: { id: string; sessionID: string; answer: FormAnswer; source?: FormReplySource }
-}
-
-export type DotsExchange = {
-  envelope: DotsTaskEnvelope
-  exchangeID: string
-  sessionID: string
-  targetSessionID: string
-  inputID: string
-  channel: "task"
-  state: "pending" | "running" | "completed" | "failed" | "unknown"
-  progress: Array<DotsExchangeOutput>
-  result?: DotsExchangeOutput
-}
-
-export type SessionContextObserved = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.context.observed"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    sessionID: string
-    source: "session-state" | "team-view" | "step-limit" | "dots"
-    text: string
-    dots?: DotsCoordinationContext
-  }
 }
 
 export type ModelInfo = {
@@ -3491,11 +3467,23 @@ export type IsolatedBrowserObservation = {
 
 export type McpEventsListResult = { events: Array<McpEventsEventDefinition> }
 
-export type DotsDelegationStatus = {
-  sources: Array<{ sourceExchangeID: string; principal: McpEventsPrincipal }>
-  tasks: Array<{ taskInputID: string; text: string }>
-  grants: Array<DotsDelegationInfo>
-}
+export type DotsDelegationInfo =
+  | {
+      id: string
+      revision: number
+      sourceExchangeID: string
+      targetSessionID: string
+      taskInputID: string
+      principal: McpEventsPrincipal
+      scope: {
+        operations: ["continue" | "presentation", ...Array<"continue" | "presentation">]
+        format?: ["prose" | "bullets", ...Array<"prose" | "bullets">]
+        detail?: ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
+      }
+      expiresAt: number
+      active: boolean
+    }
+  | DotsSessionDelegationInfo
 
 export type SessionGenerationSpeedHistory = {
   model?: ModelRef
@@ -3697,6 +3685,11 @@ export type SessionReviewDecided = {
   data: { sessionID: string; itemID: SessionReviewID; decision: SessionReviewDecision }
 }
 
+export type DotsDelegatedReceipt = {
+  delegation: { id: string; revision: number }
+  instruction: DotsDelegatedInstruction
+}
+
 export type IntegrationMethod =
   | IntegrationOAuthMethod
   | IntegrationCommandMethod
@@ -3808,6 +3801,12 @@ export type ProjectArtifactPromotionPreview = {
   expiresAt: ProjectArtifactTimestampMillis
 }
 
+export type DotsDelegationStatus = {
+  sources: Array<{ sourceExchangeID: string; principal: McpEventsPrincipal }>
+  tasks: Array<{ taskInputID: string; text: string }>
+  grants: Array<DotsDelegationInfo>
+}
+
 export type SessionCacheDiagnostics = {
   model: ModelRef
   contextBreakdown?: SessionContextBreakdown
@@ -3896,6 +3895,65 @@ export type FormInfo1 = {
   fields: FormFields
   coordinationEscalation?: CoordinationEscalation
   assessment?: FormAssessment
+}
+
+export type DotsDecisionCandidate = {
+  target: DotsDecisionTarget
+  action?: string
+  resources?: Array<string>
+  ruleIDs?: Array<string>
+  title?: string
+  fields?: FormFields
+  questions?: Array<QuestionInfo>
+}
+
+export type DotsCoordinationContext =
+  | {
+      state: "enabled"
+      generation: number
+      tool: "dots_report"
+      envelope: DotsTaskEnvelope
+      routine?: {
+        delegation: { id: string; revision: number }
+        taskInputID: string
+        instruction: DotsRoutineInstruction
+      }
+      delegated?: DotsDelegatedReceipt
+    }
+  | {
+      state: "disabled"
+      generation: number
+      reason: "capability_disabled" | "no_task" | "task_settled" | "unavailable" | "tool_unavailable"
+      routine?: {
+        delegation: { id: string; revision: number }
+        taskInputID: string
+        instruction: DotsRoutineInstruction
+      }
+      delegated?: DotsDelegatedReceipt
+    }
+
+export type SessionDotsExchangeCreated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.dots.exchange.created"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    exchangeID: string
+    sessionID: string
+    targetSessionID: string
+    inputID: string
+    expectedAttachment: DotsTarget
+    accountDigest: string
+    fingerprint: string
+    source: McpEventsRequestContext
+    grantID: string
+    routine?: { delegation: { id: string; revision: number }; taskInputID: string; instruction: DotsRoutineInstruction }
+    delegated?: DotsDelegatedReceipt
+    scope: { rootSessionID: string; groupID?: string; ownerSessionID?: string }
+  }
 }
 
 export type IntegrationInfo = {
@@ -4045,6 +4103,36 @@ export type FormCreated = {
   type: "form.created"
   location?: LocationRef
   data: { form: FormInfo1 }
+}
+
+export type DotsExchange = {
+  envelope: DotsTaskEnvelope
+  exchangeID: string
+  sessionID: string
+  targetSessionID: string
+  inputID: string
+  channel: "task"
+  state: "pending" | "running" | "completed" | "failed" | "unknown"
+  progress: Array<DotsExchangeOutput>
+  result?: DotsExchangeOutput
+  decisions?: Array<DotsDecisionCandidate>
+  decisionOutcome?: DotsDecisionOutcome
+}
+
+export type SessionContextObserved = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.context.observed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    source: "session-state" | "team-view" | "step-limit" | "dots"
+    text: string
+    dots?: DotsCoordinationContext
+  }
 }
 
 export type ProjectArtifactApiListItem = ProjectArtifactArtifactSummary | ProjectArtifactApiTrashSummary
@@ -4428,7 +4516,23 @@ export type SessionLogItem =
           taskInputID: string
           instruction: DotsRoutineInstruction
         }
+        delegated?: DotsDelegatedReceipt
         scope: { rootSessionID: string; groupID?: string; ownerSessionID?: string }
+      }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.dots.decision.settled"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: {
+        sessionID: string
+        source: FormDelegatedReplySource
+        target: DotsDecisionTarget
+        reply?: "once" | "reject"
       }
     }
   | {
@@ -5001,6 +5105,7 @@ export type ServerEvent =
   | SessionInputAdmitted
   | SessionInputConsumed
   | SessionDotsExchangeCreated
+  | SessionDotsDecisionSettled
   | SessionDotsInstructionRejected
   | SessionDotsReportRecorded
   | SessionExecutionStarted
@@ -11132,13 +11237,35 @@ export type RemoteSetOutput = {
 }["data"]
 
 export type RemoteMcpGetOutput = {
-  data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined; url?: string | undefined }
+  data: {
+    state: "off" | "connecting" | "on" | "error"
+    message?: string
+    url?: string
+    clientCapabilities?: Array<{
+      protocolVersion?: string
+      elicitation?: boolean
+      form?: boolean
+      url?: boolean
+      observedAt: number
+    }>
+  }
 }["data"]
 
 export type RemoteMcpSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
 
 export type RemoteMcpSetOutput = {
-  data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined; url?: string | undefined }
+  data: {
+    state: "off" | "connecting" | "on" | "error"
+    message?: string
+    url?: string
+    clientCapabilities?: Array<{
+      protocolVersion?: string
+      elicitation?: boolean
+      form?: boolean
+      url?: boolean
+      observedAt: number
+    }>
+  }
 }["data"]
 
 export type KeepAwakeGetOutput = { data: KeepAwakeStatus }["data"]
@@ -11455,6 +11582,56 @@ export type DotsExchangeCreateInput = {
           readonly epoch: string
         }
       }
+    | {
+        readonly exchangeID: string
+        readonly expectedAttachment: {
+          readonly profile: string
+          readonly dotID: string
+          readonly threadID: string
+          readonly generation: string
+          readonly label: string
+        }
+        readonly targetSessionID: string
+        readonly channel: "task"
+        readonly delivery: "steer" | "queue"
+        readonly delegation: { readonly id: string; readonly revision: number }
+        readonly instruction:
+          | { readonly operation: "task"; readonly text: string }
+          | {
+              readonly operation: "decision"
+              readonly target: { readonly kind: "permission"; readonly requestID: string; readonly fingerprint: string }
+              readonly reply: "once" | "reject"
+            }
+          | {
+              readonly operation: "decision"
+              readonly target: { readonly kind: "guardrail"; readonly requestID: string; readonly fingerprint: string }
+              readonly reply: "once" | "reject"
+            }
+          | {
+              readonly operation: "decision"
+              readonly target: { readonly kind: "form"; readonly formID: string; readonly fingerprint: string }
+              readonly answers: {
+                readonly [x: string]:
+                  | string
+                  | number
+                  | "Infinity"
+                  | "-Infinity"
+                  | "NaN"
+                  | boolean
+                  | ReadonlyArray<string>
+              }
+            }
+          | {
+              readonly operation: "decision"
+              readonly target: { readonly kind: "question"; readonly requestID: string; readonly fingerprint: string }
+              readonly answers: ReadonlyArray<ReadonlyArray<string>>
+            }
+        readonly remoteSource: {
+          readonly requestID: string
+          readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
+          readonly epoch: string
+        }
+      }
 }
 
 export type DotsExchangeCreateOutput = { data: DotsExchange }["data"]
@@ -11487,139 +11664,45 @@ export type DotsDelegationStatusOutput = { data: DotsDelegationStatus }["data"]
 
 export type DotsDelegationCreateInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly expectedAttachment: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-    readonly proposalID: string
-    readonly sourceExchangeID: string
-    readonly taskInputID: string
-    readonly scope: {
-      readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-      readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-      readonly detail?: readonly ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-    }
-    readonly expiresAt: number
-  }["expectedAttachment"]
-  readonly targetSessionID: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-    readonly proposalID: string
-    readonly sourceExchangeID: string
-    readonly taskInputID: string
-    readonly scope: {
-      readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-      readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-      readonly detail?: readonly ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-    }
-    readonly expiresAt: number
-  }["targetSessionID"]
-  readonly proposalID: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-    readonly proposalID: string
-    readonly sourceExchangeID: string
-    readonly taskInputID: string
-    readonly scope: {
-      readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-      readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-      readonly detail?: readonly ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-    }
-    readonly expiresAt: number
-  }["proposalID"]
-  readonly sourceExchangeID: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-    readonly proposalID: string
-    readonly sourceExchangeID: string
-    readonly taskInputID: string
-    readonly scope: {
-      readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-      readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-      readonly detail?: readonly ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-    }
-    readonly expiresAt: number
-  }["sourceExchangeID"]
-  readonly taskInputID: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-    readonly proposalID: string
-    readonly sourceExchangeID: string
-    readonly taskInputID: string
-    readonly scope: {
-      readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-      readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-      readonly detail?: readonly ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-    }
-    readonly expiresAt: number
-  }["taskInputID"]
-  readonly scope: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-    readonly proposalID: string
-    readonly sourceExchangeID: string
-    readonly taskInputID: string
-    readonly scope: {
-      readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-      readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-      readonly detail?: readonly ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-    }
-    readonly expiresAt: number
-  }["scope"]
-  readonly expiresAt: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-    readonly proposalID: string
-    readonly sourceExchangeID: string
-    readonly taskInputID: string
-    readonly scope: {
-      readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-      readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-      readonly detail?: readonly ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-    }
-    readonly expiresAt: number
-  }["expiresAt"]
+  readonly payload:
+    | {
+        readonly expectedAttachment: {
+          readonly profile: string
+          readonly dotID: string
+          readonly threadID: string
+          readonly generation: string
+          readonly label: string
+        }
+        readonly targetSessionID: string
+        readonly proposalID: string
+        readonly sourceExchangeID: string
+        readonly taskInputID: string
+        readonly scope: {
+          readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
+          readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
+          readonly detail?: readonly [
+            "concise" | "standard" | "detailed",
+            ...Array<"concise" | "standard" | "detailed">,
+          ]
+        }
+        readonly expiresAt: number
+      }
+    | {
+        readonly expectedAttachment: {
+          readonly profile: string
+          readonly dotID: string
+          readonly threadID: string
+          readonly generation: string
+          readonly label: string
+        }
+        readonly targetSessionID: string
+        readonly proposalID: string
+        readonly sourceExchangeID: string
+        readonly basis: "session"
+        readonly taskInputID?: never
+        readonly scope: { readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">] }
+        readonly expiresAt: number
+      }
 }
 
 export type DotsDelegationCreateOutput = { data: DotsDelegationInfo }["data"]

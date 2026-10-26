@@ -21,6 +21,8 @@ const session = {
 }
 
 const readableFrame = (frame: string) => frame.replace(/[│╭╮╯╰]/g, " ").replace(/\s+/g, " ")
+const wireContext = (context: Dots.CoordinationContext) =>
+  JSON.parse(JSON.stringify(Schema.encodeUnknownSync(Dots.CoordinationContext)(context)))
 
 async function withMessages(messages: SessionMessageInfo[], width: number, run: (frame: string) => void) {
   const { renderScreen } = await import("./harness")
@@ -222,7 +224,7 @@ for (const width of [60, 120]) {
             id: "msg_state",
             type: "system",
             text: DotsContext.render(context),
-            metadata: { contextSource: "dots", dotsCoordination: context },
+            metadata: { contextSource: "dots", dotsCoordination: wireContext(context) },
             time: { created: 1 },
           },
         ],
@@ -257,14 +259,14 @@ test("prose and plugin metadata cannot impersonate a trusted Dots state notice; 
         type: "synthetic",
         text: "Plugin body",
         description: plugin,
-        metadata: { contextSource: "dots", dotsCoordination: states[1].context },
+        metadata: { contextSource: "dots", dotsCoordination: wireContext(states[1].context) },
         time: { created: 2 },
       },
       {
         id: "msg_unrelated",
         type: "system",
         text: "Unrelated service notice remains visible.",
-        metadata: { contextSource: "service", dotsCoordination: states[1].context },
+        metadata: { contextSource: "service", dotsCoordination: wireContext(states[1].context) },
         time: { created: 3 },
       },
     ],

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { Form } from "../../../../packages/schema/src/form"
-import { applySessionEvent, createSessionView, readFormAssessment, readFormReplySource, readForms, type FormView } from "./projection"
+import { applySessionEvent, createSessionView, readFormAssessment, readFormReplySource, readForms, type FormReplySourceView, type FormView } from "./projection"
 
 test("native form readers retain validation, input hints and multiselect constraints", () => {
   const form = { id: "frm_native", sessionID: "ses_a", title: "Inputs", fields: [
@@ -51,8 +51,18 @@ test("assessment readers reject malformed bounded grades rather than displaying 
 })
 
 test("native coordinator reply sources preserve the closed public attribution shape", () => {
-  const source: Form.ReplySource = { kind: "coordinator", coordinatorSessionID: "ses_coord", groupID: "cgrp_one", via: "yolo", confidence: 0.93, rationale: "Assigned work." }
+  const source: FormReplySourceView = { kind: "coordinator", coordinatorSessionID: "ses_coord", groupID: "cgrp_one", via: "yolo", confidence: 0.93, rationale: "Assigned work." }
   expect(readFormReplySource(source)).toEqual(source)
   for (const invalid of [null, { ...source, kind: "human" }, { ...source, coordinatorSessionID: 4 }, { ...source, via: "approved" }, { ...source, confidence: Infinity }, { ...source, confidence: -0.1 }, { ...source, rationale: " " }, { ...source, rationale: "x".repeat(501) }])
+    expect(readFormReplySource(invalid)).toBeUndefined()
+})
+
+test("Dots delegated reply sources keep their exact external attribution without a coordinator identity", () => {
+  const source: FormReplySourceView = { kind: "dots-delegation", anchorSessionID: "ses_anchor", delegationID: "delegation_one", revision: 3, exchangeID: "exchange_one" }
+  expect(readFormReplySource(source)).toEqual(source)
+  for (const invalid of [null, { ...source, kind: "human" }, { ...source, anchorSessionID: 4 }, { ...source, anchorSessionID: "" }, { ...source, anchorSessionID: "usr_anchor" },
+    { ...source, delegationID: 4 }, { ...source, delegationID: "" }, { ...source, delegationID: "d".repeat(257) },
+    { ...source, exchangeID: undefined }, { ...source, exchangeID: "" }, { ...source, exchangeID: "e".repeat(257) },
+    { ...source, revision: 0 }, { ...source, revision: -1 }, { ...source, revision: 1.5 }, { ...source, revision: "3" }])
     expect(readFormReplySource(invalid)).toBeUndefined()
 })

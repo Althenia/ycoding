@@ -1116,7 +1116,7 @@ const layer = Layer.effectDiscard(
         eq(SessionPendingTable.id, event.data.inputID), eq(SessionPendingTable.session_id, event.data.sessionID),
         eq(SessionPendingTable.type, "user"), sql`json_extract(${SessionPendingTable.data}, '$.metadata.inputOrigin') = 'plugin'`,
         sql`json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.exchangeID') = ${event.data.exchangeID}`,
-        sql`json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.routine.delegation.id') = ${event.data.delegationID}`,
+        sql`(json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.routine.delegation.id') = ${event.data.delegationID} OR json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.delegated.delegation.id') = ${event.data.delegationID})`,
         sql`json_extract(${SessionPendingTable.data}, '$.metadata.dotsExchange.sessionID') = ${event.data.anchorSessionID}`,
       )).run().pipe(Effect.orDie, Effect.asVoid),
     )

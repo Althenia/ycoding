@@ -11,6 +11,7 @@ import { DecisionChoice } from "./decision-choice"
 import { makeLocationNode } from "./effect/app-node"
 import { EventRuntime } from "./event"
 import { SessionAutonomy } from "./session/autonomy"
+import { SessionEvent } from "./session/event"
 import { CoordinationEscalation } from "./session/coordination-escalation"
 import { SessionMessage } from "./session/message"
 import { SessionReviewFold } from "./session/review-fold"
@@ -47,6 +48,9 @@ export type Reply = typeof Reply.Type
 
 export const ReplySource = Form.ReplySource
 export type ReplySource = typeof ReplySource.Type
+
+export const DelegatedReplySource = Form.DelegatedReplySource
+export type DelegatedReplySource = typeof DelegatedReplySource.Type
 
 export function fingerprint(form: Pick<Info, "sessionID" | "title" | "fields">) {
   return Hash.json({ sessionID: form.sessionID, title: form.title, fields: form.fields })
@@ -133,7 +137,16 @@ export interface ListInput {
   readonly sessionID?: Form.Info["sessionID"]
 }
 
+export interface DelegatedReplyInput {
+  readonly id: ID
+  readonly answer: Answer
+  readonly fingerprint: string
+  readonly source: DelegatedReplySource
+  readonly validate: (form: Info) => Effect.Effect<boolean>
+}
+
 export interface Interface {
+  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
   readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
   readonly ask: (
     input: CreateInput,
@@ -211,6 +224,7 @@ export const layer = Layer.effect(
       entry: Entry,
       state: Exclude<TerminalState, { readonly status: "timed_out" }>,
       source?: ReplySource,
+      beforeSettle?: Effect.Effect<void>,
     ) {
       const id = entry.form.id
       const sessionID = entry.form.sessionID
@@ -227,6 +241,7 @@ export const layer = Layer.effect(
         }),
       } }
       yield* Cache.set(forms, id, { form, deferred: entry.deferred, epoch: entry.epoch, state, ...(source === undefined ? {} : { source }) })
+      if (beforeSettle) yield* beforeSettle
       yield* Deferred.succeed(entry.deferred, state)
     })
 
@@ -646,6 +661,23 @@ export const layer = Layer.effect(
       ),
     )
 
+    const replyDelegated = Effect.fn("Form.replyDelegated")((input: DelegatedReplyInput) =>
+      exclusive(
+        Effect.gen(function* () {
+          const entry = yield* find(input.id)
+          if (entry.state.status !== "pending" || fingerprint(entry.form) !== input.fingerprint || entry.form.fields.some((field) => field.type === "external") || !(yield* input.validate(entry.form)))
+            return yield* new NotFoundError({ id: input.id })
+          const invalid = validateAnswer(entry.form, input.answer)
+          if (invalid) return yield* new InvalidAnswerError({ id: input.id, message: invalid })
+          yield* complete(entry, { status: "answered", answer: input.answer }, input.source, events.publish(SessionEvent.DotsDecisionSettled, {
+            sessionID: SessionSchema.ID.make(entry.form.sessionID),
+            source: input.source,
+            target: { kind: "form", formID: entry.form.id, fingerprint: input.fingerprint },
+          }).pipe(Effect.asVoid))
+        }),
+      ),
+    )
+
     const cancel = Effect.fn("Form.cancel")((id: ID) =>
       exclusive(
         Effect.gen(function* () {
@@ -668,7 +700,7 @@ export const layer = Layer.effect(
       ),
     )
 
-    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, escalate, reply, cancel, cancelPending })
+    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, escalate, reply, replyDelegated, cancel, cancelPending })
   }),
 )
 

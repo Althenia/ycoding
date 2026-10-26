@@ -205,7 +205,7 @@ const forecast = {
 
 const specs = {
   "session.dots.exchange.create": {
-    description: "Admit external information or a closed routine directive for one separately native-approved task. A routine directive requires an active native human delegation; it cannot supply arbitrary text or decisions. Stable exchange IDs reconcile retries.",
+    description: "Admit external information, a closed routine directive for one separately native-approved task, or a delegated task/decision under an active native session delegation. Delegated text is plugin-origin information from the authenticated client, not the user. Decisions settle only eligible ordinary pending requests from that delegation's own tasks by exact fingerprint; read candidates from the task exchange. Stable exchange IDs reconcile retries.",
     input: { oneOf: [
       object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery, text: text(32768) }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text"]),
       object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery,
@@ -213,10 +213,20 @@ const specs = {
         instruction: { oneOf: [object({ operation: { const: "continue" } }, ["operation"]),
           object({ operation: { const: "presentation" }, preferences: { ...object({ format: { enum: ["prose", "bullets"] }, detail: { enum: ["concise", "standard", "detailed"] } }), minProperties: 1 } }, ["operation", "preferences"]) ] },
       }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "taskInputID", "instruction"]),
+      object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery,
+        delegation: object({ id: text(256), revision: { type: "integer", minimum: 1 } }, ["id", "revision"]),
+        instruction: { oneOf: [
+          object({ operation: { const: "task" }, text: text(32768) }, ["operation", "text"]),
+          object({ operation: { const: "decision" }, target: object({ kind: { const: "permission" }, requestID: prefixed("^per[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), reply: choice("once", "reject") }, ["operation", "target", "reply"]),
+          object({ operation: { const: "decision" }, target: object({ kind: { const: "guardrail" }, requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), reply: choice("once", "reject") }, ["operation", "target", "reply"]),
+          object({ operation: { const: "decision" }, target: object({ kind: { const: "form" }, formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "formID", "fingerprint"]), answers: { type: "object", maxProperties: 64, additionalProperties: { anyOf: [{ type: "string", maxLength: 8192 }, { type: "number" }, { type: "boolean" }, { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } }] } } }, ["operation", "target", "answers"]),
+          object({ operation: { const: "decision" }, target: object({ kind: { const: "question" }, requestID: prefixed("^que[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), answers: { type: "array", maxItems: 64, items: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } } } }, ["operation", "target", "answers"]),
+        ] },
+      }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "instruction"]),
     ] },
   },
   "session.dots.exchange.read": {
-    description: "Read only the authorized exchange's correlated progress and result. Does not retry work or transmit room messages.",
+    description: "Read only the authorized exchange's correlated progress and result. Delegated task exchanges also list eligible pending native decisions from that exact task with fingerprints for a delegated decision exchange. Does not retry work or transmit room messages.",
     input: object({ exchangeID: text(256) }, ["exchangeID"]),
   },
   "provider.auth.list": {
@@ -581,11 +591,29 @@ const standardTools: readonly Tool[] = (Object.entries(specs) as [ToolOperation,
   }
 })
 
-export const tools: readonly Tool[] = standardTools.flatMap((tool) =>
+const decisionForm: Tool = {
+  name: "session_dots_decision_form",
+  operation: "session.dots.exchange.create",
+  description: "Collect an authenticated client response for one already-listed native decision under an existing native-approved delegation. Standard MCP forms only; this is never human approval. The native request remains pending unless the form is accepted and natively validated. Read taskExchangeID first; use a new exchangeID for this decision.",
+  inputSchema: object({ sessionID, input: object({
+    exchangeID: text(256), taskExchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery,
+    delegation: object({ id: text(256), revision: { type: "integer", minimum: 1 } }, ["id", "revision"]),
+    instruction: object({ operation: { const: "decision" }, target: { oneOf: [
+      object({ kind: { const: "permission" }, requestID: prefixed("^per[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+      object({ kind: { const: "guardrail" }, requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+      object({ kind: { const: "form" }, formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "formID", "fingerprint"]),
+      object({ kind: { const: "question" }, requestID: prefixed("^que[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+    ] } }, ["operation", "target"]),
+  }, ["exchangeID", "taskExchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "instruction"]) }, ["sessionID", "input"]),
+  mutation: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+}
+
+export const tools: readonly Tool[] = [decisionForm, ...standardTools.flatMap((tool) =>
   tool.operation === "session.createInDirectory"
     ? [...RemoteMcpApps.tools.map((app) => ({ ...app, mutation: !app.annotations.readOnlyHint })), tool]
     : [tool],
-)
+)]
 
 function inputSchema(operation: ToolOperation, spec: Spec) {
   if (operation === "usage.forecast") return forecast

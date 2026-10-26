@@ -1,4 +1,4 @@
-import { createStore } from "solid-js/store"
+import { createStore, unwrap } from "solid-js/store"
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js"
 import { useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { BoxRenderable, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
@@ -19,9 +19,10 @@ import { ProjectEscalation } from "./project-escalation"
 import { toolDisplayName } from "@ycoding-ai/client/tool-display"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { Schema } from "effect"
-import { DotsDelegationReview } from "../../component/dialog-dots-delegation"
+import { DotsDelegationReview, DotsSessionDelegationReview } from "../../component/dialog-dots-delegation"
 
 const decodeDelegationReview = Schema.decodeUnknownOption(Dots.DelegationReview)
+const decodeSessionDelegationReview = Schema.decodeUnknownOption(Dots.SessionDelegationReview)
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -173,7 +174,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
       <Match when={store.stage === "permission"}>
         {(() => {
           const delegation = props.request.action === "dots_delegate"
-          const review = delegation ? decodeDelegationReview(props.request.metadata) : undefined
+          const review = delegation ? decodeDelegationReview(structuredClone(unwrap(props.request.metadata))) : undefined
+          const sessionReview = delegation && review?._tag !== "Some" ? decodeSessionDelegationReview(structuredClone(unwrap(props.request.metadata))) : undefined
+          const reviewed = review?._tag === "Some" || sessionReview?._tag === "Some"
           const current = permissionPresentation(
             {
               action: props.request.action,
@@ -187,6 +190,8 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           const presentationBody = delegation ? (
             review?._tag === "Some" ? (
               <DotsDelegationReview value={review.value} />
+            ) : sessionReview?._tag === "Some" ? (
+              <DotsSessionDelegationReview value={sessionReview.value} />
             ) : (
               <box paddingLeft={3} paddingRight={3}>
                 <text fg={theme.text.feedback.warning.default} wrapMode="word">
@@ -248,7 +253,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   <box paddingLeft={3} paddingRight={3}>
                     <text fg={theme.text.feedback.info.default}>
                       {delegation
-                        ? "Delegate routine instructions for an existing task"
+                        ? sessionReview?._tag === "Some"
+                          ? "Bind coordinator to this Session"
+                          : "Delegate routine instructions for an existing task"
                         : props.request.action === "shell"
                           ? "bash wants to run"
                           : current.title}
@@ -258,7 +265,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 </box>
               }
               options={
-                delegation && review?._tag !== "Some"
+                delegation && !reviewed
                   ? { reject: "Deny" }
                   : !delegation && props.request.save?.length
                     ? {

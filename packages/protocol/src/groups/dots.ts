@@ -13,6 +13,7 @@ export function makeDotsGroup<Id extends HttpApiMiddleware.AnyId, Service>(middl
         payload: Schema.Union([
           Schema.Struct({ ...Dots.ExchangeCreate.members[0].fields, remoteSource: McpEvents.RequestContext }),
           Schema.Struct({ ...Dots.ExchangeCreate.members[1].fields, remoteSource: McpEvents.RequestContext }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+          Schema.Struct({ ...Dots.ExchangeCreate.members[2].fields, remoteSource: McpEvents.RequestContext }).annotate({ parseOptions: { onExcessProperty: "error" } }),
         ]),
         success: Schema.Struct({ data: Dots.Exchange }),
         error: [InvalidRequestError, SessionNotFoundError],

@@ -131,6 +131,8 @@ describe("SkillTool", () => {
                 ),
               ask: () => Effect.die("unused"),
               reply: () => Effect.die("unused"),
+              replyDelegated: () => Effect.die("unused"),
+              delegatedEligible: () => Effect.die("unused"),
               snapshot: () => Effect.die("unused"),
               snapshots: () => Effect.die("unused"),
               reconsider: () => Effect.die("unused"),

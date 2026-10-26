@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
+import { SessionID } from "../src/session-id.js"
 import { Form } from "../src/form.js"
 
 describe("Form reply source attribution", () => {
@@ -45,5 +46,21 @@ describe("Form question assessments", () => {
   })
   for (const evidence of ["", " ", "x".repeat(501)]) test(`rejects invalid grade evidence of length ${evidence.length}`, () => {
     expect(() => Schema.decodeUnknownSync(Form.OptionGrade)({ choice: "a", confidence: 0.9, evidence })).toThrow()
+  })
+})
+
+describe("delegated reply source", () => {
+  test("decodes the existing coordinator member and the dots-delegation member distinctly", () => {
+    const decode = (value: unknown) => Schema.decodeUnknownSync(Form.ReplySource)(value, { onExcessProperty: "error" })
+    const coordinator = { kind: "coordinator", coordinatorSessionID: "ses_coord", groupID: "cgrp_1", via: "coordination", rationale: "Assigned in the task." } satisfies Form.ReplySource
+    expect(decode(coordinator)).toEqual(coordinator)
+    const delegated = { kind: "dots-delegation", anchorSessionID: SessionID.make("ses_anchor"), delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" } satisfies Form.DelegatedReplySource
+    expect(Schema.decodeUnknownSync(Form.DelegatedReplySource)(delegated, { onExcessProperty: "error" })).toEqual(delegated)
+    expect(decode(delegated)).toEqual(delegated)
+    for (const invalid of [
+      { ...delegated, revision: 0 }, { ...delegated, delegationID: "" }, { ...delegated, exchangeID: "" },
+      { ...delegated, coordinatorSessionID: "ses_coord" }, { ...coordinator, delegationID: "proposal_1" },
+      { kind: "human", anchorSessionID: "ses_anchor", delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" },
+    ] as unknown[]) expect(() => decode(invalid)).toThrow()
   })
 })

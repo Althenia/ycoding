@@ -35,6 +35,7 @@ import { Guardrail } from "./guardrail.js"
 import { SessionReview } from "./session-review.js"
 import { DecisionFailure } from "./decision-failure.js"
 import { Dots } from "./dots.js"
+import { Form } from "./form.js"
 
 export { FileAttachment }
 
@@ -457,6 +458,18 @@ export const DotsInstructionRejected = Event.durable({
   },
 })
 export type DotsInstructionRejected = typeof DotsInstructionRejected.Type
+
+export const DotsDecisionSettled = Event.durable({
+  type: "session.dots.decision.settled",
+  ...options,
+  schema: {
+    ...Base,
+    source: Form.DelegatedReplySource,
+    target: Dots.DecisionTarget,
+    reply: Schema.Literals(["once", "reject"]).pipe(optional),
+  },
+})
+export type DotsDecisionSettled = typeof DotsDecisionSettled.Type
 
 export const DotsReportRecorded = Event.durable({
   type: "session.dots.report.recorded",
@@ -1042,6 +1055,7 @@ export const Definitions = Event.inventory(
   InputAdmitted,
   InputConsumed,
   DotsExchangeCreated,
+  DotsDecisionSettled,
   DotsInstructionRejected,
   DotsReportRecorded,
   Execution.Started,

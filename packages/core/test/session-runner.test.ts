@@ -478,6 +478,8 @@ const permission = Layer.succeed(
     assert: () => Effect.die("unused"),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
+    replyDelegated: () => Effect.die("unused"),
+    delegatedEligible: () => Effect.die("unused"),
     snapshot: () => Effect.die("unused"),
     snapshots: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),
@@ -7589,6 +7591,49 @@ describe("SessionRunnerLLM", () => {
             },
           ],
         },
+      ])
+    }),
+  )
+
+  it.effect("returns a delegated permission decline to the model and continues", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const registry = yield* ToolRegistry.Service
+      yield* registry.register(
+        {
+          delegated_declined: Tool.make({
+            description: "Fail because the delegated external client declined approval",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            execute: () =>
+              Effect.die(new Permission.DeclinedError({
+                source: { kind: "dots-delegation", anchorSessionID: sessionID, delegationID: "runner_delegation", revision: 1, exchangeID: "runner_decision" },
+              })),
+          }),
+        },
+        { codemode: false },
+      )
+      yield* admit(session, "Call delegated declined")
+
+      responses = [reply.tool("call-delegated-declined", "delegated_declined", {}), reply.text("Fixture response", "text-fixture")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Call delegated declined" },
+        sessionStateNotice,
+        {
+          type: "assistant",
+          content: [
+            {
+              type: "tool",
+              id: "call-delegated-declined",
+              state: { status: "error", error: { message: "The delegated external client declined this permission under a native-approved Dots delegation, not the user." } },
+            },
+          ],
+        },
+        { type: "assistant", finish: "stop" },
       ])
     }),
   )

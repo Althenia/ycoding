@@ -275,6 +275,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.profile.bound": () => Effect.void,
       "session.dots.exchange.created": () => Effect.void,
       "session.dots.instruction.rejected": () => Effect.void,
+      "session.dots.decision.settled": () => Effect.void,
       "session.dots.report.recorded": () => Effect.void,
       "session.guardrail.approved": () => Effect.void,
       "session.guardrail.decided": () => Effect.void,

@@ -977,10 +977,10 @@ async function run(input: OperationInput) {
       if (recipient === undefined) throw new OperationError("session_not_allowed", "The exchange target is not available in this device's Session inventory")
       if (recipient.parentID !== undefined && recipient.agent !== "btw")
         throw new OperationError("subagent_read_only", "Managed subagents accept input only from their parent Session")
-      return { data: await input.local.dotsExchangeCreate(sessionID, location, validated.input, input.appContext) }
+      return { data: await input.local.dotsExchangeCreate(sessionID, location, validated.input, input.appContext, input.signal) }
     case "dots.exchange.read":
       if (input.appContext === undefined) return unknownOperation()
-      return { data: await input.local.dotsExchangeRead(sessionID, location, validated.input, input.appContext) }
+      return { data: await input.local.dotsExchangeRead(sessionID, location, validated.input, input.appContext, input.signal) }
     case "dots.targets": return { data: await input.local.dotsTargets(sessionID, location, validated.profile) }
     case "dots.status": return { data: await input.local.dotsStatus(sessionID, location) }
     case "dots.bind": return { data: await input.local.dotsBind(sessionID, location, validated.target) }

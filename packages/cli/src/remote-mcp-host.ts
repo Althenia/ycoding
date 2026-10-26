@@ -12,6 +12,7 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
   let preference: RemoteMcpPreference = { enabled: false, epoch: crypto.randomUUID() }
   let pendingRevocation = false
   let current: Remote.McpStatus = off()
+  let clientCapabilities: Remote.McpStatus["clientCapabilities"]
   let transport: { url: string; send: (state: RemoteMcpPreference) => Promise<void> } | undefined
   let laneHold = false
   let generation = 0
@@ -21,6 +22,7 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
   let transition = Promise.resolve()
 
   function revoke() {
+    clientCapabilities = undefined
     admitted = false
     authorization.abort()
   }
@@ -81,8 +83,9 @@ export async function createRemoteMcpHost(input: { file: string; remote: () => s
   }
 
   return {
-    status: (): Remote.McpStatus => current.state === "on" && laneHold ? { ...current, message: laneHoldMessage } : current,
+    status: (): Remote.McpStatus => ({ ...current, ...(current.state === "on" && laneHold ? { message: laneHoldMessage } : {}), ...(clientCapabilities === undefined ? {} : { clientCapabilities }) }),
     setLaneHold: (held: boolean) => { laneHold = held },
+    setClientCapabilities: (value: Remote.McpStatus["clientCapabilities"]) => { clientCapabilities = admitted ? value : undefined },
     advertisement: () => preference,
     authorizationSignal: () => authorization.signal,
     allowed: (epoch: string) => admitted && preference.enabled && preference.epoch === epoch && transport !== undefined,

@@ -31,6 +31,21 @@ test("routine delegation uses the existing exchange operation and never exposes 
   for (const operation of ["status", "create", "revoke"]) expect(parse(`session.dots.delegation.${operation}`, {}).ok).toBe(false)
 })
 
+test("session-basis delegated exchanges accept only closed task and decision instructions", () => {
+  const base = { exchangeID: "delegated", expectedAttachment: target, targetSessionID: "ses_target", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 } }
+  expect(parse("session.dots.exchange.create", { ...base, instruction: { operation: "task", text: "Inspect" } }).ok).toBe(true)
+  expect(parse("session.dots.exchange.create", { ...base, instruction: { operation: "decision", target: { kind: "permission", requestID: "per_1", fingerprint: "f".repeat(64) }, reply: "once" } }).ok).toBe(true)
+  expect(parse("session.dots.exchange.create", { ...base, instruction: { operation: "decision", target: { kind: "question", requestID: "que_1", fingerprint: "a".repeat(64) }, answers: [["main"]] } }).ok).toBe(true)
+  for (const invalid of [
+    { ...base, taskInputID: "msg_human", instruction: { operation: "task", text: "Inspect" } },
+    { ...base, instruction: { operation: "task", text: "" } },
+    { ...base, instruction: { operation: "decision", target: { kind: "permission", requestID: "per_1", fingerprint: "f".repeat(64) }, reply: "always" } },
+    { ...base, instruction: { operation: "decision", target: { kind: "recovery", requestID: "rvw_1", fingerprint: "f".repeat(64) }, reply: "once" } },
+    { ...base, instruction: { operation: "decision", target: { kind: "form", formID: "frm_1", fingerprint: "short" }, answers: {} } },
+    { ...base, instruction: { operation: "execute", command: "synthetic" } },
+  ]) expect(parse("session.dots.exchange.create", invalid).ok).toBe(false)
+})
+
 test("typed exchanges reject caller provenance, missing recipients and non-task channels", () => {
   const input = { exchangeID: "exchange_1", expectedAttachment: target, targetSessionID: "ses_target", channel: "task", delivery: "queue", text: "Synthetic task" }
   expect(parse("session.dots.exchange.create", input).ok).toBe(true)

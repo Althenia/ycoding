@@ -487,6 +487,54 @@ test("creating a Project with a new Master in a chosen directory, then adding an
   }
 }, 60_000)
 
+test("a relative Project directory shows an absolute-directory correction without a Session creation request and ~ then creates the Project", async () => {
+  const { screen, server, router } = await mountCoordination()
+  try {
+    router().navigate({ type: "projects", sessionID: leadID })
+    await waitForFrame(screen, "preview")
+    screen.input.pressKey("n")
+    await waitForFrame(screen, "NEW PROJECT")
+    await until(screen, () => editing(screen), "Name editor")
+    await screen.input.typeText("Dots")
+    screen.input.pressEnter()
+    await settle(screen)
+    screen.input.pressArrow("right")
+    await settle(screen)
+    screen.input.pressArrow("down")
+    screen.input.pressEnter()
+    await until(screen, () => editing(screen), "Directory editor")
+    await screen.input.typeText("work/dots")
+    screen.input.pressEnter()
+    await settle(screen)
+    screen.input.pressKey("c")
+    await waitForFrame(screen, "Failed to create project: Choose an absolute directory")
+    expect(screen.frame()).not.toContain("outcome unknown")
+    expect(screen.frame()).toContain("work/dots")
+    expect(server.state.created).toBe(0)
+    expect(server.state.writes).toEqual([])
+
+    screen.input.pressEnter()
+    await until(screen, () => editing(screen), "Directory editor")
+    for (let i = 0; i < "work/dots".length; i++) screen.input.pressBackspace()
+    await screen.input.typeText("~/work/dots")
+    screen.input.pressEnter()
+    await settle(screen)
+    screen.input.pressKey("c")
+    await waitForFrame(screen, "◇ Master")
+    expect(server.state.created).toBe(1)
+    expect(server.state.writes.map((write) => [write.method, write.path, write.body] as const).slice(0, 2)).toEqual([
+      [
+        "POST",
+        "/api/session",
+        { location: { directory: `${process.env.YCODING_TEST_HOME}/work/dots` }, title: "Dots" },
+      ],
+      ["POST", "/api/coordination", { name: "Dots", masterSessionID: "ses_new00000001", memberSessionIDs: [] }],
+    ])
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 const runningMaster = (width: number) =>
   mountCoordination({
     width,

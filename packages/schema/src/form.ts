@@ -6,6 +6,7 @@ import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
 import { NonNegativeInt, optional, PositiveInt, statics } from "./schema.js"
 import { SessionReviewID } from "./session-review-id.js"
+import { SessionID } from "./session-id.js"
 
 const IDSchema = Schema.String.check(Schema.isStartsWith("frm_")).pipe(Schema.brand("Form.ID"))
 
@@ -187,15 +188,27 @@ export const Reply = Schema.Struct({
 }).annotate({ identifier: "Form.Reply" })
 export interface Reply extends Schema.Schema.Type<typeof Reply> {}
 
-export const ReplySource = Schema.Struct({
-  kind: Schema.Literal("coordinator"),
-  coordinatorSessionID: Schema.String,
-  groupID: Schema.String.pipe(optional),
-  via: Schema.Literals(["auto-answer", "yolo", "coordination"]).pipe(optional),
-  confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
-  rationale: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)).pipe(optional),
-}).annotate({ identifier: "Form.ReplySource" })
-export interface ReplySource extends Schema.Schema.Type<typeof ReplySource> {}
+export const DelegatedReplySource = Schema.Struct({
+  kind: Schema.Literal("dots-delegation"),
+  anchorSessionID: SessionID,
+  delegationID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+  revision: PositiveInt,
+  exchangeID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+}).annotate({ identifier: "Form.DelegatedReplySource" })
+export interface DelegatedReplySource extends Schema.Schema.Type<typeof DelegatedReplySource> {}
+
+export const ReplySource = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("coordinator"),
+    coordinatorSessionID: Schema.String,
+    groupID: Schema.String.pipe(optional),
+    via: Schema.Literals(["auto-answer", "yolo", "coordination"]).pipe(optional),
+    confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
+    rationale: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)).pipe(optional),
+  }),
+  DelegatedReplySource,
+]).annotate({ identifier: "Form.ReplySource" })
+export type ReplySource = typeof ReplySource.Type
 
 const Created = ephemeral({ type: "form.created", schema: { form: Info } })
 const Replied = ephemeral({

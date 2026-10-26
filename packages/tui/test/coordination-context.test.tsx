@@ -17,6 +17,7 @@ import {
   notesID,
   scratchID,
 } from "./fixture/coordination-backend"
+import { ProjectCreationError } from "../src/util/coordination"
 import { createApi, createEventStream, createFetch } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
@@ -210,6 +211,66 @@ test("a new master takes an explicit title over the Project name", async () => {
     await coordination().service.create({ name: "Infra move", master: { directory: "/x", title: "Ops lead" } })
     expect(server.state.writes[0]!.body).toEqual({ location: { directory: "/x" }, title: "Ops lead" })
     expect(server.state.writes.some((write) => write.path.endsWith("/rename"))).toBe(false)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a new master directory beginning with ~ resolves against the TUI home before the Session is created", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await coordination().service.create({ name: "Home project", master: { directory: "~/Workspace/app" } })
+    await coordination().service.create({ name: "Bare home", master: { directory: "~" } })
+    expect(server.state.writes.filter((write) => write.path === "/api/session").map((write) => write.body)).toEqual([
+      { location: { directory: "/tmp/ycoding/home/Workspace/app" }, title: "Home project" },
+      { location: { directory: "/tmp/ycoding/home" }, title: "Bare home" },
+    ])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a relative directory is rejected before Session creation and a corrected directory then creates once", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    const input = { name: "Relative project", master: { directory: "Workspace/app" } }
+    const rejected = await coordination()
+      .service.create(input)
+      .catch((cause: unknown) => cause)
+    expect(rejected).toBeInstanceOf(Error)
+    expect(rejected).not.toBeInstanceOf(ProjectCreationError)
+    expect(rejected).toMatchObject({ message: "Choose an absolute directory" })
+    await expect(coordination().service.create(input)).rejects.toThrow("Choose an absolute directory")
+    expect(server.state.writes).toEqual([])
+
+    const masterID = await coordination().service.create({
+      name: "Relative project",
+      master: { directory: "/tmp/ycoding/home/Workspace/app" },
+    })
+    expect(masterID).toStartWith("ses_new")
+    expect(server.state.created).toBe(1)
+    expect(server.state.writes.map((write) => write.path)).toEqual(["/api/session", "/api/coordination"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a new member directory resolves ~ and rejects a relative path before Session creation", async () => {
+  const server = backend()
+  const { app, coordination } = await mount(server)
+  try {
+    await expect(coordination().service.newMember(groupID, "Workspace/new", "Fresh")).rejects.toThrow(
+      "Choose an absolute directory",
+    )
+    expect(server.state.writes).toEqual([])
+    const created = await coordination().service.newMember(groupID, "~/Workspace/new", "Fresh")
+    expect(server.state.writes[0]).toMatchObject({
+      path: "/api/session",
+      body: { location: { directory: "/tmp/ycoding/home/Workspace/new" }, title: "Fresh" },
+    })
+    expect(server.state.projects.find((project) => project.id === groupID)?.memberSessionIDs).toContain(created)
   } finally {
     app.renderer.destroy()
   }

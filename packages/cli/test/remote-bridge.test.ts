@@ -187,6 +187,7 @@ test("MCP event authority uses the current connector credential and cancels on d
   const host: RemoteMcpHost = {
     status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
     setLaneHold: () => {},
+    setClientCapabilities: () => {},
     advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
     allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
     authorizationSignal: () => authority.signal,
@@ -236,6 +237,7 @@ describe("MCP Events relay authorization budget", () => {
     const host: RemoteMcpHost = {
       status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
       setLaneHold: () => {},
+      setClientCapabilities: () => {},
       advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
       allowed: (epoch) => !state.authority.signal.aborted && epoch === "epoch_test",
       authorizationSignal: () => state.authority.signal,
@@ -457,6 +459,7 @@ test("connector reconnect discards registered apps without renewing old access",
   const host: RemoteMcpHost = {
     status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
     setLaneHold: () => {},
+    setClientCapabilities: () => {},
     advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
     allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
     authorizationSignal: () => authority.signal,
@@ -498,6 +501,49 @@ test("connector reconnect discards registered apps without renewing old access",
   }
 })
 
+test("connector reconnect retires MRTR tokens and observations while preserving uncertain exchange holds", async () => {
+  let authority = new AbortController()
+  const observations: unknown[] = []
+  const holds: boolean[] = []
+  const host: RemoteMcpHost = {
+    status: () => ({ state: "on" }), setLaneHold: (held) => holds.push(held), setClientCapabilities: (value) => observations.push(value),
+    advertisement: () => ({ enabled: true, epoch: "epoch_test" }), allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
+    authorizationSignal: () => authority.signal, attach: async () => { authority = new AbortController() }, detach: () => authority.abort(), set: async () => ({ state: "off" }), settled: async () => {},
+  }
+  const principal = { ownerID: "owner_fixture", deviceID: "dev_test", clientID: "client_fixture" }
+  const target = { kind: "permission", requestID: "per_fixture", fingerprint: "f".repeat(64) }
+  const expectedAttachment = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "V" }
+  const source = { sessionID: "ses_1", targetSessionID: "ses_1", exchangeID: "source_task", inputID: "msg_fixture", channel: "task", state: "running", progress: [], decisions: [{ target }], envelope: { coordinator: principal, scope: { epoch: "epoch_test", grantID: "grant_fixture" }, exchangeID: "source_task", messageID: "msg_fixture", targetSessionID: "ses_1", origin: "plugin", kind: "task" } }
+  const fixture = harness({ sessions: [entry, second], mcp: { host, resource: "https://relay.example/api/mcp/devices/dev_test", deviceID: "dev_test", home: "/home/synthetic" }, results: { dotsExchangeRead: source, dotsExchangeCreate: new LocalFailure("transport", "Synthetic unknown admission") } })
+  await fixture.bridge.connect()
+  const connection = fixture.records[0]
+  const call = async (id: string, name: string, args: unknown, extra: Record<string, unknown> = {}) => {
+    connection.deliver({ type: "request", id, operation: "mcp.request", input: { epoch: "epoch_test", principal,
+      headers: { "content-type": "application/json", accept: "application/json", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": name },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args, _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": { elicitation: {} } }, ...extra } }),
+    } })
+    const response = await waitFor(() => connection.sent.map((frame) => JSON.parse(frame)).find((frame) => frame.type === "response" && frame.id === id))
+    expect(response.ok).toBe(true)
+    return JSON.parse(response.value.body)
+  }
+  try {
+    const args = { sessionID: "ses_1", input: { exchangeID: "decision", taskExchangeID: "source_task", expectedAttachment, targetSessionID: "ses_1", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, instruction: { operation: "decision", target } } }
+    const round = (await call("mint", "session_dots_decision_form", args)).result
+    expect(round.resultType).toBe("input_required")
+    expect(observations.at(-1)).toEqual([{ protocolVersion: "2026-07-28", elicitation: true, form: true, url: false, observedAt: 1000 }])
+    expect((await call("uncertain", "session_dots_exchange_create", { sessionID: "ses_2", input: { exchangeID: "uncertain", expectedAttachment, targetSessionID: "ses_2", channel: "task", delivery: "queue", text: "Synthetic task" } })).result.isError).toBe(true)
+    expect(holds).toEqual([true])
+    connection.input.onClose(1006)
+    await waitFor(() => observations.at(-1) === undefined ? true : undefined)
+    connection.input.onOpen()
+    expect((await call("stale", "session_dots_decision_form", args, { requestState: round.requestState, inputResponses: { decision: { action: "accept", content: { reply: "once" } } } })).error.code).toBe(-32602)
+    expect(holds).toEqual([true])
+    expect((await call("held", "session_interrupt", { sessionID: "ses_2" })).result.isError).toBe(true)
+    expect(fixture.calls.filter((call) => call.method === "dotsExchangeCreate")).toHaveLength(1)
+    expect(fixture.calls.filter((call) => call.method === "interrupt")).toHaveLength(0)
+  } finally { await fixture.bridge.close() }
+})
+
 describe("registered app authorization failures", () => {
   type Answer = (action: string) => Promise<Response>
   const granted: Answer = async (action) => Response.json(action === "capabilities"
@@ -525,6 +571,7 @@ describe("registered app authorization failures", () => {
     const host: RemoteMcpHost = {
       status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
       setLaneHold: () => {},
+      setClientCapabilities: () => {},
       advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
       allowed: (epoch) => epoch === "epoch_test",
       authorizationSignal: () => authority.signal,
@@ -611,6 +658,7 @@ describe("relay MCP mutation lanes", () => {
     const host: RemoteMcpHost = {
       status: () => ({ state: "on", url: "https://relay.example/api/mcp/devices/dev_test" }),
       setLaneHold: (held) => { laneHolds.push(held) },
+      setClientCapabilities: () => {},
       advertisement: () => ({ enabled: true, epoch: "epoch_test" }),
       allowed: (epoch) => !authority.signal.aborted && epoch === "epoch_test",
       authorizationSignal: () => authority.signal,
@@ -853,6 +901,7 @@ test("relay MCP state is acknowledged only for the current enable epoch", async 
   const host: RemoteMcpHost = {
     status: () => ({ state: "off" }),
     setLaneHold: () => {},
+    setClientCapabilities: () => {},
     advertisement: () => ({ enabled: false, epoch: "epoch_test" }),
     allowed: () => false,
     authorizationSignal: () => disabledSignal,

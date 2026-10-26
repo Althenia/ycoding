@@ -7,8 +7,41 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.2 Projects, Dots delegation, child model selection and graded questions first", () => {
+  test("lists v0.11.3 delegated decision forms and multi-Session Dots bindings first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.3", date: "2026-10-26", tags: ["Added", "Changed", "Fixed"] })
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "session_dots_decision_form",
+      "MCP 2026-07-28 form",
+      "decision scope",
+      "URL-only or unknown-only",
+      "never human approval",
+      "leave the native request pending",
+      "single-use",
+      "five minutes",
+      "requireHuman",
+      "Always grants stay human-only",
+      "no defaults",
+      "clientCapabilities",
+      "unreported, not unsupported",
+      "Bind several Sessions",
+      "Nothing is preselected",
+      "denied Session does not undo an approved one",
+      "exactly the displayed grant",
+      "never replayed",
+      "external-client source",
+      "keyboard-selected option",
+      "direct child",
+      "leading ~",
+      "Multiline free-text",
+    ])
+      expect(text.toLowerCase()).toContain(fragment.toLowerCase())
+    expect(after("0.11.3")?.version).toBe("0.11.2")
+  })
+
+  test("retains v0.11.2 Projects, Dots delegation, child model selection and graded questions", () => {
+    const entry = byVersion("0.11.2")
     expect(entry).toMatchObject({ version: "0.11.2", date: "2026-10-25", tags: ["Changed", "Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of [
@@ -1714,7 +1747,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 47)).toEqual([
+    expect(versions.slice(0, 48)).toEqual([
+      "0.11.3",
       "0.11.2",
       "0.11.1",
       "0.11.0",

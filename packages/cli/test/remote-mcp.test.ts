@@ -6,6 +6,7 @@ import { LocalFailure, type LocalServer } from "../src/remote-local"
 import { createSessionRegistry, createSubscriptions, successFrames } from "../src/remote-operations"
 import { createRemoteMcp, toolResult } from "../src/remote-mcp"
 import { RemoteMcpSchemas } from "../src/remote-mcp-schemas"
+import { RemoteMcpForms } from "../src/remote-mcp-forms"
 
 const resource = "https://relay.example.com/api/mcp/devices/dev_1"
 const context = {
@@ -20,6 +21,7 @@ const meta = {
 }
 
 const expectedTools = [
+  "session_dots_decision_form",
   "session_dots_exchange_create",
   "session_dots_exchange_read",
   "provider_auth_list",
@@ -173,6 +175,7 @@ async function fixture(
   calls.length = 0
   const state = { allowed: true, now: 1000 }
   const holds: boolean[] = []
+  const observations: unknown[] = []
   const subscriptions = createSubscriptions()
   const create = () => {
     const created = createRemoteMcp({
@@ -183,6 +186,7 @@ async function fixture(
       allowed: (epoch) => state.allowed && epoch === context.epoch,
       now: () => state.now,
       onLaneHold: (held) => holds.push(held),
+      onCapabilities: (value) => observations.push(value),
     })
     closers.push(() => created.close())
     return created
@@ -224,8 +228,244 @@ async function fixture(
       }
     ).result
   }
-  return { mcp, calls, state, request, tool, run, results, holds, restart }
+  return { mcp, calls, state, request, tool, run, results, holds, restart, observations }
 }
+
+describe("delegated MRTR forms", () => {
+  const target = { kind: "permission", requestID: "per_fixture", fingerprint: "f".repeat(64) }
+  const input = { exchangeID: "form_decision", taskExchangeID: "source_task", expectedAttachment: { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "V" }, targetSessionID: "ses_1", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, instruction: { operation: "decision", target } }
+  const envelope = { coordinator: context.principal, scope: { epoch: context.epoch, grantID: "grant_fixture" }, exchangeID: "source_task", messageID: "msg_fixture", targetSessionID: "ses_1", origin: "plugin", kind: "task" }
+  const exchange = { sessionID: "ses_1", targetSessionID: "ses_1", exchangeID: "source_task", inputID: "msg_fixture", channel: "task", state: "running", envelope, progress: [] }
+  const capabilities = { elicitation: {} }
+  async function setup(candidate: unknown = { target, action: "edit", resources: ["src/synthetic.ts"] }) {
+    const f = await fixture({ dotsExchangeRead: { ...exchange, decisions: [candidate] }, dotsExchangeCreate: { ...exchange, exchangeID: "form_decision", decisionOutcome: { target, state: "settled", reply: "once" } } })
+    const call = async (extra: Record<string, unknown> = {}, args: Record<string, unknown> = { sessionID: "ses_1", input }, caps: unknown = capabilities, principal = context, signal?: AbortSignal) => {
+      const response = await f.mcp.fetch(new Request(resource, {
+        method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-method": "tools/call", "mcp-name": "session_dots_decision_form", "mcp-protocol-version": "2026-07-28" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "session_dots_decision_form", arguments: args, _meta: { ...meta, "io.modelcontextprotocol/clientCapabilities": caps }, ...extra } }), ...(signal ? { signal } : {}),
+      }), principal)
+      return response.json()
+    }
+    return { ...f, call }
+  }
+  test("MRTR standard form capability matrix never borrows another request's declaration", async () => {
+    const f = await setup()
+    for (const [caps, parent, form, url, supported] of [
+      [{}, "absent", "absent", "absent", false],
+      [{ elicitation: null }, "malformed", "malformed", "malformed", false],
+      [{ elicitation: false }, "malformed", "malformed", "malformed", false],
+      [{ elicitation: true }, "malformed", "malformed", "malformed", false],
+      [{ elicitation: { form: null } }, "declared-object", "malformed", "absent", false],
+      [{ elicitation: { form: false } }, "declared-object", "malformed", "absent", false],
+      [{ elicitation: { url: {} } }, "declared-object", "absent", "declared-object", false],
+      [{ elicitation: { unknown: {} } }, "declared-object", "absent", "absent", false],
+      [{ extensions: { "openai/elicitation": { form: {} } } }, "absent", "absent", "absent", false],
+      [{ elicitation: {} }, "declared-object", "implied-by-empty-object", "absent", true],
+      [{ elicitation: { form: {} } }, "declared-object", "declared-object", "absent", true],
+    ] as const) {
+      expect(RemoteMcpForms.capabilities({ ...meta, "io.modelcontextprotocol/clientCapabilities": caps })).toEqual({ protocolVersion: "2026-07-28", elicitation: parent, form, url })
+      const value = await f.call({}, undefined, caps)
+      if (supported) expect(value.result).toMatchObject({ resultType: "input_required", requestState: expect.any(String) })
+      if (!supported) expect(value.result?.isError === true || value.error !== undefined).toBe(true)
+    }
+    expect((await f.call({}, undefined, {})).result.isError).toBe(true)
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(0)
+  })
+  test("MRTR malformed arguments and protocol disagreement issue no form state", async () => {
+    const f = await setup()
+    const malformed = await f.call({}, { sessionID: "ses_1", input: { ...input, extra: true } })
+    expect(malformed.result.isError).toBe(true)
+    expect(malformed.result.requestState).toBeUndefined()
+    const protocol = await f.call({ _meta: { ...meta, "io.modelcontextprotocol/protocolVersion": "2025-11-25", "io.modelcontextprotocol/clientCapabilities": capabilities } })
+    expect(protocol.error).toBeDefined()
+    expect(f.calls.filter((c) => c.method === "dotsExchangeRead")).toHaveLength(0)
+  })
+  test("MRTR accepted client reply dispatches once, preserves native rejection, and consumes opaque state", async () => {
+    for (const reply of ["once", "reject"]) {
+      const f = await setup()
+      const first = (await f.call()).result
+      expect(first).toMatchObject({ resultType: "input_required", inputRequests: { decision: { method: "elicitation/create", params: { mode: "form" } } } })
+      const result = await f.call({ requestState: first.requestState, inputResponses: { decision: { action: "accept", content: { reply } } } })
+      expect(result.result.isError).toBeUndefined()
+      const create = f.calls.filter((c) => c.method === "dotsExchangeCreate")
+      expect(create).toHaveLength(1)
+      expect(create[0]?.args).toContainEqual(expect.objectContaining({ instruction: { operation: "decision", target, reply } }))
+      expect((await f.call({ requestState: first.requestState, inputResponses: { decision: { action: "accept", content: { reply } } } })).error.code).toBe(-32602)
+      expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(1)
+    }
+  })
+  test("MRTR decline cancel missing dropped and invalid content never dispatch a native rejection", async () => {
+    for (const response of [{ action: "decline" }, { action: "cancel" }, undefined, { method: "elicitation/create", result: { action: "accept", content: { reply: "once" } } }, { action: "accept", content: {} }, { action: "accept", content: { reply: "always" } }]) {
+      const f = await setup()
+      const first = (await f.call()).result
+      const value = await f.call({ requestState: first.requestState, inputResponses: response === undefined ? {} : { decision: response } })
+      expect(value.result?.resultType).not.toBe("input_required")
+      expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(0)
+    }
+  })
+  test("MRTR rejects a valid client decision alongside an SDK-dropped wrapped response", async () => {
+    const f = await setup()
+    const first = (await f.call()).result
+    const decision = { action: "accept", content: { reply: "once" } }
+    const value = await f.call({ requestState: first.requestState, inputResponses: { decision, wrapped: { method: "elicitation/create", result: decision } } })
+    expect(f.calls.filter((call) => call.method === "dotsExchangeCreate")).toHaveLength(0)
+    expect(value.result).toMatchObject({ isError: true, structuredContent: { error: { code: "invalid_message" } } })
+    expect((await f.call({ requestState: first.requestState, inputResponses: { decision } })).error.code).toBe(-32602)
+  })
+  test("MRTR validates every representable Form type and preserves false versus absent without defaults", async () => {
+    const formTarget = { kind: "form", formID: "frm_fixture", fingerprint: target.fingerprint }
+    const fields = [
+      { key: "name", type: "string", required: true, minLength: 1, maxLength: 12, pattern: "^[a-z]+$", default: "invented" },
+      { key: "count", type: "integer", minimum: 1, maximum: 3, required: true },
+      { key: "ratio", type: "number", minimum: 0, maximum: 1, required: true },
+      { key: "enabled", type: "boolean", required: true, default: true },
+      { key: "branch", type: "string", options: [{ value: "main", label: "Main" }], required: true },
+      { key: "tags", type: "multiselect", options: [{ value: "safe", label: "Safe" }], minItems: 1, maxItems: 2, required: true },
+      { key: "custom", type: "string", options: [{ value: "option", label: "Option" }], custom: true },
+      { key: "optional", type: "boolean", default: true },
+      { key: "free", type: "string", options: [], custom: true },
+    ]
+    const f = await setup({ target: formTarget, title: "Synthetic choices", fields })
+    const args = { sessionID: "ses_1", input: { ...input, instruction: { operation: "decision", target: formTarget } } }
+    const first = (await f.call({}, args)).result
+    const schema = first.inputRequests.decision.params.requestedSchema
+    expect(JSON.stringify(schema)).not.toContain('"default"')
+    expect(schema.properties.enabled.type).toBe("boolean")
+    const answer = { name: "safe", count: 2, ratio: 0.5, enabled: false, branch: "main", tags: ["safe"], custom__custom: "other", free: "synthetic" }
+    expect((await f.call({ requestState: first.requestState, inputResponses: { decision: { action: "accept", content: answer } } }, args)).result.isError).toBeUndefined()
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")[0]?.args).toContainEqual(expect.objectContaining({ instruction: { operation: "decision", target: formTarget, answers: { name: "safe", count: 2, ratio: 0.5, enabled: false, branch: "main", tags: ["safe"], custom: "other", free: "synthetic" } } }))
+    const second = (await f.call({}, args)).result
+    expect((await f.call({ requestState: second.requestState, inputResponses: { decision: { action: "accept", content: { ...answer, enabled: undefined } } } }, args)).result.isError).toBe(true)
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(1)
+  })
+  test("MRTR questions map single multiple and custom text without nested schemas", async () => {
+    const questionTarget = { kind: "question", requestID: "que_fixture", fingerprint: target.fingerprint }
+    const questions = [{ question: "Branch?", header: "Branch", options: [{ label: "main", description: "Main" }], custom: false }, { question: "Tags?", header: "Tags", options: [{ label: "safe", description: "Safe" }], multiple: true, custom: false }, { question: "Name?", header: "Name", options: [] }]
+    const f = await setup({ target: questionTarget, questions })
+    const args = { sessionID: "ses_1", input: { ...input, instruction: { operation: "decision", target: questionTarget } } }
+    const first = (await f.call({}, args)).result
+    expect((await f.call({ requestState: first.requestState, inputResponses: { decision: { action: "accept", content: { q0: "main", q1: ["safe"], q2: "synthetic" } } } }, args)).result.isError).toBeUndefined()
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")[0]?.args).toContainEqual(expect.objectContaining({ instruction: { operation: "decision", target: questionTarget, answers: [["main"], ["safe"], ["synthetic"]] } }))
+  })
+  test("MRTR standard-form validation rejects invalid scalar selection and custom values", async () => {
+    for (const [field, value] of [
+      [{ key: "value", type: "string", minLength: 2, maxLength: 3, required: true }, "x"],
+      [{ key: "value", type: "integer", required: true }, 1.5],
+      [{ key: "value", type: "number", minimum: 0, maximum: 1, required: true }, 2],
+      [{ key: "value", type: "boolean", required: true }, "false"],
+      [{ key: "value", type: "string", options: [{ value: "listed", label: "Listed" }], required: true }, "other"],
+      [{ key: "value", type: "multiselect", options: [{ value: "listed", label: "Listed" }], maxItems: 1, required: true }, ["other"]],
+      [{ key: "value", type: "string", format: "email", required: true }, "invalid"],
+    ] as const) {
+      const formTarget = { kind: "form", formID: "frm_fixture", fingerprint: target.fingerprint }
+      const f = await setup({ target: formTarget, fields: [field] })
+      const args = { sessionID: "ses_1", input: { ...input, instruction: { operation: "decision", target: formTarget } } }
+      const round = (await f.call({}, args)).result
+      expect(round.resultType).toBe("input_required")
+      expect((await f.call({ requestState: round.requestState, inputResponses: { decision: { action: "accept", content: { value } } } }, args)).result.isError).toBe(true)
+      expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(0)
+    }
+  })
+  test("MRTR ordinary guardrail form returns only a one-time or reject client instruction", async () => {
+    const guardrailTarget = { kind: "guardrail", requestID: "grq_fixture", fingerprint: target.fingerprint }
+    const f = await setup({ target: guardrailTarget, ruleIDs: ["standard.review.synthetic"] })
+    const args = { sessionID: "ses_1", input: { ...input, instruction: { operation: "decision", target: guardrailTarget } } }
+    const round = (await f.call({}, args)).result
+    expect(round.inputRequests.decision.params.requestedSchema.properties.reply.oneOf.map((option: { const: string }) => option.const)).toEqual(["once", "reject"])
+    expect((await f.call({ requestState: round.requestState, inputResponses: { decision: { action: "accept", content: { reply: "once" } } } }, args)).result.isError).toBeUndefined()
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")[0]?.args).toContainEqual(expect.objectContaining({ instruction: { operation: "decision", target: guardrailTarget, reply: "once" } }))
+  })
+  test("MRTR unsupported fields and stale candidates fail before minting state", async () => {
+    for (const fields of [[{ key: "conditional", type: "boolean", when: [{ key: "x", op: "eq", value: true }] }], [{ key: "external", type: "external", url: "https://example.invalid" }], [{ key: "custom", type: "multiselect", options: [], custom: true }], [{ key: "name", type: "string", options: [{ value: "listed", label: "Listed" }], custom: true }, { key: "name__custom", type: "string" }]]) {
+      const formTarget = { kind: "form", formID: "frm_fixture", fingerprint: target.fingerprint }
+      const f = await setup({ target: formTarget, fields })
+      const value = await f.call({}, { sessionID: "ses_1", input: { ...input, instruction: { operation: "decision", target: formTarget } } })
+      expect(value.result.isError).toBe(true)
+      expect(value.result.requestState).toBeUndefined()
+    }
+    const f = await setup({ target: { ...target, fingerprint: "e".repeat(64) } })
+    expect((await f.call()).result.isError).toBe(true)
+  })
+  test("MRTR state rejects tamper principal arguments expiry revocation and shutdown", async () => {
+    for (const kind of ["tamper", "principal", "epoch", "arguments", "expiry", "revocation", "shutdown", "disconnect"]) {
+      const f = await setup()
+      const first = (await f.call()).result
+      if (kind === "expiry") f.state.now += 300_001
+      if (kind === "revocation") f.state.allowed = false
+      if (kind === "shutdown") await f.mcp.close()
+      if (kind === "disconnect") f.mcp.clearAccess()
+      const extra = { requestState: kind === "tamper" ? "forged" : first.requestState, inputResponses: { decision: { action: "accept", content: { reply: "once" } } } }
+      const result = await f.call(extra, kind === "arguments" ? { sessionID: "ses_1", input: { ...input, exchangeID: "other" } } : undefined, capabilities, kind === "principal" ? { ...context, principal: { ...context.principal, clientID: "other" } } : kind === "epoch" ? { ...context, epoch: "other_epoch" } : context)
+      expect(result.error !== undefined || result.result?.isError === true).toBe(true)
+      expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(0)
+    }
+  })
+  test("MRTR revalidates source candidate grant and native errors before applying client data", async () => {
+    for (const change of ["grant", "candidate", "missing", "native"]) {
+      const f = await setup()
+      const first = (await f.call()).result
+      if (change === "grant") f.results.dotsExchangeRead = { ...exchange, envelope: { ...envelope, scope: { ...envelope.scope, grantID: "changed" } }, decisions: [{ target }] }
+      if (change === "candidate") f.results.dotsExchangeRead = { ...exchange, decisions: [{ target, action: "changed" }] }
+      if (change === "missing") f.results.dotsExchangeRead = { ...exchange, decisions: [] }
+      if (change === "native") f.results.dotsExchangeCreate = new LocalFailure("invalid", "Native validator rejected the synthetic answer")
+      const result = await f.call({ requestState: first.requestState, inputResponses: { decision: { action: "accept", content: { reply: "once" } } } })
+      expect(result.result.isError).toBe(true)
+      expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(change === "native" ? 1 : 0)
+      expect(f.holds).toEqual([])
+    }
+  })
+  test("MRTR form capacity expires without eviction and observations stay bounded and private", async () => {
+    const f = await setup()
+    for (let index = 0; index < 256; index++) expect((await f.call()).result.resultType).toBe("input_required")
+    expect((await f.call()).result.isError).toBe(true)
+    f.state.now += 300_001
+    expect((await f.call()).result.resultType).toBe("input_required")
+    for (let index = 0; index < 257; index++) await f.call({}, undefined, {}, { ...context, principal: { ...context.principal, clientID: `synthetic_${index}` } })
+    const last = f.observations.at(-1)
+    expect(Array.isArray(last) && last.length).toBe(256)
+    expect(JSON.stringify(last)).not.toMatch(/synthetic_|clientInfo|clientID|grantID/)
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(0)
+  }, 60000)
+  test("MRTR unknown settlement retains the lane until the existing exact settled read and never replays", async () => {
+    const f = await setup()
+    f.results.dotsExchangeCreate = new LocalFailure("transport", "Unknown settlement")
+    const first = (await f.call()).result
+    const extra = { requestState: first.requestState, inputResponses: { decision: { action: "accept", content: { reply: "once" } } } }
+    expect((await f.call(extra)).result.isError).toBe(true)
+    expect(f.holds).toEqual([true])
+    expect((await f.call(extra)).error.code).toBe(-32602)
+    f.results.dotsExchangeRead = { ...exchange, exchangeID: input.exchangeID, decisionOutcome: { target, state: "pending", reply: "once" } }
+    await f.run("session_dots_exchange_read", { sessionID: "ses_1", input: { exchangeID: input.exchangeID } })
+    expect(f.holds).toEqual([true])
+    f.results.dotsExchangeRead = { ...exchange, exchangeID: input.exchangeID, decisionOutcome: { target, state: "settled", reply: "once" } }
+    await f.run("session_dots_exchange_read", { sessionID: "ses_1", input: { exchangeID: input.exchangeID } })
+    expect(f.holds).toEqual([true, false])
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(1)
+  })
+  test("MRTR capabilities are allowlisted bounded diagnostics cleared on close", async () => {
+    const f = await setup()
+    expect(f.observations).toEqual([])
+    await f.call({}, undefined, {})
+    await f.call()
+    expect(f.observations.at(-1)).toEqual(expect.arrayContaining([{ protocolVersion: "2026-07-28", elicitation: true, form: true, url: false, observedAt: 1000 }]))
+    expect(JSON.stringify(f.observations)).not.toMatch(/clientInfo|client_1|own_1|grant_fixture|request_fixture/)
+    await f.mcp.close()
+    expect(f.observations.at(-1)).toBeUndefined()
+  })
+  test("MRTR disconnect during candidate read cannot mint a token", async () => {
+    const f = await setup()
+    const entered = Promise.withResolvers<void>()
+    const released = Promise.withResolvers<void>()
+    f.results.dotsExchangeRead = async () => { entered.resolve(); await released.promise; return { ...exchange, decisions: [{ target }] } }
+    const pending = f.call()
+    await entered.promise
+    f.mcp.clearAccess()
+    released.resolve()
+    expect((await pending).result.isError).toBe(true)
+    expect(f.observations.at(-1)).toBeUndefined()
+    expect(f.calls.filter((c) => c.method === "dotsExchangeCreate")).toHaveLength(0)
+  })
+})
 
 describe("inventory and discovery", () => {
   test("uncertain routine exchanges reconcile only the exact task, delegation and presentation instruction", async () => {
@@ -241,6 +481,73 @@ describe("inventory and discovery", () => {
       expect((await held.run("session_dots_exchange_create", { sessionID: "ses_1", input: changed })).isError).toBe(true)
       expect(held.calls.filter((call) => call.method === "dotsExchangeRead")).toHaveLength(0)
       expect(held.calls.filter((call) => call.method === "dotsExchangeCreate")).toHaveLength(1)
+    }
+  })
+  test("an unknown delegated decision outcome keeps the exchange lane held until an authoritative settled read", async () => {
+    const envelope = { coordinator: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" }, scope: { epoch: "epoch_fixture", grantID: "grant_fixture" }, exchangeID: "decision_exchange", messageID: "msg_decision", targetSessionID: "ses_1", origin: "plugin", kind: "task" }
+    const target = { kind: "permission", requestID: "per_delegated", fingerprint: "f".repeat(64) }
+    const unknown = { sessionID: "ses_1", targetSessionID: "ses_1", exchangeID: "decision_exchange", inputID: "msg_decision", channel: "task", state: "pending", envelope, progress: [], decisionOutcome: { target, state: "unknown", reply: "once" } }
+    const results: Partial<Record<keyof LocalServer, unknown>> = { dotsExchangeCreate: new LocalFailure("transport", "Synthetic unconfirmed response"), dotsExchangeRead: unknown }
+    const held = await fixture(results)
+    const input = { exchangeID: "decision_exchange", expectedAttachment: { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "V" }, targetSessionID: "ses_1", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, instruction: { operation: "decision", target, reply: "once" } }
+    expect((await held.run("session_dots_exchange_create", { sessionID: "ses_1", input })).isError).toBe(true)
+    expect(held.holds).toEqual([true])
+    const stillUnknown = await held.run("session_dots_exchange_create", { sessionID: "ses_1", input })
+    expect(stillUnknown.isError).toBe(true)
+    expect(stillUnknown.structuredContent).toEqual({ error: { code: "outcome_unknown", message: expect.any(String) } })
+    expect(held.calls.filter((call) => call.method === "dotsExchangeCreate")).toHaveLength(1)
+    expect((await held.run("session_dots_exchange_read", { sessionID: "ses_1", input: { exchangeID: "decision_exchange" } })).isError).toBeUndefined()
+    expect(held.holds).toEqual([true])
+    expect((await held.run("session_interrupt", { sessionID: "ses_1" })).isError).toBe(true)
+    results.dotsExchangeRead = { ...unknown, decisionOutcome: { target, state: "settled", reply: "once" } }
+    const reconciled = await held.run("session_dots_exchange_create", { sessionID: "ses_1", input })
+    expect(reconciled.isError).toBeUndefined()
+    expect(held.holds).toEqual([true, false])
+    expect(held.calls.filter((call) => call.method === "dotsExchangeCreate")).toHaveLength(1)
+  })
+  test("only an exact settled delegated decision receipt releases the exchange lane", async () => {
+    const envelope = { coordinator: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" }, scope: { epoch: "epoch_fixture", grantID: "grant_fixture" }, exchangeID: "decision_exchange", messageID: "msg_decision", targetSessionID: "ses_1", origin: "plugin", kind: "task" }
+    const target = { kind: "permission", requestID: "per_delegated", fingerprint: "f".repeat(64) }
+    const base = { sessionID: "ses_1", targetSessionID: "ses_1", exchangeID: "decision_exchange", inputID: "msg_decision", channel: "task", state: "pending", envelope, progress: [] }
+    const input = { exchangeID: "decision_exchange", expectedAttachment: { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "V" }, targetSessionID: "ses_1", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, instruction: { operation: "decision", target, reply: "once" } }
+    const formTarget = { kind: "form", formID: "frm_delegated", fingerprint: "f".repeat(64) }
+    const formInput = { ...input, instruction: { operation: "decision", target: formTarget, answers: { branch: "safe" } } }
+    const settled = { ...base, decisionOutcome: { target, state: "settled", reply: "once" } }
+    const variants: Array<{ name: string; read: unknown; readError?: boolean; input?: typeof input | typeof formInput; settled?: unknown; viaRead?: boolean }> = [
+      { name: "pending", read: { ...base, decisionOutcome: { target, state: "pending", reply: "once" } } },
+      { name: "stale", read: { ...base, decisionOutcome: { target, state: "stale", reply: "once" } } },
+      { name: "absent", read: base },
+      { name: "malformed", read: { sessionID: "ses_1" }, readError: true },
+      { name: "settled-wrong-fingerprint", read: { ...base, decisionOutcome: { target: { ...target, fingerprint: "e".repeat(64) }, state: "settled", reply: "once" } } },
+      { name: "settled-wrong-reply", read: { ...base, decisionOutcome: { target, state: "settled", reply: "reject" } } },
+      { name: "settled-wrong-anchor", read: { ...settled, sessionID: "ses_other" } },
+      { name: "settled-wrong-exchange", read: { ...settled, exchangeID: "other_exchange" } },
+      { name: "settled-wrong-request", read: { ...base, decisionOutcome: { target: { ...target, requestID: "per_other" }, state: "settled", reply: "once" } } },
+      { name: "settled-wrong-kind", read: { ...base, decisionOutcome: { target: { kind: "guardrail", requestID: "grq_delegated", fingerprint: target.fingerprint }, state: "settled", reply: "once" } } },
+      { name: "settled-direct-read", read: settled, viaRead: true },
+      { name: "form-no-reply", input: formInput, read: { ...base, decisionOutcome: { target: formTarget, state: "pending" } }, settled: { ...base, decisionOutcome: { target: formTarget, state: "settled" } } },
+    ]
+    for (const variant of variants) {
+      const variantInput = variant.input ?? input
+      const results: Partial<Record<keyof LocalServer, unknown>> = { dotsExchangeCreate: new LocalFailure("transport", "Synthetic unconfirmed response"), dotsExchangeRead: variant.read }
+      const held = await fixture(results)
+      expect((await held.run("session_dots_exchange_create", { sessionID: "ses_1", input: variantInput })).isError, variant.name).toBe(true)
+      expect(held.holds, variant.name).toEqual([true])
+      const read = await held.run("session_dots_exchange_read", { sessionID: "ses_1", input: { exchangeID: "decision_exchange" } })
+      expect(read.isError, variant.name).toBe(variant.readError ? true : undefined)
+      if (variant.viaRead) {
+        expect(held.holds, variant.name).toEqual([true, false])
+        expect(held.calls.filter((call) => call.method === "dotsExchangeCreate"), variant.name).toHaveLength(1)
+        continue
+      }
+      expect(held.holds, variant.name).toEqual([true])
+      expect((await held.run("session_dots_exchange_create", { sessionID: "ses_1", input: variantInput })).isError, variant.name).toBe(true)
+      expect(held.holds, variant.name).toEqual([true])
+      expect(held.calls.filter((call) => call.method === "dotsExchangeCreate"), variant.name).toHaveLength(1)
+      results.dotsExchangeRead = variant.settled ?? settled
+      expect((await held.run("session_dots_exchange_create", { sessionID: "ses_1", input: variantInput })).isError, variant.name).toBeUndefined()
+      expect(held.holds, variant.name).toEqual([true, false])
+      expect(held.calls.filter((call) => call.method === "dotsExchangeCreate"), variant.name).toHaveLength(1)
     }
   })
   test("Dots report text reaches the MCP response with a program-stamped visible header", async () => {
@@ -290,7 +597,7 @@ describe("inventory and discovery", () => {
       expect(tool.inputSchema.type).toBe("object")
       if (tool.name !== "usage_forecast") expect(tool.inputSchema.additionalProperties).toBe(false)
     }
-    const operations = RemoteMcpSchemas.tools
+    const operations = RemoteMcpSchemas.tools.filter((tool) => tool.name !== "session_dots_decision_form")
       .map((tool) => tool.operation)
       .filter((operation) => operation !== "session.createInDirectory")
     expect(operations.map(String).toSorted()).toEqual(
@@ -300,7 +607,7 @@ describe("inventory and discovery", () => {
         .toSorted(),
     )
     expect(RemoteMcpSchemas.tools.at(-1)?.operation).toBe("session.createInDirectory")
-    expect(new Set(expectedTools).size).toBe(84)
+    expect(new Set(expectedTools).size).toBe(85)
   })
 
   test("human-only decision tools are unpublished and calling them never reaches the local server", async () => {

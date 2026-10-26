@@ -210,7 +210,7 @@ const layer = Layer.effect(
       cause.reasons.some(
         (reason) =>
           Cause.isDieReason(reason) &&
-          (reason.defect instanceof Permission.DeclinedError || reason.defect instanceof QuestionTool.CancelledError),
+          ((reason.defect instanceof Permission.DeclinedError && reason.defect.source === undefined) || reason.defect instanceof QuestionTool.CancelledError),
       )
 
     const appendContextObservations = Effect.fn("SessionRunner.appendContextObservations")(function* (

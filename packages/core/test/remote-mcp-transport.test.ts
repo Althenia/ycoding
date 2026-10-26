@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client"
 import { createHash } from "node:crypto"
 import { RemoteMCPTransport } from "../src/remote-mcp/transport"
+import { inputRequired } from "@modelcontextprotocol/server"
+import { Schema } from "effect"
 
 const endpoint = "http://127.0.0.1:4096/api/mcp/devices/dev_1"
 const meta = {
@@ -25,6 +27,37 @@ const tools = [
 
 type Seen = { name: string; arguments: Record<string, unknown>; context: string | undefined; signal: AbortSignal }
 const open: Array<{ transport: ReturnType<typeof RemoteMCPTransport.create<string>>; clients: Client[] }> = []
+
+test("MRTR carries the per-request envelope, responses and verified opaque state through the SDK seam", async () => {
+  const seen: RemoteMCPTransport.Call<string>[] = []
+  const transport = RemoteMCPTransport.create<string>({
+    name: "mrtr", version: "1", tools,
+    requestState: { verify: (state) => { if (state !== "opaque") throw new Error("invalid state") } },
+    call: async (call) => {
+      seen.push(call)
+      if (call.requestState === undefined) return inputRequired({ requestState: "opaque", inputRequests: { decision: inputRequired.elicit({ message: "Choose", requestedSchema: { type: "object", properties: { confirm: { type: "boolean" } }, required: ["confirm"] } }) } })
+      return { content: [], structuredContent: call.inputResponses }
+    },
+  })
+  open.push({ transport, clients: [] })
+  const post = (extra: Record<string, unknown>) => transport.fetch(new Request(endpoint, {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-method": "tools/call", "mcp-name": "echo", "mcp-protocol-version": "2026-07-28" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "echo", arguments: { count: 1 }, _meta: { ...meta, "io.modelcontextprotocol/clientCapabilities": { elicitation: {} } }, ...extra } }),
+  }), "synthetic")
+  const decode = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Record(Schema.String, Schema.Unknown) }))
+  const first = decode(await (await post({})).json())
+  expect(first.result).toMatchObject({ resultType: "input_required", requestState: "opaque", inputRequests: { decision: { method: "elicitation/create" } } })
+  const accepted = { decision: { action: "accept", content: { confirm: false } } }
+  expect(decode(await (await post({ requestState: "opaque", inputResponses: accepted })).json()).result.structuredContent).toEqual(accepted)
+  expect(seen[1]?.requestState).toBe("opaque")
+  expect(seen[1]?.envelope).toMatchObject({ "io.modelcontextprotocol/protocolVersion": "2026-07-28" })
+  const dropped = { method: "elicitation/create", result: accepted.decision }
+  expect(decode(await (await post({ requestState: "opaque", inputResponses: { ...accepted, wrapped: dropped } })).json()).result.structuredContent).toEqual(accepted)
+  expect(seen[2]).toMatchObject({ inputResponses: accepted, droppedInputResponseKeys: ["wrapped"] })
+  const tampered = Schema.decodeUnknownSync(Schema.Struct({ error: Schema.Unknown }))(await (await post({ requestState: "tampered", inputResponses: accepted })).json())
+  expect(tampered.error).toMatchObject({ code: -32602, data: { reason: "invalid_request_state" } })
+  expect(seen).toHaveLength(3)
+})
 
 afterEach(async () => {
   for (const entry of open.splice(0)) {

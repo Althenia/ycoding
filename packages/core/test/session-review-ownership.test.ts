@@ -20,6 +20,8 @@ import { Hash } from "@ycoding-ai/core/util/hash"
 import { SessionPendingTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Question, QuestionID } from "@ycoding-ai/schema/session-orchestration"
+import { CatalogModel } from "@ycoding-ai/core/model"
+import { Provider } from "@ycoding-ai/core/provider"
 import { SessionReview as SessionReviewSchema } from "@ycoding-ai/schema/session-review"
 import { eq } from "drizzle-orm"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -29,12 +31,14 @@ import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { Tools } from "@ycoding-ai/core/tool/tools"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { Integration } from "@ycoding-ai/core/integration"
+import { executeTool, registerToolPlugin, settleTool, toolIdentity } from "./lib/tool"
 import { testEffect } from "./lib/effect"
 import { reviewLayer, reviewLocation } from "./fixture/review"
 import { tmpdir } from "./fixture/tmpdir"
 
 const it = testEffect(reviewLayer())
+const childModel = CatalogModel.Ref.make({ providerID: Provider.ID.make("test"), id: CatalogModel.ID.make("model") })
 
 for (const change of ["action", "child", "payload", "launch-prompt", "launch-model"] as const) it.effect(`subagent permission grants bind ${change} and permit an identical re-issue`, () => Effect.gen(function* () {
   const sessions = yield* Session.Service
@@ -91,7 +95,7 @@ for (const change of ["operation", "content", "arguments"] as const) it.effect(`
 const childQuestion = Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
-  const child = yield* sessions.create({ parentID: root.id })
+  const child = yield* sessions.create({ parentID: root.id, model: childModel })
   const events = yield* EventRuntime.Service
   yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({ sessionID: child.id, change: {
     type: "launched", parentID: root.id, parentAssistantMessageID: "msg_owned_parent", toolCallID: "call_owned", inputID: "msg_owned_child",
@@ -104,7 +108,7 @@ const childQuestion = Effect.gen(function* () {
 for (const change of ["cancel", "child", "text"] as const) it.effect(`the subagent control tool cannot spend a send approval on changed ${change}`, () => Effect.gen(function* () {
   const fixture = yield* childQuestion
   const sessions = yield* Session.Service
-  const child = yield* sessions.create({ parentID: fixture.root.id })
+  const child = yield* sessions.create({ parentID: fixture.root.id, model: childModel })
   const events = yield* EventRuntime.Service
   yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({ sessionID: child.id, change: {
     type: "launched", parentID: fixture.root.id, parentAssistantMessageID: "msg_second_parent", toolCallID: "call_second", inputID: "msg_second_child",
@@ -142,6 +146,59 @@ for (const change of ["cancel", "child", "text"] as const) it.effect(`the subage
   expect(Exit.isFailure(yield* call("changed", changed))).toBe(true)
   expect((yield* orchestration.get(fixture.root.id, fixture.child.id)).state).toBe("running")
   expect(Exit.isSuccess(yield* call("identical", original))).toBe(true)
+}))
+
+it.effect("the subagent control tool never exposes an authorization cause through switch_model diagnostics", () => Effect.gen(function* () {
+  const fixture = yield* childQuestion
+  const sessions = yield* Session.Service
+  const locations = yield* LocationServiceMap.Service
+  const located = locations.get(fixture.root.location)
+  const permission = yield* Permission.Service.pipe(Effect.provide(located))
+  const orchestration = yield* SessionOrchestration.Service
+  const sentinel = "SYNTHETIC_SECRET_SENTINEL"
+  const authorization = new Integration.AuthorizationError({ cause: new Error(sentinel) })
+  authorization.message = `authorization failed: ${sentinel}`
+  const tools = yield* Tools.Service.pipe(Effect.provide(located))
+  const registry = yield* ToolRegistry.Service.pipe(Effect.provide(located))
+  const unavailable = () => Effect.die(new Error("unused PluginRuntime operation"))
+  yield* registerToolPlugin(SubagentControlTool.Plugin, "auth_control").pipe(Effect.provideService(Tools.Service, tools),
+    Effect.provideService(Permission.Service, permission), Effect.provide(Layer.succeed(PluginRuntime.Service, PluginRuntime.Service.of({
+      orchestration: { ...orchestration, switchModel: () => Effect.fail(authorization) }, session: sessions,
+      job: { start: unavailable, wait: unavailable, block: unavailable, background: unavailable, cancel: unavailable, noticeAdmitted: unavailable },
+      location: { agent: { list: unavailable } },
+    }))))
+  const settlement = yield* settleTool(registry, { sessionID: fixture.root.id, ...toolIdentity,
+    call: { type: "tool-call", id: "call_auth_switch", name: "auth_control",
+      input: { action: "switch_model", sessionID: fixture.child.id, expectedModel: { providerID: "test", id: "model" }, model: { providerID: "test", id: "model" } } } })
+  const sanitized = "Provider authorization failed for the selected model; reconnect the provider profile and retry"
+  expect(settlement.result).toEqual({ type: "error", value: sanitized })
+  expect(settlement.error).toEqual({ type: "tool.execution", message: sanitized })
+  expect(JSON.stringify(settlement)).not.toContain(sentinel)
+}))
+
+it.effect("the subagent control tool reports bounded corrected permission feedback for switch_model", () => Effect.gen(function* () {
+  const fixture = yield* childQuestion
+  const sessions = yield* Session.Service
+  const locations = yield* LocationServiceMap.Service
+  const located = locations.get(fixture.root.location)
+  const permission = yield* Permission.Service.pipe(Effect.provide(located))
+  const orchestration = yield* SessionOrchestration.Service
+  const corrected = new Permission.CorrectedError({ feedback: "x".repeat(600) })
+  const tools = yield* Tools.Service.pipe(Effect.provide(located))
+  const registry = yield* ToolRegistry.Service.pipe(Effect.provide(located))
+  const unavailable = () => Effect.die(new Error("unused PluginRuntime operation"))
+  yield* registerToolPlugin(SubagentControlTool.Plugin, "corrected_control").pipe(Effect.provideService(Tools.Service, tools),
+    Effect.provideService(Permission.Service, permission), Effect.provide(Layer.succeed(PluginRuntime.Service, PluginRuntime.Service.of({
+      orchestration: { ...orchestration, switchModel: () => Effect.fail(corrected) }, session: sessions,
+      job: { start: unavailable, wait: unavailable, block: unavailable, background: unavailable, cancel: unavailable, noticeAdmitted: unavailable },
+      location: { agent: { list: unavailable } },
+    }))))
+  const settlement = yield* settleTool(registry, { sessionID: fixture.root.id, ...toolIdentity,
+    call: { type: "tool-call", id: "call_corrected_switch", name: "corrected_control",
+      input: { action: "switch_model", sessionID: fixture.child.id, expectedModel: { providerID: "test", id: "model" }, model: { providerID: "test", id: "model" } } } })
+  const expected = `Permission request corrected: ${"x".repeat(500)}`
+  expect(settlement.result).toEqual({ type: "error", value: expected })
+  expect(settlement.error).toEqual({ type: "tool.execution", message: expected })
 }))
 
 it.effect("permission grants normalize omitted metadata fields without changing operation identity", () => Effect.gen(function* () {
@@ -328,7 +385,7 @@ test("a persisted child decision retains ownership across restart before reconci
   const state = await Effect.runPromise(Effect.gen(function* () {
     const sessions = yield* Session.Service
     const root = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }) })
-    const child = yield* sessions.create({ parentID: root.id })
+    const child = yield* sessions.create({ parentID: root.id, model: childModel })
     const events = yield* EventRuntime.Service
     yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({ sessionID: child.id, change: {
       type: "launched", parentID: root.id, parentAssistantMessageID: "msg_restart_parent", toolCallID: "call_restart", inputID: "msg_restart_child",

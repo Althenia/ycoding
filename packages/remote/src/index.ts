@@ -921,6 +921,26 @@ function validDotsRoutine(input: Record<string, unknown>): boolean {
     (preferences.detail === undefined || preferences.detail === "concise" || preferences.detail === "standard" || preferences.detail === "detailed")
 }
 
+function validDotsDelegated(input: Record<string, unknown>): boolean {
+  if (Object.keys(input).length !== 7 || !Object.keys(input).every((key) => ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "instruction"].includes(key))) return false
+  const delegation = input.delegation
+  const instruction = input.instruction
+  if (!isRecord(delegation) || Object.keys(delegation).length !== 2 || typeof delegation.id !== "string" || !delegation.id || delegation.id.length > 256 ||
+    typeof delegation.revision !== "number" || !Number.isSafeInteger(delegation.revision) || delegation.revision < 1 || !isRecord(instruction)) return false
+  if (instruction.operation === "task")
+    return Object.keys(instruction).length === 2 && typeof instruction.text === "string" && instruction.text.length > 0 && instruction.text.length <= 32768
+  if (instruction.operation !== "decision" || Object.keys(instruction).length !== 3 || !isRecord(instruction.target)) return false
+  const target = instruction.target
+  if (typeof target.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(target.fingerprint)) return false
+  const reply = instruction.reply === "once" || instruction.reply === "reject"
+  if (target.kind === "permission") return Object.keys(target).length === 3 && typeof target.requestID === "string" && target.requestID.startsWith("per") && target.requestID.length <= 256 && reply && !("answers" in instruction)
+  if (target.kind === "guardrail") return Object.keys(target).length === 3 && typeof target.requestID === "string" && target.requestID.startsWith("grq_") && target.requestID.length <= 256 && reply && !("answers" in instruction)
+  if (target.kind === "form") return Object.keys(target).length === 3 && typeof target.formID === "string" && target.formID.startsWith("frm_") && target.formID.length <= 256 && isRecord(instruction.answers) && !("reply" in instruction)
+  if (target.kind === "question") return Object.keys(target).length === 3 && typeof target.requestID === "string" && target.requestID.startsWith("que") && target.requestID.length <= 256 &&
+    Array.isArray(instruction.answers) && instruction.answers.length <= 64 && instruction.answers.every((answer) => Array.isArray(answer) && answer.length <= 64 && answer.every((entry) => typeof entry === "string" && entry.length <= 4096)) && !("reply" in instruction)
+  return false
+}
+
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
   if (operation === "session.dots.exchange.read") return isRecord(input) && Object.keys(input).length === 1 &&
     typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256
@@ -928,7 +948,7 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
     typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256 &&
     validDotsTarget(input.expectedAttachment) && isSessionID(input.targetSessionID) && input.channel === "task" &&
     (input.delivery === "steer" || input.delivery === "queue") &&
-    ((Object.keys(input).length === 6 && typeof input.text === "string" && input.text.length > 0 && input.text.length <= 32768) || validDotsRoutine(input))
+    ((Object.keys(input).length === 6 && typeof input.text === "string" && input.text.length > 0 && input.text.length <= 32768) || validDotsRoutine(input) || validDotsDelegated(input))
   if (operation === "session.dots.status") return input === undefined
   if (operation === "session.dots.targets") return isRecord(input) &&
     typeof input.profile === "string" && input.profile.trim().length > 0 && input.profile.length <= 256 &&

@@ -80,7 +80,7 @@ export interface DelegationGrant {
   readonly bindingID: string
   readonly accountDigest: string
   readonly target: Dots.Target
-  readonly taskFence: string
+  readonly taskFence?: string
   readonly ownerFence: string
   readonly nativeScope: Dots.ExchangeRecord["scope"]
 }

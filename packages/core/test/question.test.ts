@@ -492,3 +492,26 @@ describe("Question", () => {
     )
   })
 })
+
+describe("Question delegated settlement", () => {
+  const delegatedSource = { kind: "dots-delegation", anchorSessionID: Session.ID.make("ses_anchor"), delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" } as const
+  it.effect("propagates delegated source to the outcome only on exact fingerprint", () =>
+    Effect.gen(function* () {
+      yield* setupAutonomy("normal")
+      const service = yield* Question.Service
+      const fiber = yield* service.ask({ sessionID, questions: [{ ...question, custom: false }] }).pipe(Effect.forkScoped)
+      let request = (yield* service.list())[0]
+      for (let attempt = 0; request === undefined && attempt < 100; attempt++) {
+        yield* Effect.yieldNow
+        request = (yield* service.list())[0]
+      }
+      expect(request).toBeDefined()
+      const fingerprint = Question.fingerprint(request!)
+      expect((yield* service.replyDelegated({ requestID: request!.id, answers: [["One"]], fingerprint: "0".repeat(64), source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(yield* service.list()).toHaveLength(1)
+      yield* service.replyDelegated({ requestID: request!.id, answers: [["One"]], fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) })
+      const outcome = yield* Fiber.join(fiber)
+      expect(outcome.status).toBe("answered")
+      if (outcome.status === "answered") expect(outcome.source).toEqual(delegatedSource)
+    }))
+})

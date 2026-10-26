@@ -43,6 +43,8 @@ test("guardrail HTTP routes preserve family ownership, normalized output, and ty
     evaluate: () => Effect.die("unused"),
     assert: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),
+    replyDelegated: () => Effect.die("unused"),
+    delegatedEligible: () => Effect.die("unused"),
     requestSnapshot: () => Effect.die("unused"),
     requestSnapshots: () => Effect.die("unused"),
     reconsider: () => Effect.die("unused"),

@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.3",
+    date: "2026-10-26",
+    title: "Delegated decision forms and multi-Session Dots bindings",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Relay MCP provides session_dots_decision_form. For one eligible ordinary decision already listed by a Dots task exchange read, it asks the authenticated client for the answer through a standard MCP 2026-07-28 form. It requires a native-approved delegation with decision scope and a request that declares elicitation: {} or object-valued elicitation.form; URL-only or unknown-only declarations do not qualify. The answer is client data, never human approval, and decline, cancel, missing or dropped responses leave the native request pending. Form state is single-use, expires after five minutes and is bound to the caller, arguments and exact candidate. Hard reviews, custom-rule reviews, requireHuman requests and Always grants stay human-only. Conditional fields, external forms and multiple custom answers are refused with an explicit error, and no defaults are filled in." },
+      { tag: "Added", text: "ycoding remote mcp status can include optional clientCapabilities observations of the declared protocol version and form support per client request. Omission means unreported, not unsupported. Observations carry no client names, identifiers or payloads, are not persisted and clear on disconnect, revocation or close; they never authorize a later request." },
+      { tag: "Added", text: "The native Dots bindings dialog can Bind several Sessions in one pass. Nothing is preselected: choose each Session, the scope, the expiry (at most one hour) and, when a Session has several source principals, the source. Each Session needs its own native approval, and a denied Session does not undo an approved one. Unbind revokes exactly the displayed grant, and an unknown outcome locks the dialog to read-only refresh." },
+      { tag: "Changed", text: "Eligible ordinary permission, guardrail, Form and question requests from a delegated task can be settled through the delegated decision exchange. Native checks repeat inside the settlement lock against the exact request fingerprint and canonical source, a decision is never replayed, and an unknown outcome keeps the exchange lane read-only until an exact read reconciles it. Form answers settled this way show an external-client source in the TUI and web, distinct from you and from native coordinators; a malformed source reads as unreported." },
+      { tag: "Changed", text: "Compact permission and Form details size to their content, keep the keyboard-selected option visible in long lists, and stay bounded and answerable on short or narrow terminals. A parent whose child model switch is rejected because the child is not its direct child, or because the causing input is not a native user prompt, receives a sanitized explanation; ownership and permission gates are unchanged. Project creation resolves a leading ~ against the home directory and shows an absolute-directory correction for other relative paths before any Session is created." },
+      { tag: "Fixed", text: "Multiline free-text and custom answers show their last line in short terminals and submit the complete value." },
+    ],
+  },
+  {
     version: "0.11.2",
     date: "2026-10-25",
     title: "Projects, Dots exchanges and mobile controls",

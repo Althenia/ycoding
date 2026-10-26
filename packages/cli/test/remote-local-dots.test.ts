@@ -6,6 +6,82 @@ import { createLocalServer, LocalFailure } from "../src/remote-local"
 import { createSessionRegistry, createSubscriptions, executeRemoteOperation } from "../src/remote-operations"
 import { SessionID } from "@ycoding-ai/schema/session-id"
 import { RemoteMcpSchemas } from "../src/remote-mcp-schemas"
+import { createRemoteMcp } from "../src/remote-mcp"
+
+test("MRTR cancellation aborts the real native HTTP exchange and keeps uncertain settlement held without replay", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-mrtr-abort-"))
+  const principal = { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" }
+  const context = { requestID: "request_fixture", epoch: "epoch_fixture", principal }
+  const decision = { kind: "permission", requestID: "per_fixture", fingerprint: "f".repeat(64) }
+  const source = { sessionID, targetSessionID: sessionID, exchangeID: "source_task", inputID: "msg_fixture", channel: "task", state: "running", progress: [], decisions: [{ target: decision }], envelope: { coordinator: principal, scope: { epoch: context.epoch, grantID: "grant_fixture" }, exchangeID: "source_task", messageID: "msg_fixture", targetSessionID: sessionID, origin: "plugin", kind: "task" } }
+  const entered = Promise.withResolvers<void>()
+  const nativeAborted = Promise.withResolvers<void>()
+  const readEntered = Promise.withResolvers<void>()
+  const readAborted = Promise.withResolvers<void>()
+  let writes = 0
+  let reading = false
+  const info = { id: sessionID, projectID: "global", title: "Synthetic", agent: "build", cost: 0, model: { providerID: "test", id: "test" }, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 }, location: { directory } }
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const pathname = new URL(request.url).pathname
+    if (pathname === "/api/remote/mcp/events/status") return Response.json({ data: { available: false } })
+    if (pathname === "/api/session") return Response.json({ data: [info], cursor: {} })
+    if (pathname === `/api/session/${sessionID}`) return Response.json({ data: info })
+    if (pathname.endsWith("/exchanges/read") && !reading) return Response.json({ data: source })
+    if (pathname.endsWith("/exchanges/read")) {
+      await request.text()
+      request.signal.addEventListener("abort", () => readAborted.resolve(), { once: true })
+      readEntered.resolve()
+      await readAborted.promise
+      return Response.json({ data: source })
+    }
+    if (!pathname.endsWith("/exchanges")) return new Response(null, { status: 404 })
+    if (pathname.endsWith("/exchanges")) writes++
+    await request.text()
+    request.signal.addEventListener("abort", () => nativeAborted.resolve(), { once: true })
+    entered.resolve()
+    await nativeAborted.promise
+    return Response.json({ data: source })
+  } })
+  const local = createLocalServer({ url: `http://127.0.0.1:${server.port}` }, { timeoutMs: 60000 })
+  const sessions = createSessionRegistry({ local })
+  const holds: boolean[] = []
+  const mcp = createRemoteMcp({ local, sessions, subscriptions: createSubscriptions(), resource: "https://relay.example/mcp", allowed: () => true, onLaneHold: (held) => holds.push(held) })
+  const args = { sessionID, input: { exchangeID: "decision", taskExchangeID: "source_task", expectedAttachment: target, targetSessionID: sessionID, channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, instruction: { operation: "decision", target: decision } } }
+  const post = (name: string, arguments_: unknown, extra: Record<string, unknown> = {}, signal?: AbortSignal) => mcp.fetch(new Request("https://relay.example/mcp", {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": name },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: arguments_, _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": { elicitation: {} } }, ...extra } }), ...(signal ? { signal } : {}),
+  }), context)
+  try {
+    await sessions.refresh()
+    const first = (await (await post("session_dots_decision_form", args)).json()).result
+    expect(first.resultType).toBe("input_required")
+    const retry = { requestState: first.requestState, inputResponses: { decision: { action: "accept", content: { reply: "once" } } } }
+    const controller = new AbortController()
+    const pending = post("session_dots_decision_form", args, retry, controller.signal).catch(() => undefined)
+    await entered.promise
+    controller.abort()
+    await nativeAborted.promise
+    await pending
+    expect(writes).toBe(1)
+    expect(holds).toEqual([true])
+    expect((await (await post("session_dots_decision_form", args, retry)).json()).error.code).toBe(-32602)
+    expect(writes).toBe(1)
+    reading = true
+    const readController = new AbortController()
+    const read = post("session_dots_exchange_read", { sessionID, input: { exchangeID: "source_task" } }, {}, readController.signal).catch(() => undefined)
+    await readEntered.promise
+    readController.abort()
+    await readAborted.promise
+    await read
+    expect(holds).toEqual([true])
+  } finally {
+    nativeAborted.resolve()
+    readAborted.resolve()
+    await mcp.close()
+    await server.stop(true)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 type Recorded = {
   readonly method: string

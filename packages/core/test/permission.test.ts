@@ -666,3 +666,69 @@ describe("Permission", () => {
     }),
   )
 })
+
+describe("Permission delegated settlement", () => {
+  const delegatedSource = { kind: "dots-delegation", anchorSessionID: Session.ID.make("ses_anchor"), delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" } as const
+  it.effect("settles only the exact fingerprint, publishes the canonical receipt, and seeds no human rejection prior", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const events = yield* EventRuntime.Service
+      const receipts: unknown[] = []
+      const unsubscribe = yield* events.listen((event) => Effect.sync(() => { if (event.type === SessionEvent.DotsDecisionSettled.type) receipts.push(event.data) }))
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const first = yield* waitForRequest({ id: Permission.ID.create("per_delegated"), action: "edit", resources: ["src/a.ts"] })
+      const snapshot = yield* service.snapshot(first.request.id)
+      expect(snapshot).toBeDefined()
+      expect((yield* service.replyDelegated({ requestID: first.request.id, reply: "reject", fingerprint: "0".repeat(64), source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(yield* service.snapshot(first.request.id)).toBeDefined()
+      expect((yield* service.replyDelegated({ requestID: first.request.id, reply: "reject", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(false) }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(yield* service.snapshot(first.request.id)).toBeDefined()
+      yield* service.replyDelegated({ requestID: first.request.id, reply: "reject", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) })
+      expect((yield* Fiber.join(first.fiber).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(receipts).toEqual([{ sessionID: first.request.sessionID, source: delegatedSource, target: { kind: "permission", requestID: first.request.id, fingerprint: snapshot!.fingerprint }, reply: "reject" }])
+      const second = yield* waitForRequest({ id: Permission.ID.create("per_after_delegated"), action: "edit", resources: ["src/a.ts"] })
+      yield* service.reply({ requestID: second.request.id, reply: "once" })
+      yield* Fiber.join(second.fiber)
+    }))
+  it.effect("a prior human request-scoped rejection holds a delegated approve without settling it", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const first = yield* waitForRequest({ id: Permission.ID.create("per_human_first"), action: "edit", resources: ["src/held.ts"] })
+      yield* service.reply({ requestID: first.request.id, reply: "reject", rejectScope: "request" })
+      expect((yield* Fiber.join(first.fiber).pipe(Effect.exit))._tag).toBe("Failure")
+      const sibling = yield* waitForRequest({ id: Permission.ID.create("per_held_sibling"), action: "edit", resources: ["src/held.ts"] })
+      const snapshot = yield* service.snapshot(sibling.request.id)
+      expect((yield* service.delegatedEligible({ requestID: sibling.request.id, fingerprint: snapshot!.fingerprint, reply: "once" }))).toBe(false)
+      expect((yield* service.replyDelegated({ requestID: sibling.request.id, reply: "once", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(yield* service.snapshot(sibling.request.id)).toBeDefined()
+      yield* service.reply({ requestID: sibling.request.id, reply: "reject", rejectScope: "request" })
+      expect((yield* Fiber.join(sibling.fiber).pipe(Effect.exit))._tag).toBe("Failure")
+    }))
+  it.effect("a deny on the twenty-first resource holds delegated settlement and eligibility", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const resources = Array.from({ length: 21 }, (_, index) => `src/r${index + 1}.ts`)
+      const pending = yield* waitForRequest({ id: Permission.ID.create("per_twenty_one"), action: "edit", resources })
+      const snapshot = yield* service.snapshot(pending.request.id)
+      yield* setRules([{ action: "*", resource: "*", effect: "ask" }, { action: "edit", resource: "src/r21.ts", effect: "deny" }])
+      expect((yield* service.delegatedEligible({ requestID: pending.request.id, fingerprint: snapshot!.fingerprint, reply: "once" }))).toBe(false)
+      expect((yield* service.replyDelegated({ requestID: pending.request.id, reply: "once", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(yield* service.snapshot(pending.request.id)).toBeDefined()
+      yield* service.reply({ requestID: pending.request.id, reply: "reject", rejectScope: "request" })
+      expect((yield* Fiber.join(pending.fiber).pipe(Effect.exit))._tag).toBe("Failure")
+    }))
+  it.effect("a requireHuman request is never delegated-eligible", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const pending = yield* waitForRequest({ id: Permission.ID.create("per_human_only"), action: "edit", resources: ["src/human.ts"], requireHuman: true })
+      const snapshot = yield* service.snapshot(pending.request.id)
+      expect((yield* service.replyDelegated({ requestID: pending.request.id, reply: "once", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
+      expect(yield* service.snapshot(pending.request.id)).toBeDefined()
+      yield* service.reply({ requestID: pending.request.id, reply: "reject", rejectScope: "request" })
+      expect((yield* Fiber.join(pending.fiber).pipe(Effect.exit))._tag).toBe("Failure")
+    }))
+})

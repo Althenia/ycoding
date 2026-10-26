@@ -92,11 +92,31 @@ export const Plugin = {
                   action: "resume" as const,
                   task: yield* orchestration.resume({ parentID: context.sessionID, childID: input.sessionID }),
                 }
-              }).pipe(Effect.mapError((error) => new ToolFailure({ message: error.message, error }))),
+              }).pipe(Effect.mapError((error) => {
+                const message = diagnostic(input, error)
+                return error._tag === "Integration.Authorization" ? new ToolFailure({ message }) : new ToolFailure({ message, error })
+              })),
           }),
           { codemode: false },
         ),
       )
       .pipe(Effect.orDie)
   }),
+}
+
+function diagnostic(
+  input: typeof Input.Type,
+  error: { readonly _tag: string; readonly message: string },
+): string {
+  if (input.action === "switch_model" && error._tag === "SessionOrchestration.ForbiddenError")
+    return `Model selection for child ${input.sessionID} was rejected: the child is not a direct child of this Session, or the input that caused this call is not a native user prompt in this Session. Request the model change in a native user prompt to the parent Session.`
+  if (error._tag === "Integration.Authorization")
+    return "Provider authorization failed for the selected model; reconnect the provider profile and retry"
+  if (error._tag === "Permission.CorrectedError") {
+    const feedback = (error as { readonly feedback?: unknown }).feedback
+    return typeof feedback === "string" && feedback.trim().length > 0
+      ? `Permission request corrected: ${feedback.slice(0, 500)}`
+      : "Permission request corrected by the user"
+  }
+  return error.message
 }

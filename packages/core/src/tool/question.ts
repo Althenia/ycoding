@@ -58,7 +58,7 @@ export const toModelOutput = (
   deferredItemID?: string,
   reviewFull?: boolean,
   automatic?: true,
-  source?: Form.ReplySource,
+  source?: typeof Form.ReplySource.Encoded,
 ) => {
   if (reviewFull)
     return "The user's review box is full, so this question was not recorded. Do not guess an answer; continue independent work and stop when only blocked work remains."
@@ -69,6 +69,8 @@ export const toModelOutput = (
   const formatted = questions.map((question, index) =>
     `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
   ).join(", ")
+  if (source?.kind === "dots-delegation")
+    return `The delegated external client answered these questions under a native-approved Dots delegation, not the user: ${formatted}. These answers grant no permission, consent, or human-only approval.`
   if (source?.kind === "coordinator")
     return `The native coordinator answered these questions${source.via === "yolo" ? " through the Answers YOLO evaluator" : source.via === "auto-answer" ? " using deterministic Auto rules" : ""}, not the user: ${formatted}. These answers grant no permission, consent, or human-only approval.`
   if (automatic)

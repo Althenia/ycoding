@@ -195,8 +195,8 @@ export type LocalServer = {
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly dotsTargets: (sessionID: string, location: LocalLocation, profile: string) => Promise<unknown>
-  readonly dotsExchangeCreate: (sessionID: string, location: LocalLocation, input: Dots.ExchangeCreate, remoteSource: McpEvents.RequestContext) => Promise<DotsExchange>
-  readonly dotsExchangeRead: (sessionID: string, location: LocalLocation, input: Dots.ExchangeRead, remoteSource: McpEvents.RequestContext) => Promise<DotsExchange>
+  readonly dotsExchangeCreate: (sessionID: string, location: LocalLocation, input: Dots.ExchangeCreate, remoteSource: McpEvents.RequestContext, signal?: AbortSignal) => Promise<DotsExchange>
+  readonly dotsExchangeRead: (sessionID: string, location: LocalLocation, input: Dots.ExchangeRead, remoteSource: McpEvents.RequestContext, signal?: AbortSignal) => Promise<DotsExchange>
   readonly dotsStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly dotsBind: (sessionID: string, location: LocalLocation, target: Dots.Target) => Promise<unknown>
   readonly dotsUnbind: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<unknown>
@@ -453,8 +453,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     }),
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
     dotsTargets: (sessionID, location, profile) => call(() => client.dots.targets({ sessionID, profile }, request(location, timeoutMs))),
-    dotsExchangeCreate: (sessionID, location, input, remoteSource) => call(() => client.dots.exchange.create({ sessionID, payload: { ...input, remoteSource } }, request(location, timeoutMs))),
-    dotsExchangeRead: (sessionID, location, input, remoteSource) => call(() => client.dots.exchange.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs))),
+    dotsExchangeCreate: (sessionID, location, input, remoteSource, signal) => call(() => client.dots.exchange.create({ sessionID, payload: { ...input, remoteSource } }, request(location, timeoutMs, signal))),
+    dotsExchangeRead: (sessionID, location, input, remoteSource, signal) => call(() => client.dots.exchange.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs, signal))),
     dotsStatus: (sessionID, location) => call(() => client.dots.status({ sessionID }, request(location, timeoutMs))),
     dotsBind: (sessionID, location, target) => call(() => client.dots.bind({ sessionID, ...target }, request(location, timeoutMs))),
     dotsUnbind: (sessionID, location, expectedTarget) => call(() => client.dots.unbind({ sessionID, expectedTarget }, request(location, timeoutMs))),

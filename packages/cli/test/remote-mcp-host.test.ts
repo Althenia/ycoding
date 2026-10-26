@@ -4,6 +4,32 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createRemoteMcpHost } from "../src/remote-mcp-host"
 
+test("MCP client capability diagnostics are volatile and never restore authority", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "relay-mcp-host-"))
+  const file = path.join(directory, "mcp.json")
+  try {
+    const host = await createRemoteMcpHost({ file, remote: () => "on" })
+    expect(host.status().clientCapabilities).toBeUndefined()
+    await host.attach("https://relay.example.invalid/api/mcp/devices/dev_test", async () => {})
+    await host.set(true)
+    const observed = [{ protocolVersion: "2026-07-28", elicitation: false, form: false, url: false, observedAt: 0 }]
+    host.setClientCapabilities(observed)
+    expect(host.status().clientCapabilities).toEqual(observed)
+    host.setLaneHold(true)
+    host.detach()
+    expect(host.status().clientCapabilities).toBeUndefined()
+    host.setClientCapabilities(observed)
+    expect(host.status().clientCapabilities).toBeUndefined()
+    await host.attach("https://relay.example.invalid/api/mcp/devices/dev_test", async () => {})
+    expect(host.status().message).toContain("read-only")
+    expect(host.status().clientCapabilities).toBeUndefined()
+    const restored = await createRemoteMcpHost({ file, remote: () => "on" })
+    expect(restored.status().clientCapabilities).toBeUndefined()
+    await host.set(false)
+    expect(host.status().clientCapabilities).toBeUndefined()
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})
+
 test("relay MCP starts off and requires the existing Remote connection", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "relay-mcp-host-"))
   try {

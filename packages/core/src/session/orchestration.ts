@@ -218,17 +218,29 @@ export const snapshot = Effect.fn("SessionOrchestration.snapshot")(function* (
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("SessionOrchestration.NotFoundError", {
   parentID: SessionSchema.ID,
   childID: SessionSchema.ID,
-}) {}
+}) {
+  override get message() {
+    return `Child task not found for parent ${this.parentID}: ${this.childID}`
+  }
+}
 
 export class ForbiddenError extends Schema.TaggedErrorClass<ForbiddenError>()("SessionOrchestration.ForbiddenError", {
   parentID: SessionSchema.ID,
   childID: SessionSchema.ID,
-}) {}
+}) {
+  override get message() {
+    return `Control of child ${this.childID} by session ${this.parentID} is not permitted`
+  }
+}
 
 export class TaskNotFoundError extends Schema.TaggedErrorClass<TaskNotFoundError>()(
   "SessionOrchestration.TaskNotFoundError",
   { childID: SessionSchema.ID },
-) {}
+) {
+  override get message() {
+    return `Child task not found: ${this.childID}`
+  }
+}
 
 export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("SessionOrchestration.ConflictError", {
   message: Schema.String,
@@ -236,7 +248,11 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("Ses
 
 export class ModelBlockedError extends Schema.TaggedErrorClass<ModelBlockedError>()("SessionOrchestration.ModelBlockedError", {
   blocked: ModelSwitchBlocked,
-}) {}
+}) {
+  override get message() {
+    return `Model switch blocked: current context (${this.blocked.currentContextTokens} tokens) exceeds the target model's safe input (${this.blocked.targetSafeInputTokens} tokens); reduce context by ${this.blocked.requiredReductionTokens} tokens and retry`
+  }
+}
 
 export class InvalidRequestError extends Schema.TaggedErrorClass<InvalidRequestError>()(
   "SessionOrchestration.InvalidRequestError",
@@ -251,7 +267,11 @@ export class ServiceUnavailableError extends Schema.TaggedErrorClass<ServiceUnav
 export class QuestionNotFoundError extends Schema.TaggedErrorClass<QuestionNotFoundError>()(
   "SessionOrchestration.QuestionNotFoundError",
   { childID: SessionSchema.ID, questionID: QuestionID },
-) {}
+) {
+  override get message() {
+    return `Open question ${this.questionID} not found for child ${this.childID}`
+  }
+}
 
 export interface ModelSource {
   readonly agent: Agent.ID

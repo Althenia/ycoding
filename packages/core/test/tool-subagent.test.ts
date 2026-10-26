@@ -1958,6 +1958,63 @@ describe("SubagentTool", () => {
     ),
   )
 
+  it.live("reports a nonempty diagnostic when a non-native tool input cannot switch a child model", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          yield* waitForTool(registry, SubagentTool.name)
+          yield* waitForTool(registry, SubagentControlTool.name)
+          const launched = yield* settleTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-switch-diagnostic-launch",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "controlled", prompt: "wait", background: true },
+            },
+          })
+          const childID = outputSessionID(launched.output?.structured)
+          const before = (yield* sessions.get(childID)).model
+          expect(
+            yield* executeTool(registry, {
+              sessionID: parent.id,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-switch-diagnostic",
+                name: SubagentControlTool.name,
+                input: { action: "switch_model", sessionID: childID, expectedModel: before, model: parentModel },
+              },
+            }),
+          ).toEqual({ type: "error", value: expect.stringContaining("native user prompt") })
+          expect((yield* sessions.get(childID)).model).toEqual(before)
+          expect(
+            yield* executeTool(registry, {
+              sessionID: parent.id,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-switch-diagnostic-missing",
+                name: SubagentControlTool.name,
+                input: { action: "switch_model", sessionID: "ses_missing_child", expectedModel: before, model: parentModel },
+              },
+            }),
+          ).toEqual({ type: "error", value: expect.stringContaining("ses_missing_child") })
+        }),
+      ),
+    ),
+  )
+
   it.live("backgrounds a held child immediately", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),

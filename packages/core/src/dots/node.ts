@@ -16,6 +16,8 @@ import { Integration } from "../integration"
 import { Location } from "../location"
 import { LocationServiceMap } from "../location-service-map"
 import { Permission } from "../permission"
+import { Form } from "../form"
+import { Question } from "../question"
 import { PluginRuntime } from "../plugin/runtime"
 import { SessionGuardrail } from "../session/guardrail"
 import { Session } from "../session"
@@ -161,18 +163,20 @@ export const requestToolsNode: Node.LocationNode<RequestTools> = makeLocationNod
         observation: (sessionID, permissions, toolsDisabled) => Effect.gen(function* (): Effect.fn.Return<DotsContext.State> {
           observed.add(sessionID)
           const routine = yield* exchanges.currentRoutine(sessionID)
+          const delegated = yield* exchanges.currentDelegated(sessionID)
+          const receipts = { ...(routine === undefined ? {} : { routine }), ...(delegated === undefined ? {} : { delegated }) }
           const capabilities = Config.capabilities(yield* config.entries())
           if (!ConfigCapabilities.allowsDots(capabilities)) return { state: "disabled", reason: "capability_disabled" }
           if (!(yield* associated(sessionID))) return { state: "disabled", reason: "no_task" }
           const available = yield* registry.available(permissions, capabilities, yield* registrations(sessionID))
-          if (toolsDisabled || !available.has("dots_report")) return { state: "disabled", reason: "tool_unavailable", ...(routine === undefined ? {} : { routine }) }
+          if (toolsDisabled || !available.has("dots_report")) return { state: "disabled", reason: "tool_unavailable", ...receipts }
           return yield* exchanges.resolveReport(sessionID).pipe(
-            Effect.map(({ record }) => ({ state: "enabled" as const, tool: "dots_report" as const, ...(routine === undefined ? {} : { routine }), envelope: Dots.TaskEnvelope.make({
+            Effect.map(({ record }) => ({ state: "enabled" as const, tool: "dots_report" as const, ...receipts, envelope: Dots.TaskEnvelope.make({
               coordinator: record.source.principal, scope: { epoch: record.source.epoch, grantID: record.grantID },
               exchangeID: record.exchangeID, messageID: record.inputID, targetSessionID: record.targetSessionID,
               kind: "task", origin: "plugin",
             }) })),
-            Effect.catch((error) => Effect.succeed({ state: "disabled" as const, reason: error.code === "exchange_not_found" ? "no_task" as const : "unavailable" as const, ...(routine === undefined ? {} : { routine }) })),
+            Effect.catch((error) => Effect.succeed({ state: "disabled" as const, reason: error.code === "exchange_not_found" ? "no_task" as const : "unavailable" as const, ...receipts })),
           )
         }),
       })
@@ -187,5 +191,5 @@ export const requestToolsNode: Node.LocationNode<RequestTools> = makeLocationNod
     }),
   ),
   deps: [node, Location.node, Permission.node, SessionGuardrail.node, Database.node, EventRuntime.node, Config.node, ToolRegistry.node,
-    Session.node, SessionExecution.node, CoordinationService.node, SessionMcpEvents.Authorization.node, LocationServiceMap.node],
+    Session.node, SessionExecution.node, CoordinationService.node, SessionMcpEvents.Authorization.node, LocationServiceMap.node, Form.node, Question.node],
 })

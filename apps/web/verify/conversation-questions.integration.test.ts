@@ -155,6 +155,13 @@ test("native question grades update without selecting, losing a focused draft, o
         expect(attributed).not.toContain("answered by you")
         expect(attributed.includes("via Answers YOLO")).toBe(via === "yolo")
       }
+      await page.evaluate(`window.responseSnapshot(${JSON.stringify([{ id: "msg_delegated_question", type: "assistant", content: [{ type: "tool", id: "call_delegated_question", name: "question", state: { status: "completed", input: { questions: [{ header: "Scope", question: "Which sessions should reload?", options: [] }] }, structured: { answers: [["Active only"]], source: { kind: "dots-delegation", anchorSessionID: "ses_anchor", delegationID: "delegation_one", revision: 3, exchangeID: "exchange_one" } }, content: [] } }], time: { created: 1, completed: 2 } }])}, [], false)`)
+      await wait(page, `document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by external client via Dots delegation delegation_one · anchor ses_anchor')`)
+      const delegated = await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)
+      expect(delegated).toContain("Active only")
+      expect(delegated).not.toContain("answered by you")
+      expect(delegated).not.toContain("answered by coordinator")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
     }
   } finally { await page.close() }
 }, 60_000)

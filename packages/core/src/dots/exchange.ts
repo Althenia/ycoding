@@ -1,6 +1,7 @@
 export * as DotsExchange from "./exchange"
 
 import { Dots } from "@ycoding-ai/schema/dots"
+import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Coordination } from "@ycoding-ai/schema/coordination"
 import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm"
@@ -19,8 +20,12 @@ import { SessionEvent } from "../session/event"
 import { SessionExecution } from "../session/execution"
 import { SessionMessage } from "../session/message"
 import { SessionPending } from "../session/pending"
-import { SessionMessageTable, SessionPendingTable, SessionProviderRequestTable } from "../session/sql"
+import { SessionMessageTable, SessionProviderRequestTable } from "../session/sql"
 import { Permission } from "../permission"
+import { Form } from "../form"
+import { Question } from "../question"
+import { SessionGuardrail } from "../session/guardrail"
+import { CoordinationDecisions } from "../session/coordination-decisions"
 import { Hash } from "../util/hash"
 
 const lock = KeyedMutex.makeUnsafe<string>()
@@ -30,6 +35,14 @@ const completedType = EventRuntime.versionedType(SessionEvent.Work.Completed.typ
 const fail = (code: Dots.ErrorCode, message: string) => new DotsRuntime.Error({ code, message })
 const identity = (target: Dots.Target) => [target.profile, target.dotID, target.threadID, target.generation]
 const recordID = (sessionID: Session.ID, exchangeID: string) => EventRuntime.ID.make(`evt_dots_${Hash.json([sessionID, exchangeID])}`)
+
+export type PendingDecision =
+  | { readonly kind: "permission"; readonly sessionID: Session.ID; readonly requestID: string; readonly fingerprint: string; readonly action: string; readonly resources: ReadonlyArray<string>; readonly metadata?: Readonly<Record<string, unknown>>; readonly sourceMessageID?: string; readonly delegatedEligible?: boolean }
+  | { readonly kind: "guardrail"; readonly sessionID: Session.ID; readonly requestID: string; readonly fingerprint: string; readonly action: string; readonly resources: ReadonlyArray<string>; readonly ruleIDs: ReadonlyArray<string>; readonly standard: boolean; readonly hardReview?: boolean; readonly sourceMessageID?: string; readonly delegatedEligible?: boolean }
+  | { readonly kind: "form"; readonly sessionID: Session.ID; readonly formID: string; readonly fingerprint: string; readonly title: string; readonly fields: Form.Fields; readonly metadata?: Readonly<Record<string, unknown>>; readonly sourceMessageID?: string; readonly delegatedEligible?: boolean }
+  | { readonly kind: "question"; readonly sessionID: Session.ID; readonly requestID: string; readonly fingerprint: string; readonly questions: ReadonlyArray<Question.Info>; readonly sourceMessageID?: string; readonly delegatedEligible?: boolean }
+
+export type DecisionChoiceInput = { readonly reply: "once" | "reject" } | { readonly answers: Form.Answer | ReadonlyArray<Question.Answer> }
 
 export interface Options {
   readonly db: Database.Interface["db"]
@@ -43,6 +56,79 @@ export interface Options {
   readonly withBinding: DotsRuntime.Interface["withBinding"]
   readonly approve: (input: Permission.AssertInput) => Effect.Effect<void, DotsRuntime.Error>
   readonly now: () => number
+  readonly decisions?: {
+    readonly pending: (sessionID: Session.ID) => Effect.Effect<ReadonlyArray<PendingDecision>, unknown>
+    readonly permissionEffect: (sessionID: Session.ID, action: string, resource: string) => Effect.Effect<"allow" | "deny" | "ask", unknown>
+    readonly settle: (input: { readonly pending: PendingDecision; readonly choice: DecisionChoiceInput; readonly source: Form.DelegatedReplySource; readonly validate: () => Effect.Effect<boolean> }) => Effect.Effect<void, unknown>
+  }
+}
+
+export const questionFingerprint = Question.fingerprint
+
+const formSourceMessageID = (metadata: Readonly<Record<string, unknown>> | undefined) => {
+  const tool = metadata?.tool
+  return tool && typeof tool === "object" && !Array.isArray(tool) && typeof (tool as Record<string, unknown>).messageID === "string"
+    ? (tool as Record<string, string>).messageID
+    : undefined
+}
+
+export function decisionServices(deps: {
+  readonly permission: Pick<Permission.Interface, "snapshots" | "replyDelegated" | "delegatedEligible" | "evaluateEffective">
+  readonly guardrail: Pick<SessionGuardrail.Interface, "requestSnapshots" | "replyDelegated" | "delegatedEligible">
+  readonly forms: Pick<Form.Interface, "snapshots" | "replyDelegated">
+  readonly questions: Pick<Question.Interface, "list" | "replyDelegated">
+}): NonNullable<Options["decisions"]> {
+  return {
+    pending: (sessionID) => Effect.gen(function* () {
+      const items: PendingDecision[] = []
+      for (const item of yield* deps.permission.snapshots(sessionID))
+        items.push({ kind: "permission", sessionID, requestID: item.request.id, fingerprint: item.fingerprint, action: item.request.action, resources: item.request.resources,
+          delegatedEligible: yield* deps.permission.delegatedEligible({ requestID: item.request.id, fingerprint: item.fingerprint, reply: "once" }).pipe(Effect.catch(() => Effect.succeed(false))),
+          ...(item.request.metadata === undefined ? {} : { metadata: item.request.metadata }), ...(item.request.source === undefined ? {} : { sourceMessageID: item.request.source.messageID }) })
+      for (const item of yield* deps.guardrail.requestSnapshots(sessionID))
+        items.push({ kind: "guardrail", sessionID, requestID: item.request.id, fingerprint: item.fingerprint, action: item.request.action, resources: item.request.resources,
+          delegatedEligible: yield* deps.guardrail.delegatedEligible({ sessionID, requestID: item.request.id, fingerprint: item.fingerprint, reply: "once" }).pipe(Effect.catch(() => Effect.succeed(false))),
+          ruleIDs: item.request.ruleIDs, standard: item.request.standard, ...(item.request.hardReview === undefined ? {} : { hardReview: item.request.hardReview }),
+          ...(item.request.source === undefined ? {} : { sourceMessageID: item.request.source.messageID as string }) })
+      for (const item of yield* deps.forms.snapshots(sessionID)) {
+        if (item.state.status !== "pending") continue
+        const sourceMessageID = formSourceMessageID(item.form.metadata)
+        items.push({ kind: "form", sessionID, formID: item.form.id, fingerprint: item.fingerprint, title: item.form.title, fields: item.form.fields,
+          ...(item.form.metadata === undefined ? {} : { metadata: item.form.metadata }), ...(sourceMessageID === undefined ? {} : { sourceMessageID }) })
+      }
+      for (const request of yield* deps.questions.list()) {
+        if (request.sessionID !== sessionID) continue
+        items.push({ kind: "question", sessionID, requestID: request.id, fingerprint: questionFingerprint(request), questions: request.questions,
+          ...(request.tool === undefined ? {} : { sourceMessageID: request.tool.messageID }) })
+      }
+      return items
+    }),
+    permissionEffect: (sessionID, action, resource) => deps.permission.evaluateEffective({ sessionID, action, resource }),
+    settle: (input) => Effect.gen(function* () {
+      const pending = input.pending
+      if (pending.kind === "permission" && "reply" in input.choice)
+        return yield* deps.permission.replyDelegated({ requestID: Permission.ID.create(pending.requestID), reply: input.choice.reply, fingerprint: pending.fingerprint, source: input.source,
+          validate: (current) => current.source?.messageID !== undefined && current.source.messageID === pending.sourceMessageID &&
+            CoordinationDecisions.humanOnlyReason({ kind: "permission", action: current.action, resources: current.resources, metadata: current.metadata }) === undefined
+            ? input.validate() : Effect.succeed(false) })
+      if (pending.kind === "guardrail" && "reply" in input.choice)
+        return yield* deps.guardrail.replyDelegated({ sessionID: pending.sessionID, requestID: Guardrail.RequestID.create(pending.requestID), reply: input.choice.reply, fingerprint: pending.fingerprint, source: input.source,
+          validate: (current) => current.source?.messageID !== undefined && current.source.messageID === pending.sourceMessageID &&
+            CoordinationDecisions.humanOnlyReason({ kind: "review", action: current.action, resources: current.resources, ruleIDs: current.ruleIDs, hardReview: current.hardReview }) === undefined
+            ? input.validate() : Effect.succeed(false) })
+      if (pending.kind === "form" && "answers" in input.choice)
+        return yield* deps.forms.replyDelegated({ id: Form.ID.create(pending.formID), answer: input.choice.answers as Form.Answer, fingerprint: pending.fingerprint, source: input.source,
+          validate: (current) => formSourceMessageID(current.metadata) !== undefined && formSourceMessageID(current.metadata) === pending.sourceMessageID &&
+            CoordinationDecisions.humanOnlyReason({ kind: "question", resources: [current.title, ...current.fields.flatMap((field) => [field.key, field.title ?? "", field.description ?? ""])], metadata: current.metadata }) === undefined
+            ? input.validate() : Effect.succeed(false) })
+      if (pending.kind === "question" && "answers" in input.choice)
+        return yield* deps.questions.replyDelegated({ requestID: Question.ID.ascending(pending.requestID), answers: input.choice.answers as ReadonlyArray<Question.Answer>, fingerprint: pending.fingerprint, source: input.source,
+          validate: (current) => current.tool?.messageID !== undefined && current.tool.messageID === pending.sourceMessageID &&
+            CoordinationDecisions.humanOnlyReason({ kind: "question", resources: current.questions.flatMap((item) => [item.question, item.header, ...item.options.map((option) => option.label)]) }) === undefined
+            ? input.validate() : Effect.succeed(false) })
+      return yield* Effect.fail(new Error("The decision does not match the native request."))
+    }),
+  }
 }
 
 export function make(options: Options) {
@@ -139,6 +225,11 @@ export function make(options: Options) {
       grant.accountDigest !== binding.accountDigest || Hash.json(identity(grant.target)) !== Hash.json(identity(binding.target)))
       return yield* fail("authorization_failed", "The routine delegation is inactive or its binding changed.")
     const current = yield* nativeFence(grant.anchorSessionID, grant.info.targetSessionID)
+    if ("basis" in grant.info) {
+      if (current.ownerFence !== grant.ownerFence || Hash.json(current.nativeScope) !== Hash.json(grant.nativeScope))
+        return yield* fail("target_forbidden", "The native ownership incarnation changed.")
+      return grant
+    }
     const selected = yield* task(grant.info.targetSessionID)
     if (selected.taskInputID !== grant.info.taskInputID || selected.fence !== grant.taskFence || current.ownerFence !== grant.ownerFence || Hash.json(current.nativeScope) !== Hash.json(grant.nativeScope))
       return yield* fail("target_forbidden", "The native task or ownership incarnation changed.")
@@ -150,7 +241,7 @@ export function make(options: Options) {
     checked.expiresAt > options.now() && checked.signal?.aborted !== true
   const routineGrant = Effect.fn("DotsExchange.routineGrant")(function* (binding: DotsRuntime.BindingAuthority, value: Dots.RoutineReceipt, principal: McpEvents.Principal, targetSessionID: Session.ID) {
     const grant = binding.grants.get(value.delegation.id)
-    if (!grant || grant.info.revision !== value.delegation.revision || grant.info.taskInputID !== value.taskInputID || grant.info.targetSessionID !== targetSessionID || Hash.json(grant.info.principal) !== Hash.json(principal))
+    if (!grant || "basis" in grant.info || grant.info.revision !== value.delegation.revision || grant.info.taskInputID !== value.taskInputID || grant.info.targetSessionID !== targetSessionID || Hash.json(grant.info.principal) !== Hash.json(principal))
       return yield* fail("authorization_failed", "The routine delegation does not match this authenticated task.")
     if (!grant.info.scope.operations.includes(value.instruction.operation) || (value.instruction.operation === "presentation" &&
       ((value.instruction.preferences.format !== undefined && !grant.info.scope.format?.includes(value.instruction.preferences.format)) ||
@@ -158,9 +249,156 @@ export function make(options: Options) {
       return yield* fail("target_forbidden", "The routine operation is outside the approved scope.")
     return yield* localGrant(binding, grant)
   })
+  const delegatedGrant = Effect.fn("DotsExchange.delegatedGrant")(function* (binding: DotsRuntime.BindingAuthority, value: Dots.DelegatedReceipt, principal: McpEvents.Principal, targetSessionID: Session.ID) {
+    const grant = binding.grants.get(value.delegation.id)
+    if (!grant || !("basis" in grant.info) || grant.info.revision !== value.delegation.revision || grant.info.targetSessionID !== targetSessionID || Hash.json(grant.info.principal) !== Hash.json(principal))
+      return yield* fail("authorization_failed", "The session delegation does not match this authenticated invocation.")
+    if (!grant.info.scope.operations.includes(value.instruction.operation))
+      return yield* fail("target_forbidden", "The delegated operation is outside the approved scope.")
+    return yield* localGrant(binding, grant)
+  })
+  const assistantsFor = Effect.fn("DotsExchange.assistantsFor")(function* (targetSessionID: Session.ID, inputID: SessionMessage.ID) {
+    const promoted = yield* options.db.select({ seq: EventTable.seq }).from(EventTable).where(and(
+      eq(EventTable.aggregate_id, targetSessionID), eq(EventTable.type, promotedType), sql`json_extract(${EventTable.data}, '$.inputID') = ${inputID}`,
+    )).orderBy(desc(EventTable.seq)).limit(1).get().pipe(Effect.orDie)
+    if (!promoted) return new Set<string>()
+    const next = yield* options.db.select({ seq: EventTable.seq }).from(EventTable).where(and(
+      eq(EventTable.aggregate_id, targetSessionID), eq(EventTable.type, promotedType), gt(EventTable.seq, promoted.seq),
+    )).orderBy(asc(EventTable.seq)).limit(1).get().pipe(Effect.orDie)
+    const rows = yield* options.db.select({ id: SessionMessageTable.id }).from(SessionMessageTable).where(and(
+      eq(SessionMessageTable.session_id, targetSessionID), eq(SessionMessageTable.type, "assistant"),
+      gt(SessionMessageTable.seq, promoted.seq), next ? lt(SessionMessageTable.seq, next.seq) : undefined,
+    )).limit(64).all().pipe(Effect.orDie)
+    return new Set(rows.map((row) => row.id as string))
+  })
+  const inputForAssistant = Effect.fn("DotsExchange.inputForAssistant")(function* (targetSessionID: Session.ID, sourceMessageID: string) {
+    const assistant = yield* options.db.select({ seq: SessionMessageTable.seq }).from(SessionMessageTable).where(and(
+      eq(SessionMessageTable.session_id, targetSessionID), eq(SessionMessageTable.type, "assistant"), eq(SessionMessageTable.id, SessionMessage.ID.make(sourceMessageID)),
+    )).limit(1).get().pipe(Effect.orDie)
+    if (!assistant) return undefined
+    const promoted = yield* options.db.select({ data: EventTable.data }).from(EventTable).where(and(
+      eq(EventTable.aggregate_id, targetSessionID), eq(EventTable.type, promotedType), lt(EventTable.seq, assistant.seq),
+    )).orderBy(desc(EventTable.seq)).limit(1).get().pipe(Effect.orDie)
+    if (!promoted) return undefined
+    return Schema.decodeUnknownSync(SessionEvent.InputPromoted.data)(promoted.data).inputID
+  })
+  const eligibleDecision = (pending: PendingDecision, assistants: ReadonlySet<string>) => {
+    if (pending.delegatedEligible === false) return false
+    if (pending.sourceMessageID === undefined || !assistants.has(pending.sourceMessageID)) return false
+    if (pending.kind === "permission")
+      return CoordinationDecisions.humanOnlyReason({ kind: "permission", action: pending.action, resources: pending.resources, metadata: pending.metadata }) === undefined
+    if (pending.kind === "guardrail")
+      return pending.standard && pending.hardReview !== true && pending.ruleIDs.every((rule) => rule.startsWith("standard.")) &&
+        CoordinationDecisions.humanOnlyReason({ kind: "review", action: pending.action, resources: pending.resources, ruleIDs: pending.ruleIDs, hardReview: pending.hardReview }) === undefined
+    if (pending.kind === "form")
+      return pending.fields.every((field) => field.type !== "external") &&
+        CoordinationDecisions.humanOnlyReason({ kind: "question", resources: [pending.title, ...pending.fields.flatMap((field) => [field.key, field.title ?? "", field.description ?? ""])], metadata: pending.metadata }) === undefined
+    return CoordinationDecisions.humanOnlyReason({ kind: "question", resources: pending.questions.flatMap((item) => [item.question, item.header, ...item.options.map((option) => option.label)]) }) === undefined
+  }
+  const decisionTargetOf = (pending: PendingDecision): Dots.DecisionTarget =>
+    pending.kind === "permission" ? { kind: "permission", requestID: Permission.ID.create(pending.requestID), fingerprint: pending.fingerprint }
+      : pending.kind === "guardrail" ? { kind: "guardrail", requestID: Guardrail.RequestID.create(pending.requestID), fingerprint: pending.fingerprint }
+        : pending.kind === "form" ? { kind: "form", formID: Form.ID.create(pending.formID), fingerprint: pending.fingerprint }
+          : { kind: "question", requestID: Question.ID.ascending(pending.requestID), fingerprint: pending.fingerprint }
+  const candidateOf = (pending: PendingDecision): Dots.DecisionCandidate => ({
+    target: decisionTargetOf(pending),
+    ...(pending.kind === "permission" ? { action: pending.action.slice(0, 256), resources: pending.resources.slice(0, 20).map((item) => item.slice(0, 1000)) } : {}),
+    ...(pending.kind === "guardrail" ? { action: pending.action.slice(0, 256), resources: pending.resources.slice(0, 20).map((item) => item.slice(0, 1000)), ruleIDs: pending.ruleIDs.slice(0, 20).map((item) => item.slice(0, 256)) } : {}),
+    ...(pending.kind === "form" ? { title: pending.title.slice(0, 256), fields: pending.fields } : {}),
+    ...(pending.kind === "question" ? { questions: [...pending.questions] } : {}),
+  })
+  const pendingDecisions = Effect.fn("DotsExchange.pendingDecisions")(function* (targetSessionID: Session.ID) {
+    if (!options.decisions) return [] as ReadonlyArray<PendingDecision>
+    return yield* options.decisions.pending(targetSessionID).pipe(
+      Effect.catchCause((cause) => Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.fail(fail("authorization_failed", "Pending native decisions are unavailable."))),
+    )
+  })
+  const decisionCandidates = Effect.fn("DotsExchange.decisionCandidates")(function* (value: Dots.ExchangeRecord) {
+    if (!value.delegated || value.delegated.instruction.operation !== "task") return [] as Dots.DecisionCandidate[]
+    const grant = yield* options.withBinding(value.sessionID, (binding) => Effect.succeed(binding.grants.get(value.delegated!.delegation.id))).pipe(Effect.result)
+    if (grant._tag === "Failure" || !grant.success || !("basis" in grant.success.info) || grant.success.info.revision !== value.delegated.delegation.revision || !grant.success.info.scope.operations.includes("decision") || !grant.success.info.active || grant.success.info.expiresAt <= options.now())
+      return [] as Dots.DecisionCandidate[]
+    const assistants = yield* assistantsFor(value.targetSessionID, value.inputID)
+    const pending = yield* pendingDecisions(value.targetSessionID).pipe(Effect.result)
+    if (pending._tag === "Failure") return [] as Dots.DecisionCandidate[]
+    return pending.success.filter((item) => eligibleDecision(item, assistants)).slice(0, 20).map(candidateOf)
+  })
+  const decisionOutcomeOf = Effect.fn("DotsExchange.decisionOutcomeOf")(function* (value: Dots.ExchangeRecord) {
+    if (!value.delegated || value.delegated.instruction.operation !== "decision") return undefined
+    const instruction = value.delegated.instruction
+    const reply = "reply" in instruction ? { reply: instruction.reply } : {}
+    if (!options.decisions) return { target: instruction.target, state: "unknown" as const, ...reply }
+    const pending = yield* pendingDecisions(value.targetSessionID).pipe(Effect.result)
+    if (pending._tag === "Failure") return { target: instruction.target, state: "unknown" as const, ...reply }
+    const receiptRow = yield* options.db.select({ data: EventTable.data }).from(EventTable).where(and(
+      eq(EventTable.aggregate_id, value.targetSessionID), eq(EventTable.type, EventRuntime.versionedType(SessionEvent.DotsDecisionSettled.type, 1)),
+      sql`json_extract(${EventTable.data}, '$.source.exchangeID') = ${value.exchangeID}`,
+      sql`json_extract(${EventTable.data}, '$.source.anchorSessionID') = ${value.sessionID}`,
+      sql`json_extract(${EventTable.data}, '$.source.delegationID') = ${value.delegated.delegation.id}`,
+      sql`json_extract(${EventTable.data}, '$.source.revision') = ${value.delegated.delegation.revision}`,
+    )).limit(1).get().pipe(Effect.orDie)
+    const receipt = receiptRow ? Schema.decodeUnknownSync(SessionEvent.DotsDecisionSettled.data)(receiptRow.data) : undefined
+    if (receipt && Hash.json(receipt.target) === Hash.json(instruction.target)) return { target: instruction.target, state: "settled" as const, ...reply }
+    const found = pending.success.find((item) => Hash.json(decisionTargetOf(item)) === Hash.json(instruction.target))
+    const sameKind = pending.success.find((item) => item.kind === instruction.target.kind && ("formID" in item && "formID" in instruction.target ? item.formID === instruction.target.formID : "requestID" in item && "requestID" in instruction.target ? item.requestID === instruction.target.requestID : false))
+    return { target: instruction.target, state: found ? "pending" as const : sameKind ? "stale" as const : "unknown" as const, ...reply }
+  })
+  const sessionDelegationCreate = Effect.fn("DotsExchange.sessionDelegationCreate")(function* (input: Dots.SessionDelegationCreate & { readonly sessionID: Session.ID }) {
+    const { sessionID, ...raw } = input
+    const payload = yield* Schema.decodeUnknownEffect(Dots.SessionDelegationCreate)(raw).pipe(Effect.mapError(() => fail("invalid_input", "Invalid native delegation proposal.")))
+    const source = yield* record(sessionID, payload.sourceExchangeID)
+    if (!source || source.targetSessionID !== payload.targetSessionID) return yield* fail("target_forbidden", "Select an authenticated exchange for this exact target.")
+    const principal = { ...source.source.principal, epoch: source.source.epoch, grantID: source.grantID }
+    yield* checkedPrincipal(principal)
+    yield* checkFences(source, source.source)
+    const current = yield* nativeFence(sessionID, payload.targetSessionID)
+    const proposal = yield* options.withBinding(sessionID, (binding) => Effect.gen(function* () {
+      if (Hash.json(identity(binding.target)) !== Hash.json(identity(payload.expectedAttachment))) return yield* fail("target_changed", "The attachment changed.")
+      const fingerprint = Hash.json([{ ...payload, expectedAttachment: identity(payload.expectedAttachment) }, binding.incarnation, binding.accountDigest, principal, current])
+      const existing = binding.proposals.get(payload.proposalID)
+      if (existing) {
+        if (existing.fingerprint !== fingerprint) return yield* fail("exchange_conflict", "The proposal ID already names another scope.")
+        return { owner: false, pending: existing, bindingID: binding.incarnation, accountDigest: binding.accountDigest }
+      }
+      if (payload.expiresAt <= options.now() || payload.expiresAt > options.now() + 3_600_000) return yield* fail("invalid_input", "Delegation expiry must be within the next hour.")
+      const pending = { fingerprint, result: Deferred.makeUnsafe<Dots.DelegationInfo, DotsRuntime.Error>() }
+      binding.proposals.set(payload.proposalID, pending)
+      return { owner: true, pending, bindingID: binding.incarnation, accountDigest: binding.accountDigest }
+    }))
+    if (!proposal.owner) {
+      const prior = yield* Deferred.await(proposal.pending.result)
+      return yield* options.withBinding(sessionID, (binding) => Effect.gen(function* () {
+        const grant = binding.grants.get(prior.id)
+        if (!grant) return yield* fail("authorization_failed", "The delegation is unavailable.")
+        yield* localGrant(binding, grant)
+        return grant.info
+      }))
+    }
+    const activate = Effect.gen(function* () {
+      yield* options.approve({ sessionID, action: "dots_delegate", resources: [Hash.json([sessionID, payload.targetSessionID, "session", proposal.pending.fingerprint])], requireHuman: true,
+        metadata: Dots.SessionDelegationReview.make({ kind: "dots-session-delegation", proposalID: payload.proposalID, sourceExchangeID: source.exchangeID,
+          principal, targetSessionID: payload.targetSessionID, expectedAttachment: source.expectedAttachment,
+          scope: payload.scope, expiresAt: payload.expiresAt, lifetime: "binding", fingerprint: proposal.pending.fingerprint }) })
+      const checked = yield* checkedPrincipal(principal)
+      yield* checkFences(source, source.source)
+      return yield* SessionPending.withInboxLock(payload.targetSessionID)(options.withBinding(sessionID, (binding) => owned(current.nativeScope, Effect.gen(function* () {
+        if (!liveAuthorization(checked)) return yield* fail("authorization_failed", "The coordinator grant changed during native approval.")
+        const info: Dots.SessionDelegationInfo = { id: payload.proposalID, revision: 1, sourceExchangeID: payload.sourceExchangeID, targetSessionID: payload.targetSessionID,
+          basis: "session", principal, scope: payload.scope, expiresAt: payload.expiresAt, active: true }
+        const grant: DotsRuntime.DelegationGrant = { info, anchorSessionID: sessionID, bindingID: proposal.bindingID, accountDigest: proposal.accountDigest,
+          target: source.expectedAttachment, ...current }
+        yield* localGrant(binding, grant)
+        binding.grants.set(info.id, grant)
+        return info as Dots.DelegationInfo
+      }))))
+    })
+    return yield* activate.pipe(Effect.onExit((exit) => Deferred.done(proposal.pending.result, exit)))
+  })
   const delegationCreate = Effect.fn("DotsExchange.delegationCreate")(function* (input: Dots.DelegationCreate & { readonly sessionID: Session.ID }) {
+    if ("basis" in input) return yield* sessionDelegationCreate(input as Dots.SessionDelegationCreate & { readonly sessionID: Session.ID })
     const { sessionID, ...raw } = input
     const payload = yield* Schema.decodeUnknownEffect(Dots.DelegationCreate)(raw).pipe(Effect.mapError(() => fail("invalid_input", "Invalid native delegation proposal.")))
+    if ("basis" in payload) return yield* fail("invalid_input", "Invalid native delegation proposal.")
     const source = yield* record(sessionID, payload.sourceExchangeID)
     if (!source || source.targetSessionID !== payload.targetSessionID) return yield* fail("target_forbidden", "Select an authenticated exchange for this exact target.")
     const principal = { ...source.source.principal, epoch: source.source.epoch, grantID: source.grantID }
@@ -217,22 +455,24 @@ export function make(options: Options) {
       sql`json_extract(${EventTable.data}, '$.inputID') = ${entry.id}`, sql`json_extract(${EventTable.data}, '$.targetSessionID') = ${entry.sessionID}`)).limit(1).get().pipe(Effect.orDie)
     if (!row) return yield* promote()
     const value = Schema.decodeUnknownSync(Dots.ExchangeRecord)(row.data)
-    if (!value.routine) return yield* promote()
+    const delegated = value.delegated?.instruction.operation === "task" ? value.delegated : undefined
+    if (!value.routine && !delegated) return yield* promote()
     const routine = value.routine
     const principal = { ...value.source.principal, epoch: value.source.epoch, grantID: value.grantID }
+    const check = (binding: DotsRuntime.BindingAuthority) => delegated ? delegatedGrant(binding, delegated, principal, value.targetSessionID) : routineGrant(binding, routine!, principal, value.targetSessionID)
     let promoting = false
     const result = yield* checkedPrincipal(principal).pipe(Effect.flatMap((checked) => checkFences(value, value.source).pipe(Effect.andThen(
       options.withBinding(value.sessionID, (binding) => owned(value.scope, Effect.gen(function* () {
         if (!liveAuthorization(checked)) return yield* fail("authorization_failed", "The coordinator grant changed before promotion.")
-        yield* routineGrant(binding, routine, principal, value.targetSessionID)
+        yield* check(binding)
         promoting = true
-        return yield* promote(routineGrant(binding, routine, principal, value.targetSessionID).pipe(Effect.match({ onFailure: () => false, onSuccess: () => liveAuthorization(checked) })))
+        return yield* promote(check(binding).pipe(Effect.match({ onFailure: () => false, onSuccess: () => liveAuthorization(checked) })))
       }))),
     ))), Effect.result)
     if (result._tag === "Success" && result.success) return true
     if (result._tag === "Failure" && promoting) return yield* Effect.fail(result.failure)
     yield* options.events.publish(SessionEvent.DotsInstructionRejected, { sessionID: entry.sessionID, inputID: entry.id, anchorSessionID: value.sessionID,
-      exchangeID: value.exchangeID, delegationID: routine.delegation.id, reason: "delegation_invalid" })
+      exchangeID: value.exchangeID, delegationID: delegated ? delegated.delegation.id : routine!.delegation.id, reason: "delegation_invalid" })
     return false
   })
 
@@ -259,7 +499,10 @@ export function make(options: Options) {
   })
 
   const project = Effect.fn("DotsExchange.project")(function* (value: Dots.ExchangeRecord): Effect.fn.Return<Dots.Exchange> {
-    const base = { exchangeID: value.exchangeID, sessionID: value.sessionID, targetSessionID: value.targetSessionID, inputID: value.inputID, channel: "task" as const, envelope: taskEnvelope(value) }
+    const decisions = yield* decisionCandidates(value)
+    const decisionOutcome = yield* decisionOutcomeOf(value)
+    const base = { exchangeID: value.exchangeID, sessionID: value.sessionID, targetSessionID: value.targetSessionID, inputID: value.inputID, channel: "task" as const, envelope: taskEnvelope(value),
+      ...(value.delegated?.instruction.operation === "task" ? { decisions } : {}), ...(decisionOutcome === undefined ? {} : { decisionOutcome }) }
     const rejected = yield* options.db.select({ id: EventTable.id }).from(EventTable).where(and(eq(EventTable.aggregate_id, value.targetSessionID),
       eq(EventTable.type, EventRuntime.versionedType(SessionEvent.DotsInstructionRejected.type, 1)), sql`json_extract(${EventTable.data}, '$.inputID') = ${value.inputID}`)).limit(1).get().pipe(Effect.orDie)
     if (rejected) return { ...base, state: "failed", progress: [] }
@@ -323,8 +566,11 @@ export function make(options: Options) {
   const createRoutine = Effect.fn("DotsExchange.createRoutine")(function* (input: Dots.ExchangeCreate & { readonly sessionID: Session.ID; readonly remoteSource: McpEvents.RequestContext }) {
     const { sessionID, remoteSource, ...raw } = input
     const payload = yield* Schema.decodeUnknownEffect(Dots.ExchangeCreate)(raw, { onExcessProperty: "error" }).pipe(Effect.mapError(() => fail("invalid_input", "Invalid routine instruction.")))
-    if (payload.delegation === undefined) return yield* fail("invalid_input", "A routine instruction requires a delegation.")
-    const routine: Dots.RoutineReceipt = { delegation: payload.delegation, taskInputID: payload.taskInputID, instruction: payload.instruction }
+    if (!("taskInputID" in payload) || payload.taskInputID === undefined || !("delegation" in payload) || payload.delegation === undefined || !("instruction" in payload) || payload.instruction === undefined ||
+      (payload.instruction.operation !== "continue" && payload.instruction.operation !== "presentation"))
+      return yield* fail("invalid_input", "A routine instruction requires a delegation.")
+    const routineInstruction: Dots.RoutineInstruction = payload.instruction.operation === "continue" ? { operation: "continue" } : { operation: "presentation", preferences: payload.instruction.preferences }
+    const routine: Dots.RoutineReceipt = { delegation: payload.delegation, taskInputID: payload.taskInputID, instruction: routineInstruction }
     const principal = yield* authorize(remoteSource)
     const checked = yield* checkedPrincipal(principal)
     const attachment = yield* options.attachment(sessionID)
@@ -343,9 +589,9 @@ export function make(options: Options) {
         const value: Dots.ExchangeRecord = { exchangeID: payload.exchangeID, sessionID, targetSessionID: payload.targetSessionID,
           inputID: SessionMessage.ID.make(`msg_dots_${Hash.json([sessionID, payload.exchangeID])}`), expectedAttachment: binding.target,
           accountDigest: binding.accountDigest, fingerprint, source: remoteSource, scope: current.nativeScope, grantID: principal.grantID, routine }
-        const text = payload.instruction.operation === "continue"
+        const text = routineInstruction.operation === "continue"
           ? "Continue the existing native human task. Preserve its scope, remaining step allowance, permissions and pending human decisions."
-          : `Present the existing native human task using these approved preferences: ${JSON.stringify(payload.instruction.preferences)}. Preserve its objective, permissions and pending human decisions.`
+          : `Present the existing native human task using these approved preferences: ${JSON.stringify(routineInstruction.preferences)}. Preserve its objective, permissions and pending human decisions.`
         const committed = yield* options.events.publishBatch([
           { definition: SessionEvent.DotsExchangeCreated, data: value, options: { id: recordID(sessionID, payload.exchangeID) } },
           { definition: SessionEvent.InputAdmitted, data: { sessionID: payload.targetSessionID, inputID: value.inputID,
@@ -362,10 +608,110 @@ export function make(options: Options) {
     ))
   })
 
+  const findDecision = Effect.fn("DotsExchange.findDecision")(function* (value: Dots.ExchangeRecord) {
+    if (!value.delegated || value.delegated.instruction.operation !== "decision" || !options.decisions)
+      return yield* fail("target_forbidden", "Delegated decisions are unavailable.")
+    const instruction = value.delegated.instruction
+    const pending = yield* pendingDecisions(value.targetSessionID)
+    const found = pending.find((item) => Hash.json(decisionTargetOf(item)) === Hash.json(instruction.target))
+    if (!found) {
+      const sameID = pending.some((item) => item.kind === instruction.target.kind && ("formID" in item && "formID" in instruction.target ? item.formID === instruction.target.formID : "requestID" in item && "requestID" in instruction.target ? item.requestID === instruction.target.requestID : false))
+      if (sameID) return yield* fail("exchange_conflict", "The native decision changed since it was listed.")
+      return yield* fail("target_forbidden", "The native decision does not exist or is not eligible for delegated settlement.")
+    }
+    const sourceInputID = found.sourceMessageID === undefined ? undefined : yield* inputForAssistant(value.targetSessionID, found.sourceMessageID)
+    const sourceRecord = sourceInputID === undefined ? undefined : yield* options.db.select({ data: EventTable.data }).from(EventTable).where(and(eq(EventTable.type, createdType),
+      sql`json_extract(${EventTable.data}, '$.targetSessionID') = ${value.targetSessionID}`,
+      sql`json_extract(${EventTable.data}, '$.inputID') = ${sourceInputID}`)).limit(1).get().pipe(Effect.orDie)
+    const taskRecord = sourceRecord ? Schema.decodeUnknownSync(Dots.ExchangeRecord)(sourceRecord.data) : undefined
+    const assistants = taskRecord === undefined ? new Set<string>() : yield* assistantsFor(value.targetSessionID, taskRecord.inputID)
+    if (taskRecord?.delegated?.instruction.operation !== "task" || taskRecord.sessionID !== value.sessionID || taskRecord.grantID !== value.grantID ||
+      taskRecord.accountDigest !== value.accountDigest || Hash.json(identity(taskRecord.expectedAttachment)) !== Hash.json(identity(value.expectedAttachment)) ||
+      Hash.json(taskRecord.source.principal) !== Hash.json(value.source.principal) || taskRecord.source.epoch !== value.source.epoch ||
+      taskRecord.delegated.delegation.id !== value.delegated.delegation.id ||
+      taskRecord.delegated.delegation.revision !== value.delegated.delegation.revision || !eligibleDecision(found, assistants))
+      return yield* fail("target_forbidden", "The native decision is not eligible for delegated settlement.")
+    if (found.kind === "permission" && "reply" in instruction && instruction.reply === "once") {
+      for (const resource of found.resources) {
+        const effect = yield* options.decisions.permissionEffect(value.targetSessionID, found.action, resource).pipe(
+          Effect.catchCause((cause) => Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.fail(fail("authorization_failed", "Native permission rules are unavailable."))),
+        )
+        if (effect === "deny") return yield* fail("target_forbidden", "A native permission rule denies this action.")
+      }
+    }
+    return found
+  })
+  const settleDecision = Effect.fn("DotsExchange.settleDecision")(function* (value: Dots.ExchangeRecord, validate: () => Effect.Effect<boolean>) {
+    if (!value.delegated || value.delegated.instruction.operation !== "decision" || !options.decisions)
+      return yield* fail("target_forbidden", "Delegated decisions are unavailable.")
+    const instruction = value.delegated.instruction
+    const found = yield* findDecision(value)
+    const source: Form.DelegatedReplySource = { kind: "dots-delegation", anchorSessionID: value.sessionID, delegationID: value.delegated.delegation.id, revision: value.delegated.delegation.revision, exchangeID: value.exchangeID }
+    const choice: DecisionChoiceInput = "reply" in instruction ? { reply: instruction.reply } : { answers: instruction.answers }
+    yield* options.decisions.settle({ pending: found, choice, source, validate }).pipe(
+      Effect.catchDefect(() => Effect.fail(fail("exchange_outcome_unknown", "The decision outcome could not be confirmed; read the same exchange before another mutation."))),
+      Effect.mapError((error) => error instanceof DotsRuntime.Error ? error : fail("invalid_input", "The native validator rejected this decision.")),
+    )
+    return "settled" as const
+  })
+  const createDelegated = Effect.fn("DotsExchange.createDelegated")(function* (input: Dots.ExchangeCreate & { readonly sessionID: Session.ID; readonly remoteSource: McpEvents.RequestContext }) {
+    const { sessionID, remoteSource, ...raw } = input
+    const payload = yield* Schema.decodeUnknownEffect(Dots.ExchangeCreate)(raw, { onExcessProperty: "error" }).pipe(Effect.mapError(() => fail("invalid_input", "Invalid delegated instruction.")))
+    if (!("instruction" in payload) || !("delegation" in payload) || payload.delegation === undefined || !("operation" in payload.instruction) || (payload.instruction.operation !== "task" && payload.instruction.operation !== "decision"))
+      return yield* fail("invalid_input", "A delegated instruction requires a session delegation.")
+    const receipt: Dots.DelegatedReceipt = { delegation: payload.delegation, instruction: payload.instruction as Dots.DelegatedInstruction }
+    const principal = yield* authorize(remoteSource)
+    const checked = yield* checkedPrincipal(principal)
+    const attachment = yield* options.attachment(sessionID)
+    if (Hash.json(identity(attachment.target)) !== Hash.json(identity(payload.expectedAttachment))) return yield* fail("target_changed", "The confirmed attachment changed.")
+    const current = yield* nativeFence(sessionID, payload.targetSessionID)
+    const fingerprint = Hash.json({ ...payload, expectedAttachment: identity(payload.expectedAttachment), source: principal })
+    return yield* lock.withLock(recordID(sessionID, payload.exchangeID))(SessionPending.withInboxLock(payload.targetSessionID)(Effect.gen(function* () {
+      const committed = yield* options.withBinding(sessionID, (binding) => owned(current.nativeScope, Effect.gen(function* () {
+        if (!liveAuthorization(checked)) return yield* fail("authorization_failed", "The coordinator grant changed before admission.")
+        yield* delegatedGrant(binding, receipt, principal, payload.targetSessionID)
+        const prior = yield* record(sessionID, payload.exchangeID)
+        if (prior) {
+          if (prior.fingerprint !== fingerprint) return yield* fail("exchange_conflict", "The exchange ID already names another delegated instruction.")
+          return { value: prior, fresh: false }
+        }
+        const value: Dots.ExchangeRecord = { exchangeID: payload.exchangeID, sessionID, targetSessionID: payload.targetSessionID,
+          inputID: SessionMessage.ID.make(`msg_dots_${Hash.json([sessionID, payload.exchangeID])}`), expectedAttachment: binding.target,
+          accountDigest: binding.accountDigest, fingerprint, source: remoteSource, scope: current.nativeScope, grantID: principal.grantID, delegated: receipt }
+        const guard = delegatedGrant(binding, receipt, principal, payload.targetSessionID).pipe(Effect.match({ onFailure: () => false, onSuccess: () => liveAuthorization(checked) }))
+        if (receipt.instruction.operation === "decision") {
+          yield* findDecision(value)
+          const published = yield* options.events.publishBatch([
+            { definition: SessionEvent.DotsExchangeCreated, data: value, options: { id: recordID(sessionID, payload.exchangeID) } },
+          ], { when: guard })
+          if (!published.length) return yield* fail("authorization_failed", "The session delegation changed before admission.")
+          yield* settleDecision(value, () => delegatedGrant(binding, receipt, principal, payload.targetSessionID).pipe(
+            Effect.match({ onFailure: () => false, onSuccess: () => liveAuthorization(checked) }),
+          ))
+          return { value, fresh: false }
+        }
+        const published = yield* options.events.publishBatch([
+          { definition: SessionEvent.DotsExchangeCreated, data: value, options: { id: recordID(sessionID, payload.exchangeID) } },
+          { definition: SessionEvent.InputAdmitted, data: { sessionID: payload.targetSessionID, inputID: value.inputID,
+            input: SessionPending.Message.make({ type: "user", delivery: payload.delivery, data: { text: receipt.instruction.text, metadata: {
+              inputOrigin: "plugin", remoteMcp: remoteSource,
+              dotsExchange: Dots.ExchangeMetadata.make({ exchangeID: value.exchangeID, sessionID, targetSessionID: value.targetSessionID,
+                attachment: value.expectedAttachment, envelope: taskEnvelope(value), delegated: receipt }),
+            } } }) } },
+        ], { when: guard })
+        if (!published.length) return yield* fail("authorization_failed", "The session delegation changed before admission.")
+        return { value, fresh: true }
+      })))
+      if (committed.fresh) yield* options.execution.wake(committed.value.targetSessionID)
+      return yield* project(committed.value)
+    })))
+  })
+
   return {
     delegationCreate,
     promoteRoutine,
     currentRoutine: (sessionID: Session.ID) => activeRecord(sessionID).pipe(Effect.map((active) => active.record.routine), Effect.catch(() => Effect.succeed(undefined))),
+    currentDelegated: (sessionID: Session.ID) => activeRecord(sessionID).pipe(Effect.map((active) => active.record.delegated), Effect.catch(() => Effect.succeed(undefined))),
     delegationStatus: Effect.fn("DotsExchange.delegationStatus")(function* (input: typeof Dots.DelegationStatusInput.Type & { readonly sessionID: Session.ID }): Effect.fn.Return<Dots.DelegationStatus, DotsRuntime.Error> {
       const current = yield* nativeFence(input.sessionID, input.targetSessionID)
       const attachment = yield* options.attachment(input.sessionID)
@@ -418,6 +764,7 @@ export function make(options: Options) {
       return current
     }),
     create: Effect.fn("DotsExchange.create")(function* (input: Dots.ExchangeCreate & { readonly sessionID: Session.ID; readonly remoteSource: McpEvents.RequestContext }) {
+      if (input.delegation !== undefined && "instruction" in input && (input.instruction.operation === "task" || input.instruction.operation === "decision")) return yield* createDelegated(input)
       if (input.delegation !== undefined) return yield* createRoutine(input)
       const principal = yield* authorize(input.remoteSource)
       if (["envelope", "grantID", "origin", "coordinator", "scope"].some((key) => key in input))
@@ -510,10 +857,25 @@ export const service = Effect.gen(function* () {
   const locations = yield* LocationServiceMap.Service
   const authorization = yield* SessionMcpEvents.Authorization.Service
   const permission = yield* Permission.Service
+  const guardrail = yield* SessionGuardrail.Service
+  const forms = yield* Form.Service
+  const questions = yield* Question.Service
   const runtimeFor = (sessionID: Session.ID) => Effect.gen(function* () {
     const session = yield* sessions.get(sessionID).pipe(Effect.mapError(() => fail("session_not_found", "The attachment Session does not exist.")))
     if (session.location.directory === currentLocation.directory && session.location.workspaceID === currentLocation.workspaceID) return dots
     return yield* DotsRuntime.Service.pipe(Effect.provide(locations.get(session.location)), Effect.mapError(() => fail("connection_unavailable", "The attachment Location is unavailable.")))
+  })
+  const servicesFor = (sessionID: Session.ID) => Effect.gen(function* () {
+    const session = yield* sessions.get(sessionID).pipe(Effect.mapError(() => fail("session_not_found", "The target Session does not exist.")))
+    if (session.location.directory === currentLocation.directory && session.location.workspaceID === currentLocation.workspaceID)
+      return { permission, guardrail, forms, questions }
+    const layer = locations.get(session.location)
+    return {
+      permission: yield* Permission.Service.pipe(Effect.provide(layer)),
+      guardrail: yield* SessionGuardrail.Service.pipe(Effect.provide(layer)),
+      forms: yield* Form.Service.pipe(Effect.provide(layer)),
+      questions: yield* Question.Service.pipe(Effect.provide(layer)),
+    }
   })
   return make({ db: database.db, events, sessions, coordination, execution, attachment: attachmentForSession({ sessions, currentLocation, current: dots,
     runtimeAt: (location) => DotsRuntime.Service.pipe(Effect.provide(locations.get(location)), Effect.mapError(() => fail("connection_unavailable", "The attachment Location is unavailable."))),
@@ -530,5 +892,10 @@ export const service = Effect.gen(function* () {
       if (grant.expiresAt <= (yield* Clock.currentTimeMillis)) return yield* fail("authorization_failed", "The remote grant expired.")
       return { ...source.principal, epoch: source.epoch, grantID: grant.grantID }
     }),
+    decisions: {
+      pending: (sessionID) => servicesFor(sessionID).pipe(Effect.flatMap((services) => decisionServices(services).pending(sessionID))),
+      permissionEffect: (sessionID, action, resource) => servicesFor(sessionID).pipe(Effect.flatMap((services) => decisionServices(services).permissionEffect(sessionID, action, resource))),
+      settle: (input) => servicesFor(input.pending.sessionID).pipe(Effect.flatMap((services) => decisionServices(services).settle(input))),
+    },
   })
 })

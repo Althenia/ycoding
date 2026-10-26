@@ -27,7 +27,7 @@ Sessions and subagents can select named profiles independently for the same prov
 | Skill and project artifact | Loadable guidance and managed reusable agent customization.                                                             | [Repository resources](./repository-resources.md)    |
 | Workspace memory           | Explicit linked knowledge, separate from transcripts and prompt caches.                                                 | [Memory](./memory.md)                                |
 | Provider cache and quota   | Provider-owned reuse telemetry and read-only usage reporting.                                                           | [Provider efficiency](./provider-efficiency.md)      |
-| Dots conversation peer     | Opt-in external Dot conversation per Session, with untrusted, attributed peer content.                                | [Runtime](./runtime.md#dots-conversation-peer)       |
+| Dots conversation peer     | Opt-in external Dot conversation per Session, with untrusted, attributed peer content and native-approved, binding-scoped delegated tasks. | [Runtime](./runtime.md#dots-conversation-peer)       |
 
 ### 1. Terminal-first delivery
 

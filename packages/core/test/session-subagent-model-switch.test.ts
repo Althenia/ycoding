@@ -284,6 +284,23 @@ it.live("named selection keeps its private binding through activation and refuse
   expect((yield* f.sessions.get(f.child.id)).model).toEqual(next)
 }))
 
+it.live("known selection failures carry nonempty diagnostic messages", () => Effect.gen(function* () {
+  const f = yield* fixture()
+  const missing = yield* f.orchestration.switchModel({ parentID: f.parent.id, childID: Session.ID.make("ses_missing"), model: target, expectedModel: old, source: { type: "native" } }).pipe(Effect.flip)
+  expect(missing._tag).toBe("SessionOrchestration.NotFoundError")
+  expect(missing.message).toContain("ses_missing")
+  const foreign = yield* f.sessions.create({ location: f.parent.location, model: old })
+  const forbidden = yield* f.orchestration.switchModel({ parentID: f.parent.id, childID: foreign.id, model: target, expectedModel: old, source: { type: "native" } }).pipe(Effect.flip)
+  expect(forbidden._tag).toBe("SessionOrchestration.ForbiddenError")
+  expect(forbidden.message).toContain(foreign.id)
+  yield* f.sessions.prompt({ sessionID: f.child.id, text: "large retained history ".repeat(1000), resume: false })
+  yield* SessionPending.promoteSteers(f.db, f.events, f.child.id)
+  const blocked = yield* f.select(CatalogModel.Ref.make({ ...target, id: CatalogModel.ID.make("small"), variant: undefined })).pipe(Effect.flip)
+  expect(blocked._tag).toBe("SessionOrchestration.ModelBlockedError")
+  expect(blocked.message).toContain("context")
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(old)
+}))
+
 it.live("context-fit refusal leaves canonical messages and selection unchanged", () => Effect.gen(function* () {
   const f = yield* fixture()
   yield* f.sessions.prompt({ sessionID: f.child.id, text: "large retained history ".repeat(1000), resume: false })

@@ -1,6 +1,6 @@
 export * as RemoteMcp from "./remote-mcp"
 
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { Option, Result, Schema } from "effect"
 import { RemoteMCPTransport } from "@ycoding-ai/core/remote-mcp/transport"
@@ -20,6 +20,8 @@ import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { DotsReport } from "@ycoding-ai/schema/dots-report"
 import { RemoteMcpApps } from "./remote-mcp-apps"
+import { RemoteMcpForms } from "./remote-mcp-forms"
+import type { Remote } from "@ycoding-ai/schema/remote"
 
 export const maxResultChars = 2 * 1024 * 1024
 
@@ -39,6 +41,7 @@ export type Options = {
   readonly maxResultChars?: number
   readonly now?: () => number
   readonly onLaneHold?: (held: boolean) => void
+  readonly onCapabilities?: (observations: Remote.McpStatus["clientCapabilities"]) => void
 }
 
 type Ticket = { readonly context: Context; readonly previous: Promise<void>; readonly release: () => void; readonly lane?: string; started: boolean; authorizationDenied?: true }
@@ -46,7 +49,7 @@ type Admitted = { readonly response: Response } | { readonly body: string; reado
 type Hold =
   | { readonly kind: "model"; readonly sessionID: string; readonly model: Readonly<Record<string, unknown>> }
   | { readonly kind: "prompt"; readonly messageID: string }
-  | { readonly kind: "exchange"; readonly sessionID: string; readonly exchangeID: string; readonly fingerprint: string }
+  | { readonly kind: "exchange"; readonly sessionID: string; readonly exchangeID: string; readonly fingerprint: string; readonly decision?: { readonly target: string; readonly reply?: string } }
   | { readonly kind: "unknown" }
 
 const guidance: Partial<Record<RemoteErrorCode, string>> = {
@@ -67,8 +70,12 @@ export function createRemoteMcp(options: Options) {
   const lanes = new Map<string, Promise<void>>()
   const holds = new Map<string, Hold>()
   const inflight = new Set<AbortController>()
+  const now = options.now ?? Date.now
+  const rounds = new Map<string, { binding: string; source: string; expiresAt: number; epoch: string; form: ReturnType<typeof RemoteMcpForms.create> }>()
+  const observations = new Map<string, ReturnType<typeof RemoteMcpForms.capabilities> & { observedAt: number }>()
   let admission: Promise<unknown> = Promise.resolve()
   let closed = false
+  let accessGeneration = 0
 
   const transport = RemoteMCPTransport.create<Ticket>({
     name: "ycoding-remote",
@@ -82,6 +89,13 @@ export function createRemoteMcp(options: Options) {
       ...(tool.name === appPresentation?.name ? { _meta: appPresentation._meta } : {}),
     })),
     call: execute,
+    requestState: { verify: (state) => {
+      const round = rounds.get(state)
+      if (round === undefined || closed || round.expiresAt <= now() || !options.allowed(round.epoch)) {
+        rounds.delete(state)
+        throw new Error("The decision form state is unavailable")
+      }
+    } },
     events: {
       available: async (ticket, signal) => ticket !== undefined && options.allowed(ticket.context.epoch) && (await options.local.mcpEventsStatus(signal)).available,
       list: (input) => eventsCall(input.context, () => options.local.mcpEventsList(input.params.cursor == null ? {} : { cursor: input.params.cursor }, input.signal)),
@@ -114,7 +128,7 @@ export function createRemoteMcp(options: Options) {
     }
   }
 
-  async function execute(call: RemoteMCPTransport.Call<Ticket>): Promise<RemoteMCPTransport.ToolResult> {
+  async function execute(call: RemoteMCPTransport.Call<Ticket>): Promise<RemoteMCPTransport.Result> {
     const ticket = call.context
     const tool = byName.get(call.name)
     if (ticket === undefined || tool === undefined || ticket.started) return failure("internal_error", "The request has no admission")
@@ -127,28 +141,33 @@ export function createRemoteMcp(options: Options) {
     try {
       const refused = denied()
       if (refused !== undefined) return refused
+      if (call.requestState !== undefined && tool.name !== "session_dots_decision_form") return failure("invalid_message", "Decision form state cannot be used by another tool")
       const lane = ticket.lane
       const held = lane === undefined ? undefined : holds.get(lane)
+      if (held !== undefined && tool.name === "session_dots_decision_form") return failure("outcome_unknown", "This lane is held; read the exact exchange to reconcile before collecting another client decision")
+      const prepared = tool.name === "session_dots_decision_form" ? await decisionForm(call, ticket.context) : { args: call.arguments }
+      if ("result" in prepared) return prepared.result
+      const args = prepared.args
       if (lane !== undefined && held !== undefined) {
-        const settled = await reconcile(lane, held, tool, call.arguments, call.signal, ticket.context)
+        const settled = await reconcile(lane, held, tool, args, call.signal, ticket.context)
         if (settled !== undefined) return settled
       }
-      const baseline = tool.operation === "session.switchModel" && typeof call.arguments.sessionID === "string"
-        ? await selectedModel(call.arguments.sessionID, call.signal, ticket.context)
+      const baseline = tool.operation === "session.switchModel" && typeof args.sessionID === "string"
+        ? await selectedModel(args.sessionID, call.signal, ticket.context)
         : undefined
       if (baseline?.failure !== undefined) return baseline.failure
       const revoked = denied()
       if (revoked !== undefined) return revoked
-      const frames = await dispatch(tool, call.arguments, call.signal, ticket.context)
+      const frames = await dispatch(tool, args, call.signal, ticket.context)
       const rawResult = toolResult(frames, limit)
       const result = tool.operation === "session.dots.exchange.read" ? reportResult(rawResult, limit) : rawResult
       if (tool.operation === "session.dots.exchange.read" && !result.isError) {
-        const sessionID = call.arguments.sessionID
-        const exchangeID = RemoteMcpSchemas.recordOf(call.arguments.input)?.exchangeID
+        const sessionID = args.sessionID
+        const exchangeID = RemoteMcpSchemas.recordOf(args.input)?.exchangeID
         const held = typeof sessionID === "string" ? holds.get(`session:${sessionID}`) : undefined
-        if (held?.kind === "exchange" && held.exchangeID === exchangeID) release(`session:${held.sessionID}`)
+        if (held?.kind === "exchange" && held.exchangeID === exchangeID && (held.decision === undefined || decisionSettled(result, held))) release(`session:${held.sessionID}`)
       }
-      if (lane !== undefined && frames.some((frame) => !frame.ok && frame.error.code === "outcome_unknown")) hold(lane, holdOf(tool, call.arguments, baseline?.model))
+      if (lane !== undefined && frames.some((frame) => !frame.ok && frame.error.code === "outcome_unknown")) hold(lane, holdOf(tool, args, baseline?.model))
       else if (lane !== undefined && held?.kind === "prompt" && frames[0]?.ok === true) release(lane)
       if (!result.isError && (localAppOperations as readonly string[]).includes(tool.operation)) {
         const app = RemoteMcpSchemas.recordOf(result.structuredContent)
@@ -168,6 +187,68 @@ export function createRemoteMcp(options: Options) {
     }
   }
 
+  async function decisionForm(call: RemoteMCPTransport.Call<Ticket>, context: Context): Promise<{ args: Record<string, unknown> } | { result: RemoteMCPTransport.Result }> {
+    const generation = accessGeneration
+    const support = RemoteMcpForms.capabilities(call.envelope)
+    if (support.protocolVersion !== "2026-07-28" || !RemoteMcpForms.supported(support.form)) return { result: failure("invalid_message", "This request must declare MCP 2026-07-28 standard form elicitation support") }
+    const binding = createHash("sha256").update(canonical([context.principal, context.epoch, call.name, call.arguments])).digest("hex")
+    const token = call.requestState
+    const round = typeof token === "string" ? rounds.get(token) : undefined
+    if (token !== undefined && (round === undefined || round.binding !== binding || round.expiresAt <= now()))
+      return { result: failure("invalid_message", "The decision form state does not match this authenticated request") }
+    if (typeof token === "string") rounds.delete(token)
+    const input = RemoteMcpSchemas.recordOf(call.arguments.input)
+    const instruction = RemoteMcpSchemas.recordOf(input?.instruction)
+    const target = RemoteMcpSchemas.recordOf(instruction?.target)
+    if (input === undefined || target === undefined || input.exchangeID === input.taskExchangeID) return { result: failure("invalid_message", "Read a distinct task exchange and select one of its exact decision candidates") }
+    if (token === undefined && (call.inputResponses !== undefined || call.droppedInputResponseKeys?.length)) return { result: failure("invalid_message", "Client input has no decision form state") }
+    if (round !== undefined) {
+      const response = RemoteMcpSchemas.recordOf(call.inputResponses?.decision)
+      if (call.droppedInputResponseKeys?.length || Object.keys(call.inputResponses ?? {}).length !== 1 || response?.action !== "accept") return { result: failure("invalid_message", "The client did not accept the decision form; the native request remains pending") }
+      if (Object.keys(response).some((key) => key !== "action" && key !== "content")) return { result: failure("invalid_message", "The client form response is malformed") }
+    }
+    const read = toolResult(await operate({ type: "request", id: `mcp_${randomUUID()}`, operation: "session.dots.exchange.read", sessionID: String(call.arguments.sessionID), input: { exchangeID: input.taskExchangeID } }, call.signal, context), limit)
+    if (read.isError) return { result: read }
+    const parsed = Schema.decodeUnknownOption(Dots.Exchange)(RemoteMcpSchemas.recordOf(read.structuredContent)?.data, { onExcessProperty: "error" })
+    if (Option.isNone(parsed)) return { result: failure("internal_error", "The native task exchange is invalid") }
+    const exchange = parsed.value
+    if (exchange.sessionID !== call.arguments.sessionID || exchange.exchangeID !== input.taskExchangeID || exchange.targetSessionID !== input.targetSessionID || canonical(exchange.envelope.coordinator) !== canonical(context.principal) || exchange.envelope.scope.epoch !== context.epoch)
+      return { result: failure("invalid_message", "The task exchange does not match this authenticated client and epoch") }
+    const candidate = exchange.decisions?.find((candidate) => decisionTargetKey(candidate.target) === decisionTargetKey(target))
+    if (candidate === undefined) return { result: failure("invalid_message", "The selected native decision is unavailable or stale") }
+    const source = createHash("sha256").update(canonical([exchange.envelope, candidate])).digest("hex")
+    if (round !== undefined && round.source !== source) return { result: failure("invalid_message", "The native decision changed while the client form was open") }
+    if (closed || generation !== accessGeneration || !options.allowed(context.epoch)) return { result: failure("agent_unavailable", "Relay MCP authorization changed") }
+    call.signal.throwIfAborted()
+    try {
+      if (round !== undefined) {
+        const response = RemoteMcpSchemas.recordOf(call.inputResponses?.decision)
+        const choice = round.form.choice(response?.content)
+        const nativeInput = { ...input }
+        delete nativeInput.taskExchangeID
+        return { args: { sessionID: call.arguments.sessionID, input: { ...nativeInput, instruction: { ...instruction, ...choice } } } }
+      }
+      const form = RemoteMcpForms.create(candidate)
+      for (const [token, pending] of rounds) if (pending.expiresAt <= now() || !options.allowed(pending.epoch)) rounds.delete(token)
+      if (rounds.size >= 256) return { result: failure("invalid_message", "The decision form capacity is exhausted; wait for existing forms to expire") }
+      const message = ["Authenticated client response only; not human approval.", candidate.title, candidate.action, ...(candidate.resources ?? []), ...(candidate.ruleIDs ?? [])].filter(Boolean).join("\n")
+      if (message.length > 8192) return { result: failure("message_too_large", "The native decision description exceeds its form bound") }
+      const state = randomUUID()
+      rounds.set(state, { binding, source, expiresAt: now() + 300_000, epoch: context.epoch, form })
+      return { result: RemoteMCPTransport.inputRequired({ requestState: state, inputRequests: { decision: RemoteMCPTransport.inputRequired.elicit({ mode: "form", message, requestedSchema: form.requestedSchema }) } }) }
+    } catch (error) {
+      return { result: failure("invalid_message", error instanceof Error ? error.message : "The standard form is unsupported or invalid") }
+    }
+  }
+
+  function clearAccess() {
+    accessGeneration++
+    rounds.clear()
+    observations.clear()
+    options.onCapabilities?.(undefined)
+    options.apps?.clear()
+  }
+
   async function reconcile(lane: string, held: Hold, tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, signal: AbortSignal, context: Context) {
     if (held.kind === "exchange") {
       const input = RemoteMcpSchemas.recordOf(args.input)
@@ -175,6 +256,7 @@ export function createRemoteMcp(options: Options) {
         return failure("outcome_unknown", "An exchange admission is unconfirmed. Read that exchange before issuing another mutation; no work was replayed.")
       const result = reportResult(toolResult(await operate({ type: "request", id: `mcp_${randomUUID()}`, operation: "session.dots.exchange.read", sessionID: held.sessionID, input: { exchangeID: held.exchangeID } }, signal, context), limit), limit)
       if (result.isError) return failure("outcome_unknown", "The exchange admission could not be reconciled. This lane remains read-only; no work was replayed.")
+      if (held.decision !== undefined && !decisionSettled(result, held)) return failure("outcome_unknown", "The delegated decision is not settled by an exact receipt yet. Read that exact exchange again before issuing another mutation; no work was replayed.")
       release(lane)
       return result
     }
@@ -240,12 +322,23 @@ export function createRemoteMcp(options: Options) {
     })
   }
 
-  async function admit(request: Request, context: Context): Promise<Admitted> {
+  async function admit(request: Request, context: Context, generation: number): Promise<Admitted> {
     const url = new URL(request.url)
     if (url.origin !== resource.origin || url.pathname !== resource.pathname || url.search) return { response: new Response(null, { status: 404 }) }
     if (request.method !== "POST") return { response: new Response(null, { status: 405, headers: { allow: "POST" } }) }
     const body = await request.text()
+    if (generation !== accessGeneration || closed || !options.allowed(context.epoch)) return { response: unavailable() }
     if (body.length > RemoteMCPTransport.defaultMaxRequestBodySize) return { response: new Response(null, { status: 413 }) }
+    const message = RemoteMcpSchemas.recordOf(Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(body)))
+    const meta = RemoteMcpSchemas.recordOf(RemoteMcpSchemas.recordOf(message?.params)?._meta)
+    if (meta !== undefined) {
+      const key = canonical([context.principal, context.epoch])
+      observations.delete(key)
+      observations.set(key, { ...RemoteMcpForms.capabilities(meta), observedAt: now() })
+      const oldest = observations.keys().next().value
+      if (observations.size > 256 && oldest !== undefined) observations.delete(oldest)
+      options.onCapabilities?.([...observations.values()].map((value) => ({ ...value, elicitation: RemoteMcpForms.supported(value.elicitation), form: RemoteMcpForms.supported(value.form), url: RemoteMcpForms.supported(value.url) })))
+    }
     const lane = laneOf(body)
     const gate = Promise.withResolvers<void>()
     const previous = lane === undefined ? Promise.resolve() : (lanes.get(lane) ?? Promise.resolve())
@@ -299,13 +392,15 @@ export function createRemoteMcp(options: Options) {
   return {
     fetch(request: Request, context: Context): Promise<Response> {
       if (closed || !options.allowed(context.epoch)) return Promise.resolve(unavailable())
-      const admitted = admission.then(() => admit(request, context))
+      const generation = accessGeneration
+      const admitted = admission.then(() => admit(request, context, generation))
       admission = admitted.catch(() => undefined)
       return admitted.then((result) => serve(request, result))
     },
-    clearApps() { options.apps?.clear() },
+    clearAccess,
     async close() {
       closed = true
+      clearAccess()
       if (holds.size > 0) {
         holds.clear()
         options.onLaneHold?.(false)
@@ -315,6 +410,13 @@ export function createRemoteMcp(options: Options) {
       await transport.close()
     },
   }
+}
+
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, value: unknown) => {
+    const record = RemoteMcpSchemas.recordOf(value)
+    return record === undefined ? value : Object.fromEntries(Object.keys(record).sort().map((key) => [key, record[key]]))
+  })
 }
 
 export function toolResult(frames: readonly RemoteResponse[], limit = maxResultChars): TextResult {
@@ -330,6 +432,20 @@ export function toolResult(frames: readonly RemoteResponse[], limit = maxResultC
   if (text.length > limit) return failure("message_too_large", `Result is ${text.length} characters, above the ${limit} character limit`)
   const parsed = parseChunkedValue(parts)
   return parsed.ok ? success(text, parsed.value, limit) : failure("internal_error", "The local agent returned an unreadable chunked response")
+}
+
+function decisionTargetKey(target: Readonly<Record<string, unknown>>) {
+  return JSON.stringify([target.kind, typeof target.requestID === "string" ? target.requestID : target.formID, target.fingerprint])
+}
+
+function decisionSettled(result: TextResult, held: Extract<Hold, { kind: "exchange" }>) {
+  if (held.decision === undefined) return false
+  const data = RemoteMcpSchemas.recordOf(result.structuredContent)?.data
+  const exchange = Schema.decodeUnknownOption(Dots.Exchange)(data, { onExcessProperty: "error" })
+  if (Option.isNone(exchange)) return false
+  const outcome = exchange.value.decisionOutcome
+  return exchange.value.exchangeID === held.exchangeID && exchange.value.sessionID === held.sessionID && outcome?.state === "settled" &&
+    decisionTargetKey(outcome.target) === held.decision.target && (held.decision.reply === undefined || outcome.reply === held.decision.reply)
 }
 
 function reportResult(result: TextResult, limit: number): TextResult {
@@ -348,8 +464,15 @@ function reportResult(result: TextResult, limit: number): TextResult {
 
 function holdOf(tool: RemoteMcpSchemas.Tool, args: Record<string, unknown>, baseline: Readonly<Record<string, unknown>> | undefined): Hold {
   const input = RemoteMcpSchemas.recordOf(args.input)
-  if (tool.operation === "session.dots.exchange.create" && typeof args.sessionID === "string" && typeof input?.exchangeID === "string")
-    return { kind: "exchange", sessionID: args.sessionID, exchangeID: input.exchangeID, fingerprint: exchangeFingerprint(input) }
+  if (tool.operation === "session.dots.exchange.create" && typeof args.sessionID === "string" && typeof input?.exchangeID === "string") {
+    const instruction = RemoteMcpSchemas.recordOf(input.instruction)
+    const target = RemoteMcpSchemas.recordOf(instruction?.target)
+    const decision = instruction?.operation === "decision" && target !== undefined && typeof target.kind === "string" && typeof target.fingerprint === "string" &&
+      (typeof target.requestID === "string" || typeof target.formID === "string")
+      ? { target: decisionTargetKey(target), ...(typeof instruction.reply === "string" ? { reply: instruction.reply } : {}) }
+      : undefined
+    return { kind: "exchange", sessionID: args.sessionID, exchangeID: input.exchangeID, fingerprint: exchangeFingerprint(input), ...(decision === undefined ? {} : { decision }) }
+  }
   if (tool.operation === "session.prompt" && typeof input?.id === "string") return { kind: "prompt", messageID: input.id }
   const model = RemoteMcpSchemas.recordOf(input?.model)
   if (tool.operation !== "session.switchModel" || typeof args.sessionID !== "string" || model === undefined) return { kind: "unknown" }
@@ -364,7 +487,9 @@ function exchangeFingerprint(input: Record<string, unknown>) {
   const delegation = RemoteMcpSchemas.recordOf(input.delegation)
   const instruction = RemoteMcpSchemas.recordOf(input.instruction)
   const preferences = RemoteMcpSchemas.recordOf(instruction?.preferences)
-  return JSON.stringify([...ordinary, delegation?.id, delegation?.revision, input.taskInputID, instruction?.operation, preferences?.format, preferences?.detail])
+  const target = RemoteMcpSchemas.recordOf(instruction?.target)
+  return JSON.stringify([...ordinary, delegation?.id, delegation?.revision, input.taskInputID, instruction?.operation, preferences?.format, preferences?.detail,
+    instruction?.text, target?.kind, target?.requestID, target?.formID, target?.fingerprint, instruction?.reply, instruction?.answers])
 }
 
 function sameModel(current: Readonly<Record<string, unknown>> | undefined, target: Readonly<Record<string, unknown>> | undefined) {

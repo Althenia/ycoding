@@ -2,24 +2,26 @@ export * as RemoteMCPTransport from "./transport"
 
 import {
   createMcpHandler,
+  inputRequired,
   ProtocolError,
   ProtocolErrorCode,
   ResourceNotFoundError,
   Server,
-  type CallToolResult,
   type ContentBlock,
   type JsonSchemaType,
   type MetaObject,
   type ReadResourceResult,
   type Resource,
   type Tool,
+  type InputRequiredResult,
+  type ElicitRequestFormParams,
 } from "@modelcontextprotocol/server"
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv"
 import { Schema } from "effect"
 import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 
-export type { Tool }
-export { ProtocolError }
+export type { Tool, ElicitRequestFormParams }
+export { ProtocolError, inputRequired, AjvJsonSchemaValidator }
 
 export type ToolResult<Content extends ContentBlock = ContentBlock> = {
   readonly content: readonly Content[]
@@ -39,7 +41,13 @@ export type Call<Context> = {
   readonly arguments: Record<string, unknown>
   readonly signal: AbortSignal
   readonly context: Context | undefined
+  readonly envelope?: unknown
+  readonly inputResponses?: Record<string, unknown>
+  readonly requestState?: unknown
+  readonly droppedInputResponseKeys?: readonly string[]
 }
+
+export type Result = ToolResult | InputRequiredResult
 
 export type EventRequest<Params, Context> = {
   readonly params: Params
@@ -53,7 +61,8 @@ export function create<Context>(options: {
   readonly name: string
   readonly version: string
   readonly tools: readonly Tool[]
-  readonly call: (call: Call<Context>) => Promise<ToolResult>
+  readonly call: (call: Call<Context>) => Promise<Result>
+  readonly requestState?: { readonly verify: (state: string) => void }
   readonly resources?: {
     readonly list: (context: Context | undefined, signal: AbortSignal) => Promise<Resource[]>
     readonly read: (input: ResourceRead<Context>) => Promise<ReadResourceResult | undefined>
@@ -81,7 +90,8 @@ export function create<Context>(options: {
         : undefined
       const server = new Server(
         { name: options.name, version: options.version },
-        { capabilities: { tools: {}, ...(options.resources === undefined ? {} : { resources: {} }), ...(events === undefined ? {} : { events: {} }) } },
+        { capabilities: { tools: {}, ...(options.resources === undefined ? {} : { resources: {} }), ...(events === undefined ? {} : { events: {} }) },
+          ...(options.requestState === undefined ? {} : { requestState: { verify: (state: string) => { options.requestState?.verify(state); return state } } }) },
       )
       server.setRequestHandler("tools/list", async () => ({ tools: [...options.tools] }))
       if (events !== undefined) {
@@ -121,12 +131,17 @@ export function create<Context>(options: {
             isError: true,
             content: [{ type: "text", text: `Invalid arguments for ${entry.tool.name}: ${checked.errorMessage}` }],
           }
-        return (await options.call({
+        const result = await options.call({
           name: entry.tool.name,
           arguments: args,
           signal: ctx.mcpReq.signal,
           context: carried,
-        })) as CallToolResult
+          envelope: ctx.mcpReq.envelope,
+          inputResponses: ctx.mcpReq.inputResponses,
+          requestState: ctx.mcpReq.requestState(),
+          droppedInputResponseKeys: ctx.mcpReq.droppedInputResponseKeys,
+        })
+        return "resultType" in result ? result : { ...result, content: [...result.content] }
       })
       return server
     },

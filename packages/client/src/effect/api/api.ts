@@ -2262,13 +2262,7 @@ export type DotsDelegationStatusOperation<E = never> = (
 type Endpoint40_2Request = Parameters<RawClient["server.dots"]["session.dots.delegation.create"]>[0]
 export type Endpoint40_2Input = {
   readonly sessionID: Endpoint40_2Request["params"]["sessionID"]
-  readonly expectedAttachment: Endpoint40_2Request["payload"]["expectedAttachment"]
-  readonly targetSessionID: Endpoint40_2Request["payload"]["targetSessionID"]
-  readonly proposalID: Endpoint40_2Request["payload"]["proposalID"]
-  readonly sourceExchangeID: Endpoint40_2Request["payload"]["sourceExchangeID"]
-  readonly taskInputID: Endpoint40_2Request["payload"]["taskInputID"]
-  readonly scope: Endpoint40_2Request["payload"]["scope"]
-  readonly expiresAt: Endpoint40_2Request["payload"]["expiresAt"]
+  readonly payload: Endpoint40_2Request["payload"]
 }
 export type Endpoint40_2Output = EffectValue<
   ReturnType<RawClient["server.dots"]["session.dots.delegation.create"]>

@@ -20,6 +20,9 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { SessionProviderRequestTable } from "@ycoding-ai/core/session/sql"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Permission } from "@ycoding-ai/core/permission"
+import { Form } from "@ycoding-ai/core/form"
+import { Question } from "@ycoding-ai/core/question"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { DotsRuntime } from "@ycoding-ai/core/dots"
 import { DotsExchange } from "@ycoding-ai/core/dots/exchange"
 import { DotsReporting } from "@ycoding-ai/core/dots/report"
@@ -73,6 +76,16 @@ test("authenticated MCP exchanges cross the typed protocol into owner-checked du
     const permission = yield* Permission.Service.pipe(Effect.provide(Layer.mock(Permission.Service, {
       assert: () => Effect.die("MCP cannot activate native task delegation"),
     })))
+    const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(Layer.mock(SessionGuardrail.Service, {
+      reviewPolicy: { enabled: true, decideReviews: false, decideHardReviews: true },
+      requestSnapshots: () => Effect.die("No delegated decisions in this fixture"),
+    })))
+    const forms = yield* Form.Service.pipe(Effect.provide(Layer.mock(Form.Service, {
+      snapshots: () => Effect.die("No delegated decisions in this fixture"),
+    })))
+    const questions = yield* Question.Service.pipe(Effect.provide(Layer.mock(Question.Service, {
+      list: () => Effect.die("No delegated decisions in this fixture"),
+    })))
     const context = Context.add(
       yield* Effect.context<Session.Service | SessionOrchestration.Service | SessionExecution.Service | CoordinationService.Service | Database.Service | EventRuntime.Service>(),
       DotsRuntime.Service,
@@ -87,7 +100,7 @@ test("authenticated MCP exchanges cross the typed protocol into owner-checked du
         pause: () => Effect.die("No runtime control is permitted"),
         resume: () => Effect.die("No runtime control is permitted"),
       }),
-    ).pipe(Context.add(Permission.Service, permission), Context.add(Location.Service, { ...location, project: { id: anchor.projectID, directory: location.directory } }), Context.add(SessionMcpEvents.Authorization.Service, SessionMcpEvents.Authorization.Service.of({
+    ).pipe(Context.add(Permission.Service, permission), Context.add(SessionGuardrail.Service, guardrail), Context.add(Form.Service, forms), Context.add(Question.Service, questions), Context.add(Location.Service, { ...location, project: { id: anchor.projectID, directory: location.directory } }), Context.add(SessionMcpEvents.Authorization.Service, SessionMcpEvents.Authorization.Service.of({
       capabilities: Effect.succeed(true),
       resolve: (value) => Effect.suspend(() => {
         verified.push(value)

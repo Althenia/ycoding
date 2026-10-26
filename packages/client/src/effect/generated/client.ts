@@ -2860,27 +2860,13 @@ const Endpoint40_1 = (raw: RawClient["server.dots"]) => (input: Endpoint40_1Inpu
 type Endpoint40_2Request = Parameters<RawClient["server.dots"]["session.dots.delegation.create"]>[0]
 type Endpoint40_2Input = {
   readonly sessionID: Endpoint40_2Request["params"]["sessionID"]
-  readonly expectedAttachment: Endpoint40_2Request["payload"]["expectedAttachment"]
-  readonly targetSessionID: Endpoint40_2Request["payload"]["targetSessionID"]
-  readonly proposalID: Endpoint40_2Request["payload"]["proposalID"]
-  readonly sourceExchangeID: Endpoint40_2Request["payload"]["sourceExchangeID"]
-  readonly taskInputID: Endpoint40_2Request["payload"]["taskInputID"]
-  readonly scope: Endpoint40_2Request["payload"]["scope"]
-  readonly expiresAt: Endpoint40_2Request["payload"]["expiresAt"]
+  readonly payload: Endpoint40_2Request["payload"]
 }
 const Endpoint40_2 = (raw: RawClient["server.dots"]) => (input: Endpoint40_2Input) =>
   raw["session.dots.delegation.create"]({
     params: { sessionID: input["sessionID"] },
-    payload: {
-      expectedAttachment: input["expectedAttachment"],
-      targetSessionID: input["targetSessionID"],
-      proposalID: input["proposalID"],
-      sourceExchangeID: input["sourceExchangeID"],
-      taskInputID: input["taskInputID"],
-      scope: input["scope"],
-      expiresAt: input["expiresAt"],
-    },
-  }).pipe(
+    payload: input["payload"],
+  } as Endpoint40_2Request).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )

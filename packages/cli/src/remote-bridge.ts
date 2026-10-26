@@ -283,7 +283,7 @@ export class RemoteAgent {
       this.previewEnabled = false
       for (const settle of this.previewAcks.values()) settle(undefined)
       this.previewAcks.clear()
-      this.clearMcpApps()
+      this.clearMcpAccess()
       this.options.mcp?.host.detach()
       for (const pending of this.mcpAcknowledgements.values()) pending.reject()
       this.mcpAcknowledgements.clear()
@@ -507,7 +507,7 @@ export class RemoteAgent {
   }
 
   private async sendMcpState(state: RemoteMcpPreference) {
-    if (!state.enabled) await this.clearMcpApps()
+    if (!state.enabled) await this.clearMcpAccess()
     const id = crypto.randomUUID()
     const result = Promise.withResolvers<void>()
     const timeout = setTimeout(() => result.reject(new Error("Relay MCP acknowledgement timed out")), 5_000)
@@ -521,11 +521,11 @@ export class RemoteAgent {
     }
   }
 
-  private clearMcpApps() {
+  private clearMcpAccess() {
     const server = this.mcpServer
     if (server === undefined) return this.mcpCleanup
-    this.mcpCleanup = Promise.all([this.mcpCleanup, server.then((value) => value.clearApps())])
-      .then(() => {}, () => this.diagnostic("Could not clear local app registrations"))
+    this.mcpCleanup = Promise.all([this.mcpCleanup, server.then((value) => value.clearAccess())])
+      .then(() => {}, () => this.diagnostic("Could not clear MCP access state"))
     return this.mcpCleanup
   }
 
@@ -598,7 +598,8 @@ export class RemoteAgent {
           ...(this.previewHost === undefined ? {} : { preview: this.previewHost.preview }),
         })
         return createRemoteMcp({ local: this.options.local, sessions: this.registry, subscriptions: this.subscriptions,
-          cache: this.cache, home: mcp.home, resource: mcp.resource, apps, allowed: (epoch) => mcp.host.allowed(epoch), onLaneHold: (held) => mcp.host.setLaneHold(held) })
+          cache: this.cache, home: mcp.home, resource: mcp.resource, apps, allowed: (epoch) => mcp.host.allowed(epoch), now: this.now,
+          onCapabilities: (observations) => mcp.host.setClientCapabilities(observations), onLaneHold: (held) => mcp.host.setLaneHold(held) })
       })()
       const server = await this.mcpServer
       await this.mcpCleanup

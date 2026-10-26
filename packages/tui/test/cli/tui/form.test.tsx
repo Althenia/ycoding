@@ -228,6 +228,127 @@ test("includes external acknowledgements in progress", async () => {
   }
 })
 
+const formBorderRows = (frame: string) => frame.split("\n").filter((line) => line.includes("┃")).length
+
+test("a short single-choice form is content-sized on a tall terminal and still submits by key", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 80, true, false, {
+    fields: [{ key: "q0", type: "string", title: "Pick one", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] }],
+  }, 40)
+  try {
+    const lines = prompt.app.captureCharFrame().split("\n")
+    expect(formBorderRows(prompt.app.captureCharFrame())).toBeLessThanOrEqual(12)
+    expect(lines[0]).not.toContain("┃")
+    expect(prompt.app.captureCharFrame()).toContain("Alpha")
+    expect(prompt.app.captureCharFrame()).toContain("enter")
+    prompt.app.mockInput.pressKey("2")
+    await prompt.app.waitFor(() => prompt.replies.length === 1)
+    expect(prompt.replies).toEqual([{ answer: { q0: "b" } }])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
+
+test("a long multiselect form is viewport-bounded, reveals the keyboard-selected option and submits from Confirm", async () => {
+  await using tmp = await tmpdir()
+  const options = Array.from({ length: 12 }, (_, i) => ({
+    value: `v${i}`,
+    label: `Option ${i + 1}`,
+    description: `Description for option ${i + 1} with some extra words`,
+  }))
+  const prompt = await mountForm(tmp.path, 80, true, false, {
+    fields: [{ key: "q0", type: "multiselect", title: "Pick many", options }],
+  }, 24)
+  try {
+    expect(formBorderRows(prompt.app.captureCharFrame())).toBeLessThanOrEqual(15)
+    expect(
+      prompt.app
+        .captureCharFrame()
+        .split("\n")
+        .find((line) => line.includes("enter")),
+    ).toContain("esc")
+    expect(prompt.app.captureCharFrame().split("\n")[0]).not.toContain("┃")
+    expect(prompt.app.captureCharFrame()).toContain("enter")
+    expect(prompt.app.captureCharFrame()).not.toContain("Option 12")
+    for (let i = 0; i < 11; i++) prompt.app.mockInput.pressKey("j")
+    await prompt.app.waitForFrame((frame) => frame.includes("Option 12"))
+    expect(prompt.app.captureCharFrame()).toContain("enter")
+    prompt.app.mockInput.pressEnter()
+    prompt.app.mockInput.pressKey("right")
+    await prompt.app.waitForFrame((frame) => frame.includes("Review"))
+    prompt.app.mockInput.pressEnter()
+    await prompt.app.waitFor(() => prompt.replies.length === 1)
+    expect(prompt.replies).toEqual([{ answer: { q0: ["v11"] } }])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
+
+test("a free-text form stays bounded and answerable after a narrow short resize", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 80, true, false, {
+    fields: [{ key: "name", type: "string", title: "Your name" }],
+  }, 24)
+  try {
+    prompt.app.renderer.resize(40, 12)
+    await prompt.app.waitForFrame((frame) => frame.includes("Your name") && frame.includes("enter"))
+    expect(formBorderRows(prompt.app.captureCharFrame())).toBeLessThanOrEqual(7)
+    expect(
+      prompt.app
+        .captureCharFrame()
+        .split("\n")
+        .find((line) => line.includes("enter")),
+    ).toContain("esc")
+    await prompt.app.mockInput.typeText("Ada")
+    await prompt.app.waitForFrame((frame) => frame.includes("Ada"))
+    prompt.app.mockInput.pressEnter()
+    await prompt.app.waitForFrame((frame) => frame.includes("Review"))
+    prompt.app.mockInput.pressEnter()
+    await prompt.app.waitFor(() => prompt.replies.length === 1)
+    expect(prompt.replies).toEqual([{ answer: { name: "Ada" } }])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
+
+test("a multiline free-text editor shows its last line at 40x12 and submits the complete value through Review", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 40, true, false, {
+    fields: [{ key: "notes", type: "string", title: "Notes" }],
+  }, 12)
+  try {
+    const value = "line1\nline2\nline3\nline4\nline5\nline6"
+    await prompt.app.mockInput.pasteBracketedText(value)
+    await prompt.app.waitForFrame((frame) => frame.includes("line6"))
+    prompt.app.mockInput.pressEnter()
+    await prompt.app.waitForFrame((frame) => frame.includes("Review"))
+    prompt.app.mockInput.pressEnter()
+    await prompt.app.waitFor(() => prompt.replies.length === 1)
+    expect(prompt.replies).toEqual([{ answer: { notes: value } }])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
+
+test("a multiline custom answer shows its last line at 40x12 and submits the complete value", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 40, true, false, {
+    fields: [{ key: "q0", type: "string", title: "Pick one", custom: true, options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] }],
+  }, 12)
+  try {
+    prompt.app.mockInput.pressKey("3")
+    await prompt.app.waitForFrame((frame) => frame.includes("Type your own answer"))
+    const value = "line1\nline2\nline3\nline4\nline5\nline6"
+    await prompt.app.mockInput.pasteBracketedText(value)
+    await prompt.app.waitForFrame((frame) => frame.includes("line6"))
+    prompt.app.mockInput.pressEnter()
+    await prompt.app.waitFor(() => prompt.replies.length === 1)
+    expect(prompt.replies).toEqual([{ answer: { q0: value } }])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
+
 test("keeps a form surface immediately above the session footer", async () => {
   await using tmp = await tmpdir()
   const prompt = await mountForm(tmp.path, 80, true)

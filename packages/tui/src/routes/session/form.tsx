@@ -56,6 +56,7 @@ export function FormPrompt(props: {
   const { theme, mode: themeMode } = useTheme().contextual("elevated")
   const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
+  const contentMaxHeight = () => Math.max(3, Math.floor(dimensions().height * 0.65) - 2)
   const keymap = Keymap.use()
   const clipboard = useClipboard()
   const toast = useToast()
@@ -151,7 +152,16 @@ export function FormPrompt(props: {
   })
   const multi = createMemo(() => answerField()?.type === "multiselect")
   function revealOption() {
-    if (!props.form.assessment || store.editing || !content) return
+    if (!content) return
+    if (textual() || store.editing) {
+      const editor = content.content.findDescendantById(`${props.form.id}-${answerField()?.key}-editor`)
+      if (
+        editor &&
+        (editor.y < content.viewport.y || editor.y + editor.height > content.viewport.y + content.viewport.height)
+      )
+        content.scrollBy(editor.y - content.viewport.y)
+      return
+    }
     const row = content.content.findDescendantById(`${props.form.id}-${answerField()?.key}-option-${store.selected}`)
     if (!row) return
     if (row.y < content.viewport.y || row.y + row.height > content.viewport.y + content.viewport.height)
@@ -657,9 +667,17 @@ export function FormPrompt(props: {
       borderColor={theme.hue.interactive[themeMode() === "light" ? 800 : 200]}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <scrollbox gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}
-        maxHeight={props.form.assessment ? Math.max(3, dimensions().height - 5) : undefined}
-        scrollbarOptions={{ visible: false }} ref={(value: ScrollBoxRenderable) => (content = value)}>
+      <scrollbox
+        gap={1}
+        paddingLeft={1}
+        paddingRight={3}
+        paddingTop={1}
+        paddingBottom={1}
+        maxHeight={contentMaxHeight()}
+        contentOptions={{ flexShrink: 0, minHeight: 0 }}
+        scrollbarOptions={{ visible: false }}
+        ref={(value: ScrollBoxRenderable) => (content = value)}
+      >
         <box paddingLeft={1}>
           <text fg={theme.text.subdued}>{props.form.title}</text>
         </box>
@@ -785,7 +803,11 @@ export function FormPrompt(props: {
               </text>
             </box>
             <Show when={textual() ? answerField()!.key : undefined} keyed>
-              <box paddingLeft={1}>
+              <box
+                id={`${props.form.id}-${answerField()?.key}-editor`}
+                paddingLeft={1}
+                onSizeChange={() => revealOption()}
+              >
                 <textarea
                   ref={(val: TextareaRenderable) => {
                     textarea = val
@@ -801,7 +823,7 @@ export function FormPrompt(props: {
                   placeholder={placeholder()}
                   placeholderColor={theme.text.subdued}
                   minHeight={1}
-                  maxHeight={6}
+                  maxHeight={Math.min(6, contentMaxHeight())}
                   textColor={theme.text.default}
                   focusedTextColor={theme.text.default}
                   cursorColor={theme.text.default}
@@ -910,7 +932,11 @@ export function FormPrompt(props: {
                       </Show>
                     </box>
                     <Show when={store.editing}>
-                      <box paddingLeft={3}>
+                      <box
+                        id={`${props.form.id}-${answerField()?.key}-editor`}
+                        paddingLeft={3}
+                        onSizeChange={() => revealOption()}
+                      >
                         <textarea
                           ref={(val: TextareaRenderable) => {
                             textarea = val
@@ -924,7 +950,7 @@ export function FormPrompt(props: {
                           placeholder="Type your own answer"
                           placeholderColor={theme.text.subdued}
                           minHeight={1}
-                          maxHeight={6}
+                          maxHeight={Math.min(6, contentMaxHeight())}
                           textColor={theme.text.default}
                           focusedTextColor={theme.text.default}
                           cursorColor={theme.text.default}
@@ -1067,6 +1093,7 @@ export function FormAssessment(props: { value: unknown; fieldKey?: string; settl
   const settlement = () => {
     if (!props.settled) return "awaiting your decision"
     const reply = source()
+    if (reply?.kind === "dots-delegation") return `answered by external client via Dots delegation ${escapeTerminalText(reply.delegationID)} · anchor ${escapeTerminalText(reply.anchorSessionID)}`
     if (reply) return `answered by coordinator ${escapeTerminalText(reply.coordinatorSessionID)}${reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
     if (props.source !== undefined) return "answer source unreported"
     return props.settled === "automatic" ? "automatically answered" : "answered by you"

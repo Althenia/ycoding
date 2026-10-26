@@ -62,6 +62,7 @@ export function previewHarness(options: { appPreview?: RemoteAppPreviewHost.Conf
   const host: RemoteMcpHost = {
     status: () => ({ state: "on", url: resource }),
     setLaneHold: () => {},
+    setClientCapabilities: () => {},
     advertisement: () => ({ enabled: true, epoch }),
     allowed: (value) => !authority.signal.aborted && value === epoch,
     authorizationSignal: () => authority.signal,

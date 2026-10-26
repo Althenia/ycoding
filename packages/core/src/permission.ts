@@ -3,6 +3,7 @@ export * as Permission from "./permission"
 import { makeLocationNode } from "./effect/app-node"
 import { Context, Deferred, Effect, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
+import { Form } from "@ycoding-ai/schema/form"
 import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { EventRuntime } from "./event"
@@ -88,7 +89,13 @@ export type AskResult = typeof AskResult.Type
 
 export const Event = Permission.Event
 
-export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Permission.DeclinedError", {}) {}
+export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Permission.DeclinedError", {
+  source: Form.DelegatedReplySource.pipe(Schema.optional),
+}) {
+  override get message() {
+    return this.source ? "The delegated external client declined this permission under a native-approved Dots delegation, not the user." : ""
+  }
+}
 
 export class DeferredError extends Schema.TaggedErrorClass<DeferredError>()("Permission.DeferredError", {
   requestID: ID,
@@ -237,7 +244,17 @@ export interface ReconsiderResult {
   readonly reason?: string
 }
 
+export interface DelegatedReplyInput {
+  readonly requestID: ID
+  readonly reply: "once" | "reject"
+  readonly fingerprint: string
+  readonly source: Form.DelegatedReplySource
+  readonly validate: (request: Request) => Effect.Effect<boolean>
+}
+
 export interface Interface {
+  readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, NotFoundError | SessionErrors.NotFoundError>
+  readonly delegatedEligible: (input: { readonly requestID: ID; readonly fingerprint: string; readonly reply: "once" | "reject" }) => Effect.Effect<boolean, SessionErrors.NotFoundError>
   readonly evaluateEffective: (
     input: EvaluateEffectiveInput,
   ) => Effect.Effect<Permission.Effect, SessionErrors.NotFoundError>
@@ -1008,6 +1025,50 @@ const layer = Layer.effect(
       )),
     )
 
+    const delegatedGate = Effect.fnUntraced(function* (existing: Pending, reply: "once" | "reject") {
+      if (existing.request.metadata?.requireHuman === true) return false
+      if (reply === "reject") return true
+      const input: AssertInput = {
+        id: existing.request.id, sessionID: existing.request.sessionID, action: existing.request.action, resources: existing.request.resources,
+        ...(existing.request.save === undefined ? {} : { save: existing.request.save }),
+        ...(existing.request.metadata === undefined ? {} : { metadata: existing.request.metadata }),
+        ...(existing.request.source === undefined ? {} : { source: existing.request.source }),
+        ...(existing.agent === undefined ? {} : { agent: existing.agent }),
+        requireHuman: existing.request.metadata?.requireHuman === true,
+      }
+      const applicability = yield* applicabilityOf(input)
+      if (humanRejected(applicability.prior)) return false
+      return (yield* evaluateInput(input)).effect !== "deny"
+    })
+    const delegatedEligible = Effect.fn("Permission.delegatedEligible")(function* (input: { readonly requestID: ID; readonly fingerprint: string; readonly reply: "once" | "reject" }) {
+      const existing = pending.get(input.requestID)
+      if (!existing || fingerprintOf(existing.request) !== input.fingerprint) return false
+      return yield* delegatedGate(existing, input.reply)
+    })
+    const replyDelegated = Effect.fn("Permission.replyDelegated")((input: DelegatedReplyInput) =>
+      exclusive(Effect.uninterruptible(
+        Effect.gen(function* () {
+          const existing = pending.get(input.requestID)
+          if (!existing || fingerprintOf(existing.request) !== input.fingerprint || !(yield* delegatedGate(existing, input.reply)) || !(yield* input.validate(existing.request)))
+            return yield* new NotFoundError({ requestID: input.requestID })
+          yield* events.publish(Event.Replied, {
+            sessionID: existing.request.sessionID,
+            requestID: existing.request.id,
+            reply: input.reply,
+          })
+          yield* events.publish(SessionEvent.DotsDecisionSettled, {
+            sessionID: existing.request.sessionID,
+            source: input.source,
+            target: { kind: "permission", requestID: existing.request.id, fingerprint: input.fingerprint },
+            reply: input.reply,
+          })
+          pending.delete(input.requestID)
+          if (input.reply === "reject") yield* Deferred.fail(existing.deferred, new DeclinedError({ source: input.source }))
+          else yield* Deferred.succeed(existing.deferred, undefined)
+        }),
+      )),
+    )
+
     const list = Effect.fn("Permission.list")(function* () {
       return Array.from(pending.values(), (item) => item.request)
     })
@@ -1020,7 +1081,7 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 
-    return Service.of({ evaluateEffective, ask, assert, deferPending, reply, snapshot, snapshots, reconsider, escalate, get, forSession, list })
+    return Service.of({ evaluateEffective, ask, assert, deferPending, reply, replyDelegated, delegatedEligible, snapshot, snapshots, reconsider, escalate, get, forSession, list })
   }),
 )
 

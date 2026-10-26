@@ -1409,9 +1409,19 @@ export function readFormAssessment(value: unknown): Form.Assessment | undefined 
   return fields.length === record.fields.length ? { mode: record.mode, sourceSessionID: record.sourceSessionID, fields } : undefined
 }
 
-export function readFormReplySource(value: unknown): Form.ReplySource | undefined {
+export type FormReplySourceView = (typeof Form.ReplySource)["Encoded"]
+
+export function readFormReplySource(value: unknown): FormReplySourceView | undefined {
   const source = recordField(value)
-  if (!source || source.kind !== "coordinator" || typeof source.coordinatorSessionID !== "string" ||
+  if (!source) return undefined
+  if (source.kind === "dots-delegation") {
+    if (typeof source.anchorSessionID !== "string" || !source.anchorSessionID.startsWith("ses") ||
+      typeof source.delegationID !== "string" || source.delegationID.length === 0 || source.delegationID.length > 256 ||
+      typeof source.exchangeID !== "string" || source.exchangeID.length === 0 || source.exchangeID.length > 256 ||
+      typeof source.revision !== "number" || !Number.isSafeInteger(source.revision) || source.revision < 1) return undefined
+    return { kind: source.kind, anchorSessionID: source.anchorSessionID, delegationID: source.delegationID, revision: source.revision, exchangeID: source.exchangeID }
+  }
+  if (source.kind !== "coordinator" || typeof source.coordinatorSessionID !== "string" ||
     (source.groupID !== undefined && typeof source.groupID !== "string") ||
     (source.via !== undefined && source.via !== "coordination" && source.via !== "yolo" && source.via !== "auto-answer") ||
     (source.confidence !== undefined && (typeof source.confidence !== "number" || !Number.isFinite(source.confidence) || source.confidence < 0 || source.confidence > 1)) ||

@@ -24,4 +24,12 @@ export const mcpClient = Effect.fn("cli.remote.mcp.client")(function* (input: {
 export function printMcpStatus(status: Remote.McpStatus) {
   line(`  Relay MCP  ${status.state}${status.message ? ` · ${status.message}` : ""}`)
   if (status.url) line(`  URL        ${status.url}`)
+  if (status.clientCapabilities === undefined || status.clientCapabilities.length === 0) {
+    line("  Client forms  unreported")
+    return
+  }
+  for (const observation of status.clientCapabilities) {
+    const form = observation.form === undefined ? "unreported" : observation.form && observation.protocolVersion === "2026-07-28" ? "supported" : "unsupported"
+    line(`  Client forms  ${form} · protocol ${observation.protocolVersion ?? "unreported"} · observed ${observation.observedAt}`)
+  }
 }
