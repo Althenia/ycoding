@@ -908,13 +908,13 @@ test("effort thumb follows drag before snapping, keeps keyboard semantics and su
     expect(dragging.committed).toBe("Low")
     await page.evaluate(`(() => { const slider=document.querySelector('[role="slider"]'), r=slider.getBoundingClientRect(); slider.dispatchEvent(new PointerEvent('pointerup', { bubbles:true, pointerId:7, clientX:r.left+r.width*.52, clientY:r.top+15 })); })()`)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Medium")
-    await Bun.sleep(300)
+    await wait(page, transitionsSettled)
     const mediumColor = await page.evaluate<string>(`getComputedStyle(document.querySelector('.model-control__switch strong')).color`)
     await page.pressKey("ArrowLeft", "ArrowLeft", 37)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("Low")
     await page.pressKey("End", "End", 35)
     expect(await page.evaluate<string>(`document.querySelector('[role="slider"]')?.getAttribute('aria-valuetext')`)).toBe("High")
-    await Bun.sleep(300)
+    await wait(page, transitionsSettled)
     const normal = await page.evaluate<{ color: string; transition: string; target: number }>(`(() => { const surface=document.querySelector('.model-control__surface'), fill=surface.querySelector('.model-control__fill'), slider=surface.querySelector('[role="slider"]'); return { color:getComputedStyle(surface.querySelector('.model-control__switch strong')).color, transition:getComputedStyle(fill).transitionDuration, target:slider.getBoundingClientRect().height } })()`)
     expect(normal.target).toBeGreaterThanOrEqual(44)
     expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.model-control__hero button')].every(button => { const rect=button.getBoundingClientRect(); return rect.width>=44 && rect.height>=44 })`)).toBe(true)
@@ -938,7 +938,7 @@ test("effort slider keeps its thumb inside the pill and reveals sparkles with ef
     await page.evaluate(`document.querySelector('[role="slider"]')?.focus()`)
     const geometry = () => page.evaluate<{ readonly inside: boolean; readonly glow: number; readonly sparkles: number; readonly trackHeight: number; readonly fillCoversThumb: boolean }>(`(() => { const slider=document.querySelector('[role="slider"]'), track=slider.querySelector('.model-control__track'), t=track.getBoundingClientRect(), thumb=slider.querySelector('.model-control__thumb').getBoundingClientRect(), fill=slider.querySelector('.model-control__fill').getBoundingClientRect(); return { inside: thumb.left >= t.left - .5 && thumb.right <= t.right + .5 && thumb.top >= t.top - .5 && thumb.bottom <= t.bottom + .5, glow: Number(getComputedStyle(slider.querySelector('.model-control__sparkles')).opacity), sparkles: slider.querySelectorAll('.model-control__sparkles i').length, trackHeight: t.height, fillCoversThumb: fill.right >= thumb.right - .5 } })()`)
     await page.evaluate(`document.querySelector('[aria-label="Clear reasoning effort override"]').click()`)
-    await Bun.sleep(300)
+    await wait(page, transitionsSettled)
     const unselected = await geometry()
     expect(unselected.inside).toBe(true)
     expect(unselected.glow).toBe(0)
@@ -946,12 +946,12 @@ test("effort slider keeps its thumb inside the pill and reveals sparkles with ef
     expect(unselected.trackHeight).toBeGreaterThanOrEqual(44)
     expect(unselected.fillCoversThumb).toBe(true)
     await page.pressKey("Home", "Home", 36)
-    await Bun.sleep(300)
+    await wait(page, transitionsSettled)
     const first = await geometry()
     expect(first.inside).toBe(true)
     expect(first.glow).toBeGreaterThan(0)
     await page.pressKey("End", "End", 35)
-    await Bun.sleep(300)
+    await wait(page, transitionsSettled)
     const top = await geometry()
     expect(top.inside).toBe(true)
     expect(top.glow).toBe(1)
@@ -1763,6 +1763,7 @@ async function wait(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBro
   }
   throw new Error(`Timed out: ${expression}`)
 }
+const transitionsSettled = `document.getAnimations().every(animation => !(animation instanceof CSSTransition) || animation.playState === 'finished')`
 async function ready() { return fetch(`http://127.0.0.1:${port}/verify/composer-fixture.html`).then((response) => response.ok, () => false) }
 
 function contrast(foreground: string, background: string) {

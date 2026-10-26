@@ -173,7 +173,7 @@ async function fixture(
   const registry = createSessionRegistry({ local, ...verification })
   await registry.refresh()
   calls.length = 0
-  const state = { allowed: true, now: 1000 }
+  const state = { allowed: true, now: 1000, onAdmission: () => {} }
   const holds: boolean[] = []
   const observations: unknown[] = []
   const subscriptions = createSubscriptions()
@@ -186,7 +186,10 @@ async function fixture(
       allowed: (epoch) => state.allowed && epoch === context.epoch,
       now: () => state.now,
       onLaneHold: (held) => holds.push(held),
-      onCapabilities: (value) => observations.push(value),
+      onCapabilities: (value) => {
+        observations.push(value)
+        if (value !== undefined) state.onAdmission()
+      },
     })
     closers.push(() => created.close())
     return created
@@ -1343,6 +1346,7 @@ describe("unknown outcome holds", () => {
   test("revoked authorization refuses a queued mutation of a held Session before any confirmation read", async () => {
     const sessions = sessionsWith({ providerID: "test", id: "model" })
     const started = Promise.withResolvers<void>()
+    const admitted = Promise.withResolvers<void>()
     const release = Promise.withResolvers<void>()
     const { tool, calls, state } = await fixture(
       {
@@ -1358,12 +1362,18 @@ describe("unknown outcome holds", () => {
     )
     const first = tool("session_switch_model", switchTo(target))
     await started.promise
+    state.onAdmission = () => admitted.resolve()
     const queued = tool("session_prompt", promptWith("msg_queued"))
+    await admitted.promise
+    expect(state.allowed).toBe(true)
+    expect(count(calls, "prompt")).toBe(0)
     state.allowed = false
     const mark = calls.length
     release.resolve()
     await first
-    expect(((await (await queued).json()) as { result: Result }).result.structuredContent).toMatchObject({
+    const response = await queued
+    expect(response.status).toBe(200)
+    expect(((await response.json()) as { result: Result }).result.structuredContent).toMatchObject({
       error: { code: "agent_unavailable" },
     })
     expect(calls.slice(mark).map((call) => call.method)).toEqual([])
@@ -1408,6 +1418,7 @@ describe("authorization gate and request shape", () => {
 
   test("rechecks authorization when a queued mutation reaches dispatch", async () => {
     const started = Promise.withResolvers<void>()
+    const admitted = Promise.withResolvers<void>()
     const release = Promise.withResolvers<{ id: string }>()
     const { tool, state, calls } = await fixture({
       prompt: (_sessionID: string, _location: unknown, input: { id: string }) => {
@@ -1421,15 +1432,44 @@ describe("authorization gate and request shape", () => {
     const args = (id: string) => ({ sessionID: "ses_1", input: { id, text: "t" } })
     const first = tool("session_prompt", args("msg_a"))
     await started.promise
+    state.onAdmission = () => admitted.resolve()
     const second = tool("session_prompt", args("msg_b"))
+    await admitted.promise
+    expect(state.allowed).toBe(true)
+    expect(calls.filter((call) => call.method === "prompt")).toHaveLength(1)
     state.allowed = false
     release.resolve({ id: "msg_a" })
     await first
-    const refused = ((await (await second).json()) as { result: { isError: boolean; structuredContent: unknown } })
+    const response = await second
+    expect(response.status).toBe(200)
+    const refused = ((await response.json()) as { result: { isError: boolean; structuredContent: unknown } })
       .result
     expect(refused.isError).toBe(true)
     expect(refused.structuredContent).toMatchObject({ error: { code: "agent_unavailable" } })
     expect(calls.filter((call) => call.method === "prompt")).toHaveLength(1)
+  })
+
+  test("revocation while reading the body refuses admission with 503 and no local call", async () => {
+    const reading = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const { request, state, calls, observations } = await fixture()
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        reading.resolve()
+        await release.promise
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "session_prompt", arguments: { sessionID: "ses_1", input: { id: "msg_before_admission", text: "t" } }, _meta: meta } })))
+        controller.close()
+      },
+    }, { highWaterMark: 0 })
+    const pending = request("tools/call", {}, { name: "session_prompt", body })
+    await reading.promise
+    state.allowed = false
+    release.resolve()
+    const response = await pending
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: "unavailable" })
+    expect(observations).toEqual([])
+    expect(calls).toEqual([])
   })
 
   test("serves only POST at the fixed resource, with bounded bodies and no caching", async () => {
