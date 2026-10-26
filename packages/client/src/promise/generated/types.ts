@@ -2642,6 +2642,8 @@ export type ModelIncidentReport = { rows: Array<ModelIncidentReportRow>; groups:
 
 export type KeepAwakeStatus = {
   state: KeepAwakeState
+  display?: KeepAwakeState
+  activity?: KeepAwakeState
   manual?: boolean
   lid?: "off" | "on" | "held" | "unsupported" | "error"
   system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"

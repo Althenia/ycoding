@@ -26,8 +26,8 @@ export function keepAwakeIndicator(awake: KeepAwakeState): { readonly label: str
   if (status.state === "error") return { label: "keep-awake error", tone: "danger", detail: status.message }
   if (status.state === "unsupported") return { label: "keep-awake unsupported", tone: "attention", detail: status.message }
   return {
-    label: `keep-awake on · lid ${status.lid === "on" || status.lid === "held" ? "held" : status.lid ?? "unreported"}${status.sleepHold ? " · sleep held" : ""}`,
-    tone: status.lid === "error" ? "danger" : status.lid === "unsupported" ? "attention" : "success",
+    label: `keep-awake on · lid ${status.lid === "on" || status.lid === "held" ? "held" : status.lid ?? "unreported"}${status.display === undefined ? "" : ` · display ${status.display}`}${status.activity === undefined ? "" : ` · activity ${status.activity}`}${status.sleepHold ? " · sleep held" : ""}`,
+    tone: [status.lid, status.display, status.activity].includes("error") ? "danger" : [status.lid, status.display, status.activity].includes("unsupported") ? "attention" : "success",
     detail: status.message,
   }
 }

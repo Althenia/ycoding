@@ -6,6 +6,20 @@ const ready = (state: "off" | "on" | "unsupported" | "error", message?: string):
   status: { state, ...(message === undefined ? {} : { message }) },
 })
 
+test("display and activity are reported independently without claiming an unlocked screen", () => {
+  for (const value of ["on", "off", "unsupported", "error"] as const) {
+    const status = readKeepAwakeStatus({ data: { state: "on", display: value, activity: value } })
+    expect(status).toEqual({ state: "on", display: value, activity: value })
+    const view = keepAwakeView({ reachable: true, keepAwake: { read: "ready", status } })
+    expect(view.detail).toContain(`Display ${value}; activity ${value}`)
+    expect(view.detail).not.toMatch(/unlocked|lock prevented/i)
+    expect(view.caveat).toMatch(/deliberate locks.*managed policy/i)
+    if (value === "error" || value === "unsupported") expect(view).toMatchObject({ tone: "attention", alert: true })
+  }
+  const missing = keepAwakeView({ reachable: true, keepAwake: ready("on") })
+  expect(missing.detail).toContain("Display unreported; activity unreported")
+})
+
 test("reports foreign lid ownership separately from local idle and sleep holds", () => {
   const status = readKeepAwakeStatus({ data: { state: "on", lid: "held", sleepHold: true } })
   expect(status?.lid).toBe("held")
@@ -50,9 +64,10 @@ test("sleep-held effective On keeps a manual-Off switch and exposes both parts a
   expect(view.caveat).toContain("heat")
 })
 
-test("machine status reserves reported-part geometry and owns error tones", async () => {
+test("machine status sizes to its content and owns error tones", async () => {
   const css = await Bun.file(new URL("../styles/remote.css", import.meta.url)).text()
-  expect(css).toMatch(/\.machine-awake__status\s*\{[^}]*min-block-size:\s*calc\(var\(--yc-leading-xs\) \* 6\)/)
+  expect(css).toMatch(/\.machine-awake__status\s*\{[^}]*line-height:\s*var\(--yc-leading-xs\)/)
+  expect(css).not.toMatch(/\.machine-awake__status\s*\{[^}]*min-block-size:/)
   expect(css).toMatch(/\.machine-awake__status\[data-tone="danger"\]\s*\{[^}]*color:\s*var\(--yc-danger\)/)
   expect(css).toMatch(/\.machine-awake__status\[data-tone="attention"\]\s*\{[^}]*color:\s*var\(--yc-yellow-strong\)/)
 })

@@ -1229,7 +1229,7 @@ export function Prompt(props: PromptProps) {
               title: "Sleep on",
               message:
                 awake?.state === "on"
-                  ? `Configured automation applies; rest go to review box. Idle sleep held off; lid ${awake.lid ?? "unreported"}${awake.system === "on" ? "; system sleep disabled" : awake.system === "setup" ? "; system sleep not disabled, run ycoding keep-awake setup" : awake.system === "held" ? "; system sleep held by another YCoding process" : awake.system === "error" ? "; system sleep change failed" : ""}. On battery this drains the battery and a closed lid traps heat.`
+                  ? `Configured automation applies; rest go to review box. Idle sleep held off; display ${awake.display ?? "unreported"}; activity ${awake.activity ?? "unreported"}; lid ${awake.lid ?? "unreported"}${awake.system === "on" ? "; system sleep disabled" : awake.system === "setup" ? "; system sleep not disabled, run ycoding keep-awake setup" : awake.system === "held" ? "; system sleep held by another YCoding process" : awake.system === "error" ? "; system sleep change failed" : ""}. Deliberate locks and managed policy apply. On battery this drains the battery and a closed lid traps heat.`
                   : "Configured automation applies; rest go to review box. Keep-awake is not holding this machine; it may sleep.",
               variant: "success",
               duration: 6000,

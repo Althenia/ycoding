@@ -6,7 +6,7 @@ import { CommandPaletteDialog } from "../src/component/command-palette"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider, useTheme } from "../src/context/theme"
-import { KeepAwakeProvider, keepAwakeStatusLabel, useKeepAwake, type KeepAwakeStatus } from "../src/keep-awake"
+import { KeepAwakeProvider, keepAwakeAssertionLabel, keepAwakeStatusLabel, useKeepAwake, type KeepAwakeStatus } from "../src/keep-awake"
 import { DialogProvider, useDialog } from "../src/ui/dialog"
 import { ToastProvider, useToast } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
@@ -26,6 +26,12 @@ function fakeServer(initial: KeepAwakeStatus = { state: "off" }) {
     writes,
   }
 }
+
+test("labels display and activity assertions without claiming an unlocked screen", () => {
+  expect(keepAwakeAssertionLabel({ state: "on", display: "on", activity: "on" })).toBe("Display on; activity on.")
+  expect(keepAwakeAssertionLabel({ state: "on", activity: "error" })).toBe("Display unreported; activity error.")
+  expect(keepAwakeAssertionLabel({ state: "on" })).toBe("Display unreported; activity unreported.")
+})
 
 test("labels a foreign lid owner without claiming this process armed it", async () => {
   const view = await renderKeepAwake(fakeServer({ state: "on", lid: "held", sleepHold: true }))
@@ -152,7 +158,7 @@ test("palette selection turns the backend switch on and off and explains what it
     await until(
       () =>
         view.toast() ===
-        "Idle sleep held off; closing the lid may still sleep this machine. On battery keep-awake drains the battery and a closed lid traps heat.",
+        "Idle sleep held off; closing the lid may still sleep this machine. Display unreported; activity unreported. System sleep is not confirmed disabled. Deliberate locks and managed policy apply; verify automatic-lock prevention on this Mac. On battery this drains the battery and a closed lid traps heat.",
     )
     await select("on")
     await view.app.waitForFrame((frame) => frame.includes("Awake fixture: off"))

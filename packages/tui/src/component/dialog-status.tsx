@@ -3,7 +3,7 @@ import { createMemo } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { DialogSelect } from "../ui/dialog-select"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { keepAwakeStatusLabel, useKeepAwake } from "../keep-awake"
+import { keepAwakeAssertionLabel, keepAwakeStatusLabel, useKeepAwake } from "../keep-awake"
 import { useRemote } from "../remote-connector"
 import { useTelemetry } from "../context/telemetry"
 import { useDialog } from "../ui/dialog"
@@ -82,7 +82,7 @@ export function DialogStatus(props: DialogStatusProps = {}) {
         },
         {
           title: "Keep awake",
-          details: [keepAwake.status()?.message].filter((message) => message !== undefined),
+          details: [keepAwakeAssertionLabel(keepAwake.status()), keepAwake.status()?.message].filter((message) => message !== undefined),
           detailsWrap: true,
           footer: keepAwakeStatusLabel(keepAwake.status()),
           state:

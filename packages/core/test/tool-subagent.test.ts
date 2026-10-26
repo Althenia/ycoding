@@ -168,7 +168,7 @@ const subagentLayer = (database = Database.node) => AppNodeBuilder.build(
     [Database.node, database],
     [SessionExecution.node, executionNode],
     [KeepAwake.node, Layer.effect(KeepAwake.Service, Effect.gen(function* () {
-      return yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "linux", pid: process.pid, clamshell: { set: () => "unsupported" }, systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") } })
+      return yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "linux", pid: process.pid, userActivity: { set: () => "unsupported" }, clamshell: { set: () => "unsupported" }, systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") } })
     })).pipe(Layer.provide(LayerNode.compile(AppProcess.node)))],
     fixtureModels,
   ],
@@ -2592,6 +2592,7 @@ const noticeIt = testEffect(
               spawner: yield* AppProcess.Service,
               platform: "linux",
               pid: process.pid,
+              userActivity: { set: () => "unsupported" },
               clamshell: { set: () => "unsupported" },
               systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") },
             })

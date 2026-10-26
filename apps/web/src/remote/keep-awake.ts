@@ -1,7 +1,7 @@
 import { describeOutcome } from "./outcome"
 import type { RemoteRequestOutcome } from "./transport"
 
-export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly lid?: "off" | "on" | "held" | "unsupported" | "error"; readonly system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"; readonly sleepHold?: boolean; readonly manual?: boolean; readonly message?: string }
+export type KeepAwakeStatus = { readonly state: "off" | "on" | "unsupported" | "error"; readonly display?: "off" | "on" | "unsupported" | "error"; readonly activity?: "off" | "on" | "unsupported" | "error"; readonly lid?: "off" | "on" | "held" | "unsupported" | "error"; readonly system?: "off" | "on" | "held" | "setup" | "unsupported" | "error"; readonly sleepHold?: boolean; readonly manual?: boolean; readonly message?: string }
 
 type KeepAwakeChange = {
   readonly state: "sending" | "failed" | "unknown"
@@ -30,8 +30,12 @@ export function readKeepAwakeStatus(payload: unknown): KeepAwakeStatus | undefin
   const system = Reflect.get(data, "system")
   const sleepHold = Reflect.get(data, "sleepHold")
   const manual = Reflect.get(data, "manual")
+  const display = Reflect.get(data, "display")
+  const activity = Reflect.get(data, "activity")
   return {
     state,
+    ...(display === "on" || display === "off" || display === "error" || display === "unsupported" ? { display } : {}),
+    ...(activity === "on" || activity === "off" || activity === "error" || activity === "unsupported" ? { activity } : {}),
     ...(lid === "off" || lid === "on" || lid === "held" || lid === "unsupported" || lid === "error" ? { lid } : {}),
     ...(system === "off" || system === "on" || system === "held" || system === "setup" || system === "unsupported" || system === "error" ? { system } : {}),
     ...(typeof sleepHold === "boolean" ? { sleepHold } : {}),
@@ -65,7 +69,7 @@ export type KeepAwakeView = {
 }
 
 const caveat =
-  "Available on macOS. Controls idle sleep and lid-closed sleep when each part reports On; an unreported lid part is unconfirmed. Choosing Sleep still sleeps unless system sleep is On; with system sleep On, a closed lid on battery stays awake until the battery dies and Sleep does not sleep. On battery this drains the battery and a closed lid traps heat. The manual preference resets when YCoding stops or restarts; sleeping families rehydrate their holds. Verify lid behavior on this Mac."
+  "Available on macOS. Controls idle sleep and lid-closed sleep when each part reports On; an unreported part is unconfirmed. Display holds idle display sleep; activity reports renewed user-activity assertions, not an unlocked screen. Verify automatic-lock prevention and lid behavior on this Mac; deliberate locks and managed policy apply. Choosing Sleep still sleeps unless system sleep is On; with system sleep On, a closed lid on battery stays awake until the battery dies and Sleep does not sleep. On battery this drains the battery and a closed lid traps heat. The manual preference resets when YCoding stops or restarts; sleeping families rehydrate their holds."
 const systemText = {
   off: "System sleep control off.",
   on: "System sleep disabled: a closed lid on battery stays awake until the battery dies, and Sleep does not sleep.",
@@ -81,12 +85,14 @@ export function keepAwakeView(input: {
   readonly reachable: boolean
 }): KeepAwakeView {
   const result = baseView(input)
-  const system = input.reachable && input.keepAwake.read === "ready" ? input.keepAwake.status?.system : undefined
-  if (system === undefined || input.keepAwake.change !== undefined) return result
+  const status = input.reachable && input.keepAwake.read === "ready" ? input.keepAwake.status : undefined
+  if (!status || input.keepAwake.change !== undefined) return result
+  const system = status.system
+  const failed = [status.display, status.activity].some((value) => value === "error" || value === "unsupported")
   return {
     ...result,
-    detail: `${result.detail} ${systemText[system]}`,
-    ...(system === "error" && result.tone !== "danger" ? { tone: "attention" as const, alert: true } : {}),
+    detail: `${result.detail} Display ${status.display ?? "unreported"}; activity ${status.activity ?? "unreported"}.${system === undefined ? "" : ` ${systemText[system]}`}`,
+    ...((system === "error" || failed) && result.tone !== "danger" ? { tone: "attention" as const, alert: true } : {}),
   }
 }
 

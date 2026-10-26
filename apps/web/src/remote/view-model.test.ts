@@ -35,6 +35,8 @@ import {
 } from "./view-model"
 
 test("keep-awake chrome is absent until settled or off and distinguishes active, held, unsupported, and failed states", () => {
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on", lid: "on", display: "on", activity: "error" } })).toMatchObject({ label: "keep-awake on · lid held · display on · activity error", tone: "danger" })
+  expect(keepAwakeIndicator({ read: "ready", status: { state: "on", lid: "on", activity: "unsupported" } })).toMatchObject({ tone: "attention" })
   for (const read of ["idle", "loading"] as const) expect(keepAwakeIndicator({ read })).toBeUndefined()
   expect(keepAwakeIndicator({ read: "ready", status: { state: "off" } })).toBeUndefined()
   expect(keepAwakeIndicator({ read: "ready", status: { state: "on", manual: true, lid: "on" } })).toMatchObject({ label: "keep-awake on · lid held", tone: "success" })

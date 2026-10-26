@@ -21,6 +21,10 @@ export function keepAwakeStatusLabel(status: KeepAwakeStatus | undefined): strin
   return `on · ${parts.join(" + ")}`
 }
 
+export function keepAwakeAssertionLabel(status: KeepAwakeStatus | undefined): string {
+  return `Display ${status?.display ?? "unreported"}; activity ${status?.activity ?? "unreported"}.`
+}
+
 const systemParts = {
   on: "system",
   setup: "system needs setup",
@@ -102,9 +106,7 @@ export function KeepAwakeProvider(props: ParentProps<{ server?: KeepAwakeServer 
           variant: "info",
           title: "Keep machine awake",
           message:
-            next.lid === "on"
-              ? "Idle and lid-closed sleep held off; on battery this drains the battery and a closed lid traps heat. Choosing Sleep still sleeps."
-              : "Idle sleep held off; closing the lid may still sleep this machine. On battery keep-awake drains the battery and a closed lid traps heat.",
+            `${next.lid === "on" ? "Idle and lid-closed sleep held off" : "Idle sleep held off; closing the lid may still sleep this machine"}. ${keepAwakeAssertionLabel(next)} ${next.system === "on" ? "System sleep disabled; choosing Sleep does not sleep." : "System sleep is not confirmed disabled."} Deliberate locks and managed policy apply; verify automatic-lock prevention on this Mac. On battery this drains the battery and a closed lid traps heat.`,
           duration: 6000,
         })
       if (next.state === "error" || next.state === "unsupported")

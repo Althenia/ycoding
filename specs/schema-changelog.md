@@ -21,6 +21,11 @@ Status: **Historical pre-release compatibility ledger.** Older entries retain th
 - Add the public ephemeral event `coordination.request.escalated` with `{ sessionID, rootSessionID?, kind, requestID, coordinationEscalation }`.
 - Additive; stored events and rows are unchanged, payloads without the field decode as before, and a runtime that predates it omits the field and event. Regenerate Promise and Effect clients from Protocol and Schema.
 
+## 2026-10-26: Report display and user-activity assertions
+
+- Add optional `display` and `activity` to `KeepAwake.Status`, each `off`, `on`, `unsupported`, or `error`. `display` reports the scoped display/idle inhibitor; `activity` reports native user-activity declaration success and cleanup. Neither field reports an unlocked screen or proves automatic-lock prevention. Absent values are unreported.
+- Keep `state` as the idle inhibitor status and preserve manual preference, sleeping-family holds, lid ownership, and system-sleep control.
+
 ## 2026-10-21: Report system sleep hold in keep-awake status
 
 - Add optional `system` to `KeepAwake.Status`: `off`, `on`, `held`, `setup`, `unsupported`, or `error`. It reports the root `pmset` system-sleep hold that accompanies effective keep-awake on macOS; `held` mirrors lid `held` for a non-owning process and `setup` means the one-time sudoers rule is absent.

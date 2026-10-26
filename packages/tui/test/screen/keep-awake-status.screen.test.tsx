@@ -26,7 +26,7 @@ test("the full TUI offers one Keep machine awake switch and lists its backend st
       get: async () => status,
       set: async (enabled) => {
         writes.push(enabled);
-        status = enabled ? { state: "on", lid: "on", sleepHold: false } : { state: "off", lid: "off", sleepHold: false }
+        status = enabled ? { state: "on", display: "on", activity: "on", lid: "on", system: "on", sleepHold: false } : { state: "off", display: "off", activity: "off", lid: "off", sleepHold: false }
         return status
       },
     },
@@ -46,17 +46,20 @@ test("the full TUI offers one Keep machine awake switch and lists its backend st
     expect(writes).toEqual([true])
     await until(() => screen.frame().includes("Idle and lid-closed sleep held off"))
     expect(screen.frame()).toContain("Idle and lid-closed sleep held off")
+    expect(screen.frame()).not.toContain("Choosing Sleep still sleeps")
 
-    status = { state: "error", message: "synthetic inhibitor failure" }
+    status = { state: "on", display: "on", activity: "error", message: "synthetic activity failure" }
     screen.input.pressKey("p", { ctrl: true })
     await until(() => screen.frame().includes("Commands"))
     await screen.input.typeText("View status")
     screen.input.pressEnter()
     await until(() => screen.frame().includes("   Status"))
     await screen.input.typeText("Keep awake")
-    await until(() => screen.frame().includes("synthetic inhibitor failure"))
+    await until(() => screen.frame().includes("synthetic activity failure"))
     expect(screen.frame()).toContain("Keep awake")
-    expect(screen.frame()).toContain("synthetic inhibitor failure")
+    expect(screen.frame()).toContain("synthetic activity failure")
+    expect(screen.frame()).toContain("Display on")
+    expect(screen.frame()).toContain("activity error")
     expect(screen.frame()).toContain("error")
   } finally {
     await screen.dispose()

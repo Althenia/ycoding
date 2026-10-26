@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import { eq } from "drizzle-orm"
 import path from "path"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -47,7 +48,7 @@ let decisionCalls = 0
 const keepAwake = Layer.effect(
   KeepAwake.Service,
   Effect.gen(function* () {
-    const awake = yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "linux", pid: process.pid, clamshell: { set: () => "unsupported" }, systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") } })
+    const awake = yield* KeepAwake.make({ spawner: yield* AppProcess.Service, platform: "linux", pid: process.pid, userActivity: { set: () => "unsupported" }, clamshell: { set: () => "unsupported" }, systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") } })
     return KeepAwake.Service.of({
       ...awake,
       hold: (id) =>
@@ -468,20 +469,28 @@ describe("Session sleep", () => {
         yield* Effect.addFinalizer(() => Effect.promise(() => directory[Symbol.asyncDispose]()))
         const databasePath = path.join(directory.path, "sleep.db")
         const firstHeld = yield* Deferred.make<string>()
+        const activityCalls: boolean[][] = []
         const recording = (signal: typeof firstHeld) =>
           Layer.effect(
             KeepAwake.Service,
             Effect.gen(function* () {
+              const calls: boolean[] = []
+              activityCalls.push(calls)
               const awake = yield* KeepAwake.make({
                 spawner: yield* AppProcess.Service,
-                platform: "linux",
+                platform: "darwin",
                 pid: process.pid,
+                lidFile: path.join(directory.path, "lid.json"),
+                command: () => ChildProcess.make(process.execPath, ["-e", "setInterval(() => {}, 1000)"]),
+                userActivity: { set: (on) => { calls.push(on); return on ? "on" : "off" } },
                 clamshell: { set: () => "unsupported" },
                 systemSleep: { permitted: Effect.succeed(false), set: () => Effect.succeed("off") },
               })
               return KeepAwake.Service.of({
                 ...awake,
-                hold: (id) => awake.hold(id).pipe(Effect.tap(() => Deferred.succeed(signal, id))),
+                hold: (id) => awake.hold(id).pipe(Effect.tap((status) => Effect.sync(() => {
+                  expect(status).toMatchObject({ state: "on", display: "on", activity: "on", sleepHold: true })
+                })), Effect.tap(() => Deferred.succeed(signal, id))),
               })
             }),
           ).pipe(Layer.provide(LayerNode.compile(AppProcess.node)))
@@ -511,6 +520,7 @@ describe("Session sleep", () => {
         yield* first.autonomy.set({ sessionID: created.id, sleep: true })
         expect(yield* Deferred.await(firstHeld)).toBe(created.id)
         yield* Scope.close(firstScope, Exit.void)
+        expect(activityCalls.every((calls) => calls.at(-1) === false)).toBe(true)
         const secondHeld = yield* Deferred.make<string>()
         const secondScope = yield* Scope.make()
         yield* Effect.addFinalizer(() => Scope.close(secondScope, Exit.void))
@@ -519,6 +529,7 @@ describe("Session sleep", () => {
           Session.Service,
         )
         expect(yield* Deferred.await(secondHeld)).toBe(created.id)
+        expect(activityCalls.some((calls) => calls.at(-1) === true)).toBe(true)
         expect((yield* second.autonomy.get(created.id)).sleep).toEqual({})
       }),
     60_000,

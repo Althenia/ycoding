@@ -56,6 +56,11 @@
       "node": "./src/util/process-lock-ffi.node.ts",
       "default": "./src/util/process-lock-ffi.bun.ts"
     },
+    "#user-activity-ffi": {
+      "bun": "./src/util/user-activity-ffi.bun.ts",
+      "node": "./src/util/user-activity-ffi.node.ts",
+      "default": "./src/util/user-activity-ffi.bun.ts"
+    },
     "#clamshell-sleep-ffi": {
       "bun": "./src/util/clamshell-sleep-ffi.bun.ts",
       "node": "./src/util/clamshell-sleep-ffi.node.ts",

@@ -59,6 +59,20 @@ async function open(read = "held", theme = "light", width = 1440) {
 }
 
 describe("Settings Keep machine awake", () => {
+  test("renders display and activity states without claiming unlock across sizes and themes", async () => {
+    for (const width of [320, 390, 1440]) for (const theme of ["light", "dark"]) for (const mode of ["assertions-on", "activity-error"]) {
+      const page = await open(mode, theme, width)
+      try {
+        await until(page, `${label} === 'On'`)
+        expect(await page.evaluate<string>(detail)).toContain(`Display on; activity ${mode === "activity-error" ? "error" : "on"}`)
+        expect(await page.evaluate<string>(`document.getElementById('machine-awake-caveat').textContent`)).toContain("deliberate locks and managed policy")
+        expect(await page.evaluate<string>(`document.getElementById('machine-awake-status').dataset.tone`)).toBe(mode === "activity-error" ? "attention" : "neutral")
+        expect(await page.evaluate<boolean>("document.documentElement.scrollWidth <= document.documentElement.clientWidth")).toBe(true)
+      } finally {
+        await page.close()
+      }
+    }
+  }, 60_000)
   test("renders foreign lid ownership without claiming local lid control or overflowing", async () => {
     for (const width of [320, 390, 1440]) for (const theme of ["light", "dark"]) {
       const page = await open("foreign-owner", theme, width)

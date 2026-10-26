@@ -11,6 +11,7 @@ import { AppProcess } from "./process"
 import { Global } from "./global"
 import { ClamshellSleep } from "./util/clamshell-sleep"
 import { SystemSleep } from "./util/system-sleep"
+import { UserActivity } from "./util/user-activity"
 
 export const Status = KeepAwake.Status
 export type Status = KeepAwake.Status
@@ -31,6 +32,7 @@ export interface Options {
   readonly command?: () => ChildProcess.Command
   readonly clamshell: ClamshellSleep.Interface
   readonly systemSleep: SystemSleep.Interface
+  readonly userActivity: UserActivity.Interface
   readonly lidFile?: string
   readonly reapplyInterval?: Duration.Input
 }
@@ -43,7 +45,7 @@ const systemApplyMessage = "System sleep could not be disabled; a closed lid may
 const systemRestoreMessage = "System sleep could not be restored; run `sudo pmset -a disablesleep 0`."
 
 export const macOSInhibitor = (pid: number) =>
-  ChildProcess.make("/usr/bin/caffeinate", ["-i", "-w", String(pid)], {
+  ChildProcess.make("/usr/bin/caffeinate", ["-d", "-i", "-w", String(pid)], {
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
@@ -79,6 +81,11 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
   const reapplyFiber = yield* Ref.make(Option.none<Fiber.Fiber<void>>())
   const systemHeld = yield* Ref.make(false)
   const systemFault = yield* Ref.make<"none" | "setup" | "apply" | "restore">("none")
+  const activity = yield* Ref.make<UserActivity.State>(darwin ? "off" : "unsupported")
+  const applyActivity = (on: boolean) => Effect.try(() => options.userActivity.set(on)).pipe(
+    Effect.catch(() => Effect.succeed("error" as const)),
+    Effect.flatMap((state) => Ref.set(activity, state)),
+  )
   const writeRecord = (armed: boolean) =>
     Ref.get(systemHeld).pipe(
       Effect.flatMap((system) =>
@@ -91,6 +98,7 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
     const base = yield* Ref.get(status)
     const lidState = yield* Ref.get(lid)
     const sleepHold = (yield* Ref.get(holds)).size > 0
+    const activityState = yield* Ref.get(activity)
     const fault = yield* Ref.get(systemFault)
     const system: NonNullable<Status["system"]> = !darwin
       ? "unsupported"
@@ -105,6 +113,8 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
               : "off"
     const message =
       base.message ??
+      (activityState === "error" ? "User activity assertion failed; automatic-lock prevention is unconfirmed." : undefined) ??
+      (base.state === "on" && activityState === "unsupported" ? "User activity assertions are unsupported; automatic-lock prevention is unconfirmed." : undefined) ??
       (lidState === "held" ? "Lid control is held by another YCoding process." : undefined) ??
       (lidState === "error"
         ? base.state === "on"
@@ -115,6 +125,8 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
       (system === "error" ? (base.state === "on" ? systemApplyMessage : systemRestoreMessage) : undefined)
     return {
       ...base,
+      display: base.state,
+      activity: activityState,
       ...(sleepHold ? { manual: yield* Ref.get(manual) } : {}),
       lid: lidState,
       system,
@@ -214,7 +226,9 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
     const interval = Duration.fromInputUnsafe(options.reapplyInterval ?? Duration.seconds(1))
     const loop = Effect.sleep(interval).pipe(
       Effect.andThen(
-        desired.pipe(Effect.flatMap((on) => (on ? applyLid(true).pipe(Effect.uninterruptible) : Effect.void))),
+        gate.withPermit(desired.pipe(Effect.flatMap((on) => (on
+          ? applyActivity(true).pipe(Effect.andThen(applyLid(true)), Effect.uninterruptible)
+          : Effect.void)))),
       ),
       Effect.forever,
     )
@@ -229,6 +243,7 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
   const settle = (next: Status) => Ref.set(status, next).pipe(Effect.andThen(combined))
   const stop = stopReapply.pipe(
     Effect.andThen(release),
+    Effect.andThen(applyActivity(false)),
     Effect.andThen(disarm),
     Effect.andThen(settle(darwin ? { state: "off" } : unsupported)),
     Effect.uninterruptible,
@@ -273,6 +288,7 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
                 yield* Ref.set(active, Option.none())
                 yield* Scope.close(scope, Exit.void)
                 yield* stopReapply
+                yield* applyActivity(false)
                 yield* disarm
                 yield* settle({ state: "error", message })
               }).pipe(Effect.uninterruptible),
@@ -280,6 +296,7 @@ export const make = Effect.fn("KeepAwake.make")(function* (options: Options) {
           ),
           Effect.forkIn(parent),
         )
+        yield* applyActivity(true)
         yield* applyLid(true)
         yield* startReapply
         return yield* settle({ state: "on" })
@@ -322,9 +339,10 @@ export const layer = Layer.effect(
     const spawner = yield* AppProcess.Service
     const clamshell = yield* ClamshellSleep.Service
     const systemSleep = yield* SystemSleep.Service
+    const userActivity = yield* UserActivity.Service
     const global = yield* Global.Service
-    return yield* make({ spawner, clamshell, systemSleep, lidFile: path.join(global.state, "keep-awake-lid.json"), platform: process.platform, pid: process.pid })
+    return yield* make({ spawner, clamshell, systemSleep, userActivity, lidFile: path.join(global.state, "keep-awake-lid.json"), platform: process.platform, pid: process.pid })
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer, deps: [AppProcess.node, ClamshellSleep.node, SystemSleep.node, Global.node] })
+export const node = makeGlobalNode({ service: Service, layer, deps: [AppProcess.node, ClamshellSleep.node, SystemSleep.node, UserActivity.node, Global.node] })

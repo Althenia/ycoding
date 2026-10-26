@@ -6,6 +6,9 @@ import { ChildProcess } from "effect/unstable/process"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
 import { AppProcess } from "@ycoding-ai/core/process"
+import { mkdtemp, rm } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { Api } from "../src/api"
@@ -15,10 +18,16 @@ function serve(platform: NodeJS.Platform, spawned: string[]) {
   const service = Layer.effect(
     KeepAwake.Service,
     Effect.gen(function* () {
+      const directory = yield* Effect.acquireRelease(
+        Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "ycoding-awake-handler-"))),
+        (value) => Effect.promise(() => rm(value, { recursive: true, force: true })),
+      )
       return yield* KeepAwake.make({
         spawner: yield* AppProcess.Service,
         platform,
         pid: process.pid,
+        lidFile: path.join(directory, "lid.json"),
+        userActivity: { set: (enabled) => enabled ? "on" : "off" },
         clamshell: { set: (enabled) => enabled ? "on" : "off" },
         systemSleep: { permitted: Effect.succeed(true), set: (disabled) => Effect.succeed(disabled ? "on" : "off") },
         command: () => {
@@ -58,16 +67,16 @@ test("serves the runtime keep-awake switch and validates its input", async () =>
   const spawned: string[] = []
   const handler = serve("darwin", spawned)
   try {
-    expect(await (await request(handler, "GET")).json()).toEqual({ data: { state: "off", lid: "off", system: "off", sleepHold: false } })
+    expect(await (await request(handler, "GET")).json()).toEqual({ data: { state: "off", display: "off", activity: "off", lid: "off", system: "off", sleepHold: false } })
     expect((await request(handler, "PUT", '{"enabled":"yes"}')).status).toBe(400)
     expect((await request(handler, "PUT", "{}")).status).toBe(400)
     expect(spawned).toEqual([])
-    expect(await (await request(handler, "PUT", '{"enabled":true}')).json()).toEqual({ data: { state: "on", lid: "on", system: "on", sleepHold: false } })
-    expect(await (await request(handler, "PUT", '{"enabled":true}')).json()).toEqual({ data: { state: "on", lid: "on", system: "on", sleepHold: false } })
+    expect(await (await request(handler, "PUT", '{"enabled":true}')).json()).toEqual({ data: { state: "on", display: "on", activity: "on", lid: "on", system: "on", sleepHold: false } })
+    expect(await (await request(handler, "PUT", '{"enabled":true}')).json()).toEqual({ data: { state: "on", display: "on", activity: "on", lid: "on", system: "on", sleepHold: false } })
     expect(spawned).toEqual(["inhibitor"])
-    expect(await (await request(handler, "GET")).json()).toEqual({ data: { state: "on", lid: "on", system: "on", sleepHold: false } })
-    expect(await (await request(handler, "PUT", '{"enabled":false}')).json()).toEqual({ data: { state: "off", lid: "off", system: "off", sleepHold: false } })
-    expect(await (await request(handler, "GET")).json()).toEqual({ data: { state: "off", lid: "off", system: "off", sleepHold: false } })
+    expect(await (await request(handler, "GET")).json()).toEqual({ data: { state: "on", display: "on", activity: "on", lid: "on", system: "on", sleepHold: false } })
+    expect(await (await request(handler, "PUT", '{"enabled":false}')).json()).toEqual({ data: { state: "off", display: "off", activity: "off", lid: "off", system: "off", sleepHold: false } })
+    expect(await (await request(handler, "GET")).json()).toEqual({ data: { state: "off", display: "off", activity: "off", lid: "off", system: "off", sleepHold: false } })
   } finally {
     await handler.dispose()
   }
@@ -76,7 +85,7 @@ test("serves the runtime keep-awake switch and validates its input", async () =>
 test("reports an unsupported platform as a successful status without starting an inhibitor", async () => {
   const spawned: string[] = []
   const handler = serve("linux", spawned)
-  const unsupported = { data: { state: "unsupported", lid: "unsupported", system: "unsupported", sleepHold: false, message: "Keep machine awake is available on macOS only." } }
+  const unsupported = { data: { state: "unsupported", display: "unsupported", activity: "unsupported", lid: "unsupported", system: "unsupported", sleepHold: false, message: "Keep machine awake is available on macOS only." } }
   try {
     expect(await (await request(handler, "GET")).json()).toEqual(unsupported)
     const response = await request(handler, "PUT", '{"enabled":true}')

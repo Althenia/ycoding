@@ -10,7 +10,7 @@ export const KeepAwakeGroup = HttpApiGroup.make("server.keepAwake")
     }).annotateMerge(OpenApi.annotations({
       identifier: "keepAwake.get",
       summary: "Get keep machine awake",
-      description: "Read effective idle/lid keep-awake, manual preference when sleep-held, and sleeping-family hold status on this machine.",
+      description: "Read idle/display inhibitors, renewed user-activity assertions, lid/system sleep control, and sleeping-family holds. Activity reports assertion success, not an unlocked screen.",
     })),
   )
   .add(
@@ -21,7 +21,7 @@ export const KeepAwakeGroup = HttpApiGroup.make("server.keepAwake")
       identifier: "keepAwake.set",
       summary: "Set keep machine awake",
       description:
-        "Set the process-local manual keep-awake preference. Sleeping Session families retain their holds independently; macOS controls idle and lid sleep and reports each part.",
+        "Set the process-local manual preference. Sleeping families retain their holds. macOS holds idle/display sleep and renews user activity; deliberate locks and managed policy apply. Each part reports its own status.",
     })),
   )
   .annotateMerge(OpenApi.annotations({ title: "keep-awake" }))

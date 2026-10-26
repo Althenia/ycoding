@@ -613,6 +613,10 @@ Use the shared `Modal`, `field`, `input`, `check` and `button` treatments for Do
 
 Inherit the brand floors. Primary normal-size button text needs 4.5:1; active boundaries/focus need 3:1 across every surface they occupy (`src/styles/contrast.test.ts`). Keyboard focus and overlay behavior require real rendered review. At installed-app zoom lock, test legibility/reflow separately; do not claim magnification support. Preserve native selection, focus behavior, coarse-pointer hit areas, reduced-motion state, and forced-colors system scrollbar rendering.
 
+## Keep-awake assertion reporting
+
+W27 reports `Display <state>; activity <state>` in the existing polite Machine status line, with missing parts `unreported`. A failed or unsupported part uses the existing attention tone and alert. W66 includes reported display/activity parts in its wrapping chip and uses danger for any failed part, attention for unsupported parts. Activity means renewed native user-activity assertions, not an unlocked screen. The persistent caveat preserves deliberate locks, managed policy, battery/heat warnings, and device verification of automatic-lock prevention and lid behavior. Reuse existing tokens and components without new controls or motion.
+
 ## Verification
 
 W1/W3: `bun test src/styles` from `apps/web`, including `design-md.test.ts` and `tokens.test.ts`. W42: `bun test src/theme src/styles/design-md.test.ts src/styles/contrast.test.ts`. W2: `contrast.test.ts`. W4–W8: named `verify/*.integration.test.ts` with a configured Chrome executable; those are not part of `bun run test:web`. W7's thumb contrast runs in `contrast.test.ts`; its rendering runs in `verify/scrollbar.integration.test.ts`, the one suite that launches Chrome with visible scrollbars (`launchBrowser(..., { scrollbars: true })`). The other suites pass `--hide-scrollbars`, which hides custom scrollbars but still reserves `scrollbar-gutter`, so their geometry includes the gutter. Lint this chain with `python3 ~/.agents/skills/daedalus/scripts/design_md.py lint apps/web/DESIGN.md`; `git diff --check` guards whitespace only.

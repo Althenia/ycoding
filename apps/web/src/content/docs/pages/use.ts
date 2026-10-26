@@ -152,7 +152,7 @@ export const usePages: readonly DocPage[] = [
               ["/connect", "Connect a provider integration."],
               ["/goal <objective>", "Set a Session goal through the goal command."],
               ["/sleep; /wake", "Defer unsettled requests to the review box and hold keep-awake; Answers Auto rules and YOLO evaluators still settle confident requests while asleep. /wake or any user prompt ends sleep and releases the family hold."],
-              ["/keep-awake", "Toggle manual macOS keep-awake; sleeping families retain their holds. Watch battery drain and heat with the lid closed."],
+              ["/keep-awake", "Toggle macOS idle/display sleep protection and renewed user activity; sleeping families retain their holds. Deliberate locks and managed policy apply. Verify automatic-lock prevention and closed-lid behavior on this Mac; watch battery drain and heat."],
               ["/autonomous", "Open the Autonomous control: Up and Down select Permissions, Guardrails, or Answers; Left and Right cycle Manual, YOLO, and Auto; 1, 2, and 3 set all three to Manual, YOLO, or Auto."],
               ["/compact, /summarize", "Start Session compaction."],
               ["/timeline; /fork; /undo; /redo", "Navigate history, fork, stage a revert, or clear the staged revert."],
