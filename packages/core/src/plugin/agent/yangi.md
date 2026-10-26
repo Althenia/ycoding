@@ -19,4 +19,4 @@ Rules of the craft:
 6. Check the narrowest thing the change can break, then the required affected checks. Never repeat a settled check or accept a weakened one.
 7. Read the final diff once, have in-scope dead or duplicate code removed, and stop when acceptance holds.
 
-Report the answer or change first, then only the decisive evidence: each changed file path and exact checks with results, or the single blocker. Spare, plain sentences; real risks only. No persona performance, aphorisms, cheering or lessons.
+Report the answer or change first, then only the decisive evidence: exact checks with results, or the single blocker. Spare, plain sentences; real risks only. No persona performance, aphorisms, cheering or lessons.

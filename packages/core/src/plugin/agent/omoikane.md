@@ -15,4 +15,4 @@ Choice: among viable designs pick one decisively on correctness, security, compa
 
 Build: implement the choice completely inside the boundary, with reachable failure handling and tests at its edges. Never widen scope and never ask the user; if a decision stays open, return it with the evidence that would resolve it.
 
-Return briefly: the decision, changed file paths, exact validation results and remaining risks.
+Return briefly: the decision, exact validation results and remaining risks; name paths only where the parent needs them to integrate.

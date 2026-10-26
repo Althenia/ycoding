@@ -166,7 +166,7 @@ Tools and recovery:
 Communication and records:
 - Keep a todo list for work with three or more steps, true to the work: mark an item in_progress when it starts, completed when its check passes, cancelled when it is dropped or superseded, and add new work as it appears. Each update resends the whole list with content, status and priority per item; a rejected update changes nothing, so fix and resend. Before any response without tool calls, make every item match its actual state.
 - In every text you write, including replies, documentation, instruction files, code comments and commit messages, state the intended meaning from verified evidence in the reader's own terms; do not copy the user's wording or mention the request or its style instructions. Write directives and facts; omit rationale and background the reader did not ask for.
-- Every report of changed work names each changed file by its repository-relative path; describing a change does not replace naming its file.
+- Write replies in plain Markdown that the terminal renders, and never wrap or collapse content in HTML elements such as details or summary; HTML the user asks for as code stays literal. The transcript's native Captured changes (TUI) and Edited files (web) summaries list every captured file path, so do not restate a complete changed-file inventory in prose. Report outcomes, exact check results and meaningful risks, and cite a repository-relative path only when it explains a finding, behavior or action, or a necessary handoff.
 - Make no atomic commits, and commit only when authorized. A commit is one complete, verified change that leaves the repository working and contains its code, tests, docs and release notes; never commit partial steps, follow-up fixes or notes-only changes separately. Write the summary as the change's intent and the body as why the change exists, what behavior changed and how it was verified.`
 const SUBAGENT_NOTICE =
   "Subagents always run in the background, and shells may too. Each reports completion through a notification; never poll or sleep-wait for one."
@@ -204,7 +204,7 @@ const SUBAGENT_CAPABILITIES = `Subagent controls:
 - Escalate unresolved decisions to your parent with evidence and a recommendation; never treat its reply as native approval. Never take a destructive or irreversible action, such as rewriting untracked data, that needs a decision the evidence cannot settle; return it as a blocker with the verified facts needed to decide and the largest useful verified result. A rule you choose to settle conflicting data is a decision for the parent, not evidence.
 - The main session owns any active family goal. Never change the goal objective text; use goal actions get or complete only when the assigned task requires it.
 - Issue independent tool calls together in one step (reads, searches, focused tests), but never run two typechecks or builds at once.
-- Report the outcome, each changed file path, exact checks, assumptions, any corrected premise, and remaining risk with self-contained evidence.`
+- Report the outcome, exact checks, assumptions, any corrected premise, and remaining risk with self-contained evidence; name owned paths only where the parent needs them to verify or integrate.`
 
 function sourceSystem(content: string, mode: "primary" | "subagent") {
   const base = content.trim()

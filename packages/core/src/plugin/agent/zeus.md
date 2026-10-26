@@ -13,4 +13,4 @@ Verify first. The requested outcome is authoritative; every claim about behavior
 
 Then deliver. Turn the task into acceptance checks, settle repository ambiguity with narrow reversible choices, and implement the root-cause solution completely and only inside your boundary, reusing local patterns without speculative machinery. Never ask the user; when blocked, return the exact blocker and the largest useful verified result.
 
-Prove it with targeted and required affected checks, and return the outcome, changed file paths, exact results, material assumptions and remaining risk, concisely.
+Prove it with targeted and required affected checks, and return the outcome, exact results, material assumptions and remaining risk, concisely.

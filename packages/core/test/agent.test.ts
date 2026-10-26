@@ -314,6 +314,41 @@ describe("Agent", () => {
     }),
   )
 
+  it.effect("directs change reports to the native summaries instead of file inventories or HTML wrappers in every maintained agent", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      const guidance = [
+        "plain Markdown",
+        "Captured changes",
+        "Edited files",
+        "never wrap or collapse content in HTML elements such as details or summary",
+        "do not restate a complete changed-file inventory",
+        "only when it explains a finding, behavior or action",
+        "HTML the user asks for as code stays literal",
+        "or a necessary handoff",
+      ]
+      const blanket = [
+        /names each changed file/i,
+        /each changed file path/i,
+        /changed file paths/i,
+        /changed paths/i,
+        /list each changed file/i,
+      ]
+      for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
+        const item = yield* agent.get(Agent.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        for (const sentence of guidance) expect(item.system.split(sentence)).toHaveLength(2)
+        for (const pattern of blanket) expect(item.system).not.toMatch(pattern)
+        expect(item.system).toContain("repository-relative path")
+        expect(item.system).toContain("exact check")
+      }
+    }),
+  )
+
   it.effect("preserves native autonomy, lifecycle and helper output obligations independently of role prose", () =>
     Effect.gen(function* () {
       const agent = yield* Agent.Service
@@ -471,12 +506,12 @@ describe("Agent", () => {
           /versioning, migration, rollout, rollback, degradation, external failure/,
           /logs, metrics, traces, alerts, capacity, diagnostics/,
           /dependency direction, operability, rollback cost and lasting complexity/,
-          /changed file path with exact checks and results/,
+          /give the outcome with exact checks and results/,
         ],
         GSD: [/Find the critical path/, /independent lanes/, /Delegate implementation of every ready lane/, /Check each child's evidence against live files/],
         god: [/Rank evidence/, /acceptance criteria/, /Calibrate every statement to its evidence/, /Never present a guess as a finding/],
         yangi: [/proven, minimal path/, /Never repeat a settled check/, /fewest subagents/, /Read the final diff once/],
-        occam: [/Read the minimal evidence/, /delete or reuse before adding/, /narrowest test/, /Return the outcome, changed paths/],
+        occam: [/Read the minimal evidence/, /delete or reuse before adding/, /narrowest test/, /Return the outcome, exact check results/],
         omoikane: [/place the boundary in the system/, /pick one decisively/, /tests at its edges/, /evidence that would resolve it/],
         wittgenstein: [/assume only what is narrow and reversible/, /every required affected check/, /Omit any bullet with nothing to say/],
         zeus: [/trusting the evidence nearest runtime/, /exact unknown, the checks performed and the evidence still required/, /exact blocker and the largest useful verified result/],

@@ -33,4 +33,4 @@ Delegate implementation of independent components once their interfaces are sett
 
 ## Report
 
-Recommendation first, then the boundaries and trade-offs that decided it. For delivered work list each changed file path with exact checks and results; for analysis separate verified facts from open decisions, and name each risk's owner. Keep it brief, like a design review.
+Recommendation first, then the boundaries and trade-offs that decided it. For delivered work give the outcome with exact checks and results; for analysis separate verified facts from open decisions, and name each risk's owner. Keep it brief, like a design review.

@@ -196,7 +196,7 @@ The body is stored as `system`.
 
 An omitted mode preserves a built-in mode or uses the runtime default for a new agent.
 
-The maintained primary catalog includes `GSD`, `architech`, `god`, and `yangi`; `god` is the default. Primaries answer read-only requests and orchestrate implementation through their own bounded subagents. `GSD` (Get shit done) emphasizes the critical path and early independent lanes; each primary retains its specialist decision and reporting style. Changed-work reports name each changed file path and exact checks. See [Built-in agents](./runtime.md#built-in-agents) for roles and permission boundaries. Configure `{"default_agent": "GSD"}` in JSON to select it by default.
+The maintained primary catalog includes `GSD`, `architech`, `god`, and `yangi`; `god` is the default. Primaries answer read-only requests and orchestrate implementation through their own bounded subagents. `GSD` (Get shit done) emphasizes the critical path and early independent lanes; each primary retains its specialist decision and reporting style. Changed-work reports state the outcome and exact checks and leave the captured-path inventory to the native change summaries. See [Built-in agents](./runtime.md#built-in-agents) for roles and permission boundaries. Configure `{"default_agent": "GSD"}` in JSON to select it by default.
 
 ## Commands
 
