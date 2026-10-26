@@ -89,8 +89,60 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(packageJob).toContain("    needs: build\n")
 })
 
+for (const failed of [undefined, "darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"])
+  test(`parallel archive creation waits for every target and ${failed ? `rejects ${failed} failure` : "succeeds only when all succeed"}`, async () => {
+    const block = /          pids=\(\)\n[\s\S]+?          test "\$status" -eq 0/.exec(workflow)?.[0] ?? ""
+    expect(block).not.toBe("")
+    expect(block.match(/pids\+=\("\$!"\)/g)).toHaveLength(4)
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-release-archives-"))
+    try {
+      const calls = path.join(root, "calls")
+      await fs.mkdir(calls)
+      await fs.mkdir(path.join(root, "unpacked/ycoding-windows-x64"), { recursive: true })
+      const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `
+        archive() {
+          local target
+          case "$*" in
+            *darwin-arm64*) target=darwin-arm64 ;;
+            *darwin-x64*) target=darwin-x64 ;;
+            *linux-x64*) target=linux-x64 ;;
+            *windows-x64*) target=windows-x64 ;;
+            *) return 8 ;;
+          esac
+          printf '%s\\n' "$@" > "$CALLS/$target"
+          test "$target" != "$FAILED"
+        }
+        tar() { archive "$@"; }
+        zip() { archive "$@"; }
+        version=9.9.9
+        mac_entries=(ycoding ycoding-chrome-extension "YCoding Computer Use.app")
+        ${block}
+      `], {
+        cwd: root,
+        env: { ...process.env, CALLS: calls, FAILED: failed ?? "" },
+        stdout: "pipe", stderr: "pipe", timeout: 5_000,
+      })
+      expect(result.exitCode, result.stderr.toString()).toBe(failed ? 1 : 0)
+      expect((await fs.readdir(calls)).sort()).toEqual(["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"])
+      for (const target of ["darwin-arm64", "darwin-x64", "linux-x64", "windows-x64"]) {
+        const args = (await Bun.file(path.join(calls, target)).text()).trim().split("\n")
+        expect(args).toEqual(target === "windows-x64"
+          ? ["-r", "../../release/ycoding-9.9.9-windows-x64.zip", "ycoding.exe", "ycoding-chrome-extension"]
+          : ["-C", `unpacked/ycoding-${target}`, "-czf", `release/ycoding-9.9.9-${target}.tar.gz`, "ycoding", "ycoding-chrome-extension", ...(target.startsWith("darwin") ? ["YCoding Computer Use.app"] : [])])
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+test("compressed release assets are uploaded without an additional compression pass", () => {
+  const upload = workflowJob(workflow, "package").split("      - name: Upload prepared release assets\n")[1] ?? ""
+  expect(upload).toContain("compression-level: 0")
+  expect(upload).toContain("if-no-files-found: error")
+})
+
 test("macOS release builds sign the app with the pinned release certificate and never fall back to ad hoc", () => {
-  const build = workflow.split("\n  build:")[1]?.split("\n  isolated-browser-acceptance:")[0] ?? ""
+  const build = workflowJob(workflow, "build")
   const importStep = build.split("      - name: Import macOS signing identity")[1]?.split("      - name: Build TUI artifact")[0] ?? ""
   const stage = build.split("      - name: Stage native executables")[1]?.split("      - name: Upload native executables")[0] ?? ""
   expect(build).toContain("      YCODING_MACOS_SIGNING_IDENTITY: YCoding Code Signing")
@@ -122,7 +174,7 @@ test("macOS release builds sign the app with the pinned release certificate and 
   expect(workflow).not.toContain("ad-hoc")
 })
 
-test("isolated-browser acceptance accepts installed Chrome 152 or newer", async () => {
+test("local browser acceptance accepts installed Chrome 152 or newer", async () => {
   const browserHost = await Bun.file(
     path.join(import.meta.dir, "../.github/actions/verify-browser-host/action.yml"),
   ).text()
@@ -245,8 +297,8 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   expect(verify).toContain('release_notes="docs/releases/v$RELEASE_VERSION.md"')
   expect(verify).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
   expect(verify).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
-  expect(verify).toContain("bun test --cwd apps/web ./test/remote-session.test.ts")
-  expect(verify).toContain("bun run test:integration:remote")
+  expect(verify).toContain("bun test --cwd apps/web ./test/remote-store-container.test.ts")
+  expect(verify).not.toContain("bun run test:integration:remote")
   expect(verify).toContain("bun run build:cloudflare")
   expect(tui).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(tui).toContain('gh release create "v$version"')
@@ -289,7 +341,7 @@ test("app preview Worker deploys only after the relay and only when the reposito
 
 test("GitHub Release publication waits for every check and web deployment waits for publication", () => {
   const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
-  expect(tui).toContain("needs: [verify-source, package, isolated-browser-acceptance]")
+  expect(tui).toContain("needs: [verify-source, package]")
   expect(tui).toContain("github.event_name == 'push'")
   expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: release-tui")
 })
@@ -305,7 +357,7 @@ test("an existing release is replaced through staged, verified publication with 
   const manifest = tui.split("- name: Upload release publication manifest")[1] ?? ""
   expect(manifest).toContain("if: always()")
   expect(manifest).toContain("path: release-publish-manifest.json")
-  expect(workflow).toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
+  expect(workflow).not.toContain('"$GITHUB_WORKSPACE/script/release-publish.test.ts"')
 })
 
 test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
@@ -332,16 +384,16 @@ test("release workflow verifies the web application and relay before the Cloudfl
   expect(workflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts")
   expect(workflow).toContain("bun run build:cloudflare")
   expect(workflow.indexOf("bun run build:web")).toBeLessThan(workflow.indexOf("bun run build:cloudflare"))
-  // CLI, helper, and isolated-browser release checks stay in place.
-  expect(workflow).toContain("bun run test:integration:browser")
-  expect(workflow).toContain("isolated-browser-smoke.ts")
+  expect(workflow).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(workflow).not.toContain("bun run test:integration:browser")
+  expect(workflow).not.toContain("isolated-browser-smoke.ts")
 })
 
-test("release source checks select named files without package-wide test commands", () => {
-  const verify = workflowJob(workflow, "verify-source")
+test("active source checks select named files without package-wide test commands", () => {
+  const source = [workflowJob(workflow, "verify-source"), workflowJob(testWorkflow, "source")].join("\n")
   for (const script of ["test:web", "test:remote", "test:integration:web", "test:cloudflare", "test:extension"])
-    expect(verify).not.toContain(`bun run ${script}`)
-  const commands = verify.split("\n").filter((line) => /\bbun test\b/.test(line))
+    expect(source).not.toContain(`bun run ${script}`)
+  const commands = source.split("\n").filter((line) => /\bbun test\b/.test(line))
   expect(commands.length).toBeGreaterThan(10)
   for (const command of commands) {
     expect(command).toMatch(/\S+\.test\.[jt]sx?\b/)
@@ -353,8 +405,9 @@ test("release source checks select named files without package-wide test command
   }
 })
 
-test("release test manifests resolve every selected file in its owning directory", async () => {
-  for (const step of workflowJob(workflow, "verify-source").split("\n      - name:")) {
+test("active test manifests resolve every selected file in its owning directory", async () => {
+  const source = [workflowJob(workflow, "verify-source"), workflowJob(workflow, "build"), workflowJob(testWorkflow, "source"), workflowJob(testWorkflow, "build")].join("\n      - name:")
+  for (const step of source.split("\n      - name:")) {
     for (const command of step.split("\n").filter((line) => /\bbun test\b/.test(line))) {
       const cwd = /--cwd\s+(\S+)/.exec(command)?.[1] ?? /\n        working-directory: (\S+)/.exec(step)?.[1] ?? "."
       const files = command.match(/(?:\.\/|test\/|\$GITHUB_WORKSPACE\/script\/)[\w/.-]+\.test\.[jt]sx?/g) ?? []
@@ -369,6 +422,26 @@ test("release test manifests resolve every selected file in its owning directory
   }
 })
 
+for (const [name, file, retained, excluded] of [
+  ["connector", "./test/remote-bridge.test.ts", ["remote bridge", "MCP Events relay authorization budget", "relay MCP mutation lanes", "MCP event authority uses the current connector credential and cancels on detach", "quota observations use the global control frame without Session subscriptions or private fields"], ["registered app authorization failures a rate-limited resolution names its cause in the connector diagnostic"]],
+  ["helper", "./test/computer-use-packaging.test.ts", ["filters unsupported targets without planning a native helper", "plans a sibling helper for each supported macOS architecture", "signs with a configured stable identity and a secure timestamp, otherwise ad hoc", "keeps only complete artifacts when the host cannot compile the macOS helper", "plans the explicit source-development helper in Core's ignored cache", "rejects a macOS package without the signed application bundle", "rejects an unexpected macOS application bundle in a non-macOS package"], ["builds a signed YCoding Computer Use app with the product icon", "lists every desktop window with a Space placement consistent with its visibility"]],
+  ["transcript", "./test/session-transcript-live-fixes.test.tsx", ["derives pending, running, terminal, cancelled, and overridden tool lifecycle states from durable time"], ["sleeping header does not warn that the machine may sleep before its keep-awake read settles", "caps large transcript at bounded mounted window"]],
+  ["picker", "./test/screen/subagent-picker-capture.test.tsx", ["captures populated subagent picker states at reference terminal dimensions", "sizes picker metadata to the measured composer width with and without the docked rail"], ["renders populated subagents in the parent-session rail", "keeps the parent header status informational while subagents are active"]],
+  ["Dots attribution", "./test/screen/dots.screen.test.ts", ["remote source attribution accepts resident reactive metadata"], ["L10 named exchange renders the chosen name with non-human provenance and canonical source details"]],
+  ["web todo", "./test/remote-todo.test.ts", ["a connector that never answers todo.list does not hold Session hydration or raise a state notice", "a superseded same-Session read cannot overwrite reconnect's newer todo list"], ["selection reads todos, live updates replace the list, and reconnect reads again"]],
+  ["web guardrail", "./test/remote-guardrail.test.ts", ["preserves inspectable guardrail metadata in the family read"], ["a human can reject a review with missing targets but cannot approve it blindly"]],
+] as const)
+  test(`mixed ${name} suites select only named unit and mock cases`, () => {
+    const commands = workflowJob(workflow, "verify-source").split("\n").filter((line) => line.includes(file))
+    expect(commands).toHaveLength(1)
+    const pattern = /-t "([^"]+)"/.exec(commands[0] ?? "")?.[1] ?? ""
+    expect(pattern).not.toBe("")
+    const match = new RegExp(pattern)
+    for (const title of retained) expect(match.test(title), title).toBe(true)
+    for (const title of excluded) expect(match.test(title), title).toBe(false)
+    expect(commands[0]?.match(/\.test\.[jt]sx?/g)).toHaveLength(1)
+  })
+
 test("release verification covers Antigravity provider and build fixtures", () => {
   const verify = workflowJob(workflow, "verify-source")
   expect(verify).toContain("Verify Antigravity provider and build fixture boundaries")
@@ -377,11 +450,9 @@ test("release verification covers Antigravity provider and build fixtures", () =
   expect(verify).toContain("./antigravity-build.test.ts")
 })
 
-test("release source gates cover Dots boundaries and merged mobile web behavior", () => {
+test("release source gates retain Dots and web unit contracts", () => {
   const verify = workflowJob(workflow, "verify-source")
   for (const file of [
-    "./test/remote-local-dots.test.ts",
-    "./test/dots-exchange.integration.test.ts",
     "./test/dots-context.test.ts",
     "./test/dots-exchange.test.ts",
     "./test/dots-report-tool.test.ts",
@@ -392,7 +463,6 @@ test("release source gates cover Dots boundaries and merged mobile web behavior"
     "./test/dots-peer.test.ts",
     "./test/cli/tui/dots-dialog.test.tsx",
     "./test/screen/dots.screen.test.ts",
-    "./test/screen/dots-notice-display.screen.test.ts",
     "./src/remote/autonomy.test.ts",
     "./src/remote/ui/composer-layout.test.ts",
     "./src/remote/ui/settings-layout.test.ts",
@@ -401,19 +471,8 @@ test("release source gates cover Dots boundaries and merged mobile web behavior"
     "./src/remote/ui/usage-accounting.test.ts",
     "./src/remote/ui/usage-filters.test.ts",
     "./src/remote/ui/usage-layout.test.ts",
-    "./verify/composer-controls.integration.test.ts",
-    "./verify/incident-usage.integration.test.ts",
-    "./verify/keep-awake-settings.integration.test.ts",
-    "./verify/machine-row.integration.test.ts",
-    "./verify/mobile-composer.integration.test.ts",
-    "./verify/mobile-usage.integration.test.ts",
-    "./verify/remote-shell-layout.integration.test.ts",
-    "./verify/status-panel-motion.integration.test.ts",
-    "./verify/todo.integration.test.ts",
-    "./verify/usage-page.integration.test.ts",
   ]) expect(verify).toContain(file)
-  expect(verify).toContain("Verify merged mobile web and directly affected render cases")
-  expect(verify).toContain("YCODING_WEB_CHROME: ${{ steps.test-browser.outputs.executable }}")
+  expect(verify).not.toContain("YCODING_WEB_CHROME")
 })
 
 test("release source gates select native task delegation and question grading", () => {
@@ -423,8 +482,6 @@ test("release source gates select native task delegation and question grading", 
     "./test/yolo-decision.test.ts",
     "./test/form.test.ts",
     "./test/cli/tui/form.test.tsx",
-    "./test/screen/dots-delegation.screen.test.ts",
-    "./verify/conversation-questions.integration.test.ts",
   ])
     expect(verify).toContain(file)
   expect(verify).toContain("bun test --cwd packages/schema ./test/form.test.ts")
@@ -503,11 +560,7 @@ test("release source gates include ownership, chronology and compact-footer regr
   for (const file of [
     "./src/styles/design-md.test.ts",
     "./src/content/boundary.test.ts",
-    "./verify/project-notification-card.integration.test.ts",
-    "./verify/model-replay.integration.test.ts",
     "./src/remote/ui/transcript-rows.test.ts",
-    "./test/build-output.test.ts",
-    "./test/import-boundaries.test.ts",
     "./test/coordination-assignment.test.ts",
     "./test/coordination-hierarchy-prompt.test.ts",
     "./test/database-migration.test.ts",
@@ -526,69 +579,66 @@ test("release source gates include ownership, chronology and compact-footer regr
     "./test/coordination.test.ts",
     "./test/session-text.test.ts",
     "./test/form-contract.test.ts",
-    "./test/screen/projects-tab.screen.test.tsx",
-    "./test/screen/projects-flow.screen.test.tsx",
-    "./test/screen/session-chrome-row.screen.test.tsx",
-    "./test/screen/autonomy-summaries.screen.test.tsx",
-    "./test/screen/session-rail-design-match.test.tsx",
-    "./test/cli/tui/projects-screen.test.tsx",
     "./test/cli/tui/session-rows-chronology.test.tsx",
-    "./test/screen/transcript-chronology.screen.test.tsx",
-    "./test/remote-coordination.integration.test.ts",
   ]) expect(verify).toContain(file)
+  expect(workflowJob(workflow, "build")).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
 })
 
 test("test workflow verifies the web application and relay before the Cloudflare build", () => {
-  expect(testWorkflow).toContain("bun run test:web")
-  expect(testWorkflow).toContain("bun run test:remote")
+  expect(testWorkflow).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
+  expect(testWorkflow).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
   expect(testWorkflow).toContain("bun run build:web")
-  expect(testWorkflow).toContain("bun run test:cloudflare")
+  expect(testWorkflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts")
   expect(testWorkflow).toContain("bun run build:cloudflare")
   expect(testWorkflow.indexOf("bun run build:web")).toBeLessThan(testWorkflow.indexOf("bun run build:cloudflare"))
 })
 
-test("web integration gates run against built artifacts in both workflows", () => {
-  for (const [content, command] of [
-    [workflow, "bun test --cwd apps/web ./test/remote-session.test.ts"],
-    [testWorkflow, "bun run test:integration:web"],
-  ] as const) {
-    expect(content).toContain(command)
-    expect(content.indexOf("bun run build:web")).toBeLessThan(content.indexOf(command))
+test("active verification selects unit and mock boundaries without browser, listener or runtime suites", () => {
+  for (const content of [workflowJob(workflow, "verify-source"), workflowJob(testWorkflow, "source")]) {
+    for (const excluded of [
+      "test:integration:", "./verify/", "./test/build-output.test.ts", "./test/commands.test.ts",
+      "./test/remote-session.test.ts", "./test/remote-session-send.test.ts", "./test/remote-speed.test.ts",
+      "./test/remote-local-dots.test.ts", "./test/remote-goal-deadline.test.ts",
+      "./test/dots-exchange.integration.test.ts", "./test/remote-coordination.integration.test.ts",
+      "./test/coordination-activation.integration.test.ts", "./test/decision-recovery.integration.test.ts",
+      "./test/yolo-continuation.integration.test.ts", "./test/screen/projects-tab.screen.test.tsx",
+      "./test/screen/projects-flow.screen.test.tsx", "./test/screen/session-chrome-row.screen.test.tsx",
+      "./test/screen/autonomy-summaries.screen.test.tsx", "./test/screen/session-rail-design-match.test.tsx",
+      "./test/screen/transcript-chronology.screen.test.tsx", "./test/screen/dots-notice-display.screen.test.ts",
+      "./test/screen/dots-delegation.screen.test.ts", "./test/cli/tui/projects-screen.test.tsx",
+      "script/release-publish.test.ts", "YCODING_WEB_CHROME", "verify-browser-host",
+    ]) expect(content, excluded).not.toContain(excluded)
+    expect(content).not.toContain("continue-on-error:")
+    expect(content).toContain("bun test --cwd apps/web ./test/remote-store-container.test.ts")
   }
 })
 
-test("remote integration gate runs the composed real flow after the web build in both workflows", async () => {
+test("real browser, relay, publisher and runtime suites remain available locally", async () => {
   const rootPackage = JSON.parse(await Bun.file(path.join(import.meta.dir, "../package.json")).text())
   expect(rootPackage.scripts["test:integration:remote"]).toBe("bun infra/cloudflare/test/integration/real-flow.ts")
-  expect(await Bun.file(path.join(import.meta.dir, "../infra/cloudflare/test/integration/real-flow.ts")).exists()).toBe(
-    true,
-  )
-  for (const content of [workflow, testWorkflow]) {
-    expect(content).toContain("bun run test:integration:remote")
-    expect(content.indexOf("bun run build:web")).toBeLessThan(content.indexOf("bun run test:integration:remote"))
-  }
-  expect(testWorkflow).toContain(
-    [
-      "      - name: Verify local remote integration",
-      "        timeout-minutes: 20",
-      "        run: bun run test:integration:remote",
-    ].join("\n"),
-  )
-  expect(workflow).toContain(
-    [
-      "      - name: Build web application",
-      "        if: matrix.suite == 'web' || matrix.suite == 'remote'",
-      "        run: bun run build:web",
-    ].join("\n"),
-  )
-  expect(workflow).toContain(
-    [
-      "      - name: Verify local remote integration",
-      "        if: matrix.suite == 'remote'",
-      "        timeout-minutes: 20",
-      "        run: bun run test:integration:remote",
-    ].join("\n"),
-  )
+  for (const name of ["test:integration:web", "test:integration:browser", "test:integration:extension", "smoke:tui", "smoke:runtime"])
+    expect(rootPackage.scripts[name]).toBeTruthy()
+  for (const file of [
+    "infra/cloudflare/test/integration/real-flow.ts", "script/release-publish.test.ts", "script/chrome-for-testing.test.ts",
+    "packages/cli/script/isolated-browser-smoke.ts", "packages/cli/script/service-smoke.ts",
+    "packages/cli/test/commands.test.ts", "packages/cli/test/remote-local-dots.test.ts",
+    "packages/cli/test/remote-goal-deadline.test.ts", "packages/cli/test/dots-exchange.integration.test.ts",
+    "packages/cli/test/remote-coordination.integration.test.ts", "packages/cli/test/coordination-activation.integration.test.ts",
+    "packages/cli/test/decision-recovery.integration.test.ts", "packages/cli/test/yolo-continuation.integration.test.ts",
+    "apps/web/test/build-output.test.ts", "apps/web/test/remote-session.test.ts", "apps/web/test/remote-session-send.test.ts",
+    "apps/web/test/remote-speed.test.ts", "apps/web/verify/composer-controls.integration.test.ts",
+    "apps/web/verify/conversation-questions.integration.test.ts", "apps/web/verify/project-notification-card.integration.test.ts",
+    "apps/web/verify/model-replay.integration.test.ts", "apps/web/verify/incident-usage.integration.test.ts",
+    "apps/web/verify/keep-awake-settings.integration.test.ts", "apps/web/verify/machine-row.integration.test.ts",
+    "apps/web/verify/mobile-composer.integration.test.ts", "apps/web/verify/mobile-usage.integration.test.ts",
+    "apps/web/verify/remote-shell-layout.integration.test.ts", "apps/web/verify/status-panel-motion.integration.test.ts",
+    "apps/web/verify/todo.integration.test.ts", "apps/web/verify/usage-page.integration.test.ts",
+    "packages/tui/test/screen/projects-tab.screen.test.tsx", "packages/tui/test/screen/projects-flow.screen.test.tsx",
+    "packages/tui/test/screen/session-chrome-row.screen.test.tsx", "packages/tui/test/screen/autonomy-summaries.screen.test.tsx",
+    "packages/tui/test/screen/session-rail-design-match.test.tsx", "packages/tui/test/screen/transcript-chronology.screen.test.tsx",
+    "packages/tui/test/screen/dots-notice-display.screen.test.ts", "packages/tui/test/screen/dots-delegation.screen.test.ts",
+    "packages/tui/test/cli/tui/projects-screen.test.tsx",
+  ]) expect(await Bun.file(path.join(import.meta.dir, "..", file)).exists(), file).toBe(true)
 })
 
 test("release types verification checks cache invalidation before typechecking", () => {
@@ -599,9 +649,17 @@ test("release types verification checks cache invalidation before typechecking",
   expect(step.indexOf(check)).toBeLessThan(step.indexOf("bun run typecheck"))
 })
 
+test("Chrome pin selector names an existing source case", async () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const selected = /bun test "\$GITHUB_WORKSPACE\/script\/chrome-for-testing\.test\.ts" -t "([^"]+)"/.exec(verify)?.[1]
+  expect(selected).toBeDefined()
+  const source = await Bun.file(path.join(import.meta.dir, "chrome-for-testing.test.ts")).text()
+  expect([...source.matchAll(/^\s*test\("([^"]+)",/gm)].map((match) => match[1])).toContain(selected)
+})
+
 test("source verification legs start in parallel with the native builds", () => {
   const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0] ?? ""
-  const build = workflow.split("\n  build:")[1]?.split("\n  isolated-browser-acceptance:")[0] ?? ""
+  const build = workflowJob(workflow, "build")
   expect(verify).not.toContain("needs:")
   expect(build).not.toContain("needs:")
   expect(verify).toContain("fail-fast: false")
@@ -609,60 +667,41 @@ test("source verification legs start in parallel with the native builds", () => 
   expect([...verify.matchAll(/- suite: (\S+)/g)].map((match) => match[1])).toEqual([
     "types",
     "web",
-    "remote",
     "cli",
     "tui",
-    "browser",
-    "extension",
   ])
-  expect(verify).toContain(["          - suite: browser", "            runner: macos-26"].join("\n"))
-  expect(verify).toContain(["          - suite: extension", "            runner: macos-26"].join("\n"))
   for (const [step, condition] of [
     ["Check workspace and types", "matrix.suite == 'types'"],
     ["Verify web application and relay", "matrix.suite == 'web'"],
-    ["Build web application", "matrix.suite == 'web' || matrix.suite == 'remote'"],
-    ["Verify built web integration", "matrix.suite == 'web'"],
-    ["Verify local remote integration", "matrix.suite == 'remote'"],
+    ["Build web application", "matrix.suite == 'web'"],
     ["Verify Cloudflare Worker", "matrix.suite == 'web'"],
     ["Verify CLI suites", "matrix.suite == 'cli'"],
     ["Verify Chrome extension suites", "matrix.suite == 'cli'"],
     ["Verify transcript and approval suites", "matrix.suite == 'tui'"],
-    ["Verify goal continuation", "matrix.suite == 'tui'"],
     ["Verify typed decision suites", "matrix.suite == 'tui'"],
     ["Verify installer and web assets", "matrix.suite == 'web'"],
-    ["Verify approved browser host", "matrix.suite == 'browser' || matrix.suite == 'extension'"],
-    ["Verify isolated-browser integration suites", "matrix.suite == 'browser'"],
-    ["Provision Chrome for Testing", "matrix.suite == 'browser' || matrix.suite == 'extension'"],
-    ["Verify Chrome extension integration suite", "matrix.suite == 'extension'"],
   ])
     expect(verify).toContain(`      - name: ${step}\n        if: ${condition}\n`)
-  expect(verify).toContain("uses: ./.github/actions/verify-browser-host")
+  expect(verify).not.toContain("uses: ./.github/actions/verify-browser-host")
   expect(verify).toContain("bun test --cwd extensions/chrome ./test/protocol.test.js ./test/service-worker.test.js ./test/design-md.test.js")
-  expect(verify).toContain("run: bun run test:integration:extension")
-  expect(verify).toContain('executable="$(bun script/chrome-for-testing.ts "$RUNNER_TEMP/chrome-for-testing")"')
-  expect(verify).toContain('echo "executable=$executable" >> "$GITHUB_OUTPUT"')
-  expect(verify).toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME: ${{ steps.test-browser.outputs.executable }}")
-  expect(verify).toContain("YCODING_WEB_CHROME: ${{ steps.test-browser.outputs.executable }}")
-  expect(verify).not.toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME=$executable")
-  expect(verify).not.toContain("YCODING_WEB_CHROME: /Applications/Google Chrome.app")
+  expect(verify).not.toContain("test:integration:")
+  expect(verify).not.toContain("script/chrome-for-testing.ts")
+  expect(verify).not.toContain("YCODING_TEST_ISOLATED_BROWSER_CHROME")
+  expect(verify).not.toContain("YCODING_WEB_CHROME")
   expect(verify).not.toContain("puppeteer")
   expect(verify).toContain('"$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts"')
-  expect(verify.indexOf("- name: Provision Chrome for Testing")).toBeLessThan(
-    verify.indexOf("- name: Verify Chrome extension integration suite"),
-  )
-  expect(verify.indexOf("- name: Provision Chrome for Testing")).toBeLessThan(
-    verify.indexOf("- name: Verify responsive Project cards and model profiles"),
-  )
+  expect(verify).toContain('-t "pins one exact version whose root metadata document is the default source"')
+  expect(build).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
+  expect(build).not.toMatch(/smoke:|service-smoke|isolated-browser-smoke|test:integration:/)
 })
 
-test("packaging overlaps packaged-browser acceptance without bypassing the publication or deployment gate", () => {
+test("packaging overlaps source verification without bypassing publication or deployment gates", () => {
   const jobs = workflow.split("\njobs:\n")[1]!.split(/(?:^|\n)  ([\w-]+):\n/).slice(1)
   const dependencies = [
     ["verify-source", undefined],
     ["build", undefined],
-    ["isolated-browser-acceptance", "build"],
     ["package", "build"],
-    ["release-tui", "[verify-source, package, isolated-browser-acceptance]"],
+    ["release-tui", "[verify-source, package]"],
     ["deploy-web", "release-tui"],
   ] as const
   expect(jobs.filter((_, index) => index % 2 === 0).sort()).toEqual(dependencies.map(([name]) => name).sort())
@@ -686,13 +725,9 @@ test("packaging overlaps packaged-browser acceptance without bypassing the publi
   expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
 })
 
-test("the packaged isolated-browser smoke waits for the native builds on the approved host", () => {
-  const acceptance = workflow.split("\n  isolated-browser-acceptance:")[1]?.split("\n  package:")[0] ?? ""
-  expect(acceptance).toContain("needs: build")
-  expect(acceptance).toContain("runs-on: macos-26")
-  expect(acceptance).toContain("uses: ./.github/actions/verify-browser-host")
-  expect(acceptance).toContain("isolated-browser-smoke.ts")
-  expect(acceptance).not.toContain("test:integration:browser")
+test("release runs serialize without cancelling a preceding release", () => {
+  expect(workflow).not.toContain("\n  isolated-browser-acceptance:")
+  expect(workflow).toContain("concurrency:\n  group: release\n  cancel-in-progress: false")
 })
 
 test("obsolete Pages publishing is replaced by the web asset publisher", async () => {
@@ -762,16 +797,16 @@ test("Windows portability regressions run directly without replacing the full un
   for (const host of ["ubuntu-24.04", "windows-2025"]) expect(testWorkflow).toContain(`host: ${host}`)
 })
 
-test("non-unit test workflow checks run in independent active jobs while the unit and portability jobs stay skipped", () => {
+test("source contracts and production builds run independently while legacy jobs stay skipped", () => {
   const skipped = "    # Temporarily disabled until the Rust release; remove this job-level if to restore.\n    if: ${{ false }}\n"
   const unit = workflowJob(testWorkflow, "unit")
   const source = workflowJob(testWorkflow, "source")
-  const lifecycle = workflowJob(testWorkflow, "lifecycle")
+  const build = workflowJob(testWorkflow, "build")
   expect(unit).toContain(skipped)
   expect(workflowJob(testWorkflow, "portability")).toContain(skipped)
   expect(unit).toContain("run: GITHUB_ACTIONS=false bun turbo test")
   expect(unit).toContain("name: Cache Turbo")
-  for (const job of [source, lifecycle]) {
+  for (const job of [source, build]) {
     expect(job).not.toMatch(/^    if:/m)
     expect(job).not.toContain("continue-on-error:")
     expect(job).not.toContain("actions/cache")
@@ -782,22 +817,21 @@ test("non-unit test workflow checks run in independent active jobs while the uni
     expect(job).toContain('git config --global user.name "ycoding"')
   }
   for (const command of [
-    "bun run test:web",
-    "bun run test:remote",
+    "bun test --cwd apps/web ./src/content/changelog.test.ts",
+    "bun test --cwd packages/remote ./test/contract.test.ts",
     "bun run build:web",
-    "bun run test:integration:web",
-    "bun run test:integration:remote",
-    "bun run test:cloudflare",
+    "bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts",
     "bun run build:cloudflare",
     "bun run check:generated",
     "bun run script/build.ts --single",
     "bun run script/build-node.ts --single --skip-install --outdir=dist/node",
-    "bun run script/service-smoke.ts",
   ]) {
     expect(unit).not.toContain(command)
     expect(testWorkflow.split(command).length - 1, command).toBeGreaterThanOrEqual(1)
   }
   expect(unit).not.toContain("service-smoke")
+  expect(build).not.toMatch(/service-smoke|smoke:|test:integration:/)
+  expect(testWorkflow).not.toContain("\n  lifecycle:")
   expect(unit).not.toContain("runner.os == 'Linux'")
   expect(unit).not.toContain("setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n        with:\n          node-version: \"26.4.0\"")
 })
@@ -808,12 +842,10 @@ test("the independent source verification job runs the Linux-only gates in order
   expect(source).toContain("runs-on: ubuntu-24.04")
   expect(source).toContain("timeout-minutes: 20")
   const order = [
-    "bun run test:web",
-    "bun run test:remote",
+    "bun test --cwd apps/web ./src/content/changelog.test.ts",
+    "bun test --cwd packages/remote ./test/contract.test.ts",
     "bun run build:web",
-    "bun run test:integration:web",
-    "bun run test:integration:remote",
-    "bun run test:cloudflare",
+    "bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts",
     "bun run build:cloudflare",
     "bun run check:generated",
   ].map((command) => source.indexOf(command))
@@ -823,21 +855,22 @@ test("the independent source verification job runs the Linux-only gates in order
   expect(source).not.toContain("matrix.")
 })
 
-test("the independent lifecycle matrix verifies compiled and Node builds on Linux and Windows", () => {
-  const lifecycle = workflowJob(testWorkflow, "lifecycle")
-  expect(lifecycle).toContain("name: compiled and Node lifecycle (${{ matrix.settings.name }})")
+test("the independent build matrix retains native and Node compilations on Linux and Windows", () => {
+  const lifecycle = workflowJob(testWorkflow, "build")
+  expect(lifecycle).toContain("name: native and Node builds (${{ matrix.settings.name }})")
   expect(lifecycle).toContain("fail-fast: false")
   expect(lifecycle).toContain("runs-on: ${{ matrix.settings.host }}")
   for (const host of ["ubuntu-24.04", "windows-2025"]) expect(lifecycle).toContain(`host: ${host}`)
   expect(lifecycle).toContain("shell: bash")
-  const compiled = lifecycle.split("      - name: Verify compiled service lifecycle\n")[1]?.split("\n      - name:")[0] ?? ""
+  const compiled = lifecycle.split("      - name: Build native executable\n")[1]?.split("\n      - name:")[0] ?? ""
   expect(compiled).toContain("timeout-minutes: 10")
   expect(compiled).toContain("working-directory: packages/cli")
-  expect(compiled).toContain("bun run script/build.ts --single\n          bun run script/service-smoke.ts")
+  expect(compiled).toContain("run: bun run script/build.ts --single")
   const node = lifecycle.split("      - name: Verify Node build\n")[1] ?? ""
   expect(node).toContain("if: always()")
   expect(node).toContain("timeout-minutes: 15")
-  expect(node).toContain("bun run script/build-node.ts --single --skip-install --outdir=dist/node\n          bun run script/service-smoke.ts --node")
+  expect(node).toContain("run: bun run script/build-node.ts --single --skip-install --outdir=dist/node")
+  expect(lifecycle).not.toContain("service-smoke")
   expect(lifecycle).toContain('node-version: "24"')
   expect(lifecycle).toContain('node-version: "26.4.0"')
   expect(lifecycle.indexOf('node-version: "24"')).toBeLessThan(lifecycle.indexOf('node-version: "26.4.0"'))

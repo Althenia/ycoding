@@ -134,7 +134,9 @@ Owns:
 - installer and updater integration;
 - artifact and runtime smoke tests.
 
-The release workflow verifies source suites alongside native builds, with independent macOS arm64 legs for isolated-browser integration and source/packaged Chrome extension integration. Packaging and packaged isolated-browser acceptance run in parallel after all native builds succeed. Cloudflare deployment requires every source leg, packaging, and packaged acceptance to succeed; TUI publication requires successful deployment. Manual runs prepare artifacts without deployment or publication.
+The release workflow runs four source-verification legs—types, web and remote contracts, CLI, and TUI—alongside four native builds. CI tests use selected unit, stub and mock boundaries. Native and Node compilation, standalone bundle boundaries, signed-app identity, version metadata, archive layout and checksums remain build gates. Packaging starts after every native build succeeds, creates four independent archives concurrently, waits for every archive process and fails if any fails before validating or checksumming the output. TUI publication requires every source leg and packaging to succeed; Cloudflare deployment requires successful publication. Manual runs prepare artifacts without deployment or publication.
+
+Real browser rendering, isolated-browser and Chrome extension integration, listening relay flows, publisher HTTP fault scenarios, service lifecycle and packaged-runtime smoke checks run locally with their existing environment requirements. Their maintained suites and commands remain available; mixed files select named mock-only cases in CI. The PR workflow uses selected web, remote and Worker contracts with independent Linux and Windows native and Node build jobs.
 
 ### `packages/tui`
 
