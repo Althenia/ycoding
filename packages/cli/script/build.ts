@@ -80,6 +80,7 @@ for (const item of targets) {
     .join("-")
   const name = target.replace(binary, artifact)
   console.log(`building ${name}`)
+  const compileStarted = performance.now()
   const result = await Bun.build({
     entrypoints: [entrypoint],
     tsconfig: "./tsconfig.json",
@@ -113,13 +114,18 @@ for (const item of targets) {
     },
   })
 
+  console.log(`build ${name} phase=compile duration_ms=${Math.round(performance.now() - compileStarted)} success=${result.success}`)
   if (!result.success) {
     for (const log of result.logs) console.error(log)
     process.exit(1)
   }
 
+  const helperStarted = performance.now()
   await buildComputerHelper({ platform: item.os, arch: item.arch }, path.join(outdir, name, "bin"))
+  console.log(`build ${name} phase=computer-helper duration_ms=${Math.round(performance.now() - helperStarted)}`)
+  const extensionStarted = performance.now()
   await copyChromeExtension(path.join(outdir, name, "bin"))
+  console.log(`build ${name} phase=chrome-extension duration_ms=${Math.round(performance.now() - extensionStarted)}`)
 
   await Bun.write(
     path.join(outdir, name, "package.json"),

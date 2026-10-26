@@ -35,7 +35,9 @@ jobs:
             runner: ubuntu-24.04
           - suite: cli
             runner: ubuntu-24.04
-          - suite: tui
+          - suite: tui-project
+            runner: ubuntu-24.04
+          - suite: tui-runtime
             runner: ubuntu-24.04
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
@@ -133,26 +135,26 @@ jobs:
         run: bun test --cwd extensions/chrome ./test/protocol.test.js ./test/service-worker.test.js ./test/design-md.test.js
 
       - name: Verify transcript and approval suites
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-project'
         working-directory: packages/tui
         run: |
           bun test test/cli/tui/permission-interaction.test.tsx test/cli/tui/permission.test.ts test/cli/tui/guardrail.test.tsx test/util/permission.test.ts test/branding.test.ts
           bun test ./test/session-transcript-live-fixes.test.tsx -t "derives pending, running, terminal, cancelled, and overridden tool lifecycle states from durable time"
 
       - name: Verify goal continuation
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-project'
         working-directory: packages/core
         run: |
           bun test test/session-execution.test.ts test/session-autonomy.test.ts
           bun test --timeout 40000 test/session-runner.test.ts -t "promotes queued input after continuation ends|resets the configured step allowance when steering input promotes|keeps the configured step allowance when only Dots peer input promotes|resets the step allowance when Dots peer input promotes with user steering|resets the step allowance when an ordinary synthetic input promotes without Dots attribution|promotes queued inputs one at a time in FIFO order|promotes queued input after steering continuation ends|promotes steers before the next queued input|coalesces multiple active steering prompts into one continuation step|preserves durable queued input for a later wake after interruption"
 
       - name: Verify typed decision suites
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-runtime'
         working-directory: packages/core
         run: bun test test/decision-agent-provider.test.ts test/decision-agent.test.ts test/decision-judgment.test.ts test/decision.test.ts test/session-guardrail-service.test.ts
 
       - name: Verify Project ownership and native routing
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-project'
         run: |
           bun test --cwd packages/core --timeout 40000 ./test/coordination.test.ts ./test/coordination-tool.test.ts ./test/coordination-runtime.test.ts ./test/coordination-assignment.test.ts ./test/coordination-hierarchy-prompt.test.ts ./test/coordination-decisions.test.ts ./test/decision-choice-redaction.test.ts ./script/migration.test.ts
           bun test --cwd packages/schema ./test/coordination.test.ts ./test/session-text.test.ts ./test/event-manifest.test.ts
@@ -160,21 +162,21 @@ jobs:
           bun test --cwd packages/server --timeout 40000 ./test/coordination-http.test.ts ./test/form.test.ts ./test/permission.test.ts ./test/guardrail.test.ts ./test/session-autonomy.test.ts
 
       - name: Verify ownership upgrade and native decision boundaries
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-project'
         run: bun test --cwd packages/core --timeout 40000 ./test/database-migration.test.ts ./test/coordination-decisions-native.test.ts ./test/coordination-decision-runtime.test.ts ./test/coordination-instructions.test.ts ./test/coordination-model-request.test.ts ./test/session-projector.test.ts
 
       - name: Verify footer state and short-terminal controls
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-runtime'
         run: bun test --cwd packages/tui --timeout 40000 ./test/session-footer-autonomy.test.tsx ./test/isolated-browser-dialog.test.tsx ./test/cli/tui/projects-layout.test.tsx ./test/theme-v1-parity.test.ts
 
       - name: Verify compact Project and transcript layouts
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-runtime'
         run: |
           bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/session-rows-chronology.test.tsx ./test/cli/tui/sidebar-cache.test.tsx ./test/design-md.test.ts
           bun test --cwd packages/tui --timeout 40000 ./test/screen/subagent-picker-capture.test.tsx -t "captures populated subagent picker states at reference terminal dimensions|sizes picker metadata to the measured composer width with and without the docked rail"
 
       - name: Verify Dots unbind and notice boundaries
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-runtime'
         run: |
           bun test --cwd packages/core --timeout 40000 ./test/dots.test.ts ./test/dots-session.test.ts ./test/dots-context.test.ts ./test/dots-exchange.test.ts ./test/dots-report-tool.test.ts ./test/dots-report.test.ts
           bun test --cwd packages/schema ./test/dots.test.ts ./test/dots-report.test.ts ./test/dots-report-state.test.ts
@@ -186,7 +188,7 @@ jobs:
           bun test --cwd packages/tui --timeout 40000 ./test/screen/dots.screen.test.ts -t "remote source attribution accepts resident reactive metadata"
 
       - name: Verify question grading and native Form views
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-runtime'
         run: |
           bun test --cwd packages/core --timeout 40000 ./test/question-grading.test.ts
           bun test --cwd packages/core --timeout 40000 ./test/yolo-decision.test.ts -t "graded values retain their original mapping when an environment credential rotates during evaluation"
@@ -195,7 +197,7 @@ jobs:
           bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/inline-tool-wrap-snapshot.test.tsx -t "filters malformed nested tool wire data|preserves native question selection modes|renders parsed multi-choice recommendations"
 
       - name: Verify subagent model selection boundaries
-        if: matrix.suite == 'tui'
+        if: matrix.suite == 'tui-runtime'
         run: |
           bun test --cwd packages/schema ./test/subagent-model-selection.test.ts
           bun test --cwd packages/core --timeout 40000 ./test/session-step-boundary.test.ts ./test/session-subagent-model-switch.test.ts
@@ -208,8 +210,17 @@ jobs:
       - name: Verify installer and web assets
         if: matrix.suite == 'web'
         run: |
-          cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts"
+          cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts" "$GITHUB_WORKSPACE/script/release-archive.test.ts"
           bun test "$GITHUB_WORKSPACE/script/chrome-for-testing.test.ts" -t "pins one exact version whose root metadata document is the default source"
+
+      - name: Upload verified web build
+        if: matrix.suite == 'web'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-web
+          path: apps/web/dist/
+          if-no-files-found: error
+          retention-days: 7
 
   build:
     name: build ${{ matrix.target }}
@@ -333,11 +344,15 @@ jobs:
             codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -Ex "designated => identifier \"app\.ycoding\.computer-use\" and certificate (leaf|root) = H\"$YCODING_MACOS_SIGNING_SHA1\"" >/dev/null
           fi
 
-      - name: Upload native executables
+      - name: Create and validate native archive
+        run: bun script/release-archive.ts create "${{ matrix.target }}" "$RELEASE_VERSION" "dist/release-bin/${{ matrix.target }}" "dist/release-archive/${{ matrix.target }}"
+
+      - name: Upload native archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ycoding-${{ matrix.target }}
-          path: dist/release-bin/${{ matrix.target }}/
+          name: release-archive-${{ matrix.target }}
+          path: dist/release-archive/${{ matrix.target }}/
+          compression-level: 0
           if-no-files-found: error
           retention-days: 7
 
@@ -356,12 +371,14 @@ jobs:
           fi
           if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
 
-  package:
-    name: package TUI release assets
-    needs: build
+  release-tui:
+    name: finalize and publish TUI release
+    needs: [verify-source, build]
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -381,116 +398,32 @@ jobs:
           fi
           echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
 
-      - name: Download native executables
+      - name: Download prepared target archives
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: unpacked
-          pattern: ycoding-*
+          path: downloaded
+          pattern: release-archive-*
+          merge-multiple: true
 
-      - name: Create release archives and checksums
-        run: |
-          set -euo pipefail
-          version="$RELEASE_VERSION"
-          mkdir release
-          chmod +x unpacked/ycoding-darwin-arm64/ycoding "unpacked/ycoding-darwin-arm64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use" unpacked/ycoding-darwin-x64/ycoding "unpacked/ycoding-darwin-x64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use" unpacked/ycoding-linux-x64/ycoding
-          test -x unpacked/ycoding-darwin-arm64/ycoding
-          test -x unpacked/ycoding-darwin-x64/ycoding
-          for target in darwin-arm64 darwin-x64; do
-            app="unpacked/ycoding-$target/YCoding Computer Use.app"
-            test -d "$app" && test ! -L "$app"
-            test "$(find "$app" -mindepth 1 -printf '%P\n' | LC_ALL=C sort)" = "$(printf '%s\n' Contents Contents/Info.plist Contents/MacOS Contents/MacOS/ycoding-computer-use Contents/Resources Contents/Resources/YCoding.icns Contents/_CodeSignature Contents/_CodeSignature/CodeResources | LC_ALL=C sort)"
-            test -f "$app/Contents/Info.plist" && test ! -L "$app/Contents/Info.plist" && test -s "$app/Contents/Info.plist"
-            test -f "$app/Contents/_CodeSignature/CodeResources" && test ! -L "$app/Contents/_CodeSignature/CodeResources" && test -s "$app/Contents/_CodeSignature/CodeResources"
-            test -f "$app/Contents/MacOS/ycoding-computer-use" && test ! -L "$app/Contents/MacOS/ycoding-computer-use" && test -x "$app/Contents/MacOS/ycoding-computer-use"
-            test -f "$app/Contents/Resources/YCoding.icns" && test ! -L "$app/Contents/Resources/YCoding.icns" && test -s "$app/Contents/Resources/YCoding.icns"
-            grep -Fq '<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string>' "$app/Contents/Info.plist"
-            grep -Fq '<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>' "$app/Contents/Info.plist"
-            grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist"
-          done
-          test -x unpacked/ycoding-linux-x64/ycoding
-          mac_entries=(ycoding ycoding-chrome-extension)
-          version_core="${version%%+*}"
-          prerelease=false
-          if [[ "$version_core" == *-* ]]; then prerelease=true; fi
-          if printf '%s\n' "${version_core%%-*}" | awk -F . -v prerelease="$prerelease" '
-            $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && ($3 > 1 || ($3 == 1 && prerelease == "false"))))) { found=1 }
-            END { exit !found }
-          '; then mac_entries+=("YCoding Computer Use.app"); fi
-          pids=()
-          tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" "${mac_entries[@]}" &
-          pids+=("$!")
-          tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" "${mac_entries[@]}" &
-          pids+=("$!")
-          tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension &
-          pids+=("$!")
-          (cd unpacked/ycoding-windows-x64 && zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension) &
-          pids+=("$!")
-          status=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || status=1
-          done
-          test "$status" -eq 0
-          tar -tzvf "release/ycoding-$version-darwin-arm64.tar.gz" | grep '^-rwx' >/dev/null
-          tar -tzvf "release/ycoding-$version-darwin-x64.tar.gz" | grep '^-rwx' >/dev/null
-          tar -tzvf "release/ycoding-$version-linux-x64.tar.gz" | grep '^-rwx' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
-          tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
-          tar -tzf "release/ycoding-$version-linux-x64.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null
-          for target in darwin-arm64 darwin-x64 linux-x64; do
-            expected=(ycoding ycoding-chrome-extension)
-            if [ "${target%%-*}" = darwin ]; then expected=("${mac_entries[@]}"); fi
-            test "$(tar -tzf "release/ycoding-$version-$target.tar.gz" | cut -d/ -f1 | LC_ALL=C sort -u)" = "$(printf '%s\n' "${expected[@]}" | LC_ALL=C sort)"
-          done
-          test "$(unzip -Z1 "release/ycoding-$version-windows-x64.zip" | cut -d/ -f1 | LC_ALL=C sort -u)" = "$(printf '%s\n' ycoding.exe ycoding-chrome-extension | LC_ALL=C sort)"
-          cp LICENSE NOTICE release/
-          # One checksum file covers every released asset, so the installer
-          # verifies each download with the same rule.
-          (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip LICENSE NOTICE > "ycoding-$version-checksums.txt")
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+          bun-download-url: https://github.com/oven-sh/bun/releases/latest/download/bun-linux-x64-baseline.zip
 
-      - name: Upload prepared release assets
+      - name: Validate release archives and checksums
+        run: bun script/release-archive.ts finalize "$RELEASE_VERSION" downloaded release
+
+      - name: Upload release checksums
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-assets-${{ env.RELEASE_VERSION }}
-          path: release/
-          compression-level: 0
+          name: release-checksums-${{ env.RELEASE_VERSION }}
+          path: release/*-checksums.txt
           if-no-files-found: error
           retention-days: 7
 
-  release-tui:
-    name: publish TUI release
-    needs: [verify-source, package]
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Resolve release version
-        run: |
-          set -euo pipefail
-          version="${{ github.ref_name }}"
-          version="${version#v}"
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-
-      - name: Download prepared release assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-assets-${{ env.RELEASE_VERSION }}
-          path: release
-
-      - name: Setup Bun
-        uses: ./.github/actions/setup-bun
-        with:
-          install-flags: --frozen-lockfile
-
       - name: Publish GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -538,8 +471,11 @@ jobs:
         with:
           install-flags: --frozen-lockfile
 
-      - name: Build web
-        run: bun run build:web
+      - name: Download verified web build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-web
+          path: apps/web/dist
 
       - name: Deploy to Cloudflare
         env:
