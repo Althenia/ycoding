@@ -1764,7 +1764,7 @@ for (const mode of ["dark", "light"] as const) test(`settled automatic question 
     expect(screen.frame()).toContain("Recommended: Gradual")
     expect(screen.frame()).toContain("Gradual · confidence 0.93")
     expect(screen.frame()).toContain("Health checks limit disruption.")
-    expect(screen.frame()).not.toContain("awaiting your decision")
+    expect(screen.frame()).not.toContain("awaiting an authorized client decision")
     expect(screen.colorOf("Answers YOLO")).toEqual(resolveThemeFile(DEFAULT_THEMES.ycoding, mode, "ycoding").text.feedback.warning.default.toInts())
   } finally { await screen.dispose() }
 }, 60_000)

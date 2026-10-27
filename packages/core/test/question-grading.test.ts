@@ -100,7 +100,10 @@ it.effect("active question tool publishes pending then exact per-option grades a
     }],
   } })
   expect(observed.published.map((event) => event.type)).toEqual(["form.created", "form.assessed", "form.replied"])
-  expect(result.result.value).toContain("not provided or approved by the user")
+  expect(result.result.value).toStartWith("Answers were selected automatically:")
+  expect(result.result.value).toContain("Do not reopen routine choices")
+  expect(result.result.value).toContain("Permissions, guardrails, and required explicit decisions still apply.")
+  expect(result.result.value).not.toContain("User has answered")
 }))
 
 it.effect("multi-choice recommends one compatible set rather than every individually high option", () => Effect.gen(function* () {

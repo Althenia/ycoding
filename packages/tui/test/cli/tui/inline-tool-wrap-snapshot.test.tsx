@@ -273,9 +273,9 @@ describe("TUI inline tool wrapping", () => {
         { width: 100, height: 10 },
       )
       testSetup.renderer.start()
-      await testSetup.waitForFrame((frame) => frame.includes("Assessed · awaiting your decision"))
+      await testSetup.waitForFrame((frame) => frame.includes("Assessed · awaiting an authorized client decision"))
       const frame = testSetup.captureCharFrame()
-      expect(frame).toContain("Assessed · awaiting your decision")
+      expect(frame).toContain("Assessed · awaiting an authorized client decision")
       expect(frame).toContain(fixture.label)
       expect(frame).toContain("Tests · confidence 0.9 · Covers the behavior boundary.")
       expect(frame).toContain("Docs · confidence 0.8 · Covers the stated contract.")

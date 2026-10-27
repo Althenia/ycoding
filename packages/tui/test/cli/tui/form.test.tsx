@@ -123,7 +123,7 @@ test("question grades name confidence and recommendations without selecting an a
     expect(prompt.app.captureCharFrame()).toContain("Answers YOLO")
     expect(prompt.app.captureCharFrame()).toContain("source ses_test")
     expect(prompt.app.captureCharFrame()).toContain("Assessed")
-    expect(prompt.app.captureCharFrame()).toContain("awaiting your decision")
+    expect(prompt.app.captureCharFrame()).toContain("awaiting an authorized client decision")
     expect(prompt.app.captureCharFrame()).toContain("confidence 0.96")
     expect(prompt.app.captureCharFrame()).toContain("Local storage fits.")
     expect(prompt.app.captureCharFrame()).toContain("Recommended: SQLite")
