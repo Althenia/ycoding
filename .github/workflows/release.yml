@@ -106,6 +106,7 @@ jobs:
         if: matrix.suite == 'web'
         run: |
           bun test --cwd apps/web ./test/remote-store-container.test.ts
+          bun test --cwd apps/web ./test/dots.test.ts ./src/remote/ui/dots-composer.test.ts
           bun test --cwd apps/web ./test/remote-todo.test.ts -t "a connector that never answers todo.list does not hold Session hydration or raise a state notice|a superseded same-Session read cannot overwrite reconnect's newer todo list"
           bun test --cwd apps/web ./test/remote-guardrail.test.ts -t "preserves inspectable guardrail metadata in the family read"
 
@@ -121,9 +122,9 @@ jobs:
         run: |
           bun test --timeout 30000 ./test/binary-name.test.ts ./test/install-local.test.ts ./test/update.test.ts ./test/chrome-extension-packaging.test.ts ./test/build-bytecode.test.ts ./test/remote-operations.test.ts ./test/remote-retirement.test.ts ./test/remote-decision-boundary.test.ts ./test/remote-control-config.test.ts ./test/remote-control-native.test.ts ./test/remote-control-native-escalation.test.ts ./test/remote-control-projection.test.ts ./test/remote-control-sequence.test.ts ./test/remote-control-stream-isolation.test.ts
           bun test --timeout 30000 ./test/computer-use-packaging.test.ts -t "filters unsupported targets without planning a native helper|plans a sibling helper for each supported macOS architecture|signs with a configured stable identity and a secure timestamp, otherwise ad hoc|keeps only complete artifacts when the host cannot compile the macOS helper|plans the explicit source-development helper in Core's ignored cache|rejects a macOS package without the signed application bundle|rejects an unexpected macOS application bundle in a non-macOS package"
-          bun test --timeout 30000 ./test/remote-bridge.test.ts -t "remote bridge|quota observations use the global control frame without Session subscriptions or private fields|quota pending results retry through the existing refresh and settled results stop retries|expired and malformed quota events never enter the relay queue|quota retry survives connection replacement and ignores the replaced connection's receipt|ID-only shell deletions invalidate family lists without forwarding shell identities|pages explicit completion receipts without a browser subscription and refreshes on accepted completion|retries a failed completion page without declaring a partial baseline complete|discards a pending completion page from a prior opening of the same connection|live completion receipts wait for a complete baseline and reject stale or child ownership|pending-request events invalidate shared list classification before the next cursor or carousel read"
+          bun test --timeout 30000 ./test/remote-bridge.test.ts -t "remote bridge|global Dots reads remain available during a pending write without Session inventory|quota observations use the global control frame without Session subscriptions or private fields|quota pending results retry through the existing refresh and settled results stop retries|expired and malformed quota events never enter the relay queue|quota retry survives connection replacement and ignores the replaced connection's receipt|ID-only shell deletions invalidate family lists without forwarding shell identities|pages explicit completion receipts without a browser subscription and refreshes on accepted completion|retries a failed completion page without declaring a partial baseline complete|discards a pending completion page from a prior opening of the same connection|live completion receipts wait for a complete baseline and reject stale or child ownership|pending-request events invalidate shared list classification before the next cursor or carousel read"
           bun test --timeout 30000 ./test/remote-control.test.ts -t "remote-control wire types|remote-control envelope|remote-control app-server mapping|state store persists installation and enrollment without configuration or tokens|host enrolls, connects with headers, serves one RPC, and answers ping with pong|enabling reports connecting before credentials resolve|fresh host enrolls when only an old websocket URL key exists|fresh host refreshes saved enrollment and uses the refreshed token|refresh 404 deletes the enrollment and re-enrolls; unrecognized enroll 404 preserves and fails closed"
-          bun test --timeout 30000 ./test/remote-access.test.ts -t "Dots access operations verify the Session and preserve exact revision and conflicts"
+          bun test --timeout 30000 ./test/remote-access.test.ts -t "global Dots operations need no Session inventory and preserve exact revision and conflicts"
 
       - name: Verify Antigravity provider and build fixture boundaries
         if: matrix.suite == 'cli'
@@ -184,8 +185,8 @@ jobs:
           bun test --cwd packages/protocol ./test/native-dots-only.test.ts
           bun test --cwd packages/server --timeout 40000 ./test/dots-access.test.ts
           bun test --cwd packages/remote ./test/dots-access-contract.test.ts
-          bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-access.test.ts
-          bun test --cwd packages/tui --timeout 40000 ./test/prompt/dots-access.test.ts ./test/dots-access-palette.test.tsx ./test/dots-access-boundary.test.ts ./test/dots-delegation-review.test.tsx
+          bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-access.test.ts ./test/dots-codegen.test.ts
+          bun test --cwd packages/tui --timeout 40000 ./test/dots-connection.test.ts ./test/dots-connection-dialog.test.tsx ./test/dots-access-boundary.test.ts ./test/dots-delegation-review.test.tsx
           bun test --cwd packages/tui --timeout 40000 ./test/screen/dots.screen.test.ts -t "remote source attribution accepts resident reactive metadata"
 
       - name: Verify question grading and native Form views

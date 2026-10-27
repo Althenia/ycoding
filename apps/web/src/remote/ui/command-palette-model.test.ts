@@ -46,13 +46,13 @@ const base: PaletteContext = {
 const ids = (context: PaletteContext) => paletteActions(context).map((action) => action.id)
 
 describe("palette availability", () => {
-  test("Dots access is an explicit root permission, not connection status", () => {
-    const access = { sessionID: "ses_a", rootSessionID: "ses_a", enabled: false, revision: 1, inherited: false, configured: true }
-    const action = (value: typeof access) => paletteActions({ ...base, session: { ...base.session!, dotsAccess: value } }).find((entry) => entry.id === "session.dots.access")
-    expect(action(access)).toMatchObject({ title: "Enable Dots access", intent: { type: "dotsAccess", enabled: true, revision: 1 } })
-    expect(action({ ...access, enabled: true, revision: 2 })).toMatchObject({ title: "Disable Dots access", intent: { type: "dotsAccess", enabled: false, revision: 2 } })
-    expect(action({ ...access, configured: false })).toBeUndefined()
-    expect(ids({ ...base, session: { ...base.session!, managedChild: true, dotsAccess: { ...access, inherited: true } } })).not.toContain("session.dots.access")
+  test("Dots connection is backend-wide on landing, roots and children", () => {
+    for (const context of [base, { ...base, view: "/remote" as const, session: undefined }, { ...base, session: { ...base.session!, managedChild: true } }]) {
+      expect(paletteActions(context).find((entry) => entry.id === "dots.connection")).toMatchObject({ title: "Dots connection", group: "Settings", intent: { type: "dotsConnection" } })
+      expect(ids(context)).not.toContain("session.dots.access")
+    }
+    expect(ids({ ...base, connected: false, activeDeviceID: undefined })).not.toContain("dots.connection")
+    expect(ids({ ...base, connected: false })).toContain("dots.connection")
   })
   test("provider actions expose the existing selection owner and the explicit connection flow", () => {
     expect(paletteActions(base).find((action) => action.id === "settings.model")?.intent).toEqual({ type: "model" })

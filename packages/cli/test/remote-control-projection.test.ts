@@ -16,7 +16,7 @@ async function fixture(initial: Projection.Stage<unknown>) {
   const host = nativeHost({ ...requestBackend, createThread: async () => rootSnapshot({ id: "ses_root", directory: "/synthetic" }),
     getThread: async () => rootSnapshot({ id: "ses_root", directory: "/synthetic" }), listThreads: async () => [],
     prompt: async () => ({ messageID: "message" }), interrupt: async () => {}, models: async () => [], skills: async () => [], account: async () => undefined })
-  const connection = await host.attach({ profile: "fixture", credentialID: "credential", accountID: "account", accountGeneration: 1, environmentID: "env", connectionID: "connection", isCurrent: () => true })
+  const connection = await host.attach({ profile: "fixture", credentialID: "credential", accountID: "account", accountGeneration: 1, accessRevision: 1, environmentID: "env", connectionID: "connection", isCurrent: () => true })
   const channel: NativeDots.Channel = { ...connection.channel({ clientID: "client", streamID: "stream" }),
     pending: async () => request ? [request] : [],
     settle: async (handle, answers) => {

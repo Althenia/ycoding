@@ -5,6 +5,7 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { Decision } from "@ycoding-ai/core/decision"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { KeepAwake } from "@ycoding-ai/core/keep-awake"
+import { KV } from "@ycoding-ai/core/kv"
 import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Project } from "@ycoding-ai/core/project"
@@ -18,7 +19,7 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { tmpdir } from "./tmpdir"
 
 export const reviewLayer = (database?: ReturnType<typeof Database.layer>, includeReview = true, decision?: Decision.Interface["evaluate"]) => AppNodeBuilder.build(
-  LayerNode.group([Database.node, EventRuntime.node, Session.node, SessionStore.node, SessionExecution.node, Project.node, SessionAutonomy.node, SessionOrchestration.node, ...(includeReview ? [SessionReview.node] : []), LocationServiceMap.node]),
+  LayerNode.group([Database.node, KV.node, EventRuntime.node, Session.node, SessionStore.node, SessionExecution.node, Project.node, SessionAutonomy.node, SessionOrchestration.node, ...(includeReview ? [SessionReview.node] : []), LocationServiceMap.node]),
   [
     [Project.node, Layer.mock(Project.Service, {
       resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),

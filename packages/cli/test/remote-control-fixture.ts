@@ -26,9 +26,10 @@ export const rootSnapshot = (thread: Parameters<typeof sessionInfo>[0]): NativeD
 
 export function nativeHost(backend: RemoteControlBackend, credential = { access: "synthetic", accountID: "synthetic", key: "synthetic", profile: "fixture" }): NativeDots.Host {
   return {
-    configuration: async () => ({ enabled: true, profile: credential.profile, credentialID: "credential", accountID: credential.accountID, accountGeneration: 1 }),
+    configuration: async () => ({ enabled: true, profile: credential.profile, credentialID: "credential", accountID: credential.accountID, accountGeneration: 1, accessRevision: 1 }),
     credential: async () => ({ ...credential, credentialID: "credential", accountGeneration: 1 }),
     subscribeConfiguration: () => () => {},
+    attachTransport: () => () => {},
     attach: async () => ({
       retire: () => {},
       channel: () => ({

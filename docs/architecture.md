@@ -245,10 +245,10 @@ Core owns account connector composition and ChatGPT discovery in `account-connec
 
 ## Native Dots
 
-- **Core:** `dots/native.ts` owns the private Host and Channels; `native-decisions.ts` and `native-projection.ts` own exact typed decision handling and staged projection. `dots/access.ts` reads and changes persisted root-family access.
-- **Server:** builds the Host in global services and passes it as the fifth server-process callback argument. CLI consumes the Channel directly.
+- **Core:** `dots/native.ts` owns the private Host and Channels; `native-decisions.ts` and `native-projection.ts` own exact typed decision handling and staged projection. The global `dots/access.ts` service owns the validated KV access preference, transactional revision changes, and safe status assembly. Native and HTTP consumers share this same service instance; it is not Location-scoped.
+- **Server:** builds the Host in global services and passes it as the fifth server-process callback argument. CLI consumes the Channel directly and registers one process-owned read-only transport status adapter through `Host.attachTransport`, unregistering it at shutdown. Core identity-fences attachment lifetime and maps closed problem categories to safe guidance. Effective native configuration drives the existing connector start/stop/retry lifecycle.
 - **Schema:** owns access, native source receipts, and historical Dots event/attribution decoders.
-- **Protocol, Client, Remote:** expose only `session.dots.access.get/set` for Dots. HTTP does not carry native task or settlement authority.
+- **Protocol, Client, Remote:** expose only sessionless `dots.get/set` for global Dots access and status. Server authentication and relay user/device ownership remain enforced. HTTP does not carry native task or settlement authority.
 - **Promotion:** normal pending-input promotion rejects queued historical routine/delegated task authority with the existing durable rejection receipt, without rewriting stored history.
 
 ## Task MCP gateway

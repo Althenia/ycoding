@@ -1,27 +1,55 @@
-# Native Dots connector
+# Dots remote connector
 
 ## Ownership and transport
 
 Core owns a private `NativeDots.Host` in the server process. Server constructs it in the built global-services context and passes it as the fifth process callback argument. CLI obtains Channels directly from this Host. Native tasks, candidate reads, and decision settlement do not use public HTTP, the browser relay, or an MCP adapter.
 
-Trusted global `dots.enabled: true` and an explicit `dots.profile` select exactly one OpenAI OAuth credential with an account identity. A connection pins its profile, credential ID, account ID, and account generation. Configuration or credential replacement retires that connection and its Channels. Project configuration cannot enable the Host, and selection never falls back to another profile or account.
+Trusted global `dots.enabled: true` and an explicit `dots.profile` select exactly one OpenAI OAuth credential with an account identity. A connection pins its profile, credential ID, account ID, account generation, and global access revision. Configuration, access, or credential replacement retires that connection and its Channels. Project configuration cannot enable the Host, and selection never falls back to another profile or account.
 
-## Root-family access
+The enrolled authenticated socket supplies the environment identity. Incoming frames require nonempty `client_id` and `stream_id` and a safe nonnegative integer `seq_id`. A supplied `env_id` must exactly match the socket's environment before receipt, chunk, or stream state changes. ACK, pong, and server responses carry that authenticated `env_id`. Connection and stream retirement applies equally to frames with and without a wire `env_id`.
 
-Access is persisted as `SessionEvent.DotsAccessChanged`. Existing roots default off. A newly native-created root is enabled in its creation transaction. Children inherit the root's setting; only the root changes it. Missing, deleted, archived, or foreign-owned Sessions have no local access authority.
+## Global access and status
+
+Persist one backend-wide access preference as `{ enabled, revision }` in the existing global KV store under `dots.native-access`. An absent preference is Off at revision 0. Malformed persisted state fails closed and is not overwritten. An unreadable preference retires existing native authority and remains an error at status and administration boundaries; infallible owner validators deny it, and native event hooks do not fail the event publisher. Enabling grants access to every existing and future eligible Session on this backend, including native-created roots and managed descendants. Session creation and historical family grants do not enable it. Missing, deleted, archived, and foreign-owned Sessions or ancestors remain ineligible. Root listings expose roots, not children as independent native threads.
 
 Local and web clients administer access through these operations only:
 
 | Operation | HTTP | Input | Output |
 | --- | --- | --- | --- |
-| `session.dots.access.get` | `GET /api/session/:sessionID/dots/access` | Path Session ID | `{ data: { sessionID, rootSessionID, enabled, revision, inherited, configured } }` |
-| `session.dots.access.set` | `POST /api/session/:sessionID/dots/access` | `{ enabled, expectedRevision }` | Same access projection |
+| `dots.get` | `GET /api/dots` | None | `{ data: Dots.NativeStatus }` |
+| `dots.set` | `PUT /api/dots` | `{ enabled, expectedRevision }` | Same status envelope |
 
-Setters reject excess authority fields. Revisions are nonnegative integers; a stale revision conflicts. Repeating the same enabled state at the current revision does not increment it. Concurrent writes at one revision commit at most one change. `configured` reports the current trusted profile gate independently of persisted `enabled`.
+Both operations require normal server authentication and authenticated relay user/device ownership. Neither accepts a Session ID or Location. Setters reject excess authority fields. Revisions are nonnegative integers; a stale revision conflicts before no-op handling. Repeating the same enabled state at the current revision does not increment it. Concurrent writes at one revision commit at most one change. Enabling requires available trusted configuration and the selected OpenAI OAuth profile. Turning access Off does not require those prerequisites.
+
+`Dots.NativeStatus` has three independent fields:
+
+```ts
+{
+  access: { enabled: boolean, revision: number },
+  configuration: { ready: boolean, profile?: string, message?: string },
+  connection: {
+    state: "unavailable" | "off" | "connecting" | "connected" | "error",
+    hostname?: string,
+    message?: string,
+  },
+}
+```
+
+An absent process-owned transport is `unavailable`; an attached transport gated by configuration or access is `off`. `connected` means the native transport is attached, not that an external client has selected or opened a conversation. The profile and hostname are bounded to 256 characters and guidance to 500, without control characters. Guidance uses fixed categories, never raw provider messages, URLs, credential/account identifiers, tokens, or payloads.
+
+The TUI and web command palette expose **Dots connection** from landing, root, and child views. Show the selected profile, machine name when available, configuration readiness, global access, and actual connection state separately. Connect/Disconnect changes the single global preference. Connection start, stop, and automatic retry belong to the existing transport lifecycle; there is no separate retry or profile-selection control. Refetch after conflicts or uncertain mutation outcomes rather than replaying the mutation.
+
+## Private transport status
+
+The Host and HTTP handlers consume the same global `DotsAccess.Service`. `NativeDots.Host.attachTransport(transport)` installs one process-owned read-only status adapter and returns its unregister function. `transport.status()` returns a Promise of `{ state: "off" | "connecting" | "connected" | "error", hostname?, problem? }`; `problem` is one of `configuration`, `authentication`, `enrollment`, or `connection`. Core maps that category to fixed display guidance.
+
+Reject an attachment while another owns the slot. Identity-fence unregister and asynchronous status reads so a retired attachment cannot clear or report for its replacement. Discard a connection observation spanning an access revision change. Host shutdown unregisters its adapter. The adapter exposes no Channel or execution operation and grants no authority.
+
+Effective native configuration combines the trusted profile gate with global access. Access changes synchronously retire existing Channels, root lifetimes, candidates, subscriptions, and staged answers, then notify the existing configuration subscription. Off-On captures a fresh revision and cannot revive old socket pins or handles. Off does not interrupt execution, remove admitted prompts, consume pending decisions, or replay work.
 
 ## Native admission and decisions
 
-Channels carry native source receipts with exact profile, credential, account generation, environment, connection, client, stream, root, access revision, and request identity. Lifetime checks fence asynchronous reads and writes against connection retirement and root-access changes. Managed-child ownership remains parent-only.
+Channels carry native source receipts with exact profile, credential, account generation, environment, connection, client, stream, root, global access revision, and request identity. Lifetime checks fence asynchronous reads and writes against connection retirement and global access changes. Managed-child ownership remains parent-only.
 
 Decision candidates bind an exact typed source and revision. Native projection stages single-pick choices rather than granting ambient approval. Permissions, hard/custom guardrails, Forms, Questions, managed-child questions, deferred reviews, and recovery retain their existing typed outcomes and validators. Explicit denies, ceilings, ownership, archive state, and live access are rechecked at settlement. Replaced candidates and retired lifetimes cannot settle. Uncertain mutation outcomes are not replayed.
 
@@ -29,6 +57,10 @@ Prompt text cannot establish a typed decision, native source receipt, or delegat
 
 ## Historical readability
 
-Historical Dots and RemoteMCP Session events, source metadata, peer labels, `Dots.DelegationReview`, database tables, and migrations remain readable. Their presence grants no active authority.
+Historical Dots and RemoteMCP Session events, family access events, source metadata, peer labels, `Dots.DelegationReview`, database tables, and migrations remain readable. Their presence grants no active authority. Stored native receipts retain their recorded `rootSessionID` and `accessRevision`; new receipts use the global revision. Historical data is neither rewritten nor used to initialize global consent.
 
 Normal queue and steer promotion inspect the stored `DotsExchangeCreated` record. An unpromoted routine or delegated task is rejected transactionally with the existing `DotsInstructionRejected` event and `reason: "delegation_invalid"`, before input preparation or promotion. Repeated promotion emits no duplicate rejection. Historical exchange events remain unchanged; ordinary and native inputs continue normally. No bulk rewrite or data migration occurs.
+
+## Verification
+
+Select the global access, native admission, native decision, Schema, Protocol, and HTTP contract files for access persistence/CAS/no-op conflicts, historical decoding without consent, global Off races, ownership/archive/deny/ceiling checks, attachment lifetime and safe status output. CLI transport checks cover authenticated environment binding, exact supplied-environment rejection, ACK/pong addressing, sequence and chunk state, and retirement. TUI rendered screens and web palette checks cover global availability and independent status display. Stubbed transports do not establish external conversation-picker interoperability.

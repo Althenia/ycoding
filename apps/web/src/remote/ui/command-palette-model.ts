@@ -3,7 +3,6 @@ import { themePreferenceLabel, type ThemePreference } from "../../theme/theme"
 import { autonomyLabels, type AutonomyModes } from "../autonomy"
 import { submission } from "./composer-logic"
 import type { RemoteView } from "./shell-model"
-import type { RemoteDotsAccess } from "@ycoding-ai/remote"
 
 export const paletteGroups = ["Session", "Commands", "Skills", "Navigation", "Settings", "Account"] as const
 
@@ -16,7 +15,7 @@ export type PaletteIntent =
   | { readonly type: "autonomous" }
   | { readonly type: "sleep"; readonly sleep: boolean }
   | { readonly type: "keepAwake" }
-  | { readonly type: "dotsAccess"; readonly enabled: boolean; readonly revision: number }
+  | { readonly type: "dotsConnection" }
   | { readonly type: "skill"; readonly skill: string }
   | { readonly type: "draft"; readonly text: string }
   | { readonly type: "go"; readonly view: "new" | "sessions" | "session" | "projects" | "usage" | "settings" }
@@ -56,7 +55,6 @@ export type PaletteContext = {
     readonly autonomous?: AutonomyModes
     readonly goalActive: boolean
     readonly asleep?: boolean
-    readonly dotsAccess?: RemoteDotsAccess
   }
   readonly commands: readonly { readonly name: string; readonly description?: string }[]
   readonly skills: readonly { readonly id: string; readonly name: string; readonly description?: string }[]
@@ -97,14 +95,6 @@ function sessionActions(context: PaletteContext): readonly PaletteAction[] {
   if (session.managedChild) return interrupt
   return [
     ...interrupt,
-    ...(session.dotsAccess?.configured && !session.dotsAccess.inherited && session.dotsAccess.sessionID === session.id && session.dotsAccess.rootSessionID === session.id ? [{
-      id: "session.dots.access",
-      title: session.dotsAccess.enabled ? "Disable Dots access" : "Enable Dots access",
-      description: "Change this Session family's Dots permission",
-      group: "Session" as const,
-      keywords: "dots permission access",
-      intent: { type: "dotsAccess" as const, enabled: !session.dotsAccess.enabled, revision: session.dotsAccess.revision },
-    }] : []),
     { id: "session.compact", title: "Compact session", description: "Summarize earlier context", group: "Session", keywords: "/compact /summarize summarize context", intent: { type: "compact" } },
     { id: "session.goal", title: "Set goal…", description: "Start an autonomous goal in the composer", group: "Session", keywords: "/goal autonomous autonomy", intent: { type: "draft", text: "/goal " } },
     { id: "session.suggest", title: "Suggest next message", description: "Suggest your next message", group: "Session", keywords: "/suggest prediction next message", intent: { type: "draft", text: "/suggest " } },
@@ -212,6 +202,7 @@ function navigationActions(context: PaletteContext): readonly PaletteAction[] {
 
 function settingsActions(context: PaletteContext): readonly PaletteAction[] {
   return [
+    ...(context.activeDeviceID !== undefined ? [{ id: "dots.connection", title: "Dots connection", description: "Connection and access for every eligible Session on this backend", group: "Settings" as const, keywords: "dots computer profile configuration access connect disconnect", intent: { type: "dotsConnection" as const } }] : []),
     ...(context.connected && context.canSelectModel && (context.view === "/remote" || !context.session?.managedChild)
       ? [{ id: "settings.model", title: "Select provider and model…", description: "Choose a model, profile, and reasoning effort", group: "Settings" as const, keywords: "/models /model provider profile variant account", intent: { type: "model" as const } }]
       : []),

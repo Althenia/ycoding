@@ -799,6 +799,8 @@ async function run(input: OperationInput) {
   // Validation is complete before any local call, so a malformed request never
   // causes local side effects.
   const validated = validate(request)
+  if (validated.kind === "dots.get") return { data: await input.local.dotsGet() }
+  if (validated.kind === "dots.set") return { data: await input.local.dotsSet(validated.input) }
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
     : await workspaceList(input) }
@@ -873,7 +875,6 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
-    "session.dots.access.set",
     "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
     "incident.guidance.clear",
@@ -885,8 +886,6 @@ async function run(input: OperationInput) {
     return input.uploads.append(sessionID, validated.uploadID, validated.index, validated.last, validated.data)
   }
   switch (validated.kind) {
-    case "dots.access.get": return { data: await input.local.dotsAccessGet(sessionID, location) }
-    case "dots.access.set": return { data: await input.local.dotsAccessSet(sessionID, location, validated.input) }
     case "session.usageReport":
       return { data: await input.local.sessionUsageReport(sessionID, location, validated.input) }
     case "session.promptCosts":
@@ -1142,8 +1141,8 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
-  | { readonly kind: "dots.access.get" }
-  | { readonly kind: "dots.access.set"; readonly input: Dots.AccessSet }
+  | { readonly kind: "dots.get" }
+  | { readonly kind: "dots.set"; readonly input: Dots.AccessSet }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
@@ -1219,7 +1218,6 @@ type Validated =
   | { readonly kind: "coordination"; readonly operation: RemoteOperation; readonly input?: Readonly<Record<string, unknown>> }
 
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
-  "session.dots.access.get": "dots.access.get",
   "session.get": "get",
   "session.delete": "delete",
   "session.pending.list": "pending.list",
@@ -1337,6 +1335,17 @@ export async function coordinationCoordinatorMap(local: LocalServer): Promise<Re
 
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
+  if (request.operation === "dots.get" || request.operation === "dots.set") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Dots controls do not accept a Session")
+    if (request.operation === "dots.get") {
+      if (request.input !== undefined) throw new OperationError("invalid_message", "Dots status does not accept input")
+      return { kind: "dots.get" }
+    }
+    const enabled = requireBoolean(fields.enabled, "enabled")
+    if (typeof fields.expectedRevision !== "number" || !Number.isSafeInteger(fields.expectedRevision) || fields.expectedRevision < 0)
+      throw new OperationError("invalid_message", "Expected revision must be a non-negative integer")
+    return { kind: "dots.set", input: { enabled, expectedRevision: fields.expectedRevision } }
+  }
   if (request.operation.startsWith("coordination.")) {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Coordination operations do not accept a Session")
     return { kind: "coordination", operation: request.operation, input: coordinationPayload(request.operation, fields) }
@@ -1490,12 +1499,6 @@ function validate(request: RemoteRequest): Validated {
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
-    case "session.dots.access.set": {
-      const enabled = requireBoolean(fields.enabled, "enabled")
-      if (typeof fields.expectedRevision !== "number" || !Number.isSafeInteger(fields.expectedRevision) || fields.expectedRevision < 0)
-        throw new OperationError("invalid_message", "Expected revision must be a non-negative integer")
-      return { kind: "dots.access.set", input: { enabled, expectedRevision: fields.expectedRevision } }
-    }
     case "session.compact": {
       const id = requireString(fields.id, "id", 128)
       if (!/^cmp_[A-Za-z0-9_-]+$/.test(id)) throw new OperationError("invalid_message", "Invalid compaction ID")
@@ -2166,8 +2169,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.switchModel": ["model"],
   "session.switchAgent": ["agent"],
   "session.command": ["id", "command", "arguments", "files", "agents", "delivery"],
-  "session.dots.access.get": [],
-  "session.dots.access.set": ["enabled", "expectedRevision"],
+  "dots.get": [],
+  "dots.set": ["enabled", "expectedRevision"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
@@ -2246,7 +2249,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.switchModel",
   "session.switchAgent",
   "session.command",
-  "session.dots.access.set",
+  "dots.set",
   "session.skill",
   "session.prompt",
   "session.interrupt",

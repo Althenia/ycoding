@@ -7,7 +7,7 @@
  * or absent.
  */
 
-import type { CreateEnrollmentResponse } from "@ycoding-ai/remote"
+import type { CreateEnrollmentResponse, RemoteDotsStatus } from "@ycoding-ai/remote"
 import { autonomySummary, autonomyTone, type AutonomyMode } from "./autonomy"
 import type { KeepAwakeState } from "./keep-awake"
 import type { RemoteRequestOutcome, RemoteTransportStatus } from "./transport"
@@ -16,6 +16,25 @@ import type { PendingMutation } from "./store"
 import type { FormAnswerView, FormFieldView, FormView, SessionView, ShellOutputFetch, ShellOutputView } from "./projection"
 
 export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
+
+export function dotsConnectionView(input: { readonly status?: RemoteDotsStatus; readonly computer?: string; readonly online: boolean; readonly loading: boolean; readonly pending: boolean; readonly error?: string }) {
+  const status = input.status
+  return {
+    computer: status?.connection.hostname ?? input.computer ?? "Unreported",
+    profile: status?.configuration.profile ?? "Unreported",
+    configuration: status ? status.configuration.ready ? "Ready" : "Not ready" : "Unreported",
+    configurationMessage: status && !status.configuration.ready ? status.configuration.message ?? "Configure dots.enabled and dots.profile on this machine, then Refresh." : status?.configuration.message,
+    access: status ? status.access.enabled ? "On" : "Off" : "Unreported",
+    transport: status ? { unavailable: "Unavailable", off: "Off", connecting: "Connecting", connected: "Connected", error: "Error" }[status.connection.state] : "Unreported",
+    connectionMessage: status?.connection.message,
+    action: status?.access.enabled ? "Disconnect" : "Connect",
+    canChange: input.online && !!status && !input.loading && !input.pending && !input.error && (status.access.enabled || status.configuration.ready),
+    notice: !input.online ? "Reconnect to this machine to read or change Dots."
+      : input.pending ? "Changing Dots access…"
+      : input.loading ? status ? "Refreshing Dots connection…" : "Loading Dots connection…"
+      : input.error ? `${input.error} Refresh to check the current state.` : undefined,
+  }
+}
 
 export function keepAwakeIndicator(awake: KeepAwakeState): { readonly label: string; readonly tone: "success" | "danger" | "attention"; readonly detail?: string } | undefined {
   if (awake.read === "idle" || awake.read === "loading") return

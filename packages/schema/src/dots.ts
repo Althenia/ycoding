@@ -18,17 +18,27 @@ const Identity = Schema.String.check(Schema.isNonEmpty())
 
 export interface Access extends Schema.Schema.Type<typeof Access> {}
 export const Access = Schema.Struct({
-  sessionID: SessionID,
-  rootSessionID: SessionID,
   enabled: Schema.Boolean,
   revision: NonNegativeInt,
-  inherited: Schema.Boolean,
-  configured: Schema.Boolean,
 }).annotate({ identifier: "Dots.Access" })
 
 export interface AccessSet extends Schema.Schema.Type<typeof AccessSet> {}
 export const AccessSet = Schema.Struct({ enabled: Schema.Boolean, expectedRevision: NonNegativeInt })
   .annotate({ identifier: "Dots.AccessSet", parseOptions: { onExcessProperty: "error" } })
+
+const DisplayName = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256), Schema.isPattern(/^[^\u0000-\u001f\u007f-\u009f]*$/))
+const DisplayMessage = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(500), Schema.isPattern(/^[^\u0000-\u001f\u007f-\u009f]*$/))
+
+export interface NativeStatus extends Schema.Schema.Type<typeof NativeStatus> {}
+export const NativeStatus = Schema.Struct({
+  access: Access,
+  configuration: Schema.Struct({ ready: Schema.Boolean, profile: DisplayName.pipe(optional), message: DisplayMessage.pipe(optional) }),
+  connection: Schema.Struct({
+    state: Schema.Literals(["unavailable", "off", "connecting", "connected", "error"]),
+    hostname: DisplayName.pipe(optional),
+    message: DisplayMessage.pipe(optional),
+  }),
+}).annotate({ identifier: "Dots.NativeStatus" })
 
 export interface Target extends Schema.Schema.Type<typeof Target> {}
 export const Target = Schema.Struct({

@@ -2,6 +2,7 @@ export * as NativeDots from "./native"
 
 import { Effect, Schema } from "effect"
 import { isDeepStrictEqual } from "node:util"
+import { eq } from "drizzle-orm"
 import { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import type { Model } from "@ycoding-ai/schema/model"
 import { Form } from "../form"
@@ -22,6 +23,7 @@ import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { RemoteControlCredential } from "../remote-control/credential"
 import { Database } from "../database/database"
 import { EventRuntime } from "../event"
+import { EventSequenceTable } from "../event/sql"
 import { LocationServiceMap } from "../location-service-map"
 import { Project } from "../project"
 import { Catalog } from "../catalog"
@@ -33,6 +35,7 @@ import { NativeDecisions } from "./native-decisions"
 
 export type Configuration = { readonly enabled: false } | {
   readonly enabled: true
+  readonly accessRevision: number
   readonly profile: string
   readonly credentialID: string
   readonly accountID: string
@@ -40,6 +43,7 @@ export type Configuration = { readonly enabled: false } | {
 }
 
 export interface Pins {
+  readonly accessRevision: number
   readonly profile: string
   readonly credentialID: string
   readonly accountID: string
@@ -87,6 +91,7 @@ export interface Connection {
   readonly retire: () => void
 }
 export interface Host {
+  readonly attachTransport: (transport: DotsAccess.Transport) => () => void
   readonly configuration: () => Promise<Configuration>
   readonly credential: (profile: string, rejectedAccessToken?: string) => Promise<RemoteControlCredential.Resolved | undefined>
   readonly subscribeConfiguration: (listener: () => void) => () => void
@@ -100,10 +105,11 @@ export class Error extends Schema.TaggedErrorClass<Error>()("NativeDots.Error", 
 const unavailable = () => new Error({ code: "unavailable", message: "Native Session access is unavailable" })
 const invalid = () => new Error({ code: "invalid_input", message: "The native request does not match its pending operation" })
 const identity = (value: Configuration) => value.enabled
-  ? [value.profile, value.credentialID, value.accountID, value.accountGeneration] : [false]
+  ? [value.profile, value.credentialID, value.accountID, value.accountGeneration, value.accessRevision] : [false]
 const nonempty = (value: string) => value.trim().length > 0 && value.length <= 256
 
 export interface Options {
+  readonly access: DotsAccess.Interface
   readonly config: { readonly snapshot: () => Effect.Effect<Config.GlobalDocuments>; readonly subscribe: (listener: () => void) => () => void }
   readonly credentials: Pick<Credential.Interface, "list">
   readonly credential: (profile: string, rejectedAccessToken?: string) => Effect.Effect<RemoteControlCredential.Resolved | undefined>
@@ -127,8 +133,11 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
   const connections = new Set<Connection>()
   const observers = new Set<EventRuntime.Subscriber>()
   const listeners = new Set<() => void>()
+  const transportStops = new Set<() => void>()
   const retire = () => { for (const connection of connections) connection.retire(); connections.clear() }
   const notify = () => { for (const listener of listeners) listener() }
+  yield* Effect.acquireRelease(Effect.sync(() => options.access.subscribe(() => { retire(); notify() })),
+    (unsubscribe) => Effect.sync(() => { unsubscribe(); for (const stop of transportStops) stop() }))
   yield* Effect.acquireRelease(Effect.sync(() => options.config.subscribe(() => {
     const next = select(Effect.runSync(options.config.snapshot()))
     if (isDeepStrictEqual(selected, next)) return
@@ -139,36 +148,68 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
   const configuration = Effect.fnUntraced(function* () {
     let result: Configuration = { enabled: false }
     const config = selected
-    if (available && config.enabled) {
+    const access = yield* options.access.get().pipe(Effect.tapError(() => Effect.sync(() => {
+      const changed = previous.enabled
+      previous = { enabled: false }
+      retire()
+      if (changed) notify()
+    })))
+    if (available && config.enabled && access.enabled) {
       const matching = (yield* options.credentials.list(Integration.ID.make("openai"))).filter((item) => item.label === config.profile)
       const credential = matching.length === 1 ? matching[0] : undefined
       const accountID = credential?.value.type === "oauth" ? OpenAICodex.accountID(credential.value) : undefined
-      if (credential && accountID) result = { enabled: true, profile: config.profile, credentialID: credential.id, accountID, accountGeneration: credential.accountGeneration }
+      if (credential && accountID) result = { enabled: true, accessRevision: access.revision, profile: config.profile, credentialID: credential.id, accountID, accountGeneration: credential.accountGeneration }
     }
     if (!isDeepStrictEqual(identity(previous), identity(result))) { previous = result; retire(); notify() }
     return result
   })
   yield* configuration()
   yield* Effect.acquireRelease(options.events.listen((event) => Effect.gen(function* () {
-    if (event.type === Integration.Event.ConnectionUpdated.type) yield* configuration()
+    if (event.type === Integration.Event.ConnectionUpdated.type)
+      yield* configuration().pipe(Effect.catchTag("DotsAccess.Error", () => Effect.void))
     yield* Effect.forEach(observers, (observe) => observe(event), { discard: true })
   })), (stop) => stop)
-  const access = DotsAccess.make({ db: options.db, sessions: options.store, events: options.events, configured: () => configuration().pipe(Effect.map((value) => value.enabled)) })
+  const accessFor = Effect.fnUntraced(function* (sessionID: Session.ID) {
+    const selected = yield* options.store.get(sessionID)
+    if (!selected) return yield* unavailable()
+    const visited = new Set<Session.ID>()
+    let current = selected
+    while (true) {
+      if (visited.has(current.id) || visited.size >= 64 || current.time.archived !== undefined) return yield* unavailable()
+      visited.add(current.id)
+      const owner = yield* options.db.db.select({ ownerID: EventSequenceTable.owner_id }).from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, current.id)).get().pipe(Effect.orDie)
+      if (owner?.ownerID) return yield* unavailable()
+      if (!current.parentID) break
+      const parent = yield* options.store.get(current.parentID)
+      if (!parent) return yield* unavailable()
+      current = parent
+    }
+    return { sessionID, rootSessionID: current.id, inherited: current.id !== sessionID,
+      ...(yield* options.access.get()), configured: (yield* configuration()).enabled }
+  })
   const host: Host = {
+    attachTransport: (transport) => {
+      if (!available) throw unavailable()
+      const release = options.access.attachTransport(transport)
+      const stop = () => { release(); transportStops.delete(stop) }
+      transportStops.add(stop)
+      return stop
+    },
     configuration: () => Effect.runPromise(configuration()),
     credential: (profile, rejected) => Effect.runPromise(Effect.gen(function* () {
       const current = yield* configuration()
       if (!current.enabled || profile !== current.profile) return undefined
       const credential = yield* options.credential(profile, rejected)
-      yield* configuration()
-      if (!credential || credential.credentialID !== current.credentialID || credential.accountID !== current.accountID || credential.accountGeneration !== current.accountGeneration) return undefined
+      const latest = yield* configuration()
+      if (!isDeepStrictEqual(identity(latest), identity(current)) || !credential || credential.credentialID !== current.credentialID || credential.accountID !== current.accountID || credential.accountGeneration !== current.accountGeneration) return undefined
       return credential
     })),
     subscribeConfiguration: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     attach: (input) => Effect.runPromise(Effect.gen(function* () {
       const pins = { ...input }
       const current = yield* configuration()
-      if (!current.enabled || !isDeepStrictEqual(identity(current), [pins.profile, pins.credentialID, pins.accountID, pins.accountGeneration]) ||
+      if (!current.enabled || !isDeepStrictEqual(identity(current), [pins.profile, pins.credentialID, pins.accountID, pins.accountGeneration, pins.accessRevision]) ||
         !nonempty(pins.environmentID) || !nonempty(pins.connectionID) || !pins.isCurrent()) return yield* unavailable()
       const config = selected
       let alive = true
@@ -216,11 +257,11 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
           const valid = Effect.fnUntraced(function* () {
             const state = yield* configuration()
             return open && alive && pins.isCurrent() && selected === config && state.enabled && isDeepStrictEqual(identity(state), identity(current))
-          })
+          }, Effect.catchTag("DotsAccess.Error", () => Effect.succeed(false)))
           const requireLive = Effect.fnUntraced(function* () { if (!(yield* valid())) return yield* unavailable() })
           const root = Effect.fnUntraced(function* (id: string) {
             yield* requireLive()
-            const state = yield* access.get(Session.ID.make(id)).pipe(Effect.catch(() => Effect.succeed(undefined)))
+            const state = yield* accessFor(Session.ID.make(id)).pipe(Effect.catch(() => Effect.succeed(undefined)))
             if (!state?.enabled || state.inherited || !state.configured) {
               const lifetime = roots.get(id)
               if (lifetime) retireRoot(lifetime)
@@ -231,7 +272,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
           })
           const validate = (source: Form.NativeReplySource) => Effect.gen(function* () {
             if (!(yield* valid()) || !currentRoot(source)) return false
-            const state = yield* access.get(source.rootSessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+            const state = yield* accessFor(source.rootSessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
             const allowed = state !== undefined && !state.inherited && state.enabled && state.configured && state.revision === source.accessRevision
             if (!allowed && currentRoot(source)) retireRoot(roots.get(source.rootSessionID)!)
             return allowed && currentRoot(source)
@@ -265,7 +306,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
               const sessionID = queue.shift()!
               if (visited.has(sessionID)) continue
               visited.add(sessionID)
-              const accessState = yield* access.get(sessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+              const accessState = yield* accessFor(sessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
               if (!accessState?.enabled || accessState.rootSessionID !== state.rootSessionID) continue
               const session = yield* options.sessions.get(sessionID)
               const decisions = yield* decisionsFor(session, lifetime)
@@ -414,7 +455,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
               const candidate = candidates.get(handle)
               if (!candidate || !(yield* validate(candidate.source))) return yield* unavailable()
               const session = yield* options.sessions.get(candidate.request.sessionID)
-              const state = yield* access.get(session.id).pipe(Effect.mapError(unavailable))
+              const state = yield* accessFor(session.id).pipe(Effect.mapError(unavailable))
               if (state.rootSessionID !== candidate.source.rootSessionID) return yield* unavailable()
               const decisions = yield* decisionsFor(session, candidate.lifetime)
               yield* decisions.settle(candidate.request, answers, candidate.source, () => validate(candidate.source))
@@ -444,7 +485,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
                 const id = typeof data.sessionID === "string" ? data.sessionID :
                   typeof data.form === "object" && data.form !== null && "sessionID" in data.form && typeof data.form.sessionID === "string" ? data.form.sessionID : undefined
                 if (!id) return
-                const permitted = yield* access.get(Session.ID.make(id)).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                const permitted = yield* accessFor(Session.ID.make(id)).pipe(Effect.catch(() => Effect.succeed(undefined)))
                 if (permitted?.enabled && permitted.rootSessionID === state.rootSessionID && (yield* validate(provenance))) {
                   try { listener(event) } catch {
                     channel.retire()
@@ -472,6 +513,7 @@ export const make = Effect.fn("NativeDots.make")(function* (options: Options) {
 })
 
 export const live = Effect.gen(function* () {
+  const access = yield* DotsAccess.Service
   const config = yield* Config.GlobalService
   const credentials = yield* Credential.Service
   const db = yield* Database.Service
@@ -483,7 +525,7 @@ export const live = Effect.gen(function* () {
   const locations = yield* LocationServiceMap.Service
   const reviews = yield* SessionReview.Service
   const orchestration = yield* SessionOrchestration.Service
-  return yield* make({ config, credentials, db, store, sessions, events, execution, projects,
+  return yield* make({ access, config, credentials, db, store, sessions, events, execution, projects,
     selectedModel: (session) => Catalog.Service.use((catalog) => SessionRunnerModel.selection(session, catalog.model)).pipe(
       Effect.map((selection) => selection?.ref), Effect.provide(locations.get(session.location))),
     models: (session) => Catalog.Service.use((catalog) => catalog.model.available()).pipe(

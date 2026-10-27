@@ -21,7 +21,6 @@ import {
   type Project,
   type ProjectDirectory,
   type SessionInfo,
-  type DotsAccess,
   type SessionCompletionsOutput,
   type SessionMessageInfo,
   type YCodingClient,
@@ -188,8 +187,8 @@ export type LocalServer = {
   readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<void>
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
-  readonly dotsAccessGet: (sessionID: string, location: LocalLocation) => Promise<DotsAccess>
-  readonly dotsAccessSet: (sessionID: string, location: LocalLocation, input: Dots.AccessSet) => Promise<DotsAccess>
+  readonly dotsGet: () => Promise<Dots.NativeStatus>
+  readonly dotsSet: (input: Dots.AccessSet) => Promise<Dots.NativeStatus>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly deleteSession: (sessionID: string, location: LocalLocation) => Promise<void>
@@ -434,8 +433,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       await client.session.switchAgent({ sessionID, agent }, request(location, timeoutMs))
     }),
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
-    dotsAccessGet: (sessionID, location) => call(() => client.dots.access.get({ sessionID }, request(location, timeoutMs))),
-    dotsAccessSet: (sessionID, location, input) => call(() => client.dots.access.set({ sessionID, ...input }, request(location, timeoutMs))),
+    dotsGet: () => call(() => client.dots.get({ signal: AbortSignal.timeout(timeoutMs) })),
+    dotsSet: (input) => call(() => client.dots.set(input, { signal: AbortSignal.timeout(timeoutMs) })),
     skill: (sessionID, location, input) => call(async () => {
       await client.session.skill({ sessionID, ...input }, request(location, timeoutMs))
     }),

@@ -2765,30 +2765,24 @@ const adaptGroup38 = (raw: RawClient["server.coordination"]) => ({
   delete: Endpoint38_5(raw),
 })
 
-type Endpoint39_0Request = Parameters<RawClient["server.dots"]["session.dots.access.get"]>[0]
-type Endpoint39_0Input = { readonly sessionID: Endpoint39_0Request["params"]["sessionID"] }
-const Endpoint39_0 = (raw: RawClient["server.dots"]) => (input: Endpoint39_0Input) =>
-  raw["session.dots.access.get"]({ params: { sessionID: input["sessionID"] } }).pipe(
+const Endpoint39_0 = (raw: RawClient["server.dots"]) => () =>
+  raw["dots.get"]({}).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-type Endpoint39_1Request = Parameters<RawClient["server.dots"]["session.dots.access.set"]>[0]
+type Endpoint39_1Request = Parameters<RawClient["server.dots"]["dots.set"]>[0]
 type Endpoint39_1Input = {
-  readonly sessionID: Endpoint39_1Request["params"]["sessionID"]
   readonly enabled: Endpoint39_1Request["payload"]["enabled"]
   readonly expectedRevision: Endpoint39_1Request["payload"]["expectedRevision"]
 }
 const Endpoint39_1 = (raw: RawClient["server.dots"]) => (input: Endpoint39_1Input) =>
-  raw["session.dots.access.set"]({
-    params: { sessionID: input["sessionID"] },
-    payload: { enabled: input["enabled"], expectedRevision: input["expectedRevision"] },
-  }).pipe(
+  raw["dots.set"]({ payload: { enabled: input["enabled"], expectedRevision: input["expectedRevision"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-const adaptGroup39 = (raw: RawClient["server.dots"]) => ({ access: { get: Endpoint39_0(raw), set: Endpoint39_1(raw) } })
+const adaptGroup39 = (raw: RawClient["server.dots"]) => ({ get: Endpoint39_0(raw), set: Endpoint39_1(raw) })
 
 const adaptClient = (raw: RawClient) => ({
   health: adaptGroup0(raw["server.health"]),

@@ -1890,7 +1890,6 @@ const layer = Layer.effect(
                   },
                 ]
               : []),
-            ...(input.native ? [{ definition: SessionEvent.DotsAccessChanged, data: { sessionID, enabled: true, revision: 1 }, options: { location } }] : []),
           ], input.native ? { when: input.native.validate() } : undefined)
           .pipe(
             Effect.flatMap((committed) => committed.length > 0 ? Effect.succeed({ type: "created" } as const) : new NotFoundError({ sessionID })),

@@ -11,6 +11,7 @@ import { NativeDecisions } from "@ycoding-ai/core/dots/native-decisions"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { Integration } from "@ycoding-ai/core/integration"
+import { KV } from "@ycoding-ai/core/kv"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { CatalogModel } from "@ycoding-ai/core/model"
 import { Permission } from "@ycoding-ai/core/permission"
@@ -29,6 +30,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { reviewLayer, reviewLocation } from "../../core/test/fixture/review"
 import { testEffect } from "../../core/test/lib/effect"
 import { createRemoteControlHost } from "../src/remote-control/host"
+import { remoteControlTransport } from "../src/remote-control/bootstrap"
 import { connectRemoteControlSocket } from "../src/remote-control/socket"
 import { createRemoteControlStateStore } from "../src/remote-control/state"
 
@@ -67,6 +69,7 @@ const it = testEffect(reviewLayer())
 it.live("local native WebSocket composition admits prompts, settles real Forms and forwards injected canonical events", () => Effect.gen(function* () {
   const location = yield* reviewLocation
   const db = yield* Database.Service
+  const kv = yield* KV.Service
   const events = yield* EventRuntime.Service
   const sessions = yield* Session.Service
   const store = yield* SessionStore.Service
@@ -76,18 +79,18 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
   const orchestration = yield* SessionOrchestration.Service
   const locations = yield* LocationServiceMap.Service
   const root = yield* sessions.create({ location })
-  const off = yield* sessions.create({ location })
+  const other = yield* sessions.create({ location })
   const child = yield* sessions.create({ parentID: root.id })
   const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location)))
-  const access = DotsAccess.make({ db, events, sessions: store, configured: () => Effect.succeed(true) })
-  yield* access.set({ sessionID: root.id, enabled: true, expectedRevision: 0 })
+  const access = DotsAccess.make({ db, kv, configuration: () => Effect.succeed({ ready: true, profile: "synthetic-native-flow" }) })
+  yield* access.set({ enabled: true, expectedRevision: 0 })
   const credential = new Credential.Info({
     id: Credential.ID.make("cred_native_flow"), integrationID: Integration.ID.make("openai"), label: "synthetic-native-flow",
     value: { type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"), access: "synthetic-access", refresh: "synthetic-refresh", expires: 0, metadata: { accountID: "synthetic-account" } },
   })
   let subscriptions = 0
   const native = yield* NativeDots.make({
-    db, store, sessions, execution, projects,
+    db, store, sessions, execution, projects, access,
     events: { ...events, listen: (listener) => events.listen(listener).pipe(Effect.map((stop) => {
       subscriptions++
       return Effect.sync(() => { subscriptions-- }).pipe(Effect.andThen(stop))
@@ -110,8 +113,8 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
   const baselineSubscriptions = subscriptions
   const frames: Frame[] = []
   const listeners = new Set<() => void>()
-  const connected = Promise.withResolvers<ServerWebSocket<undefined>>()
-  const closed = Promise.withResolvers<void>()
+  let connected = Promise.withResolvers<ServerWebSocket<undefined>>()
+  let closed = Promise.withResolvers<void>()
   const server = Bun.serve<undefined>({
     hostname: "127.0.0.1", port: 0,
     fetch: (request, server) => server.upgrade(request) ? undefined : new Response(null, { status: 404 }),
@@ -133,9 +136,10 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
     fetchFn: async () => Response.json({ server_id: "synthetic-server", environment_id: "synthetic-environment", remote_control_token: "synthetic-token" }),
     connect: (_url, headers) => connectRemoteControlSocket(`ws://127.0.0.1:${server.port}`, headers),
   })
-  yield* Effect.addFinalizer(() => Effect.promise(() => host.shutdown()))
-  yield* Effect.promise(() => host.connectOnce())
-  const peer = yield* Effect.promise(() => bounded(connected.promise, "WebSocket connection"))
+  const unregister = native.attachTransport(remoteControlTransport(host.status))
+  yield* Effect.addFinalizer(() => Effect.promise(async () => { unregister(); await host.shutdown() }))
+  yield* Effect.promise(() => host.start())
+  let peer = yield* Effect.promise(() => bounded(connected.promise, "WebSocket connection"))
   let sequence = 0
   let requestID = 0
   const send = (message: unknown, streamID = "flow") => peer.send(JSON.stringify({ type: "client_message", client_id: "synthetic-client", stream_id: streamID, env_id: "synthetic-environment", seq_id: sequence++, message }))
@@ -160,12 +164,13 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
   yield* Effect.promise(async () => {
     expect((await rpc("initialize", { clientInfo: { name: "synthetic-flow" } })).error).toBeUndefined()
     send({ method: "initialized" })
-    expect((await rpc("thread/list")).result?.data?.map((item) => item.id)).toEqual([root.id])
-    for (const session of [off, child]) expect((await rpc("thread/read", { threadId: session.id })).error).toBeDefined()
+    expect((await rpc("thread/list")).result?.data?.map((item) => item.id).toSorted()).toEqual([root.id, other.id].toSorted())
+    expect((await rpc("thread/read", { threadId: child.id })).error).toBeDefined()
     const read = await rpc("thread/read", { threadId: root.id })
     expect(read.error).toBeUndefined()
     expect(read.result?.thread).toMatchObject({ id: root.id, sessionId: root.id, projectId: root.projectID, historyMode: "legacy", model: root.model?.id ?? "unknown", modelProvider: root.model?.providerID ?? "unknown", status: { type: "idle" } })
   })
+  expect((yield* access.status()).connection).toMatchObject({ state: "connected", hostname: expect.any(String) })
   expect(subscriptions).toBe(baselineSubscriptions + 1)
   const admitted = yield* Effect.promise(() => rpc("turn/start", { threadId: root.id, input: [{ type: "text", text: "Synthetic native task" }] }))
   expect(admitted.error).toBeUndefined()
@@ -210,28 +215,35 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
   expect(output.at(-1)?.message).toMatchObject({ params: { threadId: root.id, turn: { id: messageID, status: "completed", items: [{ id: `${assistantMessageID}:0`, type: "agentMessage", text: "Synthetic output", phase: "final_answer" }] } } })
   const revokedForm = yield* forms.create({ sessionID: root.id, title: "Revoked native flow", fields: [{ type: "string", key: "answer", required: true }] })
   const revoked = yield* Effect.promise(() => input(revokedForm.id, "answer"))
-  yield* access.set({ sessionID: root.id, enabled: false, expectedRevision: 1 })
-  yield* Effect.promise(() => wait((frame) => frame.message.method === "serverRequest/resolved" && frame.message.params?.requestId === revoked.message.id, "revocation resolution"))
+  yield* access.set({ enabled: false, expectedRevision: 1 })
+  yield* Effect.promise(() => bounded(closed.promise, "global revocation closure"))
   expect(subscriptions).toBe(baselineSubscriptions)
   const beforeLate = frames.length
   yield* events.publish(SessionEvent.Text.Delta, { sessionID: root.id, assistantMessageID, ordinal: 0, delta: "must not escape revocation" })
-  yield* Effect.promise(async () => {
-    send({ id: revoked.message.id, result: { answers: { value: { answers: ["late"] }, action: { answers: ["Continue"] } } } })
-    expect((await wait((frame) => frame.message.id === revoked.message.id && frame.message.error !== undefined, "revoked response rejection")).message.error).toBeDefined()
-    expect((await rpc("thread/list")).result?.data).toEqual([])
-  })
-  expect(frames.slice(beforeLate).some((frame) => frame.message.method !== undefined)).toBe(false)
+  expect(peer.readyState).toBe(3)
+  expect((yield* Effect.promise(() => host.status())).state).toBe("off")
+  expect((yield* access.status()).connection.state).toBe("off")
+  expect(frames).toHaveLength(beforeLate)
   expect((yield* forms.state(revokedForm.id)).status).toBe("pending")
-  yield* access.set({ sessionID: root.id, enabled: true, expectedRevision: 2 })
+  const retiredPeer = peer
+  connected = Promise.withResolvers<ServerWebSocket>()
+  closed = Promise.withResolvers<void>()
+  yield* access.set({ enabled: true, expectedRevision: 2 })
+  peer = yield* Effect.promise(() => bounded(connected.promise, "new authorized WebSocket connection"))
+  expect(peer).not.toBe(retiredPeer)
+  expect(retiredPeer.readyState).toBe(3)
   yield* Effect.promise(async () => {
+    send({ id: revoked.message.id, result: { answers: { value: { answers: ["late"] }, action: { answers: ["Continue"] } } } }, "cleanup")
+    expect((await wait((frame) => frame.stream_id === "cleanup" && frame.message.id === revoked.message.id && frame.message.error !== undefined, "retired response rejection")).message.error).toBeDefined()
     await rpc("initialize", { clientInfo: { name: "synthetic-cleanup" } }, "cleanup")
     send({ method: "initialized" }, "cleanup")
     expect((await rpc("thread/read", { threadId: root.id }, "cleanup")).error).toBeUndefined()
     await input(revokedForm.id, "answer", "cleanup")
   })
   expect(subscriptions).toBe(baselineSubscriptions + 1)
-  yield* Effect.promise(() => host.shutdown())
+  yield* Effect.promise(async () => { unregister(); await host.shutdown() })
   yield* Effect.promise(() => bounded(closed.promise, "WebSocket closure"))
+  expect((yield* access.status()).connection.state).toBe("unavailable")
   expect(subscriptions).toBe(baselineSubscriptions)
   const afterClose = frames.length
   yield* events.publish(SessionEvent.Text.Delta, { sessionID: root.id, assistantMessageID, ordinal: 0, delta: "must not escape closure" })

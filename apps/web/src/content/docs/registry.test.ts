@@ -118,13 +118,14 @@ describe("documentation index", () => {
 })
 
 describe("remote workspace documentation", () => {
-  test("documents native Dots profile setup and root-family permission without promising external compatibility", () => {
+  test("documents native Dots profile setup and backend access without promising external compatibility", () => {
     const section = findDocPage("usage/remote")?.sections.find((section) => section.heading === "Native Dots access")
     expect(section).toBeDefined()
     const setup = section?.blocks.find((block) => block.kind === "code")
     expect(setup?.kind === "code" ? JSON.parse(setup.code) : undefined).toEqual({ dots: { enabled: true, profile: "<OpenAI OAuth profile>" } })
     const text = JSON.stringify(section?.blocks)
-    for (const required of ["global", "OpenAI OAuth", "project configuration", "existing roots", "off", "native-created roots", "Children inherit", "Enable Dots access", "Disable Dots access", "revision", "unknown", "not replayed"]) expect(text).toContain(required)
+    for (const required of ["global", "OpenAI OAuth", "project configuration", "every existing and future eligible Session", "off", "Dots connection", "Connect", "Disconnect", "Computer", "Profile", "Configuration", "Access", "Transport", "revision", "unknown", "not replayed", "admitted work"]) expect(text).toContain(required)
+    for (const retired of ["Choose family access", "Enable Dots access", "Disable Dots access", "Children inherit", "native-created roots"]) expect(text).not.toContain(retired)
     expect(text).toContain("YCoding keeps execution and authorization")
     for (const limitation of ["not promise strict Codex policy equivalence", "no Codex-enforced OS sandbox", "sole authority", "overrides unset", "recorded working directory", "stored summary projection is complete", "not that the original execution succeeded", "live execution status uses canonical events"]) expect(text).toContain(limitation)
     for (const projection of ["actual user and assistant messages", "omit internal system/synthetic/compaction records", "without relabeling", "stored Session history unchanged"]) expect(text).toContain(projection)

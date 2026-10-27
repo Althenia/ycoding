@@ -28,7 +28,7 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | --------------------------------------------- | --------------------------------------------------------------------------------------- |
 | [Task MCP](./task-mcp.md) | Define the opt-in OAuth-protected task gateway and ownership/admission boundaries. |
 | [Session](./session.md)                       | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
-| [Native Dots](./dots-native-connector.md) | Define private Channels, root-family access, typed native decisions, and historical input retirement. |
+| [Native Dots](./dots-native-connector.md) | Define private Channels, global access and connection status, typed native decisions, and historical input retirement. |
 | [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.     |
 | [Provider usage](./provider-usage.md)         | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
 | [Concurrent provider profiles](./provider-profiles.md) | Define explicit per-Session account selection, private binding, refresh, replay isolation, and consumer behavior. |

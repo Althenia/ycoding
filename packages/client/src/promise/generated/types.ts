@@ -77,8 +77,8 @@ export type TelemetryRequestSample = {
     | "session.switchModel"
     | "session.switchAgent"
     | "session.command"
-    | "session.dots.access.get"
-    | "session.dots.access.set"
+    | "dots.get"
+    | "dots.set"
     | "session.skill"
     | "usage.providers"
     | "usage.summary"
@@ -822,14 +822,7 @@ export type CoordinationPausedReason = "interrupted" | "restart"
 
 export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
 
-export type DotsAccess = {
-  sessionID: string
-  rootSessionID: string
-  enabled: boolean
-  revision: number
-  inherited: boolean
-  configured: boolean
-}
+export type DotsAccess = { enabled: boolean; revision: number }
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -2708,6 +2701,16 @@ export type ConfigDiagnostic = {
   jsonPath?: string
   failClosed?: boolean
   message: string
+}
+
+export type DotsNativeStatus = {
+  access: DotsAccess
+  configuration: { ready: boolean; profile?: string; message?: string }
+  connection: {
+    state: "unavailable" | "off" | "connecting" | "connected" | "error"
+    hostname?: string
+    message?: string
+  }
 }
 
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
@@ -5712,8 +5715,8 @@ export type ServerTelemetryAppendInput = {
             | "session.switchModel"
             | "session.switchAgent"
             | "session.command"
-            | "session.dots.access.get"
-            | "session.dots.access.set"
+            | "dots.get"
+            | "dots.set"
             | "session.skill"
             | "usage.providers"
             | "usage.summary"
@@ -11416,14 +11419,11 @@ export type CoordinationDeleteInput = { readonly groupID: { readonly groupID: st
 
 export type CoordinationDeleteOutput = void
 
-export type DotsAccessGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+export type DotsGetOutput = { data: DotsNativeStatus }["data"]
 
-export type DotsAccessGetOutput = { data: DotsAccess }["data"]
-
-export type DotsAccessSetInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
+export type DotsSetInput = {
   readonly enabled: { readonly enabled: boolean; readonly expectedRevision: number }["enabled"]
   readonly expectedRevision: { readonly enabled: boolean; readonly expectedRevision: number }["expectedRevision"]
 }
 
-export type DotsAccessSetOutput = { data: DotsAccess }["data"]
+export type DotsSetOutput = { data: DotsNativeStatus }["data"]

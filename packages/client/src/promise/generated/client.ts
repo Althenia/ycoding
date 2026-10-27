@@ -413,10 +413,9 @@ import type {
   CoordinationUpdateOutput,
   CoordinationDeleteInput,
   CoordinationDeleteOutput,
-  DotsAccessGetInput,
-  DotsAccessGetOutput,
-  DotsAccessSetInput,
-  DotsAccessSetOutput,
+  DotsGetOutput,
+  DotsSetInput,
+  DotsSetOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -3365,31 +3364,23 @@ export function make(options: ClientOptions) {
         ),
     },
     dots: {
-      access: {
-        get: (input: DotsAccessGetInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsAccessGetOutput }>(
-            {
-              method: "GET",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/access`,
-              successStatus: 200,
-              declaredStatuses: [400, 404, 401],
-              empty: false,
-            },
-            requestOptions,
-          ).then((value) => value.data),
-        set: (input: DotsAccessSetInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsAccessSetOutput }>(
-            {
-              method: "POST",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/access`,
-              body: { enabled: input["enabled"], expectedRevision: input["expectedRevision"] },
-              successStatus: 200,
-              declaredStatuses: [409, 400, 404, 401],
-              empty: false,
-            },
-            requestOptions,
-          ).then((value) => value.data),
-      },
+      get: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsGetOutput }>(
+          { method: "GET", path: `/api/dots`, successStatus: 200, declaredStatuses: [400, 401], empty: false },
+          requestOptions,
+        ).then((value) => value.data),
+      set: (input: DotsSetInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: DotsSetOutput }>(
+          {
+            method: "PUT",
+            path: `/api/dots`,
+            body: { enabled: input["enabled"], expectedRevision: input["expectedRevision"] },
+            successStatus: 200,
+            declaredStatuses: [409, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
     },
   }
 }

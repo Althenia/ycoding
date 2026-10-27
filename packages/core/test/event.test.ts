@@ -484,6 +484,46 @@ describe("EventRuntime", () => {
     }),
   )
 
+  for (const mode of ["live", "durable"] as const) it.effect(`self-unsubscribe preserves later ${mode} listeners and excludes itself from the next notification`, () =>
+    Effect.gen(function* () {
+      const events = yield* EventRuntime.Service
+      const received: string[] = []
+      let unsubscribe: Effect.Effect<void> = Effect.void
+      unsubscribe = yield* events.listen(() => Effect.gen(function* () {
+        received.push("first")
+        yield* unsubscribe
+      }))
+      yield* events.listen(() => Effect.sync(() => { received.push("second") }))
+      yield* events.listen(() => Effect.sync(() => { received.push("third") }))
+      const publish = mode === "durable" ? events.publish(SyncMessage, { id: "self-removal", text: "hello" }) : events.publish(Message, { text: "hello" })
+      yield* publish
+      expect(received).toEqual(["first", "second", "third"])
+      yield* publish
+      expect(received).toEqual(["first", "second", "third", "second", "third"])
+    }),
+  )
+
+  it.effect("captures listeners when notification executes and defers registrations made during delivery", () =>
+    Effect.gen(function* () {
+      const events = yield* EventRuntime.Service
+      const received: string[] = []
+      const publish = events.publish(Message, { text: "hello" })
+      let registered = false
+      yield* events.listen(() => Effect.gen(function* () {
+        received.push("first")
+        if (!registered) {
+          registered = true
+          yield* events.listen(() => Effect.sync(() => { received.push("late") }))
+        }
+      }))
+      yield* events.listen(() => Effect.sync(() => { received.push("second") }))
+      yield* publish
+      expect(received).toEqual(["first", "second"])
+      yield* publish
+      expect(received).toEqual(["first", "second", "first", "second", "late"])
+    }),
+  )
+
   it.effect("isolates observer defects after durable events commit", () =>
     Effect.gen(function* () {
       const events = yield* EventRuntime.Service

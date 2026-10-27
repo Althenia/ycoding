@@ -186,6 +186,38 @@ function sentFrames(record: ConnectionRecord) {
   })
 }
 
+test("global Dots reads remain available during a pending write without Session inventory", async () => {
+  const release = Promise.withResolvers<void>()
+  const status = { access: { enabled: false, revision: 0 }, configuration: { ready: true }, connection: { state: "off" } }
+  const value = harness({ sessions: [], results: {
+    dotsGet: status,
+    dotsSet: async (input: { enabled: boolean; expectedRevision: number }) => {
+      if (input.expectedRevision === 0) await release.promise
+      return { ...status, access: { enabled: input.enabled, revision: input.expectedRevision + 1 } }
+    },
+  } })
+  try {
+    await value.bridge.connect()
+    const record = value.records[0]!
+    record.deliver({ type: "request", id: "req_dots_first", operation: "dots.set", input: { enabled: true, expectedRevision: 0 } })
+    await waitFor(() => value.calls.find((call) => call.method === "dotsSet"))
+    record.deliver({ type: "request", id: "req_dots_read", operation: "dots.get" })
+    const read = await waitFor(() => sentFrames(record).find((frame) => frame.type === "response" && frame.id === "req_dots_read"))
+    expect(read).toMatchObject({ ok: true, value: { data: status } })
+    expect(value.calls.filter((call) => call.method === "dotsSet")).toEqual([{ method: "dotsSet", args: [{ enabled: true, expectedRevision: 0 }] }])
+    expect(value.calls.filter((call) => call.method === "getSession")).toEqual([])
+    release.resolve()
+    await waitFor(() => sentFrames(record).find((frame) => frame.type === "response" && frame.id === "req_dots_first"))
+    expect(sentFrames(record).filter((frame) => frame.type === "response")).toEqual([
+      { type: "response", id: "req_dots_read", ok: true, value: { data: status } },
+      { type: "response", id: "req_dots_first", ok: true, value: { data: { ...status, access: { enabled: true, revision: 1 } } } },
+    ])
+    expect(value.calls.filter((call) => call.method === "dotsSet")).toEqual([
+      { method: "dotsSet", args: [{ enabled: true, expectedRevision: 0 }] },
+    ])
+  } finally { release.resolve(); await value.bridge.close() }
+})
+
 function sentEvents(record: ConnectionRecord) {
   return sentFrames(record).flatMap((frame) =>
     frame.type === "events" ? frame.events.map((event) => ({ sessionID: frame.sessionID, event })) : [],

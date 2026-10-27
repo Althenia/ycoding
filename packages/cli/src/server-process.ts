@@ -162,7 +162,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           const { startNativeRemoteControl } = await import("./remote-control/bootstrap")
           return startNativeRemoteControl({
             native, stateDirectory: global.state, codexHome: global.config,
-            onDiagnostic: (message) => { logRemoteDiagnostic(Effect.logWarning("native remote connector diagnostic", { detail: message })) },
+            onDiagnostic: (message) => { logRemoteDiagnostic(Effect.logWarning("Dots remote connector diagnostic", { detail: message })) },
           })
         },
       ).pipe(

@@ -7,8 +7,21 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.5 native Dots and retirement migration first", () => {
+  test("lists v0.11.6 global Dots controls and Antigravity updates first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.6", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(6)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["/dots", "Dots connection", "Computer", "Profile", "Configuration", "Access", "Transport", "Breaking Change:", "session.dots.access.get", "session.dots.access.set", "dots.get", "dots.set", "GET /api/dots", "PUT /api/dots", "expectedRevision", "Off", "old family grants", "enable it once", "every existing and future eligible Session", "exact OpenAI OAuth profile", "Connect", "Disconnect", "admitted work", "explicit denies", "guardrails", "not replayed", "authenticated socket", "env_id", "mismatching", "unverified"]) expect(text.toLowerCase()).toContain(fragment.toLowerCase())
+    for (const fragment of ["Antigravity Claude", "JSON Schema", "union-root", "effort variants", "Antigravity quota", "TUI and web Usage", "reported group headings", "Weekly limit", "Five hour limit", "failed refreshes", "substitute data", "live gateway"]) expect(text.toLowerCase()).toContain(fragment.toLowerCase())
+    expect(entry?.changes.find((change) => change.text.startsWith("Antigravity Claude"))?.tag).toBe("Fixed")
+    expect(entry?.changes.find((change) => change.text.startsWith("Antigravity quota"))?.tag).toBe("Changed")
+    for (const excluded of ["Rust", "performance passed", "under eight", "bypass", "picker succeeds"]) expect(text.toLowerCase()).not.toContain(excluded.toLowerCase())
+    expect(after("0.11.6")?.version).toBe("0.11.5")
+  })
+
+  test("retains v0.11.5 native Dots and retirement migration", () => {
+    const entry = RELEASES[1]
     expect(entry).toMatchObject({ version: "0.11.5", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(8)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -1797,7 +1810,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 50)).toEqual([
+    expect(versions.slice(0, 51)).toEqual([
+      "0.11.6",
       "0.11.5",
       "0.11.4",
       "0.11.3",

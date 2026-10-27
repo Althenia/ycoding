@@ -1,6 +1,7 @@
 import path from "node:path"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
-import { createRemoteControlHost } from "./host"
+import type { DotsAccess } from "@ycoding-ai/core/dots/access"
+import { createRemoteControlHost, type RemoteControlStatus } from "./host"
 import { createRemoteControlStateStore } from "./state"
 import { connectRemoteControlSocket, macDeviceKind } from "./socket"
 
@@ -18,6 +19,20 @@ export async function startNativeRemoteControl(input: {
     deviceKind: macDeviceKind,
     onDiagnostic: input.onDiagnostic,
   })
-  await host.start()
-  return () => host.stop()
+  const unregister = input.native.attachTransport(remoteControlTransport(host.status))
+  await host.start().catch(async (error: unknown) => { unregister(); await host.stop(); throw error })
+  return async () => { unregister(); await host.stop() }
+}
+
+export function remoteControlTransport(status: () => Promise<RemoteControlStatus>): DotsAccess.Transport {
+  return {
+    status: async () => {
+      const current = await status().catch((): RemoteControlStatus => ({ state: "error", problem: "connection" }))
+      return {
+        state: current.state === "on" ? "connected" : current.state,
+        ...(current.serverName === undefined ? {} : { hostname: current.serverName }),
+        ...(current.problem === undefined ? {} : { problem: current.problem }),
+      }
+    },
+  }
 }

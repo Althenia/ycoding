@@ -96,8 +96,8 @@ export const remoteOperations = [
   "session.switchModel",
   "session.switchAgent",
   "session.command",
-  "session.dots.access.get",
-  "session.dots.access.set",
+  "dots.get",
+  "dots.set",
   "session.skill",
   "usage.providers",
   "usage.summary",
@@ -176,8 +176,6 @@ export const remoteSessionOperations = [
   "session.switchModel",
   "session.switchAgent",
   "session.command",
-  "session.dots.access.get",
-  "session.dots.access.set",
   "session.skill",
   "session.usageReport",
   "session.promptCosts",
@@ -186,22 +184,31 @@ export const remoteSessionOperations = [
 
 export type RemoteOperation = (typeof remoteOperations)[number]
 
-export type RemoteDotsAccess = {
-  readonly sessionID: string
-  readonly rootSessionID: string
-  readonly enabled: boolean
-  readonly revision: number
-  readonly inherited: boolean
-  readonly configured: boolean
+export type RemoteDotsStatus = {
+  readonly access: { readonly enabled: boolean; readonly revision: number }
+  readonly configuration: { readonly ready: boolean; readonly profile?: string; readonly message?: string }
+  readonly connection: { readonly state: "unavailable" | "off" | "connecting" | "connected" | "error"; readonly hostname?: string; readonly message?: string }
 }
 
-export function readDotsAccess(value: unknown): RemoteDotsAccess | undefined {
-  if (!isRecord(value) || !isSessionID(value.sessionID) || !isSessionID(value.rootSessionID) ||
-    typeof value.enabled !== "boolean" || typeof value.configured !== "boolean" || typeof value.inherited !== "boolean" ||
-    typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
-    value.inherited !== (value.sessionID !== value.rootSessionID)) return undefined
-  return { sessionID: value.sessionID, rootSessionID: value.rootSessionID, enabled: value.enabled,
-    revision: value.revision, inherited: value.inherited, configured: value.configured }
+export function readDotsStatus(value: unknown): RemoteDotsStatus | undefined {
+  if (!isRecord(value) || !isRecord(value.access) || !isRecord(value.configuration) || !isRecord(value.connection)) return undefined
+  const access = value.access
+  const configuration = value.configuration
+  const connection = value.connection
+  if (typeof access.enabled !== "boolean" || typeof access.revision !== "number" || !Number.isSafeInteger(access.revision) || access.revision < 0 ||
+    typeof configuration.ready !== "boolean" || !dotsDisplayValue(configuration.profile, 256) || !dotsDisplayValue(configuration.message, 500) ||
+    !dotsDisplayValue(connection.hostname, 256) || !dotsDisplayValue(connection.message, 500)) return undefined
+  const state = connection.state
+  if (state !== "unavailable" && state !== "off" && state !== "connecting" && state !== "connected" && state !== "error") return undefined
+  return {
+    access: { enabled: access.enabled, revision: access.revision },
+    configuration: { ready: configuration.ready, ...(configuration.profile === undefined ? {} : { profile: configuration.profile }), ...(configuration.message === undefined ? {} : { message: configuration.message }) },
+    connection: { state, ...(connection.hostname === undefined ? {} : { hostname: connection.hostname }), ...(connection.message === undefined ? {} : { message: connection.message }) },
+  }
+}
+
+function dotsDisplayValue(value: unknown, limit: number): value is string | undefined {
+  return value === undefined || typeof value === "string" && value.length > 0 && value.length <= limit && !/[\u0000-\u001f\u007f-\u009f]/.test(value)
 }
 
 export function remoteDotsPeerLabel(metadata: unknown): string | undefined {
@@ -281,8 +288,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.switchModel": "mutation",
   "session.switchAgent": "mutation",
   "session.command": "mutation",
-  "session.dots.access.get": "read",
-  "session.dots.access.set": "mutation",
+  "dots.get": "read",
+  "dots.set": "mutation",
   "session.skill": "mutation",
   "usage.providers": "read",
   "usage.summary": "read",
@@ -841,7 +848,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (operation === "usage.forecast" && (!isRecord(frame.input) ||
     (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
-  if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+  if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "dots.get" || operation === "dots.set" || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
@@ -868,8 +875,8 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
-  if (operation === "session.dots.access.get") return input === undefined
-  if (operation === "session.dots.access.set") return isRecord(input) && Object.keys(input).length === 2 &&
+  if (operation === "dots.get") return input === undefined
+  if (operation === "dots.set") return isRecord(input) && Object.keys(input).length === 2 &&
     typeof input.enabled === "boolean" && typeof input.expectedRevision === "number" &&
     Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0

@@ -2193,22 +2193,20 @@ export interface CoordinationApi<E = never> {
   readonly delete: CoordinationDeleteOperation<E>
 }
 
-type Endpoint39_0Request = Parameters<RawClient["server.dots"]["session.dots.access.get"]>[0]
-export type Endpoint39_0Input = { readonly sessionID: Endpoint39_0Request["params"]["sessionID"] }
-export type Endpoint39_0Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.access.get"]>>["data"]
-export type DotsAccessGetOperation<E = never> = (input: Endpoint39_0Input) => Effect.Effect<Endpoint39_0Output, E>
+export type Endpoint39_0Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.get"]>>["data"]
+export type DotsGetOperation<E = never> = () => Effect.Effect<Endpoint39_0Output, E>
 
-type Endpoint39_1Request = Parameters<RawClient["server.dots"]["session.dots.access.set"]>[0]
+type Endpoint39_1Request = Parameters<RawClient["server.dots"]["dots.set"]>[0]
 export type Endpoint39_1Input = {
-  readonly sessionID: Endpoint39_1Request["params"]["sessionID"]
   readonly enabled: Endpoint39_1Request["payload"]["enabled"]
   readonly expectedRevision: Endpoint39_1Request["payload"]["expectedRevision"]
 }
-export type Endpoint39_1Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.access.set"]>>["data"]
-export type DotsAccessSetOperation<E = never> = (input: Endpoint39_1Input) => Effect.Effect<Endpoint39_1Output, E>
+export type Endpoint39_1Output = EffectValue<ReturnType<RawClient["server.dots"]["dots.set"]>>["data"]
+export type DotsSetOperation<E = never> = (input: Endpoint39_1Input) => Effect.Effect<Endpoint39_1Output, E>
 
 export interface DotsApi<E = never> {
-  readonly access: { readonly get: DotsAccessGetOperation<E>; readonly set: DotsAccessSetOperation<E> }
+  readonly get: DotsGetOperation<E>
+  readonly set: DotsSetOperation<E>
 }
 
 export interface AppApi<E = never> {

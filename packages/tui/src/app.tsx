@@ -57,6 +57,7 @@ import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
+import { DotsConnectionCommand } from "./component/dialog-dots-connection"
 import { DialogConfig } from "./component/dialog-config"
 import { DialogDebug } from "./component/dialog-debug"
 import { DialogPair, type DialogPairCredentials } from "./component/dialog-pair"
@@ -357,6 +358,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                       <KeepAwakeProvider server={input.keepAwake}>
                                                       <PromptStashProvider>
                                                         <DialogProvider>
+                                                          <DotsConnectionCommand />
                                                           <FrecencyProvider>
                                                             <PromptHistoryProvider>
                                                               <PromptRefProvider>

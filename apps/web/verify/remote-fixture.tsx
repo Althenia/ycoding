@@ -647,25 +647,52 @@ function createFixtureStore(): Fixture {
   let createdSideChatID: string | undefined
   let liveReads = 0
   let backgroundReads = 0
-  const dotsAccess = new Map([[sessionID, { enabled: accountParams.get("dots") === "on", revision: 1 }]])
-  const dotsState = (id: string) => {
-    const rootSessionID = sessions.find((session) => session.id === id)?.parentID ?? id
-    const state = dotsAccess.get(rootSessionID) ?? { enabled: false, revision: 1 }
-    dotsAccess.set(rootSessionID, state)
-    return { state, rootSessionID }
+  const dotsStates = new Map([["dev_studio", { enabled: accountParams.get("dots") === "on", revision: 1 }]])
+  const dotsState = (deviceID: string) => {
+    const state = dotsStates.get(deviceID) ?? { enabled: false, revision: 1 }
+    dotsStates.set(deviceID, state)
+    return state
   }
+  let dotsTransport = accountParams.get("dotsTransport")
+  let dotsReadCount = 0
+  const dotsStatus = (deviceID: string) => ({
+    access: { ...dotsState(deviceID) },
+    configuration: { ready: accountParams.get("dotsCapability") !== "off", profile: accountParams.get("dotsProfile") ?? "native-test", ...(accountParams.get("dotsCapability") === "off" ? { message: "Configure Dots on this machine, then Refresh." } : {}) },
+    connection: { state: dotsTransport ?? (accountParams.get("dotsCapability") === "off" ? "unavailable" : dotsState(deviceID).enabled ? "connected" : "off"), hostname: deviceID === "dev_laptop" ? "Laptop" : "Studio Mac", ...(dotsTransport === "error" ? { message: "Native transport failed. Refresh to check recovery." } : {}) },
+  })
   let releaseDotsRuntime: (() => void) | undefined
   Object.assign(window, { dotsFixture: {
     release: () => releaseDotsRuntime?.(),
-    change: (enabled: boolean, notify: boolean) => {
-      const { state } = dotsState(sessionID)
+    change: (enabled: boolean) => {
+      const state = dotsState("dev_studio")
       state.enabled = enabled
       state.revision++
-      if (notify) handlers?.onEvents?.(sessionID, [{ type: "session.dots.access.changed", data: { sessionID, enabled, revision: state.revision } }])
     },
+    transport: (state: string) => { dotsTransport = state },
+    select: (id: string) => store.selectSession(id),
+    connect: (id: string) => store.connect(id),
   } })
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
+  const dotsOutcome = (operation: "dots.get" | "dots.set", input: Readonly<Record<string, unknown>> | undefined, deviceID: string): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation === "dots.get") {
+      if (accountParams.get("dotsCapability") === "unavailable") return { status: "failed", error: { code: "agent_unavailable", message: "Dots status is unavailable" } }
+      const value = { status: "ok" as const, value: { data: dotsStatus(deviceID) } }
+      if (accountParams.get("dotsRead") === "hold" && ++dotsReadCount === 1) return new Promise<RemoteRequestOutcome>((resolve) => { releaseDotsRuntime = () => resolve(value) })
+      return value
+    }
+    mutationRequests.push({ operation, input })
+    const state = dotsState(deviceID)
+    if (accountParams.get("dotsOutcome") === "failed" || input?.expectedRevision !== state.revision) return { status: "failed", error: { code: "invalid_message", message: "Dots access changed." } }
+    if (accountParams.get("dotsOutcome") === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Dots access outcome is unknown." } }
+    const settle = (): RemoteRequestOutcome => {
+      state.enabled = input?.enabled === true
+      state.revision++
+      return { status: "ok", value: { data: dotsStatus(deviceID) } }
+    }
+    if (accountParams.get("dotsOutcome") === "hold") return new Promise<RemoteRequestOutcome>((resolve) => { releaseDotsRuntime = () => resolve(settle()) })
+    return settle()
+  }
   const inventoryInputs: Readonly<Record<string, unknown>>[] = []
   let transportsCreated = 0
   type FixtureGroup = { id: string; name: string; active: boolean; pausedReason?: "interrupted" | "restart"; revision: number; settings: Record<string, unknown>; masterSessionID: string; memberSessionIDs: string[]; created: number; updated: number }
@@ -910,25 +937,7 @@ function createFixtureStore(): Fixture {
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (operation.startsWith("coordination.")) return coordinationOutcome(operation, input)
-    if (operation === "session.dots.access.get") {
-      if (accountParams.get("dotsCapability") === "unavailable") return { status: "failed", error: { code: "agent_unavailable", message: "Dots access is unavailable" } }
-      const { state, rootSessionID } = dotsState(targetSessionID)
-      return { status: "ok", value: { data: { sessionID: targetSessionID, rootSessionID, ...state, inherited: targetSessionID !== rootSessionID, configured: accountParams.get("dotsCapability") !== "off" } } }
-    }
-    if (operation === "session.dots.access.set") {
-      mutationRequests.push({ operation, input })
-      const { state, rootSessionID } = dotsState(targetSessionID)
-      if (targetSessionID !== rootSessionID) return { status: "failed", error: { code: "forbidden", message: "Only a root Session can change Dots access." } }
-      if (accountParams.get("dotsOutcome") === "failed" || input?.expectedRevision !== state.revision) return { status: "failed", error: { code: "invalid_message", message: "Dots access changed." } }
-      if (accountParams.get("dotsOutcome") === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Dots access outcome is unknown." } }
-      const settle = (): RemoteRequestOutcome => {
-        state.enabled = input?.enabled === true
-        state.revision++
-        return { status: "ok", value: { data: { sessionID: targetSessionID, rootSessionID, ...state, inherited: false, configured: true } } }
-      }
-      if (accountParams.get("dotsOutcome") === "hold") return new Promise<RemoteRequestOutcome>((resolve) => { releaseDotsRuntime = () => resolve(settle()) })
-      return settle()
-    }
+    if (operation === "dots.get" || operation === "dots.set") return dotsOutcome(operation, input, "dev_studio")
     if (operation === "session.delete") {
       mutationRequests.push({ operation, input: { sessionID: targetSessionID } })
       coordinationGroups = coordinationGroups.filter((group) => group.masterSessionID !== targetSessionID).map((group) => ({ ...group, memberSessionIDs: group.memberSessionIDs.filter((id) => id !== targetSessionID), revision: group.revision + 1 }))
@@ -1256,6 +1265,7 @@ function createFixtureStore(): Fixture {
   Object.assign(window, { remoteMachineStatuses: machineStatuses })
   const laptopOutcome = (operation: RemoteOperation | RemoteNoticeOperation, input: Readonly<Record<string, unknown>> | undefined, targetSessionID: string | undefined,
     own: RemoteTransportHandlers): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation === "dots.get" || operation === "dots.set") return dotsOutcome(operation, input, "dev_laptop")
     if (operation === "notice.subscribe" || operation === "notice.list")
       return { status: "ok", value: noticePageValue({ notices: operation === "notice.list" ? [] : [...laptopNotices], total: laptopNotices.length, unavailable: false }) }
     if (operation === "notice.read" || operation === "notice.readAll") {

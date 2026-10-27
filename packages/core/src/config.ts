@@ -140,7 +140,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description: "Global-only default policy for delegated routine coordination decisions; groups may only narrow it",
   }),
   dots: ConfigDots.Info.pipe(Schema.optional).annotate({
-    description: "Dots native connector enablement (default: disabled)",
+    description: "Dots remote connector enablement (default: disabled)",
   }),
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",

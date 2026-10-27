@@ -1,6 +1,7 @@
 import { hostname } from "node:os"
 import { randomUUID } from "node:crypto"
 import type { NativeDots } from "@ycoding-ai/core/dots/native"
+import type { DotsAccess } from "@ycoding-ai/core/dots/access"
 import { createRemoteControlAppServer } from "./app-server"
 import { createRemoteControlBackend } from "./backend"
 import { Reassembler, encodeAck, encodeOutbound, encodePong } from "./envelope"
@@ -35,7 +36,7 @@ export interface RemoteControlSocket {
 
 export type RemoteControlStatus = {
   readonly state: "off" | "connecting" | "on" | "error"
-  readonly message?: string
+  readonly problem?: DotsAccess.TransportStatus["problem"]
   readonly profile?: string
   readonly environmentID?: string
   readonly serverName?: string
@@ -58,7 +59,7 @@ export type RemoteControlHostDeps = {
 }
 
 class HostError extends Error {
-  constructor(message: string, readonly retryAfterMs?: number) {
+  constructor(message: string, readonly retryAfterMs?: number, readonly status?: number) {
     super(message)
   }
 }
@@ -141,7 +142,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
         outcome = await post(enrollURL(), credential, installationID)
       }
     }
-    if (!outcome.response.ok) throw new HostError(`Remote-control enrollment failed (${outcome.response.status})`, parseRetryAfterMs(outcome.response.headers.get("retry-after"), now()))
+    if (!outcome.response.ok) throw new HostError(`Remote-control enrollment failed (${outcome.response.status})`, parseRetryAfterMs(outcome.response.headers.get("retry-after"), now()), outcome.response.status)
     const decoded = decodeEnrollResponse(safeJSON(outcome.text))
     if (decoded === undefined) throw new HostError("Remote-control enrollment returned an unexpected response")
     await persist(decoded, hash)
@@ -158,7 +159,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     }
     const action = nextActionForHttp({ phase: "refresh", status: outcome.response.status, recognizedMissingAppServer: recognizedMissingAppServer(outcome.text) })
     if (action === "delete_reenroll") return enroll(credential, installationID, hash)
-    throw new HostError(`Remote-control refresh failed (${outcome.response.status})`, parseRetryAfterMs(outcome.response.headers.get("retry-after"), now()))
+    throw new HostError(`Remote-control refresh failed (${outcome.response.status})`, parseRetryAfterMs(outcome.response.headers.get("retry-after"), now()), outcome.response.status)
   }
 
   function tokenUsable(credential: Credential) {
@@ -190,34 +191,44 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
 
   async function connectOnce(): Promise<void> {
     const connectingGeneration = generation
-    const state = await deps.store.load()
-    const configuration = await deps.native.configuration()
+    const failed = (problem: NonNullable<RemoteControlStatus["problem"]>, error: unknown): never => {
+      const status = httpStatus(error)
+      if (connectingGeneration === generation) current = { state: "error", problem: status === 401 || status === 403 ? "authentication" : problem }
+      throw error
+    }
+    const state = await deps.store.load().catch((error: unknown) => failed("configuration", error))
+    if (connectingGeneration !== generation) return
+    const configuration = await deps.native.configuration().catch((error: unknown) => failed("configuration", error))
+    if (connectingGeneration !== generation) return
     if (!configuration.enabled) { current = { state: "off" }; return }
     current = { state: "connecting", profile: configuration.profile }
-    let credential = await deps.native.credential(configuration.profile)
-    if (credential === undefined) throw new HostError("The pinned ChatGPT profile is unavailable")
-    if (credential.accountID !== configuration.accountID || credential.credentialID !== configuration.credentialID || credential.accountGeneration !== configuration.accountGeneration)
-      throw new HostError("The pinned ChatGPT profile changed")
+    let credential = await deps.native.credential(configuration.profile).catch((error: unknown) => failed("authentication", error))
     if (connectingGeneration !== generation) return
+    if (credential === undefined) return failed("authentication", new HostError("The pinned ChatGPT profile is unavailable"))
+    if (credential.accountID !== configuration.accountID || credential.credentialID !== configuration.credentialID || credential.accountGeneration !== configuration.accountGeneration)
+      return failed("authentication", new HostError("The pinned ChatGPT profile changed"))
     const hash = accountHash(credential.accountID)
-    let enrolled = await ensureEnrolled(credential, state.installationID, hash)
+    let enrolled = await ensureEnrolled(credential, state.installationID, hash).catch((error: unknown) => failed("enrollment", error))
     if (connectingGeneration !== generation) return
     let opened: RemoteControlSocket
     try {
       opened = await openSocket(enrolled, credential, state.installationID)
     } catch (error) {
+      if (connectingGeneration !== generation) return
       const status = httpStatus(error)
-      if (status === undefined || nextActionForHttp({ phase: "websocket", status }) !== "refresh_reconnect") throw error
-      const refreshed = await deps.native.credential(configuration.profile, credential.access)
+      if (status === undefined || nextActionForHttp({ phase: "websocket", status }) !== "refresh_reconnect") return failed("connection", error)
+      const refreshed = await deps.native.credential(configuration.profile, credential.access).catch((error: unknown) => failed("authentication", error))
+      if (connectingGeneration !== generation) return
       if (!refreshed || refreshed.credentialID !== configuration.credentialID || refreshed.accountID !== configuration.accountID || refreshed.accountGeneration !== configuration.accountGeneration)
-        throw new HostError("The pinned ChatGPT profile is unavailable")
+        return failed("authentication", new HostError("The pinned ChatGPT profile is unavailable"))
       credential = refreshed
+      const existing = await deps.store.enrollment({ websocketURL: websocketURL(), accountHash: hash }).catch((error: unknown) => failed("enrollment", error))
       if (connectingGeneration !== generation) return
-      const existing = await deps.store.enrollment({ websocketURL: websocketURL(), accountHash: hash })
       token = undefined
-      enrolled = existing === undefined ? await enroll(credential, state.installationID, hash) : await refresh(credential, state.installationID, hash, existing.serverID)
+      enrolled = await (existing === undefined ? enroll(credential, state.installationID, hash) : refresh(credential, state.installationID, hash, existing.serverID))
+        .catch((error: unknown) => failed("enrollment", error))
       if (connectingGeneration !== generation) return
-      opened = await openSocket(enrolled, credential, state.installationID)
+      opened = await openSocket(enrolled, credential, state.installationID).catch((error: unknown) => failed("connection", error))
     }
     if (connectingGeneration !== generation) { opened.close(); return }
     retireSocket?.()
@@ -227,7 +238,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     attempt = 0
     const gen = generation
     const envID = enrolled.environmentID
-    const reassembler = new Reassembler()
+    const reassembler = new Reassembler({ envID })
     const streams = new Map<string, { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number }>()
     const retired = new Set<string>()
     let active = true
@@ -246,20 +257,21 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       connection?.retire()
     }
     retireSocket = retire
-    opened.onClose(() => { if (!isCurrent()) return; retire(); current = { state: running ? "connecting" : "off", profile: configuration.profile }; closedWait?.() })
-    opened.onError(() => { if (isCurrent()) opened.close() })
+    opened.onClose(() => { if (!isCurrent()) return; retire(); current = { state: "error", problem: "connection" }; closedWait?.() })
+    opened.onError(() => { if (!isCurrent()) return; current = { state: "error", problem: "connection" }; opened.close() })
     opened.onMessage((text) => {
       if (!isCurrent()) return
       if (dispatch) { dispatch(text); return }
       bufferedBytes += Buffer.byteLength(text)
-      if (bufferedBytes > maxMessageBytes) { retire(); opened.close(); return }
+      if (bufferedBytes > maxMessageBytes) { current = { state: "error", problem: "connection" }; retire(); opened.close(); closedWait?.(); return }
       buffered.push(text)
     })
     connection = await deps.native.attach({
       profile: configuration.profile, credentialID: configuration.credentialID,
       accountID: configuration.accountID, accountGeneration: configuration.accountGeneration,
+      accessRevision: configuration.accessRevision,
       environmentID: envID, connectionID: randomUUID(), isCurrent,
-    }).catch((error: unknown) => { retire(); opened.close(); throw error })
+    }).catch((error: unknown) => { retire(); opened.close(); return failed("configuration", error) })
     if (!isCurrent()) { connection.retire(); opened.close(); return }
     const streamFor = (event: { readonly clientID: string; readonly streamID: string; readonly envID: string }) => {
       const key = JSON.stringify([event.envID, event.clientID, event.streamID])
@@ -281,8 +293,8 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       if (!isCurrent()) return
       const raw = safeJSON(text)
       if (typeof raw === "object" && raw !== null && "env_id" in raw && typeof raw.env_id === "string" && raw.env_id !== "" && raw.env_id !== envID) return
-      if (typeof raw === "object" && raw !== null && "client_id" in raw && "stream_id" in raw && "env_id" in raw &&
-        retired.has(JSON.stringify([raw.env_id, raw.client_id, raw.stream_id]))) return
+      if (typeof raw === "object" && raw !== null && "client_id" in raw && "stream_id" in raw &&
+        retired.has(JSON.stringify([envID, raw.client_id, raw.stream_id]))) return
       lastSeen = now()
       const event = reassembler.push(text)
       if (event.kind === "closed") {
@@ -352,7 +364,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
         await closed
       } catch (error) {
         if (!running || gen !== generation) return
-        current = { state: "connecting", message: error instanceof Error ? error.message : "Remote control connection failed" }
+        if (current.state !== "error") current = { state: "error", problem: "connection" }
         const delay = reconnectDelay({ attempt: attempt++, ...(error instanceof HostError && error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}) })
         await new Promise<void>((resolve) => {
           const timer = setTimeout(() => { cancelBackoff = undefined; resolve() }, delay)
@@ -366,9 +378,11 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
   }
 
   async function hostStatus(): Promise<RemoteControlStatus> {
-    const state = await deps.native.configuration()
-    if (!state.enabled) return { state: "off" }
-    return current.state === "off" ? { state: "connecting", profile: state.profile } : current
+    const serverName = serverNameForHost((deps.hostname ?? hostname)())
+    const state = await deps.native.configuration().catch(() => undefined)
+    if (state === undefined) return { state: "error", problem: "configuration", serverName }
+    if (!state.enabled) return { state: "off", serverName }
+    return current.state === "off" ? { state: "connecting", profile: state.profile, serverName } : { ...current, serverName }
   }
 
   return {
@@ -383,9 +397,11 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
   }
 
   function reconcile() {
+    const requestedGeneration = generation
     const work = configurationWork.then(async () => {
       if (!unsubscribeConfiguration) return
       const configuration = await deps.native.configuration()
+      if (!unsubscribeConfiguration || requestedGeneration !== generation) return
       const key = JSON.stringify(configuration)
       if (selected === key) return
       invalidate()
@@ -396,7 +412,7 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
       current = { state: "connecting", profile: configuration.profile }
       void loop(generation)
     })
-    configurationWork = work.catch(() => { current = { state: "error", message: "Native configuration is unavailable" } })
+    configurationWork = work.catch(() => { if (unsubscribeConfiguration && requestedGeneration === generation) current = { state: "error", problem: "configuration" } })
     return configurationWork
   }
   function invalidate() {

@@ -1,29 +1,37 @@
 export * as DotsAccess from "./access"
 
-import { and, desc, eq } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
+import { isDeepStrictEqual } from "node:util"
 import { Dots } from "@ycoding-ai/schema/dots"
-import { Session } from "@ycoding-ai/schema/session"
 import { Config } from "../config"
 import { Credential } from "../credential"
 import { Database } from "../database/database"
-import { makeLocationNode } from "../effect/app-node"
-import { EventRuntime } from "../event"
-import { EventSequenceTable, EventTable } from "../event/sql"
+import { makeGlobalNode } from "../effect/app-node"
 import { Integration } from "../integration"
-import { Location } from "../location"
+import { KV } from "../kv"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
-import { SessionEvent } from "../session/event"
-import { SessionStore } from "../session/store"
 
 export class Error extends Schema.TaggedErrorClass<Error>()("DotsAccess.Error", {
-  code: Schema.Literals(["unavailable", "root_required", "conflict"]),
+  code: Schema.Literals(["unavailable", "invalid_input", "conflict"]),
   message: Schema.String,
 }) {}
 
+export interface TransportStatus {
+  readonly state: "off" | "connecting" | "connected" | "error"
+  readonly hostname?: string
+  readonly problem?: "configuration" | "authentication" | "enrollment" | "connection"
+}
+
+export interface Transport {
+  readonly status: () => Promise<TransportStatus>
+}
+
 export interface Interface {
-  readonly get: (sessionID: Session.ID) => Effect.Effect<Dots.Access, Error>
-  readonly set: (input: Dots.AccessSet & { readonly sessionID: Session.ID }) => Effect.Effect<Dots.Access, Error>
+  readonly get: () => Effect.Effect<Dots.Access, Error>
+  readonly set: (input: Dots.AccessSet) => Effect.Effect<Dots.Access, Error>
+  readonly status: () => Effect.Effect<Dots.NativeStatus, Error>
+  readonly subscribe: (listener: () => void) => () => void
+  readonly attachTransport: (transport: Transport) => () => void
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/DotsAccess") {}
@@ -35,86 +43,95 @@ export function configured(entries: readonly Config.Entry[], credentials: readon
   return exact.length === 1 && exact[0]!.value.type === "oauth" && Boolean(OpenAICodex.accountID(exact[0]!.value))
 }
 
+const display = (value: string | undefined, limit: number) => value?.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim().slice(0, limit) || undefined
+const guidance = {
+  configuration: "Native configuration is unavailable. Check global Dots configuration.",
+  authentication: "The selected ChatGPT profile is unavailable. Check its authentication; the connector retries automatically.",
+  enrollment: "Native enrollment failed. Check the selected profile and connection; the connector retries automatically.",
+  connection: "The native connection failed. The connector retries automatically.",
+} satisfies Record<NonNullable<TransportStatus["problem"]>, string>
+
 export function make(input: {
   readonly db: Database.Interface
-  readonly events: EventRuntime.Interface
-  readonly sessions: Pick<SessionStore.Interface, "get">
-  readonly configured: () => Effect.Effect<boolean>
-  readonly location?: Location.Ref
+  readonly kv: KV.Interface
+  readonly configuration: () => Effect.Effect<Dots.NativeStatus["configuration"]>
 }): Interface {
-  const db = input.db.db
-  const unavailable = () => new Error({ code: "unavailable", message: "Session Dots access is unavailable" })
-  const root = Effect.fn("DotsAccess.root")(function* (sessionID: Session.ID) {
-    const selected = yield* input.sessions.get(sessionID)
-    if (!selected || selected.time.archived !== undefined || input.location &&
-      (selected.location.directory !== input.location.directory || selected.location.workspaceID !== input.location.workspaceID))
-      return yield* unavailable()
-    const visited = new Set<Session.ID>()
-    let current = selected
-    while (true) {
-      if (visited.has(current.id) || visited.size >= 64 || current.time.archived !== undefined) return yield* unavailable()
-      visited.add(current.id)
-      const owner = yield* db.select({ ownerID: EventSequenceTable.owner_id }).from(EventSequenceTable)
-        .where(eq(EventSequenceTable.aggregate_id, current.id)).get().pipe(Effect.orDie)
-      if (owner?.ownerID) return yield* unavailable()
-      if (!current.parentID) return current
-      const parent = yield* input.sessions.get(current.parentID)
-      if (!parent) return yield* unavailable()
-      current = parent
-    }
-  })
-  const preference = Effect.fn("DotsAccess.preference")(function* (sessionID: Session.ID) {
-    const row = yield* db.select({ data: EventTable.data }).from(EventTable)
-      .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, EventRuntime.versionedType(SessionEvent.DotsAccessChanged.type, 1))))
-      .orderBy(desc(EventTable.seq)).limit(1).get().pipe(Effect.orDie)
-    if (!row) return { enabled: false, revision: 0 }
-    const data = yield* Schema.decodeUnknownEffect(SessionEvent.DotsAccessChanged.data)(row.data)
-      .pipe(Effect.mapError(() => unavailable()))
-    if (data.sessionID !== sessionID) return yield* unavailable()
-    return { enabled: data.enabled, revision: data.revision }
-  })
-  const get = Effect.fn("DotsAccess.get")(function* (sessionID: Session.ID) {
-    const owner = yield* root(sessionID)
-    return {
-      sessionID, rootSessionID: owner.id, ...(yield* preference(owner.id)),
-      inherited: owner.id !== sessionID, configured: yield* input.configured(),
-    }
+  const listeners = new Set<() => void>()
+  let attached: { readonly transport: Transport } | undefined
+  const get = Effect.fn("DotsAccess.get")(function* () {
+    const value = yield* input.kv.get("dots.native-access")
+    if (value === undefined) return { enabled: false, revision: 0 }
+    return yield* Schema.decodeUnknownEffect(Dots.Access)(value).pipe(Effect.mapError(() =>
+      new Error({ code: "unavailable", message: "The global Dots access preference is invalid" })))
   })
   return {
     get,
     set: Effect.fn("DotsAccess.set")(function* (value) {
-      const current = yield* get(value.sessionID)
-      if (current.inherited) return yield* new Error({ code: "root_required", message: "Only root Sessions can change Dots access" })
-      if (current.revision !== value.expectedRevision) return yield* new Error({ code: "conflict", message: "Dots access revision changed" })
-      if (current.enabled === value.enabled) return current
-      const revision = current.revision + 1
-      const committed = yield* input.events.publishBatch([{
-        definition: SessionEvent.DotsAccessChanged,
-        data: { sessionID: value.sessionID, enabled: value.enabled, revision },
-        options: { location: (yield* root(value.sessionID)).location },
-      }], { when: Effect.gen(function* () {
-        const owner = yield* root(value.sessionID).pipe(Effect.catch(() => Effect.succeed(undefined)))
-        return owner?.id === value.sessionID && (yield* preference(value.sessionID)).revision === value.expectedRevision
-      }).pipe(Effect.catch(() => Effect.succeed(false))) })
-      if (committed.length === 0) return yield* new Error({ code: "conflict", message: "Dots access authorization or revision changed" })
-      return { ...current, enabled: value.enabled, revision }
+      const request = yield* Schema.decodeUnknownEffect(Dots.AccessSet)(value).pipe(Effect.mapError(() =>
+        new Error({ code: "invalid_input", message: "Invalid global Dots access change" })))
+      return yield* input.db.db.transaction(() => Effect.gen(function* () {
+        const current = yield* get()
+        if (current.revision !== request.expectedRevision)
+          return yield* new Error({ code: "conflict", message: "Global Dots access revision changed" })
+        if (request.enabled && !(yield* input.configuration()).ready)
+          return yield* new Error({ code: "unavailable", message: "Configure the selected OpenAI OAuth profile before enabling Dots access" })
+        if (current.enabled === request.enabled) return { changed: false, access: current }
+        const access = { enabled: request.enabled, revision: current.revision + 1 }
+        yield* input.kv.set("dots.native-access", access)
+        return { changed: true, access }
+      })).pipe(
+        Effect.catchTag("SqlError", Effect.die),
+        Effect.tap((result) => Effect.sync(() => { if (result.changed) for (const listener of listeners) listener() })),
+        Effect.map((result) => result.access),
+        Effect.uninterruptible,
+      )
     }),
+    status: Effect.fn("DotsAccess.status")(function* () {
+      const initial = yield* get()
+      const configuration = yield* input.configuration()
+      const owner = attached
+      const observed = owner
+        ? yield* Effect.tryPromise(() => owner.transport.status()).pipe(Effect.catch(() => Effect.succeed<TransportStatus>({ state: "error", problem: "connection" })))
+        : undefined
+      const access = yield* get()
+      const current = yield* input.configuration()
+      const profile = display(current.profile, 256)
+      const message = display(current.message, 500)
+      const hostname = owner === attached && initial.revision === access.revision ? display(observed?.hostname, 256) : undefined
+      const connection: Dots.NativeStatus["connection"] = !owner || owner !== attached ? { state: "unavailable" }
+        : !access.enabled || !current.ready ? { state: "off" }
+        : initial.revision !== access.revision || !isDeepStrictEqual(configuration, current) ? { state: "connecting" }
+        : observed ? {
+          state: observed.state,
+          ...(observed.problem ? { message: guidance[observed.problem] } : {}),
+        } : { state: "connecting" }
+      return { access, configuration: { ready: current.ready, ...(profile ? { profile } : {}), ...(message ? { message } : {}) }, connection: { ...connection, ...(hostname ? { hostname } : {}) } }
+    }),
+    subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    attachTransport: (transport) => {
+      if (attached) throw new Error({ code: "unavailable", message: "The native transport already has an owner" })
+      const owner = { transport }
+      attached = owner
+      return () => { if (attached === owner) attached = undefined }
+    },
   }
 }
 
-export const node = makeLocationNode({
+export const node = makeGlobalNode({
   service: Service,
   layer: Layer.effect(Service, Effect.gen(function* () {
     const db = yield* Database.Service
-    const events = yield* EventRuntime.Service
-    const sessions = yield* SessionStore.Service
+    const kv = yield* KV.Service
     const config = yield* Config.GlobalService
     const credentials = yield* Credential.Service
-    const location = yield* Location.Service
-    return make({ db, events, sessions, location, configured: () => Effect.gen(function* () {
+    return make({ db, kv, configuration: () => Effect.gen(function* () {
       const snapshot = yield* config.snapshot()
-      return snapshot.diagnostics.length === 0 && configured(snapshot.entries, yield* credentials.list(Integration.ID.make("openai")))
+      const selected = Config.dots(snapshot.entries)
+      if (snapshot.diagnostics.length) return { ready: false, message: "Global Dots configuration is invalid." }
+      if (!selected.enabled) return { ready: false, message: "Enable Dots in global configuration." }
+      const ready = configured(snapshot.entries, yield* credentials.list(Integration.ID.make("openai")))
+      return { ready, profile: selected.profile, ...(!ready ? { message: "The selected OpenAI OAuth profile is unavailable." } : {}) }
     }) })
   })),
-  deps: [Database.node, EventRuntime.node, SessionStore.node, Config.globalNode, Credential.node, Location.node],
+  deps: [Database.node, KV.node, Config.globalNode, Credential.node],
 })

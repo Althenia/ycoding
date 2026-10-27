@@ -41,8 +41,8 @@ test("accepts telemetry for deleting a Session through the remote operation", ()
 
 test("accepts request telemetry for every Session Dots control in closed samples and batches", () => {
   const names = [
-    "session.dots.access.get",
-    "session.dots.access.set",
+    "dots.get",
+    "dots.set",
   ] as const
   for (const operation of names) {
     expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)

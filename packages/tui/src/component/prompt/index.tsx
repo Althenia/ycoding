@@ -25,7 +25,6 @@ import { useExit } from "../../context/exit"
 import { promptCommandPalette, promptOffsetWidth } from "../../prompt/display"
 import { expandPromptInputPastedText, realignPromptInputMentions } from "../../prompt/mention"
 import { parseSlashHead } from "../../prompt/parse"
-import { createDotsAccess, dotsAccessCommand } from "../../prompt/dots-access"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { emptyPrompt, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
@@ -268,22 +267,6 @@ export function Prompt(props: PromptProps) {
   const config = useConfig().data
   const dialog = useDialog()
   const toast = useToast()
-  const dotsAccess = createDotsAccess({
-    sessionID: () => props.sessionID,
-    rootSessionID: () => props.sessionID ? data.session.root(props.sessionID) : undefined,
-    location: () => {
-      const location = currentLocation.current ?? data.location.default()
-      const session = props.sessionID ? data.session.get(props.sessionID)?.location : undefined
-      return JSON.stringify([location.directory, location.workspaceID, session?.directory, session?.workspaceID])
-    },
-    connected: () => client.connection.status() === "connected",
-    owner: () => client.api,
-    paletteOpen: () => dialog.size === "command-palette" && dialog.stack.length > 0,
-    get: (sessionID, signal) => client.api.dots.access.get({ sessionID }, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) }),
-    set: (request) => client.api.dots.access.set(request),
-    error: (error) => toast.error(error),
-  })
-  onCleanup(data.on("session.dots.access.changed", (event) => dotsAccess.changed(event.data)))
   const connected = useConnected()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
   const btwSession = createMemo(() => {
@@ -842,7 +825,6 @@ export function Prompt(props: PromptProps) {
           toast.show({ message: "No suggestion available for the latest reply", variant: "info" })
         },
       },
-      dotsAccessCommand(dotsAccess),
       {
         title: "Generate prompt",
         description: "Draft a prompt from a rough intent",

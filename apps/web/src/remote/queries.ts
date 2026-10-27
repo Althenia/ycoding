@@ -52,6 +52,7 @@ export const remoteKeys = {
   incidentGuidance: (scope: QueryScope, input: IncidentGuidanceQueryInput) =>
     [...remoteKeys.incidentGuidanceModel(scope, input), input.sessionID ?? ""] as const,
   keepAwake: (scope: QueryScope) => [...remoteKeys.scope(scope), "keepAwake"] as const,
+  dots: (scope: QueryScope) => [...remoteKeys.scope(scope), "dots"] as const,
   workspaces: (scope: QueryScope) => [...remoteKeys.scope(scope), "workspaces"] as const,
   coordination: (scope: QueryScope) => [...remoteKeys.scope(scope), "coordination"] as const,
   projectCandidates: (scope: QueryScope, search: string) => [...remoteKeys.scope(scope), "project-candidates", search] as const,

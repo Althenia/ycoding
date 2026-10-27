@@ -45,6 +45,7 @@ import { Composer } from "./composer"
 import { CommandPalette, focusComposerField, type PaletteHandlers } from "./command-palette"
 import { NewSessionButton, NewSessionComposer } from "./new-session"
 import { ProviderConnect } from "./provider-connect"
+import { DotsConnection } from "./dots-connection"
 import type { CatalogTarget } from "../catalog"
 import { ProjectsPage, ProjectsRail, ProjectPanel, ProjectsDialogs, ProjectStatus, ProjectFreshness, createProjectsData } from "./projects"
 import { UsagePage } from "./usage"
@@ -99,6 +100,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
   const [navGeneration, setNavGeneration] = createSignal(1)
   const [newSessionWorkspaceID, setNewSessionWorkspaceID] = createSignal<string>()
   const [providerConnect, setProviderConnect] = createSignal<{ readonly target: CatalogTarget; readonly returnFocus: HTMLElement; readonly deviceID: string | undefined; readonly generation: number }>()
+  const [dotsConnection, setDotsConnection] = createSignal<HTMLElement>()
   let closeSessionsSheet: (() => void) | undefined
   let navTrigger: HTMLButtonElement | undefined
   const closeNav = () => {
@@ -432,6 +434,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
       trigger?.click()
     },
     connectProvider: (target, returnFocus) => setProviderConnect({ target, returnFocus, deviceID: state().activeDeviceID, generation: state().generation }),
+    dotsConnection: setDotsConnection,
   }
   createEffect(() => {
     const current = providerConnect()
@@ -589,6 +592,7 @@ export function RemoteShell(props: { readonly path: () => string }): JSX.Element
         <ProjectsDialogs data={projects} />
 
         <Show when={providerConnect()}>{(connection) => <ProviderConnect target={connection().target} returnFocus={connection().returnFocus} onClose={() => setProviderConnect(undefined)} onConnected={() => { void remote.store.loadCatalog(connection().target, { refresh: true }) }} />}</Show>
+        <Show when={dotsConnection()}>{(returnFocus) => <DotsConnection returnFocus={returnFocus()} onClose={() => setDotsConnection(undefined)} />}</Show>
         <Show when={(phoneLayout() ? teamOpen() : teamVisible()) && view() === "/remote/session" && state().team !== undefined && selected()}>
           <aside ref={teamLayer} class={`${phoneLayout() ? "team-control__phone" : "team-control__panel"}${teamEntering() ? " team-control--entering" : ""}${!teamOpen() ? " team-control--exiting" : ""}`} aria-label="Team controls" aria-hidden={!teamOpen() || teamClosing() ? "true" : undefined} inert={!teamOpen() || teamClosing()}
             onClick={(event) => { if (phoneLayout() && event.target === teamLayer?.querySelector("dialog.team-view__sheet")) closeTeam() }}>

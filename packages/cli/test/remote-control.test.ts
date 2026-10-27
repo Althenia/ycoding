@@ -155,12 +155,12 @@ describe("remote-control envelope", () => {
     const outbound = JSON.parse(frames[0]!)
     expect(outbound).toMatchObject({ type: "server_message", client_id: "client-1", seq_id: 7, stream_id: "s1", env_id: "env-1", message: JSON.parse(text) })
     const inbound = { ...outbound, type: "client_message" }
-    const reassembler = new Reassembler()
+    const reassembler = new Reassembler({ envID: address.envID })
     expect(reassembler.push(JSON.stringify(inbound))).toEqual({ kind: "message", ...address, seqID: 7, text })
   })
 
   test("client_message requires seq_id and an address while inbound ack is unsupported", () => {
-    const reassembler = new Reassembler()
+    const reassembler = new Reassembler({ envID: "e" })
     expect(reassembler.push(JSON.stringify({ type: "client_message", client_id: "c", stream_id: "s", env_id: "e", message: "{}" })).kind).toBe("drop")
     expect(reassembler.push(JSON.stringify({ type: "client_message", client_id: "c", stream_id: "s", env_id: "e", seq_id: 1, message: "{}" })).kind).toBe("message")
     expect(reassembler.push(JSON.stringify({ type: "client_message", stream_id: "s", env_id: "e", message: "{}" })).kind).toBe("drop")
@@ -172,7 +172,7 @@ describe("remote-control envelope", () => {
     const frames = encodeOutbound({ text, ...address, seqID: 3 })
     expect(frames).toHaveLength(3)
     for (const frame of frames) expect(new TextEncoder().encode(frame).byteLength).toBeLessThanOrEqual(153_600)
-    const reassembler = new Reassembler()
+    const reassembler = new Reassembler({ envID: address.envID })
     let result: ReturnType<Reassembler["push"]> | undefined
     for (const frame of frames) result = reassembler.push(frame.replace("server_message_chunk", "client_message_chunk"))
     expect(result).toEqual({ kind: "message", ...address, seqID: 3, segmentID: 2, segmentCount: 3, text })
@@ -197,21 +197,21 @@ describe("remote-control envelope", () => {
         message_chunk_base64: Buffer.from("ab").toString("base64"),
         ...patch,
       })
-    const missing = new Reassembler()
+    const missing = new Reassembler({ envID: "e" })
     expect(missing.push(JSON.stringify({ type: "client_message", message: "{}" })).kind).toBe("drop")
 
-    const order = new Reassembler()
+    const order = new Reassembler({ envID: "e" })
     expect(order.push(chunk({ segment_id: 1 })).kind).toBe("drop")
 
-    const mismatch = new Reassembler()
+    const mismatch = new Reassembler({ envID: "e" })
     expect(mismatch.push(chunk({})).kind).toBe("pending")
     expect(mismatch.push(chunk({ segment_id: 1, segment_count: 3, message_chunk_base64: Buffer.from("cd").toString("base64") })).kind).toBe("drop")
 
-    const overflow = new Reassembler()
+    const overflow = new Reassembler({ envID: "e" })
     expect(overflow.push(chunk({ message_size_bytes: 1_073_741_825 })).kind).toBe("drop")
     expect(overflow.push(chunk({ segment_count: 10_487 })).kind).toBe("drop")
 
-    const invalid = new Reassembler()
+    const invalid = new Reassembler({ envID: "e" })
     expect(invalid.push("not json").kind).toBe("drop")
     expect(invalid.push(JSON.stringify({ type: "ping", client_id: "c", stream_id: "s", env_id: "e", seq_id: 1, state: "foreground", skip_history: true })))
       .toEqual({ kind: "ping", clientID: "c", streamID: "s", envID: "e", seqID: 1 })
@@ -490,15 +490,18 @@ describe("remote-control state and host lifecycle", () => {
   test("enabling reports connecting before credentials resolve", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "ycoding-rc-status-"))
     const store = createRemoteControlStateStore(path.join(dir, "remote-control.json"))
+    const credentialGate = Promise.withResolvers<undefined>()
     const host = createRemoteControlHost({
       store,
-      native: { ...nativeHost(fakeBackend().backend, credential), credential: () => new Promise(() => {}) },
+      native: { ...nativeHost(fakeBackend().backend, credential), credential: () => credentialGate.promise },
       codexHome: "/h",
+      hostname: () => "fixture.local",
       connect: async () => { throw new Error("unexpected connect") },
     })
-    await host.start()
-    expect(await host.status()).toEqual({ state: "connecting", profile: "Work" })
-    await host.stop()
+    try {
+      await host.start()
+      expect(await host.status()).toEqual({ state: "connecting", profile: "Work", serverName: "fixture.local" })
+    } finally { await host.stop(); credentialGate.resolve(undefined) }
   })
 
   test("fresh host enrolls when only an old websocket URL key exists", async () => {

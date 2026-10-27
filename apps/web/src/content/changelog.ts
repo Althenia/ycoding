@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.6",
+    date: "2026-10-27",
+    title: "Global Dots connection and access",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "/dots in the TUI and Dots connection in the TUI and web command palettes show Computer, Profile, Configuration, Access and actual native Transport separately, including configuration and connection errors. Open the dialog without selecting a Session or from any root or child Session. Access On does not mean Transport Connected. External ChatGPT picker discovery and end-to-end selection remain unverified." },
+      { tag: "Changed", text: "Breaking Change: Dots access is now one persisted choice covering every existing and future eligible Session on this backend. It starts Off; old family grants are not converted. Configure the machine and enable it once with Connect after upgrading. The per-Session session.dots.access.get and session.dots.access.set APIs are replaced by sessionless dots.get (GET /api/dots) and dots.set (PUT /api/dots). Update API clients to send { enabled, expectedRevision } to the global setter." },
+      { tag: "Changed", text: "Connect enables global access and starts the native connection. Disconnect disables access and closes that connection without interrupting admitted work. Global dots.enabled: true and dots.profile naming an exact OpenAI OAuth profile remain prerequisites; project configuration cannot enable Dots or replace the pinned profile. Permissions, explicit denies, ceilings, guardrails and autonomy remain authoritative. Failed or unknown access changes are not replayed automatically." },
+      { tag: "Changed", text: "Antigravity quota in the TUI and web Usage views uses reported group headings, with Weekly limit before Five hour limit. Missing quota stays unreported; failed refreshes show an error without substitute data. Live gateway quota-summary compatibility remains unverified." },
+      { tag: "Fixed", text: "Native frames that omit env_id now route through the authenticated socket's environment. An explicit mismatching or malformed env_id is rejected without dispatching work or retiring another stream." },
+      { tag: "Fixed", text: "Antigravity Claude requests preserve full JSON Schema tool inputs, including union-root inputs, across effort variants. Gemini tool declarations keep their existing format. Live gateway acceptance remains unverified." },
+    ],
+  },
+  {
     version: "0.11.5",
     date: "2026-10-27",
     title: "Native Dots and Session-family access",

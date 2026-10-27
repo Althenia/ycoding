@@ -23,6 +23,7 @@ import {
   sessionListRefreshNotice,
   sessionStateChips,
   keepAwakeIndicator,
+  dotsConnectionView,
   shellOutputPaging,
   sessionProjectLabel,
   connectionLabel,
@@ -33,6 +34,32 @@ import {
   type RemoteConnectionState,
   type RemoteSessionSummary,
 } from "./view-model"
+
+describe("Dots connection display", () => {
+  const status = { access: { enabled: true, revision: 3 }, configuration: { ready: true, profile: "native-test" }, connection: { state: "connecting" as const, hostname: "test-computer" } }
+  const input = { status, online: true, loading: false, pending: false }
+  test("separates access, configured profile and actual transport", () => {
+    for (const state of ["unavailable", "off", "connecting", "connected", "error"] as const) {
+      expect(dotsConnectionView({ ...input, status: { ...status, connection: { ...status.connection, state } } })).toMatchObject({
+        computer: "test-computer", profile: "native-test", configuration: "Ready", access: "On", transport: { unavailable: "Unavailable", off: "Off", connecting: "Connecting", connected: "Connected", error: "Error" }[state], action: "Disconnect", canChange: true,
+      })
+    }
+    expect(dotsConnectionView({ ...input, status: { ...status, access: { enabled: false, revision: 3 }, connection: { state: "connected" } } })).toMatchObject({ access: "Off", transport: "Connected", action: "Connect" })
+  })
+  test("keeps configuration and connection errors separate and permits disconnect when configuration breaks", () => {
+    expect(dotsConnectionView({ ...input, status: { ...status, configuration: { ready: false, message: "Select an OAuth profile" }, connection: { state: "error", message: "Native transport stopped" } } })).toMatchObject({
+      profile: "Unreported", configuration: "Not ready", configurationMessage: "Select an OAuth profile", transport: "Error", connectionMessage: "Native transport stopped", action: "Disconnect", canChange: true,
+    })
+    expect(dotsConnectionView({ ...input, status: { ...status, access: { enabled: false, revision: 3 }, configuration: { ready: false } } })).toMatchObject({ action: "Connect", canChange: false })
+  })
+  test("missing, pending, offline and failed reads never invent current access or permit changes", () => {
+    expect(dotsConnectionView({ ...input, status: undefined })).toMatchObject({ access: "Unreported", transport: "Unreported", profile: "Unreported", canChange: false })
+    for (const override of [{ online: false }, { loading: true }, { pending: true }, { error: "Read failed" }]) expect(dotsConnectionView({ ...input, ...override }).canChange).toBe(false)
+    expect(dotsConnectionView({ ...input, pending: true }).notice).toBe("Changing Dots access…")
+    expect(dotsConnectionView({ ...input, online: false }).notice).toContain("Reconnect")
+    expect(dotsConnectionView({ ...input, error: "Read failed" }).notice).toContain("Refresh")
+  })
+})
 
 test("keep-awake chrome is absent until settled or off and distinguishes active, held, unsupported, and failed states", () => {
   expect(keepAwakeIndicator({ read: "ready", status: { state: "on", lid: "on", display: "on", activity: "error" } })).toMatchObject({ label: "keep-awake on · lid held · display on · activity error", tone: "danger" })

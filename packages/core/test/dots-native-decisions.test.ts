@@ -12,6 +12,7 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
+import { KV } from "@ycoding-ai/core/kv"
 import { EventRuntime } from "@ycoding-ai/core/event"
 import { Form } from "@ycoding-ai/core/form"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
@@ -176,9 +177,9 @@ const nativeSetup = (customRule = false) => Effect.gen(function* () {
   const credential = new Credential.Info({ id: Credential.ID.make("cred_native_acceptance"), integrationID: Integration.ID.make("openai"), label: "native-acceptance", value: {
     type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"), access: "synthetic", refresh: "synthetic", expires: 0, metadata: { accountID: "synthetic-native-account" },
   } })
-  const access = DotsAccess.make({ db, events, sessions: store, configured: () => Effect.succeed(true) })
-  yield* access.set({ sessionID: f.root.id, enabled: true, expectedRevision: 0 })
-  const host = yield* NativeDots.make({ db, events, store, sessions: f.sessions, execution, projects,
+  const access = DotsAccess.make({ db, kv: yield* KV.Service, configuration: () => Effect.succeed({ ready: true, profile: credential.label }) })
+  yield* access.set({ enabled: true, expectedRevision: 0 })
+  const host = yield* NativeDots.make({ access, db, events, store, sessions: f.sessions, execution, projects,
     config: { snapshot: () => Effect.succeed({ entries: [new Config.Document({ type: "document", scope: "global", info: new Config.Info({ dots: { enabled: true, profile: credential.label } }) })], diagnostics: [] }), subscribe: () => () => {} },
     credentials: { list: () => Effect.succeed([credential]) }, credential: () => Effect.succeed(undefined),
     models: () => Effect.succeed([]), skills: () => Effect.succeed([]), selectedModel: (session) => Effect.succeed(session.model),
@@ -190,7 +191,7 @@ const nativeSetup = (customRule = false) => Effect.gen(function* () {
       return NativeDecisions.make({ permission, guardrail, forms, questions, reviews, orchestration, sessions: f.sessions })
     }).pipe(Effect.provide(locations.get(session.location))),
   })
-  const pins: NativeDots.Pins = { profile: credential.label, credentialID: credential.id, accountID: "synthetic-native-account", accountGeneration: 0,
+  const pins: NativeDots.Pins = { accessRevision: 1, profile: credential.label, credentialID: credential.id, accountID: "synthetic-native-account", accountGeneration: 0,
     environmentID: "synthetic-environment", connectionID: "synthetic-connection", isCurrent: () => true }
   const connection = yield* Effect.promise(() => host.attach(pins))
   const channel = connection.channel({ clientID: "native-client", streamID: "native-stream" })
@@ -254,13 +255,15 @@ it.live("native candidate permission access revision fences reject revoked handl
   const f = yield* nativeSetup()
   const asked = yield* f.permissions.ask({ sessionID: f.root.id, agent: f.agent, action: "edit", resources: ["src/revoked.ts"], requireExplicitDecision: true })
   const request = yield* f.pending(asked.id)
-  yield* f.access.set({ sessionID: f.root.id, enabled: false, expectedRevision: 1 })
-  yield* f.access.set({ sessionID: f.root.id, enabled: true, expectedRevision: 2 })
+  yield* f.access.set({ enabled: false, expectedRevision: 1 })
+  yield* f.access.set({ enabled: true, expectedRevision: 2 })
   yield* nativeRejects(f.channel.settle(request.handle, nativeChoice("Allow once")))
   expect(yield* f.permissions.snapshot(asked.id)).toBeDefined()
-  const current = yield* f.pending(asked.id)
+  const connection = yield* Effect.promise(() => f.host.attach({ ...f.pins, accessRevision: 3, connectionID: "fresh-connection" }))
+  const channel = connection.channel({ clientID: "native-client", streamID: "fresh-stream" })
+  const current = (yield* Effect.promise(() => channel.pending(f.root.id))).find((item) => item.itemID === asked.id)!
   expect(current.handle).not.toBe(request.handle)
-  yield* Effect.promise(() => f.channel.settle(current.handle, nativeChoice("Reject")))
+  yield* Effect.promise(() => channel.settle(current.handle, nativeChoice("Reject")))
   const settled = (yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)
   expect(settled).toHaveLength(1)
   expect(settled[0]?.data).toMatchObject({ reply: "reject", source: { accessRevision: 3, requestID: current.id } })

@@ -78,23 +78,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
-function address(record: Record<string, unknown>): Address | undefined {
+function address(record: Record<string, unknown>, envID: string): Address | undefined {
   const clientID = record.client_id
   const streamID = record.stream_id
-  const envID = record.env_id
   if (typeof clientID !== "string" || clientID.length === 0) return undefined
   if (typeof streamID !== "string" || streamID.length === 0) return undefined
-  if (typeof envID !== "string" || envID.length === 0) return undefined
+  if (Object.hasOwn(record, "env_id") && record.env_id !== envID) return undefined
   return { clientID, streamID, envID }
 }
 
 export class Reassembler {
   readonly #partials = new Map<string, Partial>()
   readonly #receipts = new Map<string, { readonly seqID: number; readonly fingerprints: string[] }>()
+  readonly #envID: string
   readonly #maxMessageBytes: number
   readonly #maxSegmentCount: number
 
-  constructor(options: { readonly maxMessageBytes?: number; readonly maxSegmentCount?: number } = {}) {
+  constructor(options: { readonly envID: string; readonly maxMessageBytes?: number; readonly maxSegmentCount?: number }) {
+    if (typeof options.envID !== "string" || options.envID.length === 0) throw new Error("Authenticated remote-control environment is required")
+    this.#envID = options.envID
     this.#maxMessageBytes = options.maxMessageBytes ?? maxMessageBytes
     this.#maxSegmentCount = options.maxSegmentCount ?? maxSegmentCount
   }
@@ -120,7 +122,7 @@ export class Reassembler {
     if (!isRecord(parsed) || typeof parsed.type !== "string") return { kind: "drop", reason: "invalid_envelope" }
     if (!["ping", "client_closed", "client_message", "client_message_chunk"].includes(parsed.type))
       return { kind: "drop", reason: "unknown_type" }
-    const target = address(parsed)
+    const target = address(parsed, this.#envID)
     if (target === undefined) return { kind: "drop", reason: "missing_address" }
     const seqID = parsed.seq_id
     if (typeof seqID !== "number" || !Number.isSafeInteger(seqID) || seqID < 0)

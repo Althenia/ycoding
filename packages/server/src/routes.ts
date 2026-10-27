@@ -63,6 +63,7 @@ import { processIdentityLayer } from "./process-identity"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { RemoteConnection } from "./remote-connection"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
+import { DotsAccess } from "@ycoding-ai/core/dots/access"
 import { RetentionSettings } from "@ycoding-ai/core/retention-settings"
 
 const applicationServices = LayerNode.group([
@@ -70,6 +71,7 @@ const applicationServices = LayerNode.group([
   CoordinationService.node,
   CoordinationSettings.node,
   Database.node,
+  DotsAccess.node,
   EventRuntime.node,
   EventLogger.node,
   httpClient,

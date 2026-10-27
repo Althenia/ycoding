@@ -1,0 +1,17 @@
+.overlay--dots .overlay__body {
+  padding: var(--yc-space-4);
+}
+
+.dots-connection {
+  overflow-wrap: anywhere;
+}
+
+.dots-connection__facts dd {
+  margin: 0;
+}
+
+.dots-connection__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+}

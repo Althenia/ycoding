@@ -24,7 +24,7 @@ test("native archive finalization preserves both TUI shards and every accepted c
     ["Verify ownership upgrade and native decision boundaries", "tui-project", "10cb8dcc5dbb20e82da03b82faeaccf2b3f31da1f68841ac9f2c066093bc12ee"],
     ["Verify footer state and short-terminal controls", "tui-runtime", "01be3653bc1191ba5f3db6120255da2f8f04379edaa62add22258ccad823fb67"],
     ["Verify compact Project and transcript layouts", "tui-runtime", "7b817f020dc3bbccb9d2e63e342377564c8395f551a9453b967c4be65a363528"],
-    ["Verify native Dots access and retirement boundaries", "tui-runtime", "356278281642769470eceadc5d1bf76ca6b216d989c951e0a393d0d85d2cf91a"],
+    ["Verify native Dots access and retirement boundaries", "tui-runtime", "938f5cd2eabcaa6c31134de20750085823a44b06f93467e1e2041ddac65a83e9"],
     ["Verify question grading and native Form views", "tui-runtime", "ddaed34f767789cff87f5d822d5b2d5b1df5df47ac88e081b37f250969825d98"],
     ["Verify subagent model selection boundaries", "tui-runtime", "a08d919abbe6505424fab1af1ecc2626e53f917794d330ace37dbf537ddd1749"],
   ] as const) {
@@ -318,13 +318,13 @@ test("active test manifests resolve every selected file in its owning directory"
 })
 
 for (const [name, file, retained, excluded] of [
-  ["connector", "./test/remote-bridge.test.ts", ["remote bridge", "quota observations use the global control frame without Session subscriptions or private fields"], ["MCP Events relay authorization budget", "relay MCP mutation lanes", "MCP event authority uses the current connector credential and cancels on detach", "connector reconnect discards registered apps without renewing old access", "connector reconnect retires MRTR tokens and observations while preserving uncertain exchange holds", "relay MCP state is acknowledged only for the current enable epoch"]],
+  ["connector", "./test/remote-bridge.test.ts", ["remote bridge", "quota observations use the global control frame without Session subscriptions or private fields", "global Dots reads remain available during a pending write without Session inventory"], ["MCP Events relay authorization budget", "relay MCP mutation lanes", "MCP event authority uses the current connector credential and cancels on detach", "connector reconnect discards registered apps without renewing old access", "connector reconnect retires MRTR tokens and observations while preserving uncertain exchange holds", "relay MCP state is acknowledged only for the current enable epoch"]],
   ["native control", "./test/remote-control.test.ts", ["remote-control wire types", "remote-control envelope", "remote-control app-server mapping", "state store persists installation and enrollment without configuration or tokens", "host enrolls, connects with headers, serves one RPC, and answers ping with pong", "enabling reports connecting before credentials resolve", "fresh host enrolls when only an old websocket URL key exists", "fresh host refreshes saved enrollment and uses the refreshed token", "refresh 404 deletes the enrollment and re-enrolls; unrecognized enroll 404 preserves and fails closed"], ["socket sends handshake headers over a local websocket"]],
-  ["native access", "./test/remote-access.test.ts", ["Dots access operations verify the Session and preserve exact revision and conflicts"], ["Dots access local adapter sends only bound Location and revision fields"]],
+  ["native access", "./test/remote-access.test.ts", ["global Dots operations need no Session inventory and preserve exact revision and conflicts"], ["global Dots local adapter sends no Session or Location and only revision-fenced fields"]],
   ["helper", "./test/computer-use-packaging.test.ts", ["filters unsupported targets without planning a native helper", "plans a sibling helper for each supported macOS architecture", "signs with a configured stable identity and a secure timestamp, otherwise ad hoc", "keeps only complete artifacts when the host cannot compile the macOS helper", "plans the explicit source-development helper in Core's ignored cache", "rejects a macOS package without the signed application bundle", "rejects an unexpected macOS application bundle in a non-macOS package"], ["builds a signed YCoding Computer Use app with the product icon", "lists every desktop window with a Space placement consistent with its visibility"]],
   ["transcript", "./test/session-transcript-live-fixes.test.tsx", ["derives pending, running, terminal, cancelled, and overridden tool lifecycle states from durable time"], ["sleeping header does not warn that the machine may sleep before its keep-awake read settles", "caps large transcript at bounded mounted window"]],
   ["picker", "./test/screen/subagent-picker-capture.test.tsx", ["captures populated subagent picker states at reference terminal dimensions", "sizes picker metadata to the measured composer width with and without the docked rail"], ["renders populated subagents in the parent-session rail", "keeps the parent header status informational while subagents are active"]],
-  ["Dots attribution", "./test/screen/dots.screen.test.ts", ["remote source attribution accepts resident reactive metadata"], ["L10 named exchange renders the chosen name with non-human provenance and canonical source details"]],
+  ["Dots attribution", "./test/screen/dots.screen.test.ts", ["remote source attribution accepts resident reactive metadata"], ["stored named exchanges retain external provenance and canonical source details"]],
   ["web todo", "./test/remote-todo.test.ts", ["a connector that never answers todo.list does not hold Session hydration or raise a state notice", "a superseded same-Session read cannot overwrite reconnect's newer todo list"], ["selection reads todos, live updates replace the list, and reconnect reads again"]],
   ["web guardrail", "./test/remote-guardrail.test.ts", ["preserves inspectable guardrail metadata in the family read"], ["a human can reject a review with missing targets but cannot approve it blindly"]],
 ] as const)
@@ -364,8 +364,9 @@ test("release source gates retain native access, retirement and web unit contrac
     "./test/dots-access-contract.test.ts",
     "./test/dots-report-state.test.ts",
     "./test/dots-peer.test.ts",
-    "./test/prompt/dots-access.test.ts",
-    "./test/dots-access-palette.test.tsx",
+    "./test/dots-codegen.test.ts",
+    "./test/dots-connection.test.ts",
+    "./test/dots-connection-dialog.test.tsx",
     "./test/dots-access-boundary.test.ts",
     "./test/dots-delegation-review.test.tsx",
     "./test/screen/dots.screen.test.ts",
@@ -380,9 +381,32 @@ test("release source gates retain native access, retirement and web unit contrac
   ]) expect(verify).toContain(file)
   for (const file of ["remote-retirement", "remote-decision-boundary", "remote-control-config", "remote-control-native", "remote-control-native-escalation", "remote-control-projection", "remote-control-sequence", "remote-control-stream-isolation", "mcp-boundary"])
     expect(verify).toContain(`./test/${file}.test.ts`)
-  for (const file of ["remote-mcp", "remote-mcp-schemas", "remote-mcp-directory", "mcp-consent", "mcp-router", "dots-exchange", "dots-report-tool", "dots-session", "dots-codegen"])
+  for (const file of ["remote-mcp", "remote-mcp-schemas", "remote-mcp-directory", "mcp-consent", "mcp-router", "dots-exchange", "dots-report-tool", "dots-session"])
     expect(verify).not.toContain(`./test/${file}.test.ts`)
+  expect(verify).toContain("bun test --cwd apps/web ./test/dots.test.ts ./src/remote/ui/dots-composer.test.ts")
   expect(verify).not.toContain("YCODING_WEB_CHROME")
+})
+
+test("global Dots release gates select current mocks once and leave listener acceptance local", async () => {
+  const verify = workflowJob(workflow, "verify-source")
+  const steps = verify.split("\n      - name: ").slice(1)
+  for (const file of ["./test/dots-connection.test.ts", "./test/dots-connection-dialog.test.tsx"]) {
+    const selected = steps.filter((step) => step.split("\n").some((line) => /\bbun test\b/.test(line) && line.includes(file)))
+    expect(selected, file).toHaveLength(1)
+    expect(selected[0]).toContain("if: matrix.suite == 'tui-runtime'")
+  }
+  for (const [file, title] of [
+    ["./test/remote-access.test.ts", "global Dots operations need no Session inventory and preserve exact revision and conflicts"],
+    ["./test/remote-bridge.test.ts", "global Dots reads remain available during a pending write without Session inventory"],
+  ] as const) {
+    const commands = verify.split("\n").filter((line) => /\bbun test\b/.test(line) && line.includes(file))
+    expect(commands).toHaveLength(1)
+    expect(new RegExp(/-t "([^"]+)"/.exec(commands[0] ?? "")?.[1] ?? "^$").test(title)).toBe(true)
+    expect(await Bun.file(path.join(import.meta.dir, "../packages/cli", file)).text()).toContain(`test("${title}"`)
+  }
+  for (const file of ["./test/prompt/dots-access.test.ts", "./test/dots-access-palette.test.tsx", "./test/screen/dots-connection.screen.test.ts"])
+    expect(verify).not.toContain(file)
+  expect(await Bun.file(path.join(import.meta.dir, "../packages/tui/test/screen/dots-connection.screen.test.ts")).exists()).toBe(true)
 })
 
 test("release source gates select native task delegation and question grading", () => {
@@ -447,7 +471,7 @@ test("release source gates select Form, access clients, model-selection and runn
     "bun test --cwd packages/remote ./test/subagent-model-boundary.test.ts",
     "bun test --cwd packages/protocol ./test/session-orchestration.test.ts",
     "bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/subagent-model-selection.test.tsx",
-    "bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-access.test.ts",
+    "bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-access.test.ts ./test/dots-codegen.test.ts",
   ])
     expect(verify).toContain(command)
   const runnerCases = [
