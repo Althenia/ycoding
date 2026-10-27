@@ -2543,7 +2543,7 @@ describe("model incident hooks", () => {
       const settled = yield* incidentRows
       expect(incidentSummary(settled)).toEqual([
         ["guardrail-escalated", null, "hard", "incident-provider", "incident-model", "high", "build", parentID],
-        ["guardrail-rejected", "human", "hard", "incident-provider", "incident-model", "high", "build", parentID],
+        ["guardrail-rejected", "client", "hard", "incident-provider", "incident-model", "high", "build", parentID],
       ])
       expect(settled.map((row) => row.request_id)).toEqual([waiting.request.id, waiting.request.id])
       expect(JSON.stringify(settled)).not.toContain("rm -rf")

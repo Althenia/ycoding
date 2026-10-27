@@ -84,7 +84,7 @@ test("the tool description names the supervision chain", () => {
     "delegates implementation to executors",
     "inspect:",
     "decline-only (answer may only decline)",
-    "Hard, human-only, Manual-mode, and uncertain cases are refused with a reason.",
+    "Hard, explicit-decision, Manual-mode, and uncertain cases are refused with a reason.",
     "assign: Master only.",
     "release: the Master or the member's owner",
     "arrive directly at the recorded owner",
