@@ -97,6 +97,7 @@ export function mechanism(
         return "bedrock-cache-point"
       case "google":
       case "google-vertex":
+      case "antigravity":
         return "gemini-prefix-cache"
       case "cursor":
         return "provider-reported"

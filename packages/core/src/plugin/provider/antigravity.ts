@@ -363,7 +363,10 @@ export function createAntigravityFetch(
     const model = session.model ?? decodeURIComponent(match[1]!)
     const action = match[2]!
     const body = typeof init?.body === "string" ? Option.getOrUndefined(decodeBody(init.body)) : undefined
-    const request = stripTrailingModelContents(body)
+    // Gemini selects the prefix breakpoint on the server. Drop any client cache
+    // resource or breakpoint the SDK may have attached, then keep the remaining
+    // prefix stable by not ending the request on a model turn.
+    const request = stripTrailingModelContents(omitClientCacheControls(body))
     const headers = new Headers(init?.headers)
     headers.delete("x-goog-api-key")
     headers.set("authorization", `Bearer ${session.access}`)
@@ -394,6 +397,35 @@ export function createAntigravityFetch(
     })
   }
   return wrapped
+}
+
+const clientCacheControlKeys = [
+  "cachedContent",
+  "cached_content",
+  "promptCacheOptions",
+  "prompt_cache_options",
+  "systemPromptCache",
+  "systemPromptCacheOptions",
+  "system_prompt_cache",
+  "system_prompt_cache_options",
+  "cacheBreakpoints",
+  "cache_breakpoints",
+  "cacheRequest",
+  "cache_request",
+] as const
+
+// The Cloud Code server chooses the Gemini prefix breakpoint. A client cache
+// resource name or breakpoint would replace that implicit prefix.
+function omitClientCacheControls(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body
+  const record = { ...(body as Record<string, unknown>) }
+  let changed = false
+  for (const key of clientCacheControlKeys) {
+    if (!(key in record)) continue
+    delete record[key]
+    changed = true
+  }
+  return changed ? record : body
 }
 
 function stripTrailingModelContents(body: unknown) {

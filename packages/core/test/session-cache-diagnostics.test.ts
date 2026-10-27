@@ -225,6 +225,10 @@ test("derives provider cache mechanisms from the executed route", () => {
   )
   expect(SessionCacheDiagnostics.mechanism("unknown", model("cursor"), tokens)).toBe("provider-reported")
   expect(SessionCacheDiagnostics.mechanism("gemini", model("google"), tokens)).toBe("gemini-prefix-cache")
+  expect(SessionCacheDiagnostics.mechanism("unknown", model("antigravity"), tokens)).toBe("gemini-prefix-cache")
+  expect(SessionCacheDiagnostics.mechanism("ai-sdk:@ai-sdk/google", model("antigravity"), tokens)).toBe(
+    "gemini-prefix-cache",
+  )
 })
 
 test("derives provider cache mechanisms from native (non-AI-SDK) route ids", () => {

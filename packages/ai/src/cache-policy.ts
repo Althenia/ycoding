@@ -43,8 +43,10 @@ const resolve = (policy: CachePolicy | undefined): CachePolicyObject => {
   return policy
 }
 
-// Protocols whose wire format ignores inline cache markers (older OpenAI
-// models and Gemini's implicit + out-of-band CachedContent). AI SDK routes
+// Protocols whose wire format ignores inline cache markers. Older OpenAI
+// models and Gemini, including Antigravity's Gemini envelope, keep the prefix
+// breakpoint implicit on the server. Do not send a client breakpoint or a
+// CachedContent resource for those routes. AI SDK routes
 // retain their generic protocol ID, so cache-capable adapters must also opt in
 // by route ID or the default policy never reaches their provider options.
 const RESPECTS_INLINE_HINTS = new Set(["anthropic-messages", "bedrock-converse"])

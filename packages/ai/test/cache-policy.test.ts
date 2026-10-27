@@ -681,7 +681,7 @@ describe("applyCachePolicy", () => {
     }),
   )
 
-  it.effect("'auto' is a no-op on Gemini (out-of-band caching protocol)", () =>
+  it.effect("'auto' is a no-op on Gemini (server-implicit prefix breakpoint)", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -695,6 +695,8 @@ describe("applyCachePolicy", () => {
       const flat = JSON.stringify(prepared.body)
       expect(flat).not.toContain("cache_control")
       expect(flat).not.toContain("cachePoint")
+      expect(flat).not.toContain("cachedContent")
+      expect(flat).not.toContain("promptCache")
     }),
   )
 

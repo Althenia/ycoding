@@ -524,6 +524,32 @@ describe("AntigravityPlugin", () => {
     expect(sent?.request).toEqual({ contents: [{ role: "user", parts: [{ text: "Hello" }] }] })
   })
 
+  test("fetch wrap drops client cache controls so the Gemini breakpoint stays server-side", async () => {
+    let sent: Record<string, unknown> | undefined
+    const wrapped = createAntigravityFetch(
+      async (_input, init) => {
+        sent = JSON.parse(String(init?.body))
+        return Response.json({ response: { candidates: [] } })
+      },
+      { access: "google-access", project: "project-1" },
+    )
+    await wrapped("https://generativelanguage.googleapis.com/v1beta/models/gemini-fixture:generateContent", {
+      method: "POST",
+      body: JSON.stringify({
+        cachedContent: "projects/project-1/locations/global/cachedContents/prefix",
+        promptCacheOptions: { type: "ephemeral" },
+        systemPromptCacheOptions: { type: "ephemeral" },
+        cacheBreakpoints: [{ index: 0 }],
+        contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+      }),
+    })
+    expect(sent?.request).toEqual({ contents: [{ role: "user", parts: [{ text: "Hello" }] }] })
+    const wire = JSON.stringify(sent)
+    expect(wire).not.toContain("cachedContent")
+    expect(wire).not.toContain("promptCache")
+    expect(wire).not.toContain("cacheBreakpoint")
+  })
+
   test("fetch wrap rewrites the Gemini request into the Antigravity envelope and unwraps SSE", async () => {
     let seen: { url: string; init?: RequestInit } | undefined
     const send = async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
