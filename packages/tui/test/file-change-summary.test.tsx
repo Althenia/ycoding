@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import type { ModelInfo, SessionMessageInfo } from "@ycoding-ai/client"
 import { json, sessionSnapshot } from "./fixture/tui-client"
 import { DESIGN_VIEWPORT } from "./viewport"
+import { activeSkillIDs } from "../src/util/session-skills"
 import { renderScreen } from "./screen/harness"
 
 const sessionID = "ses_file_change_summary"
@@ -144,6 +145,26 @@ test("keeps a completed edit visible in the summary while its step is still runn
     const line = (text: string) => screen.lines().findIndex((row) => row.includes(text))
     expect(line("Still working.")).toBeLessThan(line("Captured changes 1 file"))
     expect(screen.frame()).not.toContain("Edited 1 file")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("captures nested execute edits in the summary and keeps the execute block visible", async () => {
+  const executeTranscript = asMessages([user("msg_user", "Apply the changes"), assistant("msg_assistant_execute", [{
+    type: "tool", id: "call_execute", name: "execute",
+    state: { status: "completed", input: { code: "await tools.edit()" }, content: [], structured: { toolCalls: [
+      { id: "nested_edit", name: "edit", tool: "edit", status: "completed", input: { replaceAll: false }, structured: { files: [{ file: "src/parent.ts", patch: parentPatch, status: "modified" }] } },
+    ] } },
+    time: { created: 2, ran: 2, completed: 3 },
+  }])])
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 60, args: { sessionID }, route: routeFor(executeTranscript), settle: "Captured changes 1 file" })
+  try {
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    expect(screen.frame()).toContain("↳ edit")
+    await screen.mouse.click(12, headerRows(screen.lines(), "Captured changes 1 file")[0]!)
+    await waitForFrame(screen.frame, "src/parent.ts")
+    expect(screen.lines().filter((line) => line.includes("src/parent.ts"))[0]).toContain("+1")
   } finally {
     await screen.dispose()
   }
@@ -305,3 +326,13 @@ for (const { name, width, config, split } of [
     await screen.dispose()
   }
 }, 60_000)
+
+
+test("tracks completed nested skill activations without treating display or failed calls as activations", () => {
+  const messages = asMessages([assistant("skill_message", [{ type: "tool", id: "outer", name: "execute", state: { status: "error", input: {}, content: [], structured: { toolCalls: [
+    { id: "s1", name: "skill", tool: "skill", status: "completed", input: { id: "loaded" }, structured: {} },
+    { id: "s2", name: "skill", tool: "skill", status: "error", input: { id: "failed" }, structured: {} },
+    { tool: "skill", status: "completed", input: { id: "display" }, structured: {} },
+  ] } }, time: { created: 2, ran: 2, completed: 3 } }])])
+  expect([...activeSkillIDs(messages)]).toEqual(["loaded"])
+})

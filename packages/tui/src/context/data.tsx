@@ -2,6 +2,7 @@
 // Transcript request identities prevent an evicted session load from becoming reachable after
 // navigation. Reconnect invalidates cached reads; active UI owners decide what to sync again.
 
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { GuardrailEscalation } from "../guardrail-escalation"
 import type {
   AgentInfo,
@@ -1844,6 +1845,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             }
           })
           break
+        case "session.tool.invocation-settled":
+          message.update(event.data.sessionID, (draft, index) => {
+            const match = message.latestTool(message.assistant(draft, index, event.data.assistantMessageID), event.data.callID)
+            if (match?.name !== "execute" || match.state.status !== "running") return
+            match.state.structured = ToolInvocation.settle(match.state.structured, event.data.invocation) as typeof match.state.structured
+          })
+          break
         case "session.tool.progress":
           message.update(event.data.sessionID, (draft, index) => {
             const match = message.latestTool(
@@ -1851,7 +1859,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               event.data.callID,
             )
             if (match?.state.status !== "running") return
-            match.state.structured = event.data.structured
+            match.state.structured = match.name === "execute" ? ToolInvocation.mergeStructured(match.state.structured, event.data.structured) : event.data.structured
             match.state.content = [...event.data.content]
           })
           break
@@ -1865,7 +1873,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             match.state = {
               status: "completed",
               input: match.state.input,
-              structured: event.data.structured,
+              structured: match.name === "execute" ? ToolInvocation.mergeStructured(match.state.structured, event.data.structured) : event.data.structured,
               content: [...event.data.content],
               result: event.data.result,
             }

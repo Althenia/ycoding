@@ -1527,3 +1527,27 @@ describe("master-origin input is the user's own channel", () => {
     expect(view.requests).toHaveLength(2)
   })
 })
+
+test("retains settled execute receipts through progress and terminal events", () => {
+  const receipt = { index: 0, id: "leaf", name: "edit", tool: "tools.edit", status: "completed", structured: { files: [{ file: "src/a.ts", patch: "diff" }] } }
+  for (const terminal of ["session.tool.success", "session.tool.failed"]) {
+    let view = apply(createSessionView("ses_a"), "session.step.started", { assistantMessageID: "msg_a" })
+    const ref = { assistantMessageID: "msg_a", callID: "outer" }
+    view = apply(view, "session.tool.input.started", { ...ref, name: "execute" })
+    view = apply(view, "session.tool.called", { ...ref, input: {} })
+    view = apply(view, "session.tool.invocation-settled", { ...ref, invocation: receipt })
+    expect(view.messages[0]).toMatchObject({ parts: [{ structured: { toolCalls: [receipt] } }] })
+    view = apply(view, "session.tool.progress", { ...ref, structured: { toolCalls: [receipt, { tool: "search", status: "completed" }] }, content: [] })
+    view = apply(view, terminal, { ...ref, structured: { toolCalls: [{ tool: "search", status: "completed" }] }, content: [], error: { type: "unknown", message: "failure" } })
+    expect(view.messages[0]).toMatchObject({ parts: [{ structured: { toolCalls: expect.arrayContaining([receipt]) } }] })
+  }
+})
+
+test("ignores settled receipts without their existing execute part and reads snapshot receipts", () => {
+  const invocation = { index: 0, id: "leaf", name: "edit", tool: "tools.edit", status: "completed", structured: { files: [{ file: "src/a.ts", patch: "diff" }] } }
+  const empty = createSessionView("ses_a")
+  expect(apply(empty, "session.tool.invocation-settled", { assistantMessageID: "missing", callID: "outer", invocation }).messages).toEqual([])
+  expect(readProjectedMessage({ id: "msg_a", type: "assistant", agent: "build", model: { id: "model", providerID: "provider" }, time: { created: 1 }, content: [
+    { type: "tool", id: "outer", name: "execute", state: { status: "completed", input: {}, structured: { toolCalls: [invocation] }, content: [] }, time: { created: 1, ran: 1, completed: 2 } },
+  ] })).toMatchObject({ parts: [{ structured: { toolCalls: [invocation] } }] })
+})

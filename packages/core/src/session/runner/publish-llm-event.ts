@@ -12,6 +12,8 @@ import { Agent } from "../../agent"
 import { Snapshot } from "../../snapshot"
 import { RelativePath } from "../../schema"
 import { SessionUsage } from "../usage"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
+import { toolFileChanges } from "../tool-file-changes"
 import type { ContextBreakdown } from "@ycoding-ai/schema/session-cache-diagnostics"
 
 type Input = {
@@ -50,35 +52,6 @@ const settledOutput = (value: ToolOutput | undefined, result: ToolResultValue): 
   return { structured: record(settled.structured), content: settled.content }
 }
 
-const fileChanges = (tool: string, structured: Record<string, unknown>) => {
-  if (tool !== "edit" && tool !== "patch") return []
-  const files = structured.files
-  if (!Array.isArray(files)) return []
-  return files.flatMap((file) => {
-    if (typeof file !== "object" || file === null || Array.isArray(file)) return []
-    const value = file as Record<string, unknown>
-    if (
-      typeof value.file !== "string" ||
-      typeof value.patch !== "string" ||
-      typeof value.additions !== "number" ||
-      !Number.isSafeInteger(value.additions) ||
-      value.additions < 0 ||
-      typeof value.deletions !== "number" ||
-      !Number.isSafeInteger(value.deletions) ||
-      value.deletions < 0
-    )
-      return []
-    return [
-      {
-        path: RelativePath.make(value.file),
-        patch: value.patch,
-        additions: value.additions,
-        deletions: value.deletions,
-      },
-    ]
-  })
-}
-
 /** Persist one step without executing tools or starting a continuation step. */
 export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "publish">, input: Input) => {
   const tools = new Map<
@@ -90,6 +63,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
       called: boolean
       settled: boolean
       providerExecuted: boolean
+      readonly invocations: Set<string>
     }
   >()
   let nextContentOrdinal = 0
@@ -253,6 +227,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
       called: false,
       settled: false,
       providerExecuted: event.providerExecuted === true,
+      invocations: new Set(),
     })
     yield* toolInput.start(event.id)
     yield* events.publish(SessionEvent.Tool.Input.Started, {
@@ -380,6 +355,33 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
     const tool = tools.get(callID)
     return tool ? Effect.succeed(tool.assistantMessageID) : Effect.die(new Error(`Unknown tool call: ${callID}`))
   }
+
+  const persistInvocations = Effect.fnUntraced(function* (callID: string, structured: Record<string, unknown>) {
+    const tool = tools.get(callID)
+    if (tool?.name !== "execute" || !Array.isArray(structured.toolCalls)) return
+    for (const invocation of structured.toolCalls) {
+      if (!ToolInvocation.isSettled(invocation) || tool.invocations.has(invocation.id)) continue
+      yield* Effect.uninterruptible(events.publish(SessionEvent.Tool.InvocationSettled, {
+        sessionID: input.sessionID,
+        assistantMessageID: tool.assistantMessageID,
+        callID,
+        invocation,
+      }).pipe(Effect.tap(() => Effect.sync(() => { tool.invocations.add(invocation.id) }))))
+    }
+  })
+
+  const progress = Effect.fn("SessionRunner.publishToolProgress")(function* (update: {
+    readonly assistantMessageID: SessionMessage.ID
+    readonly callID: string
+    readonly structured: Record<string, unknown>
+    readonly content: ToolOutput["content"]
+  }) {
+    const tool = tools.get(update.callID)
+    if (!tool?.called || tool.settled || tool.assistantMessageID !== update.assistantMessageID)
+      return yield* Effect.die(new Error(`Tool progress outside its active invocation: ${update.callID}`))
+    yield* persistInvocations(update.callID, update.structured)
+    yield* events.publish(SessionEvent.Tool.Progress, { sessionID: input.sessionID, ...update })
+  })
 
   const publish = Effect.fn("SessionRunner.publishLLMEvent")(function* (event: LLMEvent, error?: SessionError.Error) {
     switch (event.type) {
@@ -550,17 +552,25 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
           })
           return
         }
+        yield* persistInvocations(event.id, result.structured)
+        const structured = tool.name === "execute" && Array.isArray(result.structured.toolCalls)
+          ? { ...result.structured, toolCalls: result.structured.toolCalls.filter((call) =>
+              !ToolInvocation.isSettled(call) || !tool.invocations.has(call.id)) }
+          : result.structured
         yield* events.publish(SessionEvent.Tool.Success, {
           sessionID: input.sessionID,
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
           ...result,
+          structured,
           ...(executed ? { result: event.result } : {}),
           executed,
           resultState,
         })
         yield* Effect.forEach(
-          fileChanges(tool.name, result.structured),
+          ToolInvocation.list({ type: "tool", id: event.id, name: tool.name, state: { status: "completed", structured } })
+            .filter((call) => call.status === "completed" && typeof call.structured === "object" && call.structured !== null && !Array.isArray(call.structured))
+            .flatMap((call) => toolFileChanges(call.name, call.structured)),
           (change) => events.publish(SessionEvent.FileChange.Recorded, { sessionID: input.sessionID, change }),
           { discard: true },
         )
@@ -649,6 +659,7 @@ export const createLLMEventPublisher = (events: Pick<EventRuntime.Interface, "pu
   return {
     observe,
     publish,
+    progress,
     flush,
     failAssistant,
     publishStepFailure,

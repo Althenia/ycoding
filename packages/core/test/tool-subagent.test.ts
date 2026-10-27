@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { Context, DateTime, Deferred, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import path from "path"
-import { Message, SystemPart } from "@ycoding-ai/ai"
+import { LLMEvent, Message, SystemPart } from "@ycoding-ai/ai"
 import type { SessionHooks } from "@ycoding-ai/plugin/effect/session"
 import { Money } from "@ycoding-ai/schema/money"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -37,6 +37,8 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionTask } from "@ycoding-ai/core/session/task"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
+import { createLLMEventPublisher } from "@ycoding-ai/core/session/runner/publish-llm-event"
+import { SessionCapturedChanges } from "@ycoding-ai/core/session/captured-changes"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
 import { Shell } from "@ycoding-ai/core/shell"
@@ -405,6 +407,58 @@ const withSubagent = (location: Location.Ref) =>
   })
 
 describe("SubagentTool", () => {
+  it.live("nested launches and sends retain distinct durable identities and outer attribution", () => Effect.acquireRelease(
+    Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]()),
+  ).pipe(Effect.flatMap((directory) => Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
+    yield* withSubagent(parent.location)
+    const locations = yield* LocationServiceMap.Service
+    const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+    const events = yield* EventRuntime.Service
+    const publisher = createLLMEventPublisher(events, { sessionID: parent.id, agent: toolIdentity.agent, model: parentModel, providerMetadataKey: "fixture" })
+    yield* publisher.publish(LLMEvent.toolCall({ id: "outer", name: "execute", input: {} }))
+    const messageID = yield* publisher.assistantMessageID("outer")
+    const code = `const a = await tools.subagent({agent:"reviewer",description:"hold first",prompt:"first",model:${JSON.stringify(childModel)}}); const b = await tools.subagent({agent:"reviewer",description:"hold second",prompt:"second",model:${JSON.stringify(childModel)}}); await tools.subagent_control({action:"send",sessionID:a.sessionID,text:"first send",delivery:"queue"}); await tools.subagent_control({action:"send",sessionID:a.sessionID,text:"second send",delivery:"queue"}); return [a.sessionID,b.sessionID]`
+    const settled = yield* settleTool(registry, { sessionID: parent.id, agent: toolIdentity.agent, messageID,
+      call: { type: "tool-call", id: "outer", name: "execute", input: { code } },
+      progress: ({ structured, content }) => publisher.progress({ assistantMessageID: messageID, callID: "outer", structured: { ...structured }, content }),
+    })
+    expect(settled.error).toBeUndefined()
+    expect(settled.output?.structured).not.toHaveProperty("error")
+    const children = yield* (yield* SessionOrchestration.Service).list(parent.id)
+    expect(children).toHaveLength(2)
+    expect(new Set(children.map((child) => child.sessionID)).size).toBe(2)
+    const first = children.find((child) => child.description === "hold first")!
+    const pending = yield* sessions.pending(first.sessionID)
+    const sent = pending.filter((entry) => entry.type === "synthetic" && entry.data.metadata?.source === "subagent_parent")
+    expect(sent.map((entry) => entry.type === "synthetic" ? JSON.parse(entry.data.text.slice("Parent message:\n".length)).text : "")).toEqual(["first send", "second send"])
+    expect(new Set(sent.map((entry) => entry.id)).size).toBe(2)
+    const db = (yield* Database.Service).db
+    const facts = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, parent.id)).orderBy(EventTable.seq).all().pipe(Effect.orDie)
+    const leaves = facts.filter((row) => row.type === "session.tool.invocation-settled.1").map((row) => Schema.decodeUnknownSync(SessionEvent.Tool.InvocationSettled.data)(row.data))
+    expect(leaves).toHaveLength(4)
+    expect(new Set(leaves.map((leaf) => leaf.invocation.id)).size).toBe(4)
+    expect(leaves.map((leaf) => leaf.callID)).toEqual(["outer", "outer", "outer", "outer"])
+    const captured = yield* SessionCapturedChanges.page(db, { sessionID: parent.id, limit: 10 })
+    expect(captured.data.flatMap((message) => message.content ?? []).map((part) => part.name)).toEqual(["subagent", "subagent", "subagent_control", "subagent_control"])
+    expect(captured.data.flatMap((message) => message.content ?? []).slice(2)).toMatchObject([
+      { state: { structured: { action: "send", task: { sessionID: first.sessionID } } } }, { state: { structured: { action: "send", task: { sessionID: first.sessionID } } } },
+    ])
+    yield* publisher.failUnsettledTools({ type: "aborted", message: "Interrupted after nested work" })
+    expect((yield* SessionCapturedChanges.page(db, { sessionID: parent.id, limit: 10 })).data).toEqual(captured.data)
+    const history = yield* db.select().from(EventTable).orderBy(sql`rowid`).all().pipe(Effect.orDie)
+    const projects = yield* db.select().from(ProjectTable).all().pipe(Effect.orDie)
+    const rebuilt = yield* Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventRuntime.Service
+      yield* db.insert(ProjectTable).values(projects).run().pipe(Effect.orDie)
+      for (const row of history) yield* events.replay({ id: row.id, aggregateID: row.aggregate_id, seq: row.seq, type: row.type, created: DateTime.makeUnsafe(row.created), data: row.data })
+      return yield* SessionCapturedChanges.page(db, { sessionID: parent.id, limit: 10 })
+    }).pipe(Effect.provide(AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node])).pipe(Layer.fresh)), Effect.scoped)
+    expect(rebuilt.data).toEqual(captured.data)
+  }))))
+
   for (const timeout of [undefined, 1000]) it.live(`binds a launch approval to its prompt, model, and effective timeout ${timeout}`, () =>
     Effect.acquireRelease(Effect.promise(() => tmpdir()), (directory) => Effect.promise(() => directory[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((directory) => Effect.gen(function* () {

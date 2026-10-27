@@ -5242,7 +5242,7 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 
 function transcriptToolPartVisible(part: SessionMessageAssistantTool, activeSkills?: ReadonlySet<string>, hideSubagentTools = false) {
   if (hideSubagentTools && toolDisplay(part.name) === "subagent") return false
-  if (part.name === "goal" || capturedPartPatches(part).length > 0) return false
+  if (part.name === "goal" || part.name !== "execute" && capturedPartPatches(part).length > 0) return false
   if (part.name !== "skill") return true
   if (part.state.status === "completed") return recordValue(recordValue(part.state)?.structured)?.alreadyActive !== true
   const id = recordValue(recordValue(part.state)?.input)?.id

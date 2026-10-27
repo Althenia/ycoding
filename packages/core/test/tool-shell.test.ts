@@ -547,6 +547,27 @@ const requiredShellID = (settled: { output?: { structured?: unknown } }) =>
   Schema.decodeUnknownSync(Schema.Struct({ shellID: ShellSchema.ID }))(settled.output?.structured).shellID
 
 describe("ShellTool", () => {
+  ;(isWindows ? it.live.skip : it.live)("runs nested shell jobs concurrently without joining them", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) => Effect.gen(function* () {
+          const fifo = path.join(tmp.path, "gate")
+          expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0)
+          const first = `read value < '${fifo}'; printf first`
+          const second = `printf ready > '${fifo}'; printf second`
+          const code = `const values = await Promise.all([tools.shell({command:${JSON.stringify(first)}}), tools.shell({command:${JSON.stringify(second)}})]); return values.length`
+          const result = yield* settleTool(registry, { ...call({ command: "unused" }, "nested-shell"), call: { type: "tool-call", id: "nested-shell", name: "execute", input: { code } } }).pipe(Effect.timeout("10 seconds"))
+          expect(result.result).toEqual({ type: "text", value: "2" })
+          const receipt = Schema.decodeUnknownSync(Schema.Struct({ toolCalls: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String, status: Schema.String })) }))(result.output?.structured)
+          expect(receipt.toolCalls.map((item) => [item.name, item.status])).toEqual([["shell", "completed"], ["shell", "completed"]])
+          expect(new Set(receipt.toolCalls.map((item) => item.id)).size).toBe(2)
+        }))
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
   it.live("counts background shell reservations while foreground commands complete", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

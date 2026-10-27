@@ -4974,3 +4974,37 @@ test("patches the durable Daybreak program onto stored Session info", async () =
     app.renderer.destroy()
   }
 })
+
+test("retains settled execute receipts in live session messages", async () => {
+  const events = createEventStream()
+  const calls = createFetch((url) => url.pathname === "/api/session/session-1/snapshot" ? sessionSnapshot("session-1", []) : undefined, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => { ready = resolve })
+  function Probe() { sync = useData(); onMount(ready); return <box /> }
+  const app = await testRender(() => <TestTuiContexts><ClientProvider api={createApi(calls.fetch)}><ProjectProvider><DataProvider><Probe /></DataProvider></ProjectProvider></ClientProvider></TestTuiContexts>)
+  const receipt = { index: 0, id: "leaf", name: "edit", tool: "tools.edit", status: "completed", structured: { files: [{ file: "src/a.ts", patch: "diff" }] } }
+  try {
+    await mounted
+    await sync.session.message.sync("session-1")
+    for (const [index, terminal] of ["session.tool.success", "session.tool.failed"].entries()) {
+      const ref = { sessionID: "session-1", assistantMessageID: `msg_${index}`, callID: `outer_${index}` }
+      emitEvent(events, { id: `step_${index}`, created: 1, type: "session.step.started", durable: durable("session-1", index * 5 + 1), data: { sessionID: "session-1", assistantMessageID: ref.assistantMessageID, agent: "build", model: { id: "model", providerID: "provider" } } })
+      emitEvent(events, { id: `start_${index}`, created: 2, type: "session.tool.input.started", durable: durable("session-1", index * 5 + 2), data: { ...ref, name: "execute" } })
+      emitEvent(events, { id: `called_${index}`, created: 3, type: "session.tool.called", durable: durable("session-1", index * 5 + 3), data: { ...ref, input: {}, executed: true } })
+      emitEvent(events, { id: `leaf_${index}`, created: 4, type: "session.tool.invocation-settled", durable: durable("session-1", index * 5 + 4), data: { ...ref, invocation: receipt } } as never)
+      await wait(() => {
+        const message = sync.session.message.get("session-1", ref.assistantMessageID)
+        return message?.type === "assistant" && message.content[0]?.type === "tool" && message.content[0].state.status === "running" && JSON.stringify(message.content[0].state.structured).includes('"leaf"')
+      })
+      emitEvent(events, { id: `progress_${index}`, created: 5, type: "session.tool.progress", data: { ...ref, structured: { toolCalls: [receipt] }, content: [] } })
+      emitEvent(events, { id: `end_${index}`, created: 6, type: terminal, durable: durable("session-1", index * 5 + 5), data: { ...ref, structured: { toolCalls: [] }, content: [], executed: true, error: { type: "unknown", message: "failed" } } } as never)
+      await wait(() => {
+        const message = sync.session.message.get("session-1", ref.assistantMessageID)
+        return message?.type === "assistant" && message.content[0]?.type === "tool" && ["completed", "error"].includes(message.content[0].state.status)
+      })
+      const message = sync.session.message.get("session-1", ref.assistantMessageID)
+      expect(JSON.parse(JSON.stringify(message))).toMatchObject({ content: [{ state: { structured: { toolCalls: [receipt] } } }] })
+    }
+  } finally { app.renderer.destroy() }
+})

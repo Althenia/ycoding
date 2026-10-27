@@ -2,9 +2,12 @@ import { type AstNode, InterpreterRuntimeError } from "../interpreter/model.js"
 import { isBlockedMember, type SafeObject } from "../tool-runtime.js"
 import { CodeModeRegExp } from "../values.js"
 import { coerceToNumber, coerceToString } from "./value.js"
+import { Effect } from "effect"
+import type { RegexRuntime } from "../interpreter/regex-runtime.js"
 
 type MatchValue = Array<unknown> & {
   index?: number
+  input?: string
   groups?: SafeObject
   indices?: IndicesValue
 }
@@ -57,9 +60,11 @@ export const toHostRegex = (arg: unknown, method: string, node: AstNode, extraFl
   )
 }
 
-export const matchToValue = (match: RegExpMatchArray): Array<unknown> => {
+export const matchToValue = (match: RegExpMatchArray, input = match.input): Array<unknown> => {
   const result: MatchValue = Array.from(match, (group) => group)
   if (match.index !== undefined) result.index = match.index
+  if (input !== undefined) result.input = input
+  if (Object.hasOwn(match, "groups")) result.groups = undefined
   if (match.groups) {
     const groups: SafeObject = Object.create(null) as SafeObject
     for (const [key, group] of Object.entries(match.groups)) {
@@ -80,11 +85,12 @@ export const invokeRegExpStatic = (name: string, args: Array<unknown>, node: Ast
 }
 
 export const invokeRegExpMethod = (
+  runtime: RegexRuntime,
   value: CodeModeRegExp,
   name: string,
   args: Array<unknown>,
   node: AstNode,
-): unknown => {
+): Effect.Effect<unknown, unknown> => {
   switch (name) {
     case "test":
     case "exec": {
@@ -92,17 +98,15 @@ export const invokeRegExpMethod = (
       const lastIndex = value.lastIndex
       const stateful = value.regex.global || value.regex.sticky
       value.regex.lastIndex = toLength(lastIndex)
-      if (name === "test") {
-        const matched = value.regex.test(input)
-        if (!stateful) value.lastIndex = lastIndex
-        return matched
-      }
-      const matched = value.regex.exec(input)
-      if (!stateful) value.lastIndex = lastIndex
-      return matched === null ? null : matchToValue(matched)
+      return Effect.map(runtime.run(value.regex, name, input), (reply) => {
+        value.lastIndex = stateful ? reply.lastIndex : lastIndex
+        return name === "test" || reply.result === null
+          ? reply.result
+          : matchToValue(reply.result as RegExpMatchArray, input)
+      })
     }
     case "toString":
-      return coerceToString(value)
+      return Effect.succeed(coerceToString(value))
     default:
       throw new InterpreterRuntimeError(`RegExp method '${name}' is not available in CodeMode.`, node)
   }

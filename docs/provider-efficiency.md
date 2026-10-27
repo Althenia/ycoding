@@ -92,7 +92,7 @@ Hooked provider-visible tools are ordered by name and their JSON schema object k
 
 Catalog model identity remains part of that sharing namespace and the durable request record. Cache-family capability, minimum-prefix, retention, and adaptive-TTL decisions use the executable provider API model ID, so a catalog alias receives the policy of the model it actually calls.
 
-CodeMode keeps its single provider-visible `execute` definition fixed. MCP tools and resources remain dynamically discoverable at runtime, but an MCP catalog change does not rewrite the `execute` schema or description and therefore does not invalidate the stable tool prefix.
+CodeMode keeps its single provider-visible `execute` definition fixed. Visible built-in, plugin, and MCP tools remain dynamically discoverable at runtime, but a catalog change does not rewrite the `execute` schema or description. Direct definitions advertised by `codemode: false` are part of the provider-visible tool prefix and can change its digest when they change. Stable local identity does not guarantee a provider cache hit.
 
 For text-only models, the image-analysis fallback reuses each successful description per image content digest, vision model, and effective prompt for the life of the runtime process. Every later step therefore replays byte-identical description text in the user message and makes no further vision request for that image. A failed analysis is not reused, and a runtime restart analyzes each image once more.
 

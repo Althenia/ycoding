@@ -1,5 +1,6 @@
 import path from "path"
 import type { SessionMessageInfo, SessionSkillsOutput } from "@ycoding-ai/client"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 
 export type SessionSkill = {
   id: string
@@ -58,9 +59,11 @@ export function activeSkillIDs(messages: ReadonlyArray<SessionMessageInfo>): Rea
     if (message.type === "skill") active.add(message.skill)
     if (message.type === "assistant")
       message.content.forEach((part) => {
-        if (part.type !== "tool" || part.name !== "skill" || part.state.status !== "completed") return
-        const id = recordValue(part.state.input)?.id
-        if (typeof id === "string" && recordValue(part.state.structured)?.alreadyActive !== true) active.add(id)
+        ToolInvocation.list(part).forEach((invocation) => {
+          if (invocation.name !== "skill" || invocation.status !== "completed") return
+          const id = recordValue(invocation.input)?.id
+          if (typeof id === "string" && recordValue(invocation.structured)?.alreadyActive !== true) active.add(id)
+        })
       })
     if (message.type === "skill" || message.type === "assistant")
       message.skillDeactivations?.forEach((deactivation) => active.delete(deactivation.skill))

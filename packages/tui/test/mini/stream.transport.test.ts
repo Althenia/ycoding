@@ -3621,3 +3621,84 @@ describe("Mini transport", () => {
     await transport.close()
   })
 })
+
+test("retains settled execute receipts across live progress and terminal states", async () => {
+  const events = feed()
+  events.push(connected())
+  const ui = footer()
+  const transport = await createSessionTransport({
+    sdk: sdk({ streams: [events] }),
+    sessionID: "ses_1",
+    thinking: false,
+    footer: ui.api,
+  })
+  const receipt = {
+    index: 0,
+    id: "leaf",
+    name: "edit",
+    tool: "tools.edit",
+    status: "completed",
+    structured: { files: [{ file: "src/a.ts", patch: "diff" }] },
+  }
+  for (const [index, terminal] of ["session.tool.success", "session.tool.failed"].entries()) {
+    const ref = { sessionID: "ses_1", assistantMessageID: `msg_${index}`, callID: `outer_${index}` }
+    events.push({
+      id: `start_${index}`,
+      created: 1,
+      type: "session.tool.input.started",
+      durable: durable("ses_1", index * 5),
+      data: { ...ref, name: "execute" },
+    })
+    events.push({
+      id: `call_${index}`,
+      created: 2,
+      type: "session.tool.called",
+      durable: durable("ses_1", index * 5 + 1),
+      data: { ...ref, input: {}, executed: true },
+    })
+    events.push({
+      id: `leaf_${index}`,
+      created: 3,
+      type: "session.tool.invocation-settled",
+      durable: durable("ses_1", index * 5 + 2),
+      data: { ...ref, invocation: receipt },
+    } as never)
+    events.push({
+      id: `progress_${index}`,
+      created: 4,
+      type: "session.tool.progress",
+      data: {
+        ...ref,
+        structured: {
+          toolCalls: [
+            { ...receipt, status: "running", structured: undefined },
+            { tool: "search", status: "completed" },
+          ],
+        },
+        content: [{ type: "text", text: "partial" }],
+      },
+    })
+    await events.flush()
+    expect(ui.commits.filter((item) => item.part?.id === ref.callID).at(-1)?.part).toMatchObject({
+      state: { structured: { toolCalls: expect.arrayContaining([receipt]) } },
+    })
+    events.push({
+      id: `end_${index}`,
+      created: 5,
+      type: terminal,
+      durable: durable("ses_1", index * 5 + 3),
+      data: {
+        ...ref,
+        structured: { toolCalls: [{ tool: "search", status: "completed" }] },
+        content: [],
+        executed: true,
+        error: { type: "unknown", message: "failure" },
+      },
+    } as never)
+    await events.flush()
+    expect(ui.commits.filter((item) => item.part?.id === ref.callID).at(-1)?.part).toMatchObject({
+      state: { structured: { toolCalls: expect.arrayContaining([receipt]) } },
+    })
+  }
+  await transport.close()
+})

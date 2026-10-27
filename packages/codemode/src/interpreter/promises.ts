@@ -16,6 +16,7 @@ import { typeofValue } from "./references.js"
 import { spreadItems } from "../stdlib/collections.js"
 import { createAggregateErrorValue } from "../stdlib/value.js"
 import { CodeModePromise } from "../values.js"
+import { MAX_PENDING_PROMISES } from "../limits.js"
 
 // Observation only controls rejection reporting; program completion interrupts all promise work.
 export class PromiseRuntime<R> {
@@ -29,6 +30,8 @@ export class PromiseRuntime<R> {
 
   create(effect: Effect.Effect<unknown, unknown, R>): Effect.Effect<CodeModePromise, never, R> {
     return Effect.suspend(() => {
+      if (this.active.size >= MAX_PENDING_PROMISES)
+        throw new RangeError(`Pending promises exceed ${MAX_PENDING_PROMISES}.`)
       // Allocate before forking so reruns get distinct IDs and diagnostics retain creation order.
       const id = this.nextID++
       return Effect.map(Effect.forkIn(effect, this.scope, { startImmediately: true }), (fiber) => {

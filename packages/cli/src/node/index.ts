@@ -1,9 +1,13 @@
-import "./plugin-runtime.promise"
-import "./plugin-runtime.effect"
+import { runRegexProcess } from "@ycoding-ai/core/tool/regex-process"
 
-process.stdout.on("error", (error) => {
-  if ("code" in error && error.code === "EPIPE") return
-  throw error
-})
+if (!runRegexProcess()) {
+  await import("./plugin-runtime.promise")
+  await import("./plugin-runtime.effect")
 
-await import("../index")
+  process.stdout.on("error", (error) => {
+    if ("code" in error && error.code === "EPIPE") return
+    throw error
+  })
+
+  await import("../index")
+}

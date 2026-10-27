@@ -1,4 +1,5 @@
 import type { Fiber } from "effect"
+import { checkStringLength } from "./limits.js"
 
 export class CodeModePromise {
   constructor(readonly fiber: Fiber.Fiber<unknown, unknown>) {}
@@ -11,7 +12,10 @@ export class CodeModeDate {
 export class CodeModeRegExp {
   readonly regex: RegExp
   constructor(pattern: string, flags: string) {
+    checkStringLength(pattern.length)
+    checkStringLength(flags.length)
     this.regex = new RegExp(pattern, flags)
+    checkStringLength(this.regex.source.length)
   }
 
   get lastIndex(): unknown {

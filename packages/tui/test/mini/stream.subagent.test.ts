@@ -544,3 +544,179 @@ describe("mini subagent tracker family cap", () => {
     await transport.close()
   })
 })
+
+test("discovers a child from a settled nested launch", async () => {
+  const events = feed()
+  events.push(connected())
+  const ui = createFooterApiFixture()
+  const transport = await createSessionTransport({
+    sdk: sdk({ streams: [events] }),
+    sessionID: "ses_1",
+    thinking: false,
+    footer: ui.api,
+  })
+  const ref = { sessionID: "ses_1", assistantMessageID: MESSAGE_ID, callID: "outer" }
+  events.push({
+    id: "start_execute",
+    created: 1,
+    type: "session.tool.input.started",
+    durable: durable("ses_1", 0),
+    data: { ...ref, name: "execute" },
+  })
+  events.push({
+    id: "call_execute",
+    created: 2,
+    type: "session.tool.called",
+    durable: durable("ses_1", 1),
+    data: { ...ref, input: {}, executed: true },
+  })
+  events.push({
+    id: "launch_nested",
+    created: 3,
+    type: "session.tool.invocation-settled",
+    durable: durable("ses_1", 2),
+    data: {
+      ...ref,
+      invocation: {
+        index: 0,
+        id: "launch",
+        name: "subagent",
+        tool: "tools.subagent",
+        status: "completed",
+        input: { agent: "explore" },
+        structured: { sessionID: "ses_child", status: "running" },
+      },
+    },
+  } as never)
+  await events.flush()
+  const states = ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
+  expect(states.at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child" }])
+  await transport.close()
+})
+
+test("rehydrates a nested launch from the parent snapshot", async () => {
+  const events = feed()
+  events.push(connected())
+  const client = sdk({
+    streams: [events],
+    active: () => ({ ses_child: { type: "running" } }),
+    messages: {
+      ses_1: [
+        {
+          id: MESSAGE_ID,
+          type: "assistant",
+          agent: "build",
+          model: { providerID: "test", id: "model" },
+          time: { created: 1 },
+          content: [
+            {
+              type: "tool",
+              id: "outer",
+              name: "execute",
+              state: {
+                status: "completed",
+                input: {},
+                content: [],
+                structured: {
+                  toolCalls: [
+                    {
+                      index: 0,
+                      id: "launch",
+                      name: "subagent",
+                      tool: "tools.subagent",
+                      status: "completed",
+                      input: { agent: "explore" },
+                      structured: { sessionID: "ses_child", status: "running" },
+                    },
+                  ],
+                },
+              },
+              time: { created: 1, ran: 1, completed: 2 },
+            },
+          ],
+        },
+      ],
+    },
+  })
+  const ui = createFooterApiFixture()
+  const transport = await createSessionTransport({
+    sdk: client,
+    sessionID: "ses_1",
+    thinking: false,
+    footer: ui.api,
+    replay: true,
+  })
+  await transport.replayOnResize({ reset: async () => {}, localRows: () => [] })
+  const states = ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
+  expect(states.at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "running" }])
+  await transport.close()
+})
+
+test("retains nested receipts in a child execute detail after failure", async () => {
+  const events = feed()
+  events.push(connected())
+  const ui = createFooterApiFixture()
+  const transport = await createSessionTransport({
+    sdk: sdk({ streams: [events] }),
+    sessionID: "ses_1",
+    thinking: false,
+    footer: ui.api,
+  })
+  launchLiveSubagent(events)
+  await waitForState(ui, (state) => state.tabs.some((tab) => tab.sessionID === "ses_child"))
+  transport.selectSubagent("ses_child")
+  await waitForState(ui, (state) => !!state.details.ses_child)
+  const ref = { sessionID: "ses_child", assistantMessageID: "child_message", callID: "outer" }
+  const receipt = {
+    index: 0,
+    id: "leaf",
+    name: "edit",
+    tool: "tools.edit",
+    status: "completed",
+    structured: { files: [{ file: "src/a.ts", patch: "diff" }] },
+  }
+  events.push({
+    id: "child_start",
+    created: 1,
+    type: "session.tool.input.started",
+    durable: durable("ses_child", 0),
+    data: { ...ref, name: "execute" },
+  })
+  events.push({
+    id: "child_call",
+    created: 2,
+    type: "session.tool.called",
+    durable: durable("ses_child", 1),
+    data: { ...ref, input: {}, executed: true },
+  })
+  events.push({
+    id: "child_leaf",
+    created: 3,
+    type: "session.tool.invocation-settled",
+    durable: durable("ses_child", 2),
+    data: { ...ref, invocation: receipt },
+  } as never)
+  events.push({
+    id: "child_progress",
+    created: 4,
+    type: "session.tool.progress",
+    data: {
+      ...ref,
+      structured: { toolCalls: [{ ...receipt, status: "running", structured: undefined }] },
+      content: [],
+    },
+  })
+  events.push({
+    id: "child_fail",
+    created: 5,
+    type: "session.tool.failed",
+    durable: durable("ses_child", 3),
+    data: { ...ref, error: { type: "unknown", message: "failed" }, executed: true },
+  })
+  await events.flush()
+  const states = ui.events.flatMap((event) => (event.type === "stream.subagent" ? [event.state] : []))
+  expect(states.at(-1)?.details.ses_child?.commits.at(-1)?.part).toMatchObject({
+    state: { status: "error", structured: { toolCalls: [receipt] } },
+  })
+  await transport.close()
+})

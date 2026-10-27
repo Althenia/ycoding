@@ -2,6 +2,7 @@ import { Effect, Option, Schema } from "effect"
 import { sql } from "drizzle-orm"
 import type { Database } from "../database/database"
 import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { Conflict, Info, State } from "@ycoding-ai/schema/session-skill-status"
 import { Skill } from "../skill"
 import { SkillTool } from "../tool/skill"
@@ -62,10 +63,11 @@ function fold(result: Map<Skill.ID, Info>, message: StatusMessage) {
   if (message.type === "assistant") {
     message.content
       .filter((content): content is SessionMessage.AssistantTool => content.type === "tool")
+      .flatMap(ToolInvocation.list)
       .forEach((tool) => {
-        if (tool.name !== SkillTool.name || tool.state.status !== "completed") return
-        const input = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Input)(tool.state.input))
-        const output = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Output)(tool.state.structured))
+        if (tool.name !== SkillTool.name || tool.status !== "completed") return
+        const input = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Input)(tool.input))
+        const output = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Output)(tool.structured))
         if (!input || !output || output.alreadyActive) return
         result.set(input.id, {
           id: input.id,
@@ -141,13 +143,17 @@ export const load = Effect.fn("SessionSkillStatus.load")(function* (
         CASE WHEN type = 'assistant' THEN (
           SELECT coalesce(json_group_array(json_object(
             'type', 'tool', 'id', json_extract(tool.value, '$.id'), 'name', 'skill',
-            'state', json_object('status', 'completed', 'input', json_extract(tool.value, '$.state.input'),
-              'structured', json_extract(tool.value, '$.state.structured'), 'content', json('[]')),
+            'state', json_object('status', 'completed', 'input', json_extract(inv.value, '$.input'),
+              'structured', json_extract(inv.value, '$.structured'), 'content', json('[]')),
             'time', json_extract(tool.value, '$.time'))), '[]')
-          FROM json_each(data, '$.content') AS tool
+          FROM json_each(data, '$.content') AS tool,
+            json_each(CASE WHEN json_extract(tool.value, '$.name') = 'skill'
+              THEN json_array(json_extract(tool.value, '$.state'))
+              ELSE coalesce(json_extract(tool.value, '$.state.structured.toolCalls'), '[]') END) AS inv
           WHERE json_extract(tool.value, '$.type') = 'tool'
-            AND json_extract(tool.value, '$.name') = 'skill'
-            AND json_extract(tool.value, '$.state.status') = 'completed'
+            AND ((json_extract(tool.value, '$.name') = 'skill' AND json_extract(inv.value, '$.status') = 'completed')
+              OR (json_extract(tool.value, '$.name') = 'execute' AND json_extract(inv.value, '$.name') = 'skill'
+                AND json_type(inv.value, '$.id') = 'text' AND json_extract(inv.value, '$.status') = 'completed'))
         ) ELSE '[]' END AS tools,
         json_extract(data, '$.skillDeactivations') AS deactivations
       FROM session_message
@@ -157,8 +163,11 @@ export const load = Effect.fn("SessionSkillStatus.load")(function* (
           OR (type = 'assistant' AND (json_array_length(data, '$.skillDeactivations') > 0
             OR EXISTS (SELECT 1 FROM json_each(data, '$.content') AS tool
               WHERE json_extract(tool.value, '$.type') = 'tool'
-                AND json_extract(tool.value, '$.name') = 'skill'
-                AND json_extract(tool.value, '$.state.status') = 'completed'))))
+                AND ((json_extract(tool.value, '$.name') = 'skill' AND json_extract(tool.value, '$.state.status') = 'completed')
+                  OR (json_extract(tool.value, '$.name') = 'execute' AND EXISTS (
+                    SELECT 1 FROM json_each(tool.value, '$.state.structured.toolCalls') AS inv
+                    WHERE json_extract(inv.value, '$.name') = 'skill' AND json_type(inv.value, '$.id') = 'text'
+                      AND json_extract(inv.value, '$.status') = 'completed')))))))
       ORDER BY seq ASC LIMIT 200
     `,
       )
@@ -208,10 +217,10 @@ export function mcpActivation(messages: ReadonlyArray<SessionMessage.Info>, id: 
       candidate.type === "assistant" && candidate.id === status.activationMessageID,
   )
   if (!message) return undefined
-  for (const content of message.content.toReversed()) {
-    if (content.type !== "tool" || content.name !== SkillTool.name || content.state.status !== "completed") continue
-    const input = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Input)(content.state.input))
-    const output = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Output)(content.state.structured))
+  for (const content of message.content.flatMap(ToolInvocation.list).toReversed()) {
+    if (content.name !== SkillTool.name || content.status !== "completed") continue
+    const input = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Input)(content.input))
+    const output = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Output)(content.structured))
     if (input?.id !== id || output?.alreadyActive || !output?.entry) continue
     return { status, entry: output.entry }
   }

@@ -7,6 +7,7 @@ import type {
   SessionMessageAssistantTool,
   SessionMessageInfo,
 } from "@ycoding-ai/client/promise"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { Event } from "@ycoding-ai/schema/event"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { blockerStatus, pickBlockerView } from "./session-data"
@@ -943,6 +944,21 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       renderTool(event.data.assistantMessageID, item)
       return
     }
+    if (event.type === "session.tool.invocation-settled") {
+      const current = state.tools.get(streamPartKey(event.data.assistantMessageID, event.data.callID))
+      if (current?.part.name !== "execute" || current.part.state.status !== "running") return
+      renderTool(event.data.assistantMessageID, {
+        ...current.part,
+        state: {
+          ...current.part.state,
+          structured: ToolInvocation.settle(
+            current.part.state.structured,
+            event.data.invocation,
+          ) as typeof current.part.state.structured,
+        },
+      })
+      return
+    }
     if (event.type === "session.tool.progress") {
       const key = streamPartKey(event.data.assistantMessageID, event.data.callID)
       if (state.finishedTools.has(key)) return
@@ -957,7 +973,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         state: {
           status: "running",
           input: part && part.state.status !== "streaming" ? part.state.input : {},
-          structured: event.data.structured,
+          structured:
+            part?.name === "execute"
+              ? ToolInvocation.mergeStructured(
+                  part.state.status === "streaming" ? undefined : part.state.structured,
+                  event.data.structured,
+                )
+              : event.data.structured,
           content: event.data.content,
         },
         time: { created: part?.time.created ?? event.created, ran: part?.time.ran ?? event.created },
@@ -987,7 +1009,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
           : {
               status: "completed",
               input: part && part.state.status !== "streaming" ? part.state.input : {},
-              structured: event.data.structured,
+              structured:
+                part?.name === "execute"
+                  ? ToolInvocation.mergeStructured(
+                      part.state.status === "streaming" ? undefined : part.state.structured,
+                      event.data.structured,
+                    )
+                  : event.data.structured,
               content: event.data.content,
               result: event.data.result,
             },

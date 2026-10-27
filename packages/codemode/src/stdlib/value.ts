@@ -1,3 +1,5 @@
+import { joinStrings } from "../limits.js"
+
 export const errorConstructors = new Set([
   "Error",
   "TypeError",
@@ -52,7 +54,10 @@ export const coerceToString = (value: unknown): string => {
   }
   if (typeof value === "object") {
     return Array.isArray(value)
-      ? value.map((item) => (item === null || item === undefined ? "" : coerceToString(item))).join(",")
+      ? joinStrings(
+          value.map((item) => (item === null || item === undefined ? "" : coerceToString(item))),
+          ",",
+        )
       : "[object Object]"
   }
   return String(value)

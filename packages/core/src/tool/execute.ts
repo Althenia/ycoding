@@ -1,9 +1,9 @@
 export * as ExecuteTool from "./execute"
 
 import { CodeMode, DiscoveryPrompt, Tool, toolError } from "@ycoding-ai/codemode"
-import { ToolOutput } from "@ycoding-ai/ai"
-import { Effect, Ref, Schema } from "effect"
-import { definition, make, settle, type AnyTool } from "./tool"
+import { ToolOutput, type ToolFailure } from "@ycoding-ai/ai"
+import { Effect, Ref, Schema, Semaphore } from "effect"
+import { definition, make, type AnyTool, type Context } from "./tool"
 
 const ExecuteFile = Schema.Struct({
   data: Schema.String,
@@ -14,7 +14,11 @@ const ExecuteFile = Schema.Struct({
 const ExecuteCall = Schema.Struct({
   tool: Schema.String,
   status: Schema.Literals(["running", "completed", "error"]),
-  input: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  id: Schema.optionalKey(Schema.String),
+  index: Schema.optionalKey(Schema.Number),
+  name: Schema.optionalKey(Schema.String),
+  input: Schema.optionalKey(Schema.Unknown),
+  structured: Schema.optionalKey(Schema.Unknown),
 })
 
 type ExecuteCall = typeof ExecuteCall.Type
@@ -42,10 +46,18 @@ interface Registration {
   readonly path: string
 }
 
-export const create = (registrations: ReadonlyMap<string, Registration>) => {
+export const create = (
+  registrations: ReadonlyMap<string, Registration>,
+  invokeNested: (
+    name: string,
+    tool: AnyTool,
+    input: unknown,
+    context: Context,
+  ) => Effect.Effect<ToolOutput, ToolFailure>,
+) => {
   const runtime = (
     invoke: (name: string, registration: Registration, input: unknown) => Effect.Effect<unknown, unknown>,
-    hooks?: CodeMode.ToolCallHooks,
+    hooks: CodeMode.ToolCallHooks,
   ) => {
     const tools: Record<string, Tool.Definition<never>> = {}
     for (const [name, registration] of registrations) {
@@ -58,7 +70,11 @@ export const create = (registrations: ReadonlyMap<string, Registration>) => {
       })
       tools[registration.path] = value
     }
-    return CodeMode.make<typeof tools>({ tools, ...hooks })
+    return CodeMode.make<typeof tools>({
+      tools,
+      limits: { maxSteps: 60_000_000, maxToolCalls: 1000, maxOutputBytes: 1048576 },
+      ...hooks,
+    })
   }
   return make({
     description: DiscoveryPrompt.EXECUTE_DESCRIPTION,
@@ -80,10 +96,27 @@ export const create = (registrations: ReadonlyMap<string, Registration>) => {
     ],
     execute: ({ code }, context) =>
       Effect.gen(function* () {
-        const callIndex = yield* Ref.make(0)
+        const invocationIndex = yield* Ref.make(0)
+        const searches = new Map<number, number>()
         const files = yield* Ref.make<Array<CollectedFiles>>([])
         const calls = yield* Ref.make<Array<ExecuteCall>>([])
-        // TODO: Publish live call-list updates when a generic tool progress API exists.
+        const progressLock = Semaphore.makeUnsafe(1)
+        const publish = (content?: Parameters<Context["progress"]>[0]["content"]) =>
+          progressLock.withPermit(
+            Ref.get(calls).pipe(
+              Effect.flatMap((toolCalls) =>
+                context.progress({ structured: { toolCalls }, ...(content ? { content } : {}) }),
+              ),
+            ),
+          )
+        const updateCall = (index: number, update: (call: ExecuteCall) => ExecuteCall) =>
+          Ref.update(calls, (items) => {
+            const current = items[index]
+            if (!current) return items
+            const next = [...items]
+            next[index] = update(current)
+            return next
+          })
         const finalCalls = Ref.get(calls).pipe(
           Effect.map((items) =>
             items.map((call) => (call.status === "running" ? { ...call, status: "error" as const } : call)),
@@ -92,41 +125,57 @@ export const create = (registrations: ReadonlyMap<string, Registration>) => {
         const result = yield* runtime(
           (name, registration, input) =>
             Effect.gen(function* () {
-              const index = yield* Ref.getAndUpdate(callIndex, (index) => index + 1)
-              const output = yield* settle(
-                registration.tool,
-                { type: "tool-call", id: context.callID, name, input },
-                {
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  messageID: context.messageID,
-                  callID: context.callID,
-                  progress: context.progress,
-                },
-              ).pipe(Effect.mapError((failure) => toolError(failure.message, failure)))
+              const sequence = yield* Ref.getAndUpdate(invocationIndex, (value) => value + 1)
+              const id = JSON.stringify([context.sessionID, context.messageID, context.callID, sequence])
+              const index = yield* Ref.modify(calls, (items) => [
+                items.length,
+                [
+                  ...items,
+                  {
+                    tool: registration.path,
+                    name,
+                    id,
+                    index: sequence,
+                    input: structuredClone(input),
+                    status: "running" as const,
+                  },
+                ],
+              ])
+              const output = yield* invokeNested(name, registration.tool, input, {
+                ...context,
+                invocationID: id,
+                progress: (update) => publish(update.content),
+              }).pipe(
+                Effect.tapError(() =>
+                  updateCall(index, (call) => ({ ...call, status: "error" })).pipe(Effect.andThen(publish())),
+                ),
+                Effect.mapError((failure) => toolError(failure.message, failure)),
+              )
+              yield* updateCall(index, (call) => ({ ...call, status: "completed", structured: output.structured }))
+              yield* publish()
               const outputFileParts = outputFiles(output)
               if (outputFileParts.length > 0)
                 yield* Ref.update(files, (items) => [...items, { index, files: outputFileParts }])
               return output.structured
             }),
           {
-            onToolCallStart: ({ index, name, input }) =>
+            onToolCallStart: ({ index, kind, name, input }) =>
               Effect.gen(function* () {
+                if (kind !== "search") return
                 const shown = displayInput(input)
-                yield* Ref.update(calls, (items) => {
-                  const next = [...items]
-                  next[index] = { tool: name, status: "running", ...(shown ? { input: shown } : {}) }
-                  return next
-                })
+                const position = yield* Ref.modify(calls, (items) => [
+                  items.length,
+                  [...items, { tool: name, status: "running" as const, ...(shown ? { input: shown } : {}) }],
+                ])
+                searches.set(index, position)
               }),
-            onToolCallEnd: ({ index, outcome }) =>
-              Ref.update(calls, (items) => {
-                const current = items[index]
-                if (!current) return items
-                const next = [...items]
-                next[index] = { ...current, status: outcome === "success" ? "completed" : "error" }
-                return next
-              }),
+            onToolCallEnd: ({ index, kind, outcome }) => {
+              if (kind !== "search") return Effect.void
+              const position = searches.get(index)
+              return position === undefined
+                ? Effect.void
+                : updateCall(position, (call) => ({ ...call, status: outcome === "success" ? "completed" : "error" }))
+            },
           },
         ).execute(code)
         const toolCalls = yield* finalCalls

@@ -156,7 +156,7 @@ export const make = Effect.fn("SubagentTool.make")(function* () {
         ? new ToolFailure({ message: error.message, error, metadata: { reason: "capacity-exceeded" } })
         : new ToolFailure({ message: SessionGuardrail.reviewMessage(error) ?? `Session guardrail rejected subagent: ${prepared.target.id}`, error })))
       const child = yield* orchestration.launch({
-        parentID: context.sessionID, parentAssistantMessageID: context.messageID, toolCallID: context.callID,
+        parentID: context.sessionID, parentAssistantMessageID: context.messageID, toolCallID: context.invocationID ?? context.callID,
         agent: Agent.ID.make(input.agent), description: input.description, prompt: input.prompt,
         background: true, model: input.model, prepared, sharedContext,
       }).pipe(

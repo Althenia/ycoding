@@ -57,6 +57,7 @@ const settledMessageTypes = [
   SessionEvent.Tool.Input.Started,
   SessionEvent.Tool.Input.Ended,
   SessionEvent.Tool.Called,
+  SessionEvent.Tool.InvocationSettled,
   SessionEvent.Tool.Success,
   SessionEvent.Tool.Failed,
   SessionEvent.RetryScheduled,

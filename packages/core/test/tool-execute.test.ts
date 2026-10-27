@@ -6,6 +6,9 @@ import { Session } from "@ycoding-ai/schema/session"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { Effect, Schema } from "effect"
 
+const invoke = (_name: string, tool: Tool.AnyTool, input: unknown, context: Tool.Context) =>
+  Tool.settle(tool, { input }, context)
+
 test("execute preserves successful results with visible unhandled rejections", async () => {
   const child = Tool.make({
     description: "Always fail",
@@ -13,7 +16,7 @@ test("execute preserves successful results with visible unhandled rejections", a
     output: Schema.String,
     execute: () => Effect.fail(new Tool.Failure({ message: "Lookup refused" })),
   })
-  const execute = ExecuteTool.create(new Map([["fail", { tool: child, name: "fail", path: "fail" }]]))
+  const execute = ExecuteTool.create(new Map([["fail", { tool: child, name: "fail", path: "fail" }]]), invoke)
   const result = await Effect.runPromise(
     Tool.settle(
       execute,
@@ -33,7 +36,9 @@ test("execute preserves successful results with visible unhandled rejections", a
     ),
   )
 
-  expect(result.structured).toEqual({ toolCalls: [{ tool: "fail", status: "error" }] })
+  expect(result.structured).toEqual({
+    toolCalls: [{ tool: "fail", name: "fail", id: expect.any(String), index: 0, input: {}, status: "error" }],
+  })
   expect(result.content).toEqual([
     {
       type: "text",
@@ -62,9 +67,11 @@ test("execute provider definition stays stable while runtime search follows the 
   })
   const githubExecute = ExecuteTool.create(
     new Map([["github_issue", { tool: github, name: "issue", path: "github.issue" }]]),
+    invoke,
   )
   const slackExecute = ExecuteTool.create(
     new Map([["slack_channel", { tool: slack, name: "channel", path: "slack.channel" }]]),
+    invoke,
   )
 
   expect(Tool.definition("execute", githubExecute)).toEqual(Tool.definition("execute", slackExecute))
@@ -115,6 +122,7 @@ test("execute supports callable namespace tools", async () => {
       ["slack_admin", { tool: callable, name: "admin", path: "slack.admin" }],
       ["slack_admin_create", { tool: child, name: "create", path: "slack.admin.create" }],
     ]),
+    invoke,
   )
   const result = await Effect.runPromise(
     Tool.settle(
@@ -137,8 +145,24 @@ test("execute supports callable namespace tools", async () => {
 
   expect(result.structured).toEqual({
     toolCalls: [
-      { tool: "slack.admin", status: "completed" },
-      { tool: "slack.admin.create", status: "completed" },
+      {
+        tool: "slack.admin",
+        name: "slack_admin",
+        id: expect.any(String),
+        index: 0,
+        input: {},
+        status: "completed",
+        structured: "admin",
+      },
+      {
+        tool: "slack.admin.create",
+        name: "slack_admin_create",
+        id: expect.any(String),
+        index: 1,
+        input: {},
+        status: "completed",
+        structured: "created",
+      },
     ],
   })
   expect(result.content).toEqual([{ type: "text", text: '[\n  "admin",\n  "created"\n]' }])

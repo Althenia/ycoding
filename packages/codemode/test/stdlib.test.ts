@@ -745,13 +745,20 @@ describe("stdlib integration", () => {
       ],
     ])
     expect(await value(`const match = /a/.exec("ba"); return [Object.values(match), Object.entries(match)]`)).toEqual([
-      ["a", 1],
+      ["a", 1, "ba", null],
       [
         ["0", "a"],
         ["index", 1],
+        ["input", "ba"],
+        ["groups", null],
       ],
     ])
-    expect(await value(`return Object.keys(Object.values({ match: /a/.exec("ba") })[0])`)).toEqual(["0", "index"])
+    expect(await value(`return Object.keys(Object.values({ match: /a/.exec("ba") })[0])`)).toEqual([
+      "0",
+      "index",
+      "input",
+      "groups",
+    ])
   })
 
   test("Object.fromEntries accepts every supported entry collection", async () => {

@@ -480,6 +480,16 @@ export type SessionMessageProviderState4 = { [x: string]: any }
 
 export type SessionMessageProviderState5 = { [x: string]: any }
 
+export type ToolInvocationSettled = {
+  id: string
+  index: number
+  name: string
+  tool: string
+  status: "completed" | "error"
+  input?: any
+  structured?: any
+}
+
 export type SessionMessageProviderState6 = { [x: string]: any }
 
 export type SessionMessageProviderState7 = { [x: string]: any }
@@ -2349,6 +2359,17 @@ export type SessionToolCalled = {
     executed: boolean
     state?: SessionMessageProviderState5
   }
+}
+
+export type SessionToolInvocationSettled = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.tool.invocation-settled"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; assistantMessageID: string; callID: string; invocation: ToolInvocationSettled }
 }
 
 export type SessionToolFailed = {
@@ -5018,6 +5039,16 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.tool.invocation-settled"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; assistantMessageID: string; callID: string; invocation: ToolInvocationSettled }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.tool.success"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -5253,6 +5284,7 @@ export type ServerEvent =
   | SessionToolInputEnded
   | SessionToolCalled
   | SessionToolProgress
+  | SessionToolInvocationSettled
   | SessionToolSuccess
   | SessionToolFailed
   | SessionFileChangeRecorded

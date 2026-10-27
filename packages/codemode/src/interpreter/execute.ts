@@ -8,6 +8,8 @@ import { normalizeError } from "./errors.js"
 import { InterpreterRuntimeError, isRecord, type ProgramNode } from "./model.js"
 import { PromiseRuntime } from "./promises.js"
 import { Interpreter } from "./runtime.js"
+import { Containment } from "./containment.js"
+import { checkStringLength } from "../limits.js"
 
 export const executeWithLimits = <const Provided extends Record<string, unknown>>(
   options: ExecuteOptions<Provided>,
@@ -24,6 +26,7 @@ export const executeWithLimits = <const Provided extends Record<string, unknown>
 
   // Allocate execution state inside suspension so reused Effects never share it.
   return Effect.suspend(() => {
+    const containment = new Containment(limits)
     const tools = ToolRuntime.make(
       (options.tools ?? {}) as Tools<Services<Provided>>,
       limits.maxToolCalls,
@@ -50,11 +53,14 @@ export const executeWithLimits = <const Provided extends Record<string, unknown>
             tools.keys,
             promises,
             logs,
+            containment,
           )
           const value = yield* interpreter.run(program)
+          containment.check()
           const result = copyOut(copyIn(value, "Execution result"), "nullify") as DataValue
           returned = { value: result, promises }
           const warnings = yield* promises.interrupt()
+          containment.check()
           return {
             ok: true,
             value: result,
@@ -63,7 +69,7 @@ export const executeWithLimits = <const Provided extends Record<string, unknown>
             toolCalls: tools.calls,
           } satisfies Result
         }),
-      (scope, exit) => Scope.close(scope, exit),
+      (scope, exit) => containment.close().pipe(Effect.ensuring(Scope.close(scope, exit))),
     )
     const timeoutMs = limits.timeoutMs
     const operation =
@@ -119,6 +125,7 @@ export const executeWithLimits = <const Provided extends Record<string, unknown>
 }
 
 const parseProgram = (code: string): ProgramNode => {
+  checkStringLength(code.length)
   const transpiled = transpileModule(`async function __codemode__() {\n${code}\n}`, {
     reportDiagnostics: true,
     compilerOptions: {

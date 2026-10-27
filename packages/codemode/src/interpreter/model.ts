@@ -131,6 +131,7 @@ export type DiagnosticKind =
   | "InvalidDataValue"
   | "ToolCallLimitExceeded"
   | "TimeoutExceeded"
+  | "StepLimitExceeded"
   | "ToolFailure"
   | "ExecutionFailure"
 

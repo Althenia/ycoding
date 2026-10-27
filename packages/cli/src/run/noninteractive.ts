@@ -6,6 +6,7 @@ import type {
   YCodingClient,
   SessionMessageAssistantTool,
 } from "@ycoding-ai/client/promise"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { EOL } from "node:os"
 import { toolOutputText, type MiniToolPart } from "@ycoding-ai/tui/mini/tool"
@@ -366,10 +367,22 @@ export async function runNonInteractivePrompt(input: Input) {
         })
         continue
       }
+      if (event.type === "session.tool.invocation-settled") {
+        const current = tools.get(toolKey(event.data.assistantMessageID, event.data.callID))
+        if (current?.tool === "execute")
+          current.structured = ToolInvocation.settle(
+            current.structured,
+            event.data.invocation,
+          ) as typeof current.structured
+        continue
+      }
       if (event.type === "session.tool.progress") {
         const current = tools.get(toolKey(event.data.assistantMessageID, event.data.callID))
         if (current) {
-          current.structured = event.data.structured
+          current.structured =
+            current.tool === "execute"
+              ? ToolInvocation.mergeStructured(current.structured, event.data.structured)
+              : event.data.structured
           current.content = event.data.content
         }
         continue
@@ -377,6 +390,10 @@ export async function runNonInteractivePrompt(input: Input) {
       if (event.type === "session.tool.success") {
         const key = toolKey(event.data.assistantMessageID, event.data.callID)
         const current = tools.get(key) ?? fallbackTool(event)
+        const structured =
+          current.tool === "execute"
+            ? ToolInvocation.mergeStructured(current.structured, event.data.structured)
+            : event.data.structured
         const tool: SessionMessageAssistantTool = {
           type: "tool",
           id: event.data.callID,
@@ -387,7 +404,7 @@ export async function runNonInteractivePrompt(input: Input) {
           state: {
             status: "completed",
             input: current.input,
-            structured: event.data.structured,
+            structured,
             content: event.data.content,
             result: event.data.result,
           },
@@ -406,7 +423,7 @@ export async function runNonInteractivePrompt(input: Input) {
             output: toolOutputText(current.tool, event.data.content),
             title: current.tool,
             metadata: {
-              structured: event.data.structured,
+              structured,
               content: event.data.content,
               result: event.data.result,
               providerCall: current.provider,
@@ -453,6 +470,7 @@ export async function runNonInteractivePrompt(input: Input) {
             input: current.input,
             error,
             metadata: {
+              ...(current.tool === "execute" ? { structured: current.structured } : {}),
               result: event.data.result,
               providerCall: current.provider,
               providerResult: { executed: event.data.executed, state: event.data.resultState },

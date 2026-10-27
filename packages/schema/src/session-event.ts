@@ -36,6 +36,7 @@ import { SessionReview } from "./session-review.js"
 import { DecisionFailure } from "./decision-failure.js"
 import { Dots } from "./dots.js"
 import { Form } from "./form.js"
+import { ToolInvocation } from "./tool-invocation.js"
 
 export { FileAttachment }
 
@@ -823,6 +824,16 @@ export namespace Tool {
   })
   export type Progress = typeof Progress.Type
 
+  export const InvocationSettled = Event.durable({
+    type: "session.tool.invocation-settled",
+    ...options,
+    schema: {
+      ...ToolBase,
+      invocation: ToolInvocation.Settled,
+    },
+  })
+  export type InvocationSettled = typeof InvocationSettled.Type
+
   export const Success = Event.durable({
     type: "session.tool.success",
     ...options,
@@ -1098,6 +1109,7 @@ export const Definitions = Event.inventory(
   Tool.Input.Ended,
   Tool.Called,
   Tool.Progress,
+  Tool.InvocationSettled,
   Tool.Success,
   Tool.Failed,
   FileChange.Recorded,

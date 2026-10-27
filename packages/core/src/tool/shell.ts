@@ -124,10 +124,11 @@ export const Plugin = {
       sessionID: SessionSchema.ID,
       shellID: ShellSchema.ID,
       callID: string,
+      jobID: string,
       command: string,
     ) {
       yield* shell.noticeOwed(shellID, sessionID)
-      yield* runtime.job.wait({ id: callID }).pipe(
+      yield* runtime.job.wait({ id: jobID }).pipe(
         Effect.flatMap((result) => {
           const state =
             result.info?.status === "completed"
@@ -155,7 +156,7 @@ export const Plugin = {
             })
             .pipe(
               Effect.catchTag("Session.NotFoundError", () => Effect.void),
-              Effect.andThen(runtime.job.noticeAdmitted(callID)),
+              Effect.andThen(runtime.job.noticeAdmitted(jobID)),
               Effect.andThen(shell.noticeAdmitted(shellID)),
             )
         }),
@@ -314,7 +315,7 @@ export const Plugin = {
                 )
                 const job = yield* runtime.job
                   .start({
-                    id: context.callID,
+                    id: context.invocationID ?? context.callID,
                     type: name,
                     title: input.command,
                     metadata: { sessionID: context.sessionID, shellID: info.id },
@@ -328,7 +329,7 @@ export const Plugin = {
 
                 if (input.background === true) {
                   yield* runtime.job.background(job.id)
-                  yield* notifyWhenDone(context.sessionID, info.id, context.callID, input.command)
+                  yield* notifyWhenDone(context.sessionID, info.id, context.callID, job.id, input.command)
                   return {
                     output: BACKGROUND_STARTED,
                     shellID: info.id,
@@ -369,7 +370,7 @@ export const Plugin = {
                       text: AUTO_BACKGROUND_STEER,
                       delivery: "steer",
                     })
-                  yield* notifyWhenDone(context.sessionID, info.id, context.callID, input.command)
+                  yield* notifyWhenDone(context.sessionID, info.id, context.callID, job.id, input.command)
                   return {
                     output: BACKGROUND_STARTED,
                     shellID: info.id,

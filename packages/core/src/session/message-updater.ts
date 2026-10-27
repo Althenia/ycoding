@@ -1,6 +1,7 @@
 import { castDraft, produce, type WritableDraft } from "immer"
 import { DateTime, Effect } from "effect"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 
@@ -632,8 +633,18 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match && match.state.status === "running") {
-            match.state.structured = event.data.structured
+            match.state.structured = match.name === "execute"
+              ? ToolInvocation.mergeStructured(match.state.structured, event.data.structured)
+              : event.data.structured
             match.state.content = [...event.data.content]
+          }
+        })
+      },
+      "session.tool.invocation-settled": (event) => {
+        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          const match = latestTool(draft, event.data.callID)
+          if (match?.name === "execute" && match.state.status === "running") {
+            match.state.structured = ToolInvocation.settle(match.state.structured, event.data.invocation)
           }
         })
       },
@@ -648,7 +659,9 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
               SessionMessage.ToolStateCompleted.make({
                 status: "completed",
                 input: match.state.input,
-                structured: event.data.structured,
+                structured: match.name === "execute"
+                  ? ToolInvocation.mergeStructured(match.state.structured, event.data.structured)
+                  : event.data.structured,
                 content: [...event.data.content],
                 result: event.data.result,
               }),

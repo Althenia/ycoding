@@ -10,6 +10,7 @@ import type { Job } from "../job"
 import { Hash } from "../util/hash"
 import { SessionEvent } from "./event"
 import { SessionReviewFold } from "./review-fold"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { SessionSchema } from "./schema"
 import { SessionPendingTable, SessionTable, SessionTaskNotificationTable, SessionTaskTable } from "./sql"
 
@@ -25,6 +26,7 @@ const historyDefinitions = [
   SessionEvent.Text.Ended,
   SessionEvent.Tool.Input.Started,
   SessionEvent.Tool.Called,
+  SessionEvent.Tool.InvocationSettled,
   SessionEvent.Tool.Success,
   SessionEvent.Tool.Failed,
 ] as const
@@ -161,18 +163,29 @@ const completionCandidate = Effect.fnUntraced(function* (db: DatabaseService, se
     return undefined
   const declaration = history
     .filter((event) => event.type === SessionEvent.Tool.Success.type)
-    .findLast(
-      (event) =>
+    .findLast((event) => {
+      let structured = event.data.structured
+      for (const leaf of history) {
+        if (leaf.type === SessionEvent.Tool.InvocationSettled.type &&
+          leaf.data.assistantMessageID === event.data.assistantMessageID && leaf.data.callID === event.data.callID &&
+          leaf.durable.seq < event.durable.seq) structured = ToolInvocation.settle(structured, leaf.data.invocation)
+      }
+      return (
         !event.data.executed &&
-        event.data.structured.recorded === true &&
         history.some(
           (input) =>
             input.type === SessionEvent.Tool.Input.Started.type &&
-            input.data.name === "task_complete" &&
             input.data.assistantMessageID === event.data.assistantMessageID &&
-            input.data.callID === event.data.callID,
-        ),
-    )
+            input.data.callID === event.data.callID &&
+            event.data.structured.error !== true &&
+            ToolInvocation.list({ type: "tool", id: event.data.callID, name: input.data.name,
+              state: { status: "completed", structured } }).some((call) =>
+                call.name === "task_complete" && call.status === "completed" &&
+                typeof call.structured === "object" && call.structured !== null &&
+                "recorded" in call.structured && call.structured.recorded === true),
+        )
+      )
+    })
   if (
     !declaration ||
     declaration.data.assistantMessageID === ended.data.assistantMessageID ||

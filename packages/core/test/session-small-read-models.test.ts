@@ -12,6 +12,7 @@ import { AbsolutePath } from "../src/schema"
 import { SessionMessage } from "../src/session/message"
 import { SessionSchema } from "../src/session/schema"
 import { SessionStore } from "../src/session/store"
+import { SessionCapturedChanges } from "../src/session/captured-changes"
 import { SessionEvent } from "../src/session/event"
 import { EventRuntime } from "../src/event"
 import { EventSequenceTable, EventTable } from "../src/event/sql"
@@ -97,6 +98,31 @@ const insert = (db: Database.Interface["db"], seq: number, message: SessionMessa
   yield* db.insert(EventTable).values({ id: EventRuntime.ID.make(`evt_read_${seq}`), aggregate_id: sessionID,
     seq, created: 0, type: event.type, data: event.data }).run().pipe(Effect.orDie)
 })
+
+test("nested receipts are included in narrow skill and captured change reads", () =>
+  run((store, db) => Effect.gen(function* () {
+    yield* insert(db, 1, SessionMessage.Assistant.make({
+      id: SessionMessage.ID.make("msg_nested"), agent: Agent.defaultID, model, time: { created },
+      content: [SessionMessage.AssistantTool.make({ type: "tool", id: "outer", name: "execute", time: { created },
+        state: SessionMessage.ToolStateRunning.make({ input: { code: "" }, content: [], structured: { toolCalls: [
+          { id: "skill-id", name: "skill", tool: "tools.skill", status: "completed", input: { id: "skill" }, structured: { name: "Skill", directory: "", output: "guidance" } },
+          { id: "edit-id", name: "edit", tool: "tools.edit", status: "completed", input: {}, structured: { files: [{ file: "a.ts", patch: "@@" }] } },
+          { id: "child-id", name: "subagent", tool: "tools.subagent", status: "completed", input: {}, structured: { sessionID: "ses_child" } },
+          { id: "answer-id", name: "subagent_control", tool: "tools.subagent_control", status: "completed", input: { action: "answer", sessionID: "ses_child", questionID: "qst_child" }, structured: { action: "answer", task: { sessionID: "ses_child" } } },
+        ] } }),
+      })],
+    }))
+    expect(yield* store.skills(sessionID)).toMatchObject([{ id: "skill", state: "active", content: "guidance" }])
+    yield* insert(db, 2, SessionMessage.User.make({ id: SessionMessage.ID.make("msg_after_nested"), text: "Next input", time: { created } }))
+    const page = yield* SessionCapturedChanges.page(db, { sessionID, limit: 1 })
+    expect(page.data[0].content).toMatchObject([
+      { id: "edit-id", name: "edit", state: { status: "completed", structured: { files: [{ file: "a.ts", patch: "@@" }] } } },
+      { id: "child-id", name: "subagent", state: { structured: { sessionID: "ses_child" } } },
+      { id: "answer-id", name: "subagent_control", state: { input: { questionID: "qst_child" }, structured: { action: "answer", task: { sessionID: "ses_child" } } } },
+    ])
+    expect(page.next).toBe(1)
+    expect((yield* SessionCapturedChanges.page(db, { sessionID, after: page.next, limit: 1 })).data).toMatchObject([{ id: "msg_after_nested", type: "user" }])
+  })))
 
 async function readBytes(db: Database.Interface["db"], queries: { sql: string; params: unknown[] }[]) {
   const reads = queries.filter((query) => /\b(?:from|join) ["`]?session_message\b/i.test(query.sql))

@@ -27,7 +27,7 @@ export class RetryableFailure extends Data.TaggedError(
  * the choice is only between waiting and reporting.
  */
 export const RETRY_AFTER_CEILING_MS = 120_000;
-export const MAX_ATTEMPTS = 10;
+export const MAX_ATTEMPTS = 3;
 
 const reasonRetryAfterMs = (reason: LLMError["reason"]) =>
   reason._tag === "RateLimit" || reason._tag === "ProviderInternal"

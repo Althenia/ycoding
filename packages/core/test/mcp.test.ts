@@ -25,6 +25,7 @@ import { Permission } from "@ycoding-ai/core/permission"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Session } from "@ycoding-ai/core/session"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { McpTool } from "@ycoding-ai/core/tool/mcp"
@@ -40,6 +41,9 @@ import { settleTool, toolDefinitions, toolIdentity, waitForTool } from "./lib/to
 let assertion: Deferred.Deferred<Permission.AssertInput> | undefined
 let decision: Effect.Effect<void, Permission.Error> = Effect.void
 let calls = 0
+let parallelGate: Deferred.Deferred<void> | undefined
+let nestedStarted: Deferred.Deferred<void> | undefined
+let nestedCancelled: Deferred.Deferred<void> | undefined
 
 type ResourcePage = {
   items: Array<{ name: string; uri: string; description?: string; mimeType?: string }>
@@ -267,10 +271,10 @@ const mcp = Layer.mock(MCP.Service, {
         server: MCP.ServerName.make("demo"),
         name: "search",
         description: "Search",
-        inputSchema: { type: "object", properties: {} },
+        inputSchema: { type: "object", properties: { label: { type: "string" } } },
         outputSchema: {
           type: "object",
-          properties: { ok: { type: "boolean" } },
+          properties: { ok: { type: "boolean" }, label: { type: "string" } },
           required: ["ok"],
         },
       }),
@@ -283,13 +287,19 @@ const mcp = Layer.mock(MCP.Service, {
       }),
     ]),
   callTool: (input) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       calls += 1
+      if (nestedStarted) yield* Deferred.succeed(nestedStarted, undefined)
+      const gate = parallelGate
+      if (gate) {
+        if (calls === 2) yield* Deferred.succeed(gate, undefined)
+        yield* Deferred.await(gate).pipe(Effect.onInterrupt(() => nestedCancelled ? Deferred.succeed(nestedCancelled, undefined).pipe(Effect.asVoid) : Effect.void))
+      }
       return new MCP.ToolResult({
         server: MCP.ServerName.make(input.server),
         tool: input.name,
         isError: false,
-        structured: { ok: true },
+        structured: { ok: true, ...(input.args?.label === undefined ? {} : { label: input.args.label }) },
         content: [],
       })
     }),
@@ -956,7 +966,133 @@ it.effect("exposes MCP output schemas through Code Mode search", () =>
     const discovered = text === undefined ? undefined : JSON.parse(text)
 
     expect(discovered?.items[0]?.path).toBe("tools.demo.search")
-    expect(discovered?.items[0]?.signature).toBe("tools.demo.search(input: {}): Promise<{\n  ok: boolean,\n}>")
+    expect(discovered?.items[0]?.signature).toBe("tools.demo.search(input: {\n  label?: string,\n}): Promise<{\n  ok: boolean,\n  label?: string,\n}>")
+  }),
+)
+
+it.live("runs parallel nested MCP calls independently", () =>
+  Effect.gen(function* () {
+    calls = 0
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.void
+    parallelGate = yield* Deferred.make<void>()
+    const registry = yield* ToolRegistry.Service
+    yield* waitForTool(registry, "execute")
+    const settlement = yield* settleTool(registry, {
+      sessionID: Session.ID.make("ses_mcp_parallel"),
+      ...toolIdentity,
+      call: { type: "tool-call", id: "call_mcp_parallel", name: "execute", input: { code: "return await Promise.all([tools.demo.search({}), tools.demo.search({})])" } },
+    }).pipe(Effect.timeout("2 seconds"), Effect.ensuring(Effect.sync(() => { parallelGate = undefined })))
+    expect(calls).toBe(2)
+    expect(settlement.output?.structured).toEqual({ toolCalls: [
+      { tool: "demo.search", name: "demo_search", id: expect.any(String), index: 0, input: {}, status: "completed", structured: { ok: true } },
+      { tool: "demo.search", name: "demo_search", id: expect.any(String), index: 1, input: {}, status: "completed", structured: { ok: true } },
+    ] })
+    expect(settlement.result).toMatchObject({ type: "text", value: expect.not.stringContaining("error") })
+  }),
+)
+
+it.live("runs sequential nested MCP calls independently", () =>
+  Effect.gen(function* () {
+    calls = 0
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.void
+    const registry = yield* ToolRegistry.Service
+    yield* waitForTool(registry, "execute")
+    const settlement = yield* settleTool(registry, {
+      sessionID: Session.ID.make("ses_mcp_sequential"),
+      ...toolIdentity,
+      call: { type: "tool-call", id: "call_mcp_sequential", name: "execute", input: { code: "const a = await tools.demo.search({}); const b = await tools.demo.search({}); return [a,b]" } },
+    }).pipe(Effect.timeout("2 seconds"))
+    expect(calls).toBe(2)
+    expect(settlement.output?.structured).toEqual({ toolCalls: [
+      { tool: "demo.search", name: "demo_search", id: expect.any(String), index: 0, input: {}, status: "completed", structured: { ok: true } },
+      { tool: "demo.search", name: "demo_search", id: expect.any(String), index: 1, input: {}, status: "completed", structured: { ok: true } },
+    ] })
+  }),
+)
+
+it.live("interrupting execute cancels its nested MCP job", () =>
+  Effect.gen(function* () {
+    calls = 0
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.void
+    parallelGate = yield* Deferred.make<void>()
+    nestedStarted = yield* Deferred.make<void>()
+    nestedCancelled = yield* Deferred.make<void>()
+    const started = nestedStarted
+    const cancelled = nestedCancelled
+    const registry = yield* ToolRegistry.Service
+    yield* waitForTool(registry, "execute")
+    yield* Effect.gen(function* () {
+      const fiber = yield* settleTool(registry, {
+        sessionID: Session.ID.make("ses_mcp_cancel"), ...toolIdentity,
+        call: { type: "tool-call", id: "call_mcp_cancel", name: "execute", input: { code: "return await tools.demo.search({})" } },
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(fiber)
+      yield* Deferred.await(cancelled)
+      expect(calls).toBe(1)
+    }).pipe(Effect.timeout("2 seconds"), Effect.ensuring(Effect.sync(() => { parallelGate = undefined; nestedStarted = undefined; nestedCancelled = undefined })))
+  }),
+)
+
+it.live("isolates parallel MCP calls across concurrent sessions", () =>
+  Effect.gen(function* () {
+    calls = 0
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.void
+    parallelGate = yield* Deferred.make<void>()
+    const registry = yield* ToolRegistry.Service
+    yield* waitForTool(registry, "execute")
+    const run = (session: string, label: string, messageID: SessionMessage.ID) => settleTool(registry, {
+      sessionID: Session.ID.make(`ses_mcp_${session}`), ...toolIdentity, messageID,
+      call: { type: "tool-call", id: "shared_call", name: "execute", input: { code: `return await Promise.all([tools.demo.search({label:"${label}1"}), tools.demo.search({label:"${label}2"})])` } },
+    })
+    const results = yield* Effect.all([run("one", "one", toolIdentity.messageID), run("two", "two", toolIdentity.messageID), run("one", "three", SessionMessage.ID.make("msg_other"))], { concurrency: "unbounded" }).pipe(
+      Effect.timeout("2 seconds"), Effect.ensuring(Effect.sync(() => { parallelGate = undefined })),
+    )
+    expect(calls).toBe(6)
+    expect(JSON.stringify(results[0]?.result)).toContain("one1")
+    expect(JSON.stringify(results[0]?.result)).toContain("one2")
+    expect(JSON.stringify(results[1]?.result)).toContain("two1")
+    expect(JSON.stringify(results[1]?.result)).toContain("two2")
+    expect(JSON.stringify(results[2]?.result)).toContain("three1")
+    expect(JSON.stringify(results[2]?.result)).toContain("three2")
+    for (const result of results) expect(result.output?.structured).not.toHaveProperty("error")
+    const ids = results.flatMap((result) => Schema.decodeUnknownSync(Schema.Struct({ toolCalls: Schema.Array(Schema.Struct({ id: Schema.String })) }))(result.output?.structured).toolCalls.map((call) => call.id))
+    expect(new Set(ids).size).toBe(6)
+  }),
+)
+
+testEffect(Layer.empty).live("reports disconnected MCP calls and succeeds after reconnect", () =>
+  Effect.gen(function* () {
+    const server = new ConfigMCP.Local({ type: "local", codemode: false, command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-output-schema.ts")] })
+    yield* Effect.gen(function* () {
+    const service = yield* MCP.Service
+    yield* service.connect("resources")
+    const layer = AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, McpTool.node]), [
+      [MCP.node, Layer.succeed(MCP.Service, service)],
+      [Permission.node, Layer.mock(Permission.Service, { assert: () => Effect.void })],
+      [SessionGuardrail.node, guardrail], [EventRuntime.node, events],
+      [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig], [Image.node, imagePassthrough],
+    ])
+    yield* Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      expect(yield* service.servers()).toMatchObject([{ name: "resources", status: { status: "connected" } }])
+      yield* waitForTool(registry, "resources_second")
+      const request = yield* registry.materialize()
+      const call = { sessionID: Session.ID.make("ses_mcp_reconnect"), ...toolIdentity, call: { type: "tool-call" as const, id: "reconnect", name: "execute", input: { code: "return await tools.resources.second({})" } } }
+      yield* service.disconnect("resources")
+      const disconnected = yield* request.settle(call)
+      expect(disconnected.result).toMatchObject({ type: "text", value: expect.stringContaining("MCP") })
+      expect(disconnected.output?.structured).toMatchObject({ error: true, toolCalls: [{ name: "resources_second", status: "error" }] })
+      yield* service.connect("resources")
+      const connected = yield* request.settle({ ...call, call: { ...call.call, id: "reconnected" } })
+      expect(connected.result).toMatchObject({ type: "text", value: expect.stringContaining('"value": 1') })
+      expect(connected.output?.structured).toMatchObject({ toolCalls: [{ name: "resources_second", status: "completed" }] })
+    }).pipe(Effect.provide(layer), Effect.timeout("10 seconds"))
+    }).pipe(Effect.provide(resourceMcpLayer(server)))
   }),
 )
 
@@ -1032,7 +1168,7 @@ it.effect("does not call MCP when permission is blocked", () =>
     })
     expect(settlement.result).toEqual({ type: "text", value: "Unable to execute demo_search" })
     expect(settlement.output?.structured).toEqual({
-      toolCalls: [{ tool: "demo.search", status: "error" }],
+      toolCalls: [{ tool: "demo.search", name: "demo_search", id: expect.any(String), index: 0, input: {}, status: "error" }],
       error: true,
     })
     expect(calls).toBe(0)

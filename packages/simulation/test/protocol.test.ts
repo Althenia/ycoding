@@ -119,6 +119,15 @@ test("decodes the simulated tool lifecycle", () => {
       params: { tools: [registration] },
     }),
   ).toMatchObject({ method: "tool.attach", params: { tools: [registration] } })
+  const namespacedExecute = { ...registration, name: "execute", options: { namespace: "example", codemode: false } }
+  expect(
+    Backend.decodeRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tool.attach",
+      params: { tools: [namespacedExecute] },
+    }),
+  ).toMatchObject({ method: "tool.attach", params: { tools: [namespacedExecute] } })
   expect(
     Backend.decodeRequest({
       jsonrpc: "2.0",
@@ -162,6 +171,8 @@ test("decodes the simulated tool lifecycle", () => {
     { ...registration, name: "1lookup" },
     { ...registration, options: { namespace: "bad group", codemode: false } },
     { ...registration, name: "execute", options: { codemode: false } },
+    { ...registration, name: "execute", options: { codemode: true } },
+    { ...registration, name: "execute", options: {} },
     { ...registration, options: { namespace: "a".repeat(64), codemode: false } },
   ])
     expect(() =>

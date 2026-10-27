@@ -454,13 +454,8 @@ export namespace Backend {
         if (names.some((name) => !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)))
           return "simulated tool names including namespaces must be provider-safe"
         if (new Set(names).size !== names.length) return "simulated tool registrations must have unique exposed names"
-        if (
-          tools.some(
-            (tool) =>
-              tool.name === "execute" && tool.options?.namespace === undefined && tool.options?.codemode === false,
-          )
-        )
-          return 'direct simulated tool name "execute" is reserved'
+        if (tools.some((tool) => tool.name === "execute" && tool.options?.namespace === undefined))
+          return 'simulated tool name "execute" is reserved'
         return undefined
       }),
     ),

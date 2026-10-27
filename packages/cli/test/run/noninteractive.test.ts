@@ -931,3 +931,29 @@ describe("runNonInteractivePrompt", () => {
     })
   })
 })
+
+test("retains settled execute receipts in noninteractive tool results", async () => {
+  const receipt = { index: 0, id: "leaf", name: "edit", tool: "tools.edit", status: "completed", structured: { files: [{ file: "src/a.ts", patch: "diff" }] } }
+  for (const terminal of ["session.tool.success", "session.tool.failed"]) {
+    const rendered: SessionMessageAssistantTool[] = []
+    const turn = (inputID: string) => {
+        const ref = { sessionID: "ses_1", assistantMessageID: "msg_execute", callID: "outer" }
+        return [prompted(inputID),
+          { id: "start", created: 1, type: "session.tool.input.started", durable: { aggregateID: "ses_1", seq: 1, version: 1 }, data: { ...ref, name: "execute" } },
+          { id: "called", created: 2, type: "session.tool.called", durable: { aggregateID: "ses_1", seq: 2, version: 1 }, data: { ...ref, input: {}, executed: true } },
+          { id: "leaf", created: 3, type: "session.tool.invocation-settled", durable: { aggregateID: "ses_1", seq: 3, version: 1 }, data: { ...ref, invocation: receipt } },
+          { id: "progress", created: 4, type: "session.tool.progress", data: { ...ref, structured: { toolCalls: [{ ...receipt, status: "running", structured: undefined }] }, content: [] } },
+          { id: "end", created: 5, type: terminal, durable: { aggregateID: "ses_1", seq: 4, version: 1 }, data: { ...ref, structured: { toolCalls: [] }, content: [], error: { type: "unknown", message: "failed" }, executed: true } }, settled(),
+        ] as ServerEvent[]
+      }
+    await capture({
+      turn,
+      renderTool: async (part) => { rendered.push(part) },
+      renderToolError: async (part) => { rendered.push(part) },
+    })
+    expect(rendered.at(-1)).toMatchObject({ state: { structured: { toolCalls: [receipt] } } })
+    const output = await capture({ turn, format: "json" })
+    const events = output.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    expect(events.find((event) => event.type === "tool_use")).toMatchObject({ part: { state: { metadata: { structured: { toolCalls: [receipt] } } } } })
+  }
+})

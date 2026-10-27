@@ -753,8 +753,7 @@ const layer = Layer.effect(
                     call: event,
                     progress: (update) =>
                       serialized(
-                        events.publish(SessionEvent.Tool.Progress, {
-                          sessionID: session.id,
+                        publisher.progress({
                           assistantMessageID,
                           callID: event.id,
                           structured: { ...update.structured },

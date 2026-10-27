@@ -13,6 +13,7 @@ export interface Context {
   readonly agent: Agent.ID
   readonly messageID: SessionMessage.ID
   readonly callID: string
+  readonly invocationID?: string
   readonly progress: (update: Progress) => Effect.Effect<void>
 }
 

@@ -151,7 +151,7 @@ The TUI keeps bounded read models. It does not own canonical Session state.
 
 ### Supporting packages
 
-- `packages/codemode`: code-mode parsing and support behavior.
+- `packages/codemode`: restricted program execution and discovery over host-provided tools; Core owns catalog visibility, leaf authorization, hooks, and provider-facing output bounding. Allocation caps are not hard heap isolation.
 - `packages/httpapi-codegen`: Client code generation.
 - `packages/http-recorder`: deterministic provider and HTTP fixtures.
 - `packages/effect-drizzle-sqlite` and `packages/effect-sqlite-node`: database adapters.

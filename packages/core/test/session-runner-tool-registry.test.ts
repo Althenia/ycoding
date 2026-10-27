@@ -3,12 +3,14 @@ import { Tool } from "@ycoding-ai/core/tool/tool"
 import { Agent } from "@ycoding-ai/core/agent"
 import type { Permission } from "@ycoding-ai/core/permission"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Image } from "@ycoding-ai/core/image"
 import { Session } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionContext } from "@ycoding-ai/core/session/context"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
+import { ToolHooks } from "@ycoding-ai/core/tool/hooks"
 import type { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
@@ -49,7 +51,7 @@ const imageStore = Layer.mock(Image.Service, {
     return Effect.succeed({ ...content, content: "bm9ybWFsaXplZA==", mime: "image/jpeg" })
   },
 })
-const registryLayer = AppNodeBuilder.build(ToolRegistry.node, [
+const registryLayer = AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolHooks.node]), [
   [ToolOutputStore.node, outputStore],
   [Image.node, imageStore],
 ])
@@ -86,6 +88,342 @@ const constant = (text: string) =>
   })
 
 describe("ToolRegistry", () => {
+  it.effect("derives stable invocation identity from the complete outer identity", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      const seen: string[] = []
+      yield* service.register({
+        echo: Tool.make({
+          description: "echo",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: (_, context) =>
+            Effect.sync(() => {
+              if (context.invocationID) seen.push(context.invocationID)
+              return {}
+            }),
+        }),
+      })
+      const request = yield* service.materialize()
+      const input = {
+        ...call("execute"),
+        call: {
+          type: "tool-call" as const,
+          id: "stable",
+          name: "execute",
+          input: { code: "return await tools.echo({})" },
+        },
+      }
+      yield* request.settle(input)
+      yield* request.settle(input)
+      yield* request.settle({ ...input, messageID: SessionMessage.ID.make("msg_other") })
+      yield* request.settle({ ...input, sessionID: Session.ID.make("ses_other") })
+      expect(seen).toHaveLength(4)
+      expect(seen[0]).toBe(seen[1])
+      expect(new Set([seen[0], seen[2], seen[3]]).size).toBe(3)
+    }),
+  )
+  it.effect("distinguishes global discovery from a tool named search", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({ search: make() })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "both-searches",
+          name: "execute",
+          input: { code: 'await search({query:"search"}); return await tools.search({text:"found"})' },
+        },
+      })
+      expect(result.output?.structured).toEqual({
+        toolCalls: [
+          { tool: "search", status: "completed", input: { query: "search" } },
+          {
+            tool: "search",
+            name: "search",
+            id: expect.any(String),
+            index: 0,
+            input: { text: "found" },
+            status: "completed",
+            structured: { text: "found" },
+          },
+        ],
+      })
+    }),
+  )
+  it.effect("retains successful receipts when a later leaf fails", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({
+        echo: make(),
+        fail: Tool.make({
+          description: "fail",
+          input: Schema.Struct({}),
+          output: Schema.String,
+          execute: () => Effect.fail(new Tool.Failure({ message: "refused" })),
+        }),
+      })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "later-error",
+          name: "execute",
+          input: { code: 'await tools.echo({text:"saved"}); return await tools.fail({})' },
+        },
+      })
+      expect(result.output?.structured).toMatchObject({
+        error: true,
+        toolCalls: [
+          { id: expect.any(String), name: "echo", status: "completed", structured: { text: "saved" } },
+          { id: expect.any(String), name: "fail", status: "error" },
+        ],
+      })
+      expect(result.result).toMatchObject({ type: "text", value: expect.not.stringContaining("saved") })
+    }),
+  )
+  it.effect("publishes nested receipts before subsequent calls without exposing intermediate output to the model", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      const contexts: Tool.Context[] = []
+      const progress: ToolRegistry.Progress[] = []
+      yield* service.register({
+        echo: Tool.make({
+          description: "echo",
+          input: Schema.Struct({ text: Schema.String }),
+          output: Schema.Struct({ text: Schema.String }),
+          execute: (input, context) =>
+            Effect.gen(function* () {
+              contexts.push(context)
+              yield* context.progress({ structured: { intermediate: "ignored" } })
+              return input
+            }),
+        }),
+      })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "receipt",
+          name: "execute",
+          input: { code: 'await tools.echo({text:"private"}); await tools.echo({text:"second"}); return "aggregate"' },
+        },
+        progress: (update) =>
+          Effect.sync(() => {
+            progress.push(update)
+          }),
+      })
+      expect(contexts.map((item) => item.callID)).toEqual(["receipt", "receipt"])
+      expect(contexts[0]?.invocationID).toEqual(expect.any(String))
+      expect(contexts[0]?.invocationID).not.toBe(contexts[1]?.invocationID)
+      expect(progress.some((item) => JSON.stringify(item.structured).includes('"structured":{"text":"private"}'))).toBe(
+        true,
+      )
+      expect(progress.every((item) => !JSON.stringify(item.structured).includes('"intermediate"'))).toBe(true)
+      expect(result.result).toEqual({ type: "text", value: "aggregate" })
+      expect(result.output?.structured).toMatchObject({
+        toolCalls: [
+          { id: contexts[0]?.invocationID, name: "echo", input: { text: "private" }, structured: { text: "private" } },
+          { id: contexts[1]?.invocationID, name: "echo", input: { text: "second" }, structured: { text: "second" } },
+        ],
+      })
+    }),
+  )
+  it.effect("interrupts a nested before hook without invoking the leaf", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      const hooks = yield* ToolHooks.Service
+      const started = yield* Deferred.make<void>()
+      let executed = false
+      yield* hooks.hook.before((event) =>
+        event.tool === "echo" ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)) : Effect.void,
+      )
+      yield* service.register({
+        echo: Tool.make({
+          description: "echo",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () =>
+            Effect.sync(() => {
+              executed = true
+              return {}
+            }),
+        }),
+      })
+      const fiber = yield* settleTool(service, {
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "hook-interrupt",
+          name: "execute",
+          input: { code: "return await tools.echo({})" },
+        },
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(fiber)
+      expect(executed).toBe(false)
+    }),
+  )
+
+  it.effect("preserves the full validated output in completed edit receipts", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({
+        edit: Tool.make({
+          description: "edit",
+          input: Schema.Struct({}),
+          output: Schema.Struct({
+            files: Schema.Array(
+              Schema.Struct({ file: Schema.String, patch: Schema.String, status: Schema.String, extra: Schema.String }),
+            ),
+          }),
+          execute: () =>
+            Effect.succeed({ files: [{ file: "example.txt", patch: "+x", status: "updated", extra: "private" }] }),
+        }),
+      })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "edit",
+          name: "execute",
+          input: { code: 'await search({query:"edit"}); return await tools.edit({})' },
+        },
+      })
+      expect(result.output?.structured).toEqual({
+        toolCalls: [
+          { tool: "search", status: "completed", input: { query: "edit" } },
+          {
+            tool: "edit",
+            name: "edit",
+            id: expect.any(String),
+            index: 0,
+            input: {},
+            status: "completed",
+            structured: { files: [{ file: "example.txt", patch: "+x", status: "updated", extra: "private" }] },
+          },
+        ],
+      })
+    }),
+  )
+  it.effect("rejects more than one thousand nested calls by default", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({ echo: make() })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "limit",
+          name: "execute",
+          input: { code: 'for (let i = 0; i < 1001; i++) { await tools.echo({text:"x"}) } return "done"' },
+        },
+      })
+      expect(result.result).toMatchObject({ type: "text", value: expect.stringContaining("tool-call limit of 1000") })
+      expect(result.output?.structured).toMatchObject({ error: true })
+    }),
+  )
+  it.effect("bounds the execute result to the default output budget", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({ echo: make() })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: { type: "tool-call", id: "output-limit", name: "execute", input: { code: 'return "x".repeat(1048577)' } },
+      })
+      expect(result.result).toMatchObject({ type: "text", value: expect.stringContaining("result truncated") })
+    }),
+  )
+  it.effect("exposes direct registrations through execute as well", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({ echo: make() }, { codemode: false })
+      const request = yield* service.materialize()
+      expect(request.definitions.map((item) => item.name)).toEqual(["echo", "execute"])
+      expect((yield* request.settle(call("echo"))).result).toEqual({ type: "text", value: "echo" })
+      const nested = yield* request.settle({
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "dual",
+          name: "execute",
+          input: { code: 'return await tools.echo({text:"nested"})' },
+        },
+      })
+      expect(nested.result).toMatchObject({ type: "text", value: expect.stringContaining("nested") })
+    }),
+  )
+
+  it.effect("does not invoke the leaf after a nested before-hook defect", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      const hooks = yield* ToolHooks.Service
+      let executed = false
+      let hookInvoked = false
+      yield* hooks.hook.before((event) => {
+        if (event.tool === "echo") {
+          hookInvoked = true
+          return Effect.die("private hook failure")
+        }
+      })
+      yield* service.register({
+        echo: Tool.make({
+          description: "echo",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () =>
+            Effect.sync(() => {
+              executed = true
+              return {}
+            }),
+        }),
+      })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: { type: "tool-call", id: "hook-defect", name: "execute", input: { code: "return await tools.echo({})" } },
+      })
+      expect(hookInvoked).toBe(true)
+      expect(executed).toBe(false)
+      expect(result.output?.structured).toMatchObject({ error: true })
+      expect(JSON.stringify(result.result)).not.toContain("private hook failure")
+    }),
+  )
+  it.effect("runs nested hooks around the leaf and applies input mutation", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      const hooks = yield* ToolHooks.Service
+      const events: string[] = []
+      yield* hooks.hook.before((event) => {
+        events.push(`before:${event.tool}`)
+        if (event.tool === "demo_echo" && typeof event.input === "object" && event.input !== null)
+          Object.assign(event.input, { text: "changed" })
+      })
+      yield* hooks.hook.after((event) => {
+        events.push(`after:${event.tool}:${event.result.type === "text" ? event.result.value : ""}`)
+      })
+      yield* service.register({ echo: make() }, { namespace: "demo" })
+      const result = yield* settleTool(service, {
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "nested",
+          name: "execute",
+          input: { code: 'return await tools.demo.echo({text:"nested"})' },
+        },
+      })
+      expect(result.result).toMatchObject({ type: "text", value: expect.stringContaining("changed") })
+      expect(result.output?.structured).toMatchObject({
+        toolCalls: [{ input: { text: "nested" }, structured: { text: "changed" } }],
+      })
+      expect(events).toEqual([
+        "before:execute",
+        "before:demo_echo",
+        "after:demo_echo:changed",
+        'after:execute:{\n  "text": "changed"\n}',
+      ])
+    }),
+  )
   it.effect("captures request-local tools without exposing them to another request", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service
@@ -95,7 +433,7 @@ describe("ToolRegistry", () => {
       const second = yield* service.materialize([], {}, [
         { tools: { connector: constant("profile-b") }, options: { codemode: false } },
       ])
-      expect(first.definitions.map((tool) => tool.name)).toEqual(["connector"])
+      expect(first.definitions.map((tool) => tool.name)).toEqual(["connector", "execute"])
       expect((yield* first.settle(call("connector"))).result).toEqual({ type: "text", value: "profile-a" })
       expect((yield* second.settle(call("connector"))).result).toEqual({ type: "text", value: "profile-b" })
       expect((yield* service.materialize()).definitions).toEqual([])
@@ -162,7 +500,7 @@ describe("ToolRegistry", () => {
       const service = yield* ToolRegistry.Service
       yield* service.register({ zeta: make(), alpha: make(), middle: make() }, { codemode: false })
 
-      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["alpha", "middle", "zeta"])
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["alpha", "middle", "zeta", "execute"])
     }),
   )
 
@@ -181,7 +519,12 @@ describe("ToolRegistry", () => {
       const names = (permissions: Permission.Ruleset) =>
         toolDefinitions(service, permissions).pipe(Effect.map((definitions) => definitions.map((tool) => tool.name)))
 
-      expect(yield* names([{ action: "question", resource: "*", effect: "deny" }])).toEqual(["bash", "edit", "write"])
+      expect(yield* names([{ action: "question", resource: "*", effect: "deny" }])).toEqual([
+        "bash",
+        "edit",
+        "write",
+        "execute",
+      ])
       expect(
         yield* names([
           { action: "*", resource: "*", effect: "deny" },
@@ -194,7 +537,7 @@ describe("ToolRegistry", () => {
           { action: "*", resource: "*", effect: "deny" },
         ]),
       ).toEqual([])
-      expect(yield* names([{ action: "edit", resource: "*", effect: "deny" }])).toEqual(["bash", "question"])
+      expect(yield* names([{ action: "edit", resource: "*", effect: "deny" }])).toEqual(["bash", "question", "execute"])
     }),
   )
 
@@ -219,7 +562,11 @@ describe("ToolRegistry", () => {
         [{ action: "edit", resource: "*", effect: "deny" }],
       )
 
-      expect((yield* service.materialize(permissions)).definitions.map((tool) => tool.name)).toEqual(["read", "shell"])
+      expect((yield* service.materialize(permissions)).definitions.map((tool) => tool.name)).toEqual([
+        "read",
+        "shell",
+        "execute",
+      ])
     }),
   )
 
@@ -245,7 +592,7 @@ describe("ToolRegistry", () => {
         available: ["project_artifact", "read", "shell", "skill", "web_fetch", "web_search"],
       })
       expect(yield* visible({ tools: { deny: ["shell", "web_*"] } })).toEqual({
-        direct: ["project_artifact", "read", "skill"],
+        direct: ["project_artifact", "read", "skill", "execute"],
         available: ["project_artifact", "read", "skill"],
       })
       expect(yield* visible({ tools: { allow: ["read", "web_search"] } })).toEqual({
@@ -278,7 +625,7 @@ describe("ToolRegistry", () => {
         (yield* toolDefinitions(service, [{ action: "edit", resource: "*", effect: "deny" }])).map(
           (definition) => definition.name,
         ),
-      ).toEqual(["first"])
+      ).toEqual(["first", "execute"])
     }),
   )
 
@@ -287,7 +634,7 @@ describe("ToolRegistry", () => {
       const service = yield* ToolRegistry.Service
       const scope = yield* Scope.make()
       yield* service.register({ echo: make() }, { codemode: false }).pipe(Scope.provide(scope))
-      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo"])
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo", "execute"])
       yield* Scope.close(scope, Exit.void)
       expect(yield* toolDefinitions(service)).toEqual([])
     }),
@@ -309,7 +656,7 @@ describe("ToolRegistry", () => {
       yield* Deferred.await(registered)
       yield* Fiber.interrupt(fiber)
 
-      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo"])
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo", "execute"])
       yield* Scope.close(scope, Exit.void)
       expect(yield* toolDefinitions(service)).toEqual([])
     }),

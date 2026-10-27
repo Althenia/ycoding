@@ -1,3 +1,5 @@
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
+
 type CapturePart = {
   readonly type: string
   readonly id?: string
@@ -70,10 +72,15 @@ export function capturedPatch(diff: string, path?: string, status?: string): Cap
 }
 
 export function capturedPartPatches(part: CapturePart): CapturedPatch[] {
-  if (part.type !== "tool" || part.state?.status !== "completed" || !["edit", "patch", "apply_patch"].includes(part.name ?? "")) return []
-  const structured = part.state.structured
-  if (!structured || typeof structured !== "object" || !("files" in structured) || !Array.isArray(structured.files)) return []
-  return structured.files.flatMap((entry: unknown) => {
+  return ToolInvocation.list(part).flatMap((invocation) =>
+    invocation.status === "completed" && ["edit", "patch", "apply_patch"].includes(invocation.name)
+      ? filePatches(record(invocation.structured)?.files) : [],
+  )
+}
+
+function filePatches(files: unknown): CapturedPatch[] {
+  if (!Array.isArray(files)) return []
+  return files.flatMap((entry: unknown) => {
     if (!entry || typeof entry !== "object" || !("patch" in entry) || typeof entry.patch !== "string") return []
     const patch = capturedPatch(entry.patch, "file" in entry && typeof entry.file === "string" ? entry.file : undefined,
       "status" in entry && typeof entry.status === "string" ? entry.status : undefined)
@@ -110,24 +117,25 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : undefined
 }
 
-function dispatchOf(part: CapturePart): Dispatch | undefined {
-  if (part.type !== "tool") return undefined
-  const structured = record(part.state?.structured)
-  if (part.name === "subagent") return typeof structured?.sessionID === "string" ? { kind: "launch", childID: structured.sessionID } : undefined
-  if (part.name !== "subagent_control" || part.state?.status !== "completed") return undefined
+function dispatchOf(invocation: ToolInvocation.Invocation): Dispatch | undefined {
+  const structured = record(invocation.structured)
+  if (invocation.name === "subagent") return (invocation.id === invocation.outerCallID || invocation.status === "completed") && typeof structured?.sessionID === "string" ? { kind: "launch", childID: structured.sessionID } : undefined
+  if (invocation.name !== "subagent_control" || invocation.status !== "completed") return undefined
   const childID = record(structured?.task)?.sessionID
   if (typeof childID !== "string") return undefined
-  if (structured?.action === "send" && typeof part.id === "string") return { kind: "send", childID, callID: part.id }
+  if (structured?.action === "send" && typeof invocation.id === "string") return { kind: "send", childID, callID: invocation.id }
   if (structured?.action !== "answer") return undefined
-  const questionID = record(part.state.input)?.questionID
+  const questionID = record(invocation.input)?.questionID
   return { kind: "answer", childID, ...(typeof questionID === "string" ? { questionID } : {}) }
 }
 
 function assistantDispatches(messages: readonly CaptureMessage[]) {
-  return messages.flatMap((message) => message.type !== "assistant" ? [] : (message.content ?? []).flatMap((part) => {
-    const dispatch = dispatchOf(part)
-    return dispatch ? [{ assistantMessageID: message.id, dispatch }] : []
-  }))
+  return messages.flatMap((message) => message.type !== "assistant" ? [] : (message.content ?? []).flatMap((part) =>
+    ToolInvocation.list(part).flatMap((invocation) => {
+      const dispatch = dispatchOf(invocation)
+      return dispatch ? [{ assistantMessageID: message.id, dispatch }] : []
+    }),
+  ))
 }
 
 export function capturedChildSessionIDs(parent: readonly CaptureMessage[]): string[] {

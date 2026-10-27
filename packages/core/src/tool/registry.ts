@@ -1,6 +1,6 @@
 export * as ToolRegistry from "./registry"
 
-import { ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@ycoding-ai/ai"
+import { ToolFailure, ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@ycoding-ai/ai"
 import { Context, Effect, Layer, Scope, Semaphore } from "effect"
 import type { Agent } from "../agent"
 import { ConfigCapabilities } from "../config/capabilities"
@@ -20,6 +20,7 @@ import {
   validateNamespace,
   validPath,
   type AnyTool,
+  type Tool,
 } from "./tool"
 import { Tools } from "./tools"
 import { ToolHooks } from "./hooks"
@@ -129,6 +130,29 @@ const registryLayer = Layer.effect(
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
     const registrationLock = Semaphore.makeUnsafe(1)
 
+    const invokeNested = (name: string, tool: AnyTool, value: unknown, context: Tool.Context) =>
+      Effect.gen(function* () {
+        const before: ToolHooks.BeforeEvent = { tool: name, ...context, input: value }
+        yield* toolHooks.runBefore(before)
+        const pending = yield* settle(tool, { input: before.input }, context).pipe(
+          Effect.map((output) => ({ output })),
+          Effect.catchTag("LLM.ToolFailure", (failure) => Effect.succeed({ failure })),
+        )
+        const output = "output" in pending ? pending.output : undefined
+        const after: ToolHooks.AfterEvent = {
+          tool: name,
+          ...context,
+          input: before.input,
+          result: "failure" in pending ? { type: "error", value: pending.failure.message } : ToolOutput.toResultValue(pending.output),
+          ...(output ? { output } : {}),
+        }
+        yield* toolHooks.runAfter(after)
+        if (after.result.type === "error")
+          return yield* new ToolFailure({ message: String(after.result.value) })
+        if (after.output) return after.output
+        return yield* new ToolFailure({ message: `Tool ${name} returned no output` })
+      })
+
     const settleTool = Effect.fn("ToolRegistry.settleTool")(function* (input: ExecuteInput, tool: AnyTool) {
       // Hooks fire only for hosted/local tools; provider-executed calls never reach settleTool.
       const beforeEvent: ToolHooks.BeforeEvent = {
@@ -228,7 +252,7 @@ const registryLayer = Layer.effect(
                 }),
               )
             const codemode = options?.codemode ?? true
-            const reserved = codemode ? undefined : entries.find((entry) => entry.key === "execute")
+            const reserved = entries.find((entry) => entry.key === "execute")
             if (reserved)
               return yield* Effect.fail(
                 new RegistrationError({ name: reserved.key, message: 'Tool name "execute" is reserved for CodeMode' }),
@@ -310,8 +334,8 @@ const registryLayer = Layer.effect(
       for (const [name, registration] of selected) {
         if (whollyDisabled(permission(registration.tool, name), rules)) continue
         if (!ConfigCapabilities.allowsTool(capabilities, name)) continue
-        if (registration.codemode) codemode.set(name, registration)
-        else direct.set(name, registration)
+        codemode.set(name, registration)
+        if (!registration.codemode) direct.set(name, registration)
       }
       const callable = new Map<string, string>()
       for (const [name, registration] of codemode) {
@@ -353,7 +377,7 @@ const registryLayer = Layer.effect(
               new Map([...registrations].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)))
             const orderedDirect = ordered(visible.direct)
             const orderedCodemode = ordered(visible.codemode)
-            const execute = visible.execute ? ExecuteTool.create(orderedCodemode) : undefined
+            const execute = visible.execute ? ExecuteTool.create(orderedCodemode, invokeNested) : undefined
             return {
               definitions: [
                 ...Array.from(orderedDirect, ([name, registration]) => definition(name, registration.tool)),

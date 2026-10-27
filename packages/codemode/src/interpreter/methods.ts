@@ -1,4 +1,6 @@
 import { Effect } from "effect"
+import { checkArrayLength, checkStringLength, joinStrings, substitute } from "../limits.js"
+import type { RegexRuntime } from "./regex-runtime.js"
 import {
   type AstNode,
   CodeModeFunction,
@@ -35,6 +37,7 @@ import { invokeURLMethod, invokeURLStatic, uriArgument } from "../stdlib/url.js"
 import { boundedData, coerceToNumber, coerceToString, errorBrandName } from "../stdlib/value.js"
 
 export type CallbackRunner<R> = {
+  readonly regex: () => RegexRuntime
   readonly invokeFunction: (fn: CodeModeFunction, args: Array<unknown>) => Effect.Effect<unknown, unknown, R>
   readonly invokeCallable: (
     callable: unknown,
@@ -88,6 +91,12 @@ export const invokeIntrinsic = <R>(
         )
       }
     }
+    if (
+      ["match", "matchAll", "search"].includes(ref.name) ||
+      (args[0] instanceof CodeModeRegExp && ["replace", "replaceAll", "split"].includes(ref.name))
+    ) {
+      return invokeStringRegex(runner.regex(), ref.receiver, ref.name, args, node)
+    }
     return Effect.succeed(invokeStringMethod(ref.receiver, ref.name, args, node))
   }
   if (typeof ref.receiver === "number") {
@@ -110,7 +119,7 @@ export const invokeIntrinsic = <R>(
     )
   }
   if (ref.receiver instanceof CodeModeRegExp) {
-    return Effect.succeed(invokeRegExpMethod(ref.receiver, ref.name, args, node))
+    return invokeRegExpMethod(runner.regex(), ref.receiver, ref.name, args, node)
   }
   if (ref.receiver instanceof CodeModeMap) {
     return invokeMapMethod(runner, ref.receiver, ref.name, args, node)
@@ -182,6 +191,44 @@ const requireDataArgument = (name: string, index: number, arg: unknown, node: As
   return arg
 }
 
+const invokeStringRegex = (
+  runtime: RegexRuntime,
+  value: string,
+  name: string,
+  args: Array<unknown>,
+  node: AstNode,
+): Effect.Effect<unknown, unknown> => {
+  const pattern = toHostRegex(args[0], name, node, name === "matchAll" ? "g" : "")
+  if ((name === "matchAll" || name === "replaceAll") && !pattern.global) {
+    throw new InterpreterRuntimeError(
+      `String.${name} requires a regular expression with the global (g) flag: write /${pattern.source}/${pattern.flags}g, or use String.${name === "matchAll" ? "match for a single match" : "replace to replace only the first match"}.`,
+      node,
+    ).as("TypeError")
+  }
+  const lastIndex = pattern.lastIndex
+  return Effect.map(
+    runtime.run(pattern, name, value, {
+      replacement:
+        name === "replace" || name === "replaceAll"
+          ? coerceToString(requireDataArgument(name, 1, args[1], node))
+          : undefined,
+      limit:
+        name === "split" && args[1] !== undefined
+          ? coerceToNumber(requireDataArgument(name, 1, args[1], node))
+          : undefined,
+    }),
+    (reply) => {
+      pattern.lastIndex =
+        name === "search" || name === "matchAll" || name === "split" ? lastIndex : (reply.lastIndex as number)
+      if (name === "matchAll")
+        return (reply.result as Array<RegExpMatchArray>).map((match) => matchToValue(match, value))
+      if (name === "match" && reply.result !== null && !pattern.global)
+        return matchToValue(reply.result as RegExpMatchArray, value)
+      return boundedData(reply.result, `String.${name} result`)
+    },
+  )
+}
+
 const invokeStringMethod = (value: string, name: string, args: Array<unknown>, node: AstNode): unknown => {
   // Coerce arguments like native JS; opaque runtime references still reject.
   const str = (index: number): string => coerceToString(requireDataArgument(name, index, args[index], node))
@@ -238,10 +285,6 @@ const invokeStringMethod = (value: string, name: string, args: Array<unknown>, n
         result = requestedLimit !== undefined && requestedLimit >>> 0 === 0 ? [] : [value]
         break
       }
-      if (args[0] instanceof CodeModeRegExp) {
-        result = value.split(args[0].regex, optNum(1))
-        break
-      }
       const requestedLimit = optNum(1)
       result = value.split(str(0), requestedLimit === undefined ? undefined : requestedLimit >>> 0)
       break
@@ -269,58 +312,27 @@ const invokeStringMethod = (value: string, name: string, args: Array<unknown>, n
       break
     case "replace":
     case "replaceAll": {
-      if (args[0] instanceof CodeModeRegExp) {
-        const pattern = args[0].regex
-        const replacement = str(1)
-        if (name === "replaceAll" && !pattern.global) {
-          throw new InterpreterRuntimeError(
-            `String.replaceAll requires a regular expression with the global (g) flag: write /${pattern.source}/${pattern.flags}g, or use String.replace to replace only the first match.`,
-            node,
-          )
-        }
-        result = name === "replace" ? value.replace(pattern, replacement) : value.replaceAll(pattern, replacement)
-        break
-      }
       if (name === "replace") {
-        result = value.replace(str(0), str(1))
+        result = replaceLiteral(value, str(0), str(1), false)
         break
       }
-      result = value.replaceAll(str(0), str(1))
-      break
-    }
-    case "match": {
-      const pattern = toHostRegex(args[0], name, node)
-      const matched = value.match(pattern)
-      if (matched === null) return null
-      // Preserve the own `index` and `groups` properties on non-global matches.
-      if (pattern.global) return boundedData(matched, "String.match result")
-      return matchToValue(matched)
-    }
-    case "matchAll": {
-      const pattern = toHostRegex(args[0], name, node, "g")
-      if (!pattern.global) {
-        throw new InterpreterRuntimeError(
-          `String.matchAll requires a regular expression with the global (g) flag: write /${pattern.source}/${pattern.flags}g, or use String.match for a single match.`,
-          node,
-        )
-      }
-      return Array.from(value.matchAll(pattern), matchToValue)
-    }
-    case "search": {
-      result = value.search(toHostRegex(args[0], name, node))
+      result = replaceLiteral(value, str(0), str(1), true)
       break
     }
     case "repeat": {
       const count = num(0)
       if (!Number.isFinite(count) || count < 0)
         throw new InterpreterRuntimeError("String.repeat expects a finite non-negative count.", node).as("RangeError")
+      checkStringLength(value.length * Math.trunc(count))
       result = value.repeat(count)
       break
     }
     case "padStart":
+      if (optStr(1) !== "") checkStringLength(Math.trunc(num(0)))
       result = value.padStart(num(0), optStr(1))
       break
     case "padEnd":
+      if (optStr(1) !== "") checkStringLength(Math.trunc(num(0)))
       result = value.padEnd(num(0), optStr(1))
       break
     case "charAt":
@@ -342,7 +354,7 @@ const invokeStringMethod = (value: string, name: string, args: Array<unknown>, n
       result = value
       break
     case "concat": {
-      result = value.concat(...args.map((_, index) => str(index)))
+      result = joinStrings([value, ...args.map((_, index) => str(index))], "")
       break
     }
     default:
@@ -352,6 +364,48 @@ const invokeStringMethod = (value: string, name: string, args: Array<unknown>, n
 }
 
 export const arrayStatics = new Set(["isArray", "of", "from"])
+
+const replaceLiteral = (input: string, search: string, replacement: string, all: boolean): string => {
+  let result = ""
+  let end = 0
+  let cursor = 0
+  while (cursor <= input.length) {
+    const offset = input.indexOf(search, cursor)
+    if (offset === -1) break
+    const part = substitute(replacement, search, [], offset, input)
+    checkStringLength(result.length + offset - end + part.length)
+    result += input.slice(end, offset) + part
+    end = offset + search.length
+    if (!all) break
+    cursor = end + (search.length === 0 ? 1 : 0)
+  }
+  checkStringLength(result.length + input.length - end)
+  return result + input.slice(end)
+}
+
+const checkSpliceLength = (length: number, start: number, deleteCount: number, inserted: number): void => {
+  const position = Number.isNaN(start) ? 0 : Math.trunc(start)
+  const actualStart = position < 0 ? Math.max(length + position, 0) : Math.min(position, length)
+  const removed = Number.isNaN(deleteCount) ? 0 : Math.max(0, Math.min(Math.trunc(deleteCount), length - actualStart))
+  checkArrayLength(length - removed + inserted)
+}
+
+const flattenArray = (target: Array<unknown>, requestedDepth: number): Array<unknown> => {
+  const output: Array<unknown> = []
+  const visit = (items: Array<unknown>, depth: number): void => {
+    for (let index = 0; index < items.length; index += 1) {
+      if (!(index in items)) continue
+      const item = items[index]
+      if (depth > 0 && Array.isArray(item)) visit(item, depth - 1)
+      else {
+        checkArrayLength(output.length + 1)
+        output.push(item)
+      }
+    }
+  }
+  visit(target, Math.max(0, Math.trunc(requestedDepth) || 0))
+  return output
+}
 
 const invokeArrayStatic = (name: string, args: Array<unknown>, node: AstNode): unknown => {
   switch (name) {
@@ -379,7 +433,14 @@ const arrayFromItems = (source: unknown, node: AstNode): Array<unknown> => {
       "InvalidDataValue",
     )
   }
-  if (typeof source === "string") return Array.from(source)
+  if (typeof source === "string") {
+    const result: Array<string> = []
+    for (const character of source) {
+      checkArrayLength(result.length + 1)
+      result.push(character)
+    }
+    return result
+  }
   if (Array.isArray(source)) return [...source]
   if (
     source !== null &&
@@ -387,6 +448,7 @@ const arrayFromItems = (source: unknown, node: AstNode): Array<unknown> => {
     (Object.getPrototypeOf(source) === Object.prototype || Object.getPrototypeOf(source) === null) &&
     typeof (source as { length?: unknown }).length === "number"
   ) {
+    checkArrayLength(Math.max(0, Math.floor((source as { length: number }).length)))
     return Array.from(source as ArrayLike<unknown>)
   }
   throw new InterpreterRuntimeError(
@@ -520,44 +582,51 @@ const invokeStringReplacer = <R>(
       }
       callbackArgs[callbackArgs.length - 1] = safeGroups
     }
+    checkArrayLength(matches.length + 1)
     matches.push({ match, offset, args: callbackArgs })
     return match
   }
 
-  const pattern = args[0]
-  if (pattern instanceof CodeModeRegExp) {
-    if (name === "replaceAll" && !pattern.regex.global) {
-      throw new InterpreterRuntimeError(
-        `String.replaceAll requires a regular expression with the global (g) flag: write /${pattern.regex.source}/${pattern.regex.flags}g, or use String.replace to replace only the first match.`,
-        node,
-      )
-    }
-    if (name === "replace") value.replace(pattern.regex, collect)
-    else value.replaceAll(pattern.regex, collect)
-  } else {
-    const search = coerceToString(requireDataArgument(name, 0, pattern, node))
-    if (name === "replace") value.replace(search, collect)
-    else value.replaceAll(search, collect)
-  }
-
   return Effect.gen(function* () {
+    const pattern = args[0]
+    if (pattern instanceof CodeModeRegExp) {
+      if (name === "replaceAll" && !pattern.regex.global) {
+        throw new InterpreterRuntimeError(
+          `String.replaceAll requires a regular expression with the global (g) flag: write /${pattern.regex.source}/${pattern.regex.flags}g, or use String.replace to replace only the first match.`,
+          node,
+        ).as("TypeError")
+      }
+      const reply = yield* runner.regex().run(pattern.regex, "collect", value)
+      pattern.lastIndex = reply.lastIndex
+      for (const callbackArgs of reply.result as Array<Array<unknown>>) {
+        const hasGroups = typeof callbackArgs[callbackArgs.length - 1] === "object"
+        callbackArgs.splice(callbackArgs.length - (hasGroups ? 1 : 0), 0, value)
+        collect(...callbackArgs)
+      }
+    } else {
+      const search = coerceToString(requireDataArgument(name, 0, pattern, node))
+      if (name === "replace") value.replace(search, collect)
+      else value.replaceAll(search, collect)
+    }
     const output: Array<string> = []
+    let size = 0
     let end = 0
     for (const match of matches) {
       const replacement = yield* apply(match.args)
       // Error values are branded plain objects; boundedData would strip the brand before coercion.
-      output.push(
-        value.slice(end, match.offset),
+      const text =
         replacement instanceof CodeModePromise
           ? "[object Promise]"
           : errorBrandName(replacement)
             ? coerceToString(replacement)
-            : coerceToString(boundedData(replacement, `String.${name} replacer result`)),
-      )
+            : coerceToString(boundedData(replacement, `String.${name} replacer result`))
+      size += match.offset - end + text.length
+      checkStringLength(size)
+      output.push(value.slice(end, match.offset), text)
       end = match.offset + match.match.length
     }
     output.push(value.slice(end))
-    return boundedData(output.join(""), `String.${name} result`)
+    return boundedData(joinStrings(output, ""), `String.${name} result`)
   })
 }
 
@@ -883,7 +952,10 @@ const invokeArrayMethod = <R>(
       }
       const input = boundedData(target, "Array.join input") as Array<unknown>
       return Effect.succeed(
-        input.map((item) => coerceToString(item ?? "")).join(args.length === 0 ? "," : (args[0] as string)),
+        joinStrings(
+          input.map((item) => coerceToString(item ?? "")),
+          args.length === 0 ? "," : (args[0] as string),
+        ),
       )
     }
     case "includes":
@@ -903,9 +975,12 @@ const invokeArrayMethod = <R>(
     case "slice":
       return Effect.succeed(target.slice(optNumber(args[0], "start"), optNumber(args[1], "end")))
     case "concat":
+      checkArrayLength(
+        args.reduce<number>((size, item) => size + (Array.isArray(item) ? item.length : 1), target.length),
+      )
       return Effect.succeed(target.concat(...args))
     case "flat":
-      return Effect.succeed(target.flat(optNumber(args[0], "depth") ?? 1))
+      return Effect.succeed(flattenArray(target, optNumber(args[0], "depth") ?? 1))
     case "reverse":
       return Effect.succeed(target.reverse())
     case "sort": {
@@ -937,12 +1012,14 @@ const invokeArrayMethod = <R>(
       return Effect.succeed(copied)
     }
     case "push": {
+      checkArrayLength(target.length + args.length)
       // Validate all insertions before mutating to avoid partial cyclic updates.
       for (const item of args) rejectCircularInsertion(target, item, "Array.push result", node)
-      target.push(...args)
+      for (const item of args) target.push(item)
       return Effect.succeed(target.length)
     }
     case "unshift": {
+      checkArrayLength(target.length + args.length)
       for (const item of args) rejectCircularInsertion(target, item, "Array.unshift result", node)
       target.unshift(...args)
       return Effect.succeed(target.length)
@@ -957,6 +1034,7 @@ const invokeArrayMethod = <R>(
       if (args.length === 1) return Effect.succeed(target.splice(start))
       const deleteCount = optNumber(args[1], "delete count") ?? 0
       const inserted = args.slice(2)
+      checkSpliceLength(target.length, start, deleteCount, inserted.length)
       for (const item of inserted) rejectCircularInsertion(target, item, "Array.splice result", node)
       return Effect.succeed(target.splice(start, deleteCount, ...inserted))
     }
@@ -969,6 +1047,7 @@ const invokeArrayMethod = <R>(
         return Effect.succeed(copied)
       }
       const deleteCount = optNumber(args[1], "delete count") ?? 0
+      checkSpliceLength(target.length, start, deleteCount, Math.max(0, args.length - 2))
       const copied = [...target]
       copied.splice(start, deleteCount, ...args.slice(2))
       return Effect.succeed(copied)
@@ -1012,8 +1091,16 @@ const invokeArrayMethod = <R>(
         for (let index = 0; index < length; index += 1) {
           if (!(index in target)) continue
           const mapped = yield* apply([target[index], index, target])
-          if (Array.isArray(mapped)) values.push(...mapped)
-          else values.push(mapped)
+          if (Array.isArray(mapped)) {
+            for (let j = 0; j < mapped.length; j += 1) {
+              if (!(j in mapped)) continue
+              checkArrayLength(values.length + 1)
+              values.push(mapped[j])
+            }
+          } else {
+            checkArrayLength(values.length + 1)
+            values.push(mapped)
+          }
         }
         return values
       }

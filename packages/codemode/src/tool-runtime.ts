@@ -1,4 +1,5 @@
 import { Cause, Effect, Schema } from "effect"
+import { checkValueSize, ValueLimitError } from "./limits.js"
 import { ToolError, toolError } from "./tool-error.js"
 import {
   decodeInput as decodeToolInput,
@@ -42,12 +43,14 @@ export type ToolCall = {
 }
 
 export type ToolCallStarted = {
+  readonly kind?: "search" | "tool"
   readonly index: number
   readonly name: string
   readonly input: unknown
 }
 
 export type ToolCallEnded = {
+  readonly kind?: "search" | "tool"
   readonly index: number
   readonly name: string
   readonly input: unknown
@@ -144,6 +147,7 @@ const copyBounded = (
   seen: Set<object>,
   preserveCodeModeValues: boolean,
 ): unknown => {
+  checkValueSize(value)
   if (depth > MAX_VALUE_DEPTH) {
     throw new ToolRuntimeError("InvalidDataValue", `${label} exceeds the maximum value depth of ${MAX_VALUE_DEPTH}.`)
   }
@@ -667,7 +671,10 @@ export const make = <R>(
   const decodeOutput = (value: unknown, name: string) =>
     Effect.try({
       try: () => copyIn(value, `Result from tool '${name}'`),
-      catch: () => new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}'.`),
+      catch: (cause) =>
+        cause instanceof ValueLimitError
+          ? cause
+          : new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}'.`),
     })
 
   const recordCall = (call: ToolCall): void => {
@@ -677,13 +684,13 @@ export const make = <R>(
     calls.push(call)
   }
 
-  const recordAndObserve = (name: string, input: unknown) =>
+  const recordAndObserve = (name: string, input: unknown, kind: "search" | "tool") =>
     Effect.sync(() => {
       recordCall({ name })
       return calls.length - 1
-    }).pipe(Effect.tap((index) => hooks?.onToolCallStart?.({ index, name, input }) ?? Effect.void))
+    }).pipe(Effect.tap((index) => hooks?.onToolCallStart?.({ index, name, input, kind }) ?? Effect.void))
 
-  const invokeDefinition = (name: string, tool: Definition<R>, externalArgs: Array<unknown>) =>
+  const invokeDefinition = (name: string, tool: Definition<R>, externalArgs: Array<unknown>, kind: "search" | "tool") =>
     Effect.gen(function* () {
       if (externalArgs.length !== 1)
         throw new ToolRuntimeError("InvalidToolInput", `Tool '${name}' expects exactly one input object.`)
@@ -692,7 +699,7 @@ export const make = <R>(
         catch: (cause) =>
           new ToolRuntimeError("InvalidToolInput", `Invalid input for tool '${name}': ${String(cause)}`),
       })
-      const index = yield* recordAndObserve(name, input)
+      const index = yield* recordAndObserve(name, input, kind)
       return yield* observeEnd(
         Effect.gen(function* () {
           const raw = yield* runHost(Effect.suspend(() => tool.run(input)))
@@ -702,7 +709,7 @@ export const make = <R>(
           })
           return yield* decodeOutput(result, name)
         }),
-        { index, name, input },
+        { index, name, input, kind },
       )
     })
 
@@ -716,6 +723,7 @@ export const make = <R>(
           "search",
           searchTool,
           args.map((arg) => copyOut(copyIn(arg, "Arguments for tool 'search'"), "json")),
+          "search",
         ),
       ),
     invoke: (path, args) =>
@@ -723,7 +731,7 @@ export const make = <R>(
         const name = canonicalSegments(path).join(".")
         const externalArgs = args.map((arg) => copyOut(copyIn(arg, `Arguments for tool '${name}'`), "json"))
         const tool = resolve(root, path)
-        return yield* invokeDefinition(name, tool, externalArgs)
+        return yield* invokeDefinition(name, tool, externalArgs, "tool")
       }),
   }
 }

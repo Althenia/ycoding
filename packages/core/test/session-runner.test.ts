@@ -2718,6 +2718,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
         "defect",
         "echo",
+        "execute",
         "memory",
         "project_artifact",
         "snapshot",
@@ -2748,6 +2749,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
         "defect",
+        "execute",
         "memory",
         "project_artifact",
         "snapshot",
@@ -3467,7 +3469,7 @@ describe("SessionRunnerLLM", () => {
       }),
     )
 
-  it.effect("caps continuation fallback attempts at ten with monotonic retry events", () =>
+  it.effect("caps continuation fallback attempts at three with monotonic retry events", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = storedOpenAIResponsesModel
@@ -3482,13 +3484,9 @@ describe("SessionRunnerLLM", () => {
       yield* admit(session, "Cap continuation fallback retries")
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       while (requests.length < 3) yield* Effect.yieldNow
-      for (const delay of [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000]) {
-        yield* TestClock.adjust(delay)
-        while (requests.length < 3 + [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000].indexOf(delay) + 1)
-          yield* Effect.yieldNow
-      }
+      yield* TestClock.adjust("2 seconds")
       expect(yield* Fiber.join(run).pipe(Effect.flip)).toBe(failure)
-      expect(requests).toHaveLength(11)
+      expect(requests).toHaveLength(4)
 
       const database = (yield* Database.Service).db
       const retries = yield* database
@@ -3500,20 +3498,13 @@ describe("SessionRunnerLLM", () => {
         .pipe(Effect.orDie)
       expect(retries.map((event) => event.data)).toMatchObject([
         { attempt: 3, at: 2_000 },
-        { attempt: 4, at: 6_000 },
-        { attempt: 5, at: 14_000 },
-        { attempt: 6, at: 30_000 },
-        { attempt: 7, at: 62_000 },
-        { attempt: 8, at: 126_000 },
-        { attempt: 9, at: 246_000 },
-        { attempt: 10, at: 366_000 },
       ])
       const records = yield* SessionProviderRequest.Service.pipe(
         Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
       )
       expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
         { attempts: 1, continuation: "full" },
-        { attempts: 10, continuation: "fallback" },
+        { attempts: 3, continuation: "fallback" },
       ])
     }),
   )
@@ -4573,6 +4564,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
         "defect",
         "echo",
+        "execute",
         "memory",
         "project_artifact",
         "snapshot",
@@ -5083,6 +5075,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests.at(-1)?.tools.map((tool) => tool.name)).toEqual([
         "defect",
         "echo",
+        "execute",
         "memory",
         "snapshot",
         "storefail",
@@ -5684,6 +5677,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
         "defect",
         "echo",
+        "execute",
         "memory",
         "project_artifact",
         "snapshot",
@@ -9309,6 +9303,47 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("keeps exponential backoff when the provider delay is shorter", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Retry with a short provider delay")
+      responseStream = Stream.fail(rateLimited(1_000))
+      response = reply.text("Recovered", "short-retry-after-success")
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("1999 millis")
+      expect(requests).toHaveLength(1)
+      yield* TestClock.adjust("1 millis")
+      yield* Fiber.join(run)
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
+  for (const delay of [120_000, 120_001])
+    it.effect(`handles a provider retry-after of ${delay} milliseconds`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* admit(session, "Respect the provider retry ceiling")
+        const failure = rateLimited(delay)
+        responseStream = Stream.fail(failure)
+        response = reply.text("Recovered", "ceiling-retry-after-success")
+
+        const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+        while (requests.length < 1) yield* Effect.yieldNow
+        if (delay > 120_000) {
+          expect(yield* Fiber.join(run).pipe(Effect.flip)).toBe(failure)
+          expect(requests).toHaveLength(1)
+        } else {
+          yield* TestClock.adjust("119999 millis")
+          expect(requests).toHaveLength(1)
+          yield* TestClock.adjust("1 millis")
+          yield* Fiber.join(run)
+          expect(requests).toHaveLength(2)
+        }
+      }),
+    )
+
   it.effect("retries a recognized provider error event before observable output", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -10077,7 +10112,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("stops after ten total retry attempts with capped exponential backoff", () =>
+  it.effect("stops after three total retry attempts with exponential backoff", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Exhaust retries")
@@ -10085,15 +10120,12 @@ describe("SessionRunnerLLM", () => {
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       while (requests.length < 1) yield* Effect.yieldNow
-      for (const [index, delay] of [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000, 120_000].entries()) {
+      for (const [index, delay] of [2_000, 4_000].entries()) {
         yield* TestClock.adjust(delay)
-        while (requests.length < index + 2) {
-          if (run.pollUnsafe() !== undefined) break
-          yield* Effect.yieldNow
-        }
+        while (requests.length < index + 2) yield* Effect.yieldNow
       }
       expect(yield* Fiber.join(run).pipe(Effect.flip)).toBe(streamFailure)
-      expect(requests).toHaveLength(10)
+      expect(requests).toHaveLength(3)
 
       const database = (yield* Database.Service).db
       const retries = yield* database
@@ -10106,13 +10138,6 @@ describe("SessionRunnerLLM", () => {
       expect(retries.map((event) => event.data)).toMatchObject([
         { attempt: 2, at: 2_000 },
         { attempt: 3, at: 6_000 },
-        { attempt: 4, at: 14_000 },
-        { attempt: 5, at: 30_000 },
-        { attempt: 6, at: 62_000 },
-        { attempt: 7, at: 126_000 },
-        { attempt: 8, at: 246_000 },
-        { attempt: 9, at: 366_000 },
-        { attempt: 10, at: 486_000 },
       ])
       expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1")).toHaveLength(1)
       const assistant = requireAssistant(yield* session.context(sessionID))
@@ -10131,7 +10156,7 @@ describe("SessionRunnerLLM", () => {
       ).toEqual([
         {
           request: 1,
-          attempts: 10,
+          attempts: 3,
           invalidation: "retry-fallback",
           continuation: "fallback",
         },
@@ -11763,22 +11788,22 @@ describe("SessionRunnerLLM model fallback", () => {
       const session = yield* setup
       configureFallbacks(["fake/backup"])
       responseStreams = [
-        ...Array.from({ length: 10 }, () => Stream.fail(rateLimited())),
+        ...Array.from({ length: 3 }, () => Stream.fail(rateLimited())),
         Stream.fromIterable(reply.textWithUsage("Answered by backup", "text-backup", 1_000)),
       ]
       yield* admit(session, "Fall back after retries")
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       while (requests.length < 1) yield* Effect.yieldNow
-      for (const [index, delay] of [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000, 120_000].entries()) {
+      for (const [index, delay] of [2_000, 4_000].entries()) {
         yield* TestClock.adjust(delay)
         while (requests.length < index + 2) yield* Effect.yieldNow
       }
       yield* Fiber.join(run)
 
-      expect(requests).toHaveLength(11)
-      expect(requests.slice(0, 10).map((request) => String(request.model.id))).toEqual(Array(10).fill("fake-model"))
-      expect(String(requests[10]?.model.id)).toBe("backup")
+      expect(requests).toHaveLength(4)
+      expect(requests.slice(0, 3).map((request) => String(request.model.id))).toEqual(Array(3).fill("fake-model"))
+      expect(String(requests[3]?.model.id)).toBe("backup")
       const types = yield* recordedEventTypes(sessionID)
       expect(types.filter((type) => type === "session.step.started.1")).toHaveLength(1)
       expect(types.filter((type) => type === "session.step.rerouted.1")).toHaveLength(1)
@@ -11811,7 +11836,7 @@ describe("SessionRunnerLLM model fallback", () => {
       expect(records).toHaveLength(2)
       expect(records[0]).toMatchObject({
         model: { providerID: "fake", id: "fake-model" },
-        attempts: 10,
+        attempts: 3,
         invalidation: "retry-fallback",
         tokens: { input: 0, output: 0 },
       })

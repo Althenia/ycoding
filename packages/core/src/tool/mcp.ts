@@ -102,7 +102,7 @@ export const layer = Layer.effectDiscard(
                   const title = `${tool.name}${Object.keys(args).length ? ` (${Object.keys(args).join(", ")})` : ""}`
                   const job = yield* runtime.job
                     .start({
-                      id: context.callID,
+                      id: context.invocationID ?? context.callID,
                       type: name(tool.server, tool.name),
                       title,
                       metadata: { sessionID: context.sessionID },
@@ -123,7 +123,7 @@ export const layer = Layer.effectDiscard(
                     })
                     .pipe(Effect.onError(() => reservation.release))
                   const notifyWhenDone = Effect.fn("McpTool.notifyWhenDone")(function* () {
-                    yield* runtime.job.wait({ id: context.callID }).pipe(
+                    yield* runtime.job.wait({ id: job.id }).pipe(
                       Effect.flatMap((result) => {
                         const state =
                           result.info?.status === "completed"

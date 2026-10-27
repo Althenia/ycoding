@@ -34,6 +34,7 @@ export const invokeJsonMethod = (name: string, args: Array<unknown>, node: AstNo
       try {
         return copyIn(JSON.parse(text), "JSON.parse result")
       } catch (error) {
+        if (error instanceof RangeError) throw error
         throw new InterpreterRuntimeError(
           `JSON.parse received invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
           node,

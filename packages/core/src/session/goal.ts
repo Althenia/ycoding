@@ -10,6 +10,7 @@ import { makeLocationNode } from "../effect/app-node"
 import { llmClient } from "../effect/app-node-platform"
 import { EventRuntime } from "../event"
 import { Money } from "@ycoding-ai/schema/money"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { SessionEvent } from "./event"
 import { SessionAutonomy } from "./autonomy"
 import { SessionHelperPolicy } from "./helper-policy"
@@ -97,9 +98,13 @@ const make = (dependencies: Dependencies) => {
               `Assistant: ${message.content
                 .flatMap((part) => {
                   if (part.type === "text" || part.type === "reasoning") return [part.text]
-                  if (part.name !== "question" || part.state.status !== "completed") return []
-                  const origin = part.state.structured.automatic === true ? "automatic" : "source unreported"
-                  return [`Question details (bounded): ${JSON.stringify({ questions: part.state.input.questions }).slice(0, 1_000)}\nQuestion tool result (${origin}): ${JSON.stringify({ answers: part.state.structured.answers }).slice(0, 1_000)}`]
+                  return ToolInvocation.list(part).flatMap((call) => {
+                    if (call.name !== "question" || call.status !== "completed" || typeof call.input !== "object" || call.input === null || typeof call.structured !== "object" || call.structured === null) return []
+                    const input = call.input as Record<string, unknown>
+                    const result = call.structured as Record<string, unknown>
+                    const origin = result.automatic === true ? "automatic" : "source unreported"
+                    return [`Question details (bounded): ${JSON.stringify({ questions: input.questions }).slice(0, 1_000)}\nQuestion tool result (${origin}): ${JSON.stringify({ answers: result.answers }).slice(0, 1_000)}`]
+                  })
                 })
                 .join("\n")}`,
             ]

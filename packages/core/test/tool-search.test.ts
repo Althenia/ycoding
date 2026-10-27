@@ -93,6 +93,28 @@ const call = (name: "glob" | "grep", input: unknown) => ({
 const it = testEffect(Layer.empty)
 
 describe("search tools", () => {
+  it.live("discovers registered built-in search tools through execute", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withTools(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const result = yield* settleTool(registry, {
+              sessionID,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "search-discovery",
+                name: "execute",
+                input: { code: 'return search({query:"glob"})' },
+              },
+            })
+            expect(JSON.stringify(result.result)).toContain("tools.glob")
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
   it.live("bounds omitted glob and grep limits", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

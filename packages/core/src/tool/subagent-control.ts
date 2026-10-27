@@ -64,7 +64,7 @@ export const Plugin = {
                     task: yield* orchestration.send({
                       parentID: context.sessionID,
                       childID: input.sessionID,
-                      messageID: SessionOrchestrationIdentity.send(context.sessionID, context.messageID, context.callID),
+                      messageID: SessionOrchestrationIdentity.send(context.sessionID, context.messageID, context.invocationID ?? context.callID),
                       text: input.text,
                       delivery: input.delivery,
                     }),

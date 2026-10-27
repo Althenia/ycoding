@@ -462,6 +462,29 @@ YCoding does not auto-load `.ycoding/tool/*.ts` or `.ycoding/tools/*.ts`.
 
 `capabilities.tools` allows or denies tools by registered name, including MCP tools named `<server>_<tool>`, through the same catalog filter that permission rules use; see [capability toggles](./configuration.md#capability-toggles) for the built-in tool names.
 
+The `execute` catalog exposes visible built-in, plugin, and MCP tools. Search for an intent and copy the exact returned path and signature; a catalog entry does not grant permission. Calls use the same leaf permission and guardrail checks as direct calls. A plugin registration or MCP server with `codemode: false` also advertises direct definitions, which remain available if `execute` is disabled separately.
+
+For example, first discover the local read and search tools and an MCP issue lookup:
+
+```js
+return search({ query: "read grep files and MCP issue lookup" })
+```
+
+The following second program is illustrative: it applies only if search returns these exact paths and signatures, including an installed `tracker` server. Its issue fields depend on that server's result schema. Independent reads run in parallel; the subsequent lookup uses a filtered local result and returns only the needed fields.
+
+```js
+const [file, matches] = await Promise.all([
+  tools.read({ path: "README.md" }),
+  tools.grep({ pattern: "ISSUE-[0-9]+", path: "docs", limit: 10 }),
+])
+const keys = matches.flatMap((match) => match.text.match(/ISSUE-[0-9]+/g) ?? [])
+if (keys.length === 0) return { matches: 0 }
+const issue = await tools.tracker.lookup({ key: keys[0] })
+return { readType: file.type, issue: { key: issue.key, status: issue.status } }
+```
+
+Use actual returned signatures and relevant matches. Await calls whose completion matters, and reduce returned data to the fields needed by the task.
+
 Local selective compaction is runtime-owned rather than a model tool. At configured `consider` pressure, the context hook durably admits and starts or joins one process-global background worker without waiting for settlement. It admits once more only if the same pressure cycle rises to `advised`, and rearms after returning to `normal`; failed admission remains retryable, while successful or deduplicated admission latches. `mandatory` never starts this soft path. Explicit `/compact` and the mandatory hard-limit gate remain synchronous settlement paths, and all three paths share one per-Session admission gate. Local compaction resolves the configured `efficiency.helper_models.compaction.main` or `.subagent` model and reuses a deterministic taskless child Session with that model and the hidden built-in `compaction` agent, which remains `mode: primary`. The worker validates a bounded canonical TOON checkpoint containing objective, requirements, acceptance criteria, progress, pending work, decisions, blockers, skills, and a bounded fact capsule for every covered source item. Helper timeout or failure uses the local canonical fallback. Required semantic evidence that cannot fit fails closed; arbitrary covered bytes are not guaranteed to survive lossy compression. Codex remote compaction uses the owner model without a helper and falls back to local compaction if the remote request fails. Activation creates a new immutable context revision without deleting canonical messages or transcript events.
 
 Custom tools must not depend on destructive summary replacement.

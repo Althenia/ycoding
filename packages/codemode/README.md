@@ -78,6 +78,8 @@ runtime.execute(source) // Effect<CodeMode.Result, never, ToolServices>
 
 The Effect environment is inferred from the supplied tools. `onToolCallStart` observes admitted calls with decoded
 input; `onToolCallEnd` observes settled outcomes and duration. Both hooks return Effects and must not fail.
+Both hooks include `kind: "search"` for the built-in `search(...)` operation and `kind: "tool"` for registered tools,
+including a tool registered as `search` and called through `tools.search(...)`.
 
 ### OpenAPI tools
 
@@ -126,19 +128,20 @@ failure.
 
 Diagnostic kinds:
 
-| Kind                    | Meaning                                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `ParseError`            | Source is empty or cannot be parsed.                                                           |
-| `UnsupportedSyntax`     | Parsed JavaScript is outside the supported subset.                                             |
-| `UnknownTool`           | The program referenced an unavailable tool.                                                    |
-| `InvalidToolInput`      | Tool input failed schema decoding or safe-data copying.                                        |
-| `InvalidToolOutput`     | Tool output failed schema decoding or safe-data copying.                                       |
-| `InvalidDataValue`      | Program data violated the plain-data contract.                                                 |
-| `ToolCallLimitExceeded` | The program exceeded `maxToolCalls`.                                                           |
-| `TimeoutExceeded`       | Execution timed out; as a warning, background work was interrupted after the program returned. |
-| `ToolFailure`           | A tool refused or failed.                                                                      |
-| `ExecutionFailure`      | The program threw or another execution error occurred.                                         |
-| `Truncated`             | Warning only: additional warnings were omitted by `maxOutputBytes`.                            |
+| Kind                    | Meaning                                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| `ParseError`            | Source is empty or cannot be parsed.                                                                  |
+| `UnsupportedSyntax`     | Parsed JavaScript is outside the supported subset.                                                    |
+| `UnknownTool`           | The program referenced an unavailable tool.                                                           |
+| `InvalidToolInput`      | Tool input failed schema decoding or safe-data copying.                                               |
+| `InvalidToolOutput`     | Tool output failed schema decoding or safe-data copying.                                              |
+| `InvalidDataValue`      | Program data violated the plain-data contract.                                                        |
+| `ToolCallLimitExceeded` | The program exceeded `maxToolCalls`.                                                                  |
+| `StepLimitExceeded`     | The program exceeded `maxSteps`; program handlers cannot catch this failure.                          |
+| `TimeoutExceeded`       | Execution or a regex operation timed out; as a warning, background work was interrupted after return. |
+| `ToolFailure`           | A tool refused or failed.                                                                             |
+| `ExecutionFailure`      | The program threw or another execution error occurred.                                                |
+| `Truncated`             | Warning only: additional warnings were omitted by `maxOutputBytes`.                                   |
 
 Unknown host failures, defects, and invalid outputs are sanitized. `toolError("safe message")` explicitly exposes a
 safe refusal to the model; its optional cause remains private.
@@ -155,13 +158,39 @@ signatures. Search counts toward `maxToolCalls`.
 
 ## Execution Limits
 
-| Limit            | Default   | Controls                        |
-| ---------------- | --------- | ------------------------------- |
-| `timeoutMs`      | unlimited | Total execution time.           |
-| `maxToolCalls`   | unlimited | Admitted tool calls.            |
-| `maxOutputBytes` | unlimited | Retained result value and logs. |
+| Limit            | Default   | Controls                                                                                         |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------ |
+| `timeoutMs`      | unlimited | Total execution time.                                                                            |
+| `maxSteps`       | unlimited | Evaluated statements and expressions, shared across function calls and promises.                 |
+| `regexTimeoutMs` | 1000      | Milliseconds per regex operation, including subprocess startup and IPC, excluding queue waiting. |
+| `maxToolCalls`   | unlimited | Admitted tool calls.                                                                             |
+| `maxOutputBytes` | unlimited | Retained result value and logs.                                                                  |
 
-Execution limits have no default values.
+`maxSteps` and `regexTimeoutMs` accept safe integers greater than or equal to 1. Steps measure evaluator work, not
+elapsed time; waiting for tools or regex subprocesses consumes no steps. Step exhaustion terminates execution outside
+program `catch`, promise rejection handlers, and `finally` return overrides. `timeoutMs` remains a wall-clock budget.
+
+Regex matching runs in one lazily started subprocess per execution, including `RegExp.exec`/`test` and string
+`match`/`matchAll`/`search`/`replace`/`replaceAll`/`split` with regex patterns. String patterns interpreted as regexes
+also use the subprocess. Literal string operations stay local. Each regex operation has its own deadline; exceeding it
+sends `SIGKILL` and fails execution with a noncatchable `TimeoutExceeded`. Success, failure, and interruption close
+the pipes and wait for process exit. Stateful `g`/`y` matching, named groups, indices, and interpreted replacement callbacks retain
+their JavaScript behavior.
+
+The subprocess runs fixed host code with the current executable. Packaged CLI/TUI executables dispatch its exact
+private bootstrap before normal startup. Patterns and input travel over bounded JSON-line IPC, never executable
+source or argv. Frames exceeding 128 MiB raise a catchable `RangeError`. Replacement callback input strings are
+reconstructed on the interpreter side; wire values preserve unmatched captures, named groups, and indices.
+
+Always-on value caps are 16,777,216 UTF-16 code units per string, 10,000,000 elements per array, and 10,000 pending
+promises per execution. Exceeding a cap raises a catchable `RangeError`. These are soft value-size caps, not hard heap
+containment: objects, collections, native temporary allocations, parsing, and host tool memory are not a bounded heap.
+
+Source text and regex source use the same string-length cap before transpilation/parsing or host regex construction.
+Transpilation, parsing, and host regex construction run on the host outside the regex matching deadline. The subprocess
+deadline covers subprocess regex construction and matching, not total hard CPU isolation.
+Synchronous request encoding, response decoding, and process creation also run on the host. Their elapsed time counts
+against the regex deadline, but they cannot be forcibly interrupted; an expired operation is rejected after they return.
 
 Invalid limit configuration throws `RangeError`. Warnings receive a separate budget equal to `maxOutputBytes`.
 Truncation does not fail execution; an oversized value becomes a string with an in-band marker. Timeouts interrupt

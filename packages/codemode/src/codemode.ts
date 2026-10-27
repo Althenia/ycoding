@@ -13,6 +13,8 @@ export type ExecutionLimits = {
    * No default: absent means no timeout.
    */
   readonly timeoutMs?: number
+  readonly maxSteps?: number
+  readonly regexTimeoutMs?: number
   /** Maximum number of tool calls admitted by the runtime. No default: absent means unlimited. */
   readonly maxToolCalls?: number
   /**
@@ -29,6 +31,8 @@ export type DiscoveryOptions = {
 }
 
 export type ResolvedExecutionLimits = {
+  readonly maxSteps: number | undefined
+  readonly regexTimeoutMs: number
   readonly timeoutMs: number | undefined
   readonly maxToolCalls: number | undefined
   readonly maxOutputBytes: number | undefined
@@ -70,6 +74,7 @@ export const DiagnosticKind = Schema.Literals([
   "InvalidDataValue",
   "ToolCallLimitExceeded",
   "TimeoutExceeded",
+  "StepLimitExceeded",
   "ToolFailure",
   "ExecutionFailure",
   "Truncated",
@@ -128,6 +133,8 @@ const validateLimit = (name: keyof ExecutionLimits, value: number | undefined, m
 }
 
 const resolveExecutionLimits = (limits?: ExecutionLimits): ResolvedExecutionLimits => ({
+  maxSteps: validateLimit("maxSteps", limits?.maxSteps, 1),
+  regexTimeoutMs: validateLimit("regexTimeoutMs", limits?.regexTimeoutMs, 1) ?? 1000,
   timeoutMs: validateLimit("timeoutMs", limits?.timeoutMs, 1),
   maxToolCalls: validateLimit("maxToolCalls", limits?.maxToolCalls, 0),
   maxOutputBytes: validateLimit("maxOutputBytes", limits?.maxOutputBytes, 0),

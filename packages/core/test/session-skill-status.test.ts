@@ -66,6 +66,18 @@ const toolCompleted = (
   )
 
 describe("SessionSkillStatus.list", () => {
+  test("recognizes a completed nested skill while execute remains running", () => {
+    const message = SessionMessage.Assistant.make({
+      id: messageID("nested"), agent: Agent.defaultID, model,
+      content: [SessionMessage.AssistantTool.make({
+        type: "tool", id: "outer", name: "execute", time: { created },
+        state: SessionMessage.ToolStateRunning.make({ input: { code: "" }, content: [], structured: { toolCalls: [
+          { id: "inner", name: "skill", tool: "tools.skill", status: "completed", input: { id: "effect" }, structured: { name: "Effect", directory: "/skills", output: "guidance" } },
+        ] } }),
+      })], time: { created },
+    })
+    expect(SessionSkillStatus.list([message], [])).toMatchObject([{ id: "effect", state: "active", content: "guidance" }])
+  })
   test("records reference and completed tool activations from their snapshots", () => {
     expect(
       SessionSkillStatus.list(
@@ -95,6 +107,23 @@ describe("SessionSkillStatus.list", () => {
         declarations: { skills: [], instructions: [] },
       }),
     ])
+  })
+
+  test("retains the held MCP entry from a completed nested activation after outer failure", () => {
+    const entry = {
+      server: "skills", uri: "skill://audit/SKILL.md",
+      frontmatter: { name: "Audit", description: "Review the selected boundary" }, resources: "dynamic" as const,
+    }
+    const message = SessionMessage.Assistant.make({ id: messageID("nested-mcp"), agent: Agent.defaultID, model, time: { created }, content: [
+      SessionMessage.AssistantTool.make({ type: "tool", id: "outer", name: "execute", time: { created }, state: SessionMessage.ToolStateError.make({
+        status: "error", error: { type: "aborted", message: "Interrupted" }, input: {}, content: [], structured: { toolCalls: [
+          { id: "loaded", index: 0, tool: "tools.skill", name: "skill", status: "completed", input: { id: "audit" }, structured: { name: "Audit", directory: "", output: "Held guidance", entry } },
+          { id: "failed", index: 1, tool: "tools.skill", name: "skill", status: "error", input: { id: "audit" }, structured: { entry: { ...entry, frontmatter: { ...entry.frontmatter, description: "Unsuccessful replacement" } } } },
+        ] },
+      }) }),
+    ] })
+    expect(SessionSkillStatus.mcpActivation([message], skillID("audit"))?.entry).toEqual(entry)
+    expect(SessionSkillStatus.list([message], [])).toMatchObject([{ id: "audit", state: "active", content: "Held guidance" }])
   })
 
   test("recovers the latest MCP entry when one assistant message contains repeated activations", () => {

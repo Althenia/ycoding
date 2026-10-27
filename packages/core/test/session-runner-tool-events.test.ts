@@ -176,6 +176,14 @@ test("edit results record numeric file-change counts", async () => {
   })
 })
 
+test("nested edit results record file changes even when the program reports an error", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(LLMEvent.toolCall({ id: "outer", name: "execute", input: { code: "" } })))
+  const structured = { error: true, toolCalls: [{ id: "inner", name: "edit", tool: "tools.edit", status: "completed", input: {}, structured: { files: [{ file: "src/file.ts", patch: "@@", additions: 2, deletions: 1 }] } }] }
+  await Effect.runPromise(publisher.publish(LLMEvent.toolResult({ id: "outer", name: "execute", result: { type: "text", value: "error" }, output: { structured, content: [] } })))
+  expect(published).toContainEqual({ type: "session.file-change.recorded.1", data: { sessionID, change: { path: "src/file.ts", patch: "@@", additions: 2, deletions: 1 } } })
+})
+
 test("provider metadata is flattened using the route key", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(

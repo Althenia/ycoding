@@ -138,3 +138,65 @@ test("derives displayable patches from one completed edit or patch tool part", (
   expect(capturedPartPatches(editPart("src/a.ts", first, "error"))).toEqual([])
   expect(capturedPartPatches({ type: "tool", name: "shell", state: { status: "completed", structured: { files: [{ file: "src/a.ts", patch: first }] } } })).toEqual([])
 })
+
+const executePart = (toolCalls: unknown[], status = "completed") => ({ type: "tool", id: "call_execute", name: "execute", state: { status, structured: { toolCalls } } })
+
+const receipt = (id: string, name: string, structured: unknown, status = "completed", input?: unknown) => ({
+  id, name, tool: name, status, structured, input,
+})
+
+test("captures completed canonical edit and patch receipts regardless of outer lifecycle", () => {
+  const calls = [
+    { tool: "edit", status: "completed", structured: { files: [{ file: "src/ignored.ts", patch: first }] } },
+    receipt("one", "edit", { files: [{ file: "src/a.ts", patch: first }] }),
+    receipt("two", "patch", { files: [{ patch: other }] }),
+    receipt("three", "edit", { files: [{ file: "src/failed.ts", patch: first }] }, "error"),
+    receipt("four", "edit", { files: [{ file: "src/running.ts", patch: first }] }, "running"),
+    receipt("five", "read", { files: [{ file: "src/read.ts", patch: first }] }),
+  ]
+  for (const status of ["completed", "running", "error"]) {
+    expect(capturedPartPatches(executePart(calls, status))).toMatchObject([
+      { path: "src/a.ts", additions: 1, deletions: 1, diff: first },
+      { path: "src/b.ts", additions: 2, deletions: 1, diff: other },
+    ])
+    expect(capturedPartPatches(executePart(calls, status))).toHaveLength(2)
+  }
+})
+
+test("captures execute nested edits in the prompt segment summary", () => {
+  expect(summarize([user("msg_user"), assistant("msg_reply", [
+    executePart([receipt("edit1", "edit", { files: [{ file: "src/a.ts", patch: first }] })], "error"),
+    editPart("src/a.ts", second),
+  ])])).toMatchObject([{ placementMessageID: "msg_reply", files: [{ path: "src/a.ts", additions: 2, deletions: 2, files: [{ diff: first }, { diff: second }] }] }])
+})
+
+test("attributes nested launch, distinct sends and answer to their own child windows", () => {
+  const child = [
+    user("launch"), assistant("child1", [editPart("src/launch.ts", first)]),
+    synthetic(sendID("reply2", "send1"), { kind: "message" }), assistant("child2", [editPart("src/send1.ts", first)]),
+    synthetic(sendID("reply2", "send2"), { kind: "message" }), assistant("child3", [editPart("src/send2.ts", first)]),
+    synthetic("answer", { kind: "answer", questionID: "q1" }), assistant("child4", [editPart("src/answer.ts", first)]),
+  ]
+  const parent = [
+    user("u1"), assistant("reply1", [executePart([receipt("launch1", "subagent", { sessionID: "ses_child" })], "running")]),
+    user("u2"), assistant("reply2", [executePart([
+      receipt("send1", "subagent_control", { action: "send", task: { sessionID: "ses_child" } }),
+      receipt("send2", "subagent_control", { action: "send", task: { sessionID: "ses_child" } }),
+      receipt("bad", "subagent_control", { action: "send", task: { sessionID: "ses_bad" } }, "error"),
+    ], "error")]),
+    user("u3"), assistant("reply3", [executePart([receipt("answer1", "subagent_control", { action: "answer", task: { sessionID: "ses_child" } }, "completed", { questionID: "q1" })])]),
+  ]
+  expect(capturedChildSessionIDs(parent)).toEqual(["ses_child"])
+  expect(summarize(parent, { ses_child: child }).map((unit) => [unit.placementMessageID, unit.files.map((file) => file.path)])).toEqual([
+    ["reply1", ["src/launch.ts"]], ["reply2", ["src/send1.ts", "src/send2.ts"]], ["reply3", ["src/answer.ts"]],
+  ])
+})
+
+test("preserves captures and launch attribution for direct parts without call IDs", () => {
+  const edit = { type: "tool", name: "edit", state: { status: "completed", structured: { files: [{ file: "src/a.ts", patch: first }] } } }
+  const launchWithoutID = { type: "tool", name: "subagent", state: { status: "running", structured: { sessionID: "ses_child" } } }
+  const sendWithoutID = { type: "tool", name: "subagent_control", state: { status: "completed", structured: { action: "send", task: { sessionID: "ses_other" } } } }
+  const answerWithoutID = { type: "tool", name: "subagent_control", state: { status: "completed", input: { questionID: "q1" }, structured: { action: "answer", task: { sessionID: "ses_answer" } } } }
+  expect(capturedPartPatches(edit)).toMatchObject([{ path: "src/a.ts", diff: first }])
+  expect(capturedChildSessionIDs([assistant("reply", [launchWithoutID, sendWithoutID, answerWithoutID])])).toEqual(["ses_child", "ses_answer"])
+})

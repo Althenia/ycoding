@@ -22,6 +22,7 @@ import type {
   SessionMessageAssistantTool,
   SessionMessageInfo,
 } from "@ycoding-ai/client/promise"
+import { ToolInvocation } from "@ycoding-ai/schema/tool-invocation"
 import { Locale } from "../util/locale"
 import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream.fragment"
 import type {
@@ -838,6 +839,27 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       notifyDetail(child)
       return
     }
+    if (event.type === "session.tool.invocation-settled") {
+      const current = child.tools.get(sourceKey(event.data.assistantMessageID, event.data.callID))
+      if (current?.part.name !== "execute" || current.part.state.status !== "running") return
+      childTool(
+        child,
+        {
+          ...current.part,
+          state: {
+            ...current.part.state,
+            structured: ToolInvocation.settle(
+              current.part.state.structured,
+              event.data.invocation,
+            ) as typeof current.part.state.structured,
+          },
+        },
+        event.data.assistantMessageID,
+      )
+      touch(child, event.created)
+      notifyDetail(child)
+      return
+    }
     if (event.type === "session.tool.progress") {
       const key = sourceKey(event.data.assistantMessageID, event.data.callID)
       if (child.finishedTools.has(key)) return
@@ -854,7 +876,13 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
           state: {
             status: "running",
             input: part && part.state.status !== "streaming" ? part.state.input : {},
-            structured: event.data.structured,
+            structured:
+              part?.name === "execute"
+                ? ToolInvocation.mergeStructured(
+                    part.state.status === "streaming" ? undefined : part.state.structured,
+                    event.data.structured,
+                  )
+                : event.data.structured,
             content: event.data.content,
           },
           time: {
@@ -895,7 +923,13 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
             : {
                 status: "completed",
                 input: part && part.state.status !== "streaming" ? part.state.input : {},
-                structured: event.data.structured,
+                structured:
+                  part?.name === "execute"
+                    ? ToolInvocation.mergeStructured(
+                        part.state.status === "streaming" ? undefined : part.state.structured,
+                        event.data.structured,
+                      )
+                    : event.data.structured,
                 content: event.data.content,
                 result: event.data.result,
               },
@@ -978,26 +1012,22 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     },
   ) => {
     const tool = normalizeTool(item)
-    if (tool.name !== "subagent" || tool.state.status === "streaming") return
-    const found = childSessionID(record(tool.state.structured))
-    if (!found) return
-    const child = admitChild(found.sessionID)
-    applyMeta(child, record(tool.state.input))
-    if (tool.state.status === "completed" && found.running) child.background = true
-    if (child.status === "running") {
-      // A subagent call that has not returned still blocks the parent, so its
-      // child is live no matter what the active snapshot says. Once the call
-      // returned, the structured status plus the active map decide, which is how
-      // a backgrounded child stays running. Children already tracked from the
-      // live stream keep their streamed status unless this is a reconnect, where
-      // a settled event can be missed while the stream is down.
-      const streamed = next.reconnect !== true && next.live?.has(found.sessionID) === true
-      const blocking = tool.state.status === "running"
-      if (blocking) next.blocking?.add(found.sessionID)
-      const running = streamed || blocking || (found.running && (!next.active || found.sessionID in next.active))
-      child.status = running ? "running" : "completed"
+    for (const invocation of ToolInvocation.list(tool)) {
+      if (invocation.name !== "subagent") continue
+      const found = childSessionID(record(invocation.structured))
+      if (!found) continue
+      const child = admitChild(found.sessionID)
+      applyMeta(child, record(invocation.input))
+      if (invocation.status === "completed" && found.running) child.background = true
+      if (child.status === "running") {
+        const streamed = next.reconnect !== true && next.live?.has(found.sessionID) === true
+        const blocking = invocation.status === "running"
+        if (blocking) next.blocking?.add(found.sessionID)
+        const running = streamed || blocking || (found.running && (!next.active || found.sessionID in next.active))
+        child.status = running ? "running" : "completed"
+      }
+      touch(child, tool.time.completed ?? tool.time.created)
     }
-    touch(child, tool.time.completed ?? tool.time.created)
   }
 
   // Settle a still-running child from a parent-side signal. The child's own
@@ -1049,6 +1079,21 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
       if (event.type === "session.tool.input.started") {
         if (canonicalToolName(event.data.name) === "subagent")
           pendingCalls.set(sourceKey(event.data.assistantMessageID, event.data.callID), {})
+        return
+      }
+      if (event.type === "session.tool.invocation-settled") {
+        const invocation = event.data.invocation
+        if (invocation.name !== "subagent" || invocation.status !== "completed") return
+        const found = childSessionID(record(invocation.structured))
+        if (!found) return
+        const child = admitChild(found.sessionID)
+        applyMeta(child, record(invocation.input))
+        if (found.running) child.background = true
+        else if (child.status === "running") child.status = "completed"
+        touch(child, event.created)
+        input.emit()
+        if (!child.blockersHydrated) void hydrateBlockers(sdk, child, blockerEpoch, signal)
+        if (!child.hydrated) void hydrateChild(sdk, child, signal)
         return
       }
       if (event.type === "session.tool.called") {

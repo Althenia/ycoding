@@ -1,4 +1,6 @@
 import { Cause, Effect } from "effect"
+import { checkArrayLength, checkStringLength, checkValueSize, ValueLimitError } from "../limits.js"
+import { Containment } from "./containment.js"
 import { isBlockedMember, ToolReference, ToolRuntimeError, type SafeObject } from "../tool-runtime.js"
 import {
   type AstNode,
@@ -219,6 +221,7 @@ export class Interpreter<R> {
   private readonly logs: Array<string>
   private readonly promises: PromiseRuntime<R>
   private readonly runner: CallbackRunner<R> = {
+    regex: () => this.containment.regex,
     invokeFunction: (fn, args) => this.invokeFunction(fn, args),
     invokeCallable: (callable, args, node) => this.invokeCallable(callable, args, node),
     settlePromise: (promise) => this.settlePromise(promise),
@@ -229,7 +232,8 @@ export class Interpreter<R> {
     invokeSearch: (args: Array<unknown>) => Effect.Effect<unknown, unknown, R>,
     toolKeys: (path: ReadonlyArray<string>) => ReadonlyArray<string>,
     promises: PromiseRuntime<R>,
-    logs: Array<string> = [],
+    logs: Array<string>,
+    private readonly containment: Containment,
   ) {
     const globalScope = new Map<string, Binding>()
     this.scopes = new ScopeStack([globalScope])
@@ -324,6 +328,13 @@ export class Interpreter<R> {
   }
 
   private evaluateStatement(node: AstNode): Effect.Effect<StatementResult, unknown, R> {
+    return Effect.suspend(() => {
+      this.containment.step(node)
+      return this.dispatchStatement(node)
+    })
+  }
+
+  private dispatchStatement(node: AstNode): Effect.Effect<StatementResult, unknown, R> {
     switch (node.type) {
       case "ExpressionStatement":
         return Effect.as(this.evaluateExpression(getNode(node, "expression")), { kind: "none" })
@@ -799,7 +810,7 @@ export class Interpreter<R> {
 
     const attempted = Effect.matchCauseEffect(this.evaluateStatement(body), {
       onFailure: (cause) => {
-        if (cause.reasons.some(Cause.isInterruptReason) || !handler) {
+        if (self.containment.fatal || cause.reasons.some(Cause.isInterruptReason) || !handler) {
           return Effect.failCause(cause)
         }
 
@@ -821,7 +832,7 @@ export class Interpreter<R> {
 
     return Effect.matchCauseEffect(attempted, {
       onFailure: (cause) =>
-        cause.reasons.some(Cause.isInterruptReason)
+        self.containment.fatal || cause.reasons.some(Cause.isInterruptReason)
           ? Effect.failCause(cause)
           : Effect.flatMap(this.evaluateStatement(finalizer), (final) =>
               isAbrupt(final) ? Effect.succeed(final) : Effect.failCause(cause),
@@ -1026,6 +1037,13 @@ export class Interpreter<R> {
   }
 
   private evaluateExpression(node: AstNode): Effect.Effect<unknown, unknown, R> {
+    return Effect.suspend(() => {
+      this.containment.step(node)
+      return Effect.map(this.dispatchExpression(node), checkValueSize)
+    })
+  }
+
+  private dispatchExpression(node: AstNode): Effect.Effect<unknown, unknown, R> {
     switch (node.type) {
       case "Literal": {
         const regex = node.regex
@@ -1144,6 +1162,7 @@ export class Interpreter<R> {
       throw new InterpreterRuntimeError("Invalid array length.", node).as("RangeError")
     }
     // Sparse like JS: Array(3) has holes, and combinator loops already skip them.
+    checkArrayLength(first)
     return new Array(first)
   }
 
@@ -1205,6 +1224,7 @@ export class Interpreter<R> {
     try {
       return new CodeModeRegExp(pattern, flags)
     } catch (error) {
+      if (error instanceof ValueLimitError) throw error
       const reason = regexFailureReason(error)
       throw new InterpreterRuntimeError(
         /flag/i.test(reason)
@@ -1344,6 +1364,7 @@ export class Interpreter<R> {
     const r = coerceOperand(rhs)
     switch (operator) {
       case "+":
+        if (typeof l === "string" || typeof r === "string") checkStringLength(String(l).length + String(r).length)
         return (l as string) + (r as string)
       case "-":
         return (l as number) - (r as number)
@@ -1589,6 +1610,7 @@ export class Interpreter<R> {
   ): Effect.Effect<unknown, unknown, R> {
     const self = this
     return Effect.gen(function* () {
+      self.containment.check()
       if (callable instanceof ToolReference) {
         if (callable.path.length === 0) throw new InterpreterRuntimeError("The tools root is not callable.", callee)
         return yield* self.createToolCallPromise(callable.path, args)
@@ -1677,7 +1699,7 @@ export class Interpreter<R> {
   private invokeConsole(name: string, args: Array<unknown>, node: AstNode): undefined {
     if (!consoleMethods.has(name))
       throw new InterpreterRuntimeError(`console.${name} is not available in CodeMode.`, node)
-    this.logs.push(formatConsoleMessage(name, args))
+    this.logs.push(checkValueSize(formatConsoleMessage(name, args)))
     return undefined
   }
 
@@ -1695,7 +1717,8 @@ export class Interpreter<R> {
               "Spread arguments require an array, string, Map, or Set in CodeMode.",
               argNode,
             )
-          args.push(...items)
+          checkArrayLength(args.length + items.length)
+          for (const item of items) args.push(item)
         } else {
           args.push(yield* self.evaluateExpression(argNode))
         }
@@ -1705,7 +1728,14 @@ export class Interpreter<R> {
   }
 
   private invokeFunction(fn: CodeModeFunction, args: Array<unknown>): Effect.Effect<unknown, unknown, R> {
-    const invocation = new Interpreter(this.invokeTool, this.invokeSearch, this.toolKeys, this.promises, this.logs)
+    const invocation = new Interpreter(
+      this.invokeTool,
+      this.invokeSearch,
+      this.toolKeys,
+      this.promises,
+      this.logs,
+      this.containment,
+    )
     invocation.scopes = new ScopeStack([...fn.capturedScopes, new Map()])
     const run = Effect.gen(function* () {
       // Seed all parameters first so defaults cannot fall through to same-named outer bindings.
@@ -1816,6 +1846,7 @@ export class Interpreter<R> {
     return Effect.gen(function* () {
       for (const elementValue of elements) {
         if (elementValue === null) {
+          checkArrayLength(values.length + 1)
           // A literal elision is a real hole, like JS: extend length without an own index.
           values.length += 1
           continue
@@ -1829,8 +1860,10 @@ export class Interpreter<R> {
               "Array spread requires an array, string, Map, or Set in CodeMode.",
               element,
             )
-          values.push(...items)
+          checkArrayLength(values.length + items.length)
+          for (const item of items) values.push(item)
         } else {
+          checkArrayLength(values.length + 1)
           values.push(yield* self.evaluateExpression(element))
         }
       }
@@ -1854,11 +1887,14 @@ export class Interpreter<R> {
           throw new InterpreterRuntimeError("Invalid template literal quasi.", quasi)
         }
 
+        checkStringLength(output.length + rawValue.cooked.length)
         output += rawValue.cooked
 
         if (index < expressions.length) {
           const raw = yield* self.evaluateExpression(asNode(expressions[index], "expressions"))
-          output += coerceToString(boundedData(raw, "Template interpolation"))
+          const text = coerceToString(boundedData(raw, "Template interpolation"))
+          checkStringLength(output.length + text.length)
+          output += text
         }
       }
 
@@ -2164,6 +2200,7 @@ export class Interpreter<R> {
         )
       }
       rejectCircularInsertion(target, next, "Array assignment result", node)
+      checkArrayLength(key + 1)
       target[key] = next
       return
     }

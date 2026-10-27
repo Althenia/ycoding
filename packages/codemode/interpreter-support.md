@@ -24,7 +24,21 @@ ultimate source of truth.
 - [x] Tool calls through the host-provided `tools` tree only.
 - [x] The global `search(...)` built-in: synchronous tool discovery that counts as an admitted tool call and is
       shadowable by program declarations like other globals.
-- [x] Cooperative timeout, an optional total tool-call limit, output bounding, and unrestricted tool-call concurrency.
+- [x] Cooperative wall-clock timeout, optional deterministic `maxSteps`, an optional total tool-call limit, output
+      bounding, and unrestricted tool-call concurrency within the pending-promise cap.
+- [x] Always-on catchable `RangeError` caps: strings at 16,777,216 UTF-16 code units, arrays at 10,000,000 elements,
+      and pending promises at 10,000 per execution. These soft value caps do not bound total heap or native temporaries.
+- [x] All untrusted regex matching runs in a lazily started per-execution subprocess with no application imports,
+      including implicit regex string patterns. `regexTimeoutMs` defaults to 1000 per operation, including startup and
+      IPC but excluding queue waiting. Timeout sends `SIGKILL` and produces a noncatchable `TimeoutExceeded`. Success,
+      failure, and interruption close pipes and await process exit. Literal string operations run locally; replacement
+      callbacks run interpreted. The current executable runs fixed code through an exact private packaged bootstrap;
+      untrusted data crosses only JSON-line IPC. A 128 MiB frame cap raises catchable `RangeError`.
+- [x] Source text and regex source are capped at 16,777,216 code units before transpilation/parsing or host regex
+      construction. Transpilation, parsing, and host regex construction remain outside the regex matching deadline;
+      subprocess deadlines and value caps are not hard CPU or heap isolation.
+      Synchronous request encoding, response decoding, and process creation count against the deadline but remain
+      non-preemptible host work; an expired operation is rejected after they return.
 
 ## Values and literals
 
@@ -320,8 +334,12 @@ ultimate source of truth.
 - [x] Error `name`/`message`, error inheritance through `instanceof`, and plain-data serialization.
 - [x] `instanceof` for Date, RegExp, Map, Set, URL, URLSearchParams, Array, Object, Promise, and Error types.
 - [x] Catchable user throws, runtime failures raised during interpreted evaluation, awaited tool failures, and awaited
-      tool-call-limit failures; parse/compile failures, cooperative timeout, and output bounding remain outside program
+      tool-call-limit failures, and value-cap `RangeError`s; parse/compile failures, cooperative timeout, regex timeout,
+      `StepLimitExceeded`, and output bounding remain outside program
       `catch`.
+- [x] `maxSteps` counts evaluated statements and expressions across functions and promises, not time waiting for tools.
+      Absent means unlimited; supplied values must be safe integers of at least 1. Fatal limits bypass catch handlers,
+      promise rejection handlers, and `finally` return overrides.
 - [x] Source locations on unsupported-syntax diagnostics for JavaScript-shaped input; TypeScript transpilation may
       shift them.
 - [x] Sanitized model-visible diagnostics and explicit safe `ToolError` messages.

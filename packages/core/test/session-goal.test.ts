@@ -551,6 +551,38 @@ it.effect("fails with goal.calculation_failed for provider failure or empty outp
   }),
 )
 
+for (const automatic of [false, true]) {
+  it.effect(`goal steering preserves durable nested question provenance ${automatic}`, () => Effect.gen(function* () {
+    requests = []
+    modelAvailable = true
+    yield* configureGoalAgent
+    const sessionID = Session.ID.make("ses_goal_nested_question")
+    yield* insertSession(sessionID)
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.setGoal({ sessionID, text: "Verify the selected behavior" })
+    const events = yield* EventRuntime.Service
+    const assistantMessageID = SessionMessage.ID.make("msg_nested_question")
+    yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: Agent.defaultID, model: SessionRunnerModel.resolved(model).ref })
+    yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, callID: "outer", name: "execute" })
+    yield* events.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID, callID: "outer", input: {}, executed: false })
+    yield* events.publish(SessionEvent.Tool.InvocationSettled, { sessionID, assistantMessageID, callID: "outer", invocation: {
+      id: "question-leaf", index: 0, tool: "tools.question", name: "question", status: "completed",
+      input: { questions: [{ header: "Next", question: "Which check comes next?", options: [{ label: "Selected regression", description: "Run the authorized case" }] }] },
+      structured: { answers: [["Selected regression"]], ...(automatic ? { automatic: true } : {}) },
+    } })
+    yield* events.publish(SessionEvent.Tool.Failed, { sessionID, assistantMessageID, callID: "outer", error: { type: "aborted", message: "Interrupted after answer" }, executed: false })
+    const session = yield* (yield* SessionStore.Service).get(sessionID)
+    if (!session) return yield* Effect.die("missing session")
+    const goal = (yield* autonomy.get(sessionID)).goal!
+    yield* (yield* SessionGoal.Service).steer({ session, goal, phase: "continue" })
+    const request = JSON.stringify(requests[0]?.messages)
+    expect(request).toContain("Which check comes next?")
+    expect(request).toContain("Selected regression")
+    expect(request).toContain(automatic ? "Question tool result (automatic)" : "Question tool result (source unreported)")
+    expect(request).not.toContain("human reply")
+  }))
+}
+
 it.effect("fails with goal.calculation_failed when the stream ends without provider settlement", () =>
   Effect.gen(function* () {
     modelAvailable = true

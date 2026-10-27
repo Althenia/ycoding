@@ -6,6 +6,7 @@
  * guessed. Nothing here invents content the agent did not send.
  */
 
+import { ToolInvocation } from "../../../../packages/schema/src/tool-invocation"
 import type { Form } from "../../../../packages/schema/src/form"
 import { escapeDisplayText, toolDisplayName } from "../../../../packages/client/src/tool-display"
 import { RemoteLimits, isWellFormedBase64, type RemoteCapturedChangesPage, type RemoteCompactionHistory } from "@ycoding-ai/remote"
@@ -1090,12 +1091,18 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         ran: part.ran ?? now,
         input: recordField(data.input) ?? part.input,
       }))
+    case "session.tool.invocation-settled": {
+      const message = view.messages.find((item) => item.id === data.assistantMessageID)
+      const invocation = data.invocation
+      if (message?.kind !== "assistant" || !message.parts.some((part) => part.kind === "tool" && part.callID === data.callID && part.name === "execute") || !ToolInvocation.isSettled(invocation)) return view
+      return withToolPart(view, data, now, (part) => ({ ...part, structured: ToolInvocation.settle(part.structured, invocation) }))
+    }
     case "session.tool.progress":
       return withToolPart(view, data, now, (part) => ({
         ...part,
         status: "running",
         content: readToolContent(data.content),
-        structured: recordField(data.structured) ?? part.structured,
+        structured: part.name === "execute" ? ToolInvocation.mergeStructured(part.structured, data.structured) : recordField(data.structured) ?? part.structured,
       }))
     case "session.tool.success":
       return withToolPart(view, data, now, (part) => ({
@@ -1104,7 +1111,7 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         completed: now,
         content: readToolContent(data.content),
         input: recordField(data.input) ?? part.input,
-        structured: recordField(data.structured) ?? part.structured,
+        structured: part.name === "execute" ? ToolInvocation.mergeStructured(part.structured, data.structured) : recordField(data.structured) ?? part.structured,
       }))
     case "session.tool.failed":
       return withToolPart(view, data, now, (part) => ({

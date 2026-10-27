@@ -159,3 +159,27 @@ test("attributes a reused child's work to the segment that dispatched it and kee
     await screen.dispose()
   }
 }, 60_000)
+
+test("hydrates and attributes child changes from nested execute dispatches", async () => {
+  const nested = parentTranscript.map((message) => {
+    if (message.type !== "assistant") return message
+    return { ...message, content: message.content.map((part) => {
+      if (part.type !== "tool" || part.state.status === "streaming" || !["subagent", "subagent_control"].includes(part.name)) return part
+      return { ...part, id: `execute_${part.id}`, name: "execute", state: { ...part.state, structured: { toolCalls: [
+        { id: part.id, name: part.name, tool: part.name, status: "completed", input: part.state.input, structured: part.state.structured },
+      ] } } }
+    }) }
+  }) as SessionMessageInfo[]
+  const foreignReads: string[] = []
+  const screen = await renderScreen({ ...DESIGN_VIEWPORT, height: 80, args: { sessionID }, route: routeFor(nested, (id) => foreignReads.push(id)), settle: "Captured changes 2 files" })
+  try {
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    const header = screen.lines().findIndex((row) => row.includes("Captured changes 1 file"))
+    await screen.mouse.click(12, header)
+    await waitForFrame(screen.frame, "src/later.ts")
+    expect(screen.frame()).not.toContain("src/manual.ts")
+    expect(foreignReads).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)

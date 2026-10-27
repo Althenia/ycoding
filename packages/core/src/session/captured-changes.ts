@@ -37,24 +37,30 @@ export const page = Effect.fn("SessionCapturedChanges.page")(function* (
     questionID: sql<string | null>`CASE WHEN ${SessionMessageTable.type} = 'synthetic' AND json_type(${SessionMessageTable.data}, '$.metadata.questionID') = 'text' THEN json_extract(${SessionMessageTable.data}, '$.metadata.questionID') END`,
     parts: sql<string | null>`CASE WHEN ${SessionMessageTable.type} = 'assistant' THEN (
       SELECT json_group_array(json_object(
-        'id', json_extract(part.value, '$.id'),
-        'name', json_extract(part.value, '$.name'),
-        'status', json_extract(part.value, '$.state.status'),
-        'questionID', CASE WHEN json_extract(part.value, '$.name') = 'subagent_control' AND json_type(part.value, '$.state.input.questionID') = 'text' THEN json_extract(part.value, '$.state.input.questionID') END,
-        'sessionID', CASE WHEN json_extract(part.value, '$.name') = 'subagent' AND json_type(part.value, '$.state.structured.sessionID') = 'text' THEN json_extract(part.value, '$.state.structured.sessionID') END,
-        'action', CASE WHEN json_extract(part.value, '$.name') = 'subagent_control' AND json_type(part.value, '$.state.structured.action') = 'text' THEN json_extract(part.value, '$.state.structured.action') END,
-        'taskSessionID', CASE WHEN json_extract(part.value, '$.name') = 'subagent_control' AND json_type(part.value, '$.state.structured.task.sessionID') = 'text' THEN json_extract(part.value, '$.state.structured.task.sessionID') END,
-        'files', CASE WHEN json_extract(part.value, '$.name') IN ('edit', 'patch', 'apply_patch') AND json_type(part.value, '$.state.structured.files') = 'array' THEN (
+        'id', json_extract(inv.value, '$.id'),
+        'name', json_extract(inv.value, '$.name'),
+        'status', json_extract(inv.value, '$.status'),
+        'questionID', CASE WHEN json_extract(inv.value, '$.name') = 'subagent_control' AND json_type(inv.value, '$.input.questionID') = 'text' THEN json_extract(inv.value, '$.input.questionID') END,
+        'sessionID', CASE WHEN json_extract(inv.value, '$.name') = 'subagent' AND json_type(inv.value, '$.structured.sessionID') = 'text' THEN json_extract(inv.value, '$.structured.sessionID') END,
+        'action', CASE WHEN json_extract(inv.value, '$.name') = 'subagent_control' AND json_type(inv.value, '$.structured.action') = 'text' THEN json_extract(inv.value, '$.structured.action') END,
+        'taskSessionID', CASE WHEN json_extract(inv.value, '$.name') = 'subagent_control' AND json_type(inv.value, '$.structured.task.sessionID') = 'text' THEN json_extract(inv.value, '$.structured.task.sessionID') END,
+        'files', CASE WHEN json_extract(inv.value, '$.name') IN ('edit', 'patch', 'apply_patch') AND json_type(inv.value, '$.structured.files') = 'array' THEN (
           SELECT json_group_array(json_object(
             'patch', json_extract(entry.value, '$.patch'),
             'file', CASE WHEN json_type(entry.value, '$.file') = 'text' THEN json_extract(entry.value, '$.file') END,
             'status', CASE WHEN json_type(entry.value, '$.status') = 'text' THEN json_extract(entry.value, '$.status') END))
-          FROM json_each(part.value, '$.state.structured.files') AS entry
+          FROM json_each(inv.value, '$.structured.files') AS entry
           WHERE entry.type = 'object' AND json_type(entry.value, '$.patch') = 'text'
         ) END
-      )) FROM json_each(${SessionMessageTable.data}, '$.content') AS part
+      )) FROM json_each(${SessionMessageTable.data}, '$.content') AS part,
+        json_each(CASE WHEN json_extract(part.value, '$.name') = 'execute'
+          THEN coalesce(json_extract(part.value, '$.state.structured.toolCalls'), '[]')
+          ELSE json_array(json_object('id', json_extract(part.value, '$.id'), 'name', json_extract(part.value, '$.name'),
+            'status', json_extract(part.value, '$.state.status'), 'input', json_extract(part.value, '$.state.input'),
+            'structured', json_extract(part.value, '$.state.structured'))) END) AS inv
       WHERE part.type = 'object' AND json_extract(part.value, '$.type') = 'tool'
-        AND json_extract(part.value, '$.name') IN ('edit', 'patch', 'apply_patch', 'subagent', 'subagent_control')
+        AND json_extract(inv.value, '$.name') IN ('edit', 'patch', 'apply_patch', 'subagent', 'subagent_control')
+        AND (json_extract(part.value, '$.name') != 'execute' OR json_type(inv.value, '$.id') = 'text')
     ) END`,
   }).from(SessionMessageTable).where(and(
     eq(SessionMessageTable.session_id, input.sessionID),

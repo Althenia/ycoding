@@ -168,6 +168,36 @@ describe("CodeMode host failure boundary", () => {
 })
 
 describe("CodeMode tool-call observation", () => {
+  test("distinguishes built-in search from a registered search tool", async () => {
+    const events: Array<unknown> = []
+    const search = Tool.make({
+      description: "Search records",
+      input: Schema.Struct({}),
+      output: Schema.Number,
+      run: () => Effect.succeed(7),
+    })
+    const result = await Effect.runPromise(
+      CodeMode.execute({
+        code: `search({query: "search"}); return await tools.search({})`,
+        tools: { search },
+        onToolCallStart: (call) =>
+          Effect.sync(() => {
+            events.push(["start", call.index, call.name, call.kind])
+          }),
+        onToolCallEnd: (call) =>
+          Effect.sync(() => {
+            events.push(["end", call.index, call.name, call.kind, call.outcome])
+          }),
+      }),
+    )
+    expect(result).toMatchObject({ ok: true, value: 7 })
+    expect(events).toEqual([
+      ["start", 0, "search", "search"],
+      ["end", 0, "search", "search", "success"],
+      ["start", 1, "search", "tool"],
+      ["end", 1, "search", "tool", "success"],
+    ])
+  })
   test("reports the tools actually invoked with decoded input", async () => {
     const calls: Array<unknown> = []
     const lookup = Tool.make({
@@ -188,7 +218,9 @@ describe("CodeMode tool-call observation", () => {
     )
 
     expect(result.ok).toBe(true)
-    expect(calls).toStrictEqual([{ index: 0, name: "context.lookup", input: { query: "deployment failure" } }])
+    expect(calls).toStrictEqual([
+      { index: 0, name: "context.lookup", input: { query: "deployment failure" }, kind: "tool" },
+    ])
   })
 
   test("observes settled calls with outcome and duration", async () => {

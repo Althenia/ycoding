@@ -294,7 +294,7 @@ function completionExchange(
   options: {
     declaration?: boolean; text?: string; finish?: "stop" | "length"; phase?: "commentary";
     providerExecuted?: boolean; beforeDeclaration?: Effect.Effect<void>; afterDeclaration?: Effect.Effect<void>; failedStep?: boolean;
-    suffix?: string;
+    suffix?: string; nested?: boolean; nestedError?: boolean; nestedDurable?: boolean; nestedFailed?: boolean;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -305,9 +305,12 @@ function completionExchange(
       const assistantMessageID = SessionMessage.ID.make(`msg_work_declaration${options.suffix ?? ""}`)
       yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID, agent: Agent.defaultID, model })
       yield* options.beforeDeclaration ?? Effect.void
-      yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, callID: "complete", name: "task_complete" })
+      yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, callID: "complete", name: options.nested ? "execute" : "task_complete" })
       yield* events.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID, callID: "complete", input: {}, executed: options.providerExecuted ?? false })
-      yield* events.publish(SessionEvent.Tool.Success, { sessionID, assistantMessageID, callID: "complete", structured: { recorded: true }, content: [], executed: options.providerExecuted ?? false })
+      if (options.nestedDurable) yield* events.publish(SessionEvent.Tool.InvocationSettled, { sessionID, assistantMessageID, callID: "complete", invocation: {
+        id: "inner", index: 0, name: "task_complete", tool: "tools.task_complete", status: options.nestedFailed ? "error" : "completed", structured: { recorded: true },
+      } })
+      yield* events.publish(SessionEvent.Tool.Success, { sessionID, assistantMessageID, callID: "complete", structured: options.nested ? { ...(options.nestedError ? { error: true } : {}), toolCalls: options.nestedDurable ? [] : [{ id: "inner", name: "task_complete", tool: "tools.task_complete", status: "completed", structured: { recorded: true } }] } : { recorded: true }, content: [], executed: options.providerExecuted ?? false })
       yield* options.afterDeclaration ?? Effect.void
       yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID, finish: "tool-calls", cost: Money.USD.zero, tokens })
     }
@@ -322,6 +325,21 @@ function completionExchange(
     }
     yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID: finalID, finish: options.finish ?? "stop", cost: Money.USD.zero, tokens })
   })
+}
+
+for (const nestedError of [false, true]) {
+  completionIt.effect(`nested completion ${nestedError ? "rejects program errors" : "certifies a settled reply"}`, () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventRuntime.Service
+    const sessionID = Session.ID.make("ses_nested_completion")
+    yield* seedSessions(database, [sessionID])
+    yield* admitCompletionInput(database, events, sessionID)
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID, { nested: true, nestedError }))
+    yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+    expect(yield* completionReceipts(database, sessionID)).toHaveLength(nestedError ? 0 : 1)
+    yield* Scope.close(scope, Exit.void)
+  }))
 }
 
 for (const scenario of [
@@ -346,6 +364,31 @@ for (const scenario of [
       yield* Scope.close(scope, Exit.void)
     }),
   )
+}
+
+for (const scenario of [
+  { name: "settled declaration", options: {}, expected: 1 },
+  { name: "program error", options: { nestedError: true }, expected: 0 },
+  { name: "failed declaration", options: { nestedFailed: true }, expected: 0 },
+  { name: "unfinished final reply", options: { finish: "length" as const }, expected: 0 },
+  { name: "failed final reply", options: { failedStep: true }, expected: 0 },
+]) {
+  completionIt.effect(`durable nested completion respects ${scenario.name}`, () => Effect.gen(function* () {
+    const database = yield* Database.Service
+    const events = yield* EventRuntime.Service
+    const sessionID = Session.ID.make("ses_durable_nested_completion")
+    yield* seedSessions(database, [sessionID])
+    yield* admitCompletionInput(database, events, sessionID)
+    const scope = yield* Scope.make()
+    const context = yield* buildExecution(scope, () => completionExchange(database, events, sessionID, { nested: true, nestedDurable: true, ...scenario.options }))
+    const execution = Context.get(context, SessionExecution.Service)
+    yield* execution.resume(sessionID)
+    yield* execution.awaitIdle(sessionID)
+    const jobs = yield* Job.Service
+    yield* SessionCompletion.make({ db: database.db, events, jobs }).complete(sessionID, Effect.succeed(new Set([sessionID])))
+    expect(yield* completionReceipts(database, sessionID)).toHaveLength(scenario.expected)
+    yield* Scope.close(scope, Exit.void)
+  }))
 }
 
 for (const outcome of ["failed", "interrupted"] as const) {

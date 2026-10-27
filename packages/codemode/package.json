@@ -7,7 +7,8 @@
   "type": "module",
   "license": "AGPL-3.0-only",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./internal/regex-process": "./src/internal/regex-process.ts"
   },
   "scripts": {
     "typecheck": "bun check",

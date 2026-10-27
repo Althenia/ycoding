@@ -35,9 +35,28 @@ import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { SessionContextState } from "./context-state"
 import { HistoryPrunedError } from "./error"
 import { SessionHistory } from "./history"
+import { toolFileChanges } from "./tool-file-changes"
 import { UsageAnalytics } from "../usage-analytics"
 
 type DatabaseService = Database.Interface["db"]
+
+const projectFileChange = (db: DatabaseService, sessionID: SessionSchema.ID, seq: number, change: SessionEvent.FileChange.Info) =>
+  db.insert(SessionFileChangeTable).values({
+    session_id: sessionID,
+    path: change.path,
+    patch: change.patch,
+    additions: change.additions,
+    deletions: change.deletions,
+    latest_seq: seq,
+  }).onConflictDoUpdate({
+    target: [SessionFileChangeTable.session_id, SessionFileChangeTable.path],
+    set: {
+      patch: change.patch,
+      additions: sql`${SessionFileChangeTable.additions} + ${change.additions}`,
+      deletions: sql`${SessionFileChangeTable.deletions} + ${change.deletions}`,
+      latest_seq: seq,
+    },
+  }).run().pipe(Effect.orDie)
 type CurrentDurableEvent = Extract<SessionEvent.Event, { readonly durable: object }>
 type LegacyCompactionEvent =
   | typeof SessionEvent.Compaction.AdmittedV1.Type
@@ -1173,32 +1192,19 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Tool.Input.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Input.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Called, (event) => run(db, event))
+    yield* events.project(SessionEvent.Tool.InvocationSettled, (event) => Effect.gen(function* () {
+      yield* run(db, event)
+      if (event.data.invocation.status !== "completed") return
+      for (const change of toolFileChanges(event.data.invocation.name, event.data.invocation.structured)) {
+        yield* projectFileChange(db, event.data.sessionID, event.durable.seq, change)
+      }
+    }))
     yield* events.project(SessionEvent.Tool.Success, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
     yield* events.project(SessionEvent.FileChange.Recorded, (event) => {
       if (event.durable === undefined)
         return Effect.die(new Error("Durable Session event is missing aggregate sequence"))
-      return db
-        .insert(SessionFileChangeTable)
-        .values({
-          session_id: event.data.sessionID,
-          path: event.data.change.path,
-          patch: event.data.change.patch,
-          additions: event.data.change.additions,
-          deletions: event.data.change.deletions,
-          latest_seq: event.durable.seq,
-        })
-        .onConflictDoUpdate({
-          target: [SessionFileChangeTable.session_id, SessionFileChangeTable.path],
-          set: {
-            patch: event.data.change.patch,
-            additions: sql`${SessionFileChangeTable.additions} + ${event.data.change.additions}`,
-            deletions: sql`${SessionFileChangeTable.deletions} + ${event.data.change.deletions}`,
-            latest_seq: event.durable.seq,
-          },
-        })
-        .run()
-        .pipe(Effect.orDie)
+      return projectFileChange(db, event.data.sessionID, event.durable.seq, event.data.change)
     })
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))

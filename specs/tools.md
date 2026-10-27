@@ -34,14 +34,16 @@ Every local tool receives the same concrete invocation context:
 interface Tool.Context {
   readonly sessionID: Session.ID
   readonly agent: Agent.ID
-  readonly assistantMessageID: SessionMessage.ID
-  readonly toolCallID: string
+  readonly messageID: SessionMessage.ID
+  readonly callID: string
+  readonly invocationID?: string
+  readonly progress: (update: Tool.Progress) => Effect.Effect<void>
 }
 ```
 
-`assistantMessageID` is the durable ID of the assistant message containing the call. The Session runner owns this association and supplies the complete context to the registry; the registry does not infer it.
+`messageID` is the durable ID of the assistant message containing the call. The Session runner owns this association and supplies the context to the registry; the registry does not infer it.
 
-Durable events call the invocation identifier `callID`; `Tool.Context.toolCallID` is the same value at the executor boundary.
+`callID` identifies the outer provider call and its permission sources. For nested calls, `invocationID` identifies a leaf uniquely across Session, assistant message, outer call and leaf index; Jobs and subagent operations use it for identity and idempotency. Direct operation IDs are unchanged.
 
 Shells created by the built-in shell tool expose that identity as `Shell.Info.toolCallID`. A client holding a tool-call ID resolves the corresponding `Shell.ID` from `GET /api/shell` and pages output through `GET /api/shell/:id/output`; shells created outside a Session tool invocation omit the field.
 
@@ -80,6 +82,8 @@ Registration replaces unsupported name characters with `_` and reserves `execute
 
 Code Mode calls each tool at its normalized name, or at `<namespace>.<name>` when the registration options set `namespace`. The `paths` option maps tool names to replacement Code Mode paths; each dot-separated segment must match `^[A-Za-z][A-Za-z0-9_-]{0,63}$`. A path changes neither the registered name nor permission or capability matching. Two visible tools with one Code Mode path fail the request, and Code Mode rejects two definitions for one canonical path.
 
+Every visible canonical tool is available through `execute`. Registration option `codemode` defaults to `true`, advertising the tool through Code Mode only; `false` also advertises its direct provider definition. A wholly denied permission action or excluded capability hides the tool from both surfaces. Disabling `execute` by permission or capability disables Code Mode without removing independently advertised direct tools. The leaf still owns execution permissions and guardrails on either path.
+
 A Location plugin receives only the narrow `Tools` registration capability, not the internal registry. Each activation acquires the Location's services, constructs its tools, and registers them in a fresh plugin-owned Scope.
 
 Within one placement:
@@ -113,8 +117,8 @@ yield *
             agent: context.agent,
             source: {
               type: "tool",
-              messageID: context.assistantMessageID,
-              callID: context.toolCallID,
+              messageID: context.messageID,
+              callID: context.callID,
             },
             action: "grep",
             resources: [input.pattern],
@@ -154,6 +158,10 @@ Invalid input never invokes the tool. Invalid output never produces a successful
 `toModelOutput` is pure and total. When omitted, the encoded output remains structured output; an encoded string is also projected as text. Projection does not receive invocation identity because presentation depends only on validated input and output.
 
 Each model request captures the effective registered `Tool` value for every advertised name. Settlement executes those captured values; later registration changes affect later requests.
+
+Nested Code Mode calls use the same registry before and after hooks as direct calls. They retain the outer call identity in permission sources and use distinct invocation IDs for Job and subagent operations. Nested programs receive the complete structured result; generic model-output bounding applies to the outer `execute` settlement, not each intermediate result. Producer-owned capture limits still apply.
+
+Host `execute.toolCalls` metadata retains each call's display path, status and input, and optional leaf `id`, registered `name`, and `structured` result. The durable `session.tool.invocation-settled` v1 event records one actual leaf before its await returns, so sequential skill and resource calls can consume their results in one execution. Its payload contains `sessionID`, `assistantMessageID`, outer `callID`, and `invocation`: leaf allocation `index`, `id`, registered `name`, display `tool`, `status` (`completed` or `error`), and optional `input` and `structured`. The projector folds leaf receipts into the existing outer tool part on success or failure; full progress remains ephemeral, and final settlement does not duplicate the leaf facts. Completed mutations and receipts survive a later program failure or restart. Metadata volume grows with nested results; it is not silently truncated or reconstructed. The model receives the program's final return, logs, and collected media, not intermediate structured receipts or additional provider tool parts. A nested completion declaration requires a completed `task_complete` receipt with `structured.recorded: true` in a successful outer `execute` settlement, plus the normal execution, final reply, and unfinished-work gates.
 
 ## Producers And The Registry Own Different Limits
 

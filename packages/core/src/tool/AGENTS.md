@@ -19,8 +19,8 @@ Location-scoped built-in layers acquire `Permission.Service` and every other req
 ```ts
 const source = {
   type: "tool" as const,
-  messageID: context.assistantMessageID,
-  callID: context.toolCallID,
+  messageID: context.messageID,
+  callID: context.callID,
 }
 ```
 
@@ -30,7 +30,7 @@ Leaves own resolution, permission, and side-effect ordering. Translate only expe
 
 Built-ins and plugin tools register through `Tools.Service.register({ [name]: tool })`. Registrations may provide a
 namespace, which flattens direct model names to `<namespace>_<tool>`, and default into CodeMode (`codemode` defaults true;
-`codemode: false` keeps the tool on the provider's native tool list).
+`codemode: false` also exposes the tool on the provider's native tool list). Every visible registration remains callable through CodeMode.
 
 Registrations are scoped:
 
@@ -50,11 +50,11 @@ Definition filtering is catalog visibility, not execution authorization. A call 
 
 ## Output
 
-Built-ins return complete validated domain output. `ToolRegistry.Materialization.settle` is the only execution and generic model-output bounding boundary and owns managed retention paths.
+Built-ins return complete validated domain output. Nested calls pass through registry before and after hooks and return their structured results to the program without generic model-output bounding. `ToolRegistry.Materialization.settle` bounds the outer provider-facing settlement and owns managed retention paths. Preserve the outer call ID in permission sources and use each nested invocation ID for Job and subagent operation identity. Commit each completed leaf receipt before returning to the program; fold it into the outer tool part without exposing intermediate structured receipts to the model. Full tool progress is ephemeral. A failed outer execution cannot signal completion.
 
 Producer capture limits are separate. For example, Bash keeps `AppProcess.maxOutputBytes` and accurately reports stdout/stderr capture loss, but it does not run model-output truncation or return a managed `outputPath`.
 
 ## Current Gaps
 
-- MCP and future Session-scoped registrations still need an explicit canonical registration design.
+- Future Session-scoped registrations still need an explicit canonical registration design.
 - The public Session result shape currently exposes managed `outputPaths`; full storage encapsulation requires a future opaque managed-output reference design.
