@@ -32,13 +32,16 @@ import {
   type IntegrationCommandAttemptStatus,
   type ReviewDecideInput,
   type ReviewListOutput,
+  type JsonValue,
+  type DotsExchangeCreateInput,
 } from "@ycoding-ai/client/promise"
+import { Schema } from "effect"
 import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
 import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
-import type { Dots } from "@ycoding-ai/schema/dots"
+import { Dots } from "@ycoding-ai/schema/dots"
 import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput, type RemoteIncidentGuidance, type RemoteIncidentGuidanceInput, type RemoteIncidentRecent, type RemoteIncidentRecentInput, type RemoteIncidentReport, type RemoteIncidentReportInput } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
@@ -195,6 +198,10 @@ export type LocalServer = {
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
   readonly dotsTargets: (sessionID: string, location: LocalLocation, profile: string) => Promise<unknown>
+  readonly dotsDeviceDelegationCreate: (sessionID: string, location: LocalLocation, input: Dots.DeviceDelegationCreate, remoteSource: McpEvents.RequestContext) => Promise<Dots.DeviceDelegationInfo>
+  readonly dotsDeviceDelegationRead: (sessionID: string, location: LocalLocation, input: Dots.DeviceDelegationRead, remoteSource: McpEvents.RequestContext) => Promise<Dots.DeviceDelegationStatus>
+  readonly dotsDeviceDelegationRevoke: (sessionID: string, location: LocalLocation, input: Dots.DeviceDelegationRevoke, remoteSource: McpEvents.RequestContext) => Promise<Dots.DeviceDelegationInfo>
+  readonly dotsDecisionsList: (sessionID: string, location: LocalLocation, input: Dots.DecisionsList, remoteSource: McpEvents.RequestContext) => Promise<Dots.DecisionsPage>
   readonly dotsExchangeCreate: (sessionID: string, location: LocalLocation, input: Dots.ExchangeCreate, remoteSource: McpEvents.RequestContext, signal?: AbortSignal) => Promise<DotsExchange>
   readonly dotsExchangeRead: (sessionID: string, location: LocalLocation, input: Dots.ExchangeRead, remoteSource: McpEvents.RequestContext, signal?: AbortSignal) => Promise<DotsExchange>
   readonly dotsStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
@@ -453,7 +460,11 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     }),
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
     dotsTargets: (sessionID, location, profile) => call(() => client.dots.targets({ sessionID, profile }, request(location, timeoutMs))),
-    dotsExchangeCreate: (sessionID, location, input, remoteSource, signal) => call(() => client.dots.exchange.create({ sessionID, payload: { ...input, remoteSource } }, request(location, timeoutMs, signal))),
+    dotsDeviceDelegationCreate: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DeviceDelegationInfo)(await client.dots.delegation.device.create({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
+    dotsDeviceDelegationRead: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DeviceDelegationStatus)(await client.dots.delegation.device.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
+    dotsDeviceDelegationRevoke: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DeviceDelegationInfo)(await client.dots.delegation.device.revoke({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
+    dotsDecisionsList: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DecisionsPage)(await client.dots.decisions.list({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
+    dotsExchangeCreate: (sessionID, location, input, remoteSource, signal) => call(() => client.dots.exchange.create({ sessionID, payload: exchangePayload(input, remoteSource) }, request(location, timeoutMs, signal))),
     dotsExchangeRead: (sessionID, location, input, remoteSource, signal) => call(() => client.dots.exchange.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs, signal))),
     dotsStatus: (sessionID, location) => call(() => client.dots.status({ sessionID }, request(location, timeoutMs))),
     dotsBind: (sessionID, location, target) => call(() => client.dots.bind({ sessionID, ...target }, request(location, timeoutMs))),
@@ -571,6 +582,27 @@ async function requireDirectory(location: LocalLocation) {
     throw cause
   })
   if (!info?.isDirectory()) throw new LocalFailure("location_unavailable", "The recorded directory is unavailable on this device")
+}
+
+function exchangePayload(input: Dots.ExchangeCreate, remoteSource: McpEvents.RequestContext): DotsExchangeCreateInput["payload"] {
+  if ("text" in input) return { ...input, remoteSource }
+  if ("taskInputID" in input) return { ...input, remoteSource }
+  const instruction = input.instruction
+  if (instruction.operation !== "decision" || "reply" in instruction || "answers" in instruction || "cancelled" in instruction || "dismissed" in instruction)
+    return { ...input, instruction, remoteSource }
+  if ("decision" in instruction) {
+    const decision = instruction.decision
+    if (decision.kind === "subagent_question" && "text" in decision)
+      return { ...input, instruction: { ...instruction, decision: { ...decision, data: decision.data === undefined ? undefined : jsonValue(decision.data) } }, remoteSource }
+    return { ...input, instruction: { ...instruction, decision }, remoteSource }
+  }
+  return { ...input, instruction: { ...instruction, data: instruction.data === undefined ? undefined : jsonValue(instruction.data) }, remoteSource }
+}
+
+function jsonValue(value: Schema.Json): JsonValue {
+  if (value === null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map(jsonValue)
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, jsonValue(entry)]))
 }
 
 function classify(cause: unknown, timeoutMs: number): LocalFailure {

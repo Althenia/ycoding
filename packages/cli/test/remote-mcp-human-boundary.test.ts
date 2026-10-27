@@ -17,7 +17,7 @@ const reviewItems = [
   { ...reviewBase, itemID: "rvw_ordinary", kind: "guardrail", reason: "disabled", origin: { requestID: "grq_ordinary" }, payload: { type: "guardrail", action: "shell", resources: ["synthetic"], ruleIDs: ["standard.review.outside-repo"], reason: "outside", directories: ["/synthetic"], fingerprint: "d".repeat(64), requestID: "grq_ordinary" } },
   { ...reviewBase, itemID: "rvw_question", kind: "question", reason: "free_text", origin: { messageID: "msg_1", callID: "call_1" }, payload: { type: "form", title: "Scope", fields: [{ key: "q0", type: "string" }], questionTool: true } },
   { ...reviewBase, itemID: "rvw_child", kind: "subagent_question", reason: "low_confidence", origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "Which branch?" } },
-  { ...reviewBase, itemID: "rvw_permission", kind: "permission", reason: "sleep_entry", origin: { requestID: "per_1" }, payload: { type: "permission", action: "edit", resources: ["src/a.ts"], fingerprint: "b".repeat(64), requestID: "per_1" } },
+  { ...reviewBase, itemID: "rvw_permission", kind: "permission", reason: "sleep_entry", origin: { requestID: "per_1" }, payload: { type: "permission", action: "edit", resources: ["src/a.ts"], fingerprint: "b".repeat(64), fingerprintVersion: 2, requestID: "per_1" } },
   { ...reviewBase, itemID: "rvw_recovery", kind: "recovery", reason: "restart", origin: { sessionID: "ses_child" }, payload: { type: "recovery" } },
 ]
 const form = { id: "frm_1", sessionID: "ses_1", title: "Approval", metadata: { kind: "question" }, fields: [{ key: "approved", type: "boolean", title: "Approve?", required: true }] }
@@ -119,36 +119,40 @@ function okOf(frames: readonly { ok: boolean }[]) {
   return frame.value
 }
 
-describe("automation cannot settle human-only decisions", () => {
-  test("every human decision operation refuses an authenticated MCP context before any local call", async () => {
+describe("authenticated MCP native decision operations", () => {
+  test("forwards each existing typed feature decision to its native endpoint", async () => {
+    const expected: Record<string, string> = {
+      "session.permission.reply": "permissionReply",
+      "session.guardrail.reply": "guardrailReply",
+      "session.form.reply": "formReply",
+      "session.form.cancel": "formCancel",
+      "session.review.decide": "reviewDecide",
+      "session.subagent.answer": "subagentAnswer",
+    }
     for (const [operation, input] of humanDecisions) {
       const fixture = await harness()
-      const error = errorOf(await fixture.run(operation, input, appContext))
-      expect(error.code).toBe("forbidden")
-      expect(error.message.length).toBeLessThanOrEqual(256)
-      expect(error.message).not.toContain(appContext.principal.clientID)
-      expect(error.message).not.toContain(String(Object.values(input)[0]))
-      expect(fixture.calls).toEqual([])
+      const value = okOf(await fixture.run(operation, input, appContext))
+      if (operation === "session.subagent.answer") expect(value).toMatchObject({ data: { state: "running" } })
+      else expect(value).toBeNull()
+      expect(fixture.calls.filter((call) => call.method === expected[operation])).toHaveLength(1)
     }
   })
 
-  test("forged authority fields and malformed payloads never reach validation or the local server", async () => {
-    for (const [operation, input] of humanDecisions)
-      for (const forged of [...forgedAuthority, { requestID: "malformed" }]) {
-        const fixture = await harness()
-        expect(errorOf(await fixture.run(operation, { ...input, ...forged }, appContext)).code).toBe("forbidden")
-        expect(fixture.calls).toEqual([])
-      }
+  test("forged authority fields and malformed payloads never reach the local settlement endpoint", async () => {
+    for (const [operation, input] of humanDecisions) for (const forged of [...forgedAuthority, { requestID: "malformed" }]) {
+      const fixture = await harness()
+      expect(errorOf(await fixture.run(operation, { ...input, ...forged }, appContext)).code).toBe("invalid_message")
+      expect(fixture.calls.filter((call) => /Reply|Cancel|Decide|Answer/.test(call.method))).toEqual([])
+    }
   })
 
-  test("hard, custom, ordinary, deferred, and recovery items stay open and readable after automation attempts", async () => {
+  test("wrong, foreign, and unsettled targets remain blocked by native target validation", async () => {
     const fixture = await harness()
-    for (const [operation, input] of humanDecisions.filter(([operation]) => operation === "session.review.decide"))
-      expect(errorOf(await fixture.run(operation, input, appContext)).code).toBe("forbidden")
-    expect(okOf(await fixture.run("session.review.list", undefined, appContext))).toEqual({ data: reviewItems })
-    expect(okOf(await fixture.run("session.guardrail.request.list", undefined, appContext))).toEqual({ data: [{ id: "grq_hard" }, { id: "grq_ordinary" }] })
-    expect(okOf(await fixture.run("session.form.list", undefined, appContext))).toEqual([form])
-    expect(fixture.calls.map((call) => call.method).filter((method) => /Reply|Cancel|Decide|Answer/.test(method))).toEqual([])
+    expect(errorOf(await fixture.run("session.review.decide", { itemID: "rvw_foreign", decision: { kind: "recovery", choice: "continue" } }, appContext)).code).toBe("invalid_message")
+    expect(fixture.calls.some((call) => call.method === "reviewDecide")).toBe(false)
+    fixture.calls.length = 0
+    expect(errorOf(await fixture.run("session.guardrail.reply", { requestID: "grq_foreign", reply: "once" }, appContext)).code).toBe("invalid_message")
+    expect(fixture.calls.some((call) => call.method === "guardrailReply")).toBe(false)
   })
 
   test("listed non-decision controls still forward with an authenticated MCP context", async () => {
@@ -163,7 +167,7 @@ describe("automation cannot settle human-only decisions", () => {
 })
 
 describe("native and browser decisions keep their authenticated paths", () => {
-  test("each human decision forwards unchanged when no MCP context is present", async () => {
+  test("the native endpoint receives only typed decision data, never client identity or authority labels", async () => {
     const expected: Record<string, string> = {
       "session.permission.reply": "permissionReply",
       "session.guardrail.reply": "guardrailReply",
@@ -174,9 +178,12 @@ describe("native and browser decisions keep their authenticated paths", () => {
     }
     for (const [operation, input] of humanDecisions) {
       const fixture = await harness()
-      const frames = await fixture.run(operation, input)
+      const frames = await fixture.run(operation, input, appContext)
       expect(frames[0]?.ok).toBe(true)
-      expect(fixture.calls.filter((call) => call.method === expected[operation])).toHaveLength(1)
+      const call = fixture.calls.find((call) => call.method === expected[operation])
+      expect(call).toBeDefined()
+      expect(JSON.stringify(call?.args)).not.toContain(appContext.principal.clientID)
+      expect(JSON.stringify(call?.args)).not.toContain("humanAttestation")
     }
   })
 })

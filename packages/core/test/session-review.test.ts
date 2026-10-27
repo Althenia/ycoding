@@ -101,7 +101,7 @@ it.effect("once grants are exact, Session-bound, single-use durable consumptions
   const child = yield* session.create({ parentID: root.id })
   const fingerprint = SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: root.location.directory })
   const item = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
-    origin: { requestID: "per_exact" }, payload: { type: "permission", action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_exact") } })
+    origin: { requestID: "per_exact" }, payload: { type: "permission", fingerprintVersion: 2, action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_exact") } })
   yield* reviews.decide({ sessionID: root.id, itemID: item.itemID, decision: { kind: "permission", reply: "once" } })
   expect(yield* reviews.consume(child.id, "permission", fingerprint)).toBe(false)
   expect(yield* reviews.consume(root.id, "permission", "b".repeat(64))).toBe(false)
@@ -124,7 +124,7 @@ it.effect("deferred remembered permission stays with the same Session and resour
   const item = yield* reviews.open({
     sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
     origin: { requestID: "per_session_scope" },
-    payload: { type: "permission", ...request, save: ["src/*"], fingerprint: SessionReview.fingerprint(request), requestID: Permission.ID.make("per_session_scope") },
+    payload: { type: "permission", fingerprintVersion: 2, ...request, save: ["src/*"], fingerprint: SessionReview.fingerprint(request), requestID: Permission.ID.make("per_session_scope") },
   })
   yield* reviews.decide({ sessionID: root.id, itemID: item.itemID, decision: { kind: "permission", reply: "always" } })
   const database = yield* Database.Service
@@ -178,7 +178,7 @@ it.effect("revert withdraws both open items and unconsumed grants beyond their o
   const item = yield* reviews.open({ sessionID: root.id, kind: "question", reason: "free_text", limit: 16, origin: { messageID: after, callID: "call_after" }, payload })
   const fingerprint = SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: root.location.directory })
   const grant = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
-    origin: { messageID: after, callID: "call_grant" }, payload: { type: "permission", action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_reverted") } })
+    origin: { messageID: after, callID: "call_grant" }, payload: { type: "permission", fingerprintVersion: 2, action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_reverted") } })
   yield* reviews.decide({ sessionID: root.id, itemID: grant.itemID, decision: { kind: "permission", reply: "once" } })
   yield* reviews.withdrawAfter(root.id, before)
   expect(yield* reviews.list(root.id)).toEqual([])

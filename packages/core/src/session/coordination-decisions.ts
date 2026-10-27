@@ -44,7 +44,7 @@ export interface EscalateResult {
   readonly fingerprint: string
   readonly actor: "coordinator"
   readonly settled: false
-  readonly to?: "master" | "human"
+  readonly to?: "master" | "client"
   readonly coordinationEscalation?: Coordination.Escalation
   readonly reason?: string
   readonly reviewItemID?: string
@@ -103,7 +103,7 @@ function metadataText(value: unknown, depth = 0): string {
   return Object.values(value).slice(0, 20).map((item) => metadataText(item, depth + 1)).join("\n")
 }
 
-export function humanOnlyReason(input: {
+export function explicitDecisionReason(input: {
   readonly kind: Kind
   readonly action?: string
   readonly resources?: ReadonlyArray<string>
@@ -111,30 +111,30 @@ export function humanOnlyReason(input: {
   readonly hardReview?: boolean
   readonly ruleIDs?: ReadonlyArray<string>
 }) {
-  if (input.hardReview === true) return "human-only:hard-review"
-  if (typeof input.metadata === "object" && input.metadata !== null && "requireHuman" in input.metadata && input.metadata.requireHuman === true)
-    return "human-only:request"
+  if (input.hardReview === true) return "explicit-decision:hard-review"
+  if (typeof input.metadata === "object" && input.metadata !== null && "requireExplicitDecision" in input.metadata && input.metadata.requireExplicitDecision === true)
+    return "explicit-decision:request"
   const action = input.action ?? ""
   const evidence = [action, ...(input.resources ?? []), ...(input.ruleIDs ?? []), metadataText(input.metadata)].join("\n").toLowerCase()
   const mutation = input.kind !== "question" && !readActions.has(action)
   const sensitive = /(credential|secret|api[_-]?key|access[_-]?token|private[_-]?key|id_rsa|\.env(?:\.|\b)|\.aws\/|\.ssh\/|keychain|password|oauth|\baccount\b)/
-  if ((mutation || input.kind === "question") && sensitive.test(evidence)) return "human-only:credentials-account"
-  if (mutation && /(\.github\/workflows\/|\.gitlab-ci|jenkinsfile|\.circleci\/|\bci\/cd\b|\bcicd\b)/.test(evidence)) return "human-only:ci-cd"
+  if ((mutation || input.kind === "question") && sensitive.test(evidence)) return "explicit-decision:credentials-account"
+  if (mutation && /(\.github\/workflows\/|\.gitlab-ci|jenkinsfile|\.circleci\/|\bci\/cd\b|\bcicd\b)/.test(evidence)) return "explicit-decision:ci-cd"
   if ((mutation || input.kind === "question") && /(db:migrate|database migration|prisma migrate|drizzle[^\n]*migrat|alembic upgrade|rails db:migrate|migrat[^\n]*(prod|production)|(prod|production)[^\n]*migrat)/.test(evidence))
-    return "human-only:production-migration"
+    return "explicit-decision:production-migration"
   if ((mutation || input.kind === "question") && /(purchase|checkout|payment|\bpaid\b|billing|subscribe|subscription|buy now)/.test(evidence))
-    return "human-only:purchase-spend"
+    return "explicit-decision:purchase-spend"
   if (mutation && /(git\s+push|npm\s+publish|pnpm\s+publish|yarn\s+publish|gh\s+(pr|release|issue)\s+(create|merge|comment)|\bpublish\b)/.test(evidence))
-    return "human-only:publication"
+    return "explicit-decision:publication"
   if (mutation && /(wrangler\s+deploy|kubectl\s+apply|terraform\s+apply|\bdeploy\b|release\s+create|git\s+tag\b)/.test(evidence))
-    return "human-only:deploy-release"
+    return "explicit-decision:deploy-release"
   if (mutation && /(rm\s+-[a-z]*r|rm\s+--recursive|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f|drop\s+(table|database)|truncate\s+table|delete\s+from\b|mkfs|dd\s+if=|\bshred\b)/.test(evidence))
-    return "human-only:destructive-irreversible"
+    return "explicit-decision:destructive-irreversible"
   if (mutation && /(\b(bun|npm|pnpm|yarn|pip|pip3|brew|apt|apt-get|cargo|go)\s+(install|add)\b|\bwget\b|\bcurl\b[^\n]*(?:\s-o\b|\s-o\s|--output)|\bdownload\b)/.test(evidence))
-    return "human-only:dependency-install-download"
+    return "explicit-decision:dependency-install-download"
   if (mutation && (action === "external_directory" || /(curl\b[^\n]*(-x\s*(post|put|patch|delete)|--data|--form)|wget\b[^\n]*--post|\bscp\b|rsync\b[^\n]*:|ssh\b[^\n]*\s\S+@)/.test(evidence)))
-    return "human-only:external-write"
-  if ((mutation || input.kind === "question") && /(public contract|breaking change|scope expansion|expand (the )?scope)/.test(evidence)) return "human-only:scope-expansion"
+    return "explicit-decision:external-write"
+  if ((mutation || input.kind === "question") && /(public contract|breaking change|scope expansion|expand (the )?scope)/.test(evidence)) return "explicit-decision:scope-expansion"
   return undefined
 }
 
@@ -242,13 +242,13 @@ export function make(deps: Dependencies): Interface {
       const snapshot = yield* deps.permission.snapshot(input.requestID as Permission.ID)
       if (snapshot === undefined || snapshot.request.sessionID !== input.targetSessionID || snapshot.fingerprint !== input.fingerprint)
         return stale
-      const human = humanOnlyReason({
+      const explicit = explicitDecisionReason({
         kind: input.kind,
         action: snapshot.request.action,
         resources: snapshot.request.resources,
         metadata: snapshot.request.metadata,
       })
-      if (human !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: human }
+      if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
       if (!declining && !routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
         return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
       const initial = yield* validate(input, snapshot.request.action, snapshot.request.resources)
@@ -265,7 +265,7 @@ export function make(deps: Dependencies): Interface {
               (checked) =>
                 checked.ok &&
                 (declining || routineEligible({ kind: input.kind, action: request.action, resources: request.resources })) &&
-                humanOnlyReason({ kind: input.kind, action: request.action, resources: request.resources, metadata: request.metadata }) ===
+                explicitDecisionReason({ kind: input.kind, action: request.action, resources: request.resources, metadata: request.metadata }) ===
                   undefined,
             ),
           ),
@@ -278,7 +278,7 @@ export function make(deps: Dependencies): Interface {
         .requestSnapshot(input.targetSessionID, input.requestID as SessionGuardrail.RequestSnapshot["request"]["id"])
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
       if (snapshot === undefined || snapshot.fingerprint !== input.fingerprint) return stale
-      const human = humanOnlyReason({
+      const explicit = explicitDecisionReason({
         kind: input.kind,
         action: snapshot.request.action,
         resources: snapshot.request.resources,
@@ -286,7 +286,7 @@ export function make(deps: Dependencies): Interface {
         hardReview: snapshot.request.hardReview,
         ruleIDs: snapshot.request.ruleIDs,
       })
-      if (human !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: human }
+      if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
       const unclassifiedDecline = declining && snapshot.request.standard
       if (!unclassifiedDecline && !routineEligible({ kind: input.kind, action: snapshot.request.action, resources: snapshot.request.resources }))
         return { ...base, outcome: "escalated" as const, settled: false, reason: "unknown-semantics" }
@@ -306,7 +306,7 @@ export function make(deps: Dependencies): Interface {
                 (checked) =>
                   checked.ok &&
                   ((declining && request.standard) || routineEligible({ kind: input.kind, action: request.action, resources: request.resources })) &&
-                  humanOnlyReason({
+                  explicitDecisionReason({
                     kind: input.kind,
                     action: request.action,
                     resources: request.resources,
@@ -334,12 +334,13 @@ export function make(deps: Dependencies): Interface {
     )
       return stale
     const formEvidence = {
+      requireExplicitDecision: snapshot.form.metadata?.requireExplicitDecision,
       title: snapshot.form.title,
       fields: snapshot.form.fields.map((field) => ("title" in field ? (field.title ?? field.key) : field.key)),
       metadata: snapshot.form.metadata,
     }
-    const human = humanOnlyReason({ kind: input.kind, action: "question", resources: [], metadata: formEvidence })
-    if (human !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: human }
+    const explicit = explicitDecisionReason({ kind: input.kind, action: "question", resources: [], metadata: formEvidence })
+    if (explicit !== undefined) return { ...base, outcome: "escalated" as const, settled: false, reason: explicit }
     const initial = yield* validate(input, "question", [])
     if (!initial.ok) return { ...base, outcome: "escalated" as const, settled: false, reason: initial.reason }
     const result = yield* deps.form.reconsider({
@@ -354,11 +355,12 @@ export function make(deps: Dependencies): Interface {
           Effect.map(
             (checked) =>
               checked.ok &&
-              humanOnlyReason({
+              explicitDecisionReason({
                 kind: input.kind,
                 action: "question",
                 resources: [],
                 metadata: {
+                  requireExplicitDecision: form.metadata?.requireExplicitDecision,
                   title: form.title,
                   fields: form.fields.map((field) => ("title" in field ? (field.title ?? field.key) : field.key)),
                   metadata: form.metadata,
@@ -393,7 +395,7 @@ export function make(deps: Dependencies): Interface {
     return {
       ...base,
       outcome: "escalated" as const,
-      ...(result.reason === undefined ? { to: handoff ? ("human" as const) : ("master" as const) } : {}),
+      ...(result.reason === undefined ? { to: handoff ? ("client" as const) : ("master" as const) } : {}),
       ...(result.coordinationEscalation === undefined ? {} : { coordinationEscalation: result.coordinationEscalation }),
       ...(result.reason === undefined ? {} : { reason: result.reason }),
       ...(result.reviewItemID === undefined ? {} : { reviewItemID: result.reviewItemID }),

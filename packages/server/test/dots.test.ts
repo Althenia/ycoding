@@ -6,6 +6,7 @@ import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { Location } from "@ycoding-ai/core/location"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
+import { SessionReview } from "@ycoding-ai/core/session/review"
 import { SessionMcpEvents } from "@ycoding-ai/core/mcp-events/index"
 import { CoordinationService } from "@ycoding-ai/core/coordination/index"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -79,6 +80,7 @@ test("runtime controls forward the confirmed target and return the runtime statu
       }),
       Layer.mock(SessionExecution.Service, {}),
       Layer.mock(SessionOrchestration.Service, {}),
+      Layer.mock(SessionReview.Service, {}),
       Layer.mock(SessionMcpEvents.Authorization.Service, {}),
       Layer.effect(LocationServiceMap.Service, LayerMap.make((_: Location.Ref) => Layer.effectContext<LocationServices, never, never>(Effect.die("Unexpected Location runtime access")))),
       Layer.mock(CoordinationService.Service, {}),

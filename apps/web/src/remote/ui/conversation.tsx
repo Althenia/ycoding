@@ -326,7 +326,7 @@ function PartView(props: { readonly parts: () => readonly AssistantPart[] }): JS
             <div class="request__body"><Markdown text={question().text} /></div>
             <p class="request__body"><strong>{question().answer === undefined ? questionAnswerState(toolOf(part())!) : "Answer"}</strong></p>
             <Show when={question().answer}>{(answer) => <div class="request__body"><Markdown text={answer()} /></div>}</Show>
-            <FormAssessment value={toolOf(part())?.structured?.assessment} source={toolOf(part())?.structured?.source} fieldKey={`q${index}`} grades multiple={multiple()} settled={answered() ? toolOf(part())?.structured?.automatic === true ? "automatic" : "human" : undefined} />
+            <FormAssessment value={toolOf(part())?.structured?.assessment} source={toolOf(part())?.structured?.source} fieldKey={`q${index}`} grades multiple={multiple()} settled={answered() ? toolOf(part())?.structured?.automatic === true ? "automatic" : "client" : undefined} />
           </section>
         }}</For>
         <ToolPart part={() => toolOf(part())!} />

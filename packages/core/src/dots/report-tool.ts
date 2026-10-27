@@ -15,7 +15,7 @@ export function make(options: {
   readonly guardrail: Pick<SessionGuardrail.Interface, "assert">
 }) {
   return Tool.make({
-    description: "Report progress, a blocker or a decision request to the authenticated Dots coordinator of the current task. Routing identity is supplied by YCoding. A report grants no approval; use native question and review tools for human decisions. Recorded reports do not prove host delivery.",
+    description: "Report progress, a blocker or a decision request to the authenticated Dots coordinator of the current task. Routing identity is supplied by YCoding. A report grants no approval; use native question and review tools for explicit decisions. Recorded reports do not prove host delivery.",
     input: Schema.Struct({ kind: Schema.Literals(["progress", "blocker", "decision_request"]), text: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(32768)) }),
     output: Dots.ExchangeOutput,
     toModelOutput: ({ output }) => [{ type: "text", text: `Report recorded as ${output.deliveryID}. Host delivery is not confirmed.` }],

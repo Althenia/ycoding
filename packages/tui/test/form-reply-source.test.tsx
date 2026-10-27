@@ -11,7 +11,7 @@ async function render(source: unknown) {
     () => (
       <ConfigProvider config={createTuiResolvedConfig()}>
         <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-          <FormAssessment value={undefined} source={source} settled="human" />
+          <FormAssessment value={undefined} source={source} settled="client" />
         </ThemeProvider>
       </ConfigProvider>
     ),
@@ -21,7 +21,7 @@ async function render(source: unknown) {
   return app
 }
 
-test("a Dots delegated reply renders as an external client, never as the human or a native coordinator", async () => {
+test("a Dots delegated reply renders its external-client source, not a coordinator source", async () => {
   const app = await render({
     kind: "dots-delegation",
     anchorSessionID: "ses_anchor",
@@ -33,8 +33,41 @@ test("a Dots delegated reply renders as an external client, never as the human o
     await app.waitForFrame((frame) => frame.includes("answered by external client"))
     const frame = app.captureCharFrame()
     expect(frame).toContain("answered by external client via Dots delegation delegation_one · anchor ses_anchor")
+    expect(frame).not.toContain("answered by client")
+    expect(frame).not.toContain("answered by coordinator")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("an authenticated Dots client reply renders delegation attribution without its principal", async () => {
+  const app = await render({
+    kind: "dots-client",
+    anchorSessionID: "ses_anchor",
+    bindingID: "binding_1",
+    delegationID: "delegation_two",
+    revision: 4,
+    exchangeID: "exchange_two",
+    principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "cli_1", grantID: "grt_1", epoch: "epoch_1" },
+  })
+  try {
+    await app.waitForFrame((frame) => frame.includes("answered by external client via Dots delegation delegation_two"))
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("answered by external client via Dots delegation delegation_two · anchor ses_anchor")
+    for (const privateValue of ["binding_1", "own_1", "dev_1", "cli_1", "grt_1", "epoch_1"])
+      expect(frame).not.toContain(privateValue)
     expect(frame).not.toContain("answered by you")
     expect(frame).not.toContain("answered by coordinator")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("a direct reply without explicit source is attributed to the client rather than an invented person", async () => {
+  const app = await render(undefined)
+  try {
+    await app.waitForFrame((frame) => frame.includes("answered by client"))
+    expect(app.captureCharFrame()).not.toContain("answered by you")
   } finally {
     app.renderer.destroy()
   }

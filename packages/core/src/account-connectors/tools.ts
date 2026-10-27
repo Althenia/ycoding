@@ -14,7 +14,7 @@ export const make = Effect.fn("AccountConnectorTools.make")(function* (input: {
     readonly id: string
     readonly label: string
     readonly tool: MCPClient.ToolDefinition
-    readonly requireHuman?: boolean
+    readonly requireExplicitDecision?: boolean
   }>
   readonly permission: Pick<Permission.Interface, "assert">
   readonly guardrail: Pick<SessionGuardrail.Interface, "assert">
@@ -60,8 +60,8 @@ export const make = Effect.fn("AccountConnectorTools.make")(function* (input: {
               agent: context.agent,
               action: name,
               resources: [entry.id],
-              save: entry.requireHuman ? undefined : [entry.id],
-              requireHuman: entry.requireHuman,
+              save: entry.requireExplicitDecision ? undefined : [entry.id],
+              requireExplicitDecision: entry.requireExplicitDecision,
               metadata: { connector: entry.id, connectorLabel: entry.label, tool: tool.name, operationDigest },
               source: { type: "tool", messageID: context.messageID, callID: context.callID },
             })

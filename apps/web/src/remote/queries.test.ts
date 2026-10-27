@@ -36,7 +36,7 @@ describe("query read helpers", () => {
 
 const report = { rows: [{ providerID: "p", modelID: "m", fallbacks: 1, escalated: 2, rejected: 3, last: 4 }], groups: 1 }
 const agentReport = { rows: [{ providerID: "p", modelID: "m", agent: "build", fallbacks: 0, escalated: 1, rejected: 0, last: 9 }], groups: 3 }
-const recent = { items: [{ id: "inc_1", time: 5, kind: "guardrail-rejected", category: "hard", ruleIDs: ["standard.review.force-push"], agent: "build", decidedBy: "human" }] } as const
+const recent = { items: [{ id: "inc_1", time: 5, kind: "guardrail-rejected", category: "hard", ruleIDs: ["standard.review.force-push"], agent: "build", decidedBy: "client" }] } as const
 const note = { enabled: true, text: "note" }
 
 function incidents(answer: (operation: string, request: RemoteTransportRequest | undefined, scope: QueryScope) => RemoteRequestOutcome = (operation, request) => ({

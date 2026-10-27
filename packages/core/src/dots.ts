@@ -93,6 +93,13 @@ export interface BindingAuthority {
   readonly proposals: Map<string, { readonly fingerprint: string; readonly result: Deferred.Deferred<Dots.DelegationInfo, Error> }>
 }
 
+export interface Persistence {
+  readonly binding: (sessionID: SessionSchema.ID) => Effect.Effect<Dots.BindingRecord | undefined>
+  readonly bind: (sessionID: SessionSchema.ID, target: Dots.Target, accountDigest: string) => Effect.Effect<Dots.BindingRecord, Error>
+  readonly unbind: (sessionID: SessionSchema.ID, bindingID: string) => Effect.Effect<void>
+  readonly clear: () => Effect.Effect<void>
+}
+
 export const make = Effect.fn("DotsRuntime.make")(function* (options: {
   readonly integration: Pick<Integration.Interface, "get" | "connection">
   readonly transport: DotsTransport.Interface
@@ -104,6 +111,7 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
   readonly retryDelay?: (attempt: number) => Duration.Input
   readonly enabled?: () => Effect.Effect<boolean>
   readonly changes?: Stream.Stream<unknown>
+  readonly persistence?: Persistence
 }) {
   const lifetime = yield* Effect.scope
   const lock = Semaphore.makeUnsafe(1)
@@ -119,7 +127,7 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
 
   const requireEnabled = Effect.gen(function* () {
     if (yield* allowed) return
-    yield* disable
+    yield* invalidate
     return yield* fail("feature_disabled", disabledMessage)
   })
 
@@ -135,10 +143,11 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     )
   })
 
-  const disabledStatus = disable.pipe(Effect.as({ enabled: false, state: "disconnected" } satisfies Dots.Status))
+  const invalidate = Effect.suspend(() => options.persistence?.clear() ?? Effect.void).pipe(Effect.andThen(disable))
+  const disabledStatus = invalidate.pipe(Effect.as({ enabled: false, state: "disconnected" } satisfies Dots.Status))
   yield* Effect.addFinalizer(() => disable)
 
-  const disableSoon = disable.pipe(Effect.forkIn(lifetime), Effect.asVoid)
+  const disableSoon = invalidate.pipe(Effect.forkIn(lifetime), Effect.asVoid)
 
   const resolve = Effect.fn("DotsRuntime.resolve")(function* (profile: string) {
     const integration = yield* options.integration.get(integrationID)
@@ -230,6 +239,7 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
 
   const readStatus = (sessionID: SessionSchema.ID) => Effect.gen(function* () {
     if (!(yield* allowed)) return yield* disabledStatus
+    yield* restoreBinding(sessionID)
     const binding = bindings.get(sessionID)
     if (!binding || binding.control) return statusOf(binding)
     const state = yield* current(binding.client.account).pipe(
@@ -430,6 +440,7 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
 
   const control = (action: "pause" | "resume", input: { readonly sessionID: SessionSchema.ID } & Dots.Control) => Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
     yield* requireEnabled
+    yield* restoreBinding(input.sessionID)
     const binding = bindings.get(input.sessionID)
     if (!binding) return yield* fail("not_bound", "Confirm a Dot for this Session before controlling its runtime.")
     if (!sameTarget(binding.target, input.expectedTarget)) return yield* fail("target_changed", targetChangedMessage)
@@ -474,13 +485,26 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
 
   if (options.changes)
     yield* options.changes.pipe(
-      Stream.runForEach(() => allowed.pipe(Effect.flatMap((on) => (on ? Effect.void : disable)))),
+      Stream.runForEach(() => allowed.pipe(Effect.flatMap((on) => (on ? Effect.void : invalidate)))),
       Effect.forkIn(lifetime, { startImmediately: true }),
     )
 
-  return Service.of({
+  const restoreBinding = Effect.fn("DotsRuntime.restoreBinding")(function* (sessionID: SessionSchema.ID) {
+    if (bindings.has(sessionID) || !options.persistence) return
+    const saved = yield* options.persistence.binding(sessionID)
+    if (!saved) return
+    const account = yield* resolve(saved.target.profile)
+    if (Hash.sha256(account.account.key) !== saved.accountDigest) {
+      yield* options.persistence.unbind(sessionID, saved.id)
+      return yield* fail("profile_changed", "The bound ChatGPT profile changed accounts; confirm the Dot again.")
+    }
+    yield* service.bind({ sessionID, target: saved.target })
+  })
+
+  const service: Interface = Service.of({
     withBinding: (sessionID, use) => Effect.gen(function* () {
       yield* requireEnabled
+      yield* restoreBinding(sessionID)
       const binding = bindings.get(sessionID)
       if (!binding) return yield* fail("not_bound", "Confirm a Dot for this Session before delegating.")
       const account = yield* resolve(binding.target.profile)
@@ -488,12 +512,15 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
         yield* requireEnabled
         if (binding !== bindings.get(sessionID) || account.account.key !== binding.client.account.key)
           return yield* fail("target_changed", targetChangedMessage)
+        if (options.persistence && (yield* options.persistence.binding(sessionID))?.id !== binding.authority.incarnation)
+          return yield* fail("target_changed", targetChangedMessage)
         binding.authority.target = binding.target
         return yield* use(binding.authority)
       }))
     }),
     attachment: Effect.fn("DotsRuntime.attachment")(function* (sessionID) {
       yield* requireEnabled
+      yield* restoreBinding(sessionID)
       const binding = bindings.get(sessionID)
       if (!binding) return yield* fail("not_bound", "Confirm a Dot for this Session before creating an exchange.")
       const found = yield* destinations(binding.target.profile)
@@ -519,7 +546,8 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
         Effect.gen(function* () {
           yield* requireEnabled
           const existing = bindings.get(input.sessionID)
-          if (existing && existing.client.account.key === found.account.key && sameTarget(existing.target, target)) {
+          if (existing && existing.client.account.key === found.account.key && sameTarget(existing.target, target) &&
+            (!options.persistence || (yield* options.persistence.binding(input.sessionID))?.id === existing.authority.incarnation)) {
             if (existing.control === "pending") return yield* fail("runtime_unknown", "A Dots runtime control is still pending.")
             existing.target = target
             existing.control = undefined
@@ -530,13 +558,14 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
           const owner = clients.get(found.account.key)?.threads.get(target.threadID)
           if (owner !== undefined && owner !== input.sessionID)
             return yield* fail("target_in_use", "Another Session is already confirmed for that Dot conversation.")
+          const saved = yield* (options.persistence?.bind(input.sessionID, target, Hash.sha256(found.account.key)) ?? Effect.succeed(undefined))
           if (existing) yield* release(input.sessionID, existing)
           const reused = clients.get(found.account.key)
           const connection = reused?.state === "connected" ? reused.connection : undefined
           const client = reused ?? (yield* open(found.account))
           client.buffered.set(target.threadID, [])
           client.threads.set(target.threadID, input.sessionID)
-          const binding: Binding = { target, client, authority: { incarnation: crypto.randomUUID(), target,
+          const binding: Binding = { target, client, authority: { incarnation: saved?.id ?? crypto.randomUUID(), target,
             accountDigest: Hash.sha256(client.account.key), grants: new Map(), proposals: new Map() } }
           bindings.set(input.sessionID, binding)
           if (!reused || reused.state === "failed") yield* start(client)
@@ -554,6 +583,7 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
     status: readStatus,
     send: Effect.fn("DotsRuntime.send")(function* (input) {
       yield* requireEnabled
+      yield* restoreBinding(input.sessionID)
       if (input.text.trim() === "" && (input.files?.length ?? 0) === 0)
         return yield* fail("invalid_input", "Enter a message or attach a file to send.")
       const binding = bindings.get(input.sessionID)
@@ -603,14 +633,22 @@ export const make = Effect.fn("DotsRuntime.make")(function* (options: {
         Effect.gen(function* () {
           if (!(yield* allowed)) return yield* disabledStatus
           const binding = bindings.get(input.sessionID)
-          if (!binding) return statusOf(undefined)
+          if (!binding) {
+            const saved = yield* (options.persistence?.binding(input.sessionID) ?? Effect.succeed(undefined))
+            if (!saved) return statusOf(undefined)
+            if (!sameTarget(saved.target, input.expectedTarget)) return yield* fail("target_changed", targetChangedMessage)
+            yield* options.persistence!.unbind(input.sessionID, saved.id)
+            return statusOf(undefined)
+          }
           if (!sameTarget(binding.target, input.expectedTarget)) return yield* fail("target_changed", targetChangedMessage)
+          if (options.persistence) yield* options.persistence.unbind(input.sessionID, binding.authority.incarnation)
           yield* release(input.sessionID, binding)
           return statusOf(undefined)
         }),
       )
     }),
   })
+  return service
 })
 
 export const admitPeer = Effect.fn("DotsRuntime.admitPeer")(function* (

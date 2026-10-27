@@ -4,7 +4,7 @@ Explains retained model incidents, deterministic per-model guidance, and their A
 
 ## Facts
 
-- A fact is one of `fallback`, `guardrail-escalated`, or `guardrail-rejected` (rejected by `decision-model` or `human`). It is attributed to a provider, model, optional variant and profile, and agent; a fallback also names its target model.
+- A fact is one of `fallback`, `guardrail-escalated`, or `guardrail-rejected` (rejected by `decision-model` or `client`). It is attributed to a provider, model, optional variant and profile, and agent; a fallback also names its target model.
 - Facts hold identifiers, a bounded category, and sanitized rule IDs only. They never hold commands, targets, paths, arguments, messages, grades, evidence, or credentials.
 - Facts are backend-wide, survive Session deletion, and are bounded by global `analytics_retention.incident_days` (default 30).
 

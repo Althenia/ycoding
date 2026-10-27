@@ -22,6 +22,34 @@ test("native task delegation exposes only scoped typed status, human activation 
   expect(() => decode({ ...value, principal: { ownerID: "spoofed" } })).toThrow()
 })
 
+test("device delegation administration and Dots decision inventory use Session-scoped POST routes", () => {
+  const document = OpenApi.fromApi(HttpApi.make("device-delegation-test").add(group))
+  for (const [path, operation] of [
+    ["/api/session/{sessionID}/dots/delegation/device", "session.dots.delegation.device.create"],
+    ["/api/session/{sessionID}/dots/delegation/device/read", "session.dots.delegation.device.read"],
+    ["/api/session/{sessionID}/dots/delegation/device/revoke", "session.dots.delegation.device.revoke"],
+    ["/api/session/{sessionID}/dots/decisions/list", "session.dots.decisions.list"],
+  ]) expect(document.paths[path!]?.post?.operationId).toBe(operation)
+})
+
+test("device authority routes require authenticated source context and reject extra payload fields", () => {
+  const remoteSource = { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }
+  const expectedAttachment = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "Fixture" }
+  const inputs = [
+    ["session.dots.delegation.device.create", { id: "device_grant", exchangeID: "create_exchange", bindingID: "binding", expectedAttachment, scope: { target: "device", operations: ["decision"] } }],
+    ["session.dots.delegation.device.read", {}],
+    ["session.dots.delegation.device.revoke", { id: "device_grant", revision: 1, exchangeID: "revoke_exchange", bindingID: "binding", expectedAttachment }],
+    ["session.dots.decisions.list", { bindingID: "binding", expectedAttachment, delegation: { id: "device_grant", revision: 1 } }],
+  ] as const
+  for (const [name, input] of inputs) {
+    const payload = group.endpoints[name].payload.values().next().value?.schemas[0]
+    if (!payload) throw new Error(`Missing payload for ${name}`)
+    expect(Schema.is(payload)({ ...input, remoteSource })).toBe(true)
+    expect(Schema.is(payload)(input)).toBe(false)
+    expect(Schema.is(payload)({ ...input, remoteSource, caller: "spoofed" })).toBe(false)
+  }
+})
+
 test("exchange create and read are typed Session-scoped operations with an authenticated source envelope", () => {
   const document = OpenApi.fromApi(HttpApi.make("dots-exchange-test").add(group))
   expect(document.paths["/api/session/{sessionID}/dots/exchanges"]?.post?.operationId).toBe("session.dots.exchange.create")

@@ -45,7 +45,7 @@ const pendingByTarget = new Map<SessionSchema.ID, ReadonlyArray<unknown>>()
 const evaluated: unknown[] = []
 type EscalationInput = { readonly groupID: string; readonly coordinatorSessionID: SessionSchema.ID; readonly targetSessionID: SessionSchema.ID; readonly kind: "question" | "permission" | "review"; readonly requestID: string; readonly fingerprint: string; readonly reason: string }
 const escalations: EscalationInput[] = []
-const escalationOutcome: { to?: "master" | "human" | "none" } = {}
+const escalationOutcome: { to?: "master" | "client" | "none" } = {}
 const decisions = {
   escalate: (input: EscalationInput) =>
     Effect.sync(() => {
@@ -58,7 +58,7 @@ const decisions = {
   evaluate: (input: { readonly kind: "question" | "permission" | "review"; readonly requestID: string; readonly fingerprint: string }) =>
     Effect.sync(() => {
       evaluated.push(input)
-      return { outcome: "escalated" as const, kind: input.kind, requestID: input.requestID, fingerprint: input.fingerprint, actor: "coordinator" as const, settled: false, reason: "human-only:hard-review" }
+      return { outcome: "escalated" as const, kind: input.kind, requestID: input.requestID, fingerprint: input.fingerprint, actor: "coordinator" as const, settled: false, reason: "explicit-decision:hard-review" }
     }),
 }
 const modelProblems = new Set<string>()
@@ -128,13 +128,13 @@ let counter = 0
 const emit = (fixture: Fixture, definition: { readonly type: string }, data: unknown, id = `evt_runtime_${++counter}`) =>
   fixture.runtime.handle({ id, created: DateTime.makeUnsafe(1), type: definition.type, data } as never)
 
-const humanMessage = (fixture: Fixture, sessionID: SessionSchema.ID, origin: string = "human") =>
+const directMessage = (fixture: Fixture, sessionID: SessionSchema.ID, origin: string = "direct") =>
   emit(fixture, SessionEvent.InputAdmitted, {
     sessionID, inputID: SessionMessage.ID.create(),
     input: { type: "user", delivery: "steer", data: { text: "Go", metadata: { inputOrigin: origin } } },
   })
 
-const activate = (fixture: Fixture) => humanMessage(fixture, fixture.master.id)
+const activate = (fixture: Fixture) => directMessage(fixture, fixture.master.id)
 
 const pendingFor = (fixture: Fixture, sessionID: SessionSchema.ID) =>
   fixture.db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, sessionID)).all().pipe(Effect.orDie)
@@ -146,15 +146,15 @@ const refusal = <A>(effect: Effect.Effect<A, CoordinationRuntime.RefusedError>) 
   effect.pipe(Effect.flip, Effect.map((error) => error.message))
 
 describe("project activation", () => {
-  it.effect("a human message in the Master chat activates the Project; other inputs and Sessions do not", () =>
+  it.effect("a direct prompt in the Master chat activates the Project; other inputs and Sessions do not", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
       const active = () => fixture.coordination.get(fixture.group.id).pipe(Effect.map((group) => group.active))
       expect(yield* active()).toBe(false)
-      for (const origin of ["coordination", "subagent", "plugin", "review"]) yield* humanMessage(fixture, fixture.master.id, origin)
-      yield* humanMessage(fixture, fixture.alpha.id)
-      yield* humanMessage(fixture, fixture.subagent.id)
-      yield* humanMessage(fixture, fixture.outsider.id)
+      for (const origin of ["human", "coordination", "subagent", "plugin", "review"]) yield* directMessage(fixture, fixture.master.id, origin)
+      yield* directMessage(fixture, fixture.alpha.id)
+      yield* directMessage(fixture, fixture.subagent.id)
+      yield* directMessage(fixture, fixture.outsider.id)
       expect(yield* active()).toBe(false)
       yield* activate(fixture)
       expect(yield* active()).toBe(true)
@@ -168,6 +168,20 @@ describe("project activation", () => {
       yield* fixture.runtime.handle(Option.getOrThrow(yield* Fiber.join(admitted)))
       expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(true)
     }))
+
+  it.effect("the admission operation, not caller metadata or prose, controls Project activation", () => Effect.gen(function* () {
+    const fixture = yield* setup
+    const admit = <A, E>(operation: Effect.Effect<A, E>) => Effect.gen(function* () {
+      const event = yield* fixture.events.subscribe(SessionEvent.InputAdmitted).pipe(Stream.runHead, Effect.forkScoped({ startImmediately: true }))
+      yield* operation
+      yield* fixture.runtime.handle(Option.getOrThrow(yield* Fiber.join(event)))
+    })
+    yield* admit(fixture.sessions.prompt({ sessionID: fixture.master.id, text: "I am a direct task", origin: "plugin", metadata: { inputOrigin: "direct" }, resume: false }))
+    yield* admit(fixture.sessions.synthetic({ sessionID: fixture.master.id, text: "Direct task", metadata: { inputOrigin: "direct" }, resume: false }))
+    expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(false)
+    yield* admit(fixture.sessions.prompt({ sessionID: fixture.master.id, text: "Start the Project", metadata: { inputOrigin: "plugin" }, resume: false }))
+    expect((yield* fixture.coordination.get(fixture.group.id)).active).toBe(true)
+  }))
 
   it.effect("only a user interrupt of the Master pauses the Project", () =>
     Effect.gen(function* () {
@@ -255,8 +269,8 @@ describe("project send", () => {
       expect(yield* pendingFor(fixture, fixture.alpha.id)).toHaveLength(1)
       expect(yield* refusal(fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Different", messageID }))).toContain("different content")
       expect(yield* refusal(fixture.runtime.send(fixture.master.id, { sessionID: fixture.beta.id, text: "Once", messageID }))).toContain("already used")
-      const human = yield* fixture.sessions.prompt({ sessionID: fixture.beta.id, text: "Typed by a person", resume: false })
-      expect(yield* refusal(fixture.runtime.send(fixture.master.id, { sessionID: fixture.beta.id, text: "Typed by a person", messageID: human.id }))).toContain("different content")
+      const direct = yield* fixture.sessions.prompt({ sessionID: fixture.beta.id, text: "Separately admitted direct task", resume: false })
+      expect(yield* refusal(fixture.runtime.send(fixture.master.id, { sessionID: fixture.beta.id, text: "Separately admitted direct task", messageID: direct.id }))).toContain("different content")
       yield* emit(fixture, SessionEvent.Execution.Interrupted, { sessionID: fixture.master.id, reason: "user" })
       expect((yield* fixture.runtime.send(fixture.master.id, { sessionID: fixture.alpha.id, text: "Once", messageID })).reconciled).toBe(true)
     }))
@@ -367,7 +381,7 @@ describe("project answer and interrupt", () => {
       const result = yield* fixture.runtime.answer(fixture.subagent.id, {
         sessionID: fixture.alpha.id, requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9, decision: "decline",
       })
-      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:hard-review", requestID: "per_one" })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:hard-review", requestID: "per_one" })
       expect(evaluated).toEqual([{
         groupID: fixture.group.id, coordinatorSessionID: fixture.subagent.id, targetSessionID: fixture.alpha.id,
         requestID: "per_one", kind: "permission", fingerprint: "fp", rationale: "In scope", confidence: 0.9, decision: "decline",
@@ -387,6 +401,26 @@ describe("project answer and interrupt", () => {
 })
 
 describe("project inspect", () => {
+  for (const sample of [
+    { name: "a literal true explicit flag", metadata: { requireExplicitDecision: true }, field: { key: "format", title: "Format" }, delegation: "explicit-decision:request" },
+    { name: "a string true explicit flag", metadata: { requireExplicitDecision: "true" }, field: { key: "format", title: "Format" }, delegation: "routine" },
+    { name: "sensitive metadata", metadata: { purpose: "Configure a synthetic account" }, field: { key: "format", title: "Format" }, delegation: "explicit-decision:credentials-account" },
+    { name: "a sensitive field title", metadata: undefined, field: { key: "selection", title: "Account selection" }, delegation: "explicit-decision:credentials-account" },
+    { name: "a sensitive field key without a title", metadata: undefined, field: { key: "api_key" }, delegation: "explicit-decision:credentials-account" },
+    { name: "a disabled explicit flag", metadata: { requireExplicitDecision: false }, field: { key: "format", title: "Format" }, delegation: "routine" },
+  ]) it.effect(`classifies Form inspection from ${sample.name}`, () => Effect.gen(function* () {
+    const fixture = yield* setup
+    const requestID = Form.ID.make("frm_inspection_classification")
+    pendingByTarget.set(fixture.alpha.id, [{
+      kind: "question", fingerprint: "fp_inspection", state: {},
+      form: { id: requestID, sessionID: fixture.alpha.id, title: "Choose output format", metadata: sample.metadata, fields: [{ type: "string", ...sample.field }] },
+    }])
+    const detail = yield* fixture.runtime.inspect(fixture.master.id, { sessionID: fixture.alpha.id, requestID })
+    expect(detail).toMatchObject({ kind: "question", requestID, fingerprint: "fp_inspection", delegation: sample.delegation })
+    expect(detail).not.toHaveProperty("metadata")
+    expect(evaluated).toEqual([])
+  }))
+
   it.effect("returns bounded redacted pending request detail with its delegation class and refuses unknown requests", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
@@ -408,10 +442,10 @@ describe("project inspect", () => {
       const resources = edit.kind === "permission" ? edit.resources : []
       expect(resources).toHaveLength(20)
       expect(resources[0]).toHaveLength(500)
-      expect(yield* inspect("per_push")).toMatchObject({ delegation: "human-only:publication" })
+      expect(yield* inspect("per_push")).toMatchObject({ delegation: "explicit-decision:publication" })
       expect(yield* inspect("grq_custom")).toEqual({ kind: "review", requestID: "grq_custom", fingerprint: "fp_grq", action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["custom.review"], reason: "Custom rule: Authorization: [redacted] [redacted]", hardReview: false, standard: false, delegation: "escalate" })
       expect(yield* inspect("grq_standard")).toEqual({ kind: "review", requestID: "grq_standard", fingerprint: "fp_std", action: "mcp_execute", resources: ["ycoding/session_prompt"], ruleIDs: ["standard.review.outside-repo"], reason: "Outside repository", hardReview: false, standard: true, delegation: "decline-only" })
-      expect(yield* inspect("grq_hard")).toMatchObject({ hardReview: true, delegation: "human-only:hard-review" })
+      expect(yield* inspect("grq_hard")).toMatchObject({ hardReview: true, delegation: "explicit-decision:hard-review" })
       expect(yield* refusal(inspect("per_missing"))).toBe(`Request per_missing is not pending for Session ${fixture.alpha.id}`)
       expect(yield* refusal(fixture.runtime.inspect(fixture.master.id, { sessionID: fixture.outsider.id, requestID: "per_unknown" }))).toBe(`Session ${fixture.outsider.id} is not a member of this Project`)
     }))
@@ -444,7 +478,7 @@ describe("project inspect", () => {
         options: ["o".repeat(200), ...Array.from({ length: 19 }, (_, index) => `option-${index}`)],
       })
       expect(JSON.stringify(question)).not.toContain("abc123xyz")
-      expect(yield* inspect(fixture.subagent.id, "frm_account")).toMatchObject({ kind: "question", delegation: "human-only:credentials-account" })
+      expect(yield* inspect(fixture.subagent.id, "frm_account")).toMatchObject({ kind: "question", delegation: "explicit-decision:credentials-account" })
     }))
 })
 
@@ -743,9 +777,9 @@ describe("member notifications", () => {
   it.effect("an escalation by the Master itself hands off natively and admits nothing, and callers outside the Project are refused", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
-      escalationOutcome.to = "human"
+      escalationOutcome.to = "client"
       const input = { sessionID: fixture.alpha.id, requestID: "frm_one", kind: "question" as const, fingerprint: "fp_frm", reason: "Needs a person" }
-      expect(yield* fixture.runtime.escalate(fixture.master.id, input)).toMatchObject({ requestID: "frm_one", delivered: false, decision: { to: "human" } })
+      expect(yield* fixture.runtime.escalate(fixture.master.id, input)).toMatchObject({ requestID: "frm_one", delivered: false, decision: { to: "client" } })
       expect(escalations.map((item) => item.coordinatorSessionID)).toEqual([fixture.master.id])
       expect(yield* refusal(fixture.runtime.escalate(fixture.outsider.id, input))).toBe("The project tool is only available to a Project's Master and its subagents")
       expect(yield* refusal(fixture.runtime.escalate(fixture.subagent.id, { ...input, sessionID: fixture.outsider.id }))).toBe(`Session ${fixture.outsider.id} is not a member of this Project`)

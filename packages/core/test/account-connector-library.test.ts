@@ -133,7 +133,7 @@ describe("native account Library", () => {
       state: "ready",
     })
     expect(current.permissions[0]).toMatchObject({ action: "chatgpt_library_list", resources: ["library"] })
-    expect(current.permissions[0]?.requireHuman).toBeUndefined()
+    expect(current.permissions[0]?.requireExplicitDecision).toBeUndefined()
   })
 
   test("materializes only a mounted identifier and returns its file identity", async () => {
@@ -154,7 +154,7 @@ describe("native account Library", () => {
       action: "chatgpt_library_materialize",
       resources: ["external-gdrive:fixture"],
     })
-    expect(current.permissions[0]?.requireHuman).toBeUndefined()
+    expect(current.permissions[0]?.requireExplicitDecision).toBeUndefined()
   })
 
   test("downloads into the managed store without exposing a signed URL", async () => {
@@ -201,7 +201,7 @@ describe("native account Library", () => {
       metadata: { store_in_library: true },
     })
     expect(current.permissions[0]).toMatchObject({ action: "chatgpt_library_upload", resources: ["fixture.txt"] })
-    expect(current.permissions[0]?.requireHuman).toBeUndefined()
+    expect(current.permissions[0]?.requireExplicitDecision).toBeUndefined()
   })
 
   test("downloads native first-party content through the authenticated fixed-origin request boundary", async () => {

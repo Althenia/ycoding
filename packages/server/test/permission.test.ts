@@ -95,8 +95,8 @@ test("request-only permission rejection preserves ownership, feedback, and missi
     expect(settled.status).toBe(404)
     expect(await settled.json()).toMatchObject({ _tag: "PermissionNotFoundError", requestID: request.id })
     expect(calls).toEqual([
-      { requestID: request.id, reply: "reject", rejectScope: "request", message: undefined },
-      { requestID: request.id, reply: "reject", rejectScope: "request", message: "Use a read-only alternative" },
+      { requestID: request.id, reply: "reject", message: undefined },
+      { requestID: request.id, reply: "reject", message: "Use a read-only alternative" },
       { requestID: request.id, reply: "reject", message: undefined },
     ])
   } finally {

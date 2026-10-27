@@ -24,6 +24,10 @@ const expectedTools = [
   "session_dots_decision_form",
   "session_dots_exchange_create",
   "session_dots_exchange_read",
+  "session_dots_delegation_device_create",
+  "session_dots_delegation_device_read",
+  "session_dots_delegation_device_revoke",
+  "session_dots_decisions_list",
   "provider_auth_list",
   "provider_auth_key",
   "provider_auth_begin",
@@ -49,6 +53,7 @@ const expectedTools = [
   "session_pin",
   "session_unpin",
   "session_subagent_cancel",
+  "session_subagent_answer",
   "session_team_economics",
   "session_team_shell_list",
   "session_team_shell_kill",
@@ -61,10 +66,15 @@ const expectedTools = [
   "session_prediction",
   "session_prompt_generate",
   "session_permission_list",
+  "session_permission_reply",
   "session_guardrail_status",
   "session_guardrail_request_list",
+  "session_guardrail_reply",
   "session_review_list",
+  "session_review_decide",
   "session_form_list",
+  "session_form_reply",
+  "session_form_cancel",
   "session_shell_output",
   "session_autonomy_get",
   "session_autonomy_set",
@@ -470,6 +480,35 @@ describe("delegated MRTR forms", () => {
   })
 })
 
+test("device-wide Dots form rechecks and settles an exact native child question without a task-exchange reference", async () => {
+  const target = { kind: "subagent_question", questionID: "qst_child", fingerprint: "a".repeat(64) }
+  const candidate = { target, subagentQuestion: { id: target.questionID, text: "Provide the bounded handoff", time: 1 } }
+  const expectedAttachment = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "Fixture" }
+  const input = { exchangeID: "decision_exchange", bindingID: "binding", expectedAttachment, targetSessionID: "ses_1", delegation: { id: "device_grant", revision: 1 }, target }
+  const envelope = { coordinator: context.principal, scope: { epoch: context.epoch, grantID: "grant_fixture" }, exchangeID: "decision_exchange", messageID: "msg_fixture", targetSessionID: "ses_1", origin: "plugin", kind: "task" }
+  const exchange = { envelope, exchangeID: "decision_exchange", sessionID: "ses_1", targetSessionID: "ses_1", inputID: "msg_fixture", channel: "task", state: "completed", progress: [], decisionOutcome: { target, state: "settled" } }
+  const f = await fixture({ dotsDecisionsList: { data: [{ targetSessionID: "ses_1", candidate }] }, dotsExchangeCreate: exchange })
+  const call = (extra: Record<string, unknown> = {}) => f.mcp.fetch(new Request(resource, {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-method": "tools/call", "mcp-name": "session_dots_decision_form", "mcp-protocol-version": "2026-07-28" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "session_dots_decision_form", arguments: { sessionID: "ses_1", input }, _meta: { ...meta, "io.modelcontextprotocol/clientCapabilities": { elicitation: {} } }, ...extra } }),
+  }), context)
+  try {
+    const first = (await (await call()).json()).result
+    expect(first.resultType).toBe("input_required")
+    expect(first.inputRequests.decision.params.requestedSchema.properties.text.title).toBe("Provide the bounded handoff")
+    const result = await (await call({ requestState: first.requestState, inputResponses: { decision: { action: "accept", content: { text: "Synthetic answer" } } } })).json()
+    expect(result.result.isError).toBeUndefined()
+    expect(f.calls.filter((entry) => entry.method === "dotsDecisionsList")).toHaveLength(2)
+    expect(f.calls.filter((entry) => entry.method === "dotsExchangeCreate").map((entry) => entry.args[2])).toContainEqual(expect.objectContaining({
+      exchangeID: input.exchangeID, targetSessionID: input.targetSessionID, delegation: input.delegation,
+      instruction: { operation: "decision", target, text: "Synthetic answer" },
+    }))
+    expect(f.calls.some((entry) => entry.method === "dotsExchangeRead")).toBe(false)
+  } finally {
+    await f.mcp.close()
+  }
+})
+
 describe("inventory and discovery", () => {
   test("uncertain routine exchanges reconcile only the exact task, delegation and presentation instruction", async () => {
     const input = { exchangeID: "routine", expectedAttachment: { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "V" }, targetSessionID: "ses_1", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, taskInputID: "msg_human", instruction: { operation: "presentation", preferences: { format: "bullets", detail: "concise" } } }
@@ -610,31 +649,19 @@ describe("inventory and discovery", () => {
         .toSorted(),
     )
     expect(RemoteMcpSchemas.tools.at(-1)?.operation).toBe("session.createInDirectory")
-    expect(new Set(expectedTools).size).toBe(85)
+    expect(new Set(expectedTools).size).toBe(89)
   })
 
-  test("human-only decision tools are unpublished and calling them never reaches the local server", async () => {
+  test("lists typed decision tools beside separate Stop and Interrupt controls", async () => {
     const { request, tool, calls } = await fixture()
-    const listed = (await (await request("tools/list", {})).json()) as { result: { tools: { name: string; description: string }[] } }
+    const listed = (await (await request("tools/list", {})).json()) as { result: { tools: { name: string; description: string; annotations: Record<string, unknown> }[] } }
     const names = listed.result.tools.map((item) => item.name)
-    const removed = {
-      session_permission_reply: { sessionID: "ses_1", input: { requestID: "per_1", reply: "once" } },
-      session_guardrail_reply: { sessionID: "ses_1", input: { requestID: "grq_1", reply: "once" } },
-      session_form_reply: { sessionID: "ses_1", input: { formID: "frm_1", answer: { approved: true } } },
-      session_form_cancel: { sessionID: "ses_1", input: { formID: "frm_1" } },
-      session_review_decide: { sessionID: "ses_1", input: { itemID: "rvw_1", decision: { kind: "recovery", choice: "continue" } } },
-      session_subagent_answer: { sessionID: "ses_1", input: { childID: "ses_2", questionID: "qst_1", text: "approved", humanAttestation: true } },
-    }
-    for (const name of Object.keys(removed)) expect(names).not.toContain(name)
-    for (const name of ["session_permission_list", "session_guardrail_request_list", "session_review_list", "session_form_list", "session_subagent_list", "session_subagent_cancel", "session_interrupt", "session_dots_exchange_create", "session_dots_exchange_read"])
+    for (const name of ["session_permission_reply", "session_guardrail_reply", "session_form_reply", "session_form_cancel", "session_review_decide", "session_subagent_answer", "session_interrupt", "session_subagent_cancel"])
       expect(names).toContain(name)
-    expect(listed.result.tools.map((item) => item.description).join("\n")).not.toMatch(/permission_reply|guardrail_reply|form_reply|form_cancel|review_decide|subagent_answer/)
-    for (const [name, args] of Object.entries(removed)) {
-      const response = await tool(name, args)
-      const body = (await response.json().catch(() => undefined)) as { result?: { isError?: boolean }; error?: unknown } | undefined
-      expect(response.status !== 200 || body?.error !== undefined || body?.result?.isError === true).toBe(true)
-    }
-    expect(calls.filter((call) => /Reply|Cancel|Decide|Answer/.test(call.method))).toEqual([])
+    expect(listed.result.tools.find((item) => item.name === "session_permission_reply")?.annotations).toEqual({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false })
+    const response = await tool("session_permission_reply", { sessionID: "ses_1", input: { requestID: "per_1", reply: "once" } })
+    expect(response.status).toBe(200)
+    expect(calls.some((call) => call.method === "permissionReply")).toBe(true)
   })
 
   test("session-scoped tools require sessionID and parameterless ones publish no input", async () => {
@@ -1414,6 +1441,13 @@ describe("authorization gate and request shape", () => {
     await mcp.close()
     expect((await tool("session_get", { sessionID: "ses_1" })).status).toBe(503)
     expect(calls).toEqual([])
+  })
+
+  test("refuses a native decision call after client authorization is revoked", async () => {
+    const { tool, state, calls } = await fixture()
+    state.allowed = false
+    expect((await tool("session_permission_reply", { sessionID: "ses_1", input: { requestID: "per_1", reply: "once" } })).status).toBe(503)
+    expect(calls.filter((call) => call.method === "permissionReply")).toEqual([])
   })
 
   test("rechecks authorization when a queued mutation reaches dispatch", async () => {

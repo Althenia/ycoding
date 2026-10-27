@@ -26,6 +26,7 @@ test("question validation returns a corrective client error and preserves Sessio
         yield* new Question.InvalidAnswerError({ requestID: request.id, message: "Select an offered answer" })
     }),
     replyDelegated: () => Effect.die("unused"),
+    rejectDelegated: () => Effect.die("unused"),
     reject: () => Effect.die("unused"),
     deferPending: () => Effect.die("unused"),
     cancelPending: () => Effect.die("unused"),

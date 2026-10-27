@@ -52,6 +52,11 @@ export type ReplySource = typeof ReplySource.Type
 export const DelegatedReplySource = Form.DelegatedReplySource
 export type DelegatedReplySource = typeof DelegatedReplySource.Type
 
+export const DotsClientReplySource = Form.DotsClientReplySource
+export type DotsClientReplySource = Form.DotsClientReplySource
+export const ExternalReplySource = Form.ExternalReplySource
+export type ExternalReplySource = Form.ExternalReplySource
+
 export function fingerprint(form: Pick<Info, "sessionID" | "title" | "fields">) {
   return Hash.json({ sessionID: form.sessionID, title: form.title, fields: form.fields })
 }
@@ -138,14 +143,16 @@ export interface ListInput {
 }
 
 export interface DelegatedReplyInput {
+  readonly explicitDecision?: true
   readonly id: ID
   readonly answer: Answer
   readonly fingerprint: string
-  readonly source: DelegatedReplySource
+  readonly source: ExternalReplySource
   readonly validate: (form: Info) => Effect.Effect<boolean>
 }
 
 export interface Interface {
+  readonly cancelDelegated: (input: Omit<DelegatedReplyInput, "answer" | "source"> & { readonly source: DotsClientReplySource }) => Effect.Effect<void, AlreadySettledError | NotFoundError>
   readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
   readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
   readonly ask: (
@@ -224,15 +231,15 @@ export const layer = Layer.effect(
       entry: Entry,
       state: Exclude<TerminalState, { readonly status: "timed_out" }>,
       source?: ReplySource,
-      beforeSettle?: Effect.Effect<void>,
+      receiptCommitted = false,
     ) {
       const id = entry.form.id
       const sessionID = entry.form.sessionID
-      yield* state.status === "answered"
-        ? events.publish(Event.Replied, { id, sessionID, answer: state.answer, ...(source === undefined ? {} : { source }) })
+      const notification = state.status === "answered"
+        ? events.publish(Event.Replied, { id, sessionID, answer: state.answer, ...(source === undefined ? {} : { source }) }).pipe(Effect.asVoid)
         : state.status === "cancelled"
-          ? events.publish(Event.Cancelled, { id, sessionID })
-          : events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID })
+          ? events.publish(Event.Cancelled, { id, sessionID }).pipe(Effect.asVoid)
+          : events.publish(Event.Deferred, { id, sessionID, itemID: state.itemID }).pipe(Effect.asVoid)
       const form = entry.form.assessment === undefined ? entry.form : { ...entry.form, assessment: {
         ...entry.form.assessment,
         fields: entry.form.assessment.fields.map((field) => field.status !== "pending" ? field : {
@@ -240,9 +247,10 @@ export const layer = Layer.effect(
           reason: state.status === "answered" ? "Answered before assessment settled." : "Request closed before assessment settled.",
         }),
       } }
-      yield* Cache.set(forms, id, { form, deferred: entry.deferred, epoch: entry.epoch, state, ...(source === undefined ? {} : { source }) })
-      if (beforeSettle) yield* beforeSettle
-      yield* Deferred.succeed(entry.deferred, state)
+      const settle = Cache.set(forms, id, { form, deferred: entry.deferred, epoch: entry.epoch, state, ...(source === undefined ? {} : { source }) }).pipe(
+        Effect.andThen(Deferred.succeed(entry.deferred, state)),
+      )
+      yield* receiptCommitted ? notification.pipe(Effect.ensuring(settle)) : notification.pipe(Effect.andThen(settle))
     })
 
     const createPending = Effect.fn("Form.createPending")((input: CreateInput, epoch?: number, assessment?: Form.Assessment) =>
@@ -377,6 +385,7 @@ export const layer = Layer.effect(
           const mode = sessionID && snapshot ? yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers") : "manual"
           const autoAnswer = mode === "auto"
           const yolo = mode === "yolo"
+          const explicit = input.metadata?.requireExplicitDecision === true
           const effective = input.metadata?.kind === "question" && sessionID && snapshot
             ? yield* autonomy.effectiveDecisions(sessionID).pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
             : undefined
@@ -384,7 +393,7 @@ export const layer = Layer.effect(
             mode, sourceSessionID: effective?.inherited.answers ?? input.sessionID,
             fields: input.fields.flatMap((field): Form.FieldAssessment[] =>
               (field.type === "string" || field.type === "multiselect") && (field.options?.length ?? 0) > 0
-                ? [{ key: field.key, status: yolo ? "pending" : "not_assessed", reason: yolo ? "Answers evaluator is assessing the options." : mode === "auto" ? "Auto uses only explicit defaults or a unique Recommended option; no model assessment." : "Manual answers require your decision; no model assessment." }]
+                ? [{ key: field.key, status: yolo && !explicit ? "pending" : "not_assessed", reason: explicit ? "This request requires an explicit decision; no model assessment." : yolo ? "Answers evaluator is assessing the options." : mode === "auto" ? "Auto uses only explicit defaults or a unique Recommended option; no model assessment." : "Manual answers require your decision; no model assessment." }]
                 : []),
           } : undefined
           const createWaiting = (waiting: CreateInput, value = assessment) =>
@@ -396,7 +405,7 @@ export const layer = Layer.effect(
                 .isAsleep(sessionID)
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
             : false
-          const auto = autoAnswer || yolo
+          const auto = !explicit && (autoAnswer || yolo)
           if (asleep && sessionID) {
             const form: Info = {
               id: input.id ?? ID.create(),
@@ -536,6 +545,8 @@ export const layer = Layer.effect(
                   const base = { requestID: input.id, fingerprint: input.fingerprint }
                   if (!(yield* input.validate(entry.form)))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
+                  if (entry.form.metadata?.requireExplicitDecision === true)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   if (
                     input.answer !== undefined &&
                     input.confidence !== undefined &&
@@ -550,7 +561,7 @@ export const layer = Layer.effect(
                   if (authorization === undefined) return { ...base, outcome: "stale" as const, settled: false }
                   const mode = yield* DecisionChoice.decisionMode(autonomy, sessionID, "answers")
                   if (mode === "manual")
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:manual-answers" }
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:manual-answers" }
                   const native =
                     input.answer === undefined || mode === "auto"
                       ? yield* restore(
@@ -665,18 +676,34 @@ export const layer = Layer.effect(
       exclusive(
         Effect.gen(function* () {
           const entry = yield* find(input.id)
-          if (entry.state.status !== "pending" || fingerprint(entry.form) !== input.fingerprint || entry.form.fields.some((field) => field.type === "external") || !(yield* input.validate(entry.form)))
+          if (entry.state.status !== "pending" || fingerprint(entry.form) !== input.fingerprint ||
+            (!input.explicitDecision && (entry.form.metadata?.requireExplicitDecision === true || entry.form.fields.some((field) => field.type === "external"))) ||
+            !(yield* input.validate(entry.form)))
             return yield* new NotFoundError({ id: input.id })
           const invalid = validateAnswer(entry.form, input.answer)
           if (invalid) return yield* new InvalidAnswerError({ id: input.id, message: invalid })
-          yield* complete(entry, { status: "answered", answer: input.answer }, input.source, events.publish(SessionEvent.DotsDecisionSettled, {
+          const committed = yield* events.publishBatch([{ definition: SessionEvent.DotsDecisionSettled, data: {
             sessionID: SessionSchema.ID.make(entry.form.sessionID),
             source: input.source,
             target: { kind: "form", formID: entry.form.id, fingerprint: input.fingerprint },
-          }).pipe(Effect.asVoid))
+          } }], { when: input.validate(entry.form) })
+          if (committed.length === 0) return yield* new NotFoundError({ id: input.id })
+          yield* complete(entry, { status: "answered", answer: input.answer }, input.source, true)
         }),
       ),
     )
+
+    const cancelDelegated: Interface["cancelDelegated"] = (input) => exclusive(Effect.gen(function* () {
+      const entry = yield* find(input.id)
+      if (!input.explicitDecision || entry.state.status !== "pending" || fingerprint(entry.form) !== input.fingerprint || !(yield* input.validate(entry.form)))
+        return yield* new NotFoundError({ id: input.id })
+      const committed = yield* events.publishBatch([{ definition: SessionEvent.DotsDecisionSettled, data: {
+        sessionID: SessionSchema.ID.make(entry.form.sessionID), source: input.source,
+        target: { kind: "form", formID: entry.form.id, fingerprint: input.fingerprint },
+      } }], { when: input.validate(entry.form) })
+      if (committed.length === 0) return yield* new NotFoundError({ id: input.id })
+      return yield* complete(entry, { status: "cancelled" }, input.source, true)
+    }))
 
     const cancel = Effect.fn("Form.cancel")((id: ID) =>
       exclusive(
@@ -700,7 +727,7 @@ export const layer = Layer.effect(
       ),
     )
 
-    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, escalate, reply, replyDelegated, cancel, cancelPending })
+    return Service.of({ create, ask, deferPending, get, list, state, snapshot, snapshots, reconsider, escalate, reply, replyDelegated, cancelDelegated, cancel, cancelPending })
   }),
 )
 

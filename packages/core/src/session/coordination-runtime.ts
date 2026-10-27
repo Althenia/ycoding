@@ -105,7 +105,7 @@ export interface EscalateResult {
   readonly decision: CoordinationDecisions.EscalateResult
 }
 
-export type Delegation = "routine" | "decline-only" | "escalate" | `human-only:${string}`
+export type Delegation = "routine" | "decline-only" | "escalate" | `explicit-decision:${string}`
 
 export type RequestDetail =
   | { readonly kind: "permission"; readonly requestID: string; readonly fingerprint: string; readonly action: string; readonly resources: ReadonlyArray<string>; readonly delegation: Delegation; readonly coordinationEscalation?: Coordination.Escalation }
@@ -548,7 +548,7 @@ export function make(options: Options): Interface & { readonly handle: (event: H
     }
     if (event.type === SessionEvent.InputAdmitted.type) {
       const data = event.data
-      if (data.input.type !== "user" || data.input.data.metadata?.inputOrigin !== "human") return
+      if (data.input.type !== "user" || data.input.data.metadata?.inputOrigin !== "direct") return
       const scope = yield* masterOf(data.sessionID)
       if (scope !== undefined) yield* coordination.activate(scope.groupID)
       return
@@ -665,7 +665,15 @@ const boundedResources = (resources: ReadonlyArray<string>) => resources.slice(0
 function requestDetail(item: CoordinationDecisions.PendingSnapshot): RequestDetail {
   const escalation = (value: Coordination.Escalation | undefined) => CoordinationEscalation.redacted(value)
   if (item.kind === "question") {
-    const human = CoordinationDecisions.humanOnlyReason({ kind: "question", action: "question", resources: [item.form.title] })
+    const explicit = CoordinationDecisions.explicitDecisionReason({
+      kind: "question", action: "question", resources: [],
+      metadata: {
+        requireExplicitDecision: item.form.metadata?.requireExplicitDecision,
+        title: item.form.title,
+        fields: item.form.fields.map((field) => ("title" in field ? (field.title ?? field.key) : field.key)),
+        metadata: item.form.metadata,
+      },
+    })
     return {
       kind: "question", requestID: item.form.id, fingerprint: item.fingerprint, title: text(item.form.title),
       fields: item.form.fields.slice(0, 20).map((field) => ({
@@ -674,26 +682,26 @@ function requestDetail(item: CoordinationDecisions.PendingSnapshot): RequestDeta
         ...("required" in field && field.required !== undefined ? { required: field.required } : {}),
         ...("options" in field && field.options !== undefined ? { options: field.options.slice(0, 20).map((option) => text(typeof option === "string" ? option : option.value, 200)) } : {}),
       })),
-      delegation: human ?? "routine", ...escalation(item.form.coordinationEscalation),
+      delegation: explicit ?? "routine", ...escalation(item.form.coordinationEscalation),
     }
   }
   const request = item.request
   const routine = CoordinationDecisions.routineEligible({ kind: item.kind, action: request.action, resources: request.resources })
   if (item.kind === "permission") {
-    const human = CoordinationDecisions.humanOnlyReason({ kind: "permission", action: request.action, resources: request.resources, metadata: request.metadata })
+    const explicit = CoordinationDecisions.explicitDecisionReason({ kind: "permission", action: request.action, resources: request.resources, metadata: request.metadata })
     return {
       kind: "permission", requestID: request.id, fingerprint: item.fingerprint, action: request.action,
-      resources: boundedResources(request.resources), delegation: human ?? (routine ? "routine" : "decline-only"),
+      resources: boundedResources(request.resources), delegation: explicit ?? (routine ? "routine" : "decline-only"),
       ...escalation(request.coordinationEscalation),
     }
   }
   const review = item.request
-  const human = CoordinationDecisions.humanOnlyReason({ kind: "review", action: review.action, resources: review.resources, metadata: review.metadata, hardReview: review.hardReview, ruleIDs: review.ruleIDs })
+  const explicit = CoordinationDecisions.explicitDecisionReason({ kind: "review", action: review.action, resources: review.resources, metadata: review.metadata, hardReview: review.hardReview, ruleIDs: review.ruleIDs })
   return {
     kind: "review", requestID: review.id, fingerprint: item.fingerprint, action: review.action,
     resources: boundedResources(review.resources), ruleIDs: review.ruleIDs.slice(0, 20), reason: text(review.reason),
     hardReview: review.hardReview === true, standard: review.standard,
-    delegation: human ?? (routine ? "routine" : review.standard ? "decline-only" : "escalate"),
+    delegation: explicit ?? (routine ? "routine" : review.standard ? "decline-only" : "escalate"),
     ...escalation(review.coordinationEscalation),
   }
 }

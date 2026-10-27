@@ -371,7 +371,7 @@ test("incident wire types carry canonical Schema shapes with plain string identi
   } satisfies RemoteIncidentReport
   const recent = {
     data: { items: [{ id: "inc_1", time: 1, kind: "fallback", category: "rate_limit", ruleIDs: [], agent: "build", variant: "high", profile: "work",
-      target: { id: "n", providerID: "q", variant: "low", profile: "w" }, decidedBy: "human" }] },
+      target: { id: "n", providerID: "q", variant: "low", profile: "w" }, decidedBy: "client" }] },
   } satisfies RemoteIncidentRecent
   const guidance = { data: { text: "note", clearedAt: 5, enabled: true } } satisfies RemoteIncidentGuidance
   const reportInput = { group: "agent", from: 1, to: 2, offset: 0, limit: 5 } satisfies RemoteIncidentReportInput
@@ -867,6 +867,10 @@ describe("remote operations", () => {
       "session.dots.resume",
       "session.dots.exchange.create",
       "session.dots.exchange.read",
+      "session.dots.delegation.device.create",
+      "session.dots.delegation.device.read",
+      "session.dots.delegation.device.revoke",
+      "session.dots.decisions.list",
       "session.skill",
       "usage.providers",
       "usage.summary",

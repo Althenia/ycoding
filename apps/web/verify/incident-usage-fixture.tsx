@@ -32,7 +32,7 @@ const target = { providerID: "anthropic", id: "claude-opus" }
 const recentItems = (input: IncidentRecentInput): IncidentItem[] => Array.from({ length: Math.min(input.limit ?? 20, 25) }, (_, index) => ({
   id: `inc_${String(index + 1).padStart(3, "0")}`, time: now - (index + 1) * 3_600_000, kind: kinds[index % 3]!, category: index % 3 === 0 ? "fallback" : "standard.review.git-destructive",
   ruleIDs: index % 3 === 0 ? [] : ["standard.review.git-destructive", "custom"], agent: input.agent ?? (index % 2 === 0 ? "build" : "plan"),
-  ...(index === 0 ? { variant: "high", profile: "work", target } : {}), ...(index % 3 === 0 ? { target } : { decidedBy: index % 2 === 0 ? "decision-model" as const : "human" as const }),
+  ...(index === 0 ? { variant: "high", profile: "work", target } : {}), ...(index % 3 === 0 ? { target } : { decidedBy: index % 2 === 0 ? "decision-model" as const : "client" as const }),
 }))
 
 const requests: { readonly operation: string; readonly input: unknown }[] = []

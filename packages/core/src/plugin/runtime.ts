@@ -76,9 +76,12 @@ export const layerWithCell = (cell: Cell) =>
         launch: (input) => require(cell, (runtime) => runtime.orchestration.launch(input)),
         switchModel: (input) => require(cell, (runtime) => runtime.orchestration.switchModel(input)),
         list: (parentID) => require(cell, (runtime) => runtime.orchestration.list(parentID)),
+        questionSnapshots: () => Effect.die(new Error("Question snapshots require an authenticated device operation")),
         page: (input) => require(cell, (runtime) => runtime.orchestration.page(input)),
         send: (input) => require(cell, (runtime) => runtime.orchestration.send(input)),
-        answer: (input) => require(cell, (runtime) => runtime.orchestration.answer(input)),
+        answer: (input) => input.dots
+          ? Effect.fail(new SessionOrchestration.ConflictError({ message: "Dots decisions require an authenticated device operation" }))
+          : require(cell, (runtime) => runtime.orchestration.answer(input)),
         cancel: (input) => require(cell, (runtime) => runtime.orchestration.cancel(input)),
         notice: (input) => require(cell, (runtime) => runtime.orchestration.notice(input)),
         resume: (input) => require(cell, (runtime) => runtime.orchestration.resume(input)),
@@ -91,7 +94,7 @@ export const layerWithCell = (cell: Cell) =>
         recover: require(cell, (runtime) => runtime.orchestration.recover),
         resolveRecovery: () =>
           Effect.fail(
-            new SessionOrchestration.ConflictError({ message: "Restart recovery decisions are human-only" }),
+            new SessionOrchestration.ConflictError({ message: "Restart recovery requires an authenticated review decision operation" }),
           ),
       },
       location: {

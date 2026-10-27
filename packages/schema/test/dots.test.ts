@@ -7,8 +7,39 @@ import { SessionMessageID } from "../src/session-message-id.js"
 import { Form } from "../src/form.js"
 import { Permission } from "../src/permission.js"
 import { Question } from "../src/question.js"
+import { SessionOrchestration } from "../src/session-orchestration.js"
+import { SessionReview } from "../src/session-review.js"
 
 const target = { profile: "fixture-a", dotID: "dot_1", threadID: "thread_1", generation: "3", label: "Fixture Dot" }
+
+describe("authenticated device delegation", () => {
+  test("enrollment derives its lifetime and requires exact mutation and binding identities", () => {
+    const value: Dots.DeviceDelegationCreate = { id: "device_grant", exchangeID: "enroll_1", bindingID: "binding_1", expectedAttachment: target, scope: { target: "device", operations: ["task", "decision"] } }
+    expect(Schema.decodeUnknownSync(Dots.DeviceDelegationCreate)(value)).toEqual(value)
+    for (const invalid of [
+      { ...value, expiresAt: 1 }, { ...value, sourceExchangeID: "task" }, { ...value, principal: {} },
+      { ...value, exchangeID: "" }, { ...value, bindingID: "" }, { ...value, scope: { target: "session", operations: ["task"] } },
+      { ...value, scope: { target: "device", operations: [] } }, { ...value, scope: { target: "device", operations: ["task", "task"] } },
+    ]) expect(() => Schema.decodeUnknownSync(Dots.DeviceDelegationCreate)(invalid)).toThrow()
+    expect(Schema.decodeUnknownSync(Dots.DeviceDelegationRead)({})).toEqual({})
+    expect(() => Schema.decodeUnknownSync(Dots.DecisionsList)({ bindingID: "binding_1", expectedAttachment: target, delegation: { id: "device_grant", revision: 1 }, limit: 101 })).toThrow()
+  })
+  test("all native decision classes retain closed validated choices without permanent approvals", () => {
+    const fingerprint = "a".repeat(64)
+    const choices: Extract<Dots.DelegatedInstruction, { operation: "decision" }>[] = [
+      { operation: "decision", target: { kind: "form", formID: Form.ID.make("frm_1"), fingerprint }, cancelled: true },
+      { operation: "decision", target: { kind: "question", requestID: Question.ID.make("que_1"), fingerprint }, cancelled: true },
+      { operation: "decision", target: { kind: "subagent_question", questionID: SessionOrchestration.QuestionID.make("qst_1"), fingerprint }, text: "Proceed" },
+      { operation: "decision", target: { kind: "subagent_question", questionID: SessionOrchestration.QuestionID.make("qst_1"), fingerprint }, data: { selected: false } },
+      { operation: "decision", target: { kind: "subagent_question", questionID: SessionOrchestration.QuestionID.make("qst_1"), fingerprint }, dismissed: true },
+      { operation: "decision", target: { kind: "review", itemID: SessionReview.ID.make("rvw_1"), fingerprint }, decision: { kind: "recovery", choice: "continue" } },
+      { operation: "decision", target: { kind: "review", itemID: SessionReview.ID.make("rvw_1"), fingerprint }, decision: { kind: "guardrail", reply: "once" } },
+    ]
+    for (const choice of choices) expect(Schema.decodeUnknownSync(Dots.DelegatedInstruction)(choice)).toEqual(choice)
+    expect(() => Schema.decodeUnknownSync(Dots.DelegatedInstruction)({ operation: "decision", target: choices[5]!.target, decision: { kind: "permission", reply: "always" } })).toThrow()
+    expect(() => Schema.decodeUnknownSync(Dots.DelegatedInstruction)({ operation: "decision", target: choices[2]!.target })).toThrow()
+  })
+})
 
 describe("typed task delegation", () => {
   const common = { exchangeID: "routine_1", expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), channel: "task", delivery: "queue" } satisfies Pick<Dots.ExchangeCreate, "exchangeID" | "expectedAttachment" | "targetSessionID" | "channel" | "delivery">

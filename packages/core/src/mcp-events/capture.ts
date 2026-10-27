@@ -61,8 +61,7 @@ const attach = (
         ? { type: "tool", source_event_id, ...origin.tool }
         : { type: origin.fallback, source_event_id },
       ...(review ? { review } : {}),
-      human_required: true,
-      actions: ["inspect", "notify_human"],
+      actions: ["inspect", "respond"],
     },
   }
 }
@@ -81,7 +80,7 @@ export function mapEvent(input: {
           name,
           sessionID: extra.sessionID ?? sid ?? "",
           state,
-          sourceID: extra.requestID ?? extra.itemID ?? extra.taskID ?? identifier(input.id) ?? input.id,
+          sourceID: input.id,
           ...extra,
         }
 
@@ -93,6 +92,8 @@ export function mapEvent(input: {
     }
     case "guardrail.replied":
       return base("session.guardrail.changed", "resolved", { requestID: identifier(data.requestID), reason: category(data.reply) })
+    case "guardrail.cancelled":
+      return base("session.guardrail.changed", "cancelled", { requestID: identifier(data.requestID) })
     case "guardrail.deferred":
       return attach(base("session.guardrail.changed", "deferred", { requestID: identifier(data.requestID), itemID: identifier(data.itemID) }), input.id, "guardrail", { fallback: "review" }, "unreported")
     case "guardrail.decided":
@@ -104,6 +105,8 @@ export function mapEvent(input: {
     }
     case "permission.replied":
       return base("session.permission.changed", "resolved", { requestID: identifier(data.requestID), reason: category(data.reply) })
+    case "permission.cancelled":
+      return base("session.permission.changed", "cancelled", { requestID: identifier(data.requestID) })
     case "permission.deferred":
       return attach(base("session.permission.changed", "deferred", { requestID: identifier(data.requestID), itemID: identifier(data.itemID) }), input.id, "permission", { fallback: "review" })
     case "question.asked":
@@ -158,7 +161,7 @@ export function mapEvent(input: {
           ? "session.guardrail.changed"
           : data.kind === "permission"
             ? "session.permission.changed"
-            : data.kind === "question" || data.kind === "subagent_question"
+            : data.kind === "question" || data.kind === "subagent_question" || data.kind === "recovery"
               ? "session.question.changed"
               : data.kind === "form"
                 ? "session.form.changed"
@@ -172,8 +175,8 @@ export function mapEvent(input: {
         })
       if (input.type !== "session.review.deferred") return notification
       const kind = payload.type === "form" ? "form" : data.kind
-      if (kind !== "guardrail" && kind !== "permission" && kind !== "question" && kind !== "form" && kind !== "subagent_question") return notification
-      return attach(notification, input.id, kind, { tool: toolSource(data.origin), fallback: "review" }, kind === "guardrail" ? classify(payload) : undefined)
+      if (kind !== "guardrail" && kind !== "permission" && kind !== "question" && kind !== "form" && kind !== "subagent_question" && kind !== "recovery") return notification
+      return attach(notification, input.id, kind, { tool: kind === "recovery" ? undefined : toolSource(data.origin), fallback: "review" }, kind === "guardrail" ? classify(payload) : undefined)
     }
     case "session.execution.started":
       return base("session.progress", "running")
@@ -200,6 +203,7 @@ export function mapEvent(input: {
         case "started":
         case "backgrounded":
         case "resumed":
+        case "progressed":
           return base("session.progress", "running", extra)
         case "question_asked":
           return attach(base("session.question.changed", "pending", { ...extra, requestID: identifier(record(change.question).id) }), input.id, "subagent_question", { fallback: "managed_task" })

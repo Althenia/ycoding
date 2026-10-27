@@ -10,6 +10,9 @@ import { Form } from "./form.js"
 import { Guardrail } from "./guardrail.js"
 import { Permission } from "./permission.js"
 import { Question } from "./question.js"
+import { SessionOrchestration } from "./session-orchestration.js"
+import { SessionReview } from "./session-review.js"
+import { Event } from "./event.js"
 
 const Identity = Schema.String.check(Schema.isNonEmpty())
 
@@ -105,15 +108,31 @@ export const DecisionTarget = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("guardrail"), requestID: Guardrail.RequestID, fingerprint: DecisionFingerprint }),
   Schema.Struct({ kind: Schema.Literal("form"), formID: Form.ID, fingerprint: DecisionFingerprint }),
   Schema.Struct({ kind: Schema.Literal("question"), requestID: Question.ID, fingerprint: DecisionFingerprint }),
+  Schema.Struct({ kind: Schema.Literal("subagent_question"), questionID: SessionOrchestration.QuestionID, fingerprint: DecisionFingerprint }),
+  Schema.Struct({ kind: Schema.Literal("review"), itemID: SessionReview.ID, fingerprint: DecisionFingerprint }),
 ]).annotate({ identifier: "Dots.DecisionTarget", parseOptions: { onExcessProperty: "error" } })
 export type DecisionTarget = typeof DecisionTarget.Type
 const DelegatedReply = Schema.Literals(["once", "reject"])
+export const ReviewDecision = Schema.Union([
+  SessionReview.Decision.members[0],
+  SessionReview.Decision.members[1],
+  Schema.Struct({ ...SessionReview.Decision.members[2].fields, reply: DelegatedReply }),
+  Schema.Struct({ ...SessionReview.Decision.members[3].fields, reply: DelegatedReply }),
+  SessionReview.Decision.members[4],
+  SessionReview.Decision.members[5],
+]).annotate({ identifier: "Dots.ReviewDecision", parseOptions: { onExcessProperty: "error" } })
+export type ReviewDecision = typeof ReviewDecision.Type
 export const DelegatedInstruction = Schema.Union([
   Schema.Struct({ operation: Schema.Literal("task"), text: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(32768)) }),
   Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("permission"), requestID: Permission.ID, fingerprint: DecisionFingerprint }), reply: DelegatedReply }),
   Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("guardrail"), requestID: Guardrail.RequestID, fingerprint: DecisionFingerprint }), reply: DelegatedReply }),
   Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("form"), formID: Form.ID, fingerprint: DecisionFingerprint }), answers: Form.Answer }),
   Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("question"), requestID: Question.ID, fingerprint: DecisionFingerprint }), answers: Schema.Array(Question.Answer) }),
+  Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("form"), formID: Form.ID, fingerprint: DecisionFingerprint }), cancelled: Schema.Literal(true) }),
+  Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("question"), requestID: Question.ID, fingerprint: DecisionFingerprint }), cancelled: Schema.Literal(true) }),
+  Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("subagent_question"), questionID: SessionOrchestration.QuestionID, fingerprint: DecisionFingerprint }), text: SessionOrchestration.ControlText.pipe(optional), data: SessionOrchestration.AnswerData.pipe(optional) }).check(Schema.makeFilter((value) => value.text !== undefined || value.data !== undefined, { expected: "text or data for the child question", meta: { _tag: "isMinProperties", minProperties: 3 }, arbitrary: { constraint: { minLength: 3 } } })),
+  Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("subagent_question"), questionID: SessionOrchestration.QuestionID, fingerprint: DecisionFingerprint }), dismissed: Schema.Literal(true) }),
+  Schema.Struct({ operation: Schema.Literal("decision"), target: Schema.Struct({ kind: Schema.Literal("review"), itemID: SessionReview.ID, fingerprint: DecisionFingerprint }), decision: ReviewDecision }),
 ]).annotate({ identifier: "Dots.DelegatedInstruction", parseOptions: { onExcessProperty: "error" } })
 export type DelegatedInstruction = typeof DelegatedInstruction.Type
 export const DelegatedReceipt = Schema.Struct({ delegation: DelegationRef, instruction: DelegatedInstruction }).annotate({ identifier: "Dots.DelegatedReceipt" })
@@ -126,6 +145,8 @@ export const DecisionCandidate = Schema.Struct({
   title: Schema.String.check(Schema.isMaxLength(256)).pipe(optional),
   fields: Form.Fields.pipe(optional),
   questions: Schema.Array(Question.Info).pipe(optional),
+  subagentQuestion: SessionOrchestration.Question.pipe(optional),
+  review: SessionReview.Item.pipe(optional),
 }).annotate({ identifier: "Dots.DecisionCandidate" })
 export type DecisionCandidate = typeof DecisionCandidate.Type
 export const DecisionOutcome = Schema.Struct({
@@ -134,6 +155,59 @@ export const DecisionOutcome = Schema.Struct({
   reply: DelegatedReply.pipe(optional),
 }).annotate({ identifier: "Dots.DecisionOutcome" })
 export type DecisionOutcome = typeof DecisionOutcome.Type
+export const DeviceDelegationScope = Schema.Struct({
+  target: Schema.Literal("device"),
+  operations: Schema.NonEmptyArray(Schema.Literals(["task", "decision"])),
+}).check(Schema.makeFilter((value) => new Set(value.operations).size === value.operations.length, {
+  expected: "distinct delegated operations", meta: { _tag: "isMaxProperties", maxProperties: 2 }, arbitrary: { constraint: { maxLength: 2 } },
+})).annotate({ identifier: "Dots.DeviceDelegationScope", parseOptions: { onExcessProperty: "error" } })
+export type DeviceDelegationScope = typeof DeviceDelegationScope.Type
+const DeviceIdentity = Identity.check(Schema.isMaxLength(256))
+export const DeviceDelegationCreate = Schema.Struct({
+  id: DeviceIdentity, exchangeID: DeviceIdentity, bindingID: DeviceIdentity, expectedAttachment: Target, scope: DeviceDelegationScope,
+}).annotate({ identifier: "Dots.DeviceDelegationCreate", parseOptions: { onExcessProperty: "error" } })
+export interface DeviceDelegationCreate extends Schema.Schema.Type<typeof DeviceDelegationCreate> {}
+export const DeviceDelegationInfo = Schema.Struct({
+  ...DelegationRef.fields, basis: Schema.Literal("device"), anchorSessionID: SessionID, bindingID: DeviceIdentity,
+  principal: McpEvents.Principal, scope: DeviceDelegationScope, expiresAt: PositiveInt, active: Schema.Boolean,
+}).annotate({ identifier: "Dots.DeviceDelegationInfo" })
+export interface DeviceDelegationInfo extends Schema.Schema.Type<typeof DeviceDelegationInfo> {}
+const PageFields = { cursor: Schema.String.check(Schema.isMaxLength(4096)).pipe(optional), limit: PositiveInt.check(Schema.isLessThanOrEqualTo(100)).pipe(optional) }
+export const DeviceDelegationRead = Schema.Struct(PageFields).annotate({ identifier: "Dots.DeviceDelegationRead", parseOptions: { onExcessProperty: "error" } })
+export interface DeviceDelegationRead extends Schema.Schema.Type<typeof DeviceDelegationRead> {}
+export const DeviceDelegationStatus = Schema.Struct({
+  binding: Schema.Struct({ id: DeviceIdentity, target: Target }), grants: Schema.Array(DeviceDelegationInfo), nextCursor: PageFields.cursor,
+}).annotate({ identifier: "Dots.DeviceDelegationStatus" })
+export interface DeviceDelegationStatus extends Schema.Schema.Type<typeof DeviceDelegationStatus> {}
+export const DeviceDelegationRevoke = Schema.Struct({
+  ...DelegationRef.fields, exchangeID: DeviceIdentity, bindingID: DeviceIdentity, expectedAttachment: Target,
+}).annotate({ identifier: "Dots.DeviceDelegationRevoke", parseOptions: { onExcessProperty: "error" } })
+export interface DeviceDelegationRevoke extends Schema.Schema.Type<typeof DeviceDelegationRevoke> {}
+export const DecisionsList = Schema.Struct({
+  bindingID: DeviceIdentity, expectedAttachment: Target, delegation: DelegationRef, targetSessionID: SessionID.pipe(optional), ...PageFields,
+}).annotate({ identifier: "Dots.DecisionsList", parseOptions: { onExcessProperty: "error" } })
+export interface DecisionsList extends Schema.Schema.Type<typeof DecisionsList> {}
+export const DecisionsPage = Schema.Struct({
+  data: Schema.Array(Schema.Struct({ targetSessionID: SessionID, candidate: DecisionCandidate })), nextCursor: PageFields.cursor,
+}).annotate({ identifier: "Dots.DecisionsPage" })
+export interface DecisionsPage extends Schema.Schema.Type<typeof DecisionsPage> {}
+export const BindingRecord = Schema.Struct({ id: DeviceIdentity, target: Target, accountDigest: Identity })
+export interface BindingRecord extends Schema.Schema.Type<typeof BindingRecord> {}
+const authorityEvent = { durable: { aggregate: "sessionID", version: 1 } } as const
+export const BindingBound = Event.durable({
+  type: "session.dots.binding.bound", ...authorityEvent, schema: { sessionID: SessionID, binding: BindingRecord },
+})
+export const BindingUnbound = Event.durable({
+  type: "session.dots.binding.unbound", ...authorityEvent, schema: { sessionID: SessionID, bindingID: DeviceIdentity },
+})
+export const DeviceDelegationCreated = Event.durable({
+  type: "session.dots.device-delegation.created", ...authorityEvent,
+  schema: { sessionID: SessionID, exchangeID: DeviceIdentity, fingerprint: DecisionFingerprint, grant: DeviceDelegationInfo },
+})
+export const DeviceDelegationRevoked = Event.durable({
+  type: "session.dots.device-delegation.revoked", ...authorityEvent,
+  schema: { sessionID: SessionID, exchangeID: DeviceIdentity, fingerprint: DecisionFingerprint, delegationID: DeviceIdentity, revision: PositiveInt, principal: McpEvents.Principal },
+})
 const exchangeFields = {
   exchangeID: Identity.check(Schema.isMaxLength(256)),
   expectedAttachment: Target,

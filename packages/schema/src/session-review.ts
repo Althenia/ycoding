@@ -82,6 +82,7 @@ export const PermissionPayload = Schema.Struct({
   resources: Schema.Array(Schema.String),
   save: Schema.Array(Schema.String).pipe(optional),
   fingerprint: Fingerprint,
+  fingerprintVersion: Schema.Literals([1, 2]),
   requestID: Permission.ID,
   coordinationEscalation: Coordination.Escalation.pipe(optional),
 }).annotate({ identifier: "SessionReview.PermissionPayload" })

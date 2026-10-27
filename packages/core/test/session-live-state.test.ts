@@ -33,7 +33,7 @@ testEffect(Layer.empty).effect("goal reminders resolve routine choices without m
     expect(text).toContain("Each autonomy category (permissions, guardrails, answers) uses its own decision mode.")
     expect(text).toContain("The autonomy modes above are effective")
     expect(text).toContain("Do not repeat an automatic waiting answer")
-    expect(text).toContain("required human approval")
+    expect(text).toContain("required explicit decisions")
     expect(text).toContain("Goals do not override these gates")
   }
 }))

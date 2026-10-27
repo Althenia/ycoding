@@ -2,6 +2,7 @@ export * as SessionReviewFold from "./review-fold"
 
 import { Session } from "@ycoding-ai/schema/session"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { Form } from "@ycoding-ai/schema/form"
 import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import { Clock, Effect, Option, Schema } from "effect"
@@ -65,6 +66,8 @@ export interface Folded {
   readonly decision?: SessionReview.Decision
   readonly withdrawn?: "reverted" | "task_closed"
   readonly consumed: boolean
+  readonly revision: number
+  readonly source?: Form.DotsClientReplySource
 }
 
 type DatabaseClient = Database.Interface["db"]
@@ -103,6 +106,17 @@ export function fingerprint(input: {
 
 export function promptID(itemID: ID): SessionMessage.ID {
   return SessionMessage.ID.make(`msg_review_${Hash.sha256(itemID).slice(0, 24)}`)
+}
+
+export function pendingFingerprint(item: Folded) {
+  return Hash.json(item.payload.type === "permission" ? { ...item,
+    payload: Object.fromEntries(Object.entries(item.payload).filter(([key]) => key !== "fingerprintVersion")),
+  } : item)
+}
+
+export function matchesFingerprint(payload: SessionReview.Payload, expected: string, historical?: string) {
+  return "fingerprint" in payload && (payload.fingerprint === expected ||
+    (payload.type === "permission" && payload.fingerprintVersion === 1 && historical !== undefined && payload.fingerprint === historical))
 }
 
 export const rootOf = Effect.fnUntraced(function* (db: DatabaseClient, sessionID: Session.ID) {
@@ -157,7 +171,7 @@ export const familySessions = Effect.fnUntraced(function* (db: DatabaseClient, r
 export const fold = Effect.fnUntraced(function* (db: DatabaseClient, sessionIDs: ReadonlyArray<Session.ID>) {
   if (sessionIDs.length === 0) return [] as Folded[]
   const rows = yield* db
-    .select({ aggregate: EventTable.aggregate_id, type: EventTable.type, data: EventTable.data, created: EventTable.created })
+    .select({ aggregate: EventTable.aggregate_id, type: EventTable.type, data: EventTable.data, created: EventTable.created, revision: EventTable.seq })
     .from(EventTable)
     .where(and(inArray(EventTable.aggregate_id, [...sessionIDs]), inArray(EventTable.type, reviewTypes)))
     .orderBy(asc(EventTable.seq))
@@ -180,6 +194,7 @@ export const fold = Effect.fnUntraced(function* (db: DatabaseClient, sessionIDs:
         payload: data.value.payload,
         created: row.created,
         consumed: false,
+        revision: row.revision,
       })
       continue
     }
@@ -187,20 +202,20 @@ export const fold = Effect.fnUntraced(function* (db: DatabaseClient, sessionIDs:
       const data = decodeDecided(row.data)
       if (Option.isNone(data)) continue
       const current = items.get(data.value.itemID)
-      if (current) items.set(current.itemID, { ...current, decision: data.value.decision })
+      if (current) items.set(current.itemID, { ...current, decision: data.value.decision, revision: row.revision, ...(data.value.source === undefined ? {} : { source: data.value.source }) })
       continue
     }
     if (row.type === withdrawnType) {
       const data = decodeWithdrawn(row.data)
       if (Option.isNone(data)) continue
       const current = items.get(data.value.itemID)
-      if (current) items.set(current.itemID, { ...current, withdrawn: data.value.reason })
+      if (current) items.set(current.itemID, { ...current, withdrawn: data.value.reason, revision: row.revision })
       continue
     }
     const data = decodeConsumed(row.data)
     if (Option.isNone(data)) continue
     const current = items.get(data.value.itemID)
-    if (current) items.set(current.itemID, { ...current, consumed: true })
+    if (current) items.set(current.itemID, { ...current, consumed: true, revision: row.revision })
   }
   return Array.from(items.values()).toSorted((left, right) => (left.itemID < right.itemID ? -1 : 1))
 })
@@ -382,6 +397,7 @@ export const consume = Effect.fn("SessionReviewFold.consume")(function* (
   sessionID: Session.ID,
   kind: "guardrail" | "permission",
   expected: string,
+  historical?: string,
 ) {
   const rootID = yield* rootOf(db, sessionID)
   if (!rootID) return false
@@ -396,8 +412,7 @@ export const consume = Effect.fn("SessionReviewFold.consume")(function* (
           item.decision !== undefined &&
           "reply" in item.decision &&
           item.decision.reply !== "reject" &&
-          "fingerprint" in item.payload &&
-          item.payload.fingerprint === expected,
+          matchesFingerprint(item.payload, expected, historical),
       )
       if (!grant) return false
       yield* events.publish(SessionEvent.Review.Consumed, { sessionID, itemID: grant.itemID })

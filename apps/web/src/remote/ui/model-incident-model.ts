@@ -51,4 +51,4 @@ export function guidanceIndicator(guidance: IncidentGuidance) {
 }
 
 export const incidentKindLabel = { fallback: "Fallback", "guardrail-escalated": "Guardrail escalated", "guardrail-rejected": "Guardrail rejected" } as const
-export const decidedByLabel = { "decision-model": "Decision model", human: "Human" } as const
+export const decidedByLabel = { "decision-model": "Decision model", client: "Client" } as const satisfies Record<NonNullable<IncidentItem["decidedBy"]>, string>

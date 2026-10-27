@@ -431,6 +431,14 @@ import type {
   DotsDelegationCreateOutput,
   DotsDelegationRevokeInput,
   DotsDelegationRevokeOutput,
+  DotsDelegationDeviceCreateInput,
+  DotsDelegationDeviceCreateOutput,
+  DotsDelegationDeviceReadInput,
+  DotsDelegationDeviceReadOutput,
+  DotsDelegationDeviceRevokeInput,
+  DotsDelegationDeviceRevokeOutput,
+  DotsDecisionsListInput,
+  DotsDecisionsListOutput,
   DotsExchangeReadInput,
   DotsExchangeReadOutput,
   DotsTargetsInput,
@@ -3521,6 +3529,80 @@ export function make(options: ClientOptions) {
               method: "POST",
               path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/revoke`,
               body: { id: input["id"], revision: input["revision"], expectedAttachment: input["expectedAttachment"] },
+              successStatus: 200,
+              declaredStatuses: [400, 404, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        device: {
+          create: (input: DotsDelegationDeviceCreateInput, requestOptions?: RequestOptions) =>
+            request<{ readonly data: DotsDelegationDeviceCreateOutput }>(
+              {
+                method: "POST",
+                path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/device`,
+                body: {
+                  id: input["id"],
+                  exchangeID: input["exchangeID"],
+                  bindingID: input["bindingID"],
+                  expectedAttachment: input["expectedAttachment"],
+                  scope: input["scope"],
+                  remoteSource: input["remoteSource"],
+                },
+                successStatus: 200,
+                declaredStatuses: [400, 404, 401],
+                empty: false,
+              },
+              requestOptions,
+            ).then((value) => value.data),
+          read: (input: DotsDelegationDeviceReadInput, requestOptions?: RequestOptions) =>
+            request<{ readonly data: DotsDelegationDeviceReadOutput }>(
+              {
+                method: "POST",
+                path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/device/read`,
+                body: { cursor: input["cursor"], limit: input["limit"], remoteSource: input["remoteSource"] },
+                successStatus: 200,
+                declaredStatuses: [400, 404, 401],
+                empty: false,
+              },
+              requestOptions,
+            ).then((value) => value.data),
+          revoke: (input: DotsDelegationDeviceRevokeInput, requestOptions?: RequestOptions) =>
+            request<{ readonly data: DotsDelegationDeviceRevokeOutput }>(
+              {
+                method: "POST",
+                path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/device/revoke`,
+                body: {
+                  id: input["id"],
+                  revision: input["revision"],
+                  exchangeID: input["exchangeID"],
+                  bindingID: input["bindingID"],
+                  expectedAttachment: input["expectedAttachment"],
+                  remoteSource: input["remoteSource"],
+                },
+                successStatus: 200,
+                declaredStatuses: [400, 404, 401],
+                empty: false,
+              },
+              requestOptions,
+            ).then((value) => value.data),
+        },
+      },
+      decisions: {
+        list: (input: DotsDecisionsListInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsDecisionsListOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/decisions/list`,
+              body: {
+                bindingID: input["bindingID"],
+                expectedAttachment: input["expectedAttachment"],
+                delegation: input["delegation"],
+                targetSessionID: input["targetSessionID"],
+                cursor: input["cursor"],
+                limit: input["limit"],
+                remoteSource: input["remoteSource"],
+              },
               successStatus: 200,
               declaredStatuses: [400, 404, 401],
               empty: false,

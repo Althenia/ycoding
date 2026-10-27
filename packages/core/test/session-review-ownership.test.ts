@@ -412,7 +412,7 @@ test("a persisted child decision retains ownership across restart before reconci
   }).pipe(Effect.scoped, Effect.provide(reviewLayer(database()))))
 })
 
-it.effect("a human-review delivery without a review decision cannot answer a recovery question", () => Effect.gen(function* () {
+it.effect("a review delivery without a review decision cannot answer a recovery question", () => Effect.gen(function* () {
   const fixture = yield* childQuestion
   const events = yield* EventRuntime.Service
   const question = Question.make({ id: QuestionID.make("qst_recovery_bypass"), text: "Choose Continue or Stop.", time: 1 })
@@ -424,12 +424,12 @@ it.effect("a human-review delivery without a review decision cannot answer a rec
   }))
   const orchestration = yield* SessionOrchestration.Service
   const { db } = yield* Database.Service
-  const answer = (origin?: "human-review") => orchestration.answer({
+  const answer = (origin?: "review") => orchestration.answer({
     parentID: fixture.root.id, childID: fixture.child.id, questionID: question.id, text: "Continue", ...(origin === undefined ? {} : { origin }),
   }).pipe(Effect.flip)
 
   expect(yield* answer()).toBeInstanceOf(SessionOrchestration.ConflictError)
-  expect(yield* answer("human-review")).toBeInstanceOf(SessionOrchestration.InvalidRequestError)
+  expect(yield* answer("review")).toBeInstanceOf(SessionOrchestration.InvalidRequestError)
   expect((yield* db.select({ state: SessionTaskTable.state }).from(SessionTaskTable).where(eq(SessionTaskTable.session_id, fixture.child.id)).get().pipe(Effect.orDie))?.state).toBe("waiting")
   expect(yield* db.select({ id: SessionPendingTable.id }).from(SessionPendingTable).where(eq(SessionPendingTable.session_id, fixture.child.id)).all().pipe(Effect.orDie)).toEqual([])
   const answered = (yield* db.select({ data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, fixture.child.id)).all().pipe(Effect.orDie))

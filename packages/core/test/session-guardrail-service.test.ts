@@ -2060,6 +2060,26 @@ const customDeniedDecision = harness({
   ]),
   decision: () => Effect.die("Deny must not reach the helper"),
 })
+
+const dotsCustomDecision = harness({
+  guardrails: "manual",
+  documents: new Map([["/global/guardrails/hard.md", markdown({ id: "custom-hard", decision: "hard_review", resource: "deploy exact" })]]),
+})
+dotsCustomDecision.it.effect("Dots client settles custom hard reviews without widening native delegation", () => Effect.gen(function* () {
+  const service = yield* SessionGuardrail.Service
+  const waiting = yield* waitForRequest(service, { sessionID: childID, action: "shell", resources: ["deploy exact"] })
+  const snapshot = yield* service.requestSnapshot(childID, waiting.request.id)
+  expect(snapshot!.request.hardReview).toBe(true)
+  expect(snapshot!.request.standard).toBe(false)
+  const source = { kind: "dots-client", anchorSessionID: parentID, bindingID: "binding", delegationID: "grant", revision: 1, exchangeID: "custom-review",
+    principal: { ownerID: "owner", deviceID: "device", clientID: "client", grantID: "oauth-grant", epoch: "epoch" } } as const
+  const input = { sessionID: childID, requestID: waiting.request.id, fingerprint: snapshot!.fingerprint, reply: "once" as const, source, validate: () => Effect.succeed(true) }
+  expect((yield* service.replyDelegated(input).pipe(Effect.exit))._tag).toBe("Failure")
+  expect((yield* service.replyDelegated({ ...input, source: { kind: "dots-delegation", anchorSessionID: parentID, delegationID: "grant", revision: 1, exchangeID: "native-review" } }).pipe(Effect.exit))._tag).toBe("Failure")
+  yield* service.replyDelegated({ ...input, explicitDecision: true })
+  yield* (yield* Fiber.join(waiting.fiber)).release
+  expect(dotsCustomDecision.choices).toEqual([])
+}))
 customDeniedDecision.it.effect("explicit deny rules never reach the decision helper", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service

@@ -21,12 +21,6 @@ export const excludedOperations = [
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
-  "session.subagent.answer",
-  "session.permission.reply",
-  "session.guardrail.reply",
-  "session.review.decide",
-  "session.form.reply",
-  "session.form.cancel",
 ] as const satisfies readonly RemoteOperation[]
 
 export type ToolOperation = Exclude<RemoteOperation, (typeof excludedOperations)[number]> | "session.createInDirectory"
@@ -98,6 +92,47 @@ const shellID = prefixed("^sh_[A-Za-z0-9]+$", 128)
 const memory = array(choice("repository", "knowledge"), 0, 2, true)
 const delivery = choice("steer", "queue")
 const dotsAttachment = object({ profile: text(512), dotID: text(512), threadID: text(512), generation: text(512), label: text(512) }, ["profile", "dotID", "threadID", "generation", "label"])
+const dotsDecisionTarget: Schema = { oneOf: [
+  object({ kind: { const: "permission" }, requestID: prefixed("^per[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+  object({ kind: { const: "guardrail" }, requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+  object({ kind: { const: "form" }, formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "formID", "fingerprint"]),
+  object({ kind: { const: "question" }, requestID: prefixed("^que[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+  object({ kind: { const: "subagent_question" }, questionID: prefixed("^qst_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "questionID", "fingerprint"]),
+  object({ kind: { const: "review" }, itemID: prefixed("^rvw_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "itemID", "fingerprint"]),
+] }
+const dotsAnswerValue = { anyOf: [{ type: "string", maxLength: 8192 }, { type: "number" }, { type: "boolean" }, { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } }] }
+const dotsFormAnswers: Schema = { type: "object", maxProperties: 64, additionalProperties: dotsAnswerValue }
+const dotsQuestionAnswers: Schema = { type: "array", maxItems: 64, items: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } } }
+const nativeFormAnswers: Schema = { type: "object", additionalProperties: { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "array", items: { type: "string" } }] } }
+const nativeQuestionAnswers: Schema = { type: "array", items: { type: "array", items: { type: "string" } } }
+const nativeReviewDecision: Schema = { oneOf: [
+  object({ kind: choice("permission", "guardrail"), reply: choice("once", "always", "reject") }, ["kind", "reply"]),
+  object({ kind: { const: "recovery" }, choice: choice("continue", "stop") }, ["kind", "choice"]),
+  object({ kind: { const: "question" }, answers: { anyOf: [nativeFormAnswers, nativeQuestionAnswers] } }, ["kind", "answers"]),
+  object({ kind: { const: "subagent_question" }, text: text(65_536) }, ["kind", "text"]),
+  object({ kind: choice("question", "subagent_question"), dismissed: { const: true } }, ["kind", "dismissed"]),
+] }
+const dotsReviewDecision: Schema = { oneOf: [
+    object({ kind: choice("permission", "guardrail"), reply: choice("once", "reject") }, ["kind", "reply"]),
+    object({ kind: { const: "recovery" }, choice: choice("continue", "stop") }, ["kind", "choice"]),
+    object({ kind: { const: "question" }, answers: { anyOf: [dotsFormAnswers, dotsQuestionAnswers] } }, ["kind", "answers"]),
+    object({ kind: { const: "subagent_question" }, text: text(65_536) }, ["kind", "text"]),
+    object({ kind: { const: "question" }, dismissed: { const: true } }, ["kind", "dismissed"]),
+    object({ kind: { const: "subagent_question" }, dismissed: { const: true } }, ["kind", "dismissed"]),
+  ] }
+const dotsDecisionInstruction: Schema = { oneOf: [
+  object({ operation: { const: "decision" }, target: { oneOf: [
+    object({ kind: { const: "permission" }, requestID: prefixed("^per[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+    object({ kind: { const: "guardrail" }, requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
+  ] }, reply: choice("once", "reject") }, ["operation", "target", "reply"]),
+  object({ operation: { const: "decision" }, target: object({ kind: { const: "form" }, formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "formID", "fingerprint"]), answers: dotsFormAnswers }, ["operation", "target", "answers"]),
+  object({ operation: { const: "decision" }, target: object({ kind: { const: "form" }, formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "formID", "fingerprint"]), cancelled: { const: true } }, ["operation", "target", "cancelled"]),
+  object({ operation: { const: "decision" }, target: object({ kind: { const: "question" }, requestID: prefixed("^que[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), answers: dotsQuestionAnswers }, ["operation", "target", "answers"]),
+  object({ operation: { const: "decision" }, target: object({ kind: { const: "question" }, requestID: prefixed("^que[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), cancelled: { const: true } }, ["operation", "target", "cancelled"]),
+  object({ operation: { const: "decision" }, target: object({ kind: { const: "subagent_question" }, questionID: prefixed("^qst_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "questionID", "fingerprint"]), text: text(65_536) }, ["operation", "target", "text"]),
+  object({ operation: { const: "decision" }, target: object({ kind: { const: "subagent_question" }, questionID: prefixed("^qst_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "questionID", "fingerprint"]), dismissed: { const: true } }, ["operation", "target", "dismissed"]),
+  object({ operation: { const: "decision" }, target: object({ kind: { const: "review" }, itemID: prefixed("^rvw_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "itemID", "fingerprint"]), decision: dotsReviewDecision }, ["operation", "target", "decision"]),
+] }
 const maxNoProgress = { anyOf: [integer(0, 1_000), { type: "null" }] }
 
 const model = object({ providerID: text(128), id: text(128), variant: text(128), profile: text(128) }, [
@@ -215,19 +250,31 @@ const specs = {
       }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "taskInputID", "instruction"]),
       object({ exchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery,
         delegation: object({ id: text(256), revision: { type: "integer", minimum: 1 } }, ["id", "revision"]),
-        instruction: { oneOf: [
-          object({ operation: { const: "task" }, text: text(32768) }, ["operation", "text"]),
-          object({ operation: { const: "decision" }, target: object({ kind: { const: "permission" }, requestID: prefixed("^per[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), reply: choice("once", "reject") }, ["operation", "target", "reply"]),
-          object({ operation: { const: "decision" }, target: object({ kind: { const: "guardrail" }, requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), reply: choice("once", "reject") }, ["operation", "target", "reply"]),
-          object({ operation: { const: "decision" }, target: object({ kind: { const: "form" }, formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "formID", "fingerprint"]), answers: { type: "object", maxProperties: 64, additionalProperties: { anyOf: [{ type: "string", maxLength: 8192 }, { type: "number" }, { type: "boolean" }, { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } }] } } }, ["operation", "target", "answers"]),
-          object({ operation: { const: "decision" }, target: object({ kind: { const: "question" }, requestID: prefixed("^que[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]), answers: { type: "array", maxItems: 64, items: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } } } }, ["operation", "target", "answers"]),
-        ] },
+        instruction: { oneOf: [object({ operation: { const: "task" }, text: text(32768) }, ["operation", "text"]), dotsDecisionInstruction] },
       }, ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "instruction"]),
     ] },
   },
   "session.dots.exchange.read": {
     description: "Read only the authorized exchange's correlated progress and result. Delegated task exchanges also list eligible pending native decisions from that exact task with fingerprints for a delegated decision exchange. Does not retry work or transmit room messages.",
     input: object({ exchangeID: text(256) }, ["exchangeID"]),
+  },
+  "session.dots.delegation.device.create": {
+    description: "Create a device-wide Dots grant for the freshly authenticated client, scoped to the selected closed operations and current relay authorization.",
+    input: object({ id: text(256), exchangeID: text(256), bindingID: text(256), expectedAttachment: dotsAttachment,
+      scope: object({ target: { const: "device" }, operations: array(choice("task", "decision"), 1, 2, true) }, ["target", "operations"]) }, ["id", "exchangeID", "bindingID", "expectedAttachment", "scope"]),
+  },
+  "session.dots.delegation.device.read": {
+    description: "Read device-wide Dots grants under the authenticated binding, using the opaque continuation cursor when provided.",
+    input: object({ cursor: text(4096), limit: integer(1, 100) }),
+    optional: true,
+  },
+  "session.dots.delegation.device.revoke": {
+    description: "Revoke a device-wide Dots grant by its current revision. Revocation blocks future admissions and never replays prior work.",
+    input: object({ id: text(256), revision: integer(1, maxSafeInteger), exchangeID: text(256), bindingID: text(256), expectedAttachment: dotsAttachment }, ["id", "revision", "exchangeID", "bindingID", "expectedAttachment"]),
+  },
+  "session.dots.decisions.list": {
+    description: "List exact, currently pending native decisions from the selected Session or the confirmed device's authorized Session inventory. Results are paged with opaque cursors.",
+    input: object({ bindingID: text(256), expectedAttachment: dotsAttachment, delegation: object({ id: text(256), revision: integer(1, maxSafeInteger) }, ["id", "revision"]), targetSessionID: sessionID, cursor: text(4096), limit: integer(1, 100) }, ["bindingID", "expectedAttachment", "delegation"]),
   },
   "provider.auth.list": {
     description:
@@ -332,6 +379,10 @@ const specs = {
     description: "Cancel a managed subagent of a Session.",
     input: object({ childID: sessionID }, ["childID"]),
   },
+  "session.subagent.answer": {
+    description: "Answer one pending question from a managed child in this Session family. The local orchestration service verifies the child and question before settlement.",
+    input: object({ childID: sessionID, questionID: prefixed("^qst_[A-Za-z0-9_-]+$", 128), text: text(8_192) }, ["childID", "questionID", "text"]),
+  },
   "session.team.economics": {
     description: "Read cost, token and context figures for members of a Session's family.",
     input: object({ sessionIDs: array(sessionID, 1, 15, true) }, ["sessionIDs"]),
@@ -389,10 +440,30 @@ const specs = {
     ]),
   },
   "session.permission.list": { description: "List a Session's pending permission requests." },
+  "session.permission.reply": {
+    description: "Reply to one pending permission request with once, always, or reject. The local permission service rechecks the request, denies, ceilings, and grant scope; submit only an action available for that request.",
+    input: object({ requestID: prefixed("^per_[A-Za-z0-9_-]+$", 256), reply: choice("once", "always", "reject"), message: text(1_024, 0) }, ["requestID", "reply"]),
+  },
   "session.guardrail.status": { description: "Read a Session's guardrail review status." },
   "session.guardrail.request.list": { description: "List a Session family's pending guardrail reviews." },
+  "session.guardrail.reply": {
+    description: "Reply to one pending guardrail request with once, always, or reject. Always is available only for ordinary reviews; hard reviews permit once or reject. The local guardrail service enforces current policy.",
+    input: object({ requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 256), reply: choice("once", "always", "reject") }, ["requestID", "reply"]),
+  },
   "session.review.list": { description: "List the open review items of a Session's family, including deferred ones." },
+  "session.review.decide": {
+    description: "Submit one typed decision for an open review item. The available action depends on the item and current policy; the local review service checks ownership and settlement state.",
+    input: object({ itemID: prefixed("^rvw_[A-Za-z0-9_-]+$", 128), decision: nativeReviewDecision }, ["itemID", "decision"]),
+  },
   "session.form.list": { description: "List a Session's pending forms and questions." },
+  "session.form.reply": {
+    description: "Submit answers to one pending form. The local form validator checks the current form and answer fields.",
+    input: object({ formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), answer: nativeFormAnswers }, ["formID", "answer"]),
+  },
+  "session.form.cancel": {
+    description: "Cancel one pending form without interrupting or stopping its Session.",
+    input: object({ formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256) }, ["formID"]),
+  },
   "session.shell.output": {
     description: "Read a page of a shell's output. Pass the returned cursor to continue.",
     input: object({ shellID, cursor: integer(0, maxSafeInteger), limit: integer(1, 65_536) }, ["shellID"]),
@@ -403,7 +474,7 @@ const specs = {
   },
   "session.autonomy.set": {
     description:
-      "Set Session autonomy: send any of permissions, guardrails, and answers in one request, each manual, yolo, or auto; or send sleep alone. manual leaves undecided asks to a human only; auto decides by rule (permissions and ordinary guardrail reviews while awake approve by rule, answers use exactly one Recommended or default option); yolo adds a hidden evaluator for free-text and unresolved requests. Denies and permission ceilings always apply, and hard or custom-rule reviews always need a human approval. Grants standing authority; send only what the user authorized.",
+      "Set Session autonomy: send any of permissions, guardrails, and answers in one request, each manual, yolo, or auto; or send sleep alone. Manual leaves undecided requests pending for an authorized typed client decision; Auto uses deterministic rules; YOLO adds the category evaluator for unresolved requests. Denies and permission ceilings always apply, and hard or custom-rule review approvals require an authorized typed decision. Grants standing authority; send only what the user authorized.",
     input: autonomy,
   },
   "session.goal.set": {
@@ -594,17 +665,15 @@ const standardTools: readonly Tool[] = (Object.entries(specs) as [ToolOperation,
 const decisionForm: Tool = {
   name: "session_dots_decision_form",
   operation: "session.dots.exchange.create",
-  description: "Collect an authenticated client response for one already-listed native decision under an existing native-approved delegation. Standard MCP forms only; this is never human approval. The native request remains pending unless the form is accepted and natively validated. Read taskExchangeID first; use a new exchangeID for this decision.",
-  inputSchema: object({ sessionID, input: object({
-    exchangeID: text(256), taskExchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery,
-    delegation: object({ id: text(256), revision: { type: "integer", minimum: 1 } }, ["id", "revision"]),
-    instruction: object({ operation: { const: "decision" }, target: { oneOf: [
-      object({ kind: { const: "permission" }, requestID: prefixed("^per[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
-      object({ kind: { const: "guardrail" }, requestID: prefixed("^grq_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
-      object({ kind: { const: "form" }, formID: prefixed("^frm_[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "formID", "fingerprint"]),
-      object({ kind: { const: "question" }, requestID: prefixed("^que[A-Za-z0-9_-]+$", 256), fingerprint: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["kind", "requestID", "fingerprint"]),
-    ] } }, ["operation", "target"]),
-  }, ["exchangeID", "taskExchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "instruction"]) }, ["sessionID", "input"]),
+  description: "Collect an authenticated Dots decision for one currently pending native request listed under a device delegation. Local native services recheck authorization and the decision fingerprint before settlement.",
+  inputSchema: object({ sessionID, input: { oneOf: [
+    object({ exchangeID: text(256), taskExchangeID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID, channel: { const: "task" }, delivery,
+      delegation: object({ id: text(256), revision: integer(1, maxSafeInteger) }, ["id", "revision"]), instruction: object({ operation: { const: "decision" }, target: dotsDecisionTarget }, ["operation", "target"]) },
+      ["exchangeID", "taskExchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "instruction"]),
+    object({ exchangeID: text(256), bindingID: text(256), expectedAttachment: dotsAttachment, targetSessionID: sessionID,
+      delegation: object({ id: text(256), revision: integer(1, maxSafeInteger) }, ["id", "revision"]), target: dotsDecisionTarget, cursor: text(4096),
+    }, ["exchangeID", "bindingID", "expectedAttachment", "targetSessionID", "delegation", "target"]),
+  ] } }, ["sessionID", "input"]),
   mutation: true,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 }

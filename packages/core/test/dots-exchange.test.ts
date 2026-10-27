@@ -21,6 +21,7 @@ import { Session } from "../src/session"
 import { SessionEvent } from "../src/session/event"
 import { SessionExecution } from "../src/session/execution"
 import { SessionMessage } from "../src/session/message"
+import { memory, update } from "../src/session/message-updater"
 import { SessionOrchestration } from "../src/session/orchestration"
 import { SessionPending } from "../src/session/pending"
 import { Permission } from "../src/permission"
@@ -28,6 +29,8 @@ import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Question as QuestionSchema } from "@ycoding-ai/schema/question"
 import { Decision } from "../src/decision"
 import { Location } from "../src/location"
+import { LocationServiceMap } from "../src/location-service-map"
+import { SessionMcpEvents } from "../src/mcp-events/index"
 import { location } from "./fixture/location"
 import { Form } from "../src/form"
 import { Question } from "../src/question"
@@ -35,6 +38,9 @@ import { SessionGuardrail } from "../src/session/guardrail"
 import { SessionAutonomy } from "../src/session/autonomy"
 import { SessionProjector } from "../src/session/projector"
 import { SessionProviderRequestTable } from "../src/session/sql"
+import { SessionReview } from "../src/session/review"
+import { QuestionID, type Task } from "@ycoding-ai/schema/session-orchestration"
+import type { Item } from "@ycoding-ai/schema/session-review"
 import { testEffect } from "./lib/effect"
 
 const wakes: Session.ID[] = []
@@ -47,6 +53,7 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([
   Database.node, EventRuntime.node, SessionProjector.node, Session.node,
   SessionExecution.node, SessionOrchestration.node, CoordinationService.node, SessionAutonomy.node,
   Permission.node, SessionGuardrail.node, Form.node, Question.node, Agent.node,
+  Location.node, LocationServiceMap.node, SessionReview.node,
 ]), [
   [SessionExecution.node, execution],
   [Location.node, Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(tmpdir()) })))],
@@ -85,7 +92,7 @@ const setup = Effect.gen(function* () {
   const writer = Semaphore.makeUnsafe(1)
   const approval = { calls: [] as unknown[], enabled: true, wait: undefined as Effect.Effect<void> | undefined }
   const clock = { now: Date.now() }
-  const decisionFake = { pending: [] as DotsExchange.PendingDecision[], settled: [] as unknown[], denied: new Set<string>(), defect: false, fail: false }
+  const decisionFake = { pending: [] as DotsExchange.PendingDecision[], settled: [] as unknown[], denied: new Set<string>(), defect: false, fail: false, unavailable: false }
   const hooks: { attachment?: () => void; message?: () => void; wake?: () => void; authorize?: () => Effect.Effect<void>; checkStored?: () => Effect.Effect<void> } = {}
   const build = (decisions: DotsExchange.Options["decisions"]) => DotsExchange.make({
     db, events, sessions: { get: sessions.get, message: (input) => sessions.message(input).pipe(Effect.tap(() => Effect.sync(() => hooks.message?.()))) }, coordination,
@@ -119,7 +126,7 @@ const setup = Effect.gen(function* () {
     decisions,
   })
   const fakeDecisions: DotsExchange.Options["decisions"] = {
-    pending: (sessionID) => Effect.sync(() => decisionFake.pending.filter((item) => item.sessionID === sessionID)),
+    pending: (sessionID) => Effect.suspend(() => decisionFake.unavailable ? Effect.fail(new Error("Synthetic pending inventory unavailable")) : Effect.succeed(decisionFake.pending.filter((item) => item.sessionID === sessionID))),
     permissionEffect: (_sessionID, action, resource) => Effect.sync(() => decisionFake.denied.has(`${action}\0${resource}`) ? "deny" as const : "ask" as const),
     settle: (input) => Effect.gen(function* () {
       if (decisionFake.fail) throw new Error("Synthetic settlement failure")
@@ -135,7 +142,9 @@ const setup = Effect.gen(function* () {
           ? { kind: "guardrail" as const, requestID: Guardrail.RequestID.make(pending.requestID), fingerprint: pending.fingerprint }
           : pending.kind === "question"
             ? { kind: "question" as const, requestID: QuestionSchema.ID.make(pending.requestID), fingerprint: pending.fingerprint }
-            : { kind: "permission" as const, requestID: Permission.ID.create(pending.requestID), fingerprint: pending.fingerprint }
+            : pending.kind === "permission" ? { kind: "permission" as const, requestID: Permission.ID.create(pending.requestID), fingerprint: pending.fingerprint }
+              : pending.kind === "subagent_question" ? { kind: "subagent_question" as const, questionID: pending.task.question!.id, fingerprint: pending.fingerprint }
+                : { kind: "review" as const, itemID: pending.item.itemID, fingerprint: pending.fingerprint }
       yield* events.publish(SessionEvent.DotsDecisionSettled, { sessionID: pending.sessionID, source: input.source, target, ...("reply" in input.choice ? { reply: input.choice.reply } : {}) })
       if (decisionFake.defect) return yield* Effect.die(new Error("Synthetic settlement defect"))
     }),
@@ -171,11 +180,284 @@ const delegated = Effect.gen(function* () {
   return { ...f, task, proposal, grant, input }
 })
 
+describe("authenticated device delegation", () => {
+  it.live("authorization events leave chat messages unchanged", () => Effect.gen(function* () {
+    const f = yield* setup
+    const state = { messages: [] as SessionMessage.Info[] }
+    const adapter = memory(state)
+    const principal = { ...source.principal, epoch: source.epoch, grantID: "grant_fixture" }
+    const events = [
+      yield* f.events.publish(Dots.BindingBound, { sessionID: f.master.id, binding: { id: f.authority.incarnation, target, accountDigest: f.authority.accountDigest } }),
+      yield* f.events.publish(Dots.DeviceDelegationCreated, { sessionID: f.master.id, exchangeID: "projection_enroll", fingerprint: "a".repeat(64), grant: {
+        id: "projection_grant", revision: 1, basis: "device", anchorSessionID: f.master.id, bindingID: f.authority.incarnation, principal,
+        scope: { target: "device", operations: ["task", "decision"] }, expiresAt: f.clock.now + 60_000, active: true,
+      } }),
+      yield* f.events.publish(Dots.DeviceDelegationRevoked, { sessionID: f.master.id, exchangeID: "projection_revoke", fingerprint: "b".repeat(64), delegationID: "projection_grant", revision: 2, principal }),
+      yield* f.events.publish(Dots.BindingUnbound, { sessionID: f.master.id, bindingID: f.authority.incarnation }),
+    ]
+    for (const event of events) yield* update(adapter, event)
+    expect(state.messages).toEqual([])
+  }))
+  const enrolled = Effect.gen(function* () {
+    const f = yield* setup
+    yield* f.events.publish(Dots.BindingBound, { sessionID: f.master.id, binding: { id: f.authority.incarnation, target, accountDigest: f.authority.accountDigest } })
+    const status = yield* f.runtime.deviceDelegationRead({ sessionID: f.master.id, remoteSource: source })
+    const enrollment = { sessionID: f.master.id, remoteSource: source, id: "device_grant", exchangeID: "device_enroll", bindingID: status.binding.id, expectedAttachment: target, scope: { target: "device", operations: ["task", "decision"] } as const }
+    const grant = yield* f.runtime.deviceDelegationCreate(enrollment)
+    const list = { sessionID: f.master.id, remoteSource: source, bindingID: status.binding.id, expectedAttachment: target, delegation: { id: grant.id, revision: grant.revision } }
+    const task = { sessionID: f.master.id, remoteSource: source, expectedAttachment: target, delegation: list.delegation, targetSessionID: f.alpha.id, exchangeID: "device_task", channel: "task", delivery: "queue", instruction: { operation: "task", text: "Inspect a synthetic device task" } } as const
+    return { ...f, grant, enrollment, list, task }
+  })
+  const composed = Effect.gen(function* () {
+    const f = yield* enrolled
+    const runtime = yield* DotsExchange.service.pipe(
+      Effect.provide(Layer.mock(DotsRuntime.Service, {
+        attachment: () => Effect.succeed(f.attachment),
+        withBinding: (_sessionID, use) => use(f.authority),
+      })),
+      Effect.provideService(SessionMcpEvents.Authorization.Service, {
+        capabilities: Effect.succeed(true),
+        resolve: () => Effect.succeed({ grantID: f.grant.principal.grantID, expiresAt: f.grant.expiresAt }),
+        check: () => Effect.succeed({ expiresAt: f.grant.expiresAt }),
+      }),
+    )
+    return { ...f, runtime }
+  })
+  it.live("discovers the binding and enrolls without a human task or human approval through OAuth expiry", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    expect(f.approval.calls).toEqual([])
+    expect(f.grant.expiresAt).toBe(f.clock.now + 10_000_000)
+    expect(f.grant.principal).toEqual({ ...source.principal, epoch: source.epoch, grantID: "grant_fixture" })
+    expect((yield* f.runtime.deviceDelegationCreate(f.enrollment))).toEqual(f.grant)
+    expect((yield* f.runtime.deviceDelegationCreate({ ...f.enrollment, scope: { target: "device", operations: ["task"] } }).pipe(Effect.exit))._tag).toBe("Failure")
+    const restarted = f.make()
+    expect((yield* restarted.deviceDelegationRead({ sessionID: f.master.id, remoteSource: source })).grants).toEqual([f.grant])
+    yield* restarted.create(f.task)
+    yield* restarted.create({ ...f.task, targetSessionID: f.outsider.id, exchangeID: "device_outside_project" })
+    expect((yield* SessionPending.list(f.db, f.outsider.id))).toHaveLength(1)
+  }))
+  it.live("lists native sensitive and hard requests across Sessions and settles one exact decision once", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    const fingerprint = "f".repeat(64)
+    f.decisionFake.pending.push(
+      { kind: "permission", sessionID: f.alpha.id, requestID: "per_device", fingerprint, action: "edit", resources: ["synthetic.env"], metadata: { requireExplicitDecision: true } },
+      { kind: "guardrail", sessionID: f.beta.id, requestID: "grq_device", fingerprint, action: "shell", resources: ["synthetic custom review"], ruleIDs: ["custom.test"], standard: false, hardReview: true },
+    )
+    const page = yield* f.runtime.decisionsList({ ...f.list, limit: 1 })
+    expect(page.data).toHaveLength(1)
+    expect(page.nextCursor).toBeDefined()
+    const next = yield* f.runtime.decisionsList({ ...f.list, cursor: page.nextCursor, limit: 1 })
+    expect([...page.data, ...next.data].map((entry) => entry.candidate.target.kind).toSorted()).toEqual(["guardrail", "permission"])
+    const input = { ...f.task, exchangeID: "device_permission", instruction: { operation: "decision", target: { kind: "permission", requestID: Permission.ID.create("per_device"), fingerprint }, reply: "once" } } as const
+    const spoofed = { ...input, explicitDecision: true }
+    expect((yield* f.runtime.create(spoofed).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(f.decisionFake.settled).toEqual([])
+    const outcome = yield* f.runtime.create(input)
+    expect(outcome.decisionOutcome?.state).toBe("settled")
+    yield* f.runtime.create(input)
+    expect(f.decisionFake.settled).toHaveLength(1)
+    expect(f.decisionFake.settled[0]).toMatchObject({ explicitDecision: true, source: { kind: "dots-client", principal: f.grant.principal, bindingID: f.grant.bindingID, exchangeID: input.exchangeID } })
+    expect((yield* f.read(input.exchangeID)).decisionOutcome?.state).toBe("settled")
+    expect((yield* f.runtime.create({ ...input, instruction: { ...input.instruction, reply: "reject" } satisfies Dots.DelegatedInstruction }).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(f.decisionFake.settled).toHaveLength(1)
+    f.decisionFake.unavailable = true
+    expect((yield* f.read(input.exchangeID)).decisionOutcome?.state).toBe("settled")
+  }))
+  it.live("revocation survives rebuilding the exchange service and rejects queued work at promotion", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    const admitted = yield* f.runtime.create(f.task)
+    const revoke = { sessionID: f.master.id, remoteSource: source, id: f.grant.id, revision: f.grant.revision, bindingID: f.grant.bindingID, expectedAttachment: target, exchangeID: "device_revoke" }
+    const revoked = yield* f.runtime.deviceDelegationRevoke(revoke)
+    expect(revoked.active).toBe(false)
+    expect((yield* f.runtime.deviceDelegationRevoke(revoke))).toEqual(revoked)
+    const restarted = f.make()
+    expect((yield* restarted.deviceDelegationRead({ sessionID: f.master.id, remoteSource: source })).grants[0]?.active).toBe(false)
+    expect((yield* restarted.create({ ...f.task, exchangeID: "after_device_revoke" }).pipe(Effect.exit))._tag).toBe("Failure")
+    yield* SessionPending.promoteNextQueued(f.db, f.events, f.alpha.id, undefined, undefined, restarted.promoteRoutine)
+    expect(yield* f.sessions.message({ sessionID: f.alpha.id, messageID: admitted.inputID })).toBeUndefined()
+    expect((yield* f.read(f.task.exchangeID)).state).toBe("failed")
+  }))
+  it.live("expiry, principal replacement and binding reincarnation cannot inherit device authority", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    f.clock.now = f.grant.expiresAt
+    expect((yield* f.runtime.create(f.task).pipe(Effect.exit))._tag).toBe("Failure")
+    f.clock.now--
+    f.authorization.grantID = "replacement_grant"
+    expect((yield* f.runtime.decisionsList(f.list).pipe(Effect.exit))._tag).toBe("Failure")
+    f.authorization.grantID = "grant_fixture"
+    f.binding.current = { ...f.authority, incarnation: "replacement_binding" }
+    expect((yield* f.runtime.create(f.task).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(f.decisionFake.settled).toHaveLength(0)
+  }))
+  it.live("device decisions address a managed child without granting ordinary child task input", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    const child = yield* f.sessions.create({ parentID: f.alpha.id, title: "Managed child" })
+    const fingerprint = "e".repeat(64)
+    f.decisionFake.pending.push({ kind: "permission", sessionID: child.id, requestID: "per_child", fingerprint, action: "edit", resources: ["child.ts"], metadata: { requireExplicitDecision: true } })
+    const page = yield* f.runtime.decisionsList({ ...f.list, targetSessionID: child.id })
+    expect(page.data.map((entry) => entry.targetSessionID)).toEqual([child.id])
+    expect((yield* f.runtime.create({ ...f.task, targetSessionID: child.id, exchangeID: "child_task" }).pipe(Effect.exit))._tag).toBe("Failure")
+    const decisionTarget = page.data.map((entry) => entry.candidate.target).find((target) => target.kind === "permission")!
+    const outcome = yield* f.runtime.create({ ...f.task, targetSessionID: child.id, exchangeID: "child_decision", instruction: { operation: "decision", target: decisionTarget, reply: "once" } satisfies Dots.DelegatedInstruction })
+    expect(outcome.decisionOutcome?.state).toBe("settled")
+    expect(yield* SessionPending.list(f.db, child.id)).toEqual([])
+  }))
+  it.live("device scope reaches real explicit permission, hard review, external form and question cancellation", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    const runtime = f.makeReal()
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: f.alpha.id, permissions: "manual", guardrails: "manual", answers: "manual" })
+    const agent = (yield* f.sessions.get(f.alpha.id)).agent ?? Agent.ID.make("build")
+    yield* f.agents.transform((editor) => editor.update(agent, (value) => { value.permissions = [{ action: "*", resource: "*", effect: "ask" }] }))
+    const waitFor = <A, E>(type: string, effect: Effect.Effect<A, E>) => Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>()
+      const unsubscribe = yield* f.events.listen((event) => event.type === type ? Deferred.succeed(ready, undefined).pipe(Effect.asVoid) : Effect.void)
+      const fiber = yield* effect.pipe(Effect.forkScoped)
+      yield* Deferred.await(ready).pipe(Effect.timeout("2 seconds"))
+      yield* unsubscribe
+      return fiber
+    })
+    const permissionID = Permission.ID.create("per_device_human")
+    const permission = yield* waitFor(Permission.Event.Asked.type, f.realPermission.assert({ id: permissionID, sessionID: f.alpha.id, action: "edit", resources: ["synthetic.env"], requireExplicitDecision: true }))
+    const requests = yield* runtime.decisionsList({ ...f.list, targetSessionID: f.alpha.id })
+    const pendingPermission = requests.data.map((entry) => entry.candidate.target).find((target) => target.kind === "permission")!
+    const approved = yield* runtime.create({ ...f.task, exchangeID: "real_device_permission", instruction: { operation: "decision", target: pendingPermission, reply: "once" } satisfies Dots.DelegatedInstruction })
+    yield* Fiber.join(permission)
+    expect(approved.decisionOutcome?.state).toBe("settled")
+
+    const guardrail = yield* waitFor(Guardrail.Event.Asked.type, f.realGuardrail.assert({ sessionID: f.alpha.id, action: "shell", resources: ["rm -rf ."] }))
+    const hard = (yield* runtime.decisionsList({ ...f.list, targetSessionID: f.alpha.id })).data.map((entry) => entry.candidate.target).find((target) => target.kind === "guardrail")!
+    yield* runtime.create({ ...f.task, exchangeID: "real_device_hard", instruction: { operation: "decision", target: hard, reply: "once" } satisfies Dots.DelegatedInstruction })
+    yield* (yield* Fiber.join(guardrail)).release
+
+    const formID = Form.ID.create("frm_device_external")
+    yield* f.realForms.create({ id: formID, sessionID: f.alpha.id, title: "Synthetic credential setup", fields: [{ type: "external", key: "setup", url: "https://example.invalid/setup" }, { type: "string", key: "api_key", required: true }], metadata: { requireExplicitDecision: true } })
+    const form = (yield* runtime.decisionsList({ ...f.list, targetSessionID: f.alpha.id })).data.map((entry) => entry.candidate.target).find((target) => target.kind === "form")!
+    yield* runtime.create({ ...f.task, exchangeID: "real_device_form_cancel", instruction: { operation: "decision", target: form, cancelled: true } satisfies Dots.DelegatedInstruction })
+    expect((yield* f.realForms.state(formID)).status).toBe("cancelled")
+
+    const question = yield* waitFor(Question.Event.Asked.type, f.realQuestions.ask({ sessionID: f.alpha.id, questions: [{ question: "Synthetic credential rotation", header: "Choose", options: [] }] }))
+    const pendingQuestion = (yield* runtime.decisionsList({ ...f.list, targetSessionID: f.alpha.id })).data.map((entry) => entry.candidate.target).find((target) => target.kind === "question")!
+    yield* runtime.create({ ...f.task, exchangeID: "real_device_question_cancel", instruction: { operation: "decision", target: pendingQuestion, cancelled: true } satisfies Dots.DelegatedInstruction })
+    expect(yield* Fiber.join(question).pipe(Effect.result)).toMatchObject({ _tag: "Failure", failure: { _tag: "Question.RejectedError" } })
+    expect((yield* runtime.read({ sessionID: f.master.id, remoteSource: source, exchangeID: "real_device_question_cancel" })).decisionOutcome?.state).toBe("settled")
+    expect(f.approval.calls).toHaveLength(0)
+  }))
+  it.live("the native adapter lists child questions and durable reviews and preserves their settlement authority", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    const child = yield* f.sessions.create({ parentID: f.alpha.id, title: "Waiting child" })
+    const task: Task = { sessionID: child.id, parentID: f.alpha.id, description: "Synthetic task", agent: Agent.ID.make("build"), model: Model.Ref.make({ providerID: Provider.ID.make("fixture"), id: Model.ID.make("fixture") }), background: true, state: "waiting", revision: 1, time: { created: 1, updated: 2 }, question: { id: QuestionID.make("qst_device"), text: "Continue?", time: 2 } }
+    const review: Item = { itemID: SessionReview.ID.make("rvw_device"), sessionID: child.id, rootSessionID: f.alpha.id, sessionTitle: "Waiting child", created: 2, kind: "recovery", reason: "restart", origin: { requestID: "recovery_device" }, payload: { type: "recovery", tools: [{ messageID: SessionMessage.ID.make("msg_device_uncertain"), callID: "call_device", name: "shell" }] } }
+    const calls: unknown[] = []
+    const adapter = DotsExchange.decisionServices({ permission: f.realPermission, guardrail: f.realGuardrail, forms: f.realForms, questions: f.realQuestions, sessions: f.sessions,
+      orchestration: { questionSnapshots: () => Effect.succeed([{ task, fingerprint: "a".repeat(64) }]), answer: (input) => Effect.sync(() => { calls.push(input); return task }) },
+      reviews: { pendingSnapshots: () => Effect.succeed([{ item: review, fingerprint: "b".repeat(64) }]), decideDelegated: (input) => Effect.sync(() => { calls.push(input) }) },
+    })
+    const pending = yield* adapter.pending(child.id)
+    expect(pending.map((item) => item.kind).toSorted()).toEqual(["review", "subagent_question"])
+    const source: Form.DotsClientReplySource = { kind: "dots-client", anchorSessionID: f.master.id, bindingID: f.grant.bindingID, delegationID: f.grant.id, revision: 1, exchangeID: "child_control", principal: f.grant.principal }
+    const childInput = { pending: pending.find((item) => item.kind === "subagent_question")!, choice: { text: "Synthetic answer", data: { selected: false } }, source, validate: () => Effect.succeed(true) }
+    const reviewInput = { pending: pending.find((item) => item.kind === "review")!, choice: { decision: { kind: "recovery" as const, choice: "continue" as const } }, source, validate: () => Effect.succeed(true) }
+    expect((yield* adapter.settle(childInput).pipe(Effect.exit))._tag).toBe("Failure")
+    expect((yield* adapter.settle(reviewInput).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(calls).toEqual([])
+    yield* adapter.settle({ ...childInput, explicitDecision: true })
+    yield* adapter.settle({ ...reviewInput, explicitDecision: true })
+    expect(calls[0]).toMatchObject({ parentID: f.alpha.id, childID: child.id, questionID: task.question!.id, text: "Synthetic answer", data: { selected: false }, dots: { source, fingerprint: "a".repeat(64), explicitDecision: true } })
+    expect(calls[1]).toMatchObject({ sessionID: child.id, itemID: review.itemID, decision: { kind: "recovery", choice: "continue" }, source, fingerprint: "b".repeat(64), explicitDecision: true })
+  }))
+
+  it.live("provenance alone cannot supply explicit-decision capability or replace live validation", () => Effect.gen(function* () {
+    const f = yield* enrolled
+    const adapter = DotsExchange.decisionServices({ permission: f.realPermission, guardrail: f.realGuardrail, forms: f.realForms, questions: f.realQuestions })
+    const formID = Form.ID.create("frm_explicit_capability")
+    yield* f.realForms.create({ id: formID, sessionID: f.alpha.id, title: "Synthetic account credential choice", fields: [{ type: "string", key: "choice", required: true }], metadata: { requireExplicitDecision: true } })
+    const pending = (yield* adapter.pending(f.alpha.id)).find((item) => item.kind === "form" && item.formID === formID)!
+    const input = { pending, choice: { answers: { choice: "synthetic" } }, source: { kind: "dots-client" as const, anchorSessionID: f.master.id, bindingID: f.grant.bindingID, delegationID: f.grant.id, revision: 1, exchangeID: "capability_fixture", principal: f.grant.principal }, validate: () => Effect.succeed(true) }
+    expect((yield* adapter.settle(input).pipe(Effect.exit))._tag).toBe("Failure")
+    expect((yield* f.realForms.state(formID)).status).toBe("pending")
+    expect((yield* adapter.settle({ ...input, explicitDecision: true, validate: () => Effect.succeed(false) }).pipe(Effect.exit))._tag).toBe("Failure")
+    expect((yield* f.realForms.state(formID)).status).toBe("pending")
+    yield* adapter.settle({ ...input, explicitDecision: true })
+    expect((yield* f.realForms.state(formID)).status).toBe("answered")
+  }))
+  it.live("the composed device exchange lists and settles a real form in a second Location", () => Effect.gen(function* () {
+    const f = yield* composed
+    const directory = yield* Effect.acquireRelease(Effect.promise(async () => {
+      const { tmpdir } = await import("./fixture/tmpdir")
+      return tmpdir("ycoding-dots-location-")
+    }), (value) => Effect.promise(() => value[Symbol.asyncDispose]()))
+    const remote = yield* f.sessions.create({ location: { directory: AbsolutePath.make(directory.path) }, title: "Second Location" })
+    const locations = yield* LocationServiceMap.Service
+    const forms = yield* Form.Service.pipe(Effect.provide(locations.get(remote.location)))
+    const formID = Form.ID.create("frm_second_location")
+    yield* forms.create({ id: formID, sessionID: remote.id, title: "Synthetic remote choice", fields: [{ key: "branch", type: "string", required: true, options: [{ value: "safe", label: "Safe" }] }], metadata: { requireExplicitDecision: true } })
+    expect((yield* f.realForms.list()).some((item) => item.id === formID)).toBe(false)
+    const page = yield* f.runtime.decisionsList({ ...f.list, targetSessionID: remote.id })
+    expect(page.data).toHaveLength(1)
+    expect(page.data[0]?.targetSessionID).toBe(remote.id)
+    const decisionTarget = page.data.map((entry) => entry.candidate.target).find((target) => target.kind === "form")!
+    const settled = yield* f.runtime.create({ ...f.task, targetSessionID: remote.id, exchangeID: "second_location_form", instruction: { operation: "decision", target: decisionTarget, answers: { branch: "safe" } } satisfies Dots.DelegatedInstruction })
+    expect(settled.decisionOutcome?.state).toBe("settled")
+    expect((yield* forms.state(formID)).status).toBe("answered")
+    expect((yield* f.realForms.list()).some((item) => item.id === formID)).toBe(false)
+  }))
+  it.live("the composed child-question exchange commits its receipt with the continuation and resumes once", () => Effect.gen(function* () {
+    const f = yield* composed
+    const model = Model.Ref.make({ providerID: Provider.ID.make("fixture"), id: Model.ID.make("fixture") })
+    const child = yield* f.sessions.create({ parentID: f.alpha.id, title: "Actual waiting child", model })
+    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "launched", parentID: f.alpha.id, parentAssistantMessageID: SessionMessage.ID.make("msg_actual_parent"), toolCallID: "call_actual_child", inputID: SessionMessage.ID.make("msg_actual_child"), description: "Synthetic child", agent: Agent.ID.make("build"), model, promptDigest: "synthetic", background: true, delivery: "steer" } })
+    yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
+    const orchestration = yield* SessionOrchestration.Service
+    yield* orchestration.question(child.id, "Which synthetic branch?")
+    const pending = (yield* f.runtime.decisionsList({ ...f.list, targetSessionID: child.id })).data.map((entry) => entry.candidate.target).find((target) => target.kind === "subagent_question")!
+    const receipt = yield* Deferred.make<boolean>()
+    const unsubscribe = yield* f.events.listen((event) => event.type !== SessionEvent.DotsDecisionSettled.type ? Effect.void : Effect.gen(function* () {
+      const data = Schema.decodeUnknownSync(SessionEvent.DotsDecisionSettled.data)(event.data)
+      if (data.source.exchangeID !== "actual_child_answer") return
+      const inputs = yield* SessionPending.list(f.db, child.id)
+      yield* Deferred.succeed(receipt, inputs.some((item) => item.type === "synthetic" && item.data.text.includes("Synthetic child answer")))
+    }))
+    const input = { ...f.task, targetSessionID: child.id, exchangeID: "actual_child_answer", instruction: { operation: "decision", target: pending, text: "Synthetic child answer" } } as const
+    expect((yield* f.runtime.create(input)).decisionOutcome?.state).toBe("settled")
+    expect(yield* Deferred.await(receipt)).toBe(true)
+    yield* unsubscribe
+    yield* f.runtime.create(input)
+    expect(yield* SessionPending.list(f.db, child.id)).toHaveLength(1)
+    expect((yield* orchestration.questionSnapshots(f.alpha.id))).toEqual([])
+    yield* orchestration.question(child.id, "Another synthetic question?")
+    const second = (yield* f.runtime.decisionsList({ ...f.list, targetSessionID: child.id })).data.map((entry) => entry.candidate.target).find((target) => target.kind === "subagent_question")!
+    expect((yield* f.runtime.create({ ...f.task, targetSessionID: child.id, exchangeID: "actual_child_dismiss", instruction: { operation: "decision", target: second, dismissed: true } satisfies Dots.DelegatedInstruction })).decisionOutcome?.state).toBe("settled")
+    expect(yield* SessionPending.list(f.db, child.id)).toHaveLength(2)
+    expect((yield* orchestration.questionSnapshots(f.alpha.id))).toEqual([])
+  }))
+  it.live("the composed durable-review exchange commits its receipt and continuation without holding the inbox lock", () => Effect.gen(function* () {
+    const f = yield* composed
+    const reviews = yield* SessionReview.Service
+    const item = yield* reviews.open({ sessionID: f.beta.id, kind: "question", reason: "free_text", origin: { requestID: "qst_actual_review" }, payload: { type: "form", title: "Synthetic branch", fields: [{ key: "branch", type: "string", required: true }] }, limit: 16 })
+    const pending = (yield* f.runtime.decisionsList({ ...f.list, targetSessionID: f.beta.id })).data.map((entry) => entry.candidate.target).find((target) => target.kind === "review")!
+    const receipt = yield* Deferred.make<boolean>()
+    const unsubscribe = yield* f.events.listen((event) => event.type !== SessionEvent.DotsDecisionSettled.type ? Effect.void : Effect.gen(function* () {
+      const data = Schema.decodeUnknownSync(SessionEvent.DotsDecisionSettled.data)(event.data)
+      if (data.source.exchangeID !== "actual_review_answer") return
+      const inputs = yield* SessionPending.list(f.db, f.beta.id)
+      yield* Deferred.succeed(receipt, inputs.some((input) => input.type === "synthetic" && input.id === SessionReview.promptID(item.itemID)))
+    }))
+    const input = { ...f.task, targetSessionID: f.beta.id, exchangeID: "actual_review_answer", instruction: { operation: "decision", target: pending, decision: { kind: "question", answers: { branch: "safe" } } } } as const
+    expect((yield* f.runtime.create(input)).decisionOutcome?.state).toBe("settled")
+    expect(yield* Deferred.await(receipt)).toBe(true)
+    yield* unsubscribe
+    yield* f.runtime.create(input)
+    expect(yield* SessionPending.list(f.db, f.beta.id)).toHaveLength(1)
+    expect(yield* reviews.list(f.beta.id)).toEqual([])
+  }))
+})
+
 describe("native typed task delegation", () => {
-  it.live("requires native human approval once and admits closed continuation and presentation without another approval", () => Effect.gen(function* () {
+  it.live("requires explicit native approval once and admits closed continuation and presentation without another approval", () => Effect.gen(function* () {
     const f = yield* delegated
     expect(f.approval.calls).toHaveLength(1)
-    expect(f.approval.calls[0]).toMatchObject({ requireHuman: true, action: "dots_delegate" })
+    expect(f.approval.calls[0]).toMatchObject({ requireExplicitDecision: true, action: "dots_delegate" })
     expect(f.approval.calls[0]).not.toHaveProperty("save")
     expect((yield* f.runtime.delegationCreate(f.proposal)).id).toBe(f.grant.id)
     const first = yield* f.runtime.create(f.input)
@@ -221,7 +503,7 @@ describe("native typed task delegation", () => {
       if (change === "principal") f.input.remoteSource = { ...source, principal: { ...source.principal, clientID: "replacement" } }
       if (change === "grant") f.authorization.grantID = "replacement"
       if (change === "epoch") f.input.remoteSource = { ...source, epoch: "replacement" }
-      if (change === "task") yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "Different native human task", resume: false })
+      if (change === "task") yield* f.sessions.prompt({ sessionID: f.alpha.id, text: "Different direct task", resume: false })
       if (change === "completed") yield* f.events.publish(SessionEvent.Work.Completed, { sessionID: f.alpha.id, inputID: f.task.id, assistantMessageID: SessionMessage.ID.make("msg_finished_native") })
       if (change === "owner-return") {
         yield* f.coordination.setOwner(f.group.id, { sessionID: f.alpha.id, ownerSessionID: f.beta.id })
@@ -792,10 +1074,10 @@ const sessionDelegated = Effect.gen(function* () {
 })
 
 describe("session-basis delegated tasks and decisions", () => {
-  it.live("approves a session grant with no current human task and admits a delegated task exactly once", () => Effect.gen(function* () {
+  it.live("approves a session grant with no current direct task and admits a delegated task exactly once", () => Effect.gen(function* () {
     const f = yield* sessionDelegated
     expect(f.approval.calls).toHaveLength(1)
-    expect(f.approval.calls[0]).toMatchObject({ requireHuman: true, action: "dots_delegate" })
+    expect(f.approval.calls[0]).toMatchObject({ requireExplicitDecision: true, action: "dots_delegate" })
     expect(f.grant).toMatchObject({ basis: "session", targetSessionID: f.alpha.id, scope: { operations: ["task", "decision"] }, active: true })
     expect(f.grant).not.toHaveProperty("taskInputID")
     const status = yield* f.runtime.delegationStatus({ sessionID: f.master.id, targetSessionID: f.alpha.id, expectedAttachment: target })
@@ -814,7 +1096,7 @@ describe("session-basis delegated tasks and decisions", () => {
     expect((yield* f.runtime.create({ ...f.taskInput, exchangeID: "other_target", targetSessionID: f.beta.id }).pipe(Effect.exit))._tag).toBe("Failure")
   }))
 
-  it.live("drops an unpromoted delegated task after revocation and keeps the next human input", () => Effect.gen(function* () {
+  it.live("drops an unpromoted delegated task after revocation and keeps the next direct input", () => Effect.gen(function* () {
     const f = yield* sessionDelegated
     const queued = yield* f.runtime.create(f.taskInput)
     yield* f.runtime.delegationRevoke({ sessionID: f.master.id, id: f.grant.id, revision: f.grant.revision, expectedAttachment: target })
@@ -842,7 +1124,7 @@ describe("session-basis delegated tasks and decisions", () => {
     const fingerprint = "f".repeat(64)
     f.decisionFake.pending.push(
       { kind: "permission", sessionID: f.alpha.id, requestID: "per_delegated", fingerprint, action: "edit", resources: ["src/a.ts"], sourceMessageID: assistantMessageID },
-      { kind: "permission", sessionID: f.alpha.id, requestID: "per_human", fingerprint: "e".repeat(64), action: "edit", resources: ["src/human.ts"], metadata: { requireHuman: true }, sourceMessageID: assistantMessageID },
+      { kind: "permission", sessionID: f.alpha.id, requestID: "per_explicit", fingerprint: "e".repeat(64), action: "edit", resources: ["src/explicit.ts"], metadata: { requireExplicitDecision: true }, sourceMessageID: assistantMessageID },
       { kind: "permission", sessionID: f.alpha.id, requestID: "per_other", fingerprint: "d".repeat(64), action: "edit", resources: ["src/other.ts"], sourceMessageID: "msg_someone_else" },
       { kind: "guardrail", sessionID: f.alpha.id, requestID: "grq_hard", fingerprint: "c".repeat(64), action: "shell", resources: ["synthetic"], ruleIDs: ["standard.hard.delete"], standard: true, hardReview: true, sourceMessageID: assistantMessageID },
       { kind: "permission", sessionID: f.alpha.id, requestID: "per_later", fingerprint: "b".repeat(64), action: "edit", resources: ["src/later.ts"], sourceMessageID: laterAssistantMessageID },
@@ -855,6 +1137,7 @@ describe("session-basis delegated tasks and decisions", () => {
     const settled = yield* f.runtime.create(decisionInput)
     expect(settled.decisionOutcome).toMatchObject({ state: "settled", reply: "once" })
     expect(f.decisionFake.settled).toHaveLength(1)
+    expect(f.decisionFake.settled[0]).not.toHaveProperty("explicitDecision")
     expect((yield* f.runtime.create(decisionInput)).decisionOutcome).toMatchObject({ state: "settled" })
     expect(f.decisionFake.settled).toHaveLength(1)
     expect((yield* f.read("delegated_decision")).decisionOutcome).toMatchObject({ state: "settled" })
@@ -934,7 +1217,7 @@ describe("session-basis delegated tasks and decisions", () => {
     yield* decide("real_decision_reject", { operation: "decision", target: { kind: "permission", requestID: Permission.ID.create("per_real_reject"), fingerprint: rejectSnapshot.fingerprint }, reply: "reject" })
     expect((yield* Fiber.join(rejectFiber).pipe(Effect.exit))._tag).toBe("Failure")
     expect(yield* f.realPermission.snapshot(Permission.ID.create("per_real_unrelated"))).toBeDefined()
-    yield* f.realPermission.reply({ requestID: Permission.ID.create("per_real_unrelated"), reply: "reject", rejectScope: "request" })
+    yield* f.realPermission.reply({ requestID: Permission.ID.create("per_real_unrelated"), reply: "reject" })
     expect((yield* Fiber.join(unrelatedFiber).pipe(Effect.exit))._tag).toBe("Failure")
 
   }))
@@ -1052,11 +1335,11 @@ describe("session-basis delegated tasks and decisions", () => {
     expect(f.decisionFake.settled).toHaveLength(1)
   }))
 
-  it.live("a stale form candidate cannot settle when the actual form source or metadata is human-only", () => Effect.gen(function* () {
+  it.live("a stale form candidate cannot settle when the actual form source or metadata requires an explicit decision", () => Effect.gen(function* () {
     const f = yield* setup
     const services = DotsExchange.decisionServices({ permission: f.realPermission, guardrail: f.realGuardrail, forms: f.realForms, questions: f.realQuestions })
     const formID = Form.ID.create()
-    yield* f.realForms.create({ id: formID, sessionID: f.alpha.id, title: "Choose branch", fields: [{ key: "branch", type: "string", required: true, options: [{ value: "safe", label: "Safe" }] }], metadata: { requireHuman: true, tool: { messageID: "msg_actual_form_source", callID: "call_stale_form" } } })
+    yield* f.realForms.create({ id: formID, sessionID: f.alpha.id, title: "Choose branch", fields: [{ key: "branch", type: "string", required: true, options: [{ value: "safe", label: "Safe" }] }], metadata: { requireExplicitDecision: true, tool: { messageID: "msg_actual_form_source", callID: "call_stale_form" } } })
     const snapshot = yield* f.realForms.snapshot(formID)
     if (!snapshot) return yield* Effect.die("stale form snapshot was not retained")
     const source = { kind: "dots-delegation" as const, anchorSessionID: f.master.id, delegationID: "stale_form_grant", revision: 1, exchangeID: "stale_form_decision" }

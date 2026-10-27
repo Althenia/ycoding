@@ -60,13 +60,40 @@ describe("MCP catalog pattern interoperability", () => {
   }
 })
 
-describe("MCP human decision boundary", () => {
-  test("human-only decision tools are absent from the catalog", () => {
+describe("MCP native decision tools", () => {
+  test("publishes the six typed feature operations without custom metadata", () => {
     const names = RemoteMcpSchemas.tools.map((tool) => tool.name)
-    for (const name of ["session_permission_reply", "session_guardrail_reply", "session_form_reply", "session_form_cancel", "session_review_decide", "session_subagent_answer"])
-      expect(names).not.toContain(name)
-    for (const operation of ["session.permission.reply", "session.guardrail.reply", "session.form.reply", "session.form.cancel", "session.review.decide", "session.subagent.answer"])
-      expect(RemoteMcpSchemas.excludedOperations.map(String)).toContain(operation)
+    const operations = ["session.permission.reply", "session.guardrail.reply", "session.form.reply", "session.form.cancel", "session.review.decide", "session.subagent.answer"]
+    for (const operation of operations) {
+      const tool = RemoteMcpSchemas.tools.find((tool) => tool.operation === operation)
+      expect(tool).toBeDefined()
+      expect(names).toContain(operation.replaceAll(".", "_"))
+      expect(tool?.inputSchema.additionalProperties).toBe(false)
+      expect(Object.keys(tool?.annotations ?? {}).toSorted()).toEqual(["destructiveHint", "idempotentHint", "openWorldHint", "readOnlyHint"])
+      expect(JSON.stringify(tool)).not.toContain("requireExplicitDecision")
+    }
+    for (const operation of operations) expect(RemoteMcpSchemas.excludedOperations.map(String)).not.toContain(operation)
+  })
+})
+
+describe("MCP Dots device delegation", () => {
+  test("publishes authenticated device grant administration and decision inventory tools", () => {
+    const tools = RemoteMcpSchemas.tools
+    const byOperation = (operation: string) => tools.find((tool) => tool.operation === operation)
+    for (const operation of [
+      "session.dots.delegation.device.create",
+      "session.dots.delegation.device.read",
+      "session.dots.delegation.device.revoke",
+      "session.dots.decisions.list",
+    ]) expect(byOperation(operation)).toBeDefined()
+    expect(byOperation("session.dots.delegation.device.create")?.mutation).toBe(true)
+    expect(byOperation("session.dots.delegation.device.read")?.mutation).toBe(false)
+    expect(byOperation("session.dots.delegation.device.revoke")?.mutation).toBe(true)
+    expect(byOperation("session.dots.decisions.list")?.mutation).toBe(false)
+    expect(tools.find((tool) => tool.name === "session_dots_exchange_create")?.operation).toBe("session.dots.exchange.create")
+    expect(tools.find((tool) => tool.name === "session_dots_decision_form")?.operation).toBe("session.dots.exchange.create")
+    expect(byOperation("session.review.decide")?.name).toBe("session_review_decide")
+    expect(byOperation("session.permission.reply")?.name).toBe("session_permission_reply")
   })
 })
 

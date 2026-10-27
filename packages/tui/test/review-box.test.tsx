@@ -115,7 +115,7 @@ const questionItem: SessionReviewItem = {
   sessionTitle: "Root work",
   created: 4,
 }
-const permissionItem: SessionReviewItem = {
+const permissionItem = {
   itemID: "rvw_permission" as SessionReviewItem["itemID"],
   kind: "permission",
   reason: "sleep_entry",
@@ -125,13 +125,14 @@ const permissionItem: SessionReviewItem = {
     action: "edit",
     resources: ["/repo/src/index.ts"],
     fingerprint,
+    fingerprintVersion: 2,
     requestID: "per_1" as never,
   },
   sessionID: "ses_root",
   rootSessionID: "ses_root",
   sessionTitle: "Root work",
   created: 5,
-}
+} satisfies SessionReviewItem
 
 async function mount(body: () => JSX.Element, settle: string, height = 30, mode: "dark" | "light" = "dark") {
   const transport = createFetch(() => undefined)

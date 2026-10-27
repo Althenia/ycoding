@@ -103,7 +103,7 @@ test("a native question answer reaches the owned Form reply once and remains rea
   } finally { await page.close() }
 }, 60_000)
 
-test("native question grades update without selecting, losing a focused draft, or hiding human attribution at narrow widths", async () => {
+test("native question grades update without selecting, losing a focused draft, or hiding reply-source attribution at narrow widths", async () => {
   const page = await browser.openPage()
   try {
     for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
@@ -138,7 +138,7 @@ test("native question grades update without selecting, losing a focused draft, o
       expect(await page.evaluate<boolean>(`document.activeElement===window.focusedQuestionDraft && window.focusedQuestionDraft.value==='Keep my draft'`)).toBe(true)
       await Bun.write(new URL(`../../../.cache/tmp/web-reading/question-grades-pending-${width}-${theme}.png`, import.meta.url), Buffer.from(await page.screenshot(), "base64"))
       await page.evaluate(`(() => {const form=document.querySelector('#pending-requests form'); form.querySelectorAll('.question__option input')[1].click(); form.requestSubmit(); form.requestSubmit();})()`)
-      await wait(page, `!document.querySelector('#pending-requests form') && document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by you')`)
+      await wait(page, `!document.querySelector('#pending-requests form') && document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by client')`)
       const text = await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)
       expect(text).toContain("All advertised")
       expect(text).toContain("confidence 0.96")
@@ -152,15 +152,28 @@ test("native question grades update without selecting, losing a focused draft, o
         await page.evaluate(`window.responseSnapshot(${JSON.stringify([{ id: "msg_coordinator_question", type: "assistant", content: [{ type: "tool", id: "call_coordinator_question", name: "question", state: { status: "completed", input: { questions: [{ header: "Scope", question: "Which sessions should reload?", options: [] }] }, structured: { answers: [["Active only"]], ...(via === "yolo" ? { assessment } : {}), source: { kind: "coordinator", coordinatorSessionID: "ses_coordinator", via } }, content: [] } }], time: { created: 1, completed: 2 } }])}, [], false)`)
         await wait(page, `document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by coordinator ses_coordinator')`)
         const attributed = await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)
-        expect(attributed).not.toContain("answered by you")
+        expect(attributed).not.toContain("answered by client")
         expect(attributed.includes("via Answers YOLO")).toBe(via === "yolo")
       }
       await page.evaluate(`window.responseSnapshot(${JSON.stringify([{ id: "msg_delegated_question", type: "assistant", content: [{ type: "tool", id: "call_delegated_question", name: "question", state: { status: "completed", input: { questions: [{ header: "Scope", question: "Which sessions should reload?", options: [] }] }, structured: { answers: [["Active only"]], source: { kind: "dots-delegation", anchorSessionID: "ses_anchor", delegationID: "delegation_one", revision: 3, exchangeID: "exchange_one" } }, content: [] } }], time: { created: 1, completed: 2 } }])}, [], false)`)
       await wait(page, `document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by external client via Dots delegation delegation_one · anchor ses_anchor')`)
       const delegated = await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)
       expect(delegated).toContain("Active only")
-      expect(delegated).not.toContain("answered by you")
+      expect(delegated).not.toContain("answered by client")
       expect(delegated).not.toContain("answered by coordinator")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
+      await page.evaluate(`window.responseSnapshot(${JSON.stringify([{ id: "msg_dots_client_question", type: "assistant", content: [{ type: "tool", id: "call_dots_client_question", name: "question", state: { status: "completed", input: { questions: [{ header: "Scope", question: "Which sessions should reload?", options: [] }] }, structured: { answers: [["Active only"]], source: { kind: "dots-client", anchorSessionID: "ses_anchor", bindingID: "binding_1", delegationID: "delegation_two", revision: 4, exchangeID: "exchange_two", principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "cli_1", grantID: "grt_1", epoch: "epoch_1" } } }, content: [] } }], time: { created: 1, completed: 2 } }])}, [], false)`)
+      await wait(page, `document.querySelector('[aria-label="Recorded question"]')?.innerText.includes('answered by external client via Dots delegation delegation_two · anchor ses_anchor')`)
+      const dotsClient = await page.evaluate<string>(`document.querySelector('[aria-label="Recorded question"]').innerText`)
+      expect(dotsClient).toContain("Active only")
+      expect(dotsClient).not.toContain("binding_1")
+      expect(dotsClient).not.toContain("own_1")
+      expect(dotsClient).not.toContain("dev_1")
+      expect(dotsClient).not.toContain("cli_1")
+      expect(dotsClient).not.toContain("grt_1")
+      expect(dotsClient).not.toContain("epoch_1")
+      expect(dotsClient).not.toContain("answered by client")
+      expect(dotsClient).not.toContain("answered by coordinator")
       expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth>innerWidth`)).toBe(false)
     }
   } finally { await page.close() }

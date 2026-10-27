@@ -330,7 +330,7 @@ describe("durable question reviews under a fresh human steer", () => {
             kind === "question"
               ? formPayload
               : kind === "permission"
-                ? { type: "permission", action: "shell", resources: ["touch upload.txt"], fingerprint: "a".repeat(64), requestID: Permission.ID.make("per_stale") }
+                ? { type: "permission", fingerprintVersion: 2, action: "shell", resources: ["touch upload.txt"], fingerprint: "a".repeat(64), requestID: Permission.ID.make("per_stale") }
                 : {
                     type: "guardrail",
                     action: "shell",
@@ -488,18 +488,18 @@ describe("trusted input origin", () => {
     Effect.gen(function* () {
       const { session, root } = yield* setup({ yolo: false })
       const forged = { inputOrigin: "plugin", source: "api" }
-      const human = yield* session.prompt({ sessionID: root.id, text: "one", resume: false, metadata: forged })
+      const direct = yield* session.prompt({ sessionID: root.id, text: "one", resume: false, metadata: forged })
       const bare = yield* session.prompt({ sessionID: root.id, text: "two", resume: false })
-      const delegated = yield* session.prompt({ sessionID: root.id, text: "three", resume: false, origin: "subagent", metadata: { inputOrigin: "human" } })
+      const delegated = yield* session.prompt({ sessionID: root.id, text: "three", resume: false, origin: "subagent", metadata: { inputOrigin: "direct" } })
       const reviewed = yield* session.prompt({ sessionID: root.id, text: "four", resume: false, origin: "review" })
 
-      expect(human.data.metadata).toEqual({ inputOrigin: "human", source: "api" })
-      expect(bare.data.metadata).toEqual({ inputOrigin: "human" })
+      expect(direct.data.metadata).toEqual({ inputOrigin: "direct", source: "api" })
+      expect(bare.data.metadata).toEqual({ inputOrigin: "direct" })
       expect(delegated.data.metadata).toEqual({ inputOrigin: "subagent" })
       expect(reviewed.data.metadata).toEqual({ inputOrigin: "review" })
       const { db } = yield* Database.Service
-      const stored = yield* SessionPending.find(db, human.id)
-      expect(stored?.type === "user" ? stored.data.metadata : undefined).toEqual({ inputOrigin: "human", source: "api" })
+      const stored = yield* SessionPending.find(db, direct.id)
+      expect(stored?.type === "user" ? stored.data.metadata : undefined).toEqual({ inputOrigin: "direct", source: "api" })
     }),
   )
 })

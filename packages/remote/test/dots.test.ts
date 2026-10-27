@@ -99,3 +99,83 @@ test("the relay rejects target guessing and ambient context fields", () => {
       false,
     )
 })
+
+test("device delegation operations are closed, session-scoped, and exclude caller authority", () => {
+  const exchangeID = "grant-create"
+  const grant = {
+    id: "device-grant",
+    exchangeID,
+    bindingID: "binding-1",
+    expectedAttachment: target,
+    scope: { target: "device", operations: ["task", "decision"] },
+  }
+  const revoke = {
+    id: grant.id,
+    revision: 1,
+    exchangeID: "grant-revoke",
+    bindingID: grant.bindingID,
+    expectedAttachment: target,
+  }
+  const operations = [
+    ["session.dots.delegation.device.create", grant, "mutation"],
+    ["session.dots.delegation.device.read", { limit: 20 }, "read"],
+    ["session.dots.delegation.device.revoke", revoke, "mutation"],
+  ] as const
+  for (const [operation, input, access] of operations) {
+    expect(parse(operation, input).ok).toBe(true)
+    expect(parse(operation, input, null).ok).toBe(false)
+    expect(Reflect.get(remoteOperationAccess, operation)).toBe(access)
+  }
+  for (const extra of [
+    { expiresAt: 9_999_999 },
+    { principal: { ownerID: "owner", deviceID: "device", clientID: "client", grantID: "grant", epoch: "epoch" } },
+    { remoteSource: { requestID: "request", epoch: "epoch", principal: { ownerID: "owner", deviceID: "device", clientID: "client" } } },
+  ]) expect(parse("session.dots.delegation.device.create", { ...grant, ...extra }).ok).toBe(false)
+  expect(parse("session.dots.delegation.device.create", { ...grant, scope: { target: "device", operations: ["task", "task"] } }).ok).toBe(false)
+  expect(parse("session.dots.delegation.device.create", { ...grant, scope: { target: "device", operations: [] } }).ok).toBe(false)
+})
+
+test("Dots decision inventory is scoped by confirmed device binding and grant", () => {
+  const input = {
+    bindingID: "binding-1",
+    expectedAttachment: target,
+    delegation: { id: "device-grant", revision: 1 },
+    limit: 20,
+  }
+  expect(parse("session.dots.decisions.list", input).ok).toBe(true)
+  expect(parse("session.dots.decisions.list", input, null).ok).toBe(false)
+  expect(Reflect.get(remoteOperationAccess, "session.dots.decisions.list")).toBe("read")
+  for (const invalid of [
+    { ...input, principal: { ownerID: "owner", deviceID: "device", clientID: "client" } },
+    { ...input, exchangeID: "caller-selected-exchange" },
+    { ...input, limit: 101 },
+    { ...input, delegation: { ...input.delegation, revision: 0 } },
+  ]) expect(parse("session.dots.decisions.list", invalid).ok).toBe(false)
+})
+
+test("device decision exchanges cover all native decision candidates with strict typed choices", () => {
+  const base = {
+    exchangeID: "decision-exchange",
+    expectedAttachment: target,
+    targetSessionID: "ses_target",
+    channel: "task",
+    delivery: "queue",
+    delegation: { id: "device-grant", revision: 1 },
+  }
+  const fingerprint = "a".repeat(64)
+  const accepted = [
+    { operation: "decision", target: { kind: "subagent_question", questionID: "qst_child", fingerprint }, text: "Answer" },
+    { operation: "decision", target: { kind: "subagent_question", questionID: "qst_child", fingerprint }, dismissed: true },
+    { operation: "decision", target: { kind: "review", itemID: "rvw_review", fingerprint }, decision: { kind: "recovery", choice: "continue" } },
+    { operation: "decision", target: { kind: "review", itemID: "rvw_review", fingerprint }, decision: { kind: "permission", reply: "once" } },
+    { operation: "decision", target: { kind: "form", formID: "frm_form", fingerprint }, cancelled: true },
+    { operation: "decision", target: { kind: "question", requestID: "que_question", fingerprint }, cancelled: true },
+  ]
+  for (const instruction of accepted) expect(parse("session.dots.exchange.create", { ...base, instruction }).ok).toBe(true)
+  for (const instruction of [
+    { operation: "decision", target: { kind: "subagent_question", questionID: "qst_child", fingerprint } },
+    { operation: "decision", target: { kind: "review", itemID: "rvw_review", fingerprint }, decision: { kind: "guardrail", reply: "always" } },
+    { operation: "decision", target: { kind: "review", itemID: "rvw_review", fingerprint }, decision: { kind: "review", reply: "once" } },
+    { operation: "decision", target: { kind: "review", itemID: "rvw_review", fingerprint }, decision: { kind: "recovery", choice: "approve" } },
+  ]) expect(parse("session.dots.exchange.create", { ...base, instruction }).ok).toBe(false)
+})

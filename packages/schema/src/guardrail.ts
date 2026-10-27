@@ -204,4 +204,5 @@ const Deferred = ephemeral({
   type: "guardrail.deferred",
   schema: { rootSessionID: SessionID, sessionID: SessionID, requestID: RequestID, itemID: SessionReviewID },
 })
-export const Event = { Asked, Replied, Decided, Deferred, Definitions: inventory(Asked, Replied, Decided, Deferred) }
+const Cancelled = ephemeral({ type: "guardrail.cancelled", schema: { rootSessionID: SessionID, sessionID: SessionID, requestID: RequestID } })
+export const Event = { Asked, Replied, Decided, Deferred, Cancelled, Definitions: inventory(Asked, Replied, Decided, Deferred, Cancelled) }

@@ -7,7 +7,7 @@ import { HttpApi, HttpApiMiddleware } from "effect/unstable/httpapi"
 
 class SessionLocation extends HttpApiMiddleware.Service<SessionLocation>()("dots-codegen-location") {}
 
-test("Dots task delegation contracts compile for both clients", () => {
+test("Dots contracts compile for both clients", () => {
   const contract = compile(HttpApi.make("dots-codegen").add(makeDotsGroup(SessionLocation)))
   const promise = emitPromise(contract)
   const effect = emitEffectImported(contract, { module: "@ycoding-ai/protocol/client", api: "ClientApi" })
@@ -17,6 +17,7 @@ test("Dots task delegation contracts compile for both clients", () => {
   expect(effect.files.find((file) => file.path === "client.ts")?.content).toContain("HttpApiClient.make(ClientApi")
   expect(promise.operations.map((operation) => operation.name)).toEqual(expect.arrayContaining([
     "exchange.create", "delegation.status", "delegation.create", "delegation.revoke",
+    "delegation.device.create", "delegation.device.read", "delegation.device.revoke", "decisions.list",
   ]))
   const native = ClientApi.groups["server.dots"].endpoints["session.dots.delegation.create"].payload.values().next().value?.schemas[0]
   const exchange = ClientApi.groups["server.dots"].endpoints["session.dots.exchange.create"].payload.values().next().value?.schemas[0]

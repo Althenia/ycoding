@@ -158,7 +158,7 @@ describe("public event manifest", () => {
     expect(Config.Event.Definitions).toEqual([Config.Event.Updated])
     expect(FileSystem.Event.Definitions).toEqual([FileSystem.Event.Changed])
     expect(Integration.Event.Definitions).toEqual([Integration.Event.Updated, Integration.Event.ConnectionUpdated])
-    expect(Permission.Event.Definitions).toEqual([Permission.Event.Asked, Permission.Event.Replied, Permission.Event.Deferred])
+    expect(Permission.Event.Definitions).toEqual([Permission.Event.Asked, Permission.Event.Replied, Permission.Event.Deferred, Permission.Event.Cancelled])
     expect(EventManifest.Latest.get("permission.asked")).toBe(Permission.Event.Asked)
     expect(EventManifest.Latest.get("permission.replied")).toBe(Permission.Event.Replied)
     expect(EventManifest.Latest.get("question.asked")).toBe(Question.Event.Asked)
@@ -265,7 +265,11 @@ describe("public event manifest", () => {
         "session.guardrail.decided.1",
         "session.daybreak.set.1",
         "session.decision.audited.1",
+        "session.dots.binding.bound.1",
+        "session.dots.binding.unbound.1",
         "session.dots.decision.settled.1",
+        "session.dots.device-delegation.created.1",
+        "session.dots.device-delegation.revoked.1",
         "session.dots.exchange.created.1",
         "session.dots.instruction.rejected.1",
         "session.dots.report.recorded.1",

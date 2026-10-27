@@ -775,13 +775,11 @@ export type OperationInput = {
   readonly appContext?: McpEvents.RequestContext
 }
 
-const humanDecisionOperations: ReadonlySet<RemoteOperation> = new Set([
-  "session.permission.reply",
-  "session.guardrail.reply",
-  "session.form.reply",
-  "session.form.cancel",
-  "session.review.decide",
-  "session.subagent.answer",
+const authenticatedDotsOperations: ReadonlySet<RemoteOperation> = new Set([
+  "session.dots.delegation.device.create",
+  "session.dots.delegation.device.read",
+  "session.dots.delegation.device.revoke",
+  "session.dots.decisions.list",
 ])
 
 export async function executeRemoteOperation(input: OperationInput): Promise<readonly RemoteResponse[]> {
@@ -840,8 +838,7 @@ async function homeDescendant(home: string, directory: string) {
 
 async function run(input: OperationInput) {
   const request = input.request
-  if (input.appContext !== undefined && humanDecisionOperations.has(request.operation))
-    throw new OperationError("forbidden", "Settle this request through its native human or parent controls; MCP automation cannot supply the decision.")
+  if (authenticatedDotsOperations.has(request.operation) && input.appContext === undefined) return unknownOperation()
   if (request.operation.startsWith("provider.auth.")) {
     const fields = parseProviderAuthInput(request.operation, request.input)
     if (!fields || request.sessionID !== undefined) throw new OperationError("invalid_message", "Invalid provider authentication request")
@@ -981,6 +978,14 @@ async function run(input: OperationInput) {
     case "dots.exchange.read":
       if (input.appContext === undefined) return unknownOperation()
       return { data: await input.local.dotsExchangeRead(sessionID, location, validated.input, input.appContext, input.signal) }
+    case "dots.deviceDelegation.create":
+      return { data: await input.local.dotsDeviceDelegationCreate(sessionID, location, validated.input, input.appContext!) }
+    case "dots.deviceDelegation.read":
+      return { data: await input.local.dotsDeviceDelegationRead(sessionID, location, validated.input, input.appContext!) }
+    case "dots.deviceDelegation.revoke":
+      return { data: await input.local.dotsDeviceDelegationRevoke(sessionID, location, validated.input, input.appContext!) }
+    case "dots.decisions.list":
+      return { data: await input.local.dotsDecisionsList(sessionID, location, validated.input, input.appContext!) }
     case "dots.targets": return { data: await input.local.dotsTargets(sessionID, location, validated.profile) }
     case "dots.status": return { data: await input.local.dotsStatus(sessionID, location) }
     case "dots.bind": return { data: await input.local.dotsBind(sessionID, location, validated.target) }
@@ -1249,6 +1254,10 @@ type Reply = "once" | "always" | "reject"
 type Validated =
   | { readonly kind: "dots.exchange.create"; readonly input: Dots.ExchangeCreate }
   | { readonly kind: "dots.exchange.read"; readonly input: Dots.ExchangeRead }
+  | { readonly kind: "dots.deviceDelegation.create"; readonly input: Dots.DeviceDelegationCreate }
+  | { readonly kind: "dots.deviceDelegation.read"; readonly input: Dots.DeviceDelegationRead }
+  | { readonly kind: "dots.deviceDelegation.revoke"; readonly input: Dots.DeviceDelegationRevoke }
+  | { readonly kind: "dots.decisions.list"; readonly input: Dots.DecisionsList }
   | { readonly kind: "dots.targets"; readonly profile: string }
   | { readonly kind: "dots.status" }
   | { readonly kind: "dots.bind"; readonly target: Dots.Target }
@@ -1610,6 +1619,10 @@ function validate(request: RemoteRequest): Validated {
   switch (request.operation) {
     case "session.dots.exchange.create": return { kind: "dots.exchange.create", input: Schema.decodeUnknownSync(Dots.ExchangeCreate)(fields, { onExcessProperty: "error" }) }
     case "session.dots.exchange.read": return { kind: "dots.exchange.read", input: Schema.decodeUnknownSync(Dots.ExchangeRead)(fields, { onExcessProperty: "error" }) }
+    case "session.dots.delegation.device.create": return { kind: "dots.deviceDelegation.create", input: Schema.decodeUnknownSync(Dots.DeviceDelegationCreate)(fields, { onExcessProperty: "error" }) }
+    case "session.dots.delegation.device.read": return { kind: "dots.deviceDelegation.read", input: Schema.decodeUnknownSync(Dots.DeviceDelegationRead)(fields, { onExcessProperty: "error" }) }
+    case "session.dots.delegation.device.revoke": return { kind: "dots.deviceDelegation.revoke", input: Schema.decodeUnknownSync(Dots.DeviceDelegationRevoke)(fields, { onExcessProperty: "error" }) }
+    case "session.dots.decisions.list": return { kind: "dots.decisions.list", input: Schema.decodeUnknownSync(Dots.DecisionsList)(fields, { onExcessProperty: "error" }) }
     case "session.dots.targets": return { kind: "dots.targets", profile: requireString(fields.profile, "profile", 256) }
     case "session.dots.bind": return { kind: "dots.bind", target: {
       profile: requireString(fields.profile, "profile", 256),
@@ -2311,6 +2324,10 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.dots.send": ["id", "text", "files", "causalMessageID", "expectedTarget"],
   "session.dots.exchange.create": ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text", "delegation", "taskInputID", "instruction"],
   "session.dots.exchange.read": ["exchangeID"],
+  "session.dots.delegation.device.create": ["id", "exchangeID", "bindingID", "expectedAttachment", "scope"],
+  "session.dots.delegation.device.read": ["cursor", "limit"],
+  "session.dots.delegation.device.revoke": ["id", "revision", "exchangeID", "bindingID", "expectedAttachment"],
+  "session.dots.decisions.list": ["bindingID", "expectedAttachment", "delegation", "targetSessionID", "cursor", "limit"],
   "session.dots.pause": ["expectedTarget"],
   "session.dots.resume": ["expectedTarget"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],

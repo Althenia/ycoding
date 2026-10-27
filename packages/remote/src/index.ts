@@ -118,6 +118,10 @@ export const remoteOperations = [
   "session.dots.resume",
   "session.dots.exchange.create",
   "session.dots.exchange.read",
+  "session.dots.delegation.device.create",
+  "session.dots.delegation.device.read",
+  "session.dots.delegation.device.revoke",
+  "session.dots.decisions.list",
   "session.skill",
   "usage.providers",
   "usage.summary",
@@ -206,6 +210,10 @@ export const remoteSessionOperations = [
   "session.dots.resume",
   "session.dots.exchange.create",
   "session.dots.exchange.read",
+  "session.dots.delegation.device.create",
+  "session.dots.delegation.device.read",
+  "session.dots.delegation.device.revoke",
+  "session.dots.decisions.list",
   "session.skill",
   "session.usageReport",
   "session.promptCosts",
@@ -317,6 +325,10 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.dots.resume": "mutation",
   "session.dots.exchange.create": "mutation",
   "session.dots.exchange.read": "read",
+  "session.dots.delegation.device.create": "mutation",
+  "session.dots.delegation.device.read": "read",
+  "session.dots.delegation.device.revoke": "mutation",
+  "session.dots.decisions.list": "read",
   "session.skill": "mutation",
   "usage.providers": "read",
   "usage.summary": "read",
@@ -933,15 +945,58 @@ function validDotsDelegated(input: Record<string, unknown>): boolean {
   const target = instruction.target
   if (typeof target.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(target.fingerprint)) return false
   const reply = instruction.reply === "once" || instruction.reply === "reject"
-  if (target.kind === "permission") return Object.keys(target).length === 3 && typeof target.requestID === "string" && target.requestID.startsWith("per") && target.requestID.length <= 256 && reply && !("answers" in instruction)
-  if (target.kind === "guardrail") return Object.keys(target).length === 3 && typeof target.requestID === "string" && target.requestID.startsWith("grq_") && target.requestID.length <= 256 && reply && !("answers" in instruction)
-  if (target.kind === "form") return Object.keys(target).length === 3 && typeof target.formID === "string" && target.formID.startsWith("frm_") && target.formID.length <= 256 && isRecord(instruction.answers) && !("reply" in instruction)
-  if (target.kind === "question") return Object.keys(target).length === 3 && typeof target.requestID === "string" && target.requestID.startsWith("que") && target.requestID.length <= 256 &&
-    Array.isArray(instruction.answers) && instruction.answers.length <= 64 && instruction.answers.every((answer) => Array.isArray(answer) && answer.length <= 64 && answer.every((entry) => typeof entry === "string" && entry.length <= 4096)) && !("reply" in instruction)
+  if (target.kind === "permission") return Object.keys(target).length === 3 && typeof target.requestID === "string" && /^per[A-Za-z0-9_-]+$/.test(target.requestID) && target.requestID.length <= 256 && reply
+  if (target.kind === "guardrail") return Object.keys(target).length === 3 && typeof target.requestID === "string" && /^grq_[A-Za-z0-9_-]+$/.test(target.requestID) && target.requestID.length <= 256 && reply
+  if (target.kind === "form") return Object.keys(target).length === 3 && typeof target.formID === "string" && /^frm_[A-Za-z0-9_-]+$/.test(target.formID) && target.formID.length <= 256 &&
+    (instruction.cancelled === true && Object.keys(instruction).length === 3 || Object.keys(instruction).length === 3 && isRecord(instruction.answers) && Object.keys(instruction.answers).length <= 64 && Object.values(instruction.answers).every((value) => typeof value === "string" && value.length <= 8192 || typeof value === "boolean" || typeof value === "number" || Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === "string" && item.length <= 4096)))
+  if (target.kind === "question") return Object.keys(target).length === 3 && typeof target.requestID === "string" && /^que[A-Za-z0-9_-]+$/.test(target.requestID) && target.requestID.length <= 256 &&
+    (instruction.cancelled === true && Object.keys(instruction).length === 3 || Object.keys(instruction).length === 3 && Array.isArray(instruction.answers) && instruction.answers.length <= 64 && instruction.answers.every((answer) => Array.isArray(answer) && answer.length <= 64 && answer.every((entry) => typeof entry === "string" && entry.length <= 4096)))
+  if (target.kind === "subagent_question") return Object.keys(target).length === 3 && typeof target.questionID === "string" && /^qst_[A-Za-z0-9_-]+$/.test(target.questionID) && target.questionID.length <= 256 &&
+    (instruction.dismissed === true && Object.keys(instruction).length === 3 || Object.keys(instruction).length === 3 && (typeof instruction.text === "string" && instruction.text.length > 0 && instruction.text.length <= 65_536 || instruction.data !== undefined))
+  if (target.kind === "review") {
+    if (Object.keys(target).length !== 3 || typeof target.itemID !== "string" || !target.itemID.startsWith("rvw_") || target.itemID.length > 256 || !isRecord(instruction.decision)) return false
+    const decision = instruction.decision
+    if (decision.kind === "permission" || decision.kind === "guardrail") return Object.keys(decision).length === 2 && (decision.reply === "once" || decision.reply === "reject")
+    if (decision.kind === "recovery") return Object.keys(decision).length === 2 && (decision.choice === "continue" || decision.choice === "stop")
+    if (decision.kind === "question") return Object.keys(decision).length === 2 && (Array.isArray(decision.answers) && decision.answers.length <= 64 && decision.answers.every((answer) => Array.isArray(answer) && answer.length <= 64 && answer.every((entry) => typeof entry === "string" && entry.length <= 4096)) || isRecord(decision.answers) && Object.keys(decision.answers).length <= 64)
+    if (decision.kind === "subagent_question") return decision.dismissed === true && Object.keys(decision).length === 2 || Object.keys(decision).length <= 3 && (typeof decision.text === "string" && decision.text.length > 0 && decision.text.length <= 65_536 || decision.data !== undefined)
+  }
   return false
 }
 
+function validDotsDelegationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation === "session.dots.delegation.device.read") return input === undefined || isRecord(input) &&
+    Object.keys(input).every((key) => key === "cursor" || key === "limit") &&
+    (input.cursor === undefined || typeof input.cursor === "string" && input.cursor.length <= 4096) &&
+    (input.limit === undefined || typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 100)
+  if (!isRecord(input)) return false
+  if (operation === "session.dots.delegation.device.create") {
+    const scope = input.scope
+    return Object.keys(input).length === 5 && Object.keys(input).every((key) => ["id", "exchangeID", "bindingID", "expectedAttachment", "scope"].includes(key)) &&
+      [input.id, input.exchangeID, input.bindingID].every((value) => typeof value === "string" && value.length > 0 && value.length <= 256) &&
+      validDotsTarget(input.expectedAttachment) && isRecord(scope) && Object.keys(scope).length === 2 && scope.target === "device" &&
+      Array.isArray(scope.operations) && scope.operations.length > 0 && scope.operations.length <= 2 &&
+      scope.operations.every((value) => value === "task" || value === "decision") && new Set(scope.operations).size === scope.operations.length
+  }
+  if (operation === "session.dots.delegation.device.revoke") return Object.keys(input).length === 5 && Object.keys(input).every((key) => ["id", "revision", "exchangeID", "bindingID", "expectedAttachment"].includes(key)) &&
+    [input.id, input.exchangeID, input.bindingID].every((value) => typeof value === "string" && value.length > 0 && value.length <= 256) &&
+    typeof input.revision === "number" && Number.isSafeInteger(input.revision) && input.revision > 0 && validDotsTarget(input.expectedAttachment)
+  return false
+}
+
+function validDotsDecisionsList(input: unknown): boolean {
+  if (!isRecord(input) || Object.keys(input).some((key) => !["bindingID", "expectedAttachment", "delegation", "targetSessionID", "cursor", "limit"].includes(key))) return false
+  const delegation = input.delegation
+  return typeof input.bindingID === "string" && input.bindingID.length > 0 && input.bindingID.length <= 256 && validDotsTarget(input.expectedAttachment) &&
+    isRecord(delegation) && Object.keys(delegation).length === 2 && typeof delegation.id === "string" && delegation.id.length > 0 && delegation.id.length <= 256 &&
+    typeof delegation.revision === "number" && Number.isSafeInteger(delegation.revision) && delegation.revision > 0 &&
+    (input.targetSessionID === undefined || isSessionID(input.targetSessionID)) && (input.cursor === undefined || typeof input.cursor === "string" && input.cursor.length <= 4096) &&
+    (input.limit === undefined || typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 100)
+}
+
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
+  if (operation.startsWith("session.dots.delegation.device.")) return validDotsDelegationInput(operation, input)
+  if (operation === "session.dots.decisions.list") return validDotsDecisionsList(input)
   if (operation === "session.dots.exchange.read") return isRecord(input) && Object.keys(input).length === 1 &&
     typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256
   if (operation === "session.dots.exchange.create") return isRecord(input) &&
@@ -1762,7 +1817,7 @@ export type RemoteIncidentReport = { readonly data: { readonly rows: readonly Re
 export type RemoteIncidentRecentInput = { readonly provider: string; readonly model: string; readonly agent?: string; readonly limit?: number }
 export type RemoteIncidentItem = { readonly id: string; readonly time: number; readonly kind: RemoteIncidentKind; readonly category: string;
   readonly ruleIDs: readonly string[]; readonly agent: string; readonly variant?: string; readonly profile?: string;
-  readonly target?: RemoteIncidentModelRef; readonly decidedBy?: "decision-model" | "human" }
+  readonly target?: RemoteIncidentModelRef; readonly decidedBy?: "decision-model" | "client" }
 export type RemoteIncidentRecent = { readonly data: { readonly items: readonly RemoteIncidentItem[] } }
 export type RemoteIncidentGuidanceInput = { readonly provider: string; readonly model: string }
 export type RemoteIncidentGuidance = { readonly data: { readonly text?: string; readonly clearedAt?: number; readonly enabled: boolean } }

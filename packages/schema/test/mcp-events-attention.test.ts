@@ -7,8 +7,7 @@ const valid = {
   kind: "guardrail",
   origin: { type: "tool", source_event_id: "evt_1", message_id: "msg_1", call_id: "call_1" },
   review: "hard",
-  human_required: true,
-  actions: ["inspect", "notify_human"],
+  actions: ["inspect", "respond"],
 } as const
 
 const decode = (value: unknown) => Schema.decodeUnknownSync(McpEvents.Attention)(value, { onExcessProperty: "error" })
@@ -23,29 +22,31 @@ const accepts = (value: unknown) => {
 
 test("attention accepts every kind, origin type, review class and action set", () => {
   expect(decode(valid)).toEqual(valid)
-  for (const kind of ["guardrail", "permission", "question", "form", "subagent_question"])
+  for (const kind of ["guardrail", "permission", "question", "form", "subagent_question", "recovery"])
     expect(accepts({ ...valid, kind })).toBe(true)
   for (const type of ["tool", "native", "managed_task", "review", "unreported"])
     expect(accepts({ ...valid, origin: { type, source_event_id: "evt_1" } })).toBe(true)
   for (const review of ["ordinary", "hard", "custom", "unreported"]) expect(accepts({ ...valid, review })).toBe(true)
-  for (const actions of [[], ["inspect"], ["notify_human"], ["inspect", "notify_human"]]) expect(accepts({ ...valid, actions })).toBe(true)
+  for (const actions of [[], ["inspect"], ["respond"], ["inspect", "respond"]]) expect(accepts({ ...valid, actions })).toBe(true)
   const { review: _review, ...withoutReview } = valid
   expect(accepts(withoutReview)).toBe(true)
   expect(accepts({ ...valid, origin: { type: "native", source_event_id: "evt_1" } })).toBe(true)
 })
 
-test("attention is closed: unknown keys, invalid enums and non-literal human_required are rejected", () => {
+test("attention is closed and excludes person-specific fields and actions", () => {
   for (const bad of [
     { ...valid, extra: true },
     { ...valid, prompt: "private" },
     { ...valid, origin: { ...valid.origin, resource: "x" } },
-    { ...valid, kind: "recovery" },
+    { ...valid, kind: "unknown" },
     { ...valid, kind: "Guardrail" },
     { ...valid, review: "standard" },
     { ...valid, origin: { type: "human", source_event_id: "evt_1" } },
     { ...valid, origin: { type: "tool" } },
+    { ...valid, human_required: true },
     { ...valid, human_required: false },
-    { ...valid, human_required: undefined },
+    { ...valid, actions: ["notify_human"] },
+    { ...valid, actions: ["inspect", "respond", "notify_human"] },
     { ...valid, actions: undefined },
     { ...valid, actions: ["approve"] },
     { ...valid, actions: ["inspect", "answer"] },
@@ -85,19 +86,19 @@ test("advertised payload schema includes the closed attention shape and keeps th
     const properties = record(attention.properties)
     expect(attention.type).toBe("object")
     expect(attention.additionalProperties).toBe(false)
-    expect(strings(attention.required).toSorted()).toEqual(["actions", "human_required", "kind", "origin"])
-    expect(record(properties.kind).enum).toEqual(["guardrail", "permission", "question", "form", "subagent_question"])
+    expect(strings(attention.required).toSorted()).toEqual(["actions", "kind", "origin"])
+    expect(record(properties.kind).enum).toEqual(["guardrail", "permission", "question", "form", "subagent_question", "recovery"])
     expect(record(properties.review).enum).toEqual(["ordinary", "hard", "custom", "unreported"])
-    expect(record(properties.human_required).const).toBe(true)
+    expect(properties).not.toHaveProperty("human_required")
     const actions = record(properties.actions)
     expect(actions.type).toBe("array")
-    expect(record(actions.items).enum).toEqual(["inspect", "notify_human"])
+    expect(record(actions.items).enum).toEqual(["inspect", "respond"])
     const origin = record(properties.origin)
     const originProperties = record(origin.properties)
     expect(origin.additionalProperties).toBe(false)
     expect(strings(origin.required).toSorted()).toEqual(["source_event_id", "type"])
     expect(record(originProperties.type).enum).toEqual(["tool", "native", "managed_task", "review", "unreported"])
     for (const key of ["source_event_id", "message_id", "call_id"]) expect(record(originProperties[key]).type).toBe("string")
-    expect(Object.keys(properties).toSorted()).toEqual(["actions", "human_required", "kind", "origin", "review"])
+    expect(Object.keys(properties).toSorted()).toEqual(["actions", "kind", "origin", "review"])
   }
 })

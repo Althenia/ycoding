@@ -221,7 +221,7 @@ describe("Auto permissions apply only the deterministic rule", () => {
         yield* setup()
         yield* setPermissions("auto")
         const service = yield* Permission.Service
-        const fiber = yield* service.assert(request({ requireHuman: true })).pipe(Effect.forkScoped)
+        const fiber = yield* service.assert(request({ requireExplicitDecision: true })).pipe(Effect.forkScoped)
         const pending = yield* waitForPending
         expect(pending).not.toHaveProperty("escalation")
         yield* service.reply({ requestID: pending.id, reply: "reject" })
@@ -401,7 +401,7 @@ describe("YOLO permissions use only the hidden permission evaluator", () => {
       yield* setup()
       yield* setPermissions("yolo")
       const service = yield* Permission.Service
-      const fiber = yield* service.assert(request({ requireHuman: true })).pipe(Effect.forkScoped)
+      const fiber = yield* service.assert(request({ requireExplicitDecision: true })).pipe(Effect.forkScoped)
       const pending = yield* waitForPending
       yield* service.reply({ requestID: pending.id, reply: "reject" })
       expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)

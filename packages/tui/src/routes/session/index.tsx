@@ -5141,7 +5141,7 @@ function Question(props: ToolProps) {
                   <text fg={timedOut() ? theme.text.feedback.warning.default : theme.text.default}>
                     {format(answers()?.[i()])}
                   </text>
-                  <FormAssessment value={props.metadata.assessment} source={props.metadata.source} fieldKey={`q${i()}`} grades multiple={q.multiple === true} settled={answers()?.[i()]?.length ? props.metadata.automatic === true ? "automatic" : "human" : undefined} />
+                  <FormAssessment value={props.metadata.assessment} source={props.metadata.source} fieldKey={`q${i()}`} grades multiple={q.multiple === true} settled={answers()?.[i()]?.length ? props.metadata.automatic === true ? "automatic" : "client" : undefined} />
                 </box>
               )}
             </For>

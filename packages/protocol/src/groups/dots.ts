@@ -38,6 +38,38 @@ export function makeDotsGroup<Id extends HttpApiMiddleware.AnyId, Service>(middl
       }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.delegation.revoke", summary: "Revoke a task delegation for future admissions" })),
     )
     .add(
+      HttpApiEndpoint.post("session.dots.delegation.device.create", "/api/session/:sessionID/dots/delegation/device", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ ...Dots.DeviceDelegationCreate.fields, remoteSource: McpEvents.RequestContext }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+        success: Schema.Struct({ data: Dots.DeviceDelegationInfo }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.delegation.device.create", summary: "Create a device-wide Dots delegation for the authenticated OAuth client" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.delegation.device.read", "/api/session/:sessionID/dots/delegation/device/read", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ ...Dots.DeviceDelegationRead.fields, remoteSource: McpEvents.RequestContext }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+        success: Schema.Struct({ data: Dots.DeviceDelegationStatus }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.delegation.device.read", summary: "Read authenticated device-wide Dots delegations" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.delegation.device.revoke", "/api/session/:sessionID/dots/delegation/device/revoke", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ ...Dots.DeviceDelegationRevoke.fields, remoteSource: McpEvents.RequestContext }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+        success: Schema.Struct({ data: Dots.DeviceDelegationInfo }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.delegation.device.revoke", summary: "Revoke an authenticated device-wide Dots delegation" })),
+    )
+    .add(
+      HttpApiEndpoint.post("session.dots.decisions.list", "/api/session/:sessionID/dots/decisions/list", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ ...Dots.DecisionsList.fields, remoteSource: McpEvents.RequestContext }).annotate({ parseOptions: { onExcessProperty: "error" } }),
+        success: Schema.Struct({ data: Dots.DecisionsPage }),
+        error: [InvalidRequestError, SessionNotFoundError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "session.dots.decisions.list", summary: "List exact pending native decisions within an authenticated device delegation" })),
+    )
+    .add(
       HttpApiEndpoint.post("session.dots.exchange.read", "/api/session/:sessionID/dots/exchanges/read", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ ...Dots.ExchangeRead.fields, remoteSource: McpEvents.RequestContext }),

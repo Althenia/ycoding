@@ -77,7 +77,7 @@ test("escalation chains carry one to four bounded per-Session reasons on live re
 
   const fingerprint = "a".repeat(64)
   for (const payload of [
-    { type: "permission", action: "read", resources: [], fingerprint, requestID: "per_one" },
+    { type: "permission", action: "read", resources: [], fingerprint, fingerprintVersion: 2, requestID: "per_one" },
     { type: "guardrail", action: "edit", resources: [], ruleIDs: [], reason: "r", hardReview: false, directories: [], fingerprint, requestID: "grq_one" },
     { type: "form", title: "Pick", fields: form.fields },
   ]) {

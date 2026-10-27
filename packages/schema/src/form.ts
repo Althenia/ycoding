@@ -2,6 +2,7 @@ export * as Form from "./form.js"
 
 import { Schema } from "effect"
 import { Coordination } from "./coordination.js"
+import { McpEvents } from "./mcp-events.js"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
 import { NonNegativeInt, optional, PositiveInt, statics } from "./schema.js"
@@ -197,6 +198,20 @@ export const DelegatedReplySource = Schema.Struct({
 }).annotate({ identifier: "Form.DelegatedReplySource" })
 export interface DelegatedReplySource extends Schema.Schema.Type<typeof DelegatedReplySource> {}
 
+export const DotsClientReplySource = Schema.Struct({
+  kind: Schema.Literal("dots-client"),
+  anchorSessionID: SessionID,
+  bindingID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+  delegationID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+  revision: PositiveInt,
+  exchangeID: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
+  principal: McpEvents.Principal,
+}).annotate({ identifier: "Form.DotsClientReplySource" })
+export interface DotsClientReplySource extends Schema.Schema.Type<typeof DotsClientReplySource> {}
+
+export const ExternalReplySource = Schema.Union([DelegatedReplySource, DotsClientReplySource]).annotate({ identifier: "Form.ExternalReplySource" })
+export type ExternalReplySource = typeof ExternalReplySource.Type
+
 export const ReplySource = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("coordinator"),
@@ -206,7 +221,7 @@ export const ReplySource = Schema.Union([
     confidence: Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 })).pipe(optional),
     rationale: Schema.String.check(Schema.isMaxLength(500), Schema.isPattern(/\S/)).pipe(optional),
   }),
-  DelegatedReplySource,
+  ExternalReplySource,
 ]).annotate({ identifier: "Form.ReplySource" })
 export type ReplySource = typeof ReplySource.Type
 

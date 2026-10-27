@@ -81,14 +81,14 @@ it.effect("renders terminal goals as visible Session-state reminders", () =>
   }),
 )
 
-it.effect("reminds an active goal's agent of each category's decision mode and the human-only gates", () =>
+it.effect("reminds an active goal's agent of each category's decision mode and the explicit-decision gates", () =>
   Effect.sync(() => {
     const goal = { text: "Finish the bounded task", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 } as const
     const reminder = goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "manual", goal })
     expect(reminder).toContain("This Session's effective answers mode is Manual")
     expect(reminder).toContain("The autonomy modes above are effective")
-    expect(reminder).toContain("Manual sends unresolved requests to a human with no model assessment")
-    expect(reminder).toContain("Approval of a hard or custom-rule guardrail review always requires a human")
+    expect(reminder).toContain("Manual sends unresolved requests to the user's decision surface with no model assessment")
+    expect(reminder).toContain("Approval of a hard or custom-rule guardrail review always requires an explicit client decision")
     expect(reminder).toContain("a child Session's questions go to its parent Session.")
     expect(reminder).toContain("Goals do not override these gates.")
     expect(goalReminder({ mode: "normal", permissions: "manual", guardrails: "manual", answers: "auto", goal })).toContain("This Session's effective answers mode is Auto")

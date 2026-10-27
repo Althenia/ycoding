@@ -2285,75 +2285,139 @@ export type DotsDelegationRevokeOperation<E = never> = (
   input: Endpoint40_3Input,
 ) => Effect.Effect<Endpoint40_3Output, E>
 
-type Endpoint40_4Request = Parameters<RawClient["server.dots"]["session.dots.exchange.read"]>[0]
+type Endpoint40_4Request = Parameters<RawClient["server.dots"]["session.dots.delegation.device.create"]>[0]
 export type Endpoint40_4Input = {
   readonly sessionID: Endpoint40_4Request["params"]["sessionID"]
+  readonly id: Endpoint40_4Request["payload"]["id"]
   readonly exchangeID: Endpoint40_4Request["payload"]["exchangeID"]
+  readonly bindingID: Endpoint40_4Request["payload"]["bindingID"]
+  readonly expectedAttachment: Endpoint40_4Request["payload"]["expectedAttachment"]
+  readonly scope: Endpoint40_4Request["payload"]["scope"]
   readonly remoteSource: Endpoint40_4Request["payload"]["remoteSource"]
 }
-export type Endpoint40_4Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.exchange.read"]>>["data"]
-export type DotsExchangeReadOperation<E = never> = (input: Endpoint40_4Input) => Effect.Effect<Endpoint40_4Output, E>
+export type Endpoint40_4Output = EffectValue<
+  ReturnType<RawClient["server.dots"]["session.dots.delegation.device.create"]>
+>["data"]
+export type DotsDelegationDeviceCreateOperation<E = never> = (
+  input: Endpoint40_4Input,
+) => Effect.Effect<Endpoint40_4Output, E>
 
-type Endpoint40_5Request = Parameters<RawClient["server.dots"]["session.dots.targets"]>[0]
+type Endpoint40_5Request = Parameters<RawClient["server.dots"]["session.dots.delegation.device.read"]>[0]
 export type Endpoint40_5Input = {
   readonly sessionID: Endpoint40_5Request["params"]["sessionID"]
-  readonly profile: Endpoint40_5Request["query"]["profile"]
+  readonly cursor?: Endpoint40_5Request["payload"]["cursor"]
+  readonly limit?: Endpoint40_5Request["payload"]["limit"]
+  readonly remoteSource: Endpoint40_5Request["payload"]["remoteSource"]
 }
-export type Endpoint40_5Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.targets"]>>["data"]
-export type DotsTargetsOperation<E = never> = (input: Endpoint40_5Input) => Effect.Effect<Endpoint40_5Output, E>
+export type Endpoint40_5Output = EffectValue<
+  ReturnType<RawClient["server.dots"]["session.dots.delegation.device.read"]>
+>["data"]
+export type DotsDelegationDeviceReadOperation<E = never> = (
+  input: Endpoint40_5Input,
+) => Effect.Effect<Endpoint40_5Output, E>
 
-type Endpoint40_6Request = Parameters<RawClient["server.dots"]["session.dots.status"]>[0]
-export type Endpoint40_6Input = { readonly sessionID: Endpoint40_6Request["params"]["sessionID"] }
-export type Endpoint40_6Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.status"]>>["data"]
-export type DotsStatusOperation<E = never> = (input: Endpoint40_6Input) => Effect.Effect<Endpoint40_6Output, E>
+type Endpoint40_6Request = Parameters<RawClient["server.dots"]["session.dots.delegation.device.revoke"]>[0]
+export type Endpoint40_6Input = {
+  readonly sessionID: Endpoint40_6Request["params"]["sessionID"]
+  readonly id: Endpoint40_6Request["payload"]["id"]
+  readonly revision: Endpoint40_6Request["payload"]["revision"]
+  readonly exchangeID: Endpoint40_6Request["payload"]["exchangeID"]
+  readonly bindingID: Endpoint40_6Request["payload"]["bindingID"]
+  readonly expectedAttachment: Endpoint40_6Request["payload"]["expectedAttachment"]
+  readonly remoteSource: Endpoint40_6Request["payload"]["remoteSource"]
+}
+export type Endpoint40_6Output = EffectValue<
+  ReturnType<RawClient["server.dots"]["session.dots.delegation.device.revoke"]>
+>["data"]
+export type DotsDelegationDeviceRevokeOperation<E = never> = (
+  input: Endpoint40_6Input,
+) => Effect.Effect<Endpoint40_6Output, E>
 
-type Endpoint40_7Request = Parameters<RawClient["server.dots"]["session.dots.bind"]>[0]
+type Endpoint40_7Request = Parameters<RawClient["server.dots"]["session.dots.decisions.list"]>[0]
 export type Endpoint40_7Input = {
   readonly sessionID: Endpoint40_7Request["params"]["sessionID"]
-  readonly profile: Endpoint40_7Request["payload"]["profile"]
-  readonly dotID: Endpoint40_7Request["payload"]["dotID"]
-  readonly threadID: Endpoint40_7Request["payload"]["threadID"]
-  readonly generation: Endpoint40_7Request["payload"]["generation"]
-  readonly label: Endpoint40_7Request["payload"]["label"]
+  readonly bindingID: Endpoint40_7Request["payload"]["bindingID"]
+  readonly expectedAttachment: Endpoint40_7Request["payload"]["expectedAttachment"]
+  readonly delegation: Endpoint40_7Request["payload"]["delegation"]
+  readonly targetSessionID?: Endpoint40_7Request["payload"]["targetSessionID"]
+  readonly cursor?: Endpoint40_7Request["payload"]["cursor"]
+  readonly limit?: Endpoint40_7Request["payload"]["limit"]
+  readonly remoteSource: Endpoint40_7Request["payload"]["remoteSource"]
 }
-export type Endpoint40_7Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.bind"]>>["data"]
-export type DotsBindOperation<E = never> = (input: Endpoint40_7Input) => Effect.Effect<Endpoint40_7Output, E>
+export type Endpoint40_7Output = EffectValue<
+  ReturnType<RawClient["server.dots"]["session.dots.decisions.list"]>
+>["data"]
+export type DotsDecisionsListOperation<E = never> = (input: Endpoint40_7Input) => Effect.Effect<Endpoint40_7Output, E>
 
-type Endpoint40_8Request = Parameters<RawClient["server.dots"]["session.dots.send"]>[0]
+type Endpoint40_8Request = Parameters<RawClient["server.dots"]["session.dots.exchange.read"]>[0]
 export type Endpoint40_8Input = {
   readonly sessionID: Endpoint40_8Request["params"]["sessionID"]
-  readonly id: Endpoint40_8Request["payload"]["id"]
-  readonly text: Endpoint40_8Request["payload"]["text"]
-  readonly files?: Endpoint40_8Request["payload"]["files"]
-  readonly causalMessageID?: Endpoint40_8Request["payload"]["causalMessageID"]
-  readonly expectedTarget: Endpoint40_8Request["payload"]["expectedTarget"]
+  readonly exchangeID: Endpoint40_8Request["payload"]["exchangeID"]
+  readonly remoteSource: Endpoint40_8Request["payload"]["remoteSource"]
 }
-export type Endpoint40_8Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.send"]>>["data"]
-export type DotsSendOperation<E = never> = (input: Endpoint40_8Input) => Effect.Effect<Endpoint40_8Output, E>
+export type Endpoint40_8Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.exchange.read"]>>["data"]
+export type DotsExchangeReadOperation<E = never> = (input: Endpoint40_8Input) => Effect.Effect<Endpoint40_8Output, E>
 
-type Endpoint40_9Request = Parameters<RawClient["server.dots"]["session.dots.pause"]>[0]
+type Endpoint40_9Request = Parameters<RawClient["server.dots"]["session.dots.targets"]>[0]
 export type Endpoint40_9Input = {
   readonly sessionID: Endpoint40_9Request["params"]["sessionID"]
-  readonly expectedTarget: Endpoint40_9Request["payload"]["expectedTarget"]
+  readonly profile: Endpoint40_9Request["query"]["profile"]
 }
-export type Endpoint40_9Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.pause"]>>["data"]
-export type DotsPauseOperation<E = never> = (input: Endpoint40_9Input) => Effect.Effect<Endpoint40_9Output, E>
+export type Endpoint40_9Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.targets"]>>["data"]
+export type DotsTargetsOperation<E = never> = (input: Endpoint40_9Input) => Effect.Effect<Endpoint40_9Output, E>
 
-type Endpoint40_10Request = Parameters<RawClient["server.dots"]["session.dots.resume"]>[0]
-export type Endpoint40_10Input = {
-  readonly sessionID: Endpoint40_10Request["params"]["sessionID"]
-  readonly expectedTarget: Endpoint40_10Request["payload"]["expectedTarget"]
-}
-export type Endpoint40_10Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.resume"]>>["data"]
-export type DotsResumeOperation<E = never> = (input: Endpoint40_10Input) => Effect.Effect<Endpoint40_10Output, E>
+type Endpoint40_10Request = Parameters<RawClient["server.dots"]["session.dots.status"]>[0]
+export type Endpoint40_10Input = { readonly sessionID: Endpoint40_10Request["params"]["sessionID"] }
+export type Endpoint40_10Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.status"]>>["data"]
+export type DotsStatusOperation<E = never> = (input: Endpoint40_10Input) => Effect.Effect<Endpoint40_10Output, E>
 
-type Endpoint40_11Request = Parameters<RawClient["server.dots"]["session.dots.unbind"]>[0]
+type Endpoint40_11Request = Parameters<RawClient["server.dots"]["session.dots.bind"]>[0]
 export type Endpoint40_11Input = {
   readonly sessionID: Endpoint40_11Request["params"]["sessionID"]
-  readonly expectedTarget: Endpoint40_11Request["payload"]["expectedTarget"]
+  readonly profile: Endpoint40_11Request["payload"]["profile"]
+  readonly dotID: Endpoint40_11Request["payload"]["dotID"]
+  readonly threadID: Endpoint40_11Request["payload"]["threadID"]
+  readonly generation: Endpoint40_11Request["payload"]["generation"]
+  readonly label: Endpoint40_11Request["payload"]["label"]
 }
-export type Endpoint40_11Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.unbind"]>>["data"]
-export type DotsUnbindOperation<E = never> = (input: Endpoint40_11Input) => Effect.Effect<Endpoint40_11Output, E>
+export type Endpoint40_11Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.bind"]>>["data"]
+export type DotsBindOperation<E = never> = (input: Endpoint40_11Input) => Effect.Effect<Endpoint40_11Output, E>
+
+type Endpoint40_12Request = Parameters<RawClient["server.dots"]["session.dots.send"]>[0]
+export type Endpoint40_12Input = {
+  readonly sessionID: Endpoint40_12Request["params"]["sessionID"]
+  readonly id: Endpoint40_12Request["payload"]["id"]
+  readonly text: Endpoint40_12Request["payload"]["text"]
+  readonly files?: Endpoint40_12Request["payload"]["files"]
+  readonly causalMessageID?: Endpoint40_12Request["payload"]["causalMessageID"]
+  readonly expectedTarget: Endpoint40_12Request["payload"]["expectedTarget"]
+}
+export type Endpoint40_12Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.send"]>>["data"]
+export type DotsSendOperation<E = never> = (input: Endpoint40_12Input) => Effect.Effect<Endpoint40_12Output, E>
+
+type Endpoint40_13Request = Parameters<RawClient["server.dots"]["session.dots.pause"]>[0]
+export type Endpoint40_13Input = {
+  readonly sessionID: Endpoint40_13Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_13Request["payload"]["expectedTarget"]
+}
+export type Endpoint40_13Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.pause"]>>["data"]
+export type DotsPauseOperation<E = never> = (input: Endpoint40_13Input) => Effect.Effect<Endpoint40_13Output, E>
+
+type Endpoint40_14Request = Parameters<RawClient["server.dots"]["session.dots.resume"]>[0]
+export type Endpoint40_14Input = {
+  readonly sessionID: Endpoint40_14Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_14Request["payload"]["expectedTarget"]
+}
+export type Endpoint40_14Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.resume"]>>["data"]
+export type DotsResumeOperation<E = never> = (input: Endpoint40_14Input) => Effect.Effect<Endpoint40_14Output, E>
+
+type Endpoint40_15Request = Parameters<RawClient["server.dots"]["session.dots.unbind"]>[0]
+export type Endpoint40_15Input = {
+  readonly sessionID: Endpoint40_15Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_15Request["payload"]["expectedTarget"]
+}
+export type Endpoint40_15Output = EffectValue<ReturnType<RawClient["server.dots"]["session.dots.unbind"]>>["data"]
+export type DotsUnbindOperation<E = never> = (input: Endpoint40_15Input) => Effect.Effect<Endpoint40_15Output, E>
 
 export interface DotsApi<E = never> {
   readonly exchange: { readonly create: DotsExchangeCreateOperation<E>; readonly read: DotsExchangeReadOperation<E> }
@@ -2361,7 +2425,13 @@ export interface DotsApi<E = never> {
     readonly status: DotsDelegationStatusOperation<E>
     readonly create: DotsDelegationCreateOperation<E>
     readonly revoke: DotsDelegationRevokeOperation<E>
+    readonly device: {
+      readonly create: DotsDelegationDeviceCreateOperation<E>
+      readonly read: DotsDelegationDeviceReadOperation<E>
+      readonly revoke: DotsDelegationDeviceRevokeOperation<E>
+    }
   }
+  readonly decisions: { readonly list: DotsDecisionsListOperation<E> }
   readonly targets: DotsTargetsOperation<E>
   readonly status: DotsStatusOperation<E>
   readonly bind: DotsBindOperation<E>

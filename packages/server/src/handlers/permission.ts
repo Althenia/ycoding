@@ -88,7 +88,6 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
             .reply({
               requestID: ctx.params.requestID,
               reply: "reject",
-              rejectScope: "request",
               message: ctx.payload.message,
             })
             .pipe(Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)))

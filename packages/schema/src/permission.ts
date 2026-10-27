@@ -58,7 +58,8 @@ const Deferred = ephemeral({
   type: "permission.deferred",
   schema: { sessionID: SessionID, requestID: ID, itemID: SessionReviewID },
 })
-export const Event = { Asked, Replied, Deferred, Definitions: inventory(Asked, Replied, Deferred) }
+const Cancelled = ephemeral({ type: "permission.cancelled", schema: { sessionID: SessionID, requestID: ID } })
+export const Event = { Asked, Replied, Deferred, Cancelled, Definitions: inventory(Asked, Replied, Deferred, Cancelled) }
 
 export const Effect = Schema.Literals(["allow", "deny", "ask"]).annotate({ identifier: "Permission.Effect" })
 export type Effect = typeof Effect.Type

@@ -356,7 +356,7 @@ describe("Agent", () => {
         Effect.provideService(Location.Service, Location.Service.of(testLocation)),
       )
       const native = [
-        "Manual: human-only; no helper assessment or match verification",
+        "Manual: requires an explicit decision; no helper assessment or match verification",
         "Auto: deterministic rules only, no model fallback",
         "permissions inherit Auto across managed-task ancestry",
         "guardrails use the root family's mode",
@@ -366,8 +366,8 @@ describe("Agent", () => {
         "allow, deny or escalate",
         "guardrails.decide_reviews", "unless explicitly false", "confidence ≥0.9",
         "denies and custom rules are never verified",
-        "Hard and custom-rule approval is human-only",
-        "awake, ask the human; asleep, defer to the review box",
+        "Hard and custom-rule reviews require explicit client approval",
+        "awake, ask the user; asleep, defer to the review box",
         "Goals and sleep grant no permission, answer or review authority",
         "do not retry deferred actions", "normal choices and attribution",
         "/autonomous", "Only the user creates, replaces or resumes a goal",
@@ -599,7 +599,7 @@ describe("Agent", () => {
         expect(evaluator.system).toContain("exactly one JSON document")
         expect(evaluator.system).toContain("latest explicit user instructions")
         expect(evaluator.system).toContain("reversible implementation choices")
-        expect(evaluator.system).toContain("required human confirmation")
+        expect(evaluator.system).toContain("required explicit decisions")
         expect(evaluator.system).toContain("never human approval")
         expect(evaluator.system).toContain("Never approve actions beyond the supplied request, grant permission, certify completion, change an objective, or use tools.")
       }
@@ -654,13 +654,13 @@ describe("Agent", () => {
       const answer = yield* agent.get(Agent.ID.make("yolo-answer"))
       const decision = yield* agent.get(Agent.ID.make("decision"))
       expect(permission?.system).toContain("An ask rule is a request for assessment, not an explicit denial")
-      expect(permission?.system).toContain("Never reinterpret a denial, ceiling or requireHuman gate as an ask")
-      expect(guardrail?.system).toContain("A true hard or custom-rule review is human-only")
+      expect(permission?.system).toContain("Never reinterpret a denial, ceiling or requireExplicitDecision gate as an ask")
+      expect(guardrail?.system).toContain("A true hard or custom-rule review requires explicit client approval")
       expect(guardrail?.system).toContain("prior task consent cannot settle that native review")
       expect(guardrail?.system).toContain("A non-match is not approval of the action or of another rule")
       expect(answer?.system).toContain("A missing recommendation is not a missing fact")
       expect(answer?.system).toContain("Refuse an obsolete question rather than reviving a cancelled operation")
-      expect(answer?.system).toContain("Never answer a consent question on the human's behalf")
+      expect(answer?.system).toContain("Never answer a consent question on the client's behalf")
       expect(decision?.system).not.toContain("Purpose: permission review")
       expect(decision?.system).not.toContain("Read taskContext by source and chronology")
     }),

@@ -168,7 +168,7 @@ describe("Session.prompt", () => {
         },
       })
       expect(result.data.text).toBe(prefix + "Task text")
-      expect(result.data.metadata).toEqual({ requestTag: "ordinary-input", inputOrigin: "human" })
+      expect(result.data.metadata).toEqual({ requestTag: "ordinary-input", inputOrigin: "direct" })
     }),
   )
 
@@ -909,7 +909,7 @@ describe("Session.prompt", () => {
 
       expect(retried).toEqual(first)
       expect(reused).toEqual(first)
-      expect(first.data.metadata).toEqual({ source: "api", inputOrigin: "human" })
+      expect(first.data.metadata).toEqual({ source: "api", inputOrigin: "direct" })
     }),
   )
 

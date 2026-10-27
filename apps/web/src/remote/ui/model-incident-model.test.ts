@@ -48,5 +48,5 @@ test("guidance indicator states enabled or disabled in words and keeps cleared t
 
 test("kind and decider labels cover every incident source", () => {
   expect(incidentKindLabel).toEqual({ fallback: "Fallback", "guardrail-escalated": "Guardrail escalated", "guardrail-rejected": "Guardrail rejected" })
-  expect(decidedByLabel).toEqual({ "decision-model": "Decision model", human: "Human" })
+  expect(decidedByLabel).toEqual({ "decision-model": "Decision model", client: "Client" })
 })

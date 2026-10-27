@@ -87,6 +87,7 @@ export function validateAnswers(
       if (question.custom === false) return `Answer is not one of the options for question: ${question.header}`
     }
   }
+  return undefined
 }
 
 const RECOMMENDED = / \(Recommended\)$/
@@ -108,10 +109,11 @@ export function fingerprint(request: Pick<Request, "sessionID" | "questions">) {
 }
 
 export interface DelegatedReplyInput {
+  readonly explicitDecision?: true
   readonly requestID: ID
   readonly answers: ReadonlyArray<Answer>
   readonly fingerprint: string
-  readonly source: Form.DelegatedReplySource
+  readonly source: Form.ExternalReplySource
   readonly validate: (request: Request) => Effect.Effect<boolean>
 }
 
@@ -121,6 +123,7 @@ export interface ReplyInput {
 }
 
 export interface Interface {
+  readonly rejectDelegated: (input: Omit<DelegatedReplyInput, "answers" | "source"> & { readonly source: Form.DotsClientReplySource }) => Effect.Effect<void, NotFoundError>
   readonly ask: (input: AskInput) => Effect.Effect<Outcome, RejectedError | SessionReviewFold.FullError>
   readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | InvalidAnswerError>
@@ -417,21 +420,34 @@ const layer = Layer.effect(
             return yield* new NotFoundError({ requestID: input.requestID })
           const invalid = validateAnswers(existing.request.questions, input.answers)
           if (invalid) return yield* new InvalidAnswerError({ requestID: input.requestID, message: invalid })
-          yield* events.publish(Event.Replied, {
-            sessionID: existing.request.sessionID,
-            requestID: existing.request.id,
-            answers: input.answers.map((answer) => [...answer]),
-          })
-          yield* events.publish(SessionEvent.DotsDecisionSettled, {
+          const committed = yield* events.publishBatch([{ definition: SessionEvent.DotsDecisionSettled, data: {
             sessionID: existing.request.sessionID,
             source: input.source,
             target: { kind: "question", requestID: existing.request.id, fingerprint: input.fingerprint },
-          })
-          yield* Deferred.succeed(existing.deferred, { status: "answered", answers: input.answers, source: input.source })
-          pending.delete(input.requestID)
+          } }], { when: input.validate(existing.request) })
+          if (committed.length === 0) return yield* new NotFoundError({ requestID: input.requestID })
+          yield* events.publish(Event.Replied, { sessionID: existing.request.sessionID, requestID: existing.request.id, answers: input.answers.map((answer) => [...answer]) }).pipe(Effect.ensuring(Effect.gen(function* () {
+            pending.delete(input.requestID)
+            yield* Deferred.succeed(existing.deferred, { status: "answered", answers: input.answers, source: input.source })
+          })))
         }),
       ),
     )
+
+    const rejectDelegated: Interface["rejectDelegated"] = (input) => exclusive(Effect.gen(function* () {
+      const existing = pending.get(input.requestID)
+      if (!input.explicitDecision || !existing || fingerprint(existing.request) !== input.fingerprint || !(yield* input.validate(existing.request)))
+        return yield* new NotFoundError({ requestID: input.requestID })
+      const committed = yield* events.publishBatch([{ definition: SessionEvent.DotsDecisionSettled, data: {
+        sessionID: existing.request.sessionID, source: input.source,
+        target: { kind: "question", requestID: existing.request.id, fingerprint: input.fingerprint },
+      } }], { when: input.validate(existing.request) })
+      if (committed.length === 0) return yield* new NotFoundError({ requestID: input.requestID })
+      return yield* events.publish(Event.Rejected, { sessionID: existing.request.sessionID, requestID: existing.request.id }).pipe(Effect.ensuring(Effect.gen(function* () {
+        pending.delete(input.requestID)
+        yield* Deferred.fail(existing.deferred, new RejectedError())
+      })), Effect.asVoid)
+    }))
 
     const reject = Effect.fn("Question.reject")((requestID: ID) =>
       exclusive(
@@ -466,7 +482,7 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request)
     })
 
-    return Service.of({ ask, deferPending, reply, replyDelegated, reject, cancelPending, list })
+    return Service.of({ ask, deferPending, reply, replyDelegated, rejectDelegated, reject, cancelPending, list })
   }),
 )
 

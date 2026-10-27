@@ -4,6 +4,7 @@ import { SessionUsageAttribution } from "./usage-attribution"
 import type { Model } from "@ycoding-ai/schema/model"
 import { ModelSwitchBlocked } from "@ycoding-ai/schema/session"
 import { SessionReview } from "@ycoding-ai/schema/session-review"
+import { Form } from "@ycoding-ai/schema/form"
 import {
   Question,
   QuestionID,
@@ -53,6 +54,23 @@ const PageSize = 10
 type DatabaseService = Database.Interface["db"]
 export { truncateUtf8 }
 export const failureText = (input: string) => truncateUtf8(input, 16 * 1024)
+
+export interface DotsSettlement {
+  readonly explicitDecision?: true
+  readonly source: Form.DotsClientReplySource
+  readonly fingerprint: string
+  readonly validate: () => Effect.Effect<boolean>
+  readonly target?: { readonly kind: "review"; readonly itemID: SessionReview.ID; readonly fingerprint: string }
+}
+
+export function questionFingerprint(task: Task) {
+  return Hash.json({
+    sessionID: task.sessionID, parentID: task.parentID, description: task.description, agent: task.agent,
+    model: task.model, background: task.background, state: task.state, revision: task.revision,
+    progress: task.progress, time: task.time,
+    question: task.question === undefined ? undefined : { id: task.question.id, text: task.question.text, data: task.question.data, time: task.question.time },
+  })
+}
 
 export const selectModel = (
   spawn: Model.Ref | undefined,
@@ -352,6 +370,7 @@ export interface Interface {
     readonly source: { readonly type: "native" } | ({ readonly type: "tool" } & ModelSource)
   }) => Effect.Effect<Task, ControlError | InvalidRequestError | ModelBlockedError | SessionRunnerModel.Error | Session.MessageDecodeError | Session.CompactionConflictError | Permission.Error>
   readonly list: (parentID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Task>, Session.NotFoundError>
+  readonly questionSnapshots: (parentID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<{ readonly task: Task; readonly fingerprint: string }>, Session.NotFoundError>
   readonly page: (input: {
     readonly parentID: SessionSchema.ID
     readonly limit?: number
@@ -370,7 +389,8 @@ export interface Interface {
     readonly questionID: QuestionID
     readonly text?: string
     readonly data?: Schema.Json
-    readonly origin?: "human-review"
+    readonly origin?: "review" | "dots-review"
+    readonly dots?: DotsSettlement
     readonly reviewDecision?: { readonly itemID: SessionReview.ID; readonly decision: SessionReview.Decision }
   }) => Effect.Effect<Task, AnswerError>
   readonly cancel: (input: {
@@ -411,6 +431,7 @@ export interface Interface {
     readonly childID: SessionSchema.ID
     readonly itemID: SessionReview.ID
     readonly choice: "continue" | "stop"
+    readonly dots?: DotsSettlement
   }) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
 }
 
@@ -582,7 +603,7 @@ const layer = Layer.effect(
       if (!input) return false
       const decoded = Schema.decodeUnknownOption(SessionMessage.User)({ ...input.data, id: input.id, type: input.type })
       if (decoded._tag === "None") return false
-      if (decoded.value.metadata?.inputOrigin === "human") return true
+      if (decoded.value.metadata?.inputOrigin === "direct") return true
       if (decoded.value.metadata?.inputOrigin !== "subagent") return false
       const child = yield* task(sessionID)
       if (!child) return false
@@ -607,6 +628,10 @@ const layer = Layer.effect(
     })
 
     const result: Interface = {
+      questionSnapshots: Effect.fn("SessionOrchestration.questionSnapshots")(function* (parentID) {
+        return (yield* result.list(parentID)).filter((task) => task.state === "waiting" && task.question !== undefined && !task.question.deferred)
+          .map((task) => ({ task, fingerprint: questionFingerprint(task) }))
+      }),
       switchModel: Effect.fn("SessionOrchestration.switchModel")((input) =>
         stepBoundary.withSelection(input.childID, execution.withTransition(input.childID, Effect.gen(function* () {
           yield* switchable(input)
@@ -826,10 +851,27 @@ const layer = Layer.effect(
               return yield* new QuestionNotFoundError({ childID: input.childID, questionID: input.questionID })
             if (row.state !== "waiting")
               return yield* new ConflictError({ message: `Question ${input.questionID} is not open` })
-            if (input.origin === "human-review" && input.reviewDecision === undefined)
-              return yield* new InvalidRequestError({ message: "A human-review delivery requires a review decision" })
+            const dots = input.dots
+            const exact = Effect.gen(function* () {
+              const latest = yield* task(input.childID)
+              if (!latest || latest.revision !== row.revision || latest.question_id !== input.questionID || latest.state !== "waiting") return false
+              const owner = yield* db.select({ archived: SessionTable.time_archived }).from(SessionTable).where(eq(SessionTable.id, input.childID)).get().pipe(Effect.orDie)
+              if (!owner || owner.archived !== null) return false
+              if (!dots) return true
+              if (!dots.explicitDecision) return false
+              if (dots.target) {
+                if (dots.target.fingerprint !== dots.fingerprint || dots.target.itemID !== input.reviewDecision?.itemID) return false
+                const review = (yield* SessionReviewFold.fold(db, [input.childID])).find((item) => item.itemID === dots.target?.itemID)
+                if (!review || SessionReviewFold.pendingFingerprint(review) !== dots.fingerprint) return false
+              } else if (questionFingerprint(yield* current(input.childID)) !== dots.fingerprint || (yield* SessionReviewFold.ownsQuestion(db, input.childID, input.questionID))) return false
+              return yield* dots.validate()
+            })
+            if (dots && !(yield* exact)) return yield* new ConflictError({ message: "Dots child question authorization changed" })
+            if (input.origin === "dots-review" && (!dots || !input.reviewDecision)) return yield* new InvalidRequestError({ message: "Dots review delivery requires validated provenance and decision" })
+            if (input.origin === "review" && input.reviewDecision === undefined)
+              return yield* new InvalidRequestError({ message: "Review delivery requires a review decision" })
             if (
-              input.origin !== "human-review" &&
+              input.origin !== "review" && input.origin !== "dots-review" &&
               (yield* SessionReviewFold.ownsQuestion(db, input.childID, input.questionID))
             )
               return yield* new ConflictError({ message: `question ${input.questionID} awaits the user's review` })
@@ -842,20 +884,21 @@ const layer = Layer.effect(
             ).answer(input.questionID)
             const causedBy = yield* SessionUsageAttribution.dispatch(db, input.parentID)
             const data = {
-              text: `Parent answer:\n${JSON.stringify({ questionID: input.questionID, text: input.text, data: input.data })}`,
-              description: "Parent subagent answer",
+              text: `${dots ? "Authenticated Dots client" : "Parent"} answer:\n${JSON.stringify({ questionID: input.questionID, text: input.text, data: input.data })}`,
+              description: dots ? "Dots subagent answer" : "Parent subagent answer",
               metadata: {
                 source: "subagent_parent",
                 parentID: input.parentID,
                 childID: input.childID,
                 kind: "answer",
                 questionID: input.questionID,
+                ...(dots === undefined ? {} : { dotsSource: dots.source }),
               },
             }
-            const change = { type: "question_answered" as const, answer: { questionID: input.questionID, text: input.text, data: input.data } }
+            const change = { type: "question_answered" as const, answer: { questionID: input.questionID, text: input.text, data: input.data, ...(dots === undefined ? {} : { source: dots.source }) } }
             const review = input.reviewDecision
             if (review) {
-              if (input.origin !== "human-review") return yield* new InvalidRequestError({ message: "A review decision requires human-review delivery" })
+              if (input.origin !== "review" && input.origin !== "dots-review") return yield* new InvalidRequestError({ message: "A review decision requires review delivery" })
               const item = (yield* SessionReviewFold.fold(db, [input.childID])).find((item) => item.itemID === review.itemID)
               const matches = (item: SessionReviewFold.Folded | undefined) => item?.kind === "subagent_question" && item.withdrawn === undefined &&
                 "questionID" in item.origin && item.origin.questionID === input.questionID &&
@@ -872,8 +915,11 @@ const layer = Layer.effect(
                   input: SessionPending.Message.make({ type: "synthetic", data, delivery: "steer" }) } }] : []),
                 { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change } },
                 ...(item?.decision === undefined ? [{ definition: SessionEvent.Review.Decided,
-                  data: { sessionID: input.childID, itemID: review.itemID, decision: review.decision } }] : []),
+                  data: { sessionID: input.childID, itemID: review.itemID, decision: review.decision, ...(dots === undefined ? {} : { source: dots.source }) } }] : []),
+                ...(dots === undefined ? [] : [{ definition: SessionEvent.DotsDecisionSettled, data: { sessionID: input.childID, source: dots.source,
+                  target: dots.target ?? { kind: "subagent_question" as const, questionID: input.questionID, fingerprint: dots.fingerprint } } }]),
               ], { when: Effect.gen(function* () {
+                if (!(yield* exact)) return false
                 const latest = yield* task(input.childID)
                 if (latest?.state !== "waiting" || latest.question_id !== input.questionID) return false
                 const owner = yield* db.select({ archived: SessionTable.time_archived }).from(SessionTable).where(eq(SessionTable.id, input.childID)).get().pipe(Effect.orDie)
@@ -886,6 +932,18 @@ const layer = Layer.effect(
                 return admitted === undefined || (admitted.type === "synthetic" && Hash.json({ data: admitted.data, delivery: admitted.delivery }) === Hash.json({ data, delivery: "steer" }))
               }) })
               if (committed.length === 0) return yield* new ConflictError({ message: `Question ${input.questionID} changed before answer delivery` })
+              yield* execution.wake(input.childID)
+              return yield* current(input.childID)
+            }
+            if (dots) {
+              const committed = yield* events.publishBatch([
+                { definition: SessionEvent.InputAdmitted, data: { sessionID: input.childID, inputID: id, causedBy,
+                  input: SessionPending.Message.make({ type: "synthetic", data, delivery: "steer" }) } },
+                { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change } },
+                { definition: SessionEvent.DotsDecisionSettled, data: { sessionID: input.childID, source: dots.source,
+                  target: { kind: "subagent_question", questionID: input.questionID, fingerprint: dots.fingerprint } } },
+              ], { when: exact })
+              if (committed.length === 0) return yield* new ConflictError({ message: "Dots child answer changed before delivery" })
               yield* execution.wake(input.childID)
               return yield* current(input.childID)
             }
@@ -1222,14 +1280,22 @@ const layer = Layer.effect(
             if (!item || item.kind !== "recovery" || item.payload.type !== "recovery" || item.withdrawn !== undefined || !("questionID" in item.origin))
               return yield* new ConflictError({ message: `Review item ${input.itemID} is not an open restart recovery` })
             const questionID = item.origin.questionID
+            const dots = input.dots
+            if (dots?.target && (dots.target.itemID !== input.itemID || dots.target.fingerprint !== dots.fingerprint))
+              return yield* new ConflictError({ message: "Dots recovery target does not match its review" })
+            if (dots && (!dots.explicitDecision || SessionReviewFold.pendingFingerprint(item) !== dots.fingerprint || !(yield* dots.validate())))
+              return yield* new ConflictError({ message: "Dots recovery authorization changed" })
             const stopped = SessionReviewFold.isStoppedRecovery(item)
             if (stopped ? input.choice !== "continue" || row.state !== "lost" : item.decision !== undefined || row.state !== "waiting" || row.question_id !== questionID)
               return yield* new ConflictError({ message: `Restart recovery ${input.itemID} cannot be decided in ${row.state}` })
             const tools = item.payload.tools.map((tool) => tool.name).join(", ")
             const decided = {
               definition: SessionEvent.Review.Decided,
-              data: { sessionID: input.childID, itemID: input.itemID, decision: { kind: "recovery" as const, choice: input.choice } },
+              data: { sessionID: input.childID, itemID: input.itemID, decision: { kind: "recovery" as const, choice: input.choice }, ...(dots === undefined ? {} : { source: dots.source }) },
             }
+            const receipt = dots === undefined ? [] : [{ definition: SessionEvent.DotsDecisionSettled, data: { sessionID: input.childID, source: dots.source,
+              target: { kind: "review" as const, itemID: item.itemID, fingerprint: dots.fingerprint } } }]
+            const actor = dots ? "The authenticated Dots client" : "The user"
             const inputID = SessionReviewFold.promptID(input.itemID)
             const unchanged = Effect.gen(function* () {
               const latest = yield* task(input.childID)
@@ -1238,6 +1304,7 @@ const layer = Layer.effect(
               if (!owner || owner.archived !== null) return false
               const current = (yield* SessionReviewFold.fold(db, [input.childID])).find((candidate) => candidate.itemID === input.itemID)
               if (!current || current.withdrawn !== undefined || Hash.json(current.decision ?? null) !== Hash.json(item.decision ?? null)) return false
+              if (dots && (!dots.explicitDecision || SessionReviewFold.pendingFingerprint(current) !== dots.fingerprint || !(yield* dots.validate()))) return false
               const admitted = yield* SessionPending.lookup(db, input.childID, inputID).pipe(
                 Effect.catchDefect((defect) => defect instanceof SessionPending.LifecycleConflict ? Effect.succeed(false as const) : Effect.die(defect)),
               )
@@ -1247,9 +1314,11 @@ const layer = Layer.effect(
               ? yield* events.publishBatch([
                   { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change: {
                     type: "lost",
-                    excerpt: `The user stopped this subagent after a service restart interrupted ${tools}; their effects are unknown. Only the user can continue it.`,
+                    excerpt: `${actor} stopped this subagent after a service restart interrupted ${tools}; their effects are unknown. ${dots ? "Explicit recovery authorization is required to continue it." : "Only the user can continue it."}`,
+                    ...(dots === undefined ? {} : { source: dots.source }),
                   } } },
                   decided,
+                  ...receipt,
                 ], { when: unchanged })
               : yield* events.publishBatch([
                   { definition: SessionEvent.InputAdmitted, data: {
@@ -1259,17 +1328,18 @@ const layer = Layer.effect(
                     input: SessionPending.Message.make({
                       type: "synthetic",
                       data: {
-                        text: `The user chose Continue after a service restart interrupted ${tools}. Their effects are unknown and they were not retried; check their results before repeating any of them.`,
+                        text: `${actor} chose Continue after a service restart interrupted ${tools}. Their effects are unknown and they were not retried; check their results before repeating any of them.`,
                         description: "Restart recovery · continue",
-                        metadata: { review: { itemID: input.itemID, kind: "recovery" } },
+                        metadata: { review: { itemID: input.itemID, kind: "recovery" }, ...(dots === undefined ? {} : { dotsSource: dots.source }) },
                       },
                       delivery: "steer",
                     }),
                   } },
                   { definition: SessionEvent.Task.Updated, data: { sessionID: input.childID, change: stopped
-                    ? { type: "started" as const }
-                    : { type: "question_answered" as const, answer: { questionID, text: "Continue" } } } },
+                    ? { type: "started" as const, ...(dots === undefined ? {} : { source: dots.source }) }
+                    : { type: "question_answered" as const, answer: { questionID, text: "Continue", ...(dots === undefined ? {} : { source: dots.source }) } } } },
                   decided,
+                  ...receipt,
                 ], { when: unchanged })
             if (committed.length === 0)
               return yield* new ConflictError({ message: `Restart recovery ${input.itemID} changed before its decision` })

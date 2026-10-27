@@ -167,7 +167,7 @@ export function make(options: {
           options.directory,
           { fetch: send(id) },
         )
-      const entries: Array<{ id: string; label: string; tool: MCPClient.ToolDefinition; requireHuman: boolean }> = []
+      const entries: Array<{ id: string; label: string; tool: MCPClient.ToolDefinition; requireExplicitDecision: boolean }> = []
       const ids = new Set<string>()
       for (const connector of catalog.data) {
         if ([".", ".."].includes(connector.id) || ids.has(connector.id))
@@ -186,7 +186,7 @@ export function make(options: {
             id: connector.id,
             label: connector.display_name ?? connector.id,
             tool,
-            requireHuman: policy === "ask" || tool.metadata?.["anthropic/requiresUserInteraction"] === true,
+            requireExplicitDecision: policy === "ask" || tool.metadata?.["anthropic/requiresUserInteraction"] === true,
           })
         }
       }

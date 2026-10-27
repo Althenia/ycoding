@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { createHmac } from "node:crypto"
+import { sql } from "drizzle-orm"
 import { Cause, Deferred, Effect, Fiber, Logger } from "effect"
 import { Statement } from "effect/unstable/sql"
 import { TestClock } from "effect/testing"
@@ -122,6 +123,96 @@ const verifySignature = (item: Sent, keys = [secretBytes]) => {
   const expected = keys.map((key) => "v1," + createHmac("sha256", key).update(`${item.headers["webhook-id"]}.${item.headers["webhook-timestamp"]}.${item.body}`).digest("base64")).join(" ")
   expect(item.headers["webhook-signature"]).toBe(expected)
 }
+
+it.effect("historical attention retries preserve exact bytes and IDs while new transitions exclude obsolete fields", () => Effect.gen(function* () {
+  const { parent } = yield* seed("historical_attention")
+  const database = yield* Database.Service
+  const svc = yield* make
+  yield* subscribe(svc, parent)
+  yield* svc.capture({ type: "permission.asked", id: "evt_historical_ask", data: { id: "per_historical", sessionID: parent, action: "read" } })
+  const legacy = { kind: "permission", origin: { type: "native", source_event_id: "evt_historical_ask" }, human_required: true, actions: ["inspect", "notify_human"] }
+  yield* database.db.run(sql`UPDATE mcp_event_outbox SET attention = ${JSON.stringify(legacy)}`)
+  const retained = yield* database.db.get<{ id: string; attention: string }>(sql`SELECT id, attention FROM mcp_event_outbox`)
+  if (!retained) throw new Error("Missing retained delivery")
+  statuses = [500]
+  yield* svc.dispatchOnce()
+  const original = deliveries()[0]
+  expect(payloads()[0].data.attention).toEqual(legacy)
+  verifySignature(original)
+  yield* svc.capture({ type: "permission.deferred", id: "evt_historical_defer", data: { sessionID: parent, requestID: "per_historical", itemID: "rvw_historical" } })
+  yield* svc.capture({ type: "permission.replied", id: "evt_historical_reply", data: { sessionID: parent, requestID: "per_historical", reply: "once" } })
+  const restarted = yield* make
+  yield* TestClock.adjust("1 hour")
+  yield* subscribe(restarted, parent, "session.permission.changed", { delivery: { mode: "webhook", url, secret: rotatedSecret } })
+  yield* restarted.dispatchOnce()
+  const retry = deliveries().find((item, index) => index > 0 && item.headers["webhook-id"] === original.headers["webhook-id"])
+  if (!retry) throw new Error("Missing retained retry")
+  expect(retry.body).toBe(original.body)
+  verifySignature(retry, [rotatedBytes, secretBytes])
+  const transitions = payloads().filter((item) => item.eventId !== retained.id)
+  expect(transitions.map((item) => item.data.state)).toEqual(["deferred", "resolved"])
+  for (const item of transitions) {
+    expect(item.data.attention).toEqual({ kind: "permission", origin: legacy.origin, actions: item.data.state === "deferred" ? ["inspect", "respond"] : ["inspect"] })
+    expect(JSON.stringify(item.data)).not.toMatch(/human_required|notify_human/)
+  }
+  expect(yield* database.db.get(sql`SELECT id, attention FROM mcp_event_outbox WHERE id = ${retained.id}`)).toEqual(retained)
+}))
+
+it.effect("subscribe and refresh reconcile only observed unsettled ephemeral asks by canonical event identity", () => Effect.gen(function* () {
+  const { parent } = yield* seed("late_subscribe")
+  const svc = yield* make
+  const domains = [
+    { name: "session.guardrail.changed", asked: "guardrail.asked", replied: "guardrail.replied", requestID: "grq_late" },
+    { name: "session.permission.changed", asked: "permission.asked", replied: "permission.replied", requestID: "per_late" },
+    { name: "session.question.changed", asked: "question.asked", replied: "question.replied", requestID: "que_late" },
+    { name: "session.form.changed", asked: "form.created", replied: "form.replied", requestID: "frm_late" },
+  ] as const
+  for (const domain of domains) {
+    const asked = (requestID: string) => ({ type: domain.asked, id: `evt_${requestID}`, data: domain.asked === "form.created"
+      ? { form: { sessionID: parent, id: requestID } } : { sessionID: parent, id: requestID } })
+    yield* svc.capture(asked(`${domain.requestID}_settled`))
+    yield* svc.capture({ type: domain.replied, id: `evt_settled_${domain.requestID}`, data: { sessionID: parent, requestID: `${domain.requestID}_settled`, id: `${domain.requestID}_settled` } })
+    yield* svc.capture(asked(domain.requestID))
+    yield* subscribe(svc, parent, domain.name)
+    yield* subscribe(svc, parent, domain.name)
+  }
+  yield* svc.dispatchOnce()
+  expect(payloads().map((item) => item.data.request_id)).toEqual(domains.map((domain) => domain.requestID))
+  expect(payloads().every((item) => item.data.state === "pending")).toBe(true)
+  for (const domain of domains) yield* svc.capture({ type: domain.replied, id: `evt_resolved_${domain.requestID}`, data: { sessionID: parent, requestID: domain.requestID, id: domain.requestID } })
+  for (const domain of domains) yield* subscribe(svc, parent, domain.name)
+  yield* svc.dispatchOnce()
+  expect(payloads()).toHaveLength(8)
+  expect(payloads().slice(4).every((item) => item.data.state === "resolved")).toBe(true)
+}))
+
+it.effect("native cancellation before subscription removes only that request and never fabricates rejection", () => Effect.gen(function* () {
+  const { parent } = yield* seed("cancel_before_subscribe")
+  const svc = yield* make
+  for (const [type, name, prefix] of [
+    ["permission", "session.permission.changed", "per"], ["guardrail", "session.guardrail.changed", "grq"],
+  ] as const) {
+    for (const suffix of ["cancelled", "active"]) yield* svc.capture({ type: `${type}.asked`, id: `evt_${type}_${suffix}`, data: {
+      sessionID: parent, rootSessionID: parent, id: `${prefix}_${suffix}`, action: "shell",
+    } })
+    yield* svc.capture({ type: `${type}.cancelled`, id: `evt_${type}_cancel`, data: { sessionID: parent, rootSessionID: parent, requestID: `${prefix}_cancelled` } })
+    yield* subscribe(svc, parent, name)
+    yield* subscribe(svc, parent, name)
+  }
+  yield* svc.dispatchOnce()
+  expect(payloads().map((item) => [item.data.request_id, item.data.state])).toEqual([["per_active", "pending"], ["grq_active", "pending"]])
+  for (const type of ["permission", "guardrail"] as const) {
+    const requestID = type === "permission" ? "per_active" : "grq_active"
+    const cancellation = { type: `${type}.cancelled`, id: `evt_${type}_active_cancel`, data: { sessionID: parent, rootSessionID: parent, requestID } }
+    yield* svc.capture(cancellation)
+    yield* svc.capture(cancellation)
+    yield* subscribe(svc, parent, type === "permission" ? "session.permission.changed" : "session.guardrail.changed")
+  }
+  yield* svc.dispatchOnce()
+  expect(payloads().slice(2).map((item) => [item.data.request_id, item.data.state])).toEqual([["per_active", "cancelled"], ["grq_active", "cancelled"]])
+  expect(payloads().slice(2).every((item) => JSON.stringify(item.data.attention).includes('"actions":["inspect"]'))).toBe(true)
+  expect(deliveries().some((item) => item.body.includes("reject"))).toBe(false)
+}))
 
 for (const name of ["session.permission.changed", "session.progress"] as const) {
   it.effect(`subscription settlement rolls back a metadata failure for ${name} and retries once by identity`, () => Effect.gen(function* () {
@@ -655,14 +746,14 @@ it.effect("each delivery rechecks the grant, aborts on an aborted signal, and di
   yield* svc.unsubscribe({ context, subscription: { name: "session.permission.changed", arguments: { session_id: parent }, delivery: { mode: "webhook", url } } as never })
   yield* svc.capture({ type: "permission.asked", id: "src_g2", data: { id: "per_g2", sessionID: parent, action: "read" } })
   yield* svc.dispatchOnce()
-  expect(deliveries()).toHaveLength(1)
+  expect(payloads().map((item) => item.data.request_id)).toEqual(["per_g1", "per_g2"])
   yield* svc.unsubscribe({ context: otherContext, subscription: { name: "session.permission.changed", arguments: { session_id: parent }, delivery: { mode: "webhook", url } } as never })
   yield* svc.capture({ type: "permission.asked", id: "src_g3", data: { id: "per_g3", sessionID: parent, action: "read" } })
   yield* svc.dispatchOnce()
-  expect(deliveries()).toHaveLength(1)
+  expect(deliveries()).toHaveLength(2)
 }))
 
-it.effect("descendant filtering uses the backend session tree and progress coalesces with dedupe", () => Effect.gen(function* () {
+it.effect("descendant filtering uses the backend session tree and progress deduplicates only the same event", () => Effect.gen(function* () {
   const { parent, child } = yield* seed("tree")
   const svc = yield* make
   yield* subscribe(svc, parent, "session.progress")
@@ -679,11 +770,11 @@ it.effect("descendant filtering uses the backend session tree and progress coale
   yield* svc.capture({ type: "session.execution.started", id: "exec_p1", data: { sessionID: parent } })
   yield* svc.capture({ type: "session.execution.started", id: "exec_p2", data: { sessionID: parent } })
   yield* svc.dispatchOnce()
-  expect(payloads().filter((payload) => payload.name === "session.progress")).toHaveLength(1)
+  expect(payloads().filter((payload) => payload.name === "session.progress")).toHaveLength(2)
   yield* TestClock.adjust("31 seconds")
   yield* svc.capture({ type: "session.execution.started", id: "exec_p3", data: { sessionID: parent } })
   yield* svc.dispatchOnce()
-  expect(payloads().filter((payload) => payload.name === "session.progress")).toHaveLength(2)
+  expect(payloads().filter((payload) => payload.name === "session.progress")).toHaveLength(3)
 }))
 
 it.effect("Dots completion correlation preserves distinct receipts and deduplicates exact event replay", () => Effect.gen(function* () {
@@ -817,7 +908,7 @@ it.effect("restart cancels only the latest unresolved ephemeral attention, inclu
   yield* restarted.dispatchOnce()
   expect(payloads().slice(before).map((row) => row.data)).toEqual([
     { session_id: parent, root_session_id: parent, state: "cancelled", request_id: "grq_pending", reason: "restart", attention: {
-      kind: "guardrail", origin: { type: "unreported", source_event_id: "src_grq_pending" }, review: "unreported", human_required: true, actions: ["inspect"],
+      kind: "guardrail", origin: { type: "unreported", source_event_id: "src_grq_pending" }, review: "unreported", actions: ["inspect"],
     } },
   ])
   const again = yield* make
@@ -843,7 +934,10 @@ it.effect("controller attention persists canonical request origin and actions wi
   yield* svc.dispatchOnce()
   const sentAttention = payloads().map((item) => item.data)
   expect(sentAttention).toHaveLength(6)
-  for (const data of sentAttention) expect(data).toMatchObject({ session_id: child, root_session_id: parent, state: "pending", attention: { human_required: true, actions: ["inspect", "notify_human"] } })
+  for (const data of sentAttention) {
+    expect(data).toMatchObject({ session_id: child, root_session_id: parent, state: "pending", attention: { actions: ["inspect", "respond"] } })
+    expect(JSON.stringify(data.attention)).not.toMatch(/human_required|notify_human/)
+  }
   for (const [requestID, review] of [["grq_ordinary", "ordinary"], ["grq_hard", "hard"], ["grq_custom", "custom"]])
     expect(sentAttention.find((item) => item.request_id === requestID)).toMatchObject({ attention: { kind: "guardrail", review, origin: { type: "tool", message_id: source.messageID, call_id: source.callID } } })
   expect(sentAttention.find((item) => item.request_id === "frm_attention")).toMatchObject({ attention: { kind: "form", origin: { type: "tool", source_event_id: "evt_attention_form", message_id: source.messageID, call_id: source.callID } } })
@@ -860,13 +954,13 @@ it.effect("controller attention retries preserve the snapshot and settlement ret
   yield* svc.dispatchOnce()
   const pending = payloads()[0]
   const attention = pending.data.attention
-  expect(attention).toMatchObject({ kind: "permission", origin: { type: "tool", source_event_id: "evt_attention_retry", message_id: source.messageID, call_id: source.callID }, actions: ["inspect", "notify_human"] })
+  expect(attention).toMatchObject({ kind: "permission", origin: { type: "tool", source_event_id: "evt_attention_retry", message_id: source.messageID, call_id: source.callID }, actions: ["inspect", "respond"] })
   yield* svc.capture({ type: "permission.replied", id: "evt_attention_resolved", data: { requestID: "per_attention_retry", sessionID: parent, reply: "reject" } })
   yield* TestClock.adjust("1 hour")
   yield* svc.dispatchOnce()
   expect(payloads()[1]).toEqual(pending)
   const resolved = payloads().find((item) => item.data.state === "resolved")
-  expect(resolved?.data).toMatchObject({ request_id: "per_attention_retry", attention: { kind: "permission", origin: { source_event_id: "evt_attention_retry" }, actions: ["inspect"], human_required: true } })
+  expect(resolved?.data).toMatchObject({ request_id: "per_attention_retry", attention: { kind: "permission", origin: { source_event_id: "evt_attention_retry" }, actions: ["inspect"] } })
 }))
 
 it.effect("controller attention classifies the native request after assessment escalation without storing a partial snapshot", () => Effect.gen(function* () {
@@ -884,7 +978,7 @@ it.effect("controller attention classifies the native request after assessment e
     const sent = payloads().filter((item) => item.data.request_id === requestID)
     expect(sent).toHaveLength(1)
     expect(sent[0].data).toMatchObject({ session_id: child, root_session_id: parent, state: "pending", attention: {
-      kind: "guardrail", review, origin: { type: "tool", source_event_id: `evt_asked_${review}`, message_id: source.messageID, call_id: source.callID }, human_required: true, actions: ["inspect", "notify_human"],
+      kind: "guardrail", review, origin: { type: "tool", source_event_id: `evt_asked_${review}`, message_id: source.messageID, call_id: source.callID }, actions: ["inspect", "respond"],
     } })
     yield* svc.capture({ type: "guardrail.replied", id: `evt_rejected_${review}`, data: { sessionID: child, requestID, reply: "reject" } })
     yield* svc.dispatchOnce()
@@ -902,7 +996,7 @@ it.effect("controller attention restart cancellation never invents approval or r
   const restarted = yield* make
   yield* restarted.dispatchOnce()
   const cancelled = payloads().find((item) => item.data.state === "cancelled")
-  expect(cancelled?.data).toMatchObject({ request_id: "grq_attention_restart", reason: "restart", attention: { kind: "guardrail", review: "hard", actions: ["inspect"], human_required: true, origin: { source_event_id: "evt_attention_restart" } } })
+  expect(cancelled?.data).toMatchObject({ request_id: "grq_attention_restart", reason: "restart", attention: { kind: "guardrail", review: "hard", actions: ["inspect"], origin: { source_event_id: "evt_attention_restart" } } })
   expect(payloads().some((item) => item.data.state === "resolved")).toBe(false)
 }))
 
@@ -914,7 +1008,7 @@ it.effect("controller managed-question attention survives restart and retains pa
   yield* svc.dispatchOnce()
   expect(payloads().map((item) => item.data)).toEqual([{
     session_id: child, root_session_id: parent, task_id: child, request_id: "qst_managed", state: "pending", attention: {
-      kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_managed_question" }, human_required: true, actions: ["inspect", "notify_human"],
+      kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_managed_question" }, actions: ["inspect", "respond"],
     },
   }])
   const restarted = yield* make
@@ -924,7 +1018,7 @@ it.effect("controller managed-question attention survives restart and retains pa
   yield* restarted.dispatchOnce()
   expect(payloads()[1].data).toEqual({
     session_id: child, root_session_id: parent, task_id: child, request_id: "qst_managed", state: "resolved", attention: {
-      kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_managed_question" }, human_required: true, actions: ["inspect"],
+      kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_managed_question" }, actions: ["inspect"],
     },
   })
   yield* restarted.capture({ type: "session.task.updated", id: "evt_answered_child_cancelled", data: { sessionID: child, change: { type: "cancelled" } } })
@@ -946,7 +1040,7 @@ it.effect("controller managed-question attention cancels once when a waiting chi
     const sent = payloads().filter((item) => item.data.session_id === child)
     expect(sent).toHaveLength(2)
     expect(sent[1].data).toMatchObject({ session_id: child, root_session_id: parent, task_id: child, request_id: `qst_${type}`, state: "cancelled", attention: {
-      kind: "subagent_question", origin: { type: "managed_task", source_event_id: `evt_managed_${type}_question` }, human_required: true, actions: ["inspect"],
+      kind: "subagent_question", origin: { type: "managed_task", source_event_id: `evt_managed_${type}_question` }, actions: ["inspect"],
     } })
     expect(sent.some((item) => item.data.state === "resolved")).toBe(false)
   }

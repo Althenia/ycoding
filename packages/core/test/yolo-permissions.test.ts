@@ -159,7 +159,7 @@ describe("YOLO permission applicability evidence", () => {
           : Effect.void,
       )
       yield* Effect.addFinalizer(() => unsubscribe)
-      const fiber = yield* service.assert(request({ requireHuman: true })).pipe(Effect.forkScoped)
+      const fiber = yield* service.assert(request({ requireExplicitDecision: true })).pipe(Effect.forkScoped)
       const pending = yield* Effect.race(Deferred.await(entered), Fiber.join(fiber).pipe(Effect.as(undefined)))
       expect(pending).toBeDefined()
       expect(human.calls).toEqual([])
@@ -175,7 +175,7 @@ describe("YOLO permission applicability evidence", () => {
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID, permissions: "auto", sleep: true })
       const service = yield* Permission.Service
-      const input = request({ requireHuman: true, save: ["secret/*"], metadata: { operationDigest: "synthetic" } })
+      const input = request({ requireExplicitDecision: true, save: ["secret/*"], metadata: { operationDigest: "synthetic" } })
       expect(Exit.isFailure(yield* service.assert(input).pipe(Effect.exit))).toBe(true)
       const database = yield* Database.Service
       const items = yield* SessionReviewFold.fold(database.db, [sessionID])

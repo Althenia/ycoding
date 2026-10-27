@@ -1,7 +1,8 @@
 import path from "path"
 import { describe, expect } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
-import { Cause, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import { Coordination } from "@ycoding-ai/schema/coordination"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -220,7 +221,7 @@ describe("native coordinator Form reconsideration", () => {
       })
     })
 
-  it.effect("Manual answers keep a coordinator answer and native reconsideration human-only", () =>
+  it.effect("Manual answers keep a coordinator answer and native reconsideration pending", () =>
     Effect.gen(function* () {
       yield* setup
       const autonomy = yield* SessionAutonomy.Service
@@ -235,14 +236,71 @@ describe("native coordinator Form reconsideration", () => {
       expect(yield* reconsiderForm(recommended.id, { branch: "safe" })).toMatchObject({
         outcome: "escalated",
         settled: false,
-        reason: "human-only:manual-answers",
+        reason: "explicit-decision:manual-answers",
       })
       expect(yield* reconsiderForm(recommended.id)).toMatchObject({
         outcome: "escalated",
         settled: false,
-        reason: "human-only:manual-answers",
+        reason: "explicit-decision:manual-answers",
       })
       expect(yield* service.state(recommended.id)).toEqual({ status: "pending" })
+    }),
+  )
+
+  for (const mode of ["auto", "yolo"] as const) it.effect(`${mode} answers preserve a Form's canonical explicit-decision gate`, () =>
+    Effect.gen(function* () {
+      yield* setup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, answers: mode })
+      const service = yield* Form.Service
+      for (const flag of [true, false, "true", undefined]) {
+        const explicit = {
+          ...form, id: Form.ID.create(), title: "requireExplicitDecision",
+          metadata: { ...(flag === undefined ? {} : { requireExplicitDecision: flag }), note: "requireExplicitDecision: true" },
+          fields: [{ key: "branch", title: "requireExplicitDecision", type: "string", required: true, default: "safe", options: [{ value: "safe", label: "Safe (Recommended)" }] }],
+        } satisfies Form.CreateInput
+        yield* service.create(explicit)
+        const result = yield* reconsiderForm(explicit.id, { branch: "safe" })
+        if (flag === true) {
+          expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
+          expect(yield* reconsiderForm(explicit.id)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
+          expect(yield* service.state(explicit.id)).toEqual({ status: "pending" })
+          if (mode === "auto") yield* service.reply({ id: explicit.id, answer: { branch: "safe" } })
+          if (mode === "yolo") {
+            const snapshot = yield* service.snapshot(explicit.id)
+            const delegated = { id: explicit.id, fingerprint: snapshot!.fingerprint, answer: { branch: "safe" }, validate: () => Effect.succeed(true),
+              source: { kind: "dots-client", anchorSessionID: sessionID, bindingID: "binding", delegationID: "grant", revision: 1, exchangeID: "explicit-form",
+                principal: { ownerID: "owner", deviceID: "device", clientID: "client", grantID: "oauth-grant", epoch: "epoch" } } as const,
+            }
+            expect((yield* service.replyDelegated(delegated).pipe(Effect.exit))._tag).toBe("Failure")
+            yield* service.replyDelegated({ ...delegated, explicitDecision: true })
+          }
+        }
+        if (flag !== true) expect(result).toMatchObject({ outcome: "allowed", settled: true })
+        expect(yield* service.state(explicit.id)).toEqual({ status: "answered", answer: { branch: "safe" } })
+      }
+    }),
+  )
+
+  for (const mode of ["auto", "yolo"] as const) it.effect(`holds a canonical explicit-decision Form ask under ${mode} answers`, () =>
+    Effect.gen(function* () {
+      yield* setup
+      const autonomy = yield* SessionAutonomy.Service
+      yield* autonomy.set({ sessionID, answers: mode })
+      const service = yield* Form.Service
+      const events = yield* EventRuntime.Service
+      const created = yield* Deferred.make<void>()
+      const id = Form.ID.create("frm_explicit_ask")
+      const stop = yield* events.listen((event) => event.type === Form.Event.Created.type ? Deferred.succeed(created, undefined).pipe(Effect.asVoid) : Effect.void)
+      yield* Effect.addFinalizer(() => stop)
+      const waiting = yield* service.ask({ ...form, id, metadata: { requireExplicitDecision: true },
+        fields: [{ key: "branch", type: "string", required: true, default: "safe", options: [{ value: "safe", label: "Safe (Recommended)" }] }],
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(created)
+      yield* TestClock.adjust("1 millis")
+      expect(yield* service.state(id)).toEqual({ status: "pending" })
+      yield* service.reply({ id, answer: { branch: "safe" } })
+      expect(yield* Fiber.join(waiting)).toEqual({ status: "answered", answer: { branch: "safe" } })
     }),
   )
 
@@ -468,7 +526,7 @@ describe("native coordinator Permission reconsideration", () => {
           agent.permissions = [{ action: "read", resource: "src/*", effect: "allow" }]
         }))
         const running = yield* service.assert({
-          sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], requireHuman: true,
+          sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], requireExplicitDecision: true,
         }).pipe(Effect.forkScoped)
         for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
           yield* Effect.yieldNow
@@ -484,12 +542,12 @@ describe("native coordinator Permission reconsideration", () => {
           actor: "coordinator", source: coordinatorSource, validate: () => Effect.succeed(true),
         })
         expect(result).toMatchObject(effect === "allow"
-          ? { outcome: "escalated", settled: false, reason: "human-only:request" }
+          ? { outcome: "escalated", settled: false, reason: "explicit-decision:request" }
           : { outcome: "denied", settled: true, via: "permission-rules" })
         expect(human.choices).toHaveLength(0)
-        expect(CoordinationDecisions.humanOnlyReason({
-          kind: "permission", action: "read", resources: ["src/notes.txt"], metadata: { requireHuman: true },
-        })).toBe("human-only:request")
+        expect(CoordinationDecisions.explicitDecisionReason({
+          kind: "permission", action: "read", resources: ["src/notes.txt"], metadata: { requireExplicitDecision: true },
+        })).toBe("explicit-decision:request")
         if (effect === "allow") expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
         if (effect === "deny") expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true)
       }),
@@ -626,7 +684,7 @@ describe("native coordinator reconsideration under Manual and Auto", () => {
         yield* nativeSetup
         const service = yield* Permission.Service
         const running = yield* service
-          .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], ...(mode === "auto" ? { requireHuman: true } : {}) })
+          .assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], ...(mode === "auto" ? { requireExplicitDecision: true } : {}) })
           .pipe(Effect.forkScoped)
         for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
           yield* Effect.yieldNow
@@ -645,7 +703,7 @@ describe("native coordinator reconsideration under Manual and Auto", () => {
         expect(result).toMatchObject({
           outcome: "escalated",
           settled: false,
-          reason: mode === "manual" ? "native-assessment-unavailable" : "human-only:request",
+          reason: mode === "manual" ? "native-assessment-unavailable" : "explicit-decision:request",
         })
         expect(permission.choices).toHaveLength(0)
         yield* service.reply({ requestID: pending[0]!.id, reply: "reject" })
@@ -803,7 +861,7 @@ describe("native coordinator Guardrail reconsideration", () => {
         source: coordinatorSource,
         validate: () => Effect.succeed(true),
       })
-      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:hard-review" })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:hard-review" })
       expect(hard.choices).toHaveLength(choicesBefore)
       expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
       expect(captured.guardrailDecided).toEqual([])
@@ -891,7 +949,7 @@ describe("native coordinator Permission decline and escalation", () => {
         requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator", source: coordinatorSource,
         decision: "decline", validate: () => Effect.succeed(true),
       })
-      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:manual-permissions" })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:manual-permissions" })
       expect(manualDecline.choices).toHaveLength(0)
       expect(captured.assessed).toEqual([])
       expect(captured.permissionReplied).toEqual([])
@@ -956,7 +1014,7 @@ describe("native coordinator Permission decline and escalation", () => {
       expect(yield* service.reconsider({
         requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator", source: coordinatorSource,
         decision: "decline", validate: () => Effect.succeed(true),
-      })).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:manual-permissions" })
+      })).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:manual-permissions" })
       expect(unclassifiedManual.choices).toHaveLength(0)
       expect(captured.permissionReplied).toEqual([])
       expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
@@ -969,7 +1027,7 @@ describe("native coordinator Permission decline and escalation", () => {
       yield* nativeSetup
       const service = yield* Permission.Service
       const captured = yield* captureNativeEvents()
-      yield* service.assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], requireHuman: true }).pipe(Effect.forkScoped)
+      yield* service.assert({ sessionID: nativeSessionID, action: "read", resources: ["src/notes.txt"], requireExplicitDecision: true }).pipe(Effect.forkScoped)
       for (let attempt = 0; attempt < 200 && (yield* service.forSession(nativeSessionID)).length === 0; attempt++)
         yield* Effect.yieldNow
       const pending = yield* service.forSession(nativeSessionID)
@@ -979,7 +1037,7 @@ describe("native coordinator Permission decline and escalation", () => {
         decision: "decline", validate: () => Effect.succeed(valid),
       })
       expect(yield* decline(false)).toMatchObject({ outcome: "escalated", settled: false, reason: "delegation-invalid" })
-      expect(yield* decline(true)).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:request" })
+      expect(yield* decline(true)).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:request" })
       expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
       expect(captured.assessed.filter((event) => event.via === "coordination")).toEqual([])
     }),
@@ -1096,7 +1154,7 @@ describe("native coordinator Guardrail decline and escalation", () => {
         sessionID: nativeSessionID, requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator",
         source: coordinatorSource, decision: "decline", validate: () => Effect.succeed(true),
       })
-      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:manual-guardrails" })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:manual-guardrails" })
       expect(manualReviewDecline.choices).toHaveLength(0)
       expect(captured.guardrailDecided).toEqual([])
       expect(captured.guardrailReplied).toEqual([])
@@ -1122,7 +1180,7 @@ describe("native coordinator Guardrail decline and escalation", () => {
         sessionID: nativeSessionID, requestID: pending[0]!.id, fingerprint: snapshot!.fingerprint, actor: "coordinator",
         source: coordinatorSource, decision: "decline", validate: () => Effect.succeed(true),
       })
-      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "human-only:hard-review" })
+      expect(result).toMatchObject({ outcome: "escalated", settled: false, reason: "explicit-decision:hard-review" })
       expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
       expect(captured.guardrailDecided).toEqual([])
     }),
@@ -1199,7 +1257,7 @@ describe("native escalation chain through CoordinationDecisions", () => {
       const driver = yield* decisions.escalate(input(driverSource.coordinatorSessionID, "permission", pending[0]!.id, snapshot!.fingerprint, driverSource.rationale))
       expect(driver).toMatchObject({ outcome: "escalated", to: "master", coordinationEscalation: { reasons: [fullChain.reasons[0]] } })
       const master = yield* decisions.escalate(input(masterSource.coordinatorSessionID, "permission", pending[0]!.id, snapshot!.fingerprint, masterSource.rationale))
-      expect(master).toMatchObject({ outcome: "escalated", to: "human", coordinationEscalation: fullChain })
+      expect(master).toMatchObject({ outcome: "escalated", to: "client", coordinationEscalation: fullChain })
       expect((yield* service.forSession(nativeSessionID))[0]!.coordinationEscalation).toEqual(fullChain)
       expect(captured.assessed.filter((event) => event.via === "coordination" && event.outcome === "escalate")).toHaveLength(1)
       expect(captured.permissionReplied).toEqual([])
@@ -1229,7 +1287,7 @@ describe("native escalation chain through CoordinationDecisions", () => {
       const pending = yield* service.forSession(nativeSessionID)
       const snapshot = yield* service.requestSnapshot(nativeSessionID, pending[0]!.id)
       const master = yield* decisions.escalate(input(masterSource.coordinatorSessionID, "review", pending[0]!.id, snapshot!.fingerprint, masterSource.rationale))
-      expect(master).toMatchObject({ outcome: "escalated", to: "human", coordinationEscalation: { reasons: [fullChain.reasons[1]] } })
+      expect(master).toMatchObject({ outcome: "escalated", to: "client", coordinationEscalation: { reasons: [fullChain.reasons[1]] } })
       expect(yield* service.forSession(nativeSessionID)).toHaveLength(1)
       yield* service.deferPending(nativeSessionID)
       const after = yield* decisions.escalate(input(driverSource.coordinatorSessionID, "review", pending[0]!.id, snapshot!.fingerprint, driverSource.rationale))

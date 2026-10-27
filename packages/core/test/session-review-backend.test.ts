@@ -9,6 +9,7 @@ import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Permission } from "@ycoding-ai/core/permission"
 import { Question } from "@ycoding-ai/core/question"
 import { Session } from "@ycoding-ai/core/session"
+import { Model } from "@ycoding-ai/schema/model"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
@@ -120,7 +121,7 @@ for (const implicit of [false, true]) it.effect(`${implicit ? "prompt admission"
     origin: { messageID: boundary.id, callID: "removed" }, payload: { type: "form", title: "Removed", fields } })
   const fingerprint = SessionReview.fingerprint({ action: "edit", resources: ["file"], workdir: root.location.directory })
   const grant = yield* reviews.open({ sessionID: root.id, kind: "permission", reason: "sleep_entry", limit: 16,
-    origin: { messageID: boundary.id, callID: "grant" }, payload: { type: "permission", requestID: Permission.ID.make("per_revert"), action: "edit", resources: ["file"], fingerprint } })
+    origin: { messageID: boundary.id, callID: "grant" }, payload: { type: "permission", fingerprintVersion: 2, requestID: Permission.ID.make("per_revert"), action: "edit", resources: ["file"], fingerprint } })
   yield* reviews.decide({ sessionID: root.id, itemID: grant.itemID, decision: { kind: "permission", reply: "once" } })
   yield* events.publish(SessionEvent.RevertEvent.Staged, { sessionID: root.id, revert: { messageID: boundary.id, files: [] } })
   if (implicit) yield* sessions.prompt({ sessionID: root.id, text: "Replacement", origin: "review", resume: false })
@@ -190,7 +191,7 @@ it.effect("awake review-box state remains visible in instructions and goal repor
 
 it.effect("sleep-entry child questions remain waiting beyond their timer and accept only the human review decision", () => Effect.gen(function* () {
   const sessions = yield* Session.Service
-  const root = yield* sessions.create({ location: yield* reviewLocation })
+  const root = yield* sessions.create({ location: yield* reviewLocation, model: Schema.decodeUnknownSync(Model.Ref)({ providerID: "test", id: "model" }) })
   const child = yield* sessions.create({ parentID: root.id })
   const events = yield* EventRuntime.Service
   yield* events.publish(SessionEvent.Task.Updated, Schema.decodeUnknownSync(SessionEvent.Task.Updated.data)({ sessionID: child.id, change: {

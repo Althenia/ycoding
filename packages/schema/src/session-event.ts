@@ -144,7 +144,7 @@ export namespace Review {
   export const Decided = Event.durable({
     type: "session.review.decided",
     ...options,
-    schema: { ...Base, itemID: SessionReview.ID, decision: SessionReview.Decision },
+    schema: { ...Base, itemID: SessionReview.ID, decision: SessionReview.Decision, source: Form.DotsClientReplySource.pipe(optional) },
   })
   export type Decided = typeof Decided.Type
   export const Withdrawn = Event.durable({
@@ -464,7 +464,7 @@ export const DotsDecisionSettled = Event.durable({
   ...options,
   schema: {
     ...Base,
-    source: Form.DelegatedReplySource,
+    source: Form.ExternalReplySource,
     target: Dots.DecisionTarget,
     reply: Schema.Literals(["once", "reject"]).pipe(optional),
   },
@@ -1055,6 +1055,10 @@ export const Definitions = Event.inventory(
   InputAdmitted,
   InputConsumed,
   DotsExchangeCreated,
+  Dots.BindingBound,
+  Dots.BindingUnbound,
+  Dots.DeviceDelegationCreated,
+  Dots.DeviceDelegationRevoked,
   DotsDecisionSettled,
   DotsInstructionRejected,
   DotsReportRecorded,

@@ -1409,7 +1409,9 @@ export function readFormAssessment(value: unknown): Form.Assessment | undefined 
   return fields.length === record.fields.length ? { mode: record.mode, sourceSessionID: record.sourceSessionID, fields } : undefined
 }
 
-export type FormReplySourceView = (typeof Form.ReplySource)["Encoded"]
+type FormReplySource = (typeof Form.ReplySource)["Encoded"]
+type DotsClientReplySource = Extract<FormReplySource, { kind: "dots-client" }>
+export type FormReplySourceView = Exclude<FormReplySource, DotsClientReplySource> | Omit<DotsClientReplySource, "bindingID" | "principal">
 
 export function readFormReplySource(value: unknown): FormReplySourceView | undefined {
   const source = recordField(value)
@@ -1419,6 +1421,19 @@ export function readFormReplySource(value: unknown): FormReplySourceView | undef
       typeof source.delegationID !== "string" || source.delegationID.length === 0 || source.delegationID.length > 256 ||
       typeof source.exchangeID !== "string" || source.exchangeID.length === 0 || source.exchangeID.length > 256 ||
       typeof source.revision !== "number" || !Number.isSafeInteger(source.revision) || source.revision < 1) return undefined
+    return { kind: source.kind, anchorSessionID: source.anchorSessionID, delegationID: source.delegationID, revision: source.revision, exchangeID: source.exchangeID }
+  }
+  if (source.kind === "dots-client") {
+    const principal = recordField(source.principal)
+    if (typeof source.anchorSessionID !== "string" || !source.anchorSessionID.startsWith("ses") ||
+      typeof source.bindingID !== "string" || source.bindingID.length === 0 || source.bindingID.length > 256 ||
+      typeof source.delegationID !== "string" || source.delegationID.length === 0 || source.delegationID.length > 256 ||
+      typeof source.exchangeID !== "string" || source.exchangeID.length === 0 || source.exchangeID.length > 256 ||
+      typeof source.revision !== "number" || !Number.isSafeInteger(source.revision) || source.revision < 1 ||
+      !principal || ["ownerID", "deviceID", "clientID", "grantID", "epoch"].some((key) => {
+        const field = principal[key]
+        return typeof field !== "string" || field.length === 0 || field.length > 256
+      })) return undefined
     return { kind: source.kind, anchorSessionID: source.anchorSessionID, delegationID: source.delegationID, revision: source.revision, exchangeID: source.exchangeID }
   }
   if (source.kind !== "coordinator" || typeof source.coordinatorSessionID !== "string" ||

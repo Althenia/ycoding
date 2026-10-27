@@ -11,7 +11,7 @@ export const BuiltinInstruction = Schema.Literals([
   "project-artifact-authoring",
   "git-worktree",
   "git-attribution",
-  "human-input",
+  "decision-input",
   "decision-use",
   "task-completion",
   "memory",

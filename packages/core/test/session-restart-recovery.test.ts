@@ -125,7 +125,7 @@ const addChild = (rootID: Session.ID, state: "starting" | "running" | "waiting" 
   Effect.gen(function* () {
     const session = yield* Session.Service
     const db = (yield* Database.Service).db
-    const child = yield* session.create({ parentID: rootID })
+    const child = yield* session.create({ parentID: rootID, model })
     yield* db
       .insert(SessionTaskTable)
       .values({
@@ -374,7 +374,7 @@ it.effect("every executed tool left unsettled, including reads and provider tool
         childID: ids.child.id,
         questionID: QuestionID.make(waiting!.question_id!),
         text: "Continue",
-        origin: "human-review",
+        origin: "review",
         reviewDecision: { itemID: ids.item.itemID, decision: { kind: "recovery", choice: "continue" } },
       })
       .pipe(Effect.flip)

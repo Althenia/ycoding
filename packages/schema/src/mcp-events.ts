@@ -151,13 +151,13 @@ const Category = Schema.String.check(
   Schema.isPattern(/^[a-z0-9][a-z0-9._-]{0,63}$/),
 )
 
-const AttentionKindValues = ["guardrail", "permission", "question", "form", "subagent_question"] as const
+const AttentionKindValues = ["guardrail", "permission", "question", "form", "subagent_question", "recovery"] as const
 export const AttentionKind = Schema.Literals(AttentionKindValues)
 const AttentionOriginTypeValues = ["tool", "native", "managed_task", "review", "unreported"] as const
 export const AttentionOriginType = Schema.Literals(AttentionOriginTypeValues)
 const AttentionReviewValues = ["ordinary", "hard", "custom", "unreported"] as const
 export const AttentionReview = Schema.Literals(AttentionReviewValues)
-const AttentionActionValues = ["inspect", "notify_human"] as const
+const AttentionActionValues = ["inspect", "respond"] as const
 export const AttentionAction = Schema.Literals(AttentionActionValues)
 
 export interface Attention extends Schema.Schema.Type<typeof Attention> {}
@@ -170,7 +170,6 @@ export const Attention = Schema.Struct({
     call_id: optional(Identifier),
   }),
   review: optional(AttentionReview),
-  human_required: Schema.Literal(true),
   actions: Schema.Array(AttentionAction),
 }).annotate({ identifier: "McpEvents.Attention" })
 
@@ -247,10 +246,9 @@ const payloadSchema: JsonSchemaObject = {
           additionalProperties: false,
         },
         review: { type: "string", enum: AttentionReviewValues },
-        human_required: { type: "boolean", const: true },
         actions: { type: "array", items: { type: "string", enum: AttentionActionValues } },
       },
-      required: ["kind", "origin", "human_required", "actions"],
+      required: ["kind", "origin", "actions"],
       additionalProperties: false,
     },
   },

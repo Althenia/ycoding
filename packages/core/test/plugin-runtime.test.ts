@@ -6,6 +6,7 @@ import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionReview } from "@ycoding-ai/schema/session-review"
+import { QuestionID } from "@ycoding-ai/schema/session-orchestration"
 import { testEffect } from "./lib/effect"
 
 const cell = PluginRuntime.makeCell()
@@ -51,6 +52,7 @@ describe("PluginRuntime", () => {
           launch: unavailable,
           switchModel: unavailable,
           list: unavailable,
+          questionSnapshots: unavailable,
           page: unavailable,
           send: unavailable,
           answer: unavailable,
@@ -88,6 +90,32 @@ describe("PluginRuntime", () => {
           choice: "stop",
         })
         .pipe(Effect.flip)
+      expect(error).toBeInstanceOf(SessionOrchestration.ConflictError)
+    }),
+  )
+
+  unboundIt.effect("denies private decision snapshots without reaching the runtime", () =>
+    Effect.gen(function* () {
+      const runtime = yield* PluginRuntime.Service
+      const result = yield* runtime.orchestration.questionSnapshots(Session.ID.make("ses_parent")).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") expect(result.cause.toString()).toContain("Question snapshots require an authenticated device operation")
+    }),
+  )
+
+  unboundIt.effect("denies caller-supplied Dots decision capabilities without reaching the runtime", () =>
+    Effect.gen(function* () {
+      const runtime = yield* PluginRuntime.Service
+      const error = yield* runtime.orchestration.answer({
+        parentID: Session.ID.make("ses_parent"), childID: Session.ID.make("ses_child"),
+        questionID: QuestionID.make("qst_pending"), text: "Continue",
+        dots: {
+          explicitDecision: true, fingerprint: "f".repeat(64), validate: () => Effect.succeed(true),
+          source: { kind: "dots-client", anchorSessionID: Session.ID.make("ses_parent"), bindingID: "binding",
+            delegationID: "grant", revision: 1, exchangeID: "exchange",
+            principal: { ownerID: "owner", deviceID: "device", clientID: "client", grantID: "oauth-grant", epoch: "epoch" } },
+        },
+      }).pipe(Effect.flip)
       expect(error).toBeInstanceOf(SessionOrchestration.ConflictError)
     }),
   )

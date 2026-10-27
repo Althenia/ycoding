@@ -129,7 +129,7 @@ it.effect("a guardrail deferred because model review is disabled records no mode
   }),
 )
 
-it.effect("a human guardrail rejection records one rejection while approvals and other kinds record none", () =>
+it.effect("an explicit guardrail rejection records one rejection while approvals and other kinds record none", () =>
   Effect.gen(function* () {
     const session = yield* Session.Service
     const reviews = yield* SessionReview.Service
@@ -147,7 +147,7 @@ it.effect("a human guardrail rejection records one rejection while approvals and
       reason: "sleep_entry",
       limit: 16,
       origin: { messageID, callID: "call_execute" },
-      payload: { type: "permission", action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_reject") },
+      payload: { type: "permission", fingerprintVersion: 2, action: "edit", resources: ["file"], fingerprint, requestID: Permission.ID.make("per_reject") },
     })
     yield* reviews.decide({ sessionID: root.id, itemID: rejected.itemID, decision: { kind: "guardrail", reply: "reject" } })
     yield* reviews.decide({ sessionID: root.id, itemID: approved.itemID, decision: { kind: "guardrail", reply: "once" } })
@@ -155,8 +155,38 @@ it.effect("a human guardrail rejection records one rejection while approvals and
     yield* reviews.decide({ sessionID: root.id, itemID: converted.itemID, decision: { kind: "guardrail", reply: "reject" } })
     yield* reviews.decide({ sessionID: root.id, itemID: permission.itemID, decision: { kind: "permission", reply: "reject" } })
     expect((yield* incidents(root.id)).filter((row) => row.kind === "guardrail-rejected")).toEqual([
-      { ...escalated, kind: "guardrail-rejected", requestID: "grq_reject", decidedBy: "human" },
-      { ...escalated, kind: "guardrail-rejected", requestID: "grq_converted", decidedBy: "human" },
+      { ...escalated, kind: "guardrail-rejected", requestID: "grq_reject", decidedBy: "client" },
+      { ...escalated, kind: "guardrail-rejected", requestID: "grq_converted", decidedBy: "client" },
+    ])
+  }),
+)
+
+it.effect("an authenticated Dots deferred guardrail rejection records one atomic client incident", () =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const reviews = yield* SessionReview.Service
+    const events = yield* EventRuntime.Service
+    const root = yield* session.create({ location: yield* reviewLocation })
+    const messageID = yield* codeModeCall(root.id)
+    const rejected = yield* guardrailItem(root.id, "grq_dots_reject", { origin: { messageID, callID: "call_execute" }, reason: "escalated" })
+    const snapshot = (yield* reviews.pendingSnapshots(root.id)).find((candidate) => candidate.item.itemID === rejected.itemID)!
+    const input = {
+      sessionID: root.id, itemID: rejected.itemID, fingerprint: snapshot.fingerprint, explicitDecision: true as const,
+      source: { kind: "dots-client" as const, anchorSessionID: root.id, bindingID: "binding", delegationID: "grant", revision: 1, exchangeID: "guardrail-reject",
+        principal: { ownerID: "owner", deviceID: "device", clientID: "client", grantID: "oauth-grant", epoch: "epoch" } },
+      validate: () => Effect.succeed(true), decision: { kind: "guardrail" as const, reply: "reject" as const },
+    }
+    let failReceipt = true
+    yield* events.project(SessionEvent.DotsDecisionSettled, () => failReceipt ? Effect.die("receipt publication failed") : Effect.void)
+    expect((yield* reviews.decideDelegated(input).pipe(Effect.exit))._tag).toBe("Failure")
+    expect((yield* incidents(root.id)).filter((row) => row.kind === "guardrail-rejected")).toEqual([])
+    expect(yield* reviews.pendingSnapshots(root.id)).toHaveLength(1)
+    failReceipt = false
+    yield* reviews.decideDelegated(input)
+    expect((yield* reviews.decideDelegated(input).pipe(Effect.exit))._tag).toBe("Failure")
+    yield* reviews.reconcile
+    expect((yield* incidents(root.id)).filter((row) => row.kind === "guardrail-rejected")).toEqual([
+      { ...escalated, kind: "guardrail-rejected", requestID: "grq_dots_reject", decidedBy: "client" },
     ])
   }),
 )

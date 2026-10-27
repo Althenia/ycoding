@@ -499,7 +499,7 @@ export function readIncidentRecent(value: unknown): RemoteIncidentRecent["data"]
     if (!name(id) || !count(time) || !incidentKinds.includes(kind) || typeof category !== "string" || category.length > 128 ||
       !Array.isArray(ruleIDs) || !ruleIDs.every((rule) => typeof rule === "string" && rule.length <= 128) || !name(agent) ||
       (variant !== undefined && !name(variant)) || (profile !== undefined && !name(profile)) ||
-      (decidedBy !== undefined && decidedBy !== "decision-model" && decidedBy !== "human") ||
+      (decidedBy !== undefined && decidedBy !== "decision-model" && decidedBy !== "client") ||
       (Reflect.get(item, "target") !== undefined && target === undefined)) return []
     return [{ id, time, kind, category, ruleIDs: [...ruleIDs], agent,
       ...(variant === undefined ? {} : { variant }), ...(profile === undefined ? {} : { profile }),

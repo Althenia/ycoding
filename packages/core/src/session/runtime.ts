@@ -2474,7 +2474,7 @@ const layer = Layer.effect(
                             Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext" && key !== "remoteMcp"),
                           )),
                       ...(input.origin === "plugin" && input.remoteSource ? { remoteMcp: input.remoteSource } : {}),
-                      inputOrigin: input.origin ?? "human",
+                      inputOrigin: input.origin ?? "direct",
                     }
                     const admitted = yield* Effect.gen(function* () {
                       const existing = yield* SessionPending.lookup(db, input.sessionID, messageID)

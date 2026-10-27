@@ -6,6 +6,7 @@ import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { Project } from "@ycoding-ai/schema/project"
 import { RemoteLimits, parseChunkedValue, remoteOperations, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
+import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Schema } from "effect"
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import { RemoteMcpDemo } from "../src/remote-mcp-demo"
@@ -50,6 +51,38 @@ test("reads admitted pending prompts at their verified Session Location", async 
   expect(errorOf(await executeRemoteOperation({ request: { ...request("session.pending.list"), sessionID: "ses_other" },
     local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })).code).toBe("session_not_allowed")
   expect(fixture.calls.filter((call) => call.method === "pendingList")).toHaveLength(1)
+})
+
+test("device Dots operations require authenticated MCP context and forward closed inputs to the Session Location", async () => {
+  const context: McpEvents.RequestContext = { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }
+  const target = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "Fixture" }
+  const grant = { id: "device_grant", revision: 1 }
+  const input = {
+    "session.dots.delegation.device.create": { id: "device_grant", exchangeID: "create_exchange", bindingID: "binding", expectedAttachment: target, scope: { target: "device", operations: ["decision"] } },
+    "session.dots.delegation.device.read": { cursor: "opaque", limit: 10 },
+    "session.dots.delegation.device.revoke": { ...grant, exchangeID: "revoke_exchange", bindingID: "binding", expectedAttachment: target },
+    "session.dots.decisions.list": { bindingID: "binding", expectedAttachment: target, delegation: grant, targetSessionID: "ses_1" },
+  } as const
+  const fixture = await harness({ results: {
+    dotsDeviceDelegationCreate: { id: "device_grant", revision: 1 },
+    dotsDeviceDelegationRead: { grants: [] },
+    dotsDeviceDelegationRevoke: { id: "device_grant", revision: 2 },
+    dotsDecisionsList: { data: [] },
+  } })
+  for (const [operation, payload] of Object.entries(input) as Array<[RemoteRequest["operation"], Record<string, unknown>]>) {
+    expect(errorOf(await executeRemoteOperation({ request: { ...request(operation, payload), sessionID: "ses_1" }, local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions })).code).toBe("unknown_operation")
+    expect(valueOf(await executeRemoteOperation({ request: { ...request(operation, payload), sessionID: "ses_1" }, local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, appContext: context }))).toBeDefined()
+  }
+  const calls = fixture.calls.filter((call) => call.method !== "getSession")
+  expect(calls.map((call) => call.method)).toEqual(["dotsDeviceDelegationCreate", "dotsDeviceDelegationRead", "dotsDeviceDelegationRevoke", "dotsDecisionsList"])
+  for (const [index, call] of calls.entries()) {
+    expect(call.args[0]).toBe("ses_1")
+    expect(call.args[1]).toEqual({ directory: "/work" })
+    expect(call.args[2]).toEqual(Object.values(input)[index])
+    expect(call.args[3]).toBe(context)
+  }
+  expect(errorOf(await executeRemoteOperation({ request: { ...request("session.dots.decisions.list", { ...input["session.dots.decisions.list"], caller: "spoofed" }), sessionID: "ses_1" }, local: fixture.local, sessions: fixture.registry, subscriptions: fixture.subscriptions, appContext: context })).code).toBe("invalid_message")
+  expect(calls).toHaveLength(4)
 })
 
 test("provider authentication projects safe methods and binds attempts to their initiating Location and integration", async () => {
@@ -2177,7 +2210,7 @@ describe("session review box", () => {
     { ...base, itemID: "rvw_hard", kind: "guardrail", payload: { type: "guardrail", action: "shell", resources: ["rm -rf build"], ruleIDs: ["standard.hard.delete"], reason: "delete", hardReview: true, directories: [], fingerprint: "a".repeat(64), requestID: "grq_1" } },
     { ...base, itemID: "rvw_question", kind: "question", reason: "free_text", origin: { messageID: "msg_1", callID: "call_1" }, payload: { type: "form", title: "Scope", fields: [{ key: "q0", type: "string" }], questionTool: true } },
     { ...base, itemID: "rvw_child", kind: "subagent_question", reason: "low_confidence", confidence: 0.4, origin: { questionID: "qst_1" }, payload: { type: "subagent_question", text: "Which branch?" } },
-    { ...base, itemID: "rvw_permission", kind: "permission", reason: "sleep_entry", origin: { requestID: "per_1" }, payload: { type: "permission", action: "edit", resources: ["src/a.ts"], fingerprint: "b".repeat(64), requestID: "per_1" } },
+    { ...base, itemID: "rvw_permission", kind: "permission", reason: "sleep_entry", origin: { requestID: "per_1" }, payload: { type: "permission", action: "edit", resources: ["src/a.ts"], fingerprint: "b".repeat(64), fingerprintVersion: 2, requestID: "per_1" } },
   ]
   const reviewHarness = () => harness({
     sessions: [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_child", { updated: 1, parentID: "ses_1", agent: "general" })],

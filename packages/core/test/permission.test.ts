@@ -116,6 +116,46 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
 }
 
 describe("Permission", () => {
+  it.effect("reports a missing permission request when its Session disappears before approval", () => Effect.gen(function* () {
+    yield* setup([{ action: "*", resource: "*", effect: "ask" }])
+    const service = yield* Permission.Service
+    const pending = yield* service.ask(assertion())
+    const database = yield* Database.Service
+    yield* database.db.delete(SessionTable).where(eq(SessionTable.id, Session.ID.make("ses_test"))).run().pipe(Effect.orDie)
+    const failure = yield* service.reply({ requestID: pending.id, reply: "once" }).pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(Permission.NotFoundError)
+    expect(failure.requestID).toBe(pending.id)
+    expect(yield* service.get(pending.id)).toBeDefined()
+  }))
+
+  it.effect("explicit decisions stay pending under Auto and current allows without remembered approval", () => Effect.gen(function* () {
+    yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+    const autonomy = yield* SessionAutonomy.Service
+    yield* autonomy.set({ sessionID: Session.ID.make("ses_test"), permissions: "auto" })
+    const service = yield* Permission.Service
+    const result = yield* service.ask(assertion({ requireExplicitDecision: true, save: ["src/*"] }))
+    expect(result.effect).toBe("ask")
+    expect((yield* service.list())[0]).toMatchObject({ metadata: { requireExplicitDecision: true } })
+    expect((yield* service.list())[0]?.save).toBeUndefined()
+  }))
+
+  for (const changed of ["agent", "ceiling"] as const) it.effect(`explicit approval rechecks a changed ${changed} deny across all resources`, () => Effect.gen(function* () {
+    yield* setup([{ action: "*", resource: "*", effect: "ask" }])
+    const resources = Array.from({ length: 21 }, (_, index) => `src/r${index + 1}.ts`)
+    const pending = yield* waitForRequest({ resources })
+    const rule = { action: "read", resource: "src/r21.ts", effect: "deny" as const }
+    if (changed === "agent") yield* setRules([{ action: "*", resource: "*", effect: "ask" }, rule])
+    if (changed === "ceiling") {
+      const database = yield* Database.Service
+      yield* database.db.update(SessionTable).set({ permission: SessionPermissionCeiling.denyOnly([rule]) })
+        .where(eq(SessionTable.id, pending.request.sessionID)).run().pipe(Effect.orDie)
+    }
+    expect((yield* pending.service.reply({ requestID: pending.request.id, reply: "once" }).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(yield* pending.service.get(pending.request.id)).toEqual(pending.request)
+    yield* pending.service.reply({ requestID: pending.request.id, reply: "reject" })
+    expect((yield* Fiber.await(pending.fiber))._tag).toBe("Failure")
+  }))
+
   it.effect("system temp scope settles without an outside-directory ask while preserving explicit denies and ceilings", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "external_directory", resource: "*", effect: "ask" }])
@@ -138,8 +178,8 @@ describe("Permission", () => {
   it.effect("assert waits for an explicit human reply when approval is mandatory", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])
-      const { service, fiber, request } = yield* waitForRequest({ requireHuman: true })
-      expect(request.metadata?.requireHuman).toBe(true)
+      const { service, fiber, request } = yield* waitForRequest({ requireExplicitDecision: true })
+      expect(request.metadata?.requireExplicitDecision).toBe(true)
       yield* service.reply({ requestID: request.id, reply: "once" })
       yield* Fiber.join(fiber)
     }),
@@ -151,12 +191,12 @@ describe("Permission", () => {
       const service = yield* Permission.Service
       const autonomy = yield* SessionAutonomy.Service
       yield* autonomy.set({ sessionID: Session.ID.make("ses_test"), permissions: "auto" })
-      const value = assertion({ requireHuman: true, save: ["src/*"] })
+      const value = assertion({ requireExplicitDecision: true, save: ["src/*"] })
       expect(yield* service.ask(value)).toEqual({ id: value.id, effect: "ask" })
       expect((yield* service.get(value.id))?.save).toBeUndefined()
       yield* service.reply({ requestID: value.id, reply: "once" })
       yield* setRules([])
-      const next = assertion({ id: Permission.ID.create("per_next"), requireHuman: true })
+      const next = assertion({ id: Permission.ID.create("per_next"), requireExplicitDecision: true })
       expect(yield* service.ask(next)).toEqual({ id: next.id, effect: "ask" })
       yield* service.reply({ requestID: next.id, reply: "reject" })
     }),
@@ -167,14 +207,14 @@ describe("Permission", () => {
       yield* setup([])
       const service = yield* Permission.Service
       const ordinary = assertion({ save: ["src/*"] })
-      const human = assertion({ id: Permission.ID.create("per_human"), requireHuman: true, save: ["src/*"] })
+      const human = assertion({ id: Permission.ID.create("per_human"), requireExplicitDecision: true, save: ["src/*"] })
       yield* service.ask(ordinary)
       yield* service.ask(human)
       yield* service.reply({ requestID: ordinary.id, reply: "always" })
       expect((yield* service.list()).map((request) => request.id)).toEqual([human.id])
       yield* service.reply({ requestID: human.id, reply: "once" })
       yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
-      expect((yield* service.ask(assertion({ requireHuman: true }))).effect).toBe("deny")
+      expect((yield* service.ask(assertion({ requireExplicitDecision: true }))).effect).toBe("deny")
     }),
   )
 
@@ -504,7 +544,7 @@ describe("Permission", () => {
     }),
   )
 
-  it.effect("rejects only the selected concurrent request when request scope is explicit", () =>
+  it.effect("rejects only the selected concurrent request by default", () =>
     Effect.gen(function* () {
       yield* setup()
       const first = yield* waitForRequest()
@@ -519,7 +559,7 @@ describe("Permission", () => {
       )
       yield* Effect.addFinalizer(() => unsubscribe)
 
-      yield* first.service.reply({ requestID: first.request.id, reply: "reject", rejectScope: "request" })
+      yield* first.service.reply({ requestID: first.request.id, reply: "reject" })
 
       const exit = yield* Fiber.await(first.fiber)
       expect(exit._tag).toBe("Failure")
@@ -537,8 +577,8 @@ describe("Permission", () => {
     }),
   )
 
-  for (const rejectScope of [undefined, "session"] as const) {
-    it.effect(`rejects every same-Session request with ${rejectScope ?? "default"} scope`, () =>
+  for (const message of [undefined, "Use a narrower action"] as const) {
+    it.effect(`reject preserves other Session and concurrent requests ${message ? "with" : "without"} feedback`, () =>
       Effect.gen(function* () {
         yield* setup()
         const database = yield* Database.Service
@@ -560,11 +600,12 @@ describe("Permission", () => {
           sessionID: Session.ID.make("ses_other"),
         })
 
-        yield* first.service.reply({ requestID: first.request.id, reply: "reject", rejectScope })
+        yield* first.service.reply({ requestID: first.request.id, reply: "reject", message })
 
         expect((yield* Fiber.await(first.fiber))._tag).toBe("Failure")
-        expect((yield* Fiber.await(second.fiber))._tag).toBe("Failure")
-        expect(yield* first.service.list()).toEqual([other.request])
+        expect(yield* first.service.list()).toEqual([second.request, other.request])
+        yield* second.service.reply({ requestID: second.request.id, reply: "once" })
+        yield* Fiber.join(second.fiber)
         yield* other.service.reply({ requestID: other.request.id, reply: "once" })
         yield* Fiber.join(other.fiber)
       }),
@@ -630,7 +671,7 @@ describe("Permission", () => {
       const same = assertion({ id: Permission.ID.create("per_same"), action, resources: ["team/calendar"] })
       const otherSession = assertion({ id: Permission.ID.create("per_other_session"), sessionID, action, resources: ["team/calendar"] })
       const otherTool = assertion({ id: Permission.ID.create("per_other_tool"), action: "chatgpt_connector_43_list_events_abcdef012345", resources: ["team/calendar"] })
-      const human = assertion({ id: Permission.ID.create("per_human"), action, resources: ["team/calendar"], requireHuman: true })
+      const human = assertion({ id: Permission.ID.create("per_human"), action, resources: ["team/calendar"], requireExplicitDecision: true })
       for (const input of [first, same, otherSession, otherTool, human]) {
         expect((yield* service.ask(input)).effect).toBe("ask")
       }
@@ -696,14 +737,14 @@ describe("Permission delegated settlement", () => {
       yield* setup([{ action: "*", resource: "*", effect: "ask" }])
       const service = yield* Permission.Service
       const first = yield* waitForRequest({ id: Permission.ID.create("per_human_first"), action: "edit", resources: ["src/held.ts"] })
-      yield* service.reply({ requestID: first.request.id, reply: "reject", rejectScope: "request" })
+      yield* service.reply({ requestID: first.request.id, reply: "reject" })
       expect((yield* Fiber.join(first.fiber).pipe(Effect.exit))._tag).toBe("Failure")
       const sibling = yield* waitForRequest({ id: Permission.ID.create("per_held_sibling"), action: "edit", resources: ["src/held.ts"] })
       const snapshot = yield* service.snapshot(sibling.request.id)
       expect((yield* service.delegatedEligible({ requestID: sibling.request.id, fingerprint: snapshot!.fingerprint, reply: "once" }))).toBe(false)
       expect((yield* service.replyDelegated({ requestID: sibling.request.id, reply: "once", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
       expect(yield* service.snapshot(sibling.request.id)).toBeDefined()
-      yield* service.reply({ requestID: sibling.request.id, reply: "reject", rejectScope: "request" })
+      yield* service.reply({ requestID: sibling.request.id, reply: "reject" })
       expect((yield* Fiber.join(sibling.fiber).pipe(Effect.exit))._tag).toBe("Failure")
     }))
   it.effect("a deny on the twenty-first resource holds delegated settlement and eligibility", () =>
@@ -717,18 +758,18 @@ describe("Permission delegated settlement", () => {
       expect((yield* service.delegatedEligible({ requestID: pending.request.id, fingerprint: snapshot!.fingerprint, reply: "once" }))).toBe(false)
       expect((yield* service.replyDelegated({ requestID: pending.request.id, reply: "once", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
       expect(yield* service.snapshot(pending.request.id)).toBeDefined()
-      yield* service.reply({ requestID: pending.request.id, reply: "reject", rejectScope: "request" })
+      yield* service.reply({ requestID: pending.request.id, reply: "reject" })
       expect((yield* Fiber.join(pending.fiber).pipe(Effect.exit))._tag).toBe("Failure")
     }))
-  it.effect("a requireHuman request is never delegated-eligible", () =>
+  it.effect("an explicit-decision request is never delegated-eligible", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "*", resource: "*", effect: "ask" }])
       const service = yield* Permission.Service
-      const pending = yield* waitForRequest({ id: Permission.ID.create("per_human_only"), action: "edit", resources: ["src/human.ts"], requireHuman: true })
+      const pending = yield* waitForRequest({ id: Permission.ID.create("per_human_only"), action: "edit", resources: ["src/human.ts"], requireExplicitDecision: true })
       const snapshot = yield* service.snapshot(pending.request.id)
       expect((yield* service.replyDelegated({ requestID: pending.request.id, reply: "once", fingerprint: snapshot!.fingerprint, source: delegatedSource, validate: () => Effect.succeed(true) }).pipe(Effect.exit))._tag).toBe("Failure")
       expect(yield* service.snapshot(pending.request.id)).toBeDefined()
-      yield* service.reply({ requestID: pending.request.id, reply: "reject", rejectScope: "request" })
+      yield* service.reply({ requestID: pending.request.id, reply: "reject" })
       expect((yield* Fiber.join(pending.fiber).pipe(Effect.exit))._tag).toBe("Failure")
     }))
 })

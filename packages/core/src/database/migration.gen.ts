@@ -47,5 +47,6 @@ export const migrations = (
     import("./migration/20261024120000_session-decision-modes"),
     import("./migration/20261024192410_coordination-member-owner"),
     import("./migration/20261025113826_mcp-event-attention"),
+    import("./migration/20261026223924_client-decision-provenance"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

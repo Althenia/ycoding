@@ -166,7 +166,7 @@ describe("QuestionTool", () => {
     ] })
   }))
 
-  it.effect("does not turn a closed unanswered Form into successful tool continuation", () => Effect.gen(function* () {
+  it.effect("returns a timed-out Form as an unanswered request outcome", () => Effect.gen(function* () {
     timedOut = true
     const registry = yield* ToolRegistry.Service
     const exit = yield* executeTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "call-question-timeout", name: "question", input: questionInput } }).pipe(Effect.exit, Effect.ensuring(Effect.sync(() => { timedOut = false })))
@@ -185,18 +185,14 @@ describe("QuestionTool", () => {
     ] })
   }))
 
-  it.effect("keeps dismissed questions out of model-facing output", () => Effect.gen(function* () {
+  it.effect("returns a dismissed question without stopping execution or inventing an answer", () => Effect.gen(function* () {
     captured = undefined
     reject = true
     deny = false
     const registry = yield* ToolRegistry.Service
-    const fiber = yield* executeTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "call-question", name: "question", input: questionInput } }).pipe(Effect.forkScoped)
-    const exit = yield* Fiber.await(fiber)
+    const exit = yield* executeTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "call-question", name: "question", input: questionInput } }).pipe(Effect.exit)
     expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(Cause.squash(exit.cause)).toBeInstanceOf(QuestionTool.CancelledError)
-      expect(Cause.squash(exit.cause)).toHaveProperty("message", "This question was dismissed or superseded without an answer")
-    }
+    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(QuestionTool.CancelledError)
   }))
 
   it.effect("preserves explicit recommended labels without a helper default", () => Effect.gen(function* () {
@@ -238,7 +234,7 @@ describe("QuestionTool", () => {
     yield* autonomy.setGoal({ sessionID, text: "Choose safely" })
     decisionBehavior = () => Effect.die("Auto answers must not request judgments")
     const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "goal", name: "question", input: { questions: [recommendedPlan] } } })
-    const text = `Answers were selected automatically, not provided or approved by the user: "${plan.question}"="Fast (Recommended)". Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
+    const text = `Answers were selected automatically: "${plan.question}"="Fast (Recommended)". Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and required explicit decisions still apply.`
     expect(settled.result).toEqual({ type: "text", value: text })
     expect(settled.output?.structured).toEqual({ answers: [["Fast (Recommended)"]], automatic: true, via: "auto-answer", assessment: modelFreeAssessment("auto") })
     expect(settled.output?.content).toEqual([{ type: "text", text }])
@@ -265,23 +261,23 @@ describe("QuestionTool", () => {
     })
   }))
 
-  autonomous.effect("a delegated reply is attributed to the delegated external client, never the user", () => Effect.gen(function* () {
+  autonomous.effect("an explicit Dots client reply retains client attribution", () => Effect.gen(function* () {
     deny = false
     decisionBehavior = () => Effect.die("Questions must not request judgments")
     yield* seedSession
     const forms = yield* Form.Service
     const events = yield* EventRuntime.Service
-    const source = { kind: "dots-delegation", anchorSessionID: Session.ID.make("ses_anchor"), delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1" } as const
+    const source = { kind: "dots-client", anchorSessionID: Session.ID.make("ses_anchor"), bindingID: "binding", delegationID: "proposal_1", revision: 1, exchangeID: "exchange_1", principal: { ownerID: "owner", deviceID: "device", clientID: "client", grantID: "grant", epoch: "epoch" } } as const
     const unsubscribe = yield* events.listen((event) => event.type === Form.Event.Created.type
       ? Effect.gen(function* () {
           const form = Schema.decodeUnknownSync(Form.Event.Created.data)(event.data).form
-          yield* forms.replyDelegated({ id: form.id, answer: { q0: "Careful" }, fingerprint: Form.fingerprint(form), source, validate: () => Effect.succeed(true) })
+          yield* forms.replyDelegated({ id: form.id, answer: { q0: "Careful" }, fingerprint: Form.fingerprint(form), source, explicitDecision: true, validate: () => Effect.succeed(true) })
         }).pipe(Effect.orDie)
       : Effect.void)
     yield* Effect.addFinalizer(() => unsubscribe)
     const registry = yield* ToolRegistry.Service
     const settled = yield* settleTool(registry, { sessionID, ...toolIdentity, call: { type: "tool-call", id: "delegated-winner", name: "question", input: { questions: [plan] } } })
-    expect(settled.result.value).toContain("delegated external client answered")
+    expect(settled.result.value).toContain("Dots client answered")
     expect(settled.result.value).not.toContain("User has answered")
     expect(settled.output?.structured).toMatchObject({ answers: [["Careful"]], source })
   }))

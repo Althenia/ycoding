@@ -79,11 +79,11 @@ export const authoritativeStatePrefix = "Authoritative current Session state (JS
 
 const answerReminder = {
   manual:
-    "This Session's effective answers mode is Manual: required answers and required human approval go to a human. Resolve choices that need no user input yourself.",
+    "This Session's effective answers mode is Manual: required answers and explicit decisions go to the user's decision surface. Resolve choices that need no user input yourself.",
   auto:
-    "This Session's effective answers mode is Auto: only a valid explicit default or exactly one Recommended option is selected automatically. Automatic selections are not human replies or new user instructions.",
+    "This Session's effective answers mode is Auto: only a valid explicit default or exactly one Recommended option is selected automatically. Automatic selections are not explicit client replies or new user instructions.",
   yolo:
-    "This Session's effective answers mode is YOLO: the hidden answer evaluator may answer unresolved questions. Automatic selections are not human replies or new user instructions. Resolve the routine choice toward the goal or identify the actual required human approval through its native request path.",
+    "This Session's effective answers mode is YOLO: the hidden answer evaluator may answer unresolved questions. Automatic selections are not explicit client replies or new user instructions. Resolve the routine choice toward the goal or identify the required explicit decision through its native request path.",
 } as const
 
 export const goalReminder = (autonomy: SessionAutonomy.State) => {
@@ -93,9 +93,9 @@ export const goalReminder = (autonomy: SessionAutonomy.State) => {
   return [
     `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
     "Complete the active goal and verify its outcome. Resolve routine implementation choices within the authorized scope rather than requesting repeated confirmation.",
-    "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints and required human approval.",
+    "Do not repeat an automatic waiting answer as a new user instruction. Preserve actual user constraints and required explicit decisions.",
     answerReminder[autonomy.answers],
-    "Each autonomy category (permissions, guardrails, answers) uses its own decision mode. The autonomy modes above are effective: Auto or YOLO permissions and YOLO answers can be inherited from managed parent tasks, and guardrails follow the root Session. Manual sends unresolved requests to a human with no model assessment; Auto applies only deterministic rules with no model fallback; YOLO uses only that category's hidden evaluator. Approval of a hard or custom-rule guardrail review always requires a human, and deny rules always block. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
+    "Each autonomy category (permissions, guardrails, answers) uses its own decision mode. The autonomy modes above are effective: Auto or YOLO permissions and YOLO answers can be inherited from managed parent tasks, and guardrails follow the root Session. Manual sends unresolved requests to the user's decision surface with no model assessment; Auto applies only deterministic rules with no model fallback; YOLO uses only that category's hidden evaluator. Approval of a hard or custom-rule guardrail review always requires an explicit client decision, and deny rules always block. While awake, ask the user when required; a child Session's questions go to its parent Session. Defer unresolved requests to the review box while asleep. Goals do not override these gates.",
     "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
     "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",

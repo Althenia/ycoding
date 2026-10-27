@@ -3882,7 +3882,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return
       }
       if (pending.hardReview && reply === "always") {
-        setState({ notice: "This human-only review accepts Approve once or Reject, never Always." })
+        setState({ notice: "This hard review accepts Approve once or Reject; Always is unavailable." })
         return
       }
       if (reply !== "reject" && !guardrailContextAvailable(pending)) {

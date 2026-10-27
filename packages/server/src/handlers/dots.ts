@@ -24,6 +24,22 @@ export const DotsHandler = HttpApiBuilder.group(Api, "server.dots", (handlers) =
       const exchanges = yield* DotsExchange.service
       return { data: yield* exchanges.delegationRevoke({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
     }))
+    .handle("session.dots.delegation.device.create", Effect.fn(function* (ctx) {
+      const exchanges = yield* DotsExchange.service
+      return { data: yield* exchanges.deviceDelegationCreate({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+    }))
+    .handle("session.dots.delegation.device.read", Effect.fn(function* (ctx) {
+      const exchanges = yield* DotsExchange.service
+      return { data: yield* exchanges.deviceDelegationRead({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+    }))
+    .handle("session.dots.delegation.device.revoke", Effect.fn(function* (ctx) {
+      const exchanges = yield* DotsExchange.service
+      return { data: yield* exchanges.deviceDelegationRevoke({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+    }))
+    .handle("session.dots.decisions.list", Effect.fn(function* (ctx) {
+      const exchanges = yield* DotsExchange.service
+      return { data: yield* exchanges.decisionsList({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(Effect.mapError(failure)) }
+    }))
     .handle(
       "session.dots.exchange.create",
       Effect.fn(function* (ctx) {

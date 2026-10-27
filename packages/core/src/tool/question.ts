@@ -70,11 +70,13 @@ export const toModelOutput = (
     `"${question.question}"="${answers[index]?.length ? answers[index].join(", ") : "Unanswered"}"`,
   ).join(", ")
   if (source?.kind === "dots-delegation")
-    return `The delegated external client answered these questions under a native-approved Dots delegation, not the user: ${formatted}. These answers grant no permission, consent, or human-only approval.`
+    return `The delegated external client answered these questions under a native-approved Dots delegation: ${formatted}. These answers grant no permission, consent, or explicit decision approval.`
+  if (source?.kind === "dots-client")
+    return `The authenticated Dots client answered these questions: ${formatted}. Answers do not approve a permission or guardrail request.`
   if (source?.kind === "coordinator")
-    return `The native coordinator answered these questions${source.via === "yolo" ? " through the Answers YOLO evaluator" : source.via === "auto-answer" ? " using deterministic Auto rules" : ""}, not the user: ${formatted}. These answers grant no permission, consent, or human-only approval.`
+    return `The native coordinator answered these questions${source.via === "yolo" ? " through the Answers YOLO evaluator" : source.via === "auto-answer" ? " using deterministic Auto rules" : ""}: ${formatted}. These answers grant no permission, consent, or explicit decision approval.`
   if (automatic)
-    return `Answers were selected automatically, not provided or approved by the user: ${formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and explicit human-only approvals still apply.`
+    return `Answers were selected automatically: ${formatted}. Continue independent work within the authorized scope and follow the active goal when one exists. Do not reopen routine choices or treat an automatic selection to wait as a new user instruction or authorization constraint. Permissions, guardrails, and required explicit decisions still apply.`
   return `User has answered your questions: ${formatted}. You can now continue with the user's answers in mind.`
 }
 

@@ -12,6 +12,7 @@ import { Session } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
+import { SessionReview } from "@ycoding-ai/core/session/review"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
@@ -118,7 +119,8 @@ test("authenticated MCP exchanges cross the typed protocol into owner-checked du
       mappedLocations.push(ref)
       return Layer.succeedContext(Context.makeUnsafe<LocationServices>(context.mapUnsafe))
     }))
-    const configured = Context.add(context, LocationServiceMap.Service, locations)
+    const reviews = yield* SessionReview.Service.pipe(Effect.provide(Layer.mock(SessionReview.Service, {})))
+    const configured = context.pipe(Context.add(LocationServiceMap.Service, locations), Context.add(SessionReview.Service, reviews))
     const reportingContext = configured.pipe(
       Context.add(Location.Service, { ...alphaLocation, project: { id: alpha.projectID, directory: alphaLocation.directory } }),
       Context.add(DotsRuntime.Service, DotsRuntime.Service.of({

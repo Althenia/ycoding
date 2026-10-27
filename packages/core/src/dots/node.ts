@@ -23,6 +23,8 @@ import { SessionGuardrail } from "../session/guardrail"
 import { Session } from "../session"
 import { SessionEvent } from "../session/event"
 import { SessionExecution } from "../session/execution"
+import { SessionReview } from "../session/review"
+import { SessionOrchestration } from "../session/orchestration"
 import { SessionMcpEvents } from "../mcp-events/index"
 import { CoordinationService } from "../coordination/index"
 import type { SessionSchema } from "../session/schema"
@@ -39,6 +41,7 @@ import { DotsExchange } from "./exchange"
 import { DotsReporting } from "./report"
 import { DotsReportTool } from "./report-tool"
 import { DotsContext } from "./context"
+import { DotsAuthority } from "./authority"
 import { ToolRegistry } from "../tool/registry"
 import type { DotsTransport } from "./transport"
 
@@ -56,6 +59,7 @@ export const configured = (transport: DotsTransport.Interface) =>
       const events = yield* EventRuntime.Service
       return DotsRuntime.Service.of(
         yield* DotsRuntime.make({
+          persistence: DotsAuthority.make({ db: database.db, events, location }),
           enabled: () =>
             config.entries().pipe(Effect.map((entries) => ConfigCapabilities.allowsDots(Config.capabilities(entries)))),
           changes: events.subscribe(Event.Updated),
@@ -191,5 +195,5 @@ export const requestToolsNode: Node.LocationNode<RequestTools> = makeLocationNod
     }),
   ),
   deps: [node, Location.node, Permission.node, SessionGuardrail.node, Database.node, EventRuntime.node, Config.node, ToolRegistry.node,
-    Session.node, SessionExecution.node, CoordinationService.node, SessionMcpEvents.Authorization.node, LocationServiceMap.node, Form.node, Question.node],
+    Session.node, SessionExecution.node, SessionReview.node, SessionOrchestration.node, CoordinationService.node, SessionMcpEvents.Authorization.node, LocationServiceMap.node, Form.node, Question.node],
 })

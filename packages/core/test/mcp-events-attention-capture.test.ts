@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { mapEvent } from "../src/mcp-events/capture"
 
-const pendingActions = ["inspect", "notify_human"] as const
+const pendingActions = ["inspect", "respond"] as const
 const tool = { messageID: "msg_1", callID: "call_1" }
 const toolOrigin = (eventID: string) => ({ type: "tool" as const, source_event_id: eventID, message_id: "msg_1", call_id: "call_1" })
 const guardrail = (data: Record<string, unknown>, id = "evt_g") =>
@@ -23,7 +23,6 @@ test("guardrail attention classifies hard, custom, ordinary and unreported revie
     kind: "guardrail",
     origin: { type: "unreported", source_event_id: "evt_g" },
     review: "ordinary",
-    human_required: true,
     actions: pendingActions,
   })
 })
@@ -52,7 +51,7 @@ test("guardrail assessment escalation waits for the native pending request event
 test("permission asked attention uses the typed tool source and no review class", () => {
   const value = mapEvent({ type: "permission.asked", id: "evt_p", data: { id: "per_1", sessionID: "ses_a", action: "shell", resources: ["rm -rf /private"], metadata: { command: "secret" }, source: { type: "tool", ...tool } } })
   expect(value).toMatchObject({ name: "session.permission.changed", state: "pending", requestID: "per_1", category: "shell" })
-  expect(value?.attention).toEqual({ kind: "permission", origin: toolOrigin("evt_p"), human_required: true, actions: pendingActions })
+  expect(value?.attention).toEqual({ kind: "permission", origin: toolOrigin("evt_p"), actions: pendingActions })
   expect(JSON.stringify(value)).not.toContain("rm -rf")
   expect(JSON.stringify(value)).not.toContain("secret")
   for (const source of [undefined, { type: "plugin", ...tool }, { type: "tool", messageID: "msg 1", callID: "call_1" }, { type: "tool", messageID: "msg_1" }, "tool"])
@@ -63,7 +62,7 @@ test("permission asked attention uses the typed tool source and no review class"
 test("native question asked is native attention without question content", () => {
   const value = mapEvent({ type: "question.asked", id: "evt_q", data: { id: "que_1", sessionID: "ses_a", questions: [{ question: "Private question?", options: [] }] } })
   expect(value).toMatchObject({ name: "session.question.changed", state: "pending", requestID: "que_1" })
-  expect(value?.attention).toEqual({ kind: "question", origin: { type: "native", source_event_id: "evt_q" }, human_required: true, actions: pendingActions })
+  expect(value?.attention).toEqual({ kind: "question", origin: { type: "native", source_event_id: "evt_q" }, actions: pendingActions })
   expect(JSON.stringify(value)).not.toContain("Private question")
   expect(mapEvent({ type: "question.asked", id: "evt_q2", data: { id: "que_2", sessionID: "ses_a", tool } })?.attention?.origin).toEqual(toolOrigin("evt_q2"))
   expect(mapEvent({ type: "question.asked", id: "evt_q3", data: { id: "que_3", sessionID: "ses_a", tool: { messageID: "bad id", callID: "call_1" } } })?.attention?.origin)
@@ -74,9 +73,9 @@ test("form created stays a form even when its metadata says question", () => {
   const form = (metadata: unknown) => mapEvent({ type: "form.created", id: "evt_f", data: { form: { id: "frm_1", sessionID: "ses_a", title: "Private title", metadata, fields: [] } } })
   const asQuestion = form({ kind: "question", tool, prompt: "Private prompt" })
   expect(asQuestion).toMatchObject({ name: "session.form.changed", state: "pending", requestID: "frm_1" })
-  expect(asQuestion?.attention).toEqual({ kind: "form", origin: toolOrigin("evt_f"), human_required: true, actions: pendingActions })
+  expect(asQuestion?.attention).toEqual({ kind: "form", origin: toolOrigin("evt_f"), actions: pendingActions })
   expect(JSON.stringify(asQuestion)).not.toContain("Private")
-  expect(form({ kind: "question" })?.attention).toEqual({ kind: "form", origin: { type: "native", source_event_id: "evt_f" }, human_required: true, actions: pendingActions })
+  expect(form({ kind: "question" })?.attention).toEqual({ kind: "form", origin: { type: "native", source_event_id: "evt_f" }, actions: pendingActions })
   expect(form(undefined)?.attention?.origin).toEqual({ type: "native", source_event_id: "evt_f" })
   expect(form({ tool: { messageID: "msg_1", callID: "call/1" } })?.attention?.origin).toEqual({ type: "native", source_event_id: "evt_f" })
 })
@@ -95,7 +94,6 @@ test("deferred lifecycle events carry review-origin attention", () => {
       kind,
       origin: { type: "review", source_event_id: "evt_d" },
       ...(kind === "guardrail" ? { review: "unreported" } : {}),
-      human_required: true,
       actions: pendingActions,
     })
   }
@@ -105,21 +103,23 @@ test("session review deferral preserves direct tool origin and falls back to the
   const deferred = (data: Record<string, unknown>, id = "evt_r") => mapEvent({ type: "session.review.deferred", id, data: { sessionID: "ses_a", itemID: "rev_1", ...data } })
   const guardrailPayload = (hardReview: boolean) => ({ type: "guardrail", action: "shell", resources: ["/private"], ruleIDs: [], reason: "private reason", hardReview, directories: [], requestID: "grq_1" })
   const hard = deferred({ kind: "guardrail", origin: tool, payload: guardrailPayload(true) })
-  expect(hard?.attention).toEqual({ kind: "guardrail", origin: toolOrigin("evt_r"), review: "hard", human_required: true, actions: pendingActions })
+  expect(hard?.attention).toEqual({ kind: "guardrail", origin: toolOrigin("evt_r"), review: "hard", actions: pendingActions })
   expect(JSON.stringify(hard)).not.toContain("private")
   expect(deferred({ kind: "guardrail", origin: { requestID: "grq_1" }, payload: guardrailPayload(false) })?.attention)
-    .toEqual({ kind: "guardrail", origin: { type: "review", source_event_id: "evt_r" }, review: "unreported", human_required: true, actions: pendingActions })
+    .toEqual({ kind: "guardrail", origin: { type: "review", source_event_id: "evt_r" }, review: "unreported", actions: pendingActions })
   expect(deferred({ kind: "guardrail", origin: { messageID: "bad id", callID: "call_1" }, payload: guardrailPayload(false) })?.attention?.origin)
     .toEqual({ type: "review", source_event_id: "evt_r" })
   expect(deferred({ kind: "permission", origin: tool, payload: { type: "permission", requestID: "per_1" } })?.attention)
-    .toEqual({ kind: "permission", origin: toolOrigin("evt_r"), human_required: true, actions: pendingActions })
+    .toEqual({ kind: "permission", origin: toolOrigin("evt_r"), actions: pendingActions })
   expect(deferred({ kind: "question", origin: { questionID: "que_1" }, payload: { type: "question", questions: [] } })?.attention)
-    .toEqual({ kind: "question", origin: { type: "review", source_event_id: "evt_r" }, human_required: true, actions: pendingActions })
+    .toEqual({ kind: "question", origin: { type: "review", source_event_id: "evt_r" }, actions: pendingActions })
   expect(deferred({ kind: "question", origin: tool, payload: { type: "form", title: "Private", fields: [] } })).toMatchObject({ name: "session.form.changed" })
   expect(deferred({ kind: "question", origin: tool, payload: { type: "form", title: "Private", fields: [] } })?.attention?.kind).toBe("form")
   expect(deferred({ kind: "subagent_question", origin: { questionID: "que_1" }, payload: { type: "subagent_question", text: "Private child text" } })?.attention)
-    .toEqual({ kind: "subagent_question", origin: { type: "review", source_event_id: "evt_r" }, human_required: true, actions: pendingActions })
-  expect(deferred({ kind: "recovery", payload: { type: "recovery", tools: [] } })).toBeUndefined()
+    .toEqual({ kind: "subagent_question", origin: { type: "review", source_event_id: "evt_r" }, actions: pendingActions })
+  expect(deferred({ kind: "recovery", payload: { type: "recovery", tools: [] } })).toMatchObject({ name: "session.question.changed", state: "deferred", itemID: "rev_1", attention: {
+    kind: "recovery", origin: { type: "review", source_event_id: "evt_r" }, actions: pendingActions,
+  } })
 })
 
 test("an invalid event identifier omits attention instead of forging a source", () => {
@@ -170,10 +170,10 @@ test("attention carries metadata only: no prompts, resources, evidence or answer
     mapEvent({ type: "form.created", id: "evt_f", data: { form: { id: "frm_1", sessionID: "ses_a", title: "Private title", fields: [{ key: "secret" }], metadata: { tool, answer: "private answer" } } } }),
   ]
   for (const value of values) {
-    expect(Object.keys(value?.attention ?? {}).sort().every((key) => ["actions", "human_required", "kind", "origin", "review"].includes(key))).toBe(true)
+    expect(Object.keys(value?.attention ?? {}).sort().every((key) => ["actions", "kind", "origin", "review"].includes(key))).toBe(true)
     expect(JSON.stringify(value?.attention)).not.toMatch(/private|secret|rm -rf/)
     expect(value?.attention?.actions).toEqual(pendingActions)
-    expect(value?.attention?.human_required).toBe(true)
+    expect(value?.attention).not.toHaveProperty("human_required")
   }
 })
 
@@ -185,19 +185,19 @@ test("managed child question asked is pending subagent attention owned by the ch
     name: "session.question.changed",
     sessionID: "ses_child",
     state: "pending",
-    sourceID: "que_child_1",
+    sourceID: "evt_t",
     requestID: "que_child_1",
     taskID: "ses_child",
-    attention: { kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_t" }, human_required: true, actions: pendingActions },
+    attention: { kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_t" }, actions: pendingActions },
   })
   expect(JSON.stringify(value)).not.toMatch(/Private|private/)
 })
 
 test("managed child question answered and timed out settle without attention or content", () => {
   const answered = childTask({ type: "question_answered", answer: { questionID: "que_child_1", text: "Private answer", data: { secret: "private data" } } })
-  expect(answered).toEqual({ name: "session.question.changed", sessionID: "ses_child", state: "resolved", sourceID: "que_child_1", requestID: "que_child_1", taskID: "ses_child" })
+  expect(answered).toEqual({ name: "session.question.changed", sessionID: "ses_child", state: "resolved", sourceID: "evt_t", requestID: "que_child_1", taskID: "ses_child" })
   const timedOut = childTask({ type: "question_timed_out", questionID: "que_child_1" })
-  expect(timedOut).toEqual({ name: "session.question.changed", sessionID: "ses_child", state: "cancelled", sourceID: "que_child_1", requestID: "que_child_1", taskID: "ses_child", reason: "timed_out" })
+  expect(timedOut).toEqual({ name: "session.question.changed", sessionID: "ses_child", state: "cancelled", sourceID: "evt_t", requestID: "que_child_1", taskID: "ses_child", reason: "timed_out" })
   for (const value of [answered, timedOut]) {
     expect(value).not.toHaveProperty("attention")
     expect(JSON.stringify(value)).not.toMatch(/Private|private/)
@@ -207,7 +207,7 @@ test("managed child question answered and timed out settle without attention or 
 test("managed child question with an invalid identifier omits the request id without inventing one", () => {
   for (const id of ["", "bad id", "q/1", "q".repeat(129), 7, undefined]) {
     const asked = childTask({ type: "question_asked", question: { id, text: "x", time: 1 } })
-    expect(asked).toMatchObject({ name: "session.question.changed", state: "pending", taskID: "ses_child", sourceID: "ses_child" })
+    expect(asked).toMatchObject({ name: "session.question.changed", state: "pending", taskID: "ses_child", sourceID: "evt_t" })
     expect(asked?.requestID).toBeUndefined()
     expect(asked?.attention).toMatchObject({ kind: "subagent_question", origin: { type: "managed_task", source_event_id: "evt_t" } })
     expect(childTask({ type: "question_answered", answer: { questionID: id, text: "x" } })?.requestID).toBeUndefined()
@@ -217,8 +217,8 @@ test("managed child question with an invalid identifier omits the request id wit
   expect(mapEvent({ type: "session.task.updated", id: "evt_t", data: { change: { type: "question_asked", question: { id: "que_1" } } } })).toBeUndefined()
 })
 
-test("managed child question attention is omitted when the event identifier is invalid and progress changes stay unmapped", () => {
+test("managed child question attention is omitted when the event identifier is invalid and progress carries no text", () => {
   expect(childTask({ type: "question_asked", question: { id: "que_child_1" } }, "bad id")).not.toHaveProperty("attention")
-  expect(childTask({ type: "progressed" })).toBeUndefined()
+  expect(childTask({ type: "progressed", progress: { text: "Private progress", time: 1 } })).toEqual({ name: "session.progress", state: "running", sessionID: "ses_child", taskID: "ses_child", sourceID: "evt_t" })
   expect(childTask({ type: "completed", excerpt: "private" })).toMatchObject({ name: "session.progress", state: "completed" })
 })

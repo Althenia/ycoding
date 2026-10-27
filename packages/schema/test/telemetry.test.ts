@@ -50,6 +50,10 @@ test("accepts request telemetry for every Session Dots control in closed samples
     "session.dots.resume",
     "session.dots.exchange.create",
     "session.dots.exchange.read",
+    "session.dots.delegation.device.create",
+    "session.dots.delegation.device.read",
+    "session.dots.delegation.device.revoke",
+    "session.dots.decisions.list",
   ] as const
   for (const operation of names) {
     expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)

@@ -1,6 +1,7 @@
 import path from "path"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
+import { ConfigCapabilities } from "@ycoding-ai/core/config/capabilities"
 import * as TestClock from "effect/testing/TestClock"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Location } from "@ycoding-ai/core/location"
@@ -26,10 +27,10 @@ const gitAttribution =
   "When creating commits, use the user's existing Git author and committer identity and write messages without Co-authored-by trailers or AI, model, agent, or provider attribution. Do not set `user.name`, `user.email`, or `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, or pass `--author` or `--reset-author`, as part of committing. If Git reports a missing identity, report it and ask the user to configure their own identity; never invent one."
 const taskCompletion =
   "Call task_complete once after all accepted work is finished and verified, immediately before your final reply. Do not call it for ordinary replies, idle, partial results, blockers, or unfinished pending, subagent, or background work. In goal mode, first complete the achieved goal with the goal tool; goal completion alone is not work-completion evidence. If new input or unfinished work intervenes, finish and verify it before declaring completion again."
-const humanInput =
-  "When progress requires user input, a decision, or review, call question with the blocker and the minimum actionable request; do not end with a prose-only request for the user to act. Use options for decisions and an empty options array for free-text input. Continue after the reply; do not call task_complete while blocked. Keep permission and guardrail approvals on their native request paths. Do not ask for routine progress, optional acknowledgement, or information you can obtain yourself. Preserve autonomy and permission rules; if question is unavailable or denied, report that blocker without bypassing it. An item already in the review box awaits a human decision whether awake or asleep; do not ask it again, guess its answer, retry its action, or count it as a goal no-progress attempt. Continue independent work; when only deferred items remain, state what is waiting and stop. Review decisions arrive as user messages without waking the family."
+const decisionInput =
+  "When progress requires user input, a decision, or review, call question with the blocker and the minimum actionable request; do not end with a prose-only request for the user to act. Use options for decisions and an empty options array for free-text input. Continue after the reply; do not call task_complete while blocked. Keep permission and guardrail approvals on their native request paths. Do not ask for routine progress, optional acknowledgement, or information you can obtain yourself. Preserve autonomy and permission rules; if question is unavailable or denied, report that blocker without bypassing it. An item already in the review box awaits an explicit decision whether awake or asleep; do not ask it again, guess its answer, retry its action, or count it as a goal no-progress attempt. Continue independent work; when only deferred items remain, state what is waiting and stop. Review decisions arrive as user messages without waking the family."
 const decisionUse =
-  'Use decision for bounded typed judgments from the hidden helper. Confidence is self-reported and uncalibrated. Prefer tests, grep, typechecks, and inventory for facts. Supply authorized evidence, neutral questions, observable criteria, distinct choices including keep-current, and adjacent score levels. Batch independent questions; separate dependent judgments. Grade mode (`grade: true`) returns every typed choice once with confidence in [0,1] and nonempty evidence of at most 500 characters, without a pick. Example: {"provider":"agent","request":{"state":{},"questions":[{"type":"choice","name":"route","instructions":"Grade both routes","grade":true,"choices":[{"value":"keep-current"},{"value":"change"}]}]}} Treat refusal, invalid responses, unavailable routes, low confidence, and conflicting evidence as uncertainty. Set thresholds by mistake cost; preserve owner choices, guardrails, and permission ceilings. Reuse unchanged judgments. Explicit judgments never grant authority or prove completion. Permissions, guardrails, and answers each use a Manual, Auto, or YOLO decision mode set through /autonomous: Manual is human-only, Auto applies deterministic rules with no model fallback, and YOLO enables a separate hidden evaluator for that category with allow/deny/escalate, not unrestricted approval. Explicit denies cannot be overridden; hard-policy and custom-rule review approvals require a human. Unsettled requests ask humans awake or defer asleep; child questions go to parent controls. Never retry pending human reviews or change security settings.'
+  'Use decision for bounded typed judgments from the hidden helper. Confidence is self-reported and uncalibrated. Prefer tests, grep, typechecks, and inventory for facts. Supply authorized evidence, neutral questions, observable criteria, distinct choices including keep-current, and adjacent score levels. Batch independent questions; separate dependent judgments. Grade mode (`grade: true`) returns every typed choice once with confidence in [0,1] and nonempty evidence of at most 500 characters, without a pick. Example: {"provider":"agent","request":{"state":{},"questions":[{"type":"choice","name":"route","instructions":"Grade both routes","grade":true,"choices":[{"value":"keep-current"},{"value":"change"}]}]}} Treat refusal, invalid responses, unavailable routes, low confidence, and conflicting evidence as uncertainty. Set thresholds by mistake cost; preserve owner choices, guardrails, and permission ceilings. Reuse unchanged judgments. Explicit judgments never grant authority or prove completion. Permissions, guardrails, and answers each use a Manual, Auto, or YOLO decision mode set through /autonomous: Manual requires an explicit decision and makes no helper call, Auto applies deterministic rules with no model fallback, and YOLO enables a separate hidden evaluator for that category with allow/deny/escalate, not unrestricted approval. Explicit denies cannot be overridden; hard-policy and custom-rule reviews require explicit client approval. Unsettled requests ask the user awake or defer asleep; child questions go to parent controls. Never retry pending reviews or change security settings.'
 const allTools = new Set(["subagent", "shell", "project_artifact", "question", "decision", "task_complete", "memory"])
 const input = (id: SessionSchema.ID, overrides: Partial<Omit<InstructionBuiltIns.Input, "sessionID">> = {}) => ({
   sessionID: id,
@@ -61,7 +62,7 @@ describe("InstructionBuiltIns", () => {
     const text = typeof value === "string" ? value : ""
     expect(text.split(/\s+/).length).toBeLessThanOrEqual(220)
     for (const phrase of ["hidden helper", "uncalibrated", "tests", "grep", "typecheck", "inventory", "neutral", "observable", "adjacent", "dependent", "cost", "owner", "guardrails", "refusal", "keep-current"]) expect(text).toContain(phrase)
-    for (const phrase of ["Manual is human-only", "Auto applies deterministic rules with no model fallback", "allow/deny/escalate", "/autonomous", "hard-policy and custom-rule review approvals require a human"])
+    for (const phrase of ["Manual requires an explicit decision", "Auto applies deterministic rules with no model fallback", "allow/deny/escalate", "/autonomous", "hard-policy and custom-rule reviews require explicit client approval"])
       expect(text).toContain(phrase)
     expect(text).not.toMatch(/YOLO [0123]|Boolean YOLO|\/auto-permission|Baseline permission/)
     expect(text).not.toMatch(/advisory|automatic polic|scope tool|Use scope|native API/i)
@@ -105,7 +106,7 @@ describe("InstructionBuiltIns", () => {
           "",
           gitAttribution,
           "",
-          humanInput,
+          decisionInput,
           "",
           decisionUse,
           "",
@@ -143,17 +144,17 @@ describe("InstructionBuiltIns", () => {
     }),
   )
 
-  it.effect("routes required human input and review through question for every Session", () =>
+  it.effect("routes required decision input and review through question for every Session", () =>
     Effect.gen(function* () {
       const builtins = yield* InstructionBuiltIns.Service
-      const first = (yield* builtins.load(input(sessionID))).find((source) => source.key === "core/human-input")
-      const second = (yield* builtins.load(input(otherSessionID))).find((source) => source.key === "core/human-input")
+      const first = (yield* builtins.load(input(sessionID))).find((source) => source.key === "core/decision-input")
+      const second = (yield* builtins.load(input(otherSessionID))).find((source) => source.key === "core/decision-input")
       expect(first).toBeDefined()
       expect(second).toBeDefined()
-      expect(yield* first!.read).toBe(humanInput)
-      expect(first!.initial(humanInput)).toBe(humanInput)
-      expect(first!.changed(humanInput, humanInput)).toBe(humanInput)
-      expect(yield* second!.read).toBe(humanInput)
+      expect(yield* first!.read).toBe(decisionInput)
+      expect(first!.initial(decisionInput)).toBe(decisionInput)
+      expect(first!.changed(decisionInput, decisionInput)).toBe(decisionInput)
+      expect(yield* second!.read).toBe(decisionInput)
     }),
   )
 
@@ -200,7 +201,7 @@ describe("InstructionBuiltIns", () => {
         "core/shell-memory",
         "core/project-artifact-authoring",
         "core/git-attribution",
-        "core/human-input",
+        "core/decision-input",
         "core/task-completion",
       ])
       expect(initialized.text).not.toContain("<env>")
@@ -219,6 +220,20 @@ describe("InstructionBuiltIns", () => {
     }),
   )
 
+  it.effect("selects decision-input by the public capability name and rejects the removed selector", () =>
+    Effect.gen(function* () {
+      const builtins = yield* InstructionBuiltIns.Service
+      for (const mode of ["allow", "deny"] as const) {
+        const capabilities = Schema.decodeUnknownSync(ConfigCapabilities.Info)({ builtin_instructions: { [mode]: ["decision-input"] } })
+        const initialized = yield* readInitial(yield* builtins.load(input(sessionID, { capabilities })))
+        expect("core/decision-input" in initialized.values).toBe(mode === "allow")
+        expect(() => Schema.decodeUnknownSync(ConfigCapabilities.Info)({ builtin_instructions: { [mode]: ["human-input"] } })).toThrow()
+      }
+      const only = yield* readInitial(yield* builtins.load(input(sessionID, { capabilities: { builtin_instructions: { allow: ["decision-input"] } } })))
+      expect(Object.keys(only.values)).toEqual(["core/decision-input"])
+    }),
+  )
+
   it.effect("omits blocks that describe tools the agent cannot call", () =>
     Effect.gen(function* () {
       const builtins = yield* InstructionBuiltIns.Service
@@ -230,7 +245,7 @@ describe("InstructionBuiltIns", () => {
         "core/git-worktree",
         "core/git-attribution",
       ])
-      expect(initialized.text).not.toContain(humanInput)
+      expect(initialized.text).not.toContain(decisionInput)
       expect(initialized.text).not.toContain(decisionUse)
       expect(initialized.text).not.toContain(taskCompletion)
     }),

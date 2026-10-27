@@ -130,18 +130,18 @@ function OptionGrade(props: { readonly grade: () => Form.OptionGrade | undefined
   return <Show when={props.grade()}>{(grade) => <span class="request__note question__grade">confidence {grade().confidence} · {grade().evidence}</span>}</Show>
 }
 
-export function FormAssessment(props: { readonly value: unknown; readonly fieldKey?: string; readonly settled?: "automatic" | "human"; readonly source?: unknown; readonly grades?: boolean; readonly multiple?: boolean; readonly multipleKeys?: readonly string[] }): JSX.Element {
+export function FormAssessment(props: { readonly value: unknown; readonly fieldKey?: string; readonly settled?: "automatic" | "client"; readonly source?: unknown; readonly grades?: boolean; readonly multiple?: boolean; readonly multipleKeys?: readonly string[] }): JSX.Element {
   const assessment = createMemo(() => readFormAssessment(props.value))
   const source = createMemo(() => readFormReplySource(props.source))
   const settlement = () => {
-    if (!props.settled) return "awaiting your decision"
+    if (!props.settled) return "awaiting an authorized client decision"
     const reply = source()
-    if (reply?.kind === "dots-delegation") return `answered by external client via Dots delegation ${reply.delegationID} · anchor ${reply.anchorSessionID}`
+    if (reply?.kind === "dots-delegation" || reply?.kind === "dots-client") return `answered by external client via Dots delegation ${reply.delegationID} · anchor ${reply.anchorSessionID}`
     if (reply) return `answered by coordinator ${reply.coordinatorSessionID}${reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
     if (props.source !== undefined) return "answer source unreported"
-    return props.settled === "automatic" ? "automatically answered" : "answered by you"
+    return props.settled === "automatic" ? "automatically answered" : "answered by client"
   }
-  return <Show when={assessment()} fallback={<Show when={props.settled && props.source !== undefined}><p class="request__note question__assessment" role="status">{settlement()}</p></Show>}>{(value) => <div class="request__note question__assessment" role="status">
+  return <Show when={assessment()} fallback={<Show when={props.settled || props.source !== undefined}><p class="request__note question__assessment" role="status">{settlement()}</p></Show>}>{(value) => <div class="request__note question__assessment" role="status">
     <p>Answers {value().mode === "yolo" ? "YOLO" : value().mode === "auto" ? "Auto" : "Manual"} · source {value().sourceSessionID}</p>
     <For each={value().fields.filter((field) => props.fieldKey === undefined || field.key === props.fieldKey)}>{(field) => <div>
       <p>{field.status === "pending" ? "Assessing options" : field.status === "assessed" ? "Assessed" : field.status === "unavailable" ? "Assessment unavailable" : "Not assessed"} · {settlement()}</p>

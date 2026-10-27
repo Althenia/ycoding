@@ -2,16 +2,19 @@ export * as SessionMcpEvents from "./index"
 
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import { McpEvents } from "@ycoding-ai/schema/mcp-events"
-import { Cause, Clock, Context, Duration, Effect, Layer, Result, Schema, Semaphore } from "effect"
+import { Cause, Clock, Context, DateTime, Duration, Effect, Layer, Result, Schema, Semaphore } from "effect"
+import { SessionEvent } from "@ycoding-ai/schema/session-event"
 import { and, asc, count, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, max, min, notExists, or, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
+import { EventTable } from "../event/sql"
 import { SessionStore } from "../session/store"
 import { SessionSchema } from "../session/schema"
 import { SessionReviewFold } from "../session/review-fold"
-import { EPHEMERAL_ATTENTION, mapEvent, REPLAYABLE, type Notification } from "./capture"
+import { SessionTaskTable } from "../session/sql"
+import { ATTENTION, EPHEMERAL_ATTENTION, mapEvent, REPLAYABLE, type Notification } from "./capture"
 import { canonicalJSON, grantTtl, normalizeArguments, subscriptionIdentity } from "./identity"
 import { McpEventsHttp } from "./protected-http"
 import { McpEventsSecretBox } from "./secret-box"
@@ -52,7 +55,7 @@ export interface Interface {
 }
 
 export interface TestInterface extends Interface {
-  readonly capture: (input: { type: string; id: string; data: Record<string, unknown> }) => Effect.Effect<void>
+  readonly capture: (input: { type: string; id: string; data: Record<string, unknown>; createdAt?: number }) => Effect.Effect<void>
   readonly dispatchOnce: () => Effect.Effect<void>
   readonly rows: () => Effect.Effect<{ subscriptions: number; activeSubscriptions: number; outbox: number; pending: number }>
 }
@@ -65,6 +68,7 @@ export interface Dependencies {
   readonly transport: McpEventsHttp.Interface
   readonly secretBox: McpEventsSecretBox.SecretBox
   readonly session: (id: string) => Effect.Effect<{ id: string; parentID?: string } | undefined>
+  readonly events?: EventRuntime.Interface
 }
 
 const MAX_ATTEMPTS = 5
@@ -72,8 +76,14 @@ const DISPATCH_BATCH = 100
 const RETENTION_MS = 7 * 86_400_000
 const VERIFICATION_CACHE_MS = 5 * 60_000
 const ROTATION_MS = 120_000
-const PROGRESS_COALESCE_MS = 30_000
 const MAX_BODY_BYTES = 262_144
+const durableDefinitions = SessionEvent.DurableDefinitions.filter((definition) => [
+  "session.review.deferred", "session.review.decided", "session.review.withdrawn",
+  "session.guardrail.decided", "session.guardrail.approved", "session.guardrail.dismissed",
+  "session.execution.started", "session.execution.succeeded", "session.execution.interrupted", "session.execution.failed",
+  "session.work.completed", "session.dots.report.recorded", "session.task.updated",
+].includes(definition.type))
+const durableTypes = durableDefinitions.map((definition) => EventRuntime.versionedType(definition.type, definition.durable.version))
 
 const fail = (category: McpEvents.FailureCategory, reason: McpEvents.FailureReason) => new McpEvents.Failure({ category, reason })
 
@@ -82,6 +92,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
   const mutations = Semaphore.makeUnsafe(1)
   const verified = new Map<string, number>()
   const inflight = new Map<string, Set<AbortController>>()
+  const pendingAttention = new Map<string, { notification: Notification; createdAt: number }>()
   const abortInflight = (subscriptionID: string) => {
     for (const controller of inflight.get(subscriptionID) ?? []) controller.abort()
   }
@@ -187,7 +198,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
     if (confirmed.expiresAt <= verifiedAt || expiresAt <= verifiedAt) return yield* fail("unauthorized", "grant_expired")
     if (confirmed.signal?.aborted) return yield* fail("unavailable", "authorization_unavailable")
 
-    return yield* db.transaction((tx) => Effect.gen(function* () {
+    const result = yield* db.transaction((tx) => Effect.gen(function* () {
       const existing = yield* tx.select().from(McpEventSubscriptionTable).where(eq(McpEventSubscriptionTable.identity_hash, identity.hash)).get().pipe(Effect.orDie)
       if (existing?.disabled === 1) return yield* authorizationUnavailable()
       const fingerprint = deps.secretBox.fingerprint(secretBytes.success)
@@ -240,6 +251,14 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       if (confirmed.signal?.aborted) return yield* authorizationUnavailable()
       return result
     }), { behavior: "immediate" }).pipe(Effect.catchTag("SqlError", Effect.die))
+    yield* reconcileDurable(identity.id)
+    for (const [key, pending] of pendingAttention) yield* db.transaction(() => Effect.gen(function* () {
+      if (pendingAttention.get(key) !== pending) return
+      yield* captureNotification(pending.notification, pending.createdAt, identity.id)
+    }), { behavior: "immediate" }).pipe(Effect.orDie)
+    if (Math.min(expiresAt, confirmed.expiresAt) <= (yield* now)) return yield* fail("unauthorized", "grant_expired")
+    if (confirmed.signal?.aborted) return yield* authorizationUnavailable()
+    return result
   })
 
   const unsubscribe: Interface["unsubscribe"] = Effect.fn("McpEvents.unsubscribe")(function* (input) {
@@ -259,7 +278,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
     return {}
   })
 
-  const capture: TestInterface["capture"] = Effect.fn("McpEvents.capture")(function* (input) {
+  const captureEvent = Effect.fn("McpEvents.capture")(function* (input: Parameters<TestInterface["capture"]>[0], subscriptionID?: string) {
     const review = input.type === "session.review.decided" || input.type === "session.review.withdrawn"
       ? (yield* SessionReviewFold.fold(db, [SessionSchema.ID.make(String(input.data.sessionID))])).find((item) => item.itemID === input.data.itemID)
       : undefined
@@ -268,7 +287,13 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       data: { ...input.data, sessionID: review.sessionID, kind: review.kind, origin: review.origin, payload: review.payload },
     })
     if (notification === undefined) return
-    yield* captureNotification(notification)
+    yield* captureNotification(notification, input.createdAt, subscriptionID)
+    if (subscriptionID === undefined && !input.type.startsWith("session.") && notification.requestID !== undefined) {
+      const key = `${notification.sessionID}:${notification.name}:${notification.requestID}`
+      if (notification.state === "pending" && notification.attention !== undefined) {
+        pendingAttention.set(key, { notification, createdAt: input.createdAt ?? (yield* now) })
+      } else pendingAttention.delete(key)
+    }
     if (input.type !== "session.task.updated" || notification.taskID === undefined || notification.state !== "cancelled") return
     const previous = yield* db.select().from(McpEventOutboxTable).where(and(
       eq(McpEventOutboxTable.session_id, notification.sessionID), eq(McpEventOutboxTable.name, "session.question.changed"),
@@ -280,34 +305,27 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       requestID: previous.request_id, sourceID: input.id, state: "cancelled",
       ...(notification.reason === undefined ? {} : { reason: notification.reason }),
       ...(previous.attention === null ? {} : { attention: previous.attention }),
-    })
+    }, input.createdAt, subscriptionID)
   })
+  const capture = (input: Parameters<TestInterface["capture"]>[0], subscriptionID?: string) => db.transaction(
+    () => captureEvent(input, subscriptionID), { behavior: "immediate" },
+  ).pipe(Effect.orDie)
 
-  const captureNotification = Effect.fn("McpEvents.captureNotification")(function* (notification: Notification) {
+  const captureNotification = Effect.fn("McpEvents.captureNotification")(function* (notification: Notification, createdAt?: number, subscriptionID?: string) {
     const current = yield* now
     const chain = yield* ancestorsOf(notification.sessionID)
     const root = chain[chain.length - 1] ?? notification.sessionID
     const subscriptions = yield* db
       .select()
       .from(McpEventSubscriptionTable)
-      .where(and(eq(McpEventSubscriptionTable.name, notification.name), eq(McpEventSubscriptionTable.disabled, 0)))
+      .where(and(eq(McpEventSubscriptionTable.name, notification.name), eq(McpEventSubscriptionTable.disabled, 0),
+        subscriptionID === undefined ? undefined : eq(McpEventSubscriptionTable.id, subscriptionID)))
       .all()
       .pipe(Effect.orDie)
     for (const sub of subscriptions) {
       if (sub.expires_at <= current) continue
       const matches = sub.session_id === notification.sessionID || (sub.include_descendants === 1 && chain.includes(sub.session_id))
       if (!matches) continue
-      if (notification.name === "session.progress" && notification.requestID === undefined) {
-        const latest = yield* db
-          .select()
-          .from(McpEventOutboxTable)
-          .where(and(eq(McpEventOutboxTable.subscription_id, sub.id), eq(McpEventOutboxTable.session_id, notification.sessionID), eq(McpEventOutboxTable.name, notification.name)))
-          .orderBy(asc(McpEventOutboxTable.seq))
-          .all()
-          .pipe(Effect.orDie)
-        const last = latest[latest.length - 1]
-        if (last !== undefined && last.state === notification.state && current - last.time_created < PROGRESS_COALESCE_MS) continue
-      }
       const previous = notification.requestID === undefined && notification.itemID === undefined ? undefined : yield* db
         .select({ attention: McpEventOutboxTable.attention })
         .from(McpEventOutboxTable)
@@ -320,10 +338,12 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
           ),
           isNotNull(McpEventOutboxTable.attention),
         )).orderBy(sql`${McpEventOutboxTable.seq} DESC`).limit(1).get().pipe(Effect.orDie)
-      const snapshot = previous?.attention ?? notification.attention
-      const attention = snapshot === undefined ? undefined : McpEvents.Attention.make({
-        ...snapshot,
-        actions: notification.state === "pending" || notification.state === "deferred" ? ["inspect", "notify_human"] : ["inspect"],
+      const snapshot = notification.state === "pending" ? notification.attention ?? previous?.attention : previous?.attention ?? notification.attention
+      const attention = snapshot == null ? undefined : McpEvents.Attention.make({
+        kind: snapshot.kind,
+        origin: snapshot.origin,
+        ...(snapshot.review === undefined ? {} : { review: snapshot.review }),
+        actions: notification.state === "pending" || notification.state === "deferred" ? ["inspect", "respond"] : ["inspect"],
       })
       yield* db
         .insert(McpEventOutboxTable)
@@ -341,7 +361,7 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
           category: notification.category ?? null,
           reason: notification.reason ?? null,
           attention: attention ?? null,
-          time_created: current,
+          time_created: createdAt ?? current,
           attempts: 0,
           next_attempt_at: current,
           dead: 0,
@@ -349,6 +369,53 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
         .onConflictDoNothing()
         .run()
         .pipe(Effect.orDie)
+    }
+  })
+
+  const reconcileDurable = Effect.fn("McpEvents.reconcileDurable")(function* (subscriptionID?: string) {
+    const current = yield* now
+    const subscriptions = yield* db.select().from(McpEventSubscriptionTable).where(and(
+      eq(McpEventSubscriptionTable.disabled, 0), gt(McpEventSubscriptionTable.expires_at, current),
+      subscriptionID === undefined ? undefined : eq(McpEventSubscriptionTable.id, subscriptionID),
+    )).all().pipe(Effect.orDie)
+    for (const sub of subscriptions) {
+      const sessions = sub.include_descendants === 1
+        ? (yield* SessionReviewFold.familySessions(db, SessionSchema.ID.make(sub.session_id))).map((session) => session.id)
+        : [SessionSchema.ID.make(sub.session_id)]
+      const streams = yield* Effect.forEach(sessions, (sessionID) => Effect.gen(function* () {
+        const open = !ATTENTION.has(sub.name as McpEvents.Name) ? [] : (yield* SessionReviewFold.fold(db, [sessionID])).filter(SessionReviewFold.isOpen)
+        const task = sub.name !== "session.question.changed" ? undefined : yield* db.select({ questionID: SessionTaskTable.question_id, state: SessionTaskTable.state })
+          .from(SessionTaskTable).where(eq(SessionTaskTable.session_id, sessionID)).get().pipe(Effect.orDie)
+        const older = and(lt(EventTable.created, sub.time_created),
+          or(
+            open.length === 0 ? undefined : and(
+              eq(EventTable.type, EventRuntime.versionedType(SessionEvent.Review.Deferred.type, 1)),
+              inArray(sql`json_extract(${EventTable.data}, '$.itemID')`, open.map((item) => item.itemID)),
+            ),
+            task?.state !== "waiting" || task.questionID === null ? undefined : and(
+              eq(EventTable.type, EventRuntime.versionedType(SessionEvent.Task.Updated.type, 1)),
+              sql`json_extract(${EventTable.data}, '$.change.type') = 'question_asked'`,
+              sql`json_extract(${EventTable.data}, '$.change.question.id') = ${task.questionID}`,
+            ),
+          ) ?? sql`0`,
+        )
+        const read = (after: number) => db.select().from(EventTable).where(and(
+          eq(EventTable.aggregate_id, sessionID), inArray(EventTable.type, durableTypes), gt(EventTable.seq, after),
+          or(older, gte(EventTable.created, Math.max(sub.time_created, current - RETENTION_MS))),
+        )).orderBy(asc(EventTable.seq)).limit(1).get().pipe(Effect.orDie)
+        return { read, head: yield* read(-1) }
+      }))
+      let count = 0
+      while (true) {
+        const next = streams.filter((stream) => stream.head !== undefined).toSorted((left, right) =>
+          left.head!.created - right.head!.created || (left.head!.id < right.head!.id ? -1 : left.head!.id > right.head!.id ? 1 : 0),
+        )[0]
+        if (next?.head === undefined) break
+        const row = next.head
+        yield* capture({ type: row.type.replace(/\.\d+$/, ""), id: row.id, data: row.data, createdAt: row.created }, sub.id)
+        next.head = yield* next.read(row.seq)
+        if (++count % DISPATCH_BATCH === 0) yield* Effect.yieldNow
+      }
     }
   })
 
@@ -523,7 +590,11 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
         .where(and(
           eq(McpEventOutboxTable.state, "pending"),
           inArray(McpEventOutboxTable.name, [...EPHEMERAL_ATTENTION]),
-          or(isNull(McpEventOutboxTable.attention), sql`json_extract(${McpEventOutboxTable.attention}, '$.kind') <> 'subagent_question'`),
+          isNull(McpEventOutboxTable.item_id),
+          or(isNull(McpEventOutboxTable.attention), and(
+            sql`json_extract(${McpEventOutboxTable.attention}, '$.kind') NOT IN ('subagent_question', 'recovery')`,
+            sql`json_extract(${McpEventOutboxTable.attention}, '$.origin.type') <> 'review'`,
+          )),
           isNotNull(McpEventOutboxTable.request_id),
           notExists(db.select({ seq: later.seq }).from(later).where(and(
             eq(later.subscription_id, McpEventOutboxTable.subscription_id),
@@ -565,6 +636,12 @@ export const make = (deps: Dependencies): Effect.Effect<TestInterface> => Effect
       yield* Effect.yieldNow
     }
   })
+  if (deps.events !== undefined) {
+    for (const definition of durableDefinitions) yield* deps.events.project(definition, (event) => capture({
+      type: event.type, id: String(event.id), data: event.data as unknown as Record<string, unknown>, createdAt: DateTime.toEpochMillis(event.created),
+    }))
+  }
+  yield* reconcileDurable()
   yield* reconcile
 
   return {
@@ -623,6 +700,7 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
     authorization,
     transport,
     secretBox: box.success,
+    events,
     session: (id) => store.get(id as SessionSchema.ID).pipe(
       Effect.map((info) => info === undefined ? undefined : { id: String(info.id), parentID: info.parentID === undefined ? undefined : String(info.parentID) }),
     ),
@@ -635,9 +713,8 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
       faults.add(operation)
     })),
   )
-  const remove = yield* events.listen((event) => observe("capture",
-    svc.capture({ type: event.type, id: String(event.id), data: event.data as unknown as Record<string, unknown> }),
-  ))
+  const remove = yield* events.listen((event) => event.durable !== undefined ? Effect.void :
+    svc.capture({ type: event.type, id: String(event.id), data: event.data as unknown as Record<string, unknown>, createdAt: DateTime.toEpochMillis(event.created) }))
   yield* Effect.addFinalizer(() => remove)
   yield* Effect.forkScoped(
     Effect.forever(observe("dispatch", svc.dispatchOnce()).pipe(Effect.andThen(Effect.sleep(Duration.seconds(1))))),

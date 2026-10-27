@@ -5,6 +5,9 @@ import { join } from "node:path"
 import { createLocalServer, LocalFailure } from "../src/remote-local"
 import { createSessionRegistry, createSubscriptions, executeRemoteOperation } from "../src/remote-operations"
 import { SessionID } from "@ycoding-ai/schema/session-id"
+import { Dots } from "@ycoding-ai/schema/dots"
+import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
+import { SessionReview } from "@ycoding-ai/schema/session-review"
 import { RemoteMcpSchemas } from "../src/remote-mcp-schemas"
 import { createRemoteMcp } from "../src/remote-mcp"
 
@@ -217,6 +220,32 @@ test("each Dots method forwards its exact endpoint, identity and arguments and r
   }
 })
 
+test("device Dots authority methods forward authenticated context through Session-scoped generated routes", async () => {
+  const remoteSource = { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }
+  const expectedAttachment = { ...target }
+  const create: Dots.DeviceDelegationCreate = { id: "device_grant", exchangeID: "create_exchange", bindingID: "binding", expectedAttachment, scope: { target: "device", operations: ["decision"] } }
+  const revoke = { id: "device_grant", revision: 1, exchangeID: "revoke_exchange", bindingID: "binding", expectedAttachment }
+  const decisions = { bindingID: "binding", expectedAttachment, delegation: { id: "device_grant", revision: 1 }, targetSessionID: SessionID.make(sessionID), limit: 10 }
+  const grant: Dots.DeviceDelegationInfo = { id: "device_grant", revision: 1, basis: "device", anchorSessionID: SessionID.make(sessionID), bindingID: "binding", principal: { ...remoteSource.principal, grantID: "grant_fixture", epoch: remoteSource.epoch }, scope: create.scope, expiresAt: 1893456000000, active: true }
+  const responses = [grant, { binding: { id: "binding", target: expectedAttachment }, grants: [] }, { ...grant, revision: 2, active: false }, { data: [] }] as const satisfies readonly [Dots.DeviceDelegationInfo, Dots.DeviceDelegationStatus, Dots.DeviceDelegationInfo, Dots.DecisionsPage]
+  let index = 0
+  const { requests, server, local } = serve(() => Response.json({ data: responses[index++] }))
+  try {
+    expect(await local.dotsDeviceDelegationCreate(sessionID, location, create, remoteSource)).toEqual(responses[0])
+    expect(await local.dotsDeviceDelegationRead(sessionID, location, { cursor: "cursor_fixture", limit: 10 }, remoteSource)).toEqual(responses[1])
+    expect(await local.dotsDeviceDelegationRevoke(sessionID, location, revoke, remoteSource)).toEqual(responses[2])
+    expect(await local.dotsDecisionsList(sessionID, location, decisions, remoteSource)).toEqual(responses[3])
+    expect(requests.map(({ method, path, directory, workspace, body }) => ({ method, path, directory, workspace, body }))).toEqual([
+      { method: "POST", path: `/api/session/${sessionID}/dots/delegation/device`, directory: encodeURIComponent(location.directory), workspace: location.workspaceID, body: { ...create, remoteSource } },
+      { method: "POST", path: `/api/session/${sessionID}/dots/delegation/device/read`, directory: encodeURIComponent(location.directory), workspace: location.workspaceID, body: { cursor: "cursor_fixture", limit: 10, remoteSource } },
+      { method: "POST", path: `/api/session/${sessionID}/dots/delegation/device/revoke`, directory: encodeURIComponent(location.directory), workspace: location.workspaceID, body: { ...revoke, remoteSource } },
+      { method: "POST", path: `/api/session/${sessionID}/dots/decisions/list`, directory: encodeURIComponent(location.directory), workspace: location.workspaceID, body: { ...decisions, remoteSource } },
+    ])
+  } finally {
+    await server.stop(true)
+  }
+})
+
 test("each Dots method surfaces a rejected request as an invalid local failure, never success", async () => {
   const { requests, server, local } = serve(() =>
     Response.json({ _tag: "InvalidRequestError", message: "Synthetic Dots rejection", field: "dots" }, { status: 400 }),
@@ -250,6 +279,25 @@ test("an admitted exchange with an unconfirmed return maps to an unknown outcome
     expect(failure).toMatchObject({ kind: "transport" })
     expect(requests).toHaveLength(1)
     expect(requests[0]?.body).toEqual({ ...input, remoteSource })
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test("delegated child answers encode nested readonly JSON without changing the submitted data", async () => {
+  const { requests, server, local } = serve(() => Response.json({ _tag: "InvalidRequestError", field: "dots", message: "Synthetic rejection" }, { status: 400 }))
+  const data = { selected: false, nested: [{ values: [1, null, "synthetic"] }] } as const
+  const input: Dots.ExchangeCreate = {
+    exchangeID: "exchange_data", expectedAttachment: target, targetSessionID: SessionID.make("ses_target"), channel: "task", delivery: "queue",
+    delegation: { id: "device_grant", revision: 1 },
+    instruction: { operation: "decision", target: { kind: "subagent_question", questionID: SessionOrchestration.QuestionID.make("qst_fixture"), fingerprint: "f".repeat(64) }, data },
+  }
+  const remoteSource = { requestID: "request_fixture", epoch: "epoch_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" } }
+  try {
+    const inputs: Dots.ExchangeCreate[] = [input, { ...input, instruction: { operation: "decision", target: { kind: "review", itemID: SessionReview.ID.make("rvw_fixture"), fingerprint: "f".repeat(64) }, decision: { kind: "subagent_question", text: "Proceed", data } } satisfies Dots.DelegatedInstruction }]
+    for (const value of inputs) await expect(local.dotsExchangeCreate(sessionID, location, value, remoteSource)).rejects.toMatchObject({ kind: "invalid" })
+    expect(requests.map((request) => request.body)).toEqual(inputs.map((value) => ({ ...value, remoteSource })))
+    expect(input.instruction).toHaveProperty("data", data)
   } finally {
     await server.stop(true)
   }

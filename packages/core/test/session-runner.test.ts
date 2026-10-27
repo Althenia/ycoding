@@ -7554,14 +7554,14 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("interrupts runner continuation when permission approval is declined", () =>
+  it.effect("returns a request-local permission rejection and continues execution", () =>
     Effect.gen(function* () {
       const session = yield* setup
       const registry = yield* ToolRegistry.Service
       yield* registry.register(
         {
           declined: Tool.make({
-            description: "Fail because the user declined approval",
+            description: "Reject one permission request",
             input: Schema.Struct({}),
             output: Schema.Struct({}),
             execute: () => Effect.die(new Permission.DeclinedError()),
@@ -7571,13 +7571,10 @@ describe("SessionRunnerLLM", () => {
       )
       yield* admit(session, "Call declined")
 
-      response = reply.tool("call-declined", "declined", {})
+      responses = [reply.tool("call-declined", "declined", {}), reply.text("Fixture response", "text-fixture")]
 
-      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
-
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-      expect(requests).toHaveLength(1)
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(2)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Call declined" },
         sessionStateNotice,
@@ -7587,10 +7584,11 @@ describe("SessionRunnerLLM", () => {
             {
               type: "tool",
               id: "call-declined",
-              state: { status: "error", error: { message: "Tool execution interrupted" } },
+              state: { status: "error", error: { message: "Permission request was rejected. This action did not run." } },
             },
           ],
         },
+        { type: "assistant", finish: "stop" },
       ])
     }),
   )
@@ -7629,7 +7627,7 @@ describe("SessionRunnerLLM", () => {
             {
               type: "tool",
               id: "call-delegated-declined",
-              state: { status: "error", error: { message: "The delegated external client declined this permission under a native-approved Dots delegation, not the user." } },
+              state: { status: "error", error: { message: "Permission request was rejected. This action did not run." } },
             },
           ],
         },
@@ -7752,7 +7750,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("interrupts runner continuation when a question is cancelled", () =>
+  it.effect("returns a cancelled question outcome and continues execution", () =>
     Effect.gen(function* () {
       const session = yield* setup
       const registry = yield* ToolRegistry.Service
@@ -7767,18 +7765,14 @@ describe("SessionRunnerLLM", () => {
         },
         { codemode: false },
       )
-      yield* admit(session, "Ask then stop")
+      yield* admit(session, "Ask then continue independent work")
 
-      responses = [reply.tool("call-question", "question", {}), []]
+      responses = [reply.tool("call-question", "question", {}), reply.text("Fixture response", "text-fixture")]
 
-      const run = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
-      const exit = yield* Fiber.join(run)
-
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-      expect(requests).toHaveLength(1)
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(2)
       expect(yield* session.context(sessionID)).toMatchObject([
-        { type: "user", text: "Ask then stop" },
+        { type: "user", text: "Ask then continue independent work" },
         sessionStateNotice,
         {
           type: "assistant",
@@ -7786,10 +7780,11 @@ describe("SessionRunnerLLM", () => {
             {
               type: "tool",
               id: "call-question",
-              state: { status: "error", error: { type: "aborted", message: "Tool execution interrupted" } },
+              state: { status: "error", error: { message: "This question was dismissed or superseded without an answer" } },
             },
           ],
         },
+        { type: "assistant", finish: "stop" },
       ])
     }),
   )

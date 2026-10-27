@@ -33,22 +33,39 @@ export function supported(evidence: Evidence) {
 
 export function create(candidate: Dots.DecisionCandidate) {
   if (candidate.target.kind === "permission" || candidate.target.kind === "guardrail")
-    return build([{ key: "reply", type: "string", title: "Client decision", required: true, options: [{ value: "once", label: "Approve once" }, { value: "reject", label: "Reject" }] }], (values) => ({ reply: values.reply }))
+    return build([{ key: "reply", type: "string", title: "Authenticated Dots decision", required: true, options: [{ value: "once", label: "Allow once" }, { value: "reject", label: "Reject" }] }], (values) => ({ reply: values.reply }))
+  if (candidate.target.kind === "subagent_question") {
+    if (candidate.subagentQuestion === undefined) throw new Error("The child question is unavailable")
+    return build([{ key: "text", type: "string", title: candidate.subagentQuestion.text, required: true, maxLength: 8192 }], (values) => ({ text: values.text }))
+  }
   if (candidate.target.kind === "form") {
     if (candidate.fields === undefined) throw new Error("The native form fields are unavailable")
     return build(candidate.fields, (values) => ({ answers: values }))
   }
-  if (!candidate.questions?.length) throw new Error("The native questions are unavailable")
-  const fields: Form.Field[] = candidate.questions.map((question, index) => {
+  const review = candidate.target.kind === "review" ? candidate.review : undefined
+  if (review?.kind === "permission" || review?.kind === "guardrail")
+    return build([{ key: "reply", type: "string", title: "Authenticated Dots decision", required: true, options: [{ value: "once", label: "Allow once" }, { value: "reject", label: "Reject" }] }], (values) => ({ decision: { kind: review.kind, reply: values.reply } }))
+  if (review?.kind === "recovery")
+    return build([{ key: "choice", type: "string", title: "Recovery decision", required: true, options: [{ value: "continue", label: "Continue" }, { value: "stop", label: "Stop" }] }], (values) => ({ decision: { kind: "recovery", choice: values.choice } }))
+  if (review?.kind === "question" && review.payload.type === "form")
+    return build(review.payload.fields, (values) => ({ decision: { kind: "question", answers: values } }))
+  const questions = review?.kind === "question" && review.payload.type === "question" ? review.payload.questions : candidate.questions
+  if (review?.kind === "subagent_question" && review.payload.type === "subagent_question")
+    return build([{ key: "text", type: "string", title: review.payload.text, required: true, maxLength: 8192 }], (values) => ({ decision: { kind: "subagent_question", text: values.text } }))
+  if (!questions?.length) throw new Error("The native questions are unavailable")
+  const fields: Form.Field[] = questions.map((question, index) => {
     if (question.multiple && question.custom !== false) throw new Error("Multiple custom question answers cannot be encoded as a standard form")
     const options = question.options.map((option) => ({ value: option.label, label: option.label }))
     if (question.multiple) return { key: `q${index}`, type: "multiselect", title: question.header, description: question.question, required: true, options }
     return { key: `q${index}`, type: "string", title: question.header, description: question.question, required: true, ...(options.length ? { options, custom: question.custom !== false } : {}) }
   })
-  return build(fields, (values) => ({ answers: candidate.questions?.map((_question, index) => {
-    const value = values[`q${index}`]
-    return Array.isArray(value) ? value : [value]
-  }) }))
+  return build(fields, (values) => {
+    const answers = questions.map((_question, index) => {
+      const value = values[`q${index}`]
+      return Array.isArray(value) ? value : [value]
+    })
+    return review?.kind === "question" ? { decision: { kind: "question", answers } } : { answers }
+  })
 }
 
 function build(fields: readonly Form.Field[], choice: (values: Form.Answer) => Record<string, unknown>) {

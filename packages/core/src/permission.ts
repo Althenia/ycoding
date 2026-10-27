@@ -1,7 +1,7 @@
 export * as Permission from "./permission"
 
 import { makeLocationNode } from "./effect/app-node"
-import { Context, Deferred, Effect, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Context, Deferred, Effect, Layer, Schema, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
 import { Form } from "@ycoding-ai/schema/form"
 import { Coordination } from "@ycoding-ai/schema/coordination"
@@ -69,7 +69,7 @@ export const AssertInput = Schema.Struct({
   ...RequestFields,
   agent: Agent.ID.pipe(Schema.optional),
   consumeReview: Schema.Boolean.pipe(Schema.optional),
-  requireHuman: Schema.Boolean.pipe(Schema.optional),
+  requireExplicitDecision: Schema.Boolean.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
 
@@ -77,7 +77,6 @@ export const ReplyInput = Schema.Struct({
   requestID: ID,
   reply: Reply,
   message: Schema.String.pipe(Schema.optional),
-  rejectScope: Schema.Literals(["request", "session"]).pipe(Schema.optional),
 }).annotate({ identifier: "Permission.ReplyInput" })
 export type ReplyInput = typeof ReplyInput.Type
 
@@ -90,10 +89,10 @@ export type AskResult = typeof AskResult.Type
 export const Event = Permission.Event
 
 export class DeclinedError extends Schema.TaggedErrorClass<DeclinedError>()("Permission.DeclinedError", {
-  source: Form.DelegatedReplySource.pipe(Schema.optional),
+  source: Form.ExternalReplySource.pipe(Schema.optional),
 }) {
   override get message() {
-    return this.source ? "The delegated external client declined this permission under a native-approved Dots delegation, not the user." : ""
+    return "Permission request was rejected. This action did not run."
   }
 }
 
@@ -154,7 +153,7 @@ export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
 export type PriorStatus = "pending" | "rejected" | "approved" | "approved-used" | "withdrawn"
 
 export type Prior = {
-  readonly source: "human" | "review"
+  readonly source: "explicit" | "review"
   readonly status: PriorStatus
 }
 
@@ -165,8 +164,8 @@ export function reviewStatus(item: SessionReviewFold.Folded): PriorStatus {
   return item.consumed ? "approved-used" : "approved"
 }
 
-export function humanRejected(prior: ReadonlyArray<Prior>) {
-  if (prior.some((item) => item.source === "human" && item.status === "rejected")) return true
+export function explicitRejected(prior: ReadonlyArray<Prior>) {
+  if (prior.some((item) => item.source === "explicit" && item.status === "rejected")) return true
   return prior.findLast((item) => item.status === "rejected" || item.status === "approved" || item.status === "approved-used")?.status === "rejected"
 }
 
@@ -245,10 +244,11 @@ export interface ReconsiderResult {
 }
 
 export interface DelegatedReplyInput {
+  readonly explicitDecision?: true
   readonly requestID: ID
   readonly reply: "once" | "reject"
   readonly fingerprint: string
-  readonly source: Form.DelegatedReplySource
+  readonly source: Form.ExternalReplySource
   readonly validate: (request: Request) => Effect.Effect<boolean>
 }
 
@@ -302,7 +302,11 @@ const layer = Layer.effect(
     const exclusive = settlement.withPermit
 
     yield* Effect.addFinalizer(() =>
-      exclusive(Effect.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new DeclinedError()), {
+      exclusive(Effect.forEach(pending.values(), (item) => Effect.gen(function* () {
+        pending.delete(item.request.id)
+        yield* events.publish(Event.Cancelled, { sessionID: item.request.sessionID, requestID: item.request.id })
+        yield* Deferred.fail(item.deferred, new DeclinedError())
+      }), {
         discard: true,
       }).pipe(
         Effect.ensuring(
@@ -340,7 +344,7 @@ const layer = Layer.effect(
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return decision(input, rules, [])
       const result = decision(input, rules, yield* savedRules(input))
-      return input.requireHuman ? { ...result, effect: "ask" as const } : result
+      return input.requireExplicitDecision ? { ...result, effect: "ask" as const } : result
     })
 
     const evaluateEffective = Effect.fn("Permission.evaluateEffectiveService")(function* (
@@ -362,8 +366,8 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
-        save: input.requireHuman ? undefined : input.save,
-        metadata: input.requireHuman ? { ...input.metadata, requireHuman: true } : input.metadata,
+        save: input.requireExplicitDecision ? undefined : input.save,
+        metadata: input.requireExplicitDecision ? { ...input.metadata, requireExplicitDecision: true } : input.metadata,
         source: input.source,
         ...(escalation === undefined ? {} : { escalation }),
       }
@@ -414,13 +418,18 @@ const layer = Layer.effect(
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
     })
 
-    const fingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata"> & { readonly requireHuman?: boolean }) =>
-      SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory, metadata: input.requireHuman ? { ...input.metadata, requireHuman: true } : input.metadata })
+    const fingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata"> & { readonly requireExplicitDecision?: boolean }) =>
+      SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory, metadata: input.requireExplicitDecision ? { ...input.metadata, requireExplicitDecision: true } : input.metadata })
+    const historicalFingerprintOf = (input: Pick<Request, "action" | "resources" | "metadata"> & { readonly requireExplicitDecision?: boolean }) => {
+      if (!input.requireExplicitDecision && input.metadata?.requireExplicitDecision !== true) return undefined
+      return SessionReviewFold.fingerprint({ action: input.action, resources: input.resources, workdir: location.directory,
+        metadata: { ...Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== "requireExplicitDecision")), requireHuman: true } })
+    }
 
     const rejections = new Set<string>()
     const rejectionKey = (request: Pick<Request, "sessionID" | "action" | "resources" | "metadata">) =>
       `${request.sessionID}\0${fingerprintOf(request)}`
-    const recordHumanReply = (request: Request, reply: Reply) => {
+    const recordExplicitReply = (request: Request, reply: Reply) => {
       const key = rejectionKey(request)
       rejections.delete(key)
       if (reply !== "reject") return
@@ -435,11 +444,11 @@ const layer = Layer.effect(
       const rules = [...sources.agent, ...sources.ceiling, ...saved]
       const fingerprint = fingerprintOf(input)
       const reviews = (yield* SessionReviewFold.fold(database.db, [input.sessionID]))
-        .filter((item) => item.kind === "permission" && "fingerprint" in item.payload && item.payload.fingerprint === fingerprint)
+        .filter((item) => item.kind === "permission" && SessionReviewFold.matchesFingerprint(item.payload, fingerprint, historicalFingerprintOf(input)))
         .toSorted((left, right) => left.created - right.created)
         .slice(-5)
       const prior: Prior[] = [
-        ...(rejections.has(rejectionKey(input)) ? [{ source: "human" as const, status: "rejected" as const }] : []),
+        ...(rejections.has(rejectionKey(input)) ? [{ source: "explicit" as const, status: "rejected" as const }] : []),
         ...reviews.map((item) => ({ source: "review" as const, status: reviewStatus(item) })),
       ]
       return {
@@ -476,6 +485,7 @@ const layer = Layer.effect(
         origin,
         payload: {
           type: "permission",
+          fingerprintVersion: 2,
           action: DecisionChoice.redactText(value.action),
           resources: value.resources.map((resource) => DecisionChoice.redactText(resource)),
           ...(value.save === undefined ? {} : { save: [...value.save] }),
@@ -583,10 +593,11 @@ const layer = Layer.effect(
     const ask = Effect.fn("Permission.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
-      if (result.effect === "ask" && !input.requireHuman && (yield* permissionMode(input.sessionID)) === "auto")
+      if (result.effect === "ask" && !input.requireExplicitDecision && (yield* permissionMode(input.sessionID)) === "auto" &&
+        !explicitRejected((yield* applicabilityOf(input)).prior))
         return yield* autoPermissionAllow(value)
       if (result.effect === "ask") {
-        if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input))))
+        if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input), historicalFingerprintOf(input))))
           return { id: value.id, effect: "allow" as const }
         if (yield* asleep(input.sessionID)) {
           yield* openReview(value).pipe(Effect.catchTag("SessionReview.FullError", (error) => Effect.die(error)))
@@ -613,12 +624,12 @@ const layer = Layer.effect(
             Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: input.sessionID })),
           )
           const mode = yield* permissionMode(input.sessionID)
-          if (!input.requireHuman && mode === "auto") {
+          if (!input.requireExplicitDecision && mode === "auto" && !explicitRejected((yield* applicabilityOf(input)).prior)) {
             yield* autoPermissionAllow(request(input))
             return
           }
-          if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input)))) return
-          const modeled = !input.requireHuman && mode === "yolo"
+          if (input.consumeReview !== false && (yield* SessionReviewFold.consume(database.db, events, input.sessionID, "permission", fingerprintOf(input), historicalFingerprintOf(input)))) return
+          const modeled = !input.requireExplicitDecision && mode === "yolo"
           const applicability = modeled ? yield* applicabilityOf(input) : undefined
           const authority = modeled ? SessionDecisionContext.authorityDigest(yield* SessionDecisionContext.read(database.db, input.sessionID)) : undefined
           const assessed = applicability === undefined ? undefined : yield* restore(assess(input, applicability))
@@ -638,7 +649,7 @@ const layer = Layer.effect(
               !(yield* DecisionChoice.autonomyUnchanged(autonomy, input.sessionID, authorization))) ||
               Hash.json(yield* applicabilityOf(input)) !== Hash.json(applicability) ||
               SessionDecisionContext.authorityDigest(yield* SessionDecisionContext.read(database.db, input.sessionID)) !== authority)
-          const held = !stale && assessed?.type === "approve" && applicability !== undefined && humanRejected(applicability.prior)
+          const held = !stale && assessed?.type === "approve" && applicability !== undefined && explicitRejected(applicability.prior)
           const settled = stale || held ? undefined : assessed
           const escalation: Guardrail.Escalation | undefined =
             assessed !== undefined && (stale || held)
@@ -667,8 +678,10 @@ const layer = Layer.effect(
             Effect.catchTag("Permission.DeclinedError", (error) => Effect.die(error)),
             Effect.catchTag("Permission.DeferredError", (error) => Effect.die(error)),
             Effect.ensuring(
-              exclusive(Effect.sync(() => {
-                if (pending.get(item.request.id) === item) pending.delete(item.request.id)
+              exclusive(Effect.gen(function* () {
+                if (pending.get(item.request.id) !== item) return
+                pending.delete(item.request.id)
+                yield* events.publish(Event.Cancelled, { sessionID: item.request.sessionID, requestID: item.request.id })
               })),
             ),
           )
@@ -723,7 +736,7 @@ const layer = Layer.effect(
                     save: item.request.save,
                     metadata: item.request.metadata,
                     source: item.request.source,
-                    requireHuman: item.request.metadata?.requireHuman === true,
+                    requireExplicitDecision: item.request.metadata?.requireExplicitDecision === true,
                     agent: item.agent,
                     consumeReview: false,
                   }
@@ -731,15 +744,15 @@ const layer = Layer.effect(
                   if (!(yield* input.validate(item.request)))
                     return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                   if (input.decision === "decline") {
-                    if (assertInput.requireHuman)
-                      return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:request" }
+                    if (assertInput.requireExplicitDecision)
+                      return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                     return yield* exclusive(
                       Effect.gen(function* () {
                         if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
                         if (!(yield* input.validate(item.request)))
                           return { ...base, outcome: "escalated" as const, settled: false, reason: "delegation-invalid" }
                         if ((yield* permissionMode(assertInput.sessionID)) === "manual")
-                          return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:manual-permissions" }
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:manual-permissions" }
                         yield* publishAssessed(item.request, { outcome: "deny", via: "coordination", reply: "reject", coordination: input.source })
                         yield* publishReplied(item.request, "reject")
                         pending.delete(input.requestID)
@@ -749,7 +762,7 @@ const layer = Layer.effect(
                     )
                   }
 
-                  const settleRules = (effect: "allow" | "deny") =>
+                  const settleRules = () =>
                     exclusive(
                       Effect.gen(function* () {
                         if (pending.get(input.requestID) !== item) return { ...base, outcome: "stale" as const, settled: false }
@@ -778,9 +791,9 @@ const layer = Layer.effect(
                     )
 
                   const initial = yield* evaluateInput(assertInput)
-                  if (initial.effect !== "ask") return yield* settleRules(initial.effect)
-                  if (assertInput.requireHuman)
-                    return { ...base, outcome: "escalated" as const, settled: false, reason: "human-only:request" }
+                  if (initial.effect !== "ask") return yield* settleRules()
+                  if (assertInput.requireExplicitDecision)
+                    return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-decision:request" }
                   const authorization = yield* autonomy.snapshot(assertInput.sessionID, { inherited: true }).pipe(
                     Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID: assertInput.sessionID })),
                   )
@@ -799,6 +812,8 @@ const layer = Layer.effect(
                           yield* Deferred.fail(item.deferred, new DeclinedError())
                           return { ...base, outcome: "denied" as const, settled: true, via: "permission-rules" as const }
                         }
+                        if (current.effect === "ask" && explicitRejected((yield* applicabilityOf(assertInput)).prior))
+                          return { ...base, outcome: "escalated" as const, settled: false, reason: "explicit-rejected" }
                         yield* publishAssessed(item.request, {
                           outcome: "allow",
                           via: current.effect === "allow" ? "coordination" : "auto-permission",
@@ -826,7 +841,7 @@ const layer = Layer.effect(
                   )
                   const assessed = yield* restore(assess(assertInput, applicability))
                   const current = yield* evaluateInput(assertInput)
-                  if (current.effect !== "ask") return yield* settleRules(current.effect)
+                  if (current.effect !== "ask") return yield* settleRules()
                   const stale =
                     assessed.type !== "escalate" &&
                     ((assessed.provenance.authority === "yolo" &&
@@ -835,7 +850,7 @@ const layer = Layer.effect(
                       SessionDecisionContext.authorityDigest(
                         yield* SessionDecisionContext.read(database.db, assertInput.sessionID),
                       ) !== authority)
-                  const held = !stale && assessed.type === "approve" && humanRejected(applicability.prior)
+                  const held = !stale && assessed.type === "approve" && explicitRejected(applicability.prior)
                   const settled = stale || held ? undefined : assessed
                   if (settled !== undefined && settled.type !== "escalate") {
                     return yield* exclusive(
@@ -907,7 +922,7 @@ const layer = Layer.effect(
                     outcome: "escalated" as const,
                     settled: false,
                     via: escalation.authority,
-                    reason: stale ? "stale-assessment" : held ? "human-rejected" : (escalation.reason ?? "escalated"),
+                    reason: stale ? "stale-assessment" : held ? "explicit-rejected" : (escalation.reason ?? "escalated"),
                   }
                 }),
               ).pipe(
@@ -961,12 +976,16 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
+          if (input.reply !== "reject" && !(yield* delegatedGate(existing, "once", true).pipe(
+            Effect.catchTag("Session.NotFoundError", () => Effect.fail(new NotFoundError({ requestID: input.requestID }))),
+          )))
+            return yield* new NotFoundError({ requestID: input.requestID })
           yield* events.publish(Event.Replied, {
             sessionID: existing.request.sessionID,
             requestID: existing.request.id,
             reply: input.reply,
           })
-          recordHumanReply(existing.request, input.reply)
+          recordExplicitReply(existing.request, input.reply)
 
           if (input.reply === "reject") {
             yield* Deferred.fail(
@@ -974,18 +993,6 @@ const layer = Layer.effect(
               input.message ? new CorrectedError({ feedback: input.message }) : new DeclinedError(),
             )
             pending.delete(input.requestID)
-            if (input.rejectScope === "request") return
-            for (const [id, item] of pending) {
-              if (item.request.sessionID !== existing.request.sessionID) continue
-              yield* events.publish(Event.Replied, {
-                sessionID: item.request.sessionID,
-                requestID: item.request.id,
-                reply: "reject",
-              })
-              recordHumanReply(item.request, "reject")
-              yield* Deferred.fail(item.deferred, new DeclinedError())
-              pending.delete(id)
-            }
             return
           }
 
@@ -999,7 +1006,7 @@ const layer = Layer.effect(
           const rememberedRules = yield* savedRules(existing.request)
           for (const [id, item] of pending) {
             if (item.request.sessionID !== existing.request.sessionID || item.request.action !== existing.request.action) continue
-            if (item.request.metadata?.requireHuman === true) continue
+            if (item.request.metadata?.requireExplicitDecision === true) continue
             const input = { ...item.request }
             const rules = yield* configured(item.request.sessionID, item.agent).pipe(
               Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)),
@@ -1025,8 +1032,8 @@ const layer = Layer.effect(
       )),
     )
 
-    const delegatedGate = Effect.fnUntraced(function* (existing: Pending, reply: "once" | "reject") {
-      if (existing.request.metadata?.requireHuman === true) return false
+    const delegatedGate = Effect.fnUntraced(function* (existing: Pending, reply: "once" | "reject", explicitDecision = false) {
+      if (!explicitDecision && existing.request.metadata?.requireExplicitDecision === true) return false
       if (reply === "reject") return true
       const input: AssertInput = {
         id: existing.request.id, sessionID: existing.request.sessionID, action: existing.request.action, resources: existing.request.resources,
@@ -1034,10 +1041,10 @@ const layer = Layer.effect(
         ...(existing.request.metadata === undefined ? {} : { metadata: existing.request.metadata }),
         ...(existing.request.source === undefined ? {} : { source: existing.request.source }),
         ...(existing.agent === undefined ? {} : { agent: existing.agent }),
-        requireHuman: existing.request.metadata?.requireHuman === true,
+        requireExplicitDecision: existing.request.metadata?.requireExplicitDecision === true,
       }
       const applicability = yield* applicabilityOf(input)
-      if (humanRejected(applicability.prior)) return false
+      if (!explicitDecision && explicitRejected(applicability.prior)) return false
       return (yield* evaluateInput(input)).effect !== "deny"
     })
     const delegatedEligible = Effect.fn("Permission.delegatedEligible")(function* (input: { readonly requestID: ID; readonly fingerprint: string; readonly reply: "once" | "reject" }) {
@@ -1049,22 +1056,23 @@ const layer = Layer.effect(
       exclusive(Effect.uninterruptible(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
-          if (!existing || fingerprintOf(existing.request) !== input.fingerprint || !(yield* delegatedGate(existing, input.reply)) || !(yield* input.validate(existing.request)))
+          if (!existing || fingerprintOf(existing.request) !== input.fingerprint || !(yield* delegatedGate(existing, input.reply, input.explicitDecision === true)) || !(yield* input.validate(existing.request)))
             return yield* new NotFoundError({ requestID: input.requestID })
-          yield* events.publish(Event.Replied, {
-            sessionID: existing.request.sessionID,
-            requestID: existing.request.id,
-            reply: input.reply,
-          })
-          yield* events.publish(SessionEvent.DotsDecisionSettled, {
+          const committed = yield* events.publishBatch([{ definition: SessionEvent.DotsDecisionSettled, data: {
             sessionID: existing.request.sessionID,
             source: input.source,
             target: { kind: "permission", requestID: existing.request.id, fingerprint: input.fingerprint },
             reply: input.reply,
-          })
-          pending.delete(input.requestID)
-          if (input.reply === "reject") yield* Deferred.fail(existing.deferred, new DeclinedError({ source: input.source }))
-          else yield* Deferred.succeed(existing.deferred, undefined)
+          } }], { when: Effect.gen(function* () {
+            return pending.get(input.requestID) === existing && fingerprintOf(existing.request) === input.fingerprint &&
+              (yield* delegatedGate(existing, input.reply, input.explicitDecision === true)) && (yield* input.validate(existing.request))
+          }).pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(false))) })
+          if (committed.length === 0) return yield* new NotFoundError({ requestID: input.requestID })
+          if (input.explicitDecision) recordExplicitReply(existing.request, input.reply)
+          yield* events.publish(Event.Replied, { sessionID: existing.request.sessionID, requestID: existing.request.id, reply: input.reply }).pipe(Effect.ensuring(Effect.gen(function* () {
+            pending.delete(input.requestID)
+            yield* input.reply === "reject" ? Deferred.fail(existing.deferred, new DeclinedError({ source: input.source })) : Deferred.succeed(existing.deferred, undefined)
+          })))
         }),
       )),
     )

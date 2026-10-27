@@ -20,6 +20,8 @@ import type { Dots } from "@ycoding-ai/schema/dots"
 import { Cause, Deferred, Effect, Exit, Fiber, Queue, Schedule, Scope, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { TestClock } from "effect/testing"
+import { Database } from "../src/database/database"
+import { DotsAuthority } from "../src/dots/authority"
 
 describe("Dots room transport", () => {
   const credentials = { access: "synthetic-room-token", accountID: "synthetic-room-account" }
@@ -418,6 +420,7 @@ describe("Dots room transport", () => {
 })
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventRuntime.node])))
+const durableIt = testEffect(AppNodeBuilder.build(LayerNode.group([Integration.node, Credential.node, EventRuntime.node, Database.node])))
 const integrationID = Integration.ID.make("openai")
 const methodID = Integration.MethodID.make("chatgpt-browser")
 const s1 = SessionSchema.ID.make("ses_dots_one")
@@ -557,6 +560,7 @@ const runtime = Effect.fn(function* (
     readonly attachments?: DotsAttachments.Read
     readonly retryDelay?: (attempt: number) => number
     readonly enabled?: boolean | "omitted" | "defect" | "throws" | "succeed"
+    readonly persistence?: DotsRuntime.Persistence
   } = {},
 ) {
   const profile = yield* profiles()
@@ -573,7 +577,8 @@ const runtime = Effect.fn(function* (
     DotsAttachments.make({
       store: { resolveURI: () => Effect.die("unused"), read: () => Effect.die("unused") },
     })
-  const service = yield* DotsRuntime.make({
+  const make = () => DotsRuntime.make({
+    persistence: options.persistence,
     ...(options.enabled === "omitted"
       ? {}
       : {
@@ -603,7 +608,8 @@ const runtime = Effect.fn(function* (
         }),
     },
   })
-  return { ...profile, ...fake, service, admitted, admissions, gate, setEnabled, integrationReads }
+  const service = yield* make()
+  return { ...profile, ...fake, service, make, admitted, admissions, gate, setEnabled, integrationReads }
 })
 
 const connectedStatus = (service: DotsRuntime.Interface, sessionID: SessionSchema.ID) =>
@@ -629,6 +635,32 @@ const drained = (value: { readonly control: { readonly connections: Array<Queue.
   })
 
 describe("Dots runtime", () => {
+  durableIt.live("restores the confirmed durable binding after service reconstruction and fences an unbound incarnation", () => Effect.gen(function* () {
+    const persistence = DotsAuthority.make({ db: (yield* Database.Service).db, events: yield* EventRuntime.Service })
+    const value = yield* runtime({ persistence })
+    yield* value.service.bind({ sessionID: s1, target: a1 })
+    const first = yield* value.service.withBinding(s1, (binding) => Effect.succeed(binding.incarnation))
+    const restarted = yield* value.make()
+    expect((yield* restarted.status(s1)).target).toEqual(a1)
+    expect(yield* restarted.withBinding(s1, (binding) => Effect.succeed(binding.incarnation))).toBe(first)
+    yield* restarted.unbind({ sessionID: s1, expectedTarget: a1 })
+    const detached = yield* value.make()
+    expect((yield* detached.status(s1)).target).toBeUndefined()
+    yield* detached.bind({ sessionID: s1, target: a1 })
+    expect(yield* detached.withBinding(s1, (binding) => Effect.succeed(binding.incarnation))).not.toBe(first)
+    expect((yield* value.service.withBinding(s1, () => Effect.void).pipe(Effect.exit))._tag).toBe("Failure")
+  }))
+  durableIt.live("configuration disablement durably ends a binding instead of reviving it on enablement", () => Effect.gen(function* () {
+    const persistence = DotsAuthority.make({ db: (yield* Database.Service).db, events: yield* EventRuntime.Service })
+    const value = yield* runtime({ persistence })
+    yield* value.service.bind({ sessionID: s1, target: a1 })
+    yield* value.setEnabled(false)
+    expect((yield* value.service.status(s1)).enabled).toBe(false)
+    yield* value.setEnabled(true)
+    const restarted = yield* value.make()
+    expect((yield* restarted.status(s1)).target).toBeUndefined()
+    expect(yield* persistence.binding(s1)).toBeUndefined()
+  }))
   it.live("L10 names only the explicitly confirmed binding and renames without redirecting", () => Effect.gen(function* () {
     const value = yield* runtime()
     const named = yield* value.service.bind({ sessionID: s1, target: { ...a1, label: "  V  " } })

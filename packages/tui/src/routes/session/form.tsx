@@ -1081,7 +1081,7 @@ export function FormPrompt(props: {
   )
 }
 
-export function FormAssessment(props: { value: unknown; fieldKey?: string; settled?: "automatic" | "human"; source?: unknown; grades?: boolean; multiple?: boolean }) {
+export function FormAssessment(props: { value: unknown; fieldKey?: string; settled?: "automatic" | "client"; source?: unknown; grades?: boolean; multiple?: boolean }) {
   const { theme } = useTheme()
   const assessment = createMemo(() => Schema.decodeUnknownOption(Form.Assessment)(props.value).pipe(
     (value) => value._tag === "Some" ? value.value : undefined,
@@ -1091,14 +1091,14 @@ export function FormAssessment(props: { value: unknown; fieldKey?: string; settl
     (value) => value._tag === "Some" ? value.value : undefined,
   ))
   const settlement = () => {
-    if (!props.settled) return "awaiting your decision"
+    if (!props.settled) return "awaiting an authorized client decision"
     const reply = source()
-    if (reply?.kind === "dots-delegation") return `answered by external client via Dots delegation ${escapeTerminalText(reply.delegationID)} · anchor ${escapeTerminalText(reply.anchorSessionID)}`
+    if (reply?.kind === "dots-delegation" || reply?.kind === "dots-client") return `answered by external client via Dots delegation ${escapeTerminalText(reply.delegationID)} · anchor ${escapeTerminalText(reply.anchorSessionID)}`
     if (reply) return `answered by coordinator ${escapeTerminalText(reply.coordinatorSessionID)}${reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
     if (props.source !== undefined) return "answer source unreported"
-    return props.settled === "automatic" ? "automatically answered" : "answered by you"
+    return props.settled === "automatic" ? "automatically answered" : "answered by client"
   }
-  return <Show when={assessment()} fallback={<Show when={props.settled && props.source !== undefined}><text fg={theme.text.feedback.warning.default} wrapMode="word">{settlement()}</text></Show>}>{(value) => <box flexDirection="column">
+  return <Show when={assessment()} fallback={<Show when={props.settled || props.source !== undefined}><text fg={theme.text.feedback.warning.default} wrapMode="word">{settlement()}</text></Show>}>{(value) => <box flexDirection="column">
     <text fg={theme.text.feedback.warning.default} wrapMode="word">{`Answers ${value().mode === "yolo" ? "YOLO" : value().mode === "auto" ? "Auto" : "Manual"} · source ${escapeTerminalText(value().sourceSessionID)}`}</text>
     <For each={fields()}>{(field) => <box flexDirection="column">
       <text fg={theme.text.feedback.warning.default} wrapMode="word">{`${field.status === "pending" ? "Assessing options" : field.status === "assessed" ? "Assessed" : field.status === "unavailable" ? "Assessment unavailable" : "Not assessed"} · ${settlement()}`}</text>

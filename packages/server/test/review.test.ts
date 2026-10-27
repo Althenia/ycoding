@@ -25,6 +25,7 @@ const item: ReviewItem = {
     action: "edit",
     resources: ["outside.txt"],
     fingerprint: SessionReview.fingerprint({ action: "edit", resources: ["outside.txt"], workdir: "/project" }),
+    fingerprintVersion: 2,
     requestID: Permission.ID.make("per_review_test"),
   },
 }
@@ -34,6 +35,8 @@ test("review HTTP routes list family items and map decide outcomes to typed fail
   const locations: string[] = []
   const service = SessionReview.Service.of({
     open: () => Effect.die("unused"),
+    decideDelegated: () => Effect.die("unused"),
+    pendingSnapshots: () => Effect.die("unused"),
     withdraw: () => Effect.die("unused"),
     withdrawAfter: () => Effect.die("unused"),
     consume: () => Effect.die("unused"),

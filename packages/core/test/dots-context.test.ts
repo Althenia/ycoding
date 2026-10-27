@@ -46,10 +46,22 @@ it.live("typed routine admission renders only closed instructions and never rest
   const row = (yield* f.rows())[0]
   expect(row?.data.text).toContain('"format":"bullets"')
   expect(row?.data.text).toContain("grants no new work")
+  expect(row?.data.text).toContain("current direct task")
+  expect(row?.data.text).not.toContain("human")
   expect(row?.data.text).not.toContain("Ignore approvals")
   expect(row?.data.dots).toMatchObject({ routine })
   yield* f.observer.observe(f.session.id, { state: "disabled", reason: "tool_unavailable", routine })
   expect((yield* f.rows()).at(-1)?.data.text).not.toContain("Ignore approvals")
+}))
+
+it.live("delegated task context distinguishes external task admission from explicit decisions", () => Effect.gen(function* () {
+  const f = yield* setup
+  yield* f.observer.observe(f.session.id, { ...f.enabled, delegated: { delegation: { id: "device_fixture", revision: 1 }, instruction: { operation: "task", text: "Synthetic device task" } } })
+  const text = (yield* f.rows())[0]?.data.text
+  expect(text).toContain("An authenticated external client supplied this delegated task")
+  expect(text).not.toContain("human")
+  expect(text).not.toContain("Synthetic device task")
+  expect(text).toContain("not an explicit decision")
 }))
 
 it.live("Dots context appends deduplicated enabled and disabled generations without editing history", () => Effect.gen(function* () {

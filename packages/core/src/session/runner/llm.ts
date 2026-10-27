@@ -22,7 +22,6 @@ import { FSUtil } from "../../fs-util"
 import { ProjectArtifactAccounting } from "../../project-artifact/accounting"
 import { ProjectArtifactSource } from "../../project-artifact/source"
 import { SessionSkill } from "../skill"
-import { QuestionTool } from "../../tool/question"
 import { ToolOutputStore } from "../../tool-output-store"
 import { InstructionState } from "../instruction-state"
 import { SessionCompaction } from "../compaction"
@@ -205,14 +204,6 @@ const layer = Layer.effect(
         }
       }
     })
-    // Declining an interactive prompt halts the drain instead of becoming model-facing tool output.
-    const isUserDeclined = (cause: Cause.Cause<unknown>) =>
-      cause.reasons.some(
-        (reason) =>
-          Cause.isDieReason(reason) &&
-          ((reason.defect instanceof Permission.DeclinedError && reason.defect.source === undefined) || reason.defect instanceof QuestionTool.CancelledError),
-      )
-
     const appendContextObservations = Effect.fn("SessionRunner.appendContextObservations")(function* (
       selected: SessionContext.Selection,
       step: number,
@@ -1000,10 +991,9 @@ const layer = Layer.effect(
               ? [settled.cause]
               : settled.value.flatMap((exit) => (exit._tag === "Failure" ? [exit.cause] : []))
           const toolsInterrupted = settledCauses.some(Cause.hasInterrupts)
-          const userDeclined = settledCauses.some(isUserDeclined)
 
           if (settled._tag === "Failure") yield* FiberSet.clear(toolFibers)
-          if (userDeclined || streamInterrupted || toolsInterrupted) {
+          if (streamInterrupted || toolsInterrupted) {
             yield* serialized(publisher.failUnsettledTools({ type: "aborted", message: "Tool execution interrupted" }))
             yield* serialized(publisher.failAssistant({ type: "aborted", message: "Step interrupted" }))
           }
@@ -1011,7 +1001,7 @@ const layer = Layer.effect(
           // implementation becomes a failed tool call the model can read, and the step still
           // settles so the model may recover. A typed infrastructure failure (tool output
           // could not be persisted) also fails the assistant and then fails the drain.
-          const settledFailure = settledCauses.find((cause) => !Cause.hasInterrupts(cause) && !isUserDeclined(cause))
+          const settledFailure = settledCauses.find((cause) => !Cause.hasInterrupts(cause))
           const infraError =
             settledFailure === undefined ? undefined : Option.getOrUndefined(Cause.findErrorOption(settledFailure))
           if (settledFailure !== undefined) {
@@ -1127,7 +1117,6 @@ const layer = Layer.effect(
           if (streamInterrupted) return yield* Effect.interrupt
           if (stream._tag === "Failure" && !recoverableProviderFailure && !promotePendingSteerAfterProviderRecovery)
             return yield* Effect.failCause(stream.cause)
-          if (userDeclined) return yield* Effect.interrupt
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
             return yield* Effect.failCause(settledFailure)
           if (toolsInterrupted && settled._tag === "Failure") return yield* Effect.failCause(settled.cause)

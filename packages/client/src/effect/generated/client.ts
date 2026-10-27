@@ -2887,13 +2887,109 @@ const Endpoint40_3 = (raw: RawClient["server.dots"]) => (input: Endpoint40_3Inpu
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_4Request = Parameters<RawClient["server.dots"]["session.dots.exchange.read"]>[0]
+type Endpoint40_4Request = Parameters<RawClient["server.dots"]["session.dots.delegation.device.create"]>[0]
 type Endpoint40_4Input = {
   readonly sessionID: Endpoint40_4Request["params"]["sessionID"]
+  readonly id: Endpoint40_4Request["payload"]["id"]
   readonly exchangeID: Endpoint40_4Request["payload"]["exchangeID"]
+  readonly bindingID: Endpoint40_4Request["payload"]["bindingID"]
+  readonly expectedAttachment: Endpoint40_4Request["payload"]["expectedAttachment"]
+  readonly scope: Endpoint40_4Request["payload"]["scope"]
   readonly remoteSource: Endpoint40_4Request["payload"]["remoteSource"]
 }
 const Endpoint40_4 = (raw: RawClient["server.dots"]) => (input: Endpoint40_4Input) =>
+  raw["session.dots.delegation.device.create"]({
+    params: { sessionID: input["sessionID"] },
+    payload: {
+      id: input["id"],
+      exchangeID: input["exchangeID"],
+      bindingID: input["bindingID"],
+      expectedAttachment: input["expectedAttachment"],
+      scope: input["scope"],
+      remoteSource: input["remoteSource"],
+    },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint40_5Request = Parameters<RawClient["server.dots"]["session.dots.delegation.device.read"]>[0]
+type Endpoint40_5Input = {
+  readonly sessionID: Endpoint40_5Request["params"]["sessionID"]
+  readonly cursor?: Endpoint40_5Request["payload"]["cursor"]
+  readonly limit?: Endpoint40_5Request["payload"]["limit"]
+  readonly remoteSource: Endpoint40_5Request["payload"]["remoteSource"]
+}
+const Endpoint40_5 = (raw: RawClient["server.dots"]) => (input: Endpoint40_5Input) =>
+  raw["session.dots.delegation.device.read"]({
+    params: { sessionID: input["sessionID"] },
+    payload: { cursor: input["cursor"], limit: input["limit"], remoteSource: input["remoteSource"] },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint40_6Request = Parameters<RawClient["server.dots"]["session.dots.delegation.device.revoke"]>[0]
+type Endpoint40_6Input = {
+  readonly sessionID: Endpoint40_6Request["params"]["sessionID"]
+  readonly id: Endpoint40_6Request["payload"]["id"]
+  readonly revision: Endpoint40_6Request["payload"]["revision"]
+  readonly exchangeID: Endpoint40_6Request["payload"]["exchangeID"]
+  readonly bindingID: Endpoint40_6Request["payload"]["bindingID"]
+  readonly expectedAttachment: Endpoint40_6Request["payload"]["expectedAttachment"]
+  readonly remoteSource: Endpoint40_6Request["payload"]["remoteSource"]
+}
+const Endpoint40_6 = (raw: RawClient["server.dots"]) => (input: Endpoint40_6Input) =>
+  raw["session.dots.delegation.device.revoke"]({
+    params: { sessionID: input["sessionID"] },
+    payload: {
+      id: input["id"],
+      revision: input["revision"],
+      exchangeID: input["exchangeID"],
+      bindingID: input["bindingID"],
+      expectedAttachment: input["expectedAttachment"],
+      remoteSource: input["remoteSource"],
+    },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint40_7Request = Parameters<RawClient["server.dots"]["session.dots.decisions.list"]>[0]
+type Endpoint40_7Input = {
+  readonly sessionID: Endpoint40_7Request["params"]["sessionID"]
+  readonly bindingID: Endpoint40_7Request["payload"]["bindingID"]
+  readonly expectedAttachment: Endpoint40_7Request["payload"]["expectedAttachment"]
+  readonly delegation: Endpoint40_7Request["payload"]["delegation"]
+  readonly targetSessionID?: Endpoint40_7Request["payload"]["targetSessionID"]
+  readonly cursor?: Endpoint40_7Request["payload"]["cursor"]
+  readonly limit?: Endpoint40_7Request["payload"]["limit"]
+  readonly remoteSource: Endpoint40_7Request["payload"]["remoteSource"]
+}
+const Endpoint40_7 = (raw: RawClient["server.dots"]) => (input: Endpoint40_7Input) =>
+  raw["session.dots.decisions.list"]({
+    params: { sessionID: input["sessionID"] },
+    payload: {
+      bindingID: input["bindingID"],
+      expectedAttachment: input["expectedAttachment"],
+      delegation: input["delegation"],
+      targetSessionID: input["targetSessionID"],
+      cursor: input["cursor"],
+      limit: input["limit"],
+      remoteSource: input["remoteSource"],
+    },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+type Endpoint40_8Request = Parameters<RawClient["server.dots"]["session.dots.exchange.read"]>[0]
+type Endpoint40_8Input = {
+  readonly sessionID: Endpoint40_8Request["params"]["sessionID"]
+  readonly exchangeID: Endpoint40_8Request["payload"]["exchangeID"]
+  readonly remoteSource: Endpoint40_8Request["payload"]["remoteSource"]
+}
+const Endpoint40_8 = (raw: RawClient["server.dots"]) => (input: Endpoint40_8Input) =>
   raw["session.dots.exchange.read"]({
     params: { sessionID: input["sessionID"] },
     payload: { exchangeID: input["exchangeID"], remoteSource: input["remoteSource"] },
@@ -2902,35 +2998,35 @@ const Endpoint40_4 = (raw: RawClient["server.dots"]) => (input: Endpoint40_4Inpu
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_5Request = Parameters<RawClient["server.dots"]["session.dots.targets"]>[0]
-type Endpoint40_5Input = {
-  readonly sessionID: Endpoint40_5Request["params"]["sessionID"]
-  readonly profile: Endpoint40_5Request["query"]["profile"]
+type Endpoint40_9Request = Parameters<RawClient["server.dots"]["session.dots.targets"]>[0]
+type Endpoint40_9Input = {
+  readonly sessionID: Endpoint40_9Request["params"]["sessionID"]
+  readonly profile: Endpoint40_9Request["query"]["profile"]
 }
-const Endpoint40_5 = (raw: RawClient["server.dots"]) => (input: Endpoint40_5Input) =>
+const Endpoint40_9 = (raw: RawClient["server.dots"]) => (input: Endpoint40_9Input) =>
   raw["session.dots.targets"]({ params: { sessionID: input["sessionID"] }, query: { profile: input["profile"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_6Request = Parameters<RawClient["server.dots"]["session.dots.status"]>[0]
-type Endpoint40_6Input = { readonly sessionID: Endpoint40_6Request["params"]["sessionID"] }
-const Endpoint40_6 = (raw: RawClient["server.dots"]) => (input: Endpoint40_6Input) =>
+type Endpoint40_10Request = Parameters<RawClient["server.dots"]["session.dots.status"]>[0]
+type Endpoint40_10Input = { readonly sessionID: Endpoint40_10Request["params"]["sessionID"] }
+const Endpoint40_10 = (raw: RawClient["server.dots"]) => (input: Endpoint40_10Input) =>
   raw["session.dots.status"]({ params: { sessionID: input["sessionID"] } }).pipe(
     Effect.mapError(mapClientError),
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_7Request = Parameters<RawClient["server.dots"]["session.dots.bind"]>[0]
-type Endpoint40_7Input = {
-  readonly sessionID: Endpoint40_7Request["params"]["sessionID"]
-  readonly profile: Endpoint40_7Request["payload"]["profile"]
-  readonly dotID: Endpoint40_7Request["payload"]["dotID"]
-  readonly threadID: Endpoint40_7Request["payload"]["threadID"]
-  readonly generation: Endpoint40_7Request["payload"]["generation"]
-  readonly label: Endpoint40_7Request["payload"]["label"]
+type Endpoint40_11Request = Parameters<RawClient["server.dots"]["session.dots.bind"]>[0]
+type Endpoint40_11Input = {
+  readonly sessionID: Endpoint40_11Request["params"]["sessionID"]
+  readonly profile: Endpoint40_11Request["payload"]["profile"]
+  readonly dotID: Endpoint40_11Request["payload"]["dotID"]
+  readonly threadID: Endpoint40_11Request["payload"]["threadID"]
+  readonly generation: Endpoint40_11Request["payload"]["generation"]
+  readonly label: Endpoint40_11Request["payload"]["label"]
 }
-const Endpoint40_7 = (raw: RawClient["server.dots"]) => (input: Endpoint40_7Input) =>
+const Endpoint40_11 = (raw: RawClient["server.dots"]) => (input: Endpoint40_11Input) =>
   raw["session.dots.bind"]({
     params: { sessionID: input["sessionID"] },
     payload: {
@@ -2945,16 +3041,16 @@ const Endpoint40_7 = (raw: RawClient["server.dots"]) => (input: Endpoint40_7Inpu
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_8Request = Parameters<RawClient["server.dots"]["session.dots.send"]>[0]
-type Endpoint40_8Input = {
-  readonly sessionID: Endpoint40_8Request["params"]["sessionID"]
-  readonly id: Endpoint40_8Request["payload"]["id"]
-  readonly text: Endpoint40_8Request["payload"]["text"]
-  readonly files?: Endpoint40_8Request["payload"]["files"]
-  readonly causalMessageID?: Endpoint40_8Request["payload"]["causalMessageID"]
-  readonly expectedTarget: Endpoint40_8Request["payload"]["expectedTarget"]
+type Endpoint40_12Request = Parameters<RawClient["server.dots"]["session.dots.send"]>[0]
+type Endpoint40_12Input = {
+  readonly sessionID: Endpoint40_12Request["params"]["sessionID"]
+  readonly id: Endpoint40_12Request["payload"]["id"]
+  readonly text: Endpoint40_12Request["payload"]["text"]
+  readonly files?: Endpoint40_12Request["payload"]["files"]
+  readonly causalMessageID?: Endpoint40_12Request["payload"]["causalMessageID"]
+  readonly expectedTarget: Endpoint40_12Request["payload"]["expectedTarget"]
 }
-const Endpoint40_8 = (raw: RawClient["server.dots"]) => (input: Endpoint40_8Input) =>
+const Endpoint40_12 = (raw: RawClient["server.dots"]) => (input: Endpoint40_12Input) =>
   raw["session.dots.send"]({
     params: { sessionID: input["sessionID"] },
     payload: {
@@ -2969,12 +3065,12 @@ const Endpoint40_8 = (raw: RawClient["server.dots"]) => (input: Endpoint40_8Inpu
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_9Request = Parameters<RawClient["server.dots"]["session.dots.pause"]>[0]
-type Endpoint40_9Input = {
-  readonly sessionID: Endpoint40_9Request["params"]["sessionID"]
-  readonly expectedTarget: Endpoint40_9Request["payload"]["expectedTarget"]
+type Endpoint40_13Request = Parameters<RawClient["server.dots"]["session.dots.pause"]>[0]
+type Endpoint40_13Input = {
+  readonly sessionID: Endpoint40_13Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_13Request["payload"]["expectedTarget"]
 }
-const Endpoint40_9 = (raw: RawClient["server.dots"]) => (input: Endpoint40_9Input) =>
+const Endpoint40_13 = (raw: RawClient["server.dots"]) => (input: Endpoint40_13Input) =>
   raw["session.dots.pause"]({
     params: { sessionID: input["sessionID"] },
     payload: { expectedTarget: input["expectedTarget"] },
@@ -2983,12 +3079,12 @@ const Endpoint40_9 = (raw: RawClient["server.dots"]) => (input: Endpoint40_9Inpu
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_10Request = Parameters<RawClient["server.dots"]["session.dots.resume"]>[0]
-type Endpoint40_10Input = {
-  readonly sessionID: Endpoint40_10Request["params"]["sessionID"]
-  readonly expectedTarget: Endpoint40_10Request["payload"]["expectedTarget"]
+type Endpoint40_14Request = Parameters<RawClient["server.dots"]["session.dots.resume"]>[0]
+type Endpoint40_14Input = {
+  readonly sessionID: Endpoint40_14Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_14Request["payload"]["expectedTarget"]
 }
-const Endpoint40_10 = (raw: RawClient["server.dots"]) => (input: Endpoint40_10Input) =>
+const Endpoint40_14 = (raw: RawClient["server.dots"]) => (input: Endpoint40_14Input) =>
   raw["session.dots.resume"]({
     params: { sessionID: input["sessionID"] },
     payload: { expectedTarget: input["expectedTarget"] },
@@ -2997,12 +3093,12 @@ const Endpoint40_10 = (raw: RawClient["server.dots"]) => (input: Endpoint40_10In
     Effect.map((value) => value.data),
   )
 
-type Endpoint40_11Request = Parameters<RawClient["server.dots"]["session.dots.unbind"]>[0]
-type Endpoint40_11Input = {
-  readonly sessionID: Endpoint40_11Request["params"]["sessionID"]
-  readonly expectedTarget: Endpoint40_11Request["payload"]["expectedTarget"]
+type Endpoint40_15Request = Parameters<RawClient["server.dots"]["session.dots.unbind"]>[0]
+type Endpoint40_15Input = {
+  readonly sessionID: Endpoint40_15Request["params"]["sessionID"]
+  readonly expectedTarget: Endpoint40_15Request["payload"]["expectedTarget"]
 }
-const Endpoint40_11 = (raw: RawClient["server.dots"]) => (input: Endpoint40_11Input) =>
+const Endpoint40_15 = (raw: RawClient["server.dots"]) => (input: Endpoint40_15Input) =>
   raw["session.dots.unbind"]({
     params: { sessionID: input["sessionID"] },
     payload: { expectedTarget: input["expectedTarget"] },
@@ -3012,15 +3108,21 @@ const Endpoint40_11 = (raw: RawClient["server.dots"]) => (input: Endpoint40_11In
   )
 
 const adaptGroup40 = (raw: RawClient["server.dots"]) => ({
-  exchange: { create: Endpoint40_0(raw), read: Endpoint40_4(raw) },
-  delegation: { status: Endpoint40_1(raw), create: Endpoint40_2(raw), revoke: Endpoint40_3(raw) },
-  targets: Endpoint40_5(raw),
-  status: Endpoint40_6(raw),
-  bind: Endpoint40_7(raw),
-  send: Endpoint40_8(raw),
-  pause: Endpoint40_9(raw),
-  resume: Endpoint40_10(raw),
-  unbind: Endpoint40_11(raw),
+  exchange: { create: Endpoint40_0(raw), read: Endpoint40_8(raw) },
+  delegation: {
+    status: Endpoint40_1(raw),
+    create: Endpoint40_2(raw),
+    revoke: Endpoint40_3(raw),
+    device: { create: Endpoint40_4(raw), read: Endpoint40_5(raw), revoke: Endpoint40_6(raw) },
+  },
+  decisions: { list: Endpoint40_7(raw) },
+  targets: Endpoint40_9(raw),
+  status: Endpoint40_10(raw),
+  bind: Endpoint40_11(raw),
+  send: Endpoint40_12(raw),
+  pause: Endpoint40_13(raw),
+  resume: Endpoint40_14(raw),
+  unbind: Endpoint40_15(raw),
 })
 
 const adaptClient = (raw: RawClient) => ({

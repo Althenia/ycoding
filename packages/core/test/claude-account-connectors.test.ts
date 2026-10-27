@@ -297,7 +297,7 @@ describe("Claude account connectors", () => {
       const [, send] = find(yield* current.service.tools({}), "send")
       const fiber = yield* Tool.settle(send, { input: { query: "synthetic" } }, context).pipe(Effect.forkScoped)
       const request = yield* Deferred.await(entered)
-      expect(request.requireHuman).toBe(true)
+      expect(request.requireExplicitDecision).toBe(true)
       expect(request.save).toBeUndefined()
       expect(request.resources).toEqual(["mail"])
       expect(request.metadata).toMatchObject({ connector: "mail", connectorLabel: "Mail", tool: "send" })

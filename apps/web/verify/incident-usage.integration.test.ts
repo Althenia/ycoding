@@ -136,7 +136,7 @@ test("details load the newest 20 incidents and the exact guidance preview with a
     expect(items[1]).toContain("Guardrail escalated")
     expect(items[1]).toContain("standard.review.git-destructive")
     expect(items[1]).toContain("custom")
-    expect(items.some((item) => item.includes("Guardrail rejected") && item.includes("Human"))).toBe(true)
+    expect(items.some((item) => item.includes("Guardrail rejected") && item.includes("decided by Client"))).toBe(true)
     expect(items.some((item) => item.includes("Decision model"))).toBe(true)
     expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.incidents__recent time')].every((item) => /^\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d UTC$/.test(item.textContent))`)).toBe(true)
   } finally { await page.close() }

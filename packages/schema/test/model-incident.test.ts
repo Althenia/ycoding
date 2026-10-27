@@ -19,10 +19,11 @@ describe("ModelIncident", () => {
 
   test("closes kind, decider, and group", () => {
     for (const kind of ["fallback", "guardrail-escalated", "guardrail-rejected"]) expect(decode(ModelIncident.Kind, kind)).toBe(kind as never)
-    for (const value of ["decision-model", "human"]) expect(decode(ModelIncident.DecidedBy, value)).toBe(value as never)
+    for (const value of ["decision-model", "client"]) expect(decode(ModelIncident.DecidedBy, value)).toBe(value as never)
     for (const value of ["model", "agent"]) expect(decode(ModelIncident.Group, value)).toBe(value as never)
     rejects(ModelIncident.Kind, "other")
     rejects(ModelIncident.DecidedBy, "system")
+    rejects(ModelIncident.DecidedBy, "human")
     rejects(ModelIncident.Group, "provider")
   })
 
@@ -48,7 +49,7 @@ describe("ModelIncident", () => {
       variant: "high",
       profile: "work",
       target: { id: "m2", providerID: "p2" },
-      decidedBy: "human" as const,
+      decidedBy: "client" as const,
     }
     expect(encode(ModelIncident.Recent, decode(ModelIncident.Recent, { items: [full] }))).toEqual({ items: [full] })
     rejects(ModelIncident.Recent, { items: [{ ...item, decidedBy: "robot" }] })

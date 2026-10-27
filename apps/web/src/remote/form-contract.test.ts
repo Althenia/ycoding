@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import type { Form } from "../../../../packages/schema/src/form"
+import { SessionID } from "../../../../packages/schema/src/session-id"
 import { applySessionEvent, createSessionView, readFormAssessment, readFormReplySource, readForms, type FormReplySourceView, type FormView } from "./projection"
 
 test("native form readers retain validation, input hints and multiselect constraints", () => {
@@ -65,4 +66,31 @@ test("Dots delegated reply sources keep their exact external attribution without
     { ...source, exchangeID: undefined }, { ...source, exchangeID: "" }, { ...source, exchangeID: "e".repeat(257) },
     { ...source, revision: 0 }, { ...source, revision: -1 }, { ...source, revision: 1.5 }, { ...source, revision: "3" }])
     expect(readFormReplySource(invalid)).toBeUndefined()
+})
+
+test("authenticated Dots reply sources retain delegation attribution without client or grant identity", () => {
+  const source = {
+    kind: "dots-client",
+    anchorSessionID: SessionID.make("ses_anchor"),
+    bindingID: "binding_1",
+    delegationID: "delegation_two",
+    revision: 4,
+    exchangeID: "exchange_two",
+    principal: { ownerID: "own_1", deviceID: "dev_1", clientID: "cli_1", grantID: "grt_1", epoch: "epoch_1" },
+  } satisfies Form.DotsClientReplySource
+  const view = readFormReplySource(source)
+  expect(view).toEqual({ kind: "dots-client", anchorSessionID: "ses_anchor", delegationID: "delegation_two", revision: 4, exchangeID: "exchange_two" })
+  for (const privateValue of ["binding_1", "own_1", "dev_1", "cli_1", "grt_1", "epoch_1"])
+    expect(JSON.stringify(view)).not.toContain(privateValue)
+  for (const invalid of [
+    null,
+    { ...source, anchorSessionID: "usr_anchor" },
+    { ...source, bindingID: "" },
+    { ...source, bindingID: "b".repeat(257) },
+    { ...source, delegationID: "" },
+    { ...source, exchangeID: undefined },
+    { ...source, revision: 0 },
+    { ...source, principal: null },
+    { ...source, principal: { ...source.principal, clientID: 4 } },
+  ]) expect(readFormReplySource(invalid)).toBeUndefined()
 })

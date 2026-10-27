@@ -244,7 +244,20 @@ test("exposes every standard HTTP API group", () => {
     "dots",
   ])
   expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete"])
-  expect(Object.keys(client.dots)).toEqual(["targets", "status", "bind", "send", "pause", "resume"])
+  expect(Object.keys(client.dots)).toEqual([
+    "exchange",
+    "delegation",
+    "decisions",
+    "targets",
+    "status",
+    "bind",
+    "send",
+    "pause",
+    "resume",
+    "unbind",
+  ])
+  expect(Object.keys(client.dots.delegation.device)).toEqual(["create", "read", "revoke"])
+  expect(Object.keys(client.dots.decisions)).toEqual(["list"])
   expect(Object.keys(client.mcpEvents)).toEqual(["status", "list", "subscribe", "unsubscribe"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
@@ -263,7 +276,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.pty.connect)).toEqual(["token"])
   expect(Object.keys(client.shell)).toEqual(["list", "create", "get", "timeout", "output", "remove"])
   expect(Object.keys(client.project)).toEqual(["list", "inventory", "current", "directories", "forget"])
-  expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "resume"])
+  expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "switchModel", "resume"])
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
   expect(Object.keys(client.providerUsage)).toEqual(["forecast", "list", "get"])
@@ -608,6 +621,50 @@ test("server.get uses the public HTTP contract", async () => {
   expect(await client.server.get()).toEqual({ urls: ["http://192.168.1.10:4096"] })
   expect(request?.method).toBe("GET")
   expect(request?.url).toBe("http://localhost:3000/api/server")
+})
+
+test("generated Dots decision listing preserves the authenticated request context", async () => {
+  const requests: Request[] = []
+  const result = { data: [], nextCursor: "next+page" }
+  const context = {
+    requestID: "request_fixture",
+    principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" },
+    epoch: "epoch_fixture",
+  }
+  const expectedAttachment = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "Fixture" }
+  const input = {
+    sessionID: "ses_dots_client",
+    bindingID: "binding_fixture",
+    expectedAttachment,
+    delegation: { id: "delegation_fixture", revision: 3 },
+    targetSessionID: "ses_target",
+    cursor: "cursor_fixture",
+    limit: 12,
+    remoteSource: context,
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (request, init) => {
+      requests.push(request instanceof Request ? request : new Request(request, init))
+      return Response.json({ data: result })
+    },
+  })
+
+  expect(await client.dots.decisions.list(input)).toEqual(result)
+  expect(requests).toHaveLength(1)
+  expect([requests[0]!.method, new URL(requests[0]!.url).pathname]).toEqual([
+    "POST",
+    "/api/session/ses_dots_client/dots/decisions/list",
+  ])
+  expect(await requests[0]!.json()).toEqual({
+    bindingID: "binding_fixture",
+    expectedAttachment,
+    delegation: { id: "delegation_fixture", revision: 3 },
+    targetSessionID: "ses_target",
+    cursor: "cursor_fixture",
+    limit: 12,
+    remoteSource: context,
+  })
 })
 
 test("experimental wellknown integration add uses the public HTTP contract", async () => {

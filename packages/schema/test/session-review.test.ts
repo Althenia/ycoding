@@ -57,10 +57,23 @@ const payloads = [
       resources: ["echo [redacted]"],
       save: ["echo *"],
       fingerprint: "b".repeat(64),
+      fingerprintVersion: 2,
       requestID: Permission.ID.make("per_review"),
     },
   },
 ] as const
+
+test("permission review payloads require an explicit closed fingerprint version", () => {
+  const payload = payloads[4].payload
+  for (const fingerprintVersion of [1, 2] as const) {
+    const value = { ...payload, fingerprintVersion }
+    expect(Schema.decodeUnknownSync(SessionReview.PermissionPayload)(value)).toEqual(value)
+  }
+  const { fingerprintVersion, ...missing } = payload
+  expect(fingerprintVersion).toBe(2)
+  for (const value of [missing, ...[0, 3, "1", null].map((version) => ({ ...payload, fingerprintVersion: version }))])
+    expect(() => Schema.decodeUnknownSync(SessionReview.PermissionPayload)(value)).toThrow()
+})
 
 test("review IDs have the exact ascending prefix and reject other ID domains", () => {
   expect(SessionReview.ID.create()).toMatch(/^rvw_/)
@@ -129,7 +142,7 @@ test("review reasons, origins and optional helper evidence survive serialization
   ).toThrow()
 })
 
-test("human decisions are kind-tagged and admit answers, dismissals, and live approval choices", () => {
+test("client decisions are kind-tagged and admit answers, dismissals, and live approval choices", () => {
   const decisions: SessionReview.Decision[] = [
     { kind: "question", answers: { choice: "A", enabled: true, count: 2 } },
     { kind: "question", answers: [["A"], ["B", "C"]] },

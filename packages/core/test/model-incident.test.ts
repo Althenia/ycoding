@@ -345,10 +345,10 @@ test("rejections use the exact source row, else the same Session and request esc
         ...base,
         requestID: "req_b",
         messageID: messageID("later"),
-        decidedBy: "human",
+        decidedBy: "client",
         time: 3,
       })
-      yield* recordRejection(database.db, { ...base, requestID: "req_direct_shell", decidedBy: "human", time: 4 })
+      yield* recordRejection(database.db, { ...base, requestID: "req_direct_shell", decidedBy: "client", time: 4 })
       yield* recordRejection(database.db, {
         ...base,
         requestID: "req_a",
@@ -359,7 +359,7 @@ test("rejections use the exact source row, else the same Session and request esc
         ...base,
         requestID: "req_foreign_message",
         messageID: messageID("foreign"),
-        decidedBy: "human",
+        decidedBy: "client",
         time: 6,
       })
       yield* recordRejection(database.db, {
@@ -367,14 +367,14 @@ test("rejections use the exact source row, else the same Session and request esc
         requestID: "req_a",
         ruleIDs: [standard("git-destructive")],
         hardReview: true,
-        decidedBy: "human",
+        decidedBy: "client",
         time: 7,
       })
       const rows = yield* all(database.db)
       expect(rows.map((row) => [row.kind, row.request_id, row.provider_id, row.agent, row.decided_by])).toEqual([
         ["guardrail-escalated", "req_a", "p1", "build", null],
         ["guardrail-rejected", "req_a", "p1", "build", "decision-model"],
-        ["guardrail-rejected", "req_b", "p2", "plan", "human"],
+        ["guardrail-rejected", "req_b", "p2", "plan", "client"],
       ])
       expect(rows[1]!.category).toBe("hard")
     }),
@@ -397,7 +397,7 @@ test("rejections without an exact source or matching escalation record nothing e
         requestID: "req",
         ruleIDs: [],
         hardReview: false,
-        decidedBy: "human",
+        decidedBy: "client",
         time: 1,
       })
       yield* recordRejection(database.db, {
@@ -406,7 +406,7 @@ test("rejections without an exact source or matching escalation record nothing e
         messageID: messageID("missing"),
         ruleIDs: [],
         hardReview: false,
-        decidedBy: "human",
+        decidedBy: "client",
         time: 2,
       })
       expect(yield* all(database.db)).toEqual([])
@@ -531,7 +531,7 @@ test("recent lists newest first with id tie-break, filters by model and agent, a
         kind: "guardrail-rejected",
         category: "hard",
         rules: [standard("force-push")],
-        decidedBy: "human",
+        decidedBy: "client",
         agent: "plan",
       })
       yield* put(database.db, { id: "inc_c", time: 200, kind: "guardrail-escalated", category: "ordinary" })
@@ -553,7 +553,7 @@ test("recent lists newest first with id tie-break, filters by model and agent, a
         category: "hard",
         ruleIDs: [standard("force-push")],
         agent: agent("plan"),
-        decidedBy: "human",
+        decidedBy: "client",
       })
       expect(recent.items[2]).toEqual({
         id: incidentID("inc_a"),

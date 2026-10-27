@@ -21,7 +21,7 @@ export const Kind = Schema.Literals(["fallback", "guardrail-escalated", "guardra
 })
 export type Kind = typeof Kind.Type
 
-export const DecidedBy = Schema.Literals(["decision-model", "human"]).annotate({ identifier: "ModelIncident.DecidedBy" })
+export const DecidedBy = Schema.Literals(["decision-model", "client"]).annotate({ identifier: "ModelIncident.DecidedBy" })
 export type DecidedBy = typeof DecidedBy.Type
 
 export const Group = Schema.Literals(["model", "agent"]).annotate({ identifier: "ModelIncident.Group" })
