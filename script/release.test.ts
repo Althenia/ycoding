@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 const workflow = await Bun.file(path.join(import.meta.dir, "../.github/workflows/release.yml")).text()
@@ -628,9 +630,47 @@ test("packaging overlaps source verification without bypassing publication or de
   expect(verify).not.toContain("secrets.")
   expect(verify).not.toContain("token:")
   expect(verify).not.toContain("permissions:")
+  expect(verify).toContain("fetch-depth: 0")
   expect(verify).toContain("persist-credentials: false")
   expect(verify).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main")
   expect(verify).toContain("      - name: Verify tag is reachable from main\n        if: github.event_name == 'push'\n")
+})
+
+test.each([
+  ["ancestor", 0],
+  ["nonancestor", 1],
+  ["missing main", 128],
+] as const)("release ancestry guard uses checkout refs without a remote: %s", (scenario, status) => {
+  const guard = workflowJob(workflow, "verify-source")
+    .split("      - name: Verify tag is reachable from main\n")[1]
+    ?.split("\n      - name:")[0] ?? ""
+  const command = /\n {8}run: \|\n([\s\S]*)/.exec(guard)?.[1]
+  expect(command).toBeDefined()
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ycoding-release-ancestry-"))
+  try {
+    const git = (args: string[], stdin = "") => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: directory, stdin: Buffer.from(stdin), stdout: "pipe", stderr: "pipe" })
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString())
+      return result.stdout.toString().trim()
+    }
+    git(["init", "--quiet"])
+    const tree = git(["mktree"])
+    const commit = (parent?: string) => git(["hash-object", "-t", "commit", "-w", "--stdin"],
+      `tree ${tree}\n${parent ? `parent ${parent}\n` : ""}author Release Fixture <release@example.test> 0 +0000\ncommitter Release Fixture <release@example.test> 0 +0000\n\nfixture\n`)
+    const ancestor = commit()
+    const descendant = commit(ancestor)
+    if (scenario !== "missing main")
+      git(["update-ref", "refs/remotes/origin/main", scenario === "nonancestor" ? ancestor : descendant])
+    const result = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", command!], {
+      cwd: directory,
+      env: { ...process.env, GITHUB_SHA: scenario === "nonancestor" ? descendant : ancestor, GIT_TERMINAL_PROMPT: "0" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(status)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test("release runs serialize without cancelling a preceding release", () => {

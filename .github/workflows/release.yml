@@ -52,7 +52,6 @@ jobs:
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
-          git fetch --no-tags origin main:refs/remotes/origin/main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Resolve release version
