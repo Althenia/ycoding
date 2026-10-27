@@ -133,12 +133,6 @@ const excludedOperations = [
   "session.dots.send",
   "session.dots.pause",
   "session.dots.resume",
-  "session.subagent.answer",
-  "session.permission.reply",
-  "session.guardrail.reply",
-  "session.review.decide",
-  "session.form.reply",
-  "session.form.cancel",
 ]
 
 function sessionInfo(id: string, directory = "/work"): SessionInfo {
@@ -649,7 +643,7 @@ describe("inventory and discovery", () => {
         .toSorted(),
     )
     expect(RemoteMcpSchemas.tools.at(-1)?.operation).toBe("session.createInDirectory")
-    expect(new Set(expectedTools).size).toBe(89)
+    expect(new Set(expectedTools).size).toBe(95)
   })
 
   test("lists typed decision tools beside separate Stop and Interrupt controls", async () => {

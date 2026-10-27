@@ -48,7 +48,11 @@ test("MRTR cancellation aborts the real native HTTP exchange and keeps uncertain
   const local = createLocalServer({ url: `http://127.0.0.1:${server.port}` }, { timeoutMs: 60000 })
   const sessions = createSessionRegistry({ local })
   const holds: boolean[] = []
-  const mcp = createRemoteMcp({ local, sessions, subscriptions: createSubscriptions(), resource: "https://relay.example/mcp", allowed: () => true, onLaneHold: (held) => holds.push(held) })
+  const held = Promise.withResolvers<void>()
+  const mcp = createRemoteMcp({ local, sessions, subscriptions: createSubscriptions(), resource: "https://relay.example/mcp", allowed: () => true, onLaneHold: (value) => {
+    holds.push(value)
+    if (value) held.resolve()
+  } })
   const args = { sessionID, input: { exchangeID: "decision", taskExchangeID: "source_task", expectedAttachment: target, targetSessionID: sessionID, channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, instruction: { operation: "decision", target: decision } } }
   const post = (name: string, arguments_: unknown, extra: Record<string, unknown> = {}, signal?: AbortSignal) => mcp.fetch(new Request("https://relay.example/mcp", {
     method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "tools/call", "mcp-name": name },
@@ -65,6 +69,7 @@ test("MRTR cancellation aborts the real native HTTP exchange and keeps uncertain
     controller.abort()
     await nativeAborted.promise
     await pending
+    await held.promise
     expect(writes).toBe(1)
     expect(holds).toEqual([true])
     expect((await (await post("session_dots_decision_form", args, retry)).json()).error.code).toBe(-32602)

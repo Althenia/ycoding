@@ -109,7 +109,7 @@ describe("MCP autonomy schema", () => {
     for (const removed of ["yolo", "autoPermission", "autoGuardrail", "autoAnswer"])
       expect(serialized).not.toContain(`"${removed}":`)
     expect(tool.description).toContain("manual")
-    expect(tool.description).toContain("hard or custom-rule reviews")
+    expect(tool.description).toContain("hard or custom-rule review approvals require an authorized typed decision")
     expect(tool.description).not.toContain("approves nothing by itself")
   })
 

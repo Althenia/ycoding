@@ -7,8 +7,46 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.3 delegated decision forms and multi-Session Dots bindings first", () => {
+  test("lists v0.11.4 device-scoped Dots decisions, keep-awake activity and received-output speed first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.4", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(9)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of [
+      "device-wide grant",
+      "nonarchived Session the device owns",
+      "no one-hour cap",
+      "survives runtime restart and MCP reconnect",
+      "session.dots.decisions.list",
+      "without a preceding task exchange",
+      "MCP progress and blocker notifications are captured immediately",
+      "identify client-originated decisions",
+      "Breaking Change: an authenticated Dots principal",
+      "hard and custom-rule guardrail reviews",
+      "one-shot once or reject",
+      "room and prompt text never settles a decision",
+      "revoke or unbind",
+      "Breaking Change: the human-input",
+      "decision-input",
+      "is not rewritten",
+      "holds display sleep",
+      "every second",
+      "does not report an unlocked screen",
+      "estimated received-output throughput",
+      "first output chunk is excluded",
+      "at least one second",
+      "trailing five-second window",
+      "restart for each provider attempt",
+      "without HTML details or summary wrappers",
+      "Captured changes (TUI) and Edited files (web)",
+      "no longer send client cache resources or cache breakpoints",
+    ])
+      expect(text).toContain(fragment)
+    expect(after("0.11.4")?.version).toBe("0.11.3")
+  })
+
+  test("retains v0.11.3 delegated decision forms and multi-Session Dots bindings", () => {
+    const entry = byVersion("0.11.3")
     expect(entry).toMatchObject({ version: "0.11.3", date: "2026-10-26", tags: ["Added", "Changed", "Fixed"] })
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
     for (const fragment of [
@@ -1747,7 +1785,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 48)).toEqual([
+    expect(versions.slice(0, 49)).toEqual([
+      "0.11.4",
       "0.11.3",
       "0.11.2",
       "0.11.1",
