@@ -526,7 +526,7 @@ function readUsageProviders(value: unknown): readonly UsageProvider[] | undefine
     typeof item.stability === "string" && Number.isFinite(item.updatedAt) && !Number.isNaN(new Date(item.updatedAt).getTime()) &&
     (item.profile === undefined || typeof item.profile === "string") && (item.message === undefined || typeof item.message === "string") &&
     Array.isArray(item.windows) && item.windows.every((window: Record<string, unknown>) =>
-      typeof window.id === "string" && typeof window.label === "string" && units.includes(String(window.unit)) &&
+      typeof window.id === "string" && typeof window.label === "string" && (window.group === undefined || typeof window.group === "string" && window.group !== "") && units.includes(String(window.unit)) &&
       [window.used, window.limit, window.remaining, window.resetAt, window.periodSeconds].every((n) => n === undefined || typeof n === "number" && Number.isFinite(n) && n >= 0) &&
       (window.unlimited === undefined || typeof window.unlimited === "boolean")))) return undefined
   return value as UsageProvider[]

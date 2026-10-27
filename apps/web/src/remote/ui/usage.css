@@ -53,6 +53,9 @@
 .usage-provider__windows { display: grid; gap: var(--yc-space-3); }
 .usage-window { padding: var(--yc-space-3) 0 0; min-width: 0; }
 .usage-window + .usage-window { border-top: 1px solid var(--yc-border); }
+.usage-window-group { margin: 0; padding-top: var(--yc-space-3); border-top: 1px solid var(--yc-border); color: var(--yc-text); font: var(--yc-weight-medium) var(--yc-size-xs)/var(--yc-leading-xs) var(--yc-font-mono); overflow-wrap: anywhere; }
+.usage-window-group:first-child { padding-top: 0; border-top: 0; }
+.usage-window-group + .usage-window { padding-top: var(--yc-space-2); }
 .usage-window__top { display: flex; justify-content: space-between; gap: var(--yc-space-2); align-items: center; font: var(--yc-size-2xs)/var(--yc-leading-xs) var(--yc-font-mono); }
 .usage-window__top > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .usage-window__top strong { font-weight: var(--yc-weight-semibold); }

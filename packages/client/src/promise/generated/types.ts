@@ -7702,6 +7702,7 @@ export type ProviderUsageListOutput = {
     windows: Array<{
       id: string
       label: string
+      group?: string
       unit: ProviderUsageUnit
       used?: number
       limit?: number
@@ -7739,6 +7740,7 @@ export type ProviderUsageGetOutput = {
     windows: Array<{
       id: string
       label: string
+      group?: string
       unit: ProviderUsageUnit
       used?: number
       limit?: number

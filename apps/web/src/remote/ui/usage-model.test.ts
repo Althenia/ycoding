@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { compactUsageTotal, reportNeedsNewerConnector, unsupportedReportMessage, dailySpend, donutGeometry, matchingQuotaForecast, modelIdentity, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, reportKey, reportCostText, reportIdentity, reportLabel, spendCostText, spendMetrics, tooltipPosition, usageBounds, usageReportInputs, visibleProviders, type UsageProvider } from "./usage-model"
+import { compactUsageTotal, reportNeedsNewerConnector, unsupportedReportMessage, dailySpend, donutGeometry, matchingQuotaForecast, modelIdentity, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, reportKey, reportCostText, reportIdentity, reportLabel, spendCostText, spendMetrics, tooltipPosition, usageBounds, usageReportInputs, visibleProviders, type UsageProvider } from "./usage-model"
 
 const tokens = { input: 900, output: 100, reasoning: 20, cache: { read: 300, write: 40 } }
 const row = (label: string, cost?: number, costProvenance?: "recorded" | "current_catalog") => ({
@@ -255,4 +255,16 @@ test("older connectors reject new report groups and filters, which the page answ
   expect(unsupportedReportMessage({ group: "model", providerID: "openai", timeZone: "UTC" })).toBe("Update YCoding on this machine to use this grouping or filter.")
   expect(unsupportedReportMessage({ group: "day", timeZone: "UTC" })).toBe("Update YCoding on this machine to see Local usage. Switch to UTC to continue.")
   expect(unsupportedReportMessage({ group: "day" })).toBe("Update YCoding on this machine to see usage.")
+})
+
+test("a quota group heading appears once before its consecutive pivoted windows", () => {
+  const windows = [
+    { id: "overall", label: "Overall limit", unit: "percent" as const, used: 10 },
+    { id: "Gemini Models/weekly", label: "Weekly limit", group: "Gemini Models", unit: "percent" as const, used: 25 },
+    { id: "Gemini Models/five-hour", label: "Five hour limit", group: "Gemini Models", unit: "percent" as const, used: 100 },
+    { id: "Claude and GPT models/weekly", label: "Weekly limit", group: "Claude and GPT models", unit: "percent" as const, used: 60 },
+    { id: "Gemini 4 Argon/weekly", label: "Weekly limit", group: "Gemini 4 Argon", unit: "percent" as const, used: 0 },
+  ]
+  expect(windows.map((_, index) => quotaGroupHeading(windows, index))).toEqual([undefined, "Gemini Models", undefined, "Claude and GPT models", "Gemini 4 Argon"])
+  expect(quotaGroupHeading([], 0)).toBeUndefined()
 })

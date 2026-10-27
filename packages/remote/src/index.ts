@@ -1593,7 +1593,7 @@ export type RemoteUsageProvider = { readonly providerID: string; readonly label:
   readonly status: "available" | "stale" | "unsupported" | "unauthorized" | "error";
   readonly source: "provider_api" | "local_client_rpc" | "response_headers" | "response_stream" | "provider_internal_api" | "local_session";
   readonly stability: "stable" | "client_contract" | "observed" | "best_effort"; readonly updatedAt: number;
-  readonly windows: readonly { readonly id: string; readonly label: string; readonly unit: "percent" | "usd" | "requests" | "tokens" | "count";
+  readonly windows: readonly { readonly id: string; readonly label: string; readonly group?: string; readonly unit: "percent" | "usd" | "requests" | "tokens" | "count";
     readonly used?: number; readonly limit?: number; readonly remaining?: number; readonly unlimited?: boolean;
     readonly resetAt?: number; readonly periodSeconds?: number }[]; readonly message?: string }
 export type RemoteUsageProvidersValue = { readonly data: readonly RemoteUsageProvider[] }

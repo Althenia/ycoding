@@ -35,6 +35,7 @@ export type Unit = typeof Unit.Type
 export class Window extends Schema.Class<Window>("ProviderUsage.Window")({
   id: Schema.String.check(Schema.isNonEmpty()),
   label: Schema.String.check(Schema.isNonEmpty()),
+  group: Schema.String.check(Schema.isNonEmpty()).pipe(optional),
   unit: Unit,
   used: NonNegativeFinite.pipe(optional),
   limit: NonNegativeFinite.pipe(optional),

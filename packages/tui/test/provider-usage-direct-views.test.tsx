@@ -630,3 +630,43 @@ test.each([{ mode: "dark" as const, width: 40 }, { mode: "dark" as const, width:
     expect(frame.replace(/\s/g, "").match(/Quotaburn12percentagepoints\/hour/g)).toHaveLength(2)
   } finally { app.renderer.destroy() }
 }, 30_000)
+
+test("grouped quota windows render one heading before their pivoted rows and ungrouped rows are unchanged", async () => {
+  const grouped = (id: string, label: string, group: string | undefined, used: number) => ({ id, label, ...(group === undefined ? {} : { group }), unit: "percent" as const, used, resetAt: Date.UTC(2026, 8, 25, 12) })
+  const app = await renderUsage({
+    width: 100,
+    height: 60,
+    initialTab: "usage",
+    snapshots: [{
+      providerID: "antigravity", label: "Antigravity", status: "available", source: "provider_internal_api", stability: "client_contract", updatedAt: quotaUpdatedAt,
+      windows: [
+        grouped("overall", "Overall limit", undefined, 10),
+        grouped("Gemini Models/weekly", "Weekly limit", "Gemini Models", 25),
+        grouped("Gemini Models/five-hour", "Five hour limit", "Gemini Models", 100),
+        grouped("Claude and GPT models/weekly", "Weekly limit", "Claude and GPT models", 60),
+        grouped("Gemini 4 Argon/weekly", "Weekly limit", "Gemini 4 Argon", 0),
+      ],
+    }],
+    load: async (input) => page(input.group, []),
+  })
+  try {
+    const frame = await waitFor(app, (value) => value.includes("Gemini 4 Argon"), "grouped quota windows")
+    const lines = frame.split("\n").map((line) => line.trim())
+    const at = (text: string, from = 0) => lines.findIndex((line, index) => index >= from && line.startsWith(text))
+    const overall = at("Overall limit")
+    const gemini = at("Gemini Models")
+    const weekly = at("Weekly limit", gemini)
+    const fiveHour = at("Five hour limit", weekly)
+    const claude = at("Claude and GPT models", fiveHour)
+    const claudeWeekly = at("Weekly limit", claude)
+    const argon = at("Gemini 4 Argon", claudeWeekly)
+    const argonWeekly = at("Weekly limit", argon)
+    expect([overall, gemini, weekly, fiveHour, claude, claudeWeekly, argon, argonWeekly].every((index) => index >= 0)).toBe(true)
+    expect(overall).toBeLessThan(gemini)
+    expect(gemini).toBeLessThan(weekly)
+    expect(lines.filter((line) => line.startsWith("Gemini Models"))).toHaveLength(1)
+    expect(lines.filter((line) => line.startsWith("Claude and GPT models"))).toHaveLength(1)
+    expect(lines.filter((line) => line.startsWith("Weekly limit"))).toHaveLength(3)
+    expect(lines[overall]).not.toContain("Gemini")
+  } finally { app.renderer.destroy() }
+}, 30_000)

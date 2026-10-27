@@ -529,7 +529,7 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number; asO
         <text fg={theme.text.subdued}> Source {humanize(props.snapshot.source)} · Stability {humanize(props.snapshot.stability)}</text>
       </Show>
       <For each={props.snapshot.windows}>
-        {(window) => {
+        {(window, index) => {
           const ratio = quotaRatio(window)
           const deadline =
             props.snapshot.providerID === "meta" && window.id === "current-bill"
@@ -543,6 +543,9 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number; asO
                 : theme.text.feedback.success.default
           return (
             <box flexDirection="column" paddingBottom={1}>
+              <Show when={window.group !== undefined && window.group !== props.snapshot.windows[index() - 1]?.group}>
+                <text fg={theme.text.label}> {window.group}</text>
+              </Show>
               <text>
                 {" "}
                 {window.label} <span style={{ fg: color }}>{ratio === undefined ? "" : `${progressBar(ratio)} `}</span>

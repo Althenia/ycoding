@@ -23,7 +23,7 @@ A snapshot includes:
 - zero or more named windows;
 - an optional safe diagnostic message.
 
-A window may include used, limit, remaining, unlimited, reset time, and period length. Unknown values are omitted. Consumers must render an omitted value as unreported rather than as zero.
+A window may include a group name, used, limit, remaining, unlimited, reset time, and period length. Consecutive windows that share a group name render under one group heading; windows without a group render as ungrouped. Unknown values are omitted. Consumers must render an omitted value as unreported rather than as zero.
 
 ## Status values
 

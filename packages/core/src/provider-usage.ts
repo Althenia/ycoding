@@ -786,7 +786,7 @@ export const antigravity = (
     const project = credential.metadata?.projectID
     const response = yield* http
       .execute(
-        HttpClientRequest.post(`${antigravityBaseURL}/v1internal:fetchAvailableModels`).pipe(
+        HttpClientRequest.post(`${antigravityBaseURL}/v1internal:retrieveUserQuotaSummary`).pipe(
           HttpClientRequest.acceptJson,
           HttpClientRequest.bearerToken(credential.access),
           HttpClientRequest.setHeader("User-Agent", antigravityUserAgent()),

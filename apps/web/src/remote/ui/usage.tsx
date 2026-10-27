@@ -12,7 +12,7 @@ import { ModelIncidents } from "./model-incidents"
 import { ProviderLogo } from "./provider-logo"
 import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
 import { consumptionNeedsProfile, consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
-import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
+import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
 const groups = usageGroups.map((group) => group.value)
@@ -387,10 +387,13 @@ function ProviderCard(props: { readonly provider: () => UsageProvider; readonly 
     <header class="usage-provider__head"><div class="usage-provider__identity"><h3><ProviderLogo providerID={props.provider().providerID} />{heading().name}</h3><span class={`usage-status usage-status--${props.provider().status}`} title={label(props.provider().status)} aria-label={`${label(props.provider().status)} quota status`} /><Show when={heading().plan}><span class="usage-provider__plan">{heading().plan}</span></Show><Show when={props.provider().status !== "available"}><span class="usage-provider__state">{label(props.provider().status)}</span></Show></div>
       <span class="usage-provider__freshness">{props.provider().status === "error" ? "Checked" : "Synced"} <time datetime={new Date(props.provider().updatedAt).toISOString()}>{relativeFreshness(props.provider().updatedAt, props.now)}</time></span></header>
     <Show when={props.provider().windows.length > 0} fallback={<p class="usage-provider__empty">{props.provider().message ?? "This provider has not reported any quota metrics."}</p>}>
-      <div class="usage-provider__windows"><For each={props.provider().windows.map((window) => window.id)}>{(id) => {
+      <div class="usage-provider__windows"><For each={props.provider().windows.map((window) => window.id)}>{(id, index) => {
         const initial = props.provider().windows.find((window) => window.id === id)!
         const window = () => props.provider().windows.find((item) => item.id === id) ?? initial
-        return <QuotaRow window={window} now={props.now} forecast={forecastFor(window())} forecastAsOf={props.forecastAsOf} forecastState={props.forecastState} />
+        return <>
+          <Show when={quotaGroupHeading(props.provider().windows, index())}>{(group) => <h4 class="usage-window-group">{group()}</h4>}</Show>
+          <QuotaRow window={window} now={props.now} forecast={forecastFor(window())} forecastAsOf={props.forecastAsOf} forecastState={props.forecastState} />
+        </>
       }}</For></div>
     </Show>
     <UsageDetails label={heading().name} groups={detailGroups()} />

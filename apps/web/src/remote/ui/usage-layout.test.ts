@@ -148,3 +148,10 @@ test("disclosure details wrap long values and add no animation", () => {
   expect(cost).not.toContain("animation")
   expect(cost).not.toContain("transition")
 })
+
+test("quota group headings reuse the divider and mono text roles without a nested surface", () => {
+  const heading = rule(".usage-window-group")
+  expect(heading).toContain("border-top: 1px solid var(--yc-border)")
+  expect(heading).toContain("color: var(--yc-text)")
+  for (const property of ["background", "border-radius", "animation"]) expect(heading).not.toContain(property)
+})

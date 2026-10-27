@@ -143,6 +143,11 @@ export function donutGeometry(segments: readonly DistributionSegment[], radius: 
     offset: -circumference * segments.slice(0, index).reduce((sum, previous) => sum + previous.share, 0), circumference }))
 }
 
+export function quotaGroupHeading(windows: readonly Pick<UsageWindow, "group">[], index: number) {
+  const group = windows[index]?.group
+  return group !== undefined && group !== windows[index - 1]?.group ? group : undefined
+}
+
 export function quotaWindow(window: UsageWindow, now: number) {
   const format = (value: number) => window.unit === "usd" ? money(value) : `${number(value)}${window.unit === "percent" ? "%" : ""}`
   const used = window.used === undefined ? undefined : format(window.used)
