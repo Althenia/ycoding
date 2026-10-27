@@ -12,6 +12,7 @@ import {
   AntigravityPlugin,
   antigravityOAuth,
   antigravityUserAgent,
+  captureToolSchemas,
   createAntigravityFetch,
   discoverAntigravityModels,
   discoverAntigravityProject,
@@ -19,7 +20,14 @@ import {
 } from "@ycoding-ai/core/plugin/provider/antigravity"
 import { Provider } from "@ycoding-ai/core/provider"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { ConfigProvider, Effect, Layer } from "effect"
+import { BrowserTool } from "@ycoding-ai/core/tool/browser"
+import { ComputerTool } from "@ycoding-ai/core/tool/computer"
+import { MemoryTool } from "@ycoding-ai/core/tool/memory"
+import { ProjectArtifactTool } from "@ycoding-ai/core/tool/project-artifact"
+import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
+import { SubagentReportTool } from "@ycoding-ai/core/tool/subagent-report"
+import { Tool } from "@ycoding-ai/core/tool/tool"
+import { ConfigProvider, Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
@@ -967,5 +975,226 @@ describe("AntigravityPlugin", () => {
       { method: "POST", body: "{}" },
     )
     await expect(response.text()).rejects.toThrow("synthetic stream failure")
+  })
+})
+
+type Declaration = { name: string; parameters?: unknown; parametersJsonSchema?: Record<string, unknown> }
+
+const tool = (name: string, inputSchema: Record<string, unknown>) =>
+  ToolDefinition.make({ name, description: `${name} fixture`, inputSchema })
+
+const realTool = (name: string, input: Schema.Top) =>
+  Tool.definition(
+    name,
+    Tool.make({
+      description: `${name} fixture`,
+      input,
+      output: Schema.Unknown,
+      execute: () => Effect.succeed(null),
+    }) as never,
+  )
+
+const syntheticTools = [
+  tool("lookup", {
+    type: "object",
+    properties: { query: { type: "string" }, limit: { anyOf: [{ type: "integer" }, { type: "null" }] } },
+    required: ["query"],
+  }),
+  tool("noargs", { type: "object", properties: {}, additionalProperties: false }),
+  tool("variant", {
+    anyOf: [
+      {
+        type: "object",
+        properties: { action: { const: "read" }, path: { type: "string" } },
+        required: ["action", "path"],
+      },
+      { type: "object", properties: { action: { const: "stat" } }, required: ["action"] },
+    ],
+  }),
+  tool("nested", {
+    type: "object",
+    properties: { item: { $ref: "#/$defs/Item" } },
+    required: ["item"],
+    $defs: {
+      Item: {
+        type: "object",
+        properties: { name: { type: "string", maxLength: 12 }, tag: { anyOf: [{ type: "string" }, { type: "null" }] } },
+        required: ["name"],
+        additionalProperties: false,
+      },
+    },
+  }),
+]
+
+const realTools = [
+  realTool("browser", BrowserTool.Input),
+  realTool("computer", ComputerTool.Input),
+  realTool("memory", MemoryTool.Input),
+  realTool("project_artifact", ProjectArtifactTool.Input),
+  realTool("subagent_control", SubagentControlTool.Input),
+  realTool("subagent_report", SubagentReportTool.Input),
+  realTool("task_complete", Schema.Struct({})),
+]
+
+const single = (id: string) => ({ [id]: { displayName: id } })
+
+async function sendTools(
+  entries: Record<string, { displayName: string; supportsThinking?: boolean; thinkingBudget?: number }>,
+  tools: ReadonlyArray<ToolDefinition>,
+  options: { gatewayModel?: string; variant?: string } = {},
+) {
+  const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+  const discovered = await Effect.runPromise(
+    discoverAntigravityModels(
+      http(() => Response.json({ models: entries })),
+      "google-access",
+      "project-1",
+    ),
+  )
+  const models = options.variant
+    ? [
+        await Effect.runPromise(
+          SessionRunnerModel.withVariant(discovered[0], CatalogModel.VariantID.make(options.variant)),
+        ),
+      ]
+    : discovered
+  const gatewayModel = options.variant ? String(models[0].settings?.antigravityModelID) : options.gatewayModel
+  const sent: Record<string, unknown>[] = []
+  const sdk = createGoogleGenerativeAI({
+    apiKey: "placeholder",
+    fetch: Object.assign(
+      createAntigravityFetch(
+        async (_input, init) => {
+          if (typeof init?.body !== "string") throw new Error("Expected JSON request body")
+          sent.push(JSON.parse(init.body))
+          return new Response(
+            `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" }] } })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        },
+        { access: "google-access", project: "project-1", ...(gatewayModel ? { model: gatewayModel } : {}) },
+      ),
+      { preconnect: fetch.preconnect },
+    ),
+  })
+  const prepared = await Effect.runPromise(
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      yield* aisdk.hook.sdk((event) => {
+        event.sdk = sdk
+      })
+      const model = yield* SessionRunnerModel.fromCatalogModel(models[0], undefined, { loadAISDK: aisdk.model })
+      return yield* LLMClient.prepare<LanguageModelV3CallOptions>(LLM.request({ model, prompt: "Hello", tools }))
+    }).pipe(Effect.scoped, Effect.provide(AISDK.locationLayer)),
+  )
+  const language = captureToolSchemas(sdk.languageModel(models[0].modelID ?? models[0].id))
+  await Array.fromAsync((await language.doStream(prepared.body)).stream)
+  expect(sent).toHaveLength(1)
+  const request = sent[0]?.request as { tools?: { functionDeclarations: Declaration[] }[] }
+  return { model: sent[0]?.model, declarations: request.tools?.flatMap((entry) => entry.functionDeclarations) ?? [] }
+}
+
+function expectDraft2020Object(declaration: Declaration) {
+  expect(declaration.parameters).toBeUndefined()
+  const schema = declaration.parametersJsonSchema
+  expect(schema?.type).toBe("object")
+  expect(schema?.anyOf).toBeUndefined()
+  expect(schema?.oneOf).toBeUndefined()
+  expect(schema?.allOf).toBeUndefined()
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) return value.forEach(visit)
+    if (!value || typeof value !== "object") return
+    for (const [key, child] of Object.entries(value)) {
+      expect(key).not.toBe("nullable")
+      if (key === "type" && (typeof child === "string" || Array.isArray(child))) {
+        for (const type of Array.isArray(child) ? child : [child]) expect(type).toBe(String(type).toLowerCase())
+      }
+      visit(child)
+    }
+  }
+  visit(schema)
+}
+
+function expectRefsResolve(schema: Record<string, unknown>) {
+  const defs = (schema.$defs ?? {}) as Record<string, unknown>
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) return value.forEach(visit)
+    if (!value || typeof value !== "object") return
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "$ref") expect(Object.hasOwn(defs, String(child).replace("#/$defs/", ""))).toBe(true)
+      else visit(child)
+    }
+  }
+  visit(schema)
+}
+
+describe("Antigravity Claude tool schemas", () => {
+  test("Claude models receive every tool as a full draft 2020-12 object schema", async () => {
+    const { model, declarations } = await sendTools(single("claude-sonnet-4-6"), syntheticTools)
+    expect(model).toBe("claude-sonnet-4-6")
+    expect(declarations.map((item) => item.name)).toEqual(["lookup", "noargs", "variant", "nested"])
+    for (const declaration of declarations) expectDraft2020Object(declaration)
+    const nested = declarations.find((item) => item.name === "nested")?.parametersJsonSchema
+    expectRefsResolve(nested!)
+    expect(JSON.stringify(nested)).toContain('"maxLength":12')
+    expect(JSON.stringify(declarations.find((item) => item.name === "lookup")?.parametersJsonSchema)).toContain(
+      '"type":"null"',
+    )
+    expect(declarations.find((item) => item.name === "noargs")?.parametersJsonSchema).toMatchObject({ type: "object" })
+  })
+
+  test("the real union-root tool set keeps its parameters for Claude models", async () => {
+    const { declarations } = await sendTools(single("claude-opus-4-6"), realTools)
+    expect(declarations.map((item) => item.name)).toEqual(realTools.map((item) => item.name))
+    for (const declaration of declarations) {
+      expectDraft2020Object(declaration)
+      expectRefsResolve(declaration.parametersJsonSchema!)
+    }
+    expect(JSON.stringify(declarations.find((item) => item.name === "memory")?.parametersJsonSchema)).toContain(
+      '"query"',
+    )
+  })
+
+  test("the pivoted Claude Sonnet 5.5 effort variants send full schemas to the selected gateway model", async () => {
+    const entries = {
+      "claude-sonnet-5-5-low": { displayName: "Claude Sonnet 5.5 (Low)", supportsThinking: true, thinkingBudget: 1000 },
+      "claude-sonnet-5-5-medium": {
+        displayName: "Claude Sonnet 5.5 (Medium)",
+        supportsThinking: true,
+        thinkingBudget: 4000,
+      },
+      "claude-sonnet-5-5-high": {
+        displayName: "Claude Sonnet 5.5 (High)",
+        supportsThinking: true,
+        thinkingBudget: 16000,
+      },
+    }
+    for (const variant of ["low", "medium", "high"]) {
+      const { model, declarations } = await sendTools(entries, [...syntheticTools, ...realTools], { variant })
+      expect(model).toBe(`claude-sonnet-5-5-${variant}`)
+      expect(declarations).toHaveLength(syntheticTools.length + realTools.length)
+      for (const declaration of declarations) {
+        expectDraft2020Object(declaration)
+        expectRefsResolve(declaration.parametersJsonSchema!)
+      }
+    }
+  })
+
+  test("the variant gateway override decides the Claude schema format", async () => {
+    const { model, declarations } = await sendTools(single("claude-sonnet-4-6"), syntheticTools, {
+      gatewayModel: "claude-opus-4-6-thinking",
+    })
+    expect(model).toBe("claude-opus-4-6-thinking")
+    for (const declaration of declarations) expectDraft2020Object(declaration)
+  })
+
+  test("non-Claude gateway models keep the Gemini function declaration shape", async () => {
+    const { declarations } = await sendTools(single("gemini-3.8-flash"), syntheticTools)
+    expect(declarations.map((item) => item.name)).toEqual(["lookup", "noargs", "variant", "nested"])
+    for (const declaration of declarations) expect(declaration.parametersJsonSchema).toBeUndefined()
+    expect(declarations.find((item) => item.name === "lookup")?.parameters).toMatchObject({
+      type: "object",
+      properties: { limit: { nullable: true, type: "integer" } },
+    })
   })
 })

@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks"
+import type { LanguageModelV3 } from "@ai-sdk/provider"
+import { ToolSchemaProjection } from "@ycoding-ai/ai"
 import { createServer } from "node:http"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
@@ -352,6 +355,55 @@ export const discoverAntigravityModels = Effect.fn("Antigravity.discoverModels")
     })
 })
 
+const callToolSchemas = new AsyncLocalStorage<ReadonlyMap<string, unknown>>()
+
+export function captureToolSchemas(language: LanguageModelV3): LanguageModelV3 {
+  const capture =
+    <Options extends { tools?: ReadonlyArray<unknown> }, Result>(call: (options: Options) => PromiseLike<Result>) =>
+    (options: Options) => {
+      const schemas = new Map<string, unknown>()
+      for (const item of options.tools ?? []) {
+        if (!isRecord(item) || item.type !== "function" || typeof item.name !== "string") continue
+        schemas.set(item.name, item.inputSchema)
+      }
+      return callToolSchemas.run(schemas, () => call(options))
+    }
+  const doGenerate = capture((options: Parameters<LanguageModelV3["doGenerate"]>[0]) => language.doGenerate(options))
+  const doStream = capture((options: Parameters<LanguageModelV3["doStream"]>[0]) => language.doStream(options))
+  return new Proxy(language, {
+    get(target, property) {
+      if (property === "doGenerate") return doGenerate
+      if (property === "doStream") return doStream
+      const value = Reflect.get(target, property, target)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function claudeToolDeclarations(body: unknown, schemas: ReadonlyMap<string, unknown> | undefined) {
+  if (!schemas || !isRecord(body) || !Array.isArray(body.tools)) return body
+  return {
+    ...body,
+    tools: body.tools.map((entry) => {
+      if (!isRecord(entry) || !Array.isArray(entry.functionDeclarations)) return entry
+      return {
+        ...entry,
+        functionDeclarations: entry.functionDeclarations.map((declaration) => {
+          const schema =
+            isRecord(declaration) && typeof declaration.name === "string" ? schemas.get(declaration.name) : undefined
+          if (!isRecord(declaration) || !isRecord(schema)) return declaration
+          const { parameters: _parameters, ...rest } = declaration
+          return { ...rest, parametersJsonSchema: ToolSchemaProjection.anthropic(schema) }
+        }),
+      }
+    }),
+  }
+}
+
 export function createAntigravityFetch(
   send: Fetch,
   session: { access: string; project?: string; model?: string },
@@ -366,7 +418,11 @@ export function createAntigravityFetch(
     // Gemini selects the prefix breakpoint on the server. Drop any client cache
     // resource or breakpoint the SDK may have attached, then keep the remaining
     // prefix stable by not ending the request on a model turn.
-    const request = stripTrailingModelContents(omitClientCacheControls(body))
+    const request = stripTrailingModelContents(
+      omitClientCacheControls(
+        model.startsWith("claude-") ? claudeToolDeclarations(body, callToolSchemas.getStore()) : body,
+      ),
+    )
     const headers = new Headers(init?.headers)
     headers.delete("x-goog-api-key")
     headers.set("authorization", `Bearer ${session.access}`)
@@ -682,6 +738,10 @@ export const AntigravityPlugin = define({
         Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced("60 seconds")), Effect.ignore)),
         Effect.forkScoped,
       )
+    yield* aisdk.hook.language((evt) => {
+      if (evt.model.providerID === providerID && evt.model.package === Provider.aisdk("@ai-sdk/google"))
+        evt.language = captureToolSchemas(evt.sdk.languageModel(evt.model.modelID ?? evt.model.id))
+    })
     yield* aisdk.hook.sdk(
       Effect.fn(function* (evt) {
         if (evt.model.providerID !== providerID || evt.package !== "@ai-sdk/google") return
