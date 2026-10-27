@@ -1,6 +1,8 @@
 import { expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Stream, Schema } from "effect"
 import { LLMClient, LLMError, LLMEvent, TransportReason, type LLMRequest, type LLMClientShape } from "@ycoding-ai/ai"
+import { LLMClient as WireClient, RequestExecutor } from "@ycoding-ai/ai/route"
+import { HttpClientResponse } from "effect/unstable/http"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
 import { LayerNodePlatform } from "../src/effect/app-node-platform"
@@ -9,10 +11,12 @@ import { SessionOrchestration } from "../src/session/orchestration"
 import { SessionExecution } from "../src/session/execution"
 import { SessionStepBoundary } from "../src/session/step-boundary"
 import { SessionEvent } from "../src/session/event"
+import { SessionRunnerModel } from "../src/session/runner/model"
 import { SessionMessage } from "../src/session/message"
 import { SessionPending } from "../src/session/pending"
 import { SessionTaskTable, SessionTable } from "../src/session/sql"
 import { EventRuntime } from "../src/event"
+import { EventTable } from "../src/event/sql"
 import { Database } from "../src/database/database"
 import { Location } from "../src/location"
 import { LocationServiceMap } from "../src/location-service-map"
@@ -34,6 +38,7 @@ import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
 const provider = Provider.ID.make("selection-fixture")
+const otherProvider = Provider.ID.make("other-selection-fixture")
 const old = CatalogModel.Ref.make({ providerID: provider, id: CatalogModel.ID.make("original"), variant: CatalogModel.VariantID.make("high") })
 const target = CatalogModel.Ref.make({ ...old, id: CatalogModel.ID.make("target") })
 const requests: LLMRequest[] = []
@@ -63,6 +68,12 @@ const fixture = Effect.fn(function* () {
     const catalog = yield* Catalog.Service
     yield* catalog.transform(draft => {
       draft.provider.update(provider, item => { item.package = Provider.aisdk("@ai-sdk/openai") })
+      draft.provider.update(otherProvider, item => { item.package = "@ycoding-ai/ai/providers/openai/responses" })
+      draft.model.update(otherProvider, target.id, item => {
+        item.limit = { context: 128_000, output: 4096 }
+        item.capabilities = { tools: true, input: ["text"], output: ["text"] }
+        item.variants = [{ id: CatalogModel.VariantID.make("high") }, { id: CatalogModel.VariantID.make("low"), body: { fixture_variant: "low" } }]
+      })
       for (const model of [old, target]) draft.model.update(provider, model.id, item => {
         item.limit = { context: 128_000, output: 4096 }
         item.capabilities = { tools: true, input: ["text"], output: ["text"] }
@@ -321,7 +332,7 @@ it.live("physical retries retain the Step model while child selection waits", ()
   expect(sent).toEqual([old.id, old.id])
 }).pipe(Effect.timeout("15 seconds")), 20000)
 
-it.live("named selection keeps its private binding through activation and refuses account replacement", () => Effect.gen(function* () {
+it.live("named selection keeps its private binding through activation and explicitly rebinds replaced accounts", () => Effect.gen(function* () {
   const f = yield* fixture()
   const credentials = yield* Credential.Service
   const integrations = yield* Integration.Service.pipe(Effect.provide(f.locations.get(f.child.location)))
@@ -336,9 +347,160 @@ it.live("named selection keeps its private binding through activation and refuse
   expect((yield* f.select(next, selected)).model).toEqual(next)
   expect(yield* f.db.select({ binding: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, f.child.id)).get().pipe(Effect.orDie)).toEqual(before)
   yield* credentials.update(work.id, { value: Credential.Key.make({ type: "key", key: "synthetic-replacement-key" }) })
-  expect((yield* Effect.exit(f.select(selected, next)))._tag).toBe("Failure")
-  expect((yield* f.sessions.get(f.child.id)).model).toEqual(next)
+  expect((yield* f.select(next, next)).model).toEqual(next)
+  expect(yield* f.db.select({ binding: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, f.child.id)).get().pipe(Effect.orDie)).not.toEqual(before)
 }))
+
+it.live("switches complete targets across provider defaults and named profiles without transferring bindings", () => Effect.gen(function* () {
+  const f = yield* fixture()
+  const credentials = yield* Credential.Service
+  const integrations = yield* Integration.Service.pipe(Effect.provide(f.locations.get(f.child.location)))
+  for (const id of [provider, otherProvider]) yield* integrations.transform(draft => draft.update(Integration.ID.make(id), info => { info.name = `Fixture ${id}` }))
+  const first = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Shared", value: Credential.Key.make({ type: "key", key: "synthetic-first" }) })
+  const alternate = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Alternate", value: Credential.Key.make({ type: "key", key: "synthetic-alternate" }) })
+  const second = yield* credentials.create({ integrationID: Integration.ID.make(otherProvider), label: "Shared", value: Credential.Key.make({ type: "key", key: "synthetic-second" }) })
+  const inactiveTarget = yield* credentials.create({ integrationID: Integration.ID.make(otherProvider), label: "Other", value: Credential.Key.make({ type: "key", key: "synthetic-other" }) })
+  const firstNamed = CatalogModel.Ref.make({ ...old, profile: "Shared" })
+  const alternateNamed = CatalogModel.Ref.make({ ...old, profile: "Alternate" })
+  const secondNamed = CatalogModel.Ref.make({ providerID: otherProvider, id: target.id, profile: "Shared", variant: CatalogModel.VariantID.make("low") })
+  const secondDefault = CatalogModel.Ref.make({ ...secondNamed, profile: undefined })
+  const firstDefault = CatalogModel.Ref.make({ ...target, profile: undefined })
+  const binding = () => f.db.select({ binding: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, f.child.id)).get().pipe(Effect.orDie)
+  expect((yield* f.select(firstNamed, old)).model).toEqual(firstNamed)
+  expect((yield* binding())?.binding?.credentialID).toBe(first.id)
+  expect((yield* f.select(alternateNamed, firstNamed)).model).toEqual(alternateNamed)
+  expect((yield* binding())?.binding?.credentialID).toBe(alternate.id)
+  expect((yield* f.select(firstNamed, alternateNamed)).model).toEqual(firstNamed)
+  expect((yield* f.select(secondNamed, firstNamed)).model).toEqual(secondNamed)
+  expect((yield* binding())?.binding?.credentialID).toBe(second.id)
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(secondNamed)
+  expect((yield* f.select(secondDefault, secondNamed)).model).toEqual(secondDefault)
+  expect((yield* binding())?.binding ?? undefined).toBeUndefined()
+  expect((yield* f.select(firstDefault, secondDefault)).model).toEqual(firstDefault)
+  expect((yield* binding())?.binding ?? undefined).toBeUndefined()
+  expect((yield* f.select(secondNamed, firstDefault)).model).toEqual(secondNamed)
+  expect((yield* binding())?.binding?.credentialID).toBe(second.id)
+  yield* credentials.activate(inactiveTarget.id)
+  const requestCount = requests.length
+  yield* f.sessions.prompt({ sessionID: f.child.id, text: "Run the selected model", resume: false })
+  const execution = yield* SessionExecution.Service
+  yield* execution.resume(f.child.id)
+  expect(String(requests[requestCount]?.model.id)).toBe(String(target.id))
+  expect((yield* f.sessions.messages({ sessionID: f.child.id })).some(message => message.type === "assistant" && message.model.profile === "Shared" && message.model.variant === secondNamed.variant && message.model.providerID === otherProvider)).toBe(true)
+  expect((yield* binding())?.binding?.credentialID).toBe(second.id)
+  const captured = requests[requestCount]
+  if (!captured) return yield* Effect.die("Missing runner request")
+  const sent: { authorization?: string; body: unknown }[] = []
+  const result = yield* WireClient.generate(captured).pipe(
+    Effect.provide(WireClient.configured()),
+    Effect.provideService(RequestExecutor.Service, {
+      execute: request => Effect.gen(function* () {
+        if (request.body._tag !== "Uint8Array") return yield* Effect.die("Expected JSON request")
+        sent.push({ authorization: request.headers.authorization, body: JSON.parse(new TextDecoder().decode(request.body.body)) })
+        return HttpClientResponse.fromWeb(request, new Response("fixture", { status: 400 }))
+      }),
+    }),
+    Effect.exit,
+  )
+  expect(result._tag).toBe("Failure")
+  expect(sent).toHaveLength(1)
+  expect(sent[0]?.authorization).toBe("Bearer synthetic-second")
+  expect(sent[0]?.body).toMatchObject({ model: String(target.id), fixture_variant: "low" })
+}))
+
+it.live("child model and binding remain atomic to listeners and survive durable replay", () => Effect.gen(function* () {
+  const f = yield* fixture()
+  const credentials = yield* Credential.Service
+  const located = f.locations.get(f.child.location)
+  const integrations = yield* Integration.Service.pipe(Effect.provide(located))
+  yield* integrations.transform(draft => draft.update(Integration.ID.make(provider), info => { info.name = "Fixture provider" }))
+  const account = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Named", value: Credential.Key.make({ type: "key", key: "synthetic-named" }) })
+  const named = CatalogModel.Ref.make({ ...target, profile: "Named" })
+  const observations: { type: string; model: CatalogModel.Ref | null; binding: SessionEvent.ProfileBinding | null }[] = []
+  const stop = yield* f.events.listen(event => {
+    if (event.durable?.aggregateID !== f.child.id || (event.type !== SessionEvent.ModelSelected.type && event.type !== SessionEvent.ProfileBound.type)) return Effect.void
+    return f.db.select({ model: SessionTable.model, binding: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, f.child.id)).get().pipe(
+      Effect.orDie,
+      Effect.tap(row => Effect.sync(() => { if (row) observations.push({ type: event.type, model: row.model, binding: row.binding }) })),
+      Effect.asVoid,
+    )
+  })
+  yield* Effect.addFinalizer(() => stop)
+  yield* f.select(named, old)
+  yield* credentials.update(account.id, { value: Credential.Key.make({ type: "key", key: "synthetic-rebound" }) })
+  yield* f.select(named, named)
+  const rebound = (yield* f.db.select({ binding: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, f.child.id)).get().pipe(Effect.orDie))?.binding
+  expect(rebound).toMatchObject({ credentialID: account.id, accountGeneration: 1, profile: "Named", providerID: provider })
+  const namedEvents = yield* f.db.select().from(EventTable).where(eq(EventTable.aggregate_id, f.child.id)).all().pipe(Effect.orDie)
+  yield* f.select(target, named)
+  const clearedEvents = yield* f.db.select().from(EventTable).where(eq(EventTable.aggregate_id, f.child.id)).all().pipe(Effect.orDie)
+  expect(observations.map(item => item.type)).toEqual([
+    SessionEvent.ModelSelected.type, SessionEvent.ProfileBound.type,
+    SessionEvent.ModelSelected.type, SessionEvent.ProfileBound.type,
+    SessionEvent.ModelSelected.type, SessionEvent.ProfileBound.type,
+  ])
+  for (const item of observations.slice(0, 2)) {
+    expect(item.model).toEqual(named)
+    expect(item.binding).toMatchObject({ credentialID: account.id, accountGeneration: 0 })
+  }
+  for (const item of observations.slice(2, 4)) {
+    expect(item.model).toEqual(named)
+    expect(item.binding).toMatchObject({ credentialID: account.id, accountGeneration: 1 })
+  }
+  for (const item of observations.slice(4)) {
+    expect(item.model).toEqual(target)
+    expect(item.binding).toBeNull()
+  }
+  const included = new Set([SessionEvent.Created, SessionEvent.ModelSelected, SessionEvent.ProfileBound].map(definition => EventRuntime.versionedType(definition.type, definition.durable.version)))
+  const replay = (source: typeof namedEvents) => Effect.gen(function* () {
+    const id = Session.ID.create()
+    yield* f.events.replayAll(source.filter(event => included.has(event.type)).sort((a, b) => a.seq - b.seq).map((event, seq) => ({
+      id: EventRuntime.ID.create(), aggregateID: id, seq, type: event.type, data: { ...event.data, sessionID: id },
+    })))
+    return yield* f.sessions.get(id)
+  })
+  const restored = yield* replay(namedEvents)
+  const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(located))
+  expect(restored.model).toEqual(named)
+  expect((yield* models.resolve(restored)).profileBinding).toEqual(rebound ?? undefined)
+  const cleared = yield* replay(clearedEvents)
+  expect(cleared.model).toEqual(target)
+  expect((yield* models.resolve(cleared)).profileBinding).toBeUndefined()
+  expect((yield* f.db.select({ binding: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, cleared.id)).get().pipe(Effect.orDie))?.binding).toBeNull()
+}))
+
+for (const named of [true, false]) it.live(`target ${named ? "credential replacement" : "default activation"} after preflight cannot commit`, () => Effect.gen(function* () {
+  const f = yield* fixture()
+  const credentials = yield* Credential.Service
+  const located = f.locations.get(f.child.location)
+  const integrations = yield* Integration.Service.pipe(Effect.provide(located))
+  yield* integrations.transform(draft => draft.update(Integration.ID.make(provider), info => { info.name = "Fixture provider" }))
+  const first = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "One", value: Credential.Key.make({ type: "key", key: "synthetic-one" }) })
+  const second = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Two", value: Credential.Key.make({ type: "key", key: "synthetic-two" }) })
+  yield* credentials.activate(first.id)
+  const selected = CatalogModel.Ref.make({ ...target, ...(named ? { profile: "One" } : {}) })
+  yield* f.sessions.prompt({ sessionID: f.parent.id, text: "Select child", resume: false })
+  yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
+  const messageID = SessionMessage.ID.create()
+  const caller = Agent.ID.make("gsd")
+  yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: caller, model: old })
+  const agents = yield* Agent.Service.pipe(Effect.provide(located))
+  yield* agents.transform(draft => draft.update(caller, agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "ask" }] }))
+  const permission = yield* Permission.Service.pipe(Effect.provide(located))
+  const asked = yield* Deferred.make<Permission.Request>()
+  const stop = yield* f.events.listen(event => event.type === Permission.Event.Asked.type && Schema.is(Permission.Request)(event.data) && event.data.sessionID === f.parent.id
+    ? Deferred.succeed(asked, event.data).pipe(Effect.asVoid) : Effect.void)
+  yield* Effect.addFinalizer(() => stop)
+  const switching = yield* f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: selected,
+    source: { type: "tool", agent: caller, messageID, callID: "drift" } }).pipe(Effect.exit, Effect.forkChild)
+  const request = yield* Effect.raceFirst(Deferred.await(asked), Fiber.join(switching).pipe(Effect.flatMap(exit => Effect.die(`Selection settled before permission: ${exit._tag}`))))
+  if (named) yield* credentials.update(first.id, { value: Credential.Key.make({ type: "key", key: "synthetic-replaced" }) })
+  else yield* credentials.activate(second.id)
+  yield* permission.reply({ requestID: request.id, reply: "once" })
+  expect((yield* Fiber.join(switching))._tag).toBe("Failure")
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(old)
+  expect((yield* f.db.select({ binding: SessionTable.profile_binding }).from(SessionTable).where(eq(SessionTable.id, f.child.id)).get().pipe(Effect.orDie))?.binding ?? undefined).toBeUndefined()
+}).pipe(Effect.timeout("10 seconds")), 15000)
 
 it.live("known selection failures carry nonempty diagnostic messages", () => Effect.gen(function* () {
   const f = yield* fixture()

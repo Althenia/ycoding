@@ -593,8 +593,10 @@ const layer = Layer.effect(
         stepBoundary.withSelection(input.childID, execution.withTransition(input.childID, Effect.gen(function* () {
           yield* switchable(input)
           const child = yield* sessions.get(input.childID)
+          const binding = (yield* db.select({ value: SessionTable.profile_binding }).from(SessionTable)
+            .where(eq(SessionTable.id, child.id)).get().pipe(Effect.orDie))?.value
           const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(child.location)))
-          const resolved = yield* models.resolve({ ...child, model: input.model }, { refresh: false })
+          const resolved = yield* models.resolve({ ...child, model: input.model }, { rebind: true, refresh: false })
           return yield* stepBoundary.atBoundary(input.childID, locks.withLock(input.childID)(Effect.gen(function* () {
             const row = yield* switchable(input)
             if (input.source.type === "tool") {
@@ -606,6 +608,7 @@ const layer = Layer.effect(
             const selected = yield* sessions.selectModelAtBoundary({
               sessionID: input.childID, expectedModel: input.expectedModel, model: input.model,
               connectionIdentityDigest: resolved.connectionIdentityDigest,
+              targetBinding: resolved.profileBinding, expectedBinding: binding,
               guard: Effect.gen(function* () {
                 yield* switchable(input)
                 if (input.source.type !== "tool") return true

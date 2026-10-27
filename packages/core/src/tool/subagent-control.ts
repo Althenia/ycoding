@@ -34,7 +34,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "List direct child tasks, send steer or queue input, answer an open child question, cancel or resume a child, or select a child's model between logical Steps without interrupting or waking it. For switch_model, supply its current model as expectedModel and preserve a compatible profile and variant; success reports the committed selection, not provider execution.",
+              "List direct child tasks, send steer or queue input, answer an open child question, cancel or resume a child, or select a child's model between logical Steps without interrupting or waking it. For switch_model, supply its current model as expectedModel and the complete target model, including any profile and variant; success reports the committed selection, not provider execution.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output) }],
