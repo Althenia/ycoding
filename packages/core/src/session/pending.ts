@@ -14,6 +14,7 @@ import {
   UserData,
 } from "@ycoding-ai/schema/session-pending"
 import { Event } from "@ycoding-ai/schema/event"
+import { Dots } from "@ycoding-ai/schema/dots"
 import type { Database } from "../database/database"
 import type { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
@@ -223,6 +224,7 @@ export const admit = Effect.fn("SessionPending.admit")(function* (
     readonly input: Message
     readonly causedBy?: UsageAnchor.Ref
   },
+  options?: { readonly when: Effect.Effect<boolean> },
 ) {
   const existing = yield* find(db, request.id)
   if (existing !== undefined) {
@@ -232,14 +234,16 @@ export const admit = Effect.fn("SessionPending.admit")(function* (
   const promoted = yield* promotedFromHistory(db, request.sessionID, request.id)
   if (promoted !== undefined) return promoted
   return yield* events
-    .publish(SessionEvent.InputAdmitted, {
+    .publishBatch([{ definition: SessionEvent.InputAdmitted, data: {
       inputID: request.id,
       sessionID: request.sessionID,
       input: request.input,
       causedBy: request.causedBy,
-    })
+    } }], options)
     .pipe(
-      Effect.flatMap((event) => {
+      Effect.flatMap((committed) => {
+        const event = committed[0]
+        if (event === undefined) return Effect.die(new LifecycleConflict({ id: request.id }))
         if (event.durable === undefined)
           return Effect.die(new Error("Session input admission event is missing aggregate sequence"))
         const base = {
@@ -446,16 +450,13 @@ export const has = Effect.fn("SessionPending.has")(function* (
   return row !== undefined
 })
 
-export type PromotionGuard<G = never> = <E>(entry: Info, promote: (when?: Effect.Effect<boolean>) => Effect.Effect<boolean, E>) => Effect.Effect<boolean, E | G>
-
-const publish = Effect.fn("SessionPending.publish")(function* <E = never, G = never>(
+const publish = Effect.fn("SessionPending.publish")(function* <E = never>(
   db: DatabaseService,
   events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   rows: ReadonlyArray<typeof SessionPendingTable.$inferSelect>,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,
-  guard?: PromotionGuard<G>,
 ) {
   return yield* inboxLocks.withLock(sessionID)(
     Effect.gen(function* () {
@@ -467,6 +468,26 @@ const publish = Effect.fn("SessionPending.publish")(function* <E = never, G = ne
             const entry = fromRow(row)
             if (entry.type === "compaction") return yield* Effect.die(new LifecycleConflict({ id: entry.id }))
             if (!(yield* find(db, entry.id))) return false
+            const exchange = yield* db.select({ data: EventTable.data }).from(EventTable).where(and(
+              eq(EventTable.type, Event.versionedType(SessionEvent.DotsExchangeCreated.type, SessionEvent.DotsExchangeCreated.durable.version)),
+              sql`json_extract(${EventTable.data}, '$.inputID') = ${entry.id}`,
+              sql`json_extract(${EventTable.data}, '$.targetSessionID') = ${sessionID}`,
+            )).limit(1).get().pipe(Effect.orDie)
+            const record = exchange ? Schema.decodeUnknownSync(Dots.ExchangeRecord)(exchange.data) : undefined
+            const delegation = record?.routine?.delegation ?? (record?.delegated?.instruction.operation === "task" ? record.delegated.delegation : undefined)
+            const metadata = entry.type === "user" && entry.data.metadata?.inputOrigin === "plugin" ? entry.data.metadata : undefined
+            const association = metadata?.dotsExchange
+            const receipt = Dots.routine(metadata) ?? Dots.delegated(metadata)
+            if (record && delegation && receipt?.delegation.id === delegation.id &&
+              typeof association === "object" && association !== null &&
+              "sessionID" in association && association.sessionID === record.sessionID &&
+              "exchangeID" in association && association.exchangeID === record.exchangeID) {
+              yield* events.publishBatch([{ definition: SessionEvent.DotsInstructionRejected, data: {
+                sessionID, inputID: entry.id, anchorSessionID: record.sessionID, exchangeID: record.exchangeID,
+                delegationID: delegation.id, reason: "delegation_invalid",
+              } }], { when: find(db, entry.id).pipe(Effect.map((pending) => pending !== undefined)) })
+              return false
+            }
             const promote = (when?: Effect.Effect<boolean>) => Effect.gen(function* () {
               if (prepare) yield* prepare(entry)
               const published = yield* events
@@ -484,7 +505,7 @@ const publish = Effect.fn("SessionPending.publish")(function* <E = never, G = ne
               if (promoted) yield* promoted(entry)
               return true
             })
-            return yield* (guard ? guard(entry, promote) : promote())
+            return yield* promote()
           }),
       )
       return results.filter(Boolean).length
@@ -492,13 +513,12 @@ const publish = Effect.fn("SessionPending.publish")(function* <E = never, G = ne
   )
 })
 
-export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function* <E = never, G = never>(
+export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function* <E = never>(
   db: DatabaseService,
   events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,
-  guard?: PromotionGuard<G>,
 ) {
   if (yield* compaction(db, sessionID)) return 0
   const rows = yield* db
@@ -508,16 +528,15 @@ export const promoteSteers = Effect.fn("SessionPending.promoteSteers")(function*
     .orderBy(asc(SessionPendingTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return yield* publish(db, events, sessionID, rows, prepare, promoted, guard)
+  return yield* publish(db, events, sessionID, rows, prepare, promoted)
 })
 
-export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(function* <E = never, G = never>(
+export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(function* <E = never>(
   db: DatabaseService,
   events: EventRuntime.Interface,
   sessionID: SessionSchema.ID,
   prepare?: (entry: Info) => Effect.Effect<void, E>,
   promoted?: (entry: Info) => Effect.Effect<void, E>,
-  guard?: PromotionGuard<G>,
 ) {
   for (;;) {
     if (yield* compaction(db, sessionID)) return false
@@ -530,7 +549,7 @@ export const promoteNextQueued = Effect.fn("SessionPending.promoteNextQueued")(f
       .get()
       .pipe(Effect.orDie)
     if (!row) return false
-    if ((yield* publish(db, events, sessionID, [row], prepare, promoted, guard)) > 0) return true
+    if ((yield* publish(db, events, sessionID, [row], prepare, promoted)) > 0) return true
     if (yield* find(db, row.id)) return false
     yield* Effect.yieldNow
   }

@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import { InputRenderable } from "@opentui/core"
 import { mkdtemp, rm } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
@@ -18,7 +19,6 @@ test("the full TUI shows one server remote switch without a bottom remote line",
       const location = { directory, project: { id: "proj_remote", directory } }
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main" } })
-      if (url.pathname === "/api/remote/mcp") return json({ data: { state: "off" } })
       if (["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
         return json({ location, data: [] })
       return undefined
@@ -72,69 +72,35 @@ test("the full TUI shows one server remote switch without a bottom remote line",
   }
 }, 30_000)
 
-test("Status shows the Relay MCP state, error guidance, lane recovery guidance, and the full wrapped device URL", async () => {
-  const directory = "/tmp/ycoding/remote-mcp-status"
-  const state = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-mcp-screen-"))
-  const url = "https://relay.example/api/mcp/devices/dev_0123456789abcdef0123456789abcdef"
-  let mcp: { state: string; message?: string; url?: string } = { state: "on", url }
+test("Status retains ordinary MCP servers without a Relay MCP control or request", async () => {
+  const paths: string[] = []
   const screen = await renderScreen({
-    width: 80, height: 24, settle: "Message YCoding…", state,
+    width: 80, height: 24, settle: "Message YCoding…",
     route: (request) => {
-      const location = { directory, project: { id: "proj_remote_mcp", directory } }
-      if (request.pathname === "/api/location") return json(location)
-      if (request.pathname === "/api/vcs/branch") return json({ location, data: { current: "main" } })
-      if (request.pathname === "/api/remote/mcp") return json({ data: mcp })
-      if (["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(request.pathname))
-        return json({ location, data: [] })
+      paths.push(request.pathname)
       return undefined
     },
   })
-  const status = async (needle: string) => {
-    screen.input.pressKey("p", { ctrl: true })
-    const opened = Date.now() + 5_000
-    while (Date.now() < opened && !screen.frame().includes("Commands")) await Bun.sleep(10)
-    await screen.input.typeText("View status")
-    screen.input.pressEnter()
-    const shown = Date.now() + 5_000
-    while (Date.now() < shown && !screen.frame().includes("   Status")) await Bun.sleep(10)
-    await screen.input.typeText("Relay MCP")
-    const detail = Date.now() + 5_000
-    while (Date.now() < detail && !screen.frame().replace(/\s+/g, "").includes(needle.replace(/\s+/g, ""))) await Bun.sleep(10)
-    return screen.frame()
+  const wait = async (text: string, ready: () => boolean = () => true) => {
+    const deadline = Date.now() + 5_000
+    while ((!screen.frame().includes(text) || !ready()) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await screen.renderOnce()
+    }
+    expect(screen.frame()).toContain(text)
+    expect(ready()).toBe(true)
   }
   try {
-    const on = await status(url)
-    expect(on).toContain("Relay MCP")
-    expect(on.replace(/\s+/g, "")).toContain(url)
-    expect(on).toContain("on")
-    screen.input.pressEscape()
-    mcp = { state: "error", message: "Remote is off; run `ycoding remote connect` first" }
-    const error = await status("ycoding remote connect")
-    expect(error).toContain("Relay MCP")
-    expect(error.replace(/\s+/g, " ")).toContain("ycoding remote connect")
-    expect(error).toContain("error")
-    const closed = Date.now() + 5_000
-    while (Date.now() < closed && screen.frame().includes("   Status")) {
-      screen.input.pressEscape()
-      await Bun.sleep(50)
-    }
-    mcp = { state: "on", url, message: "MCP lane read-only; recovery needed." }
-    await status("recovery needed.")
-    const urlShown = Date.now() + 5_000
-    while (Date.now() < urlShown && !screen.frame().replace(/\s+/g, "").includes(url)) await Bun.sleep(10)
-    const held = screen.frame()
-    expect(held.replace(/\s+/g, " ")).toContain("MCP lane read-only; recovery needed.")
-    expect(held.replace(/\s+/g, "")).toContain(url)
-    expect(held).toContain("on")
-    expect(held).not.toContain("error")
-    screen.input.pressEscape()
-    mcp = { state: "off", message: "Enable Relay MCP, then authorize each client with a fresh sign-in and consent." }
-    const authorization = await status("fresh sign-in")
-    expect(authorization.replace(/\s+/g, " ")).toContain("fresh sign-in and consent.")
-    expect(authorization).toContain("off")
-    expect(authorization.replace(/\s+/g, "")).not.toContain(url)
-  } finally {
-    await screen.dispose()
-    await rm(state, { recursive: true, force: true })
-  }
+    screen.input.pressKey("p", { ctrl: true })
+    await wait("Commands", () => screen.renderer.currentFocusedEditor instanceof InputRenderable)
+    await screen.input.typeText("View status")
+    await wait("View status", () => screen.renderer.currentFocusedEditor instanceof InputRenderable && screen.renderer.currentFocusedEditor.plainText === "View status")
+    screen.input.pressEnter()
+    await wait("   Status", () => screen.renderer.currentFocusedEditor instanceof InputRenderable)
+    await screen.input.typeText("MCP")
+    await wait("MCP servers", () => screen.renderer.currentFocusedEditor instanceof InputRenderable && screen.renderer.currentFocusedEditor.plainText === "MCP")
+    expect(screen.frame()).toContain("0 configured")
+    expect(screen.frame()).not.toContain("Relay MCP")
+    expect(paths.some((request) => request.startsWith("/api/remote/mcp"))).toBe(false)
+  } finally { await screen.dispose() }
 }, 30_000)

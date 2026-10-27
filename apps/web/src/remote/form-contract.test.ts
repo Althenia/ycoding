@@ -58,6 +58,21 @@ test("native coordinator reply sources preserve the closed public attribution sh
     expect(readFormReplySource(invalid)).toBeUndefined()
 })
 
+test("native Dots reply sources validate provenance and retain only display attribution", () => {
+  const source = {
+    kind: "dots-native", profile: "profile_fixture", credentialID: "credential_fixture", accountID: "account_fixture",
+    accountGeneration: 0, environmentID: "environment_fixture", connectionID: "connection_fixture", clientID: "client_fixture",
+    streamID: "stream_fixture", rootSessionID: "ses_root", accessRevision: 0, requestID: "request_fixture",
+  }
+  expect(readFormReplySource(source)).toEqual({ kind: "dots-native", rootSessionID: "ses_root", accessRevision: 0 })
+  for (const key of ["profile", "credentialID", "accountID", "environmentID", "connectionID", "clientID", "streamID", "requestID"]) {
+    expect(readFormReplySource({ ...source, [key]: "" })).toBeUndefined()
+    expect(readFormReplySource({ ...source, [key]: 4 })).toBeUndefined()
+  }
+  for (const invalid of [{ rootSessionID: "usr_root" }, { rootSessionID: "" }, { accountGeneration: -1 }, { accountGeneration: 0.5 }, { accessRevision: -1 }, { accessRevision: Infinity }])
+    expect(readFormReplySource({ ...source, ...invalid })).toBeUndefined()
+})
+
 test("Dots delegated reply sources keep their exact external attribution without a coordinator identity", () => {
   const source: FormReplySourceView = { kind: "dots-delegation", anchorSessionID: "ses_anchor", delegationID: "delegation_one", revision: 3, exchangeID: "exchange_one" }
   expect(readFormReplySource(source)).toEqual(source)

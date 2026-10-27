@@ -14,8 +14,7 @@ import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { SessionSharedContext } from "@ycoding-ai/core/session/shared-context"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
-import { DateTime, Effect, Schema } from "effect"
-import { Dots } from "@ycoding-ai/schema/dots"
+import { DateTime, Effect } from "effect"
 import { DotsContext } from "../src/dots/context"
 
 const timestamp = DateTime.makeUnsafe(0)
@@ -200,14 +199,8 @@ const recordsWithText = (value: unknown): Array<Record<string, unknown> & { read
 }
 
 test("Dots appended state transitions preserve earlier wire input and cache configuration", async () => {
-  const enabled = Message.system(DotsContext.render(Schema.decodeUnknownSync(Dots.CoordinationContext)({
-    state: "enabled", generation: 1, tool: "dots_report", envelope: {
-      coordinator: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" },
-      scope: { epoch: "epoch_fixture", grantID: "grant_fixture" }, exchangeID: "exchange_fixture", messageID: "msg_task",
-      targetSessionID: "ses_cache_a", kind: "task", origin: "plugin",
-    },
-  })))
-  const disabled = Message.system(DotsContext.render(Schema.decodeUnknownSync(Dots.CoordinationContext)({ state: "disabled", generation: 2, reason: "capability_disabled" })))
+  const enabled = Message.system("Historical Dots reporting instruction.")
+  const disabled = Message.system(DotsContext.render({ state: "disabled", generation: 2, reason: "tool_unavailable" }))
   const before = await prepare(prefixText, undefined, false, "ses_cache_a", [enabled])
   const after = await prepare(prefixText, undefined, false, "ses_cache_a", [enabled, disabled])
   expect(after.body.input.slice(0, before.body.input.length)).toEqual([...before.body.input])

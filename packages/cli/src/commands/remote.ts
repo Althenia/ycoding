@@ -46,23 +46,6 @@ export const RemoteCommand = Spec.make("remote", {
       description: "Show device enrollment and backend session access",
       params: ServerParams,
     }),
-    Spec.make("mcp", {
-      description: "Control this server's relay MCP access",
-      commands: [
-        Spec.make("on", {
-          description: "Allow approved MCP clients to control this machine's Sessions through the relay",
-          params: ServerParams,
-        }),
-        Spec.make("off", {
-          description: "Disable relay MCP access and revoke client grants",
-          params: ServerParams,
-        }),
-        Spec.make("status", {
-          description: "Show relay MCP state and device URL",
-          params: ServerParams,
-        }),
-      ],
-    }),
     Spec.make("sessions", {
       description: "List the backend sessions available to the enrolled machine owner",
       params: ServerParams,

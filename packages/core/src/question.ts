@@ -123,7 +123,7 @@ export interface ReplyInput {
 }
 
 export interface Interface {
-  readonly rejectDelegated: (input: Omit<DelegatedReplyInput, "answers" | "source"> & { readonly source: Form.DotsClientReplySource }) => Effect.Effect<void, NotFoundError>
+  readonly rejectDelegated: (input: Omit<DelegatedReplyInput, "answers" | "source"> & { readonly source: Form.ClientReplySource }) => Effect.Effect<void, NotFoundError>
   readonly ask: (input: AskInput) => Effect.Effect<Outcome, RejectedError | SessionReviewFold.FullError>
   readonly deferPending: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | InvalidAnswerError>

@@ -1,40 +1,36 @@
 import { OpenAICodex } from "@ycoding-ai/core/plugin/provider/openai-codex"
+import { DateTime } from "effect"
 import { platformFamily } from "./types"
+import type { NativeDots } from "@ycoding-ai/core/dots/native"
+import type { EventManifest } from "@ycoding-ai/schema/event-manifest"
+import type { SessionMessage } from "@ycoding-ai/schema/session-message"
 
 export type RemoteControlLocation = { readonly directory: string; readonly workspaceID?: string }
-export type RemoteControlThread = {
-  readonly id: string
-  readonly title?: string
-  readonly directory: string
-  readonly updatedAt?: number
-}
-export type RemoteControlMessage = { readonly id: string; readonly role: string; readonly text: string }
-
 export interface RemoteControlBackend {
-  readonly resolveLocation: (directory: string) => Promise<RemoteControlLocation | undefined>
-  readonly createThread: (input: { readonly location: RemoteControlLocation; readonly title?: string }) => Promise<RemoteControlThread>
-  readonly getThread: (threadID: string) => Promise<RemoteControlThread | undefined>
-  readonly listThreads: () => Promise<readonly RemoteControlThread[]>
-  readonly readMessages: (threadID: string) => Promise<readonly RemoteControlMessage[]>
+  readonly createThread: (input: { readonly location: RemoteControlLocation; readonly title?: string; readonly inputID: string }) => Promise<NativeDots.RootSnapshot>
+  readonly getThread: NativeDots.Channel["getRoot"]
+  readonly listThreads: NativeDots.Channel["listRoots"]
+  readonly readThread: NativeDots.Channel["readRoot"]
   readonly prompt: (
     threadID: string,
     input: {
       readonly text: string
+      readonly inputID: string
       readonly delivery: "steer" | "queue"
-      readonly origin: "plugin"
-      readonly externalSource: { readonly kind: "remote-control" }
     },
   ) => Promise<{ readonly messageID: string }>
   readonly interrupt: (threadID: string) => Promise<void>
   readonly models: () => Promise<readonly { readonly id: string; readonly providerID?: string; readonly name?: string }[]>
   readonly skills: () => Promise<readonly { readonly id: string; readonly name?: string }[]>
   readonly account: () => Promise<{ readonly profile: string } | undefined>
-  readonly pendingApprovals: (threadID: string) => Promise<readonly { readonly id: string; readonly kind: string }[]>
+  readonly pending: (threadID: string) => Promise<readonly NativeDots.NativeRequest[]>
+  readonly settle: NativeDots.Channel["settle"]
+  readonly subscribe: NativeDots.Channel["subscribe"]
+  readonly retire: () => void
 }
 
-type Notify = (method: string, params: unknown) => void
-
 const refusedPrefixes = ["command/", "process/", "fs/", "permission/", "guardrail/", "question/", "form/"] as const
+const unsupportedOverrides = ["model", "modelProvider", "approvalPolicy", "approvalsReviewer", "sandbox", "sandboxPolicy", "config"] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -44,34 +40,70 @@ function validHeaderValue(value: string) {
   return value.length > 0 && value.length <= 256 && !/[\0-\x1f\x7f]/.test(value)
 }
 
-function threadWire(thread: RemoteControlThread) {
+function threadWire(snapshot: NativeDots.RootSnapshot, messages: readonly SessionMessage.Info[] = [], summaries: ReturnType<typeof transcriptSummaries> = []) {
+  const thread = snapshot.session
   return {
     id: thread.id,
-    cwd: thread.directory,
-    ...(thread.title === undefined ? {} : { title: thread.title, name: thread.title }),
-    ...(thread.updatedAt === undefined ? {} : { updatedAt: thread.updatedAt }),
-    status: { type: "idle" },
+    sessionId: thread.id,
+    forkedFromId: thread.fork?.sessionID ?? null,
+    parentThreadId: null,
+    preview: messages.find((message) => message.type === "user")?.text ?? "",
+    ephemeral: false,
+    section: null,
+    sectionEnteredAt: null,
+    projectId: thread.projectID,
+    historyMode: "legacy",
+    modelProvider: snapshot.selectedModel?.providerID ?? "unknown",
+    model: snapshot.selectedModel?.id ?? "unknown",
+    reasoningEffort: null,
+    createdAt: Math.floor(DateTime.toEpochMillis(thread.time.created) / 1_000),
+    updatedAt: Math.floor(DateTime.toEpochMillis(thread.time.updated) / 1_000),
+    recencyAt: null,
+    status: snapshot.active || snapshot.waiting.length > 0
+      ? { type: "active", activeFlags: snapshot.waiting.map((wait) => wait === "approval" ? "waitingOnApproval" : "waitingOnUserInput") }
+      : { type: "idle" },
+    path: null,
+    cwd: thread.location.directory,
+    cliVersion: "unknown",
+    originator: null,
+    source: "unknown",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: thread.title,
+    turns: summaries,
   }
 }
 
-function turnsFromMessages(messages: readonly RemoteControlMessage[]) {
-  const turns: Array<{ id: string; items: Array<Record<string, unknown>>; status: string }> = []
+function threadConfiguration(thread: ReturnType<typeof threadWire>) {
+  return { thread, model: thread.model, modelProvider: thread.modelProvider, serviceTier: null, cwd: thread.cwd,
+    approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "dangerFullAccess" }, reasoningEffort: null }
+}
+
+function changedDirectory(params: Record<string, unknown>, snapshot: NativeDots.RootSnapshot) {
+  return params.cwd !== undefined && params.cwd !== null && params.cwd !== snapshot.session.location.directory
+}
+
+function transcriptSummaries(messages: readonly SessionMessage.Info[]) {
+  const completeProjection = { status: "completed", itemsView: "summary", error: null, startedAt: null, completedAt: null, durationMs: null } as const
+  const summaries: Array<typeof completeProjection & { id: string; items: Array<Record<string, unknown>> }> = []
   for (const message of messages) {
-    if (message.role === "user") {
-      turns.push({
+    if (message.type === "user") {
+      summaries.push({
         id: message.id,
-        status: "completed",
-        items: [{ type: "userMessage", id: message.id, content: message.text }],
+        ...completeProjection,
+        items: [{ type: "userMessage", id: message.id, clientId: null, content: [{ type: "text", text: message.text, text_elements: [] }] }],
       })
       continue
     }
-    if (message.role !== "assistant") continue
-    const item = { type: "agentMessage", id: message.id, content: message.text, text: message.text }
-    const current = turns[turns.length - 1]
+    if (message.type !== "assistant") continue
+    const item = { type: "agentMessage", id: message.id, text: message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join(""), phase: null, memoryCitation: null, delivery: null, questions: null }
+    const current = summaries[summaries.length - 1]
     if (current) current.items.push(item)
-    else turns.push({ id: message.id, status: "completed", items: [item] })
+    else summaries.push({ id: message.id, ...completeProjection, items: [item] })
   }
-  return turns
+  return summaries
 }
 
 function inputText(params: Record<string, unknown>) {
@@ -86,23 +118,186 @@ function inputText(params: Record<string, unknown>) {
 export function createRemoteControlAppServer(input: {
   readonly backend: RemoteControlBackend
   readonly codexHome: string
-  readonly notify?: Notify
+  readonly requestScope: string
+  readonly send: (text: string) => void
 }) {
   const backend = input.backend
   let initialized = false
   let ready = false
+  let active = true
+  const pending = new Map<string, { readonly request: NativeDots.NativeRequest; settling: boolean }>()
+  const subscriptions = new Map<string, { readonly pending: Promise<() => void>; stop?: () => void }>()
+  const refreshing = new Map<string, Promise<void>>()
+  const dirty = new Set<string>()
+  type Item = { id: string; type: "agentMessage"; text: string; phase?: "commentary" | "final_answer" }
+  const turns = new Map<string, { threadID: string; items: Map<string, Item>; completed: Set<string> }>()
+  const consumed = new Map<string, Set<string>>()
+  const admissions = new Map<string, { count: number; events: EventManifest.ServerEvent[] }>()
+  const revoked = new Set<string>()
+  const notify = (method: string, params: unknown) => {
+    if (active) input.send(JSON.stringify({ jsonrpc: "2.0", method, params }))
+  }
 
   const result = (id: unknown, value: unknown) => JSON.stringify({ jsonrpc: "2.0", id, result: value })
   const failure = (id: unknown, code: number, message: string) =>
     JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })
 
-  async function surfaceApprovals(threadID: string) {
-    const pending = await backend.pendingApprovals(threadID)
-    if (pending.length > 0)
-      input.notify?.("item/approvalRequested", {
-        threadId: threadID,
-        items: pending.map((item) => ({ id: item.id, kind: item.kind, status: "pending" })),
-      })
+  function resolved(request: NativeDots.NativeRequest) {
+    pending.delete(request.id)
+    notify("serverRequest/resolved", { threadId: request.threadID, requestId: request.id })
+  }
+
+  function completeTurn(id: string, status: "completed" | "failed" | "interrupted", error: { message: string } | null, completedAtMs: number) {
+    const turn = turns.get(id)
+    if (!turn) return
+    for (const item of turn.items.values()) if (!turn.completed.has(item.id))
+      notify("item/completed", { threadId: turn.threadID, turnId: id, item, completedAtMs })
+    notify("turn/completed", { threadId: turn.threadID, turn: { id, status, error, items: [...turn.items.values()] } })
+    turns.delete(id)
+  }
+
+  function retireRoot(threadID: string) {
+    const completedAtMs = Date.now()
+    revoked.add(threadID)
+    for (const held of pending.values()) if (held.request.threadID === threadID) resolved(held.request)
+    for (const [id, turn] of turns) if (turn.threadID === threadID) completeTurn(id, "interrupted", null, completedAtMs)
+    admissions.delete(threadID)
+    consumed.delete(threadID)
+  }
+
+  function runtimeEvent(threadID: string, event: EventManifest.ServerEvent) {
+    if (!active || revoked.has(threadID) || !("sessionID" in event.data) || event.data.sessionID !== threadID) return
+    const admission = admissions.get(threadID)
+    if (admission) { admission.events.push(event); return }
+    if (event.type === "session.execution.started") { consumed.set(threadID, new Set()); return }
+    if (event.type === "session.input.consumed") {
+      const current = consumed.get(threadID) ?? new Set<string>()
+      for (const id of event.data.inputIDs) if (turns.get(id)?.threadID === threadID) current.add(id)
+      consumed.set(threadID, current)
+      return
+    }
+    const current = consumed.get(threadID)
+    if (!current?.size) return
+    if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed" || event.type === "session.execution.interrupted") {
+      for (const id of current) completeTurn(id,
+        event.type === "session.execution.succeeded" ? "completed" : event.type === "session.execution.failed" ? "failed" : "interrupted",
+        event.type === "session.execution.failed" ? { message: "message" in event.data.error ? String(event.data.error.message) : "Session execution failed" } : null,
+        DateTime.toEpochMillis(event.created))
+      consumed.delete(threadID)
+      return
+    }
+    if (event.type !== "session.text.started" && event.type !== "session.text.delta" && event.type !== "session.text.ended") return
+    const itemID = `${event.data.assistantMessageID}:${event.data.ordinal}`
+    for (const id of current) {
+      const turn = turns.get(id)
+      if (!turn) continue
+      if (event.type === "session.text.started") {
+        if (turn.items.has(itemID)) continue
+        const item: Item = { id: itemID, type: "agentMessage", text: "", ...(event.data.phase === undefined ? {} : { phase: event.data.phase }) }
+        turn.items.set(itemID, item)
+        notify("item/started", { threadId: threadID, turnId: id, item: { ...item }, startedAtMs: DateTime.toEpochMillis(event.created) })
+      } else {
+        const item = turn.items.get(itemID)
+        if (!item || turn.completed.has(itemID)) continue
+        if (event.type === "session.text.delta") {
+          item.text += event.data.delta
+          notify("item/agentMessage/delta", { threadId: threadID, turnId: id, itemId: itemID, delta: event.data.delta })
+        } else {
+          item.text = event.data.text
+          if (event.data.phase !== undefined) item.phase = event.data.phase
+          turn.completed.add(itemID)
+          notify("item/completed", { threadId: threadID, turnId: id, item: { ...item }, completedAtMs: DateTime.toEpochMillis(event.created) })
+        }
+      }
+    }
+  }
+
+  function surfaceApprovals(threadID: string): Promise<void> {
+    if (revoked.has(threadID)) return Promise.reject(new Error("Native access retired"))
+    dirty.add(threadID)
+    const current = refreshing.get(threadID)
+    if (current) return current
+    const task = (async () => {
+      do {
+        dirty.delete(threadID)
+        const requests = await backend.pending(threadID)
+        if (!active || revoked.has(threadID)) return
+        for (const held of pending.values())
+          if (held.request.threadID === threadID && !held.settling && !requests.some((item) => item.id === held.request.id && item.handle === held.request.handle)) resolved(held.request)
+        for (const request of requests) {
+          if (pending.has(request.id)) continue
+          pending.set(request.id, { request, settling: false })
+          input.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, method: "item/tool/requestUserInput", params: {
+            threadId: request.threadID, turnId: request.turnID, itemId: request.itemID, isBlocking: true,
+            questions: request.questions.map((question) => ({ ...question, options: question.options ?? [] })),
+          } }))
+        }
+      } while (dirty.has(threadID))
+    })()
+    refreshing.set(threadID, task)
+    void task.then(() => { if (refreshing.get(threadID) === task) refreshing.delete(threadID) }, () => { if (refreshing.get(threadID) === task) refreshing.delete(threadID) })
+    return task
+  }
+
+  async function watch(threadID: string) {
+    let entry = subscriptions.get(threadID)
+    if (!entry) {
+      const subscription = backend.subscribe(threadID, (event) => {
+        runtimeEvent(threadID, event)
+        void surfaceApprovals(threadID).catch(() => {
+          retireRoot(threadID)
+        })
+      }, () => retireRoot(threadID))
+      entry = { pending: subscription }
+      subscriptions.set(threadID, entry)
+    }
+    const stop = await entry.pending
+    if (!active || revoked.has(threadID)) throw new Error("Native access retired")
+    entry.stop = stop
+    await surfaceApprovals(threadID)
+  }
+
+  async function response(record: Record<string, unknown>): Promise<string | undefined> {
+    const id = record.id
+    if (typeof id !== "string") return failure(id ?? null, -32600, "Unknown native request")
+    const held = pending.get(id)
+    if (!held || held.settling) return failure(id, -32600, "Unknown or completed native request")
+    if ("error" in record) return failure(id, -32603, "Native decision was not delivered; the request remains pending")
+    const result = isRecord(record.result) ? record.result : undefined
+    const answers = isRecord(result?.answers) ? result.answers : undefined
+    if (!result || Object.keys(result).length !== 1 || !answers)
+      return failure(id, -32602, "Answers do not match the native request")
+    const validated: Array<[string, { answers: string[] }]> = []
+    for (const [key, raw] of Object.entries(answers)) {
+      const question = held.request.questions.find((question) => question.id === key)
+      const answer = isRecord(raw) ? raw : undefined
+      if (!question) return failure(id, -32602, "Answer does not match a native question")
+      if (!answer || Object.keys(answer).length !== 1 || !Array.isArray(answer.answers) || answer.answers.length !== 1 || typeof answer.answers[0] !== "string")
+        return failure(id, -32602, "Answers do not match the native request")
+      const value = answer.answers[0]
+      if (!question.isOther && question.options?.length && !question.options.some((option) => option.label === value))
+        return failure(id, -32602, "Answer is not an available option")
+      validated.push([question.id, { answers: [value] }])
+    }
+    held.settling = true
+    try {
+      const current = await backend.pending(held.request.threadID)
+      if (!active || !current.some((item) => item.id === id && item.handle === held.request.handle)) throw new Error("Native request is stale")
+      await backend.settle(held.request.handle, Object.fromEntries(validated))
+      if (!active) return failure(id, -32600, "Native connection retired during settlement")
+      resolved(held.request)
+      await surfaceApprovals(held.request.threadID)
+      return undefined
+    } catch {
+      held.settling = false
+      if (pending.get(id) === held) {
+        try {
+          const current = await backend.pending(held.request.threadID)
+          if (!current.some((item) => item.id === id && item.handle === held.request.handle)) resolved(held.request)
+        } catch { resolved(held.request) }
+      }
+      return failure(id, -32603, "Native decision could not be confirmed")
+    }
   }
 
   async function dispatch(method: string, params: Record<string, unknown>, id: unknown): Promise<string> {
@@ -122,6 +317,10 @@ export function createRemoteControlAppServer(input: {
       })
     }
     if (!initialized) return failure(id, -32002, "Not initialized")
+    if (method.startsWith("thread/") || method.startsWith("turn/")) {
+      const override = unsupportedOverrides.find((field) => params[field] !== undefined && params[field] !== null)
+      if (override !== undefined) return failure(id, -32602, `Native ${override} overrides are unsupported; YCoding owns execution configuration`)
+    }
     if (
       refusedPrefixes.some((prefix) => method.startsWith(prefix)) ||
       method.includes("requestApproval") ||
@@ -134,52 +333,76 @@ export function createRemoteControlAppServer(input: {
       case "thread/start": {
         const cwd = typeof params.cwd === "string" ? params.cwd : undefined
         if (cwd === undefined) return failure(id, -32602, "cwd is required")
-        const location = await backend.resolveLocation(cwd)
-        if (location === undefined) return failure(id, -32602, "Directory is not a recorded YCoding Location")
         const thread = await backend.createThread({
-          location,
+          location: { directory: cwd },
+          inputID: JSON.stringify([input.requestScope, method, id]),
           ...(typeof params.title === "string" ? { title: params.title } : {}),
         })
-        return result(id, { thread: threadWire(thread) })
+        await watch(thread.session.id)
+        return result(id, threadConfiguration(threadWire(thread)))
       }
       case "thread/resume": {
         const threadID = typeof params.threadId === "string" ? params.threadId : undefined
-        const thread = threadID === undefined ? undefined : await backend.getThread(threadID)
+        if (threadID === undefined) return failure(id, -32602, "threadId is required")
+        const loaded = params.excludeTurns === true ? undefined : await backend.readThread(threadID)
+        const thread = params.excludeTurns === true ? await backend.getThread(threadID) : loaded
         if (thread === undefined) return failure(id, -32602, "Thread is unavailable")
-        return result(id, { thread: threadWire(thread) })
+        if (changedDirectory(params, thread)) return failure(id, -32602, "cwd cannot change an existing YCoding Session")
+        const messages = loaded?.messages ?? []
+        await watch(thread.session.id)
+        return result(id, { ...threadConfiguration(threadWire(thread, messages, transcriptSummaries(messages))), turnsBackwardsCursor: null, itemsBackwardsCursor: null })
       }
       case "thread/list": {
         const threads = await backend.listThreads()
-        return result(id, { data: threads.map(threadWire) })
+        return result(id, { data: threads.map((thread) => threadWire(thread)), nextCursor: null, backwardsCursor: null })
       }
       case "thread/read": {
         const threadID = typeof params.threadId === "string" ? params.threadId : undefined
-        const thread = threadID === undefined ? undefined : await backend.getThread(threadID)
-        if (thread === undefined || threadID === undefined) return failure(id, -32602, "Thread is unavailable")
-        const turns = params.includeTurns === false ? [] : turnsFromMessages(await backend.readMessages(threadID))
-        await surfaceApprovals(threadID)
-        return result(id, { thread: { ...threadWire(thread), turns } })
+        if (threadID === undefined) return failure(id, -32602, "threadId is required")
+        const loaded = params.includeTurns === true ? await backend.readThread(threadID) : undefined
+        const thread = params.includeTurns === true ? loaded : await backend.getThread(threadID)
+        if (thread === undefined) return failure(id, -32602, "Thread is unavailable")
+        const messages = loaded?.messages ?? []
+        await watch(threadID)
+        return result(id, { thread: threadWire(thread, messages, transcriptSummaries(messages)) })
       }
       case "turn/start":
       case "turn/steer": {
         const threadID = typeof params.threadId === "string" ? params.threadId : undefined
         const text = inputText(params)
         if (threadID === undefined || text === undefined) return failure(id, -32602, "threadId and text input are required")
-        if ((await backend.getThread(threadID)) === undefined) return failure(id, -32602, "Thread is unavailable")
-        const admitted = await backend.prompt(threadID, {
-          text,
-          delivery: "steer",
-          origin: "plugin",
-          externalSource: { kind: "remote-control" },
-        })
-        input.notify?.("turn/started", { threadId: threadID, turn: { id: admitted.messageID, status: "inProgress" } })
-        await surfaceApprovals(threadID)
+        const thread = await backend.getThread(threadID)
+        if (thread === undefined) return failure(id, -32602, "Thread is unavailable")
+        if (changedDirectory(params, thread)) return failure(id, -32602, "cwd cannot change an existing YCoding Session")
+        await watch(threadID)
+        const admission = admissions.get(threadID) ?? { count: 0, events: [] }
+        admissions.set(threadID, admission)
+        admission.count++
+        let admitted: { readonly messageID: string }
+        try {
+          admitted = await backend.prompt(threadID, {
+            text,
+            inputID: JSON.stringify([input.requestScope, method, id]),
+            delivery: "steer",
+          })
+          if (!active || revoked.has(threadID)) throw new Error("Native connection retired during admission")
+          turns.set(admitted.messageID, { threadID, items: new Map(), completed: new Set() })
+          notify("turn/started", { threadId: threadID, turn: { id: admitted.messageID, status: "inProgress", error: null, items: [] } })
+        } finally {
+          admission.count--
+          if (!admission.count) {
+            admissions.delete(threadID)
+            for (const event of admission.events) runtimeEvent(threadID, event)
+          }
+        }
         return result(id, { turn: { id: admitted.messageID, status: "inProgress", items: [] } })
       }
       case "turn/interrupt": {
         const threadID = typeof params.threadId === "string" ? params.threadId : undefined
         if (threadID === undefined) return failure(id, -32602, "threadId is required")
-        if ((await backend.getThread(threadID)) === undefined) return failure(id, -32602, "Thread is unavailable")
+        const thread = await backend.getThread(threadID)
+        if (thread === undefined) return failure(id, -32602, "Thread is unavailable")
+        if (changedDirectory(params, thread)) return failure(id, -32602, "cwd cannot change an existing YCoding Session")
         await backend.interrupt(threadID)
         return result(id, {})
       }
@@ -225,7 +448,8 @@ export function createRemoteControlAppServer(input: {
         return failure(null, -32700, "Parse error")
       }
       if (!isRecord(parsed)) return failure(null, -32600, "Invalid Request")
-      if (typeof parsed.method !== "string") return undefined
+      if (!active) return failure(parsed.id ?? null, -32600, "Native connection is retired")
+      if (typeof parsed.method !== "string") return response(parsed)
       const params = isRecord(parsed.params) ? parsed.params : {}
       if (parsed.method === "initialized") {
         ready = initialized
@@ -234,11 +458,27 @@ export function createRemoteControlAppServer(input: {
       if (!("id" in parsed)) return undefined
       const id = parsed.id ?? null
       try {
-        return await dispatch(parsed.method, params, id)
+        const reply = await dispatch(parsed.method, params, id)
+        return active ? reply : failure(id, -32600, "Native connection is retired")
       } catch {
         return failure(id, -32603, "Remote-control request failed")
       }
     },
     ready: () => ready,
+    retire: () => {
+      if (!active) return
+      active = false
+      pending.clear()
+      turns.clear()
+      consumed.clear()
+      admissions.clear()
+      dirty.clear()
+      for (const subscription of subscriptions.values()) {
+        if (subscription.stop) subscription.stop()
+        else void subscription.pending.then((stop) => stop(), () => {})
+      }
+      subscriptions.clear()
+      backend.retire()
+    },
   }
 }

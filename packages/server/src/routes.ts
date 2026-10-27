@@ -21,6 +21,7 @@ import { ProjectInventory } from "@ycoding-ai/core/project/inventory"
 import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
 import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/accounting"
 import { Session } from "@ycoding-ai/core/session"
+import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
 import { SessionGenerateNode } from "@ycoding-ai/core/session/generate-node"
 import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
@@ -63,8 +64,6 @@ import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { RemoteConnection } from "./remote-connection"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { RetentionSettings } from "@ycoding-ai/core/retention-settings"
-import { SessionMcpEvents } from "@ycoding-ai/core/mcp-events/index"
-import { McpEventsAuthorization } from "./mcp-events-authorization"
 
 const applicationServices = LayerNode.group([
   CoordinationRuntime.node,
@@ -73,8 +72,6 @@ const applicationServices = LayerNode.group([
   Database.node,
   EventRuntime.node,
   EventLogger.node,
-  SessionMcpEvents.node,
-  SessionMcpEvents.Authorization.node,
   httpClient,
   ToolOutputStore.cleanupNode,
   SessionRetention.node,
@@ -84,11 +81,13 @@ const applicationServices = LayerNode.group([
   ProjectArtifactStore.node,
   ProjectArtifactAccounting.node,
   Session.node,
+  SessionStore.node,
   PluginRuntime.providerNode,
   SdkPlugins.node,
   PermissionSaved.node,
   PtyTicket.node,
   Credential.node,
+  Config.globalNode,
   WellKnown.node,
   PtyEnvironment.node,
   LocationServiceMap.node,
@@ -136,7 +135,6 @@ function makeRoutes<AuthError, AuthServices>(
 ) {
   const pluginRuntimeCell = PluginRuntime.makeCell()
   const replacements: LayerNode.Replacements = [
-    [SessionMcpEvents.Authorization.node, McpEventsAuthorization.layer(remote)],
     [Database.node, Database.configured(options.database)],
     [ModelsDev.node, ModelsDev.configured({ ...options.models, client: options.client })],
     [Watcher.node, Watcher.configured({ enabled: options.fs?.filewatcher })],

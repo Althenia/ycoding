@@ -45,24 +45,14 @@ test("serves one backend remote switch and validates its input", async () => {
   }
 })
 
-test("relay MCP status and switch share the authenticated remote service", async () => {
+test("retired relay MCP routes are absent from the remote service", async () => {
   const calls: boolean[] = []
-  let enabled = false
   const handler = HttpRouter.toWebHandler(
     HttpApiBuilder.layer(HttpApi.make("server").add(Api.groups["server.remote"])).pipe(
       Layer.provide(RemoteHandler.pipe(Layer.provide(Layer.mergeAll(
         Layer.succeed(RemoteConnection.Service, RemoteConnection.Service.of({
           ...RemoteConnection.unavailable,
-          mcpStatus: async () => enabled
-            ? { state: "on", url: "https://relay.example.invalid/api/mcp/devices/dev_test" }
-            : { state: "off" },
-          setMcp: async (value: boolean) => {
-            calls.push(value)
-            enabled = value
-            return value
-              ? { state: "on", url: "https://relay.example.invalid/api/mcp/devices/dev_test" }
-              : { state: "off" }
-          },
+          set: async (value) => { calls.push(value); return { state: "off" } },
         })),
         Layer.succeed(Authorization, (effect) => effect),
         Layer.succeed(SchemaErrorMiddleware, (effect) => effect),
@@ -75,17 +65,9 @@ test("relay MCP status and switch share the authenticated remote service", async
     ...(body === undefined ? {} : { body, headers: { "content-type": "application/json" } }),
   }))
   try {
-    expect(await (await request("GET")).json()).toEqual({ data: { state: "off" } })
-    expect((await request("PUT", '{"enabled":"yes"}')).status).toBe(400)
+    expect((await request("GET")).status).toBe(404)
+    expect((await request("PUT", '{"enabled":true}')).status).toBe(404)
     expect(calls).toEqual([])
-    expect(await (await request("PUT", '{"enabled":true}')).json()).toEqual({ data: {
-      state: "on", url: "https://relay.example.invalid/api/mcp/devices/dev_test",
-    } })
-    expect(await (await request("GET")).json()).toEqual({ data: {
-      state: "on", url: "https://relay.example.invalid/api/mcp/devices/dev_test",
-    } })
-    expect(await (await request("PUT", '{"enabled":false}')).json()).toEqual({ data: { state: "off" } })
-    expect(calls).toEqual([true, false])
   } finally {
     await handler.dispose()
   }

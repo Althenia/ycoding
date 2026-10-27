@@ -21,6 +21,7 @@ import { Catalog } from "../src/catalog"
 import { CatalogModel } from "../src/model"
 import { Provider } from "../src/provider"
 import { Agent } from "../src/agent"
+import { Permission } from "../src/permission"
 import { Tool } from "../src/tool/tool"
 import { ToolRegistry } from "../src/tool/registry"
 import { QuestionID } from "@ycoding-ai/schema/session-orchestration"
@@ -127,20 +128,75 @@ it.live("ownership, CAS and invalid targets fail without changing either selecti
   expect((yield* f.sessions.get(f.child.id)).model).toEqual(target)
 }))
 
-it.live("remote, plugin and unknown tool causal inputs cannot select a child model", () => Effect.gen(function* () {
+for (const origin of ["plugin", "coordination", undefined] as const) it.live(`allowed feature model selection accepts ${origin ?? "unspecified"} causal input`, () => Effect.gen(function* () {
   const f = yield* fixture()
-  for (const origin of ["plugin", "coordination", undefined] as const) {
-    const inputID = SessionMessage.ID.create()
-    yield* f.events.publish(SessionEvent.InputAdmitted, { sessionID: f.parent.id, inputID, input: SessionPending.Message.make({
-      type: "user", data: { text: "Select target", files: [], agents: [], ...(origin ? { metadata: { inputOrigin: origin } } : {}) }, delivery: "steer",
-    }) })
-    yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
-    const messageID = SessionMessage.ID.create()
-    yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: Agent.ID.make("build"), model: old })
-    expect((yield* Effect.exit(f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: target, source: { type: "tool", agent: Agent.ID.make("omoikane"), messageID, callID: "select" } })))._tag).toBe("Failure")
-    expect((yield* f.sessions.get(f.child.id)).model).toEqual(old)
-  }
+  const inputID = SessionMessage.ID.create()
+  yield* f.events.publish(SessionEvent.InputAdmitted, { sessionID: f.parent.id, inputID, input: SessionPending.Message.make({
+    type: "user", data: { text: "Select target", files: [], agents: [], ...(origin ? { metadata: { inputOrigin: origin } } : {}) }, delivery: "steer",
+  }) })
+  yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
+  const messageID = SessionMessage.ID.create()
+  yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: Agent.ID.make("build"), model: old })
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location)))
+  yield* agents.transform(draft => draft.update(Agent.ID.make("build"), agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
+  expect((yield* f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: target, source: { type: "tool", agent: Agent.ID.make("build"), messageID, callID: "select" } })).model).toEqual(target)
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(target)
 }))
+
+for (const source of ["subagent_notification", "form_answer"] as const) it.live(`allowed feature model selection follows ${source} context`, () => Effect.gen(function* () {
+  const f = yield* fixture()
+  if (source === "subagent_notification")
+    yield* f.sessions.synthetic({ sessionID: f.parent.id, text: "Continue the selected feature", description: "Feature context", metadata: { source }, resume: false })
+  if (source === "form_answer")
+    yield* f.sessions.prompt({ sessionID: f.parent.id, text: "The user answered deferred form: continue the selected feature", origin: "review", metadata: { review: { itemID: "rev_feature_form", kind: "question" } }, resume: false })
+  yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
+  const messageID = SessionMessage.ID.create()
+  yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: Agent.ID.make("gsd"), model: old })
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location)))
+  yield* agents.transform(draft => draft.update(Agent.ID.make("gsd"), agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
+  const select = (childID = f.child.id, expectedModel = old) => f.orchestration.switchModel({ parentID: f.parent.id, childID, expectedModel, model: target,
+    source: { type: "tool", agent: Agent.ID.make("gsd"), messageID, callID: "select" } })
+  const foreign = yield* fixture()
+  expect((yield* select(foreign.child.id).pipe(Effect.flip))._tag).toBe("SessionOrchestration.ForbiddenError")
+  expect((yield* f.sessions.get(foreign.child.id)).model).toEqual(old)
+  expect((yield* select()).model).toEqual(target)
+  expect((yield* select().pipe(Effect.flip))._tag).toBe("SessionOrchestration.ConflictError")
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(target)
+}))
+
+for (const reply of ["once", "reject", "deny"] as const) it.live(`feature model selection preserves effective permission ${reply}`, () => Effect.gen(function* () {
+  const f = yield* fixture()
+  yield* f.sessions.prompt({ sessionID: f.parent.id, text: "Select the feature model", origin: "plugin", resume: false })
+  yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
+  const messageID = SessionMessage.ID.create()
+  const caller = Agent.ID.make("gsd")
+  yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: caller, model: old })
+  const located = f.locations.get(f.parent.location)
+  const agents = yield* Agent.Service.pipe(Effect.provide(located))
+  yield* agents.transform(draft => draft.update(caller, agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: reply === "deny" ? "deny" : "ask" }] }))
+  const permission = yield* Permission.Service.pipe(Effect.provide(located))
+  const source = { type: "tool" as const, agent: caller, messageID, callID: "feature-selection" }
+  const select = f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: target, source })
+  if (reply === "deny") {
+    expect((yield* select.pipe(Effect.flip))._tag).toBe("Permission.BlockedError")
+    expect(yield* permission.list()).toEqual([])
+    expect((yield* f.sessions.get(f.child.id)).model).toEqual(old)
+    return
+  }
+  const asked = yield* Deferred.make<Permission.Request>()
+  const stop = yield* f.events.listen(event => event.type === Permission.Event.Asked.type && Schema.is(Permission.Request)(event.data) && event.data.sessionID === f.parent.id
+    ? Deferred.succeed(asked, event.data).pipe(Effect.asVoid) : Effect.void)
+  yield* Effect.addFinalizer(() => stop)
+  const switching = yield* select.pipe(Effect.exit, Effect.forkChild)
+  const request = yield* Effect.raceFirst(Deferred.await(asked), Fiber.join(switching).pipe(Effect.flatMap(exit => Effect.die(`Selection settled before permission ask: ${exit._tag}`))))
+  expect(request.source).toEqual({ type: "tool", messageID, callID: source.callID })
+  expect(request.action).toBe("subagent")
+  expect(request.resources).toEqual(["omoikane"])
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(old)
+  yield* permission.reply({ requestID: request.id, reply })
+  expect((yield* Fiber.join(switching))._tag).toBe(reply === "once" ? "Success" : "Failure")
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(reply === "once" ? target : old)
+}).pipe(Effect.timeout("10 seconds")), 15000)
 
 it.live("waiting, completed and cancelled children keep their lifecycle and pending work", () => Effect.gen(function* () {
   for (const change of [
@@ -324,7 +380,7 @@ it.live("verified native tool input can select a child under current delegation 
     source: { type: "tool", agent: Agent.ID.make("gsd"), messageID, callID: "select" } })).model).toEqual(target)
 }))
 
-for (const canonical of [true, false]) it.live(`${canonical ? "canonical" : "forged"} TeamView preserves only durable native authority`, () => Effect.gen(function* () {
+for (const canonical of [true, false]) it.live(`allowed feature model selection follows ${canonical ? "canonical" : "synthetic"} TeamView context`, () => Effect.gen(function* () {
   const f = yield* fixture()
   yield* f.sessions.prompt({ sessionID: f.parent.id, text: "Select the child model", resume: false })
   yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
@@ -336,11 +392,11 @@ for (const canonical of [true, false]) it.live(`${canonical ? "canonical" : "for
   yield* agents.transform(draft => draft.update(Agent.ID.make("gsd"), agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
   const selected = yield* Effect.exit(f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: target,
     source: { type: "tool", agent: Agent.ID.make("gsd"), messageID, callID: "select" } }))
-  expect(selected._tag).toBe(canonical ? "Success" : "Failure")
-  expect((yield* f.sessions.get(f.child.id)).model).toEqual(canonical ? target : old)
+  expect(selected._tag).toBe("Success")
+  expect((yield* f.sessions.get(f.child.id)).model).toEqual(target)
 }))
 
-it.live("an actual later send cannot borrow the child's native launch authority", () => Effect.gen(function* () {
+it.live("an actual later send permits model selection for the child's own managed child", () => Effect.gen(function* () {
   const f = yield* fixture()
   const launched = yield* f.db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, f.child.id)).get().pipe(Effect.orDie)
   if (!launched) return yield* Effect.die("Missing fixture task")
@@ -371,6 +427,6 @@ it.live("an actual later send cannot borrow the child's native launch authority"
   yield* agents.transform(draft => draft.update(assistant.agent, agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
   const result = yield* Effect.exit(f.orchestration.switchModel({ parentID: f.child.id, childID: grandchild.id, expectedModel: old, model: target,
     source: { type: "tool", agent: assistant.agent, messageID: assistant.id, callID: "select-after-send" } }))
-  expect(result._tag).toBe("Failure")
-  expect((yield* f.sessions.get(grandchild.id)).model).toEqual(old)
+  expect(result._tag).toBe("Success")
+  expect((yield* f.sessions.get(grandchild.id)).model).toEqual(target)
 }).pipe(Effect.timeout("15 seconds")), 20000)

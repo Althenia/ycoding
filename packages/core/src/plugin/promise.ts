@@ -230,12 +230,14 @@ export function fromPromise(plugin: Plugin) {
             prompt: (input) =>
               run(
                 host.session.prompt({
-                  ...input,
                   sessionID: Session.ID.make(input.sessionID),
                   id: input.id == null ? undefined : SessionMessage.ID.make(input.id),
+                  text: input.text,
+                  files: input.files,
+                  agents: input.agents,
+                  metadata: input.metadata,
                   delivery: input.delivery ?? undefined,
                   resume: input.resume ?? undefined,
-                  remoteSource: input.remoteSource ?? undefined,
                 }),
               ),
             generate: (input) =>

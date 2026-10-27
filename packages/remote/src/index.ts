@@ -26,19 +26,9 @@
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
 import { parseProviderAuthInput, providerAuthOperations } from "./provider-auth.ts"
-export { remoteMcpOperations, mcpScope, mcpHeaderNames, mcpResource, parseMcpRequest, parseMcpState, parseMcpStateAck, type McpHeaders, type McpPrincipal, type McpRequest, type McpState, type McpStateAck, type McpResponse } from "./mcp.ts"
 export { parseProviderAuthInput, providerAuthOperations, isProviderAuthorizationURL, type ProviderAuthOperation, type ProviderAuthInput, type ProviderAuthTarget, type ProviderAuthInfo, type ProviderAuthAttempt, type ProviderAuthStatus, type ProviderAuthPrompt } from "./provider-auth.ts"
 
 export const RemoteProtocolVersion = 4
-
-export const localAppOperations = [
-  "local.app.register",
-  "local.app.list",
-  "local.app.revoke",
-  "local.app.open",
-  "local.app.status",
-  "local.app.http",
-] as const
 
 /** Versioned WebSocket routes derived from the envelope revision. */
 export const RemoteWebSocketPath = {
@@ -48,9 +38,6 @@ export const RemoteWebSocketPath = {
 
 /** Operations the relay proxies. Every other operation is rejected. */
 export const remoteOperations = [
-  ...localAppOperations,
-  "artifact.demo.preview",
-  "artifact.demo.export",
   ...providerAuthOperations,
   "workspace.list",
   "session.list",
@@ -109,19 +96,8 @@ export const remoteOperations = [
   "session.switchModel",
   "session.switchAgent",
   "session.command",
-  "session.dots.targets",
-  "session.dots.status",
-  "session.dots.bind",
-  "session.dots.unbind",
-  "session.dots.send",
-  "session.dots.pause",
-  "session.dots.resume",
-  "session.dots.exchange.create",
-  "session.dots.exchange.read",
-  "session.dots.delegation.device.create",
-  "session.dots.delegation.device.read",
-  "session.dots.delegation.device.revoke",
-  "session.dots.decisions.list",
+  "session.dots.access.get",
+  "session.dots.access.set",
   "session.skill",
   "usage.providers",
   "usage.summary",
@@ -150,7 +126,6 @@ export const remoteOperations = [
 
 /** Operations that address one session and therefore require `sessionID`. */
 export const remoteSessionOperations = [
-  ...localAppOperations,
   "session.get",
   "session.delete",
   "session.messages",
@@ -201,19 +176,8 @@ export const remoteSessionOperations = [
   "session.switchModel",
   "session.switchAgent",
   "session.command",
-  "session.dots.targets",
-  "session.dots.status",
-  "session.dots.bind",
-  "session.dots.unbind",
-  "session.dots.send",
-  "session.dots.pause",
-  "session.dots.resume",
-  "session.dots.exchange.create",
-  "session.dots.exchange.read",
-  "session.dots.delegation.device.create",
-  "session.dots.delegation.device.read",
-  "session.dots.delegation.device.revoke",
-  "session.dots.decisions.list",
+  "session.dots.access.get",
+  "session.dots.access.set",
   "session.skill",
   "session.usageReport",
   "session.promptCosts",
@@ -222,13 +186,22 @@ export const remoteSessionOperations = [
 
 export type RemoteOperation = (typeof remoteOperations)[number]
 
-export type RemoteDotsTarget = { readonly profile: string; readonly dotID: string; readonly threadID: string; readonly generation: string; readonly label: string }
-export type RemoteDotsStatus = { readonly enabled: boolean; readonly target?: RemoteDotsTarget; readonly state: "disconnected" | "connecting" | "connected" | "failed"; readonly error?: string; readonly runtimeState?: "paused" | "unpaused" | "unknown" }
-export type RemoteDotsSend = { readonly id: string; readonly text: string; readonly files?: readonly { readonly uri: string; readonly name?: string; readonly description?: string; readonly mention?: { readonly start: number; readonly end: number; readonly text: string } }[]; readonly causalMessageID?: string; readonly expectedTarget: RemoteDotsTarget }
-export type RemoteDotsDelivery = { readonly messageID: string; readonly status: "accepted" | "unknown"; readonly turnID?: string }
+export type RemoteDotsAccess = {
+  readonly sessionID: string
+  readonly rootSessionID: string
+  readonly enabled: boolean
+  readonly revision: number
+  readonly inherited: boolean
+  readonly configured: boolean
+}
 
-export function readDotsTarget(value: unknown): RemoteDotsTarget | undefined {
-  return validDotsTarget(value) ? value : undefined
+export function readDotsAccess(value: unknown): RemoteDotsAccess | undefined {
+  if (!isRecord(value) || !isSessionID(value.sessionID) || !isSessionID(value.rootSessionID) ||
+    typeof value.enabled !== "boolean" || typeof value.configured !== "boolean" || typeof value.inherited !== "boolean" ||
+    typeof value.revision !== "number" || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
+    value.inherited !== (value.sessionID !== value.rootSessionID)) return undefined
+  return { sessionID: value.sessionID, rootSessionID: value.rootSessionID, enabled: value.enabled,
+    revision: value.revision, inherited: value.inherited, configured: value.configured }
 }
 
 export function remoteDotsPeerLabel(metadata: unknown): string | undefined {
@@ -245,14 +218,6 @@ export function remoteDotsPeerLabel(metadata: unknown): string | undefined {
  * Typed against RemoteOperation so a new operation fails typecheck until it is classified.
  */
 export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation"> = {
-  "local.app.register": "mutation",
-  "local.app.list": "read",
-  "local.app.revoke": "mutation",
-  "local.app.open": "mutation",
-  "local.app.status": "read",
-  "local.app.http": "mutation",
-  "artifact.demo.preview": "read",
-  "artifact.demo.export": "read",
   "provider.auth.list": "read",
   "provider.auth.key": "mutation",
   "provider.auth.begin": "mutation",
@@ -316,19 +281,8 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.switchModel": "mutation",
   "session.switchAgent": "mutation",
   "session.command": "mutation",
-  "session.dots.targets": "read",
-  "session.dots.status": "read",
-  "session.dots.bind": "mutation",
-  "session.dots.unbind": "mutation",
-  "session.dots.send": "mutation",
-  "session.dots.pause": "mutation",
-  "session.dots.resume": "mutation",
-  "session.dots.exchange.create": "mutation",
-  "session.dots.exchange.read": "read",
-  "session.dots.delegation.device.create": "mutation",
-  "session.dots.delegation.device.read": "read",
-  "session.dots.delegation.device.revoke": "mutation",
-  "session.dots.decisions.list": "read",
+  "session.dots.access.get": "read",
+  "session.dots.access.set": "mutation",
   "session.skill": "mutation",
   "usage.providers": "read",
   "usage.summary": "read",
@@ -887,7 +841,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   if (operation === "usage.forecast" && (!isRecord(frame.input) ||
     (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
-  if ((operation === "artifact.demo.preview" || operation === "artifact.demo.export" || operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
+  if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
     operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
@@ -913,114 +867,13 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
   }
 }
 
-function validDotsTarget(input: unknown): input is RemoteDotsTarget {
-  return isRecord(input) && Object.keys(input).length === 5 &&
-    ["profile", "dotID", "threadID", "generation", "label"].every((key) => typeof input[key] === "string" && input[key].trim().length > 0 && input[key].length <= 512)
-}
-
-function validDotsRoutine(input: Record<string, unknown>): boolean {
-  if (Object.keys(input).length !== 8 || !Object.keys(input).every((key) => ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "taskInputID", "instruction"].includes(key))) return false
-  const delegation = input.delegation
-  const instruction = input.instruction
-  if (!isRecord(delegation) || Object.keys(delegation).length !== 2 || typeof delegation.id !== "string" || !delegation.id ||
-    typeof delegation.revision !== "number" || !Number.isSafeInteger(delegation.revision) || delegation.revision < 1 ||
-    typeof input.taskInputID !== "string" || !/^msg_[A-Za-z0-9_-]+$/.test(input.taskInputID) || !isRecord(instruction)) return false
-  if (instruction.operation === "continue") return Object.keys(instruction).length === 1
-  if (instruction.operation !== "presentation" || Object.keys(instruction).length !== 2 || !isRecord(instruction.preferences)) return false
-  const preferences = instruction.preferences
-  return Object.keys(preferences).length > 0 && Object.keys(preferences).every((key) => key === "format" || key === "detail") &&
-    (preferences.format === undefined || preferences.format === "prose" || preferences.format === "bullets") &&
-    (preferences.detail === undefined || preferences.detail === "concise" || preferences.detail === "standard" || preferences.detail === "detailed")
-}
-
-function validDotsDelegated(input: Record<string, unknown>): boolean {
-  if (Object.keys(input).length !== 7 || !Object.keys(input).every((key) => ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "delegation", "instruction"].includes(key))) return false
-  const delegation = input.delegation
-  const instruction = input.instruction
-  if (!isRecord(delegation) || Object.keys(delegation).length !== 2 || typeof delegation.id !== "string" || !delegation.id || delegation.id.length > 256 ||
-    typeof delegation.revision !== "number" || !Number.isSafeInteger(delegation.revision) || delegation.revision < 1 || !isRecord(instruction)) return false
-  if (instruction.operation === "task")
-    return Object.keys(instruction).length === 2 && typeof instruction.text === "string" && instruction.text.length > 0 && instruction.text.length <= 32768
-  if (instruction.operation !== "decision" || Object.keys(instruction).length !== 3 || !isRecord(instruction.target)) return false
-  const target = instruction.target
-  if (typeof target.fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(target.fingerprint)) return false
-  const reply = instruction.reply === "once" || instruction.reply === "reject"
-  if (target.kind === "permission") return Object.keys(target).length === 3 && typeof target.requestID === "string" && /^per[A-Za-z0-9_-]+$/.test(target.requestID) && target.requestID.length <= 256 && reply
-  if (target.kind === "guardrail") return Object.keys(target).length === 3 && typeof target.requestID === "string" && /^grq_[A-Za-z0-9_-]+$/.test(target.requestID) && target.requestID.length <= 256 && reply
-  if (target.kind === "form") return Object.keys(target).length === 3 && typeof target.formID === "string" && /^frm_[A-Za-z0-9_-]+$/.test(target.formID) && target.formID.length <= 256 &&
-    (instruction.cancelled === true && Object.keys(instruction).length === 3 || Object.keys(instruction).length === 3 && isRecord(instruction.answers) && Object.keys(instruction.answers).length <= 64 && Object.values(instruction.answers).every((value) => typeof value === "string" && value.length <= 8192 || typeof value === "boolean" || typeof value === "number" || Array.isArray(value) && value.length <= 64 && value.every((item) => typeof item === "string" && item.length <= 4096)))
-  if (target.kind === "question") return Object.keys(target).length === 3 && typeof target.requestID === "string" && /^que[A-Za-z0-9_-]+$/.test(target.requestID) && target.requestID.length <= 256 &&
-    (instruction.cancelled === true && Object.keys(instruction).length === 3 || Object.keys(instruction).length === 3 && Array.isArray(instruction.answers) && instruction.answers.length <= 64 && instruction.answers.every((answer) => Array.isArray(answer) && answer.length <= 64 && answer.every((entry) => typeof entry === "string" && entry.length <= 4096)))
-  if (target.kind === "subagent_question") return Object.keys(target).length === 3 && typeof target.questionID === "string" && /^qst_[A-Za-z0-9_-]+$/.test(target.questionID) && target.questionID.length <= 256 &&
-    (instruction.dismissed === true && Object.keys(instruction).length === 3 || Object.keys(instruction).length === 3 && (typeof instruction.text === "string" && instruction.text.length > 0 && instruction.text.length <= 65_536 || instruction.data !== undefined))
-  if (target.kind === "review") {
-    if (Object.keys(target).length !== 3 || typeof target.itemID !== "string" || !target.itemID.startsWith("rvw_") || target.itemID.length > 256 || !isRecord(instruction.decision)) return false
-    const decision = instruction.decision
-    if (decision.kind === "permission" || decision.kind === "guardrail") return Object.keys(decision).length === 2 && (decision.reply === "once" || decision.reply === "reject")
-    if (decision.kind === "recovery") return Object.keys(decision).length === 2 && (decision.choice === "continue" || decision.choice === "stop")
-    if (decision.kind === "question") return Object.keys(decision).length === 2 && (Array.isArray(decision.answers) && decision.answers.length <= 64 && decision.answers.every((answer) => Array.isArray(answer) && answer.length <= 64 && answer.every((entry) => typeof entry === "string" && entry.length <= 4096)) || isRecord(decision.answers) && Object.keys(decision.answers).length <= 64)
-    if (decision.kind === "subagent_question") return decision.dismissed === true && Object.keys(decision).length === 2 || Object.keys(decision).length <= 3 && (typeof decision.text === "string" && decision.text.length > 0 && decision.text.length <= 65_536 || decision.data !== undefined)
-  }
-  return false
-}
-
-function validDotsDelegationInput(operation: RemoteOperation, input: unknown): boolean {
-  if (operation === "session.dots.delegation.device.read") return input === undefined || isRecord(input) &&
-    Object.keys(input).every((key) => key === "cursor" || key === "limit") &&
-    (input.cursor === undefined || typeof input.cursor === "string" && input.cursor.length <= 4096) &&
-    (input.limit === undefined || typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 100)
-  if (!isRecord(input)) return false
-  if (operation === "session.dots.delegation.device.create") {
-    const scope = input.scope
-    return Object.keys(input).length === 5 && Object.keys(input).every((key) => ["id", "exchangeID", "bindingID", "expectedAttachment", "scope"].includes(key)) &&
-      [input.id, input.exchangeID, input.bindingID].every((value) => typeof value === "string" && value.length > 0 && value.length <= 256) &&
-      validDotsTarget(input.expectedAttachment) && isRecord(scope) && Object.keys(scope).length === 2 && scope.target === "device" &&
-      Array.isArray(scope.operations) && scope.operations.length > 0 && scope.operations.length <= 2 &&
-      scope.operations.every((value) => value === "task" || value === "decision") && new Set(scope.operations).size === scope.operations.length
-  }
-  if (operation === "session.dots.delegation.device.revoke") return Object.keys(input).length === 5 && Object.keys(input).every((key) => ["id", "revision", "exchangeID", "bindingID", "expectedAttachment"].includes(key)) &&
-    [input.id, input.exchangeID, input.bindingID].every((value) => typeof value === "string" && value.length > 0 && value.length <= 256) &&
-    typeof input.revision === "number" && Number.isSafeInteger(input.revision) && input.revision > 0 && validDotsTarget(input.expectedAttachment)
-  return false
-}
-
-function validDotsDecisionsList(input: unknown): boolean {
-  if (!isRecord(input) || Object.keys(input).some((key) => !["bindingID", "expectedAttachment", "delegation", "targetSessionID", "cursor", "limit"].includes(key))) return false
-  const delegation = input.delegation
-  return typeof input.bindingID === "string" && input.bindingID.length > 0 && input.bindingID.length <= 256 && validDotsTarget(input.expectedAttachment) &&
-    isRecord(delegation) && Object.keys(delegation).length === 2 && typeof delegation.id === "string" && delegation.id.length > 0 && delegation.id.length <= 256 &&
-    typeof delegation.revision === "number" && Number.isSafeInteger(delegation.revision) && delegation.revision > 0 &&
-    (input.targetSessionID === undefined || isSessionID(input.targetSessionID)) && (input.cursor === undefined || typeof input.cursor === "string" && input.cursor.length <= 4096) &&
-    (input.limit === undefined || typeof input.limit === "number" && Number.isSafeInteger(input.limit) && input.limit >= 1 && input.limit <= 100)
-}
-
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
-  if (operation.startsWith("session.dots.delegation.device.")) return validDotsDelegationInput(operation, input)
-  if (operation === "session.dots.decisions.list") return validDotsDecisionsList(input)
-  if (operation === "session.dots.exchange.read") return isRecord(input) && Object.keys(input).length === 1 &&
-    typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256
-  if (operation === "session.dots.exchange.create") return isRecord(input) &&
-    typeof input.exchangeID === "string" && input.exchangeID.length > 0 && input.exchangeID.length <= 256 &&
-    validDotsTarget(input.expectedAttachment) && isSessionID(input.targetSessionID) && input.channel === "task" &&
-    (input.delivery === "steer" || input.delivery === "queue") &&
-    ((Object.keys(input).length === 6 && typeof input.text === "string" && input.text.length > 0 && input.text.length <= 32768) || validDotsRoutine(input) || validDotsDelegated(input))
-  if (operation === "session.dots.status") return input === undefined
-  if (operation === "session.dots.targets") return isRecord(input) &&
-    typeof input.profile === "string" && input.profile.trim().length > 0 && input.profile.length <= 256 &&
-    Object.keys(input).length === 1
-  if (operation === "session.dots.bind") return validDotsTarget(input)
-  if (operation === "session.dots.pause" || operation === "session.dots.resume" || operation === "session.dots.unbind") return isRecord(input) &&
-    validDotsTarget(input.expectedTarget) && Object.keys(input).length === 1
-  if (operation === "session.dots.send") return isRecord(input) &&
-    validDotsTarget(input.expectedTarget) &&
-    typeof input.id === "string" && input.id.length > 0 && input.id.length <= 128 &&
-    typeof input.text === "string" &&
-    (input.files === undefined || Array.isArray(input.files) && input.files.length <= 64 && input.files.every((file) => isRecord(file) && typeof file.uri === "string")) &&
-    (input.causalMessageID === undefined || typeof input.causalMessageID === "string" && input.causalMessageID.length > 0 && input.causalMessageID.length <= 128) &&
-    Object.keys(input).every((key) => ["id", "text", "files", "causalMessageID", "expectedTarget"].includes(key))
+  if (operation === "session.dots.access.get") return input === undefined
+  if (operation === "session.dots.access.set") return isRecord(input) && Object.keys(input).length === 2 &&
+    typeof input.enabled === "boolean" && typeof input.expectedRevision === "number" &&
+    Number.isSafeInteger(input.expectedRevision) && input.expectedRevision >= 0
   if (operation === "session.delete") return input === undefined || isRecord(input) && Object.keys(input).length === 0
   if (operation.startsWith("coordination.")) return validCoordinationInput(operation, input)
-  if (operation === "artifact.demo.preview" || operation === "artifact.demo.export") return input === undefined
   if (operation === "session.list") return input === undefined || isRecord(input) &&
     (input.status === undefined || input.status === "waiting" || input.status === "running" || input.status === "idle") &&
     (input.around === undefined && input.before === undefined || isSessionID(input.around) && input.order === "active" && input.cursor === undefined &&
@@ -2001,6 +1854,5 @@ export function parseBearerToken(value: string | null): string | undefined {
   const match = /^Bearer ([A-Za-z0-9_-]{16,256})$/.exec(value)
   return match?.[1]
 }
-export { RemoteMcpEvents } from "./mcp-events.ts"
 export { RemoteAppPreview } from "./app-preview.ts"
 export { previewOperation, previewRequestHeaders, maxPreviewLeases, maxPreviewOrigins, maxPreviewHeaderChars, maxRegistrationMs, leaseTagPattern, parsePreviewState, parsePreviewStateAck, parsePreviewAllocate, parsePreviewAllocateAck, parsePreviewLease, parsePreviewLeaseAck, parsePreviewRevoke, parsePreviewRequest, parsePreviewInput, parsePreviewResult, parsePreviewOrigins, sameOrigins, previewCookie, isPreviewOrigin, sha256Hex, type PreviewMethod, type PreviewState, type PreviewStateAck, type PreviewAllocate, type PreviewAllocateAck, type PreviewLease, type PreviewLeaseAck, type PreviewRevoke, type PreviewInput, type PreviewRequest, type PreviewResult } from "./preview.ts"

@@ -149,3 +149,21 @@ export async function readJsonBody(request: Request): Promise<unknown> {
 export function isWebSocketUpgrade(request: Request): boolean {
   return request.headers.get("upgrade")?.toLowerCase() === "websocket"
 }
+
+export async function readBoundedText(body: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<string | undefined> {
+  if (body === null) return ""
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let text = ""
+  let total = 0
+  for (;;) {
+    const chunk = await reader.read()
+    if (chunk.done) return text + decoder.decode()
+    total += chunk.value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined)
+      return undefined
+    }
+    text += decoder.decode(chunk.value, { stream: true })
+  }
+}

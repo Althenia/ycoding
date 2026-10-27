@@ -1,6 +1,15 @@
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
-import { Deferred, Effect, Fiber, Queue, Schema } from "effect"
+import { Deferred, Effect, Fiber, Queue, Schema, Stream } from "effect"
+import { NativeDots } from "@ycoding-ai/core/dots/native"
+import { NativeDecisions } from "@ycoding-ai/core/dots/native-decisions"
+import { DotsAccess } from "@ycoding-ai/core/dots/access"
+import { Config } from "@ycoding-ai/core/config"
+import { Credential } from "@ycoding-ai/core/credential"
+import { Integration } from "@ycoding-ai/core/integration"
+import { Project } from "@ycoding-ai/core/project"
+import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventRuntime } from "@ycoding-ai/core/event"
@@ -140,6 +149,246 @@ const child = Effect.gen(function* () {
   yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
   return { ...f, child }
 })
+
+const nativeSetup = (customRule = false) => Effect.gen(function* () {
+  const location = yield* reviewLocation
+  if (customRule) {
+    yield* Effect.promise(() => fs.mkdir(`${location.directory}/.ycoding/guardrails`, { recursive: true }))
+    yield* Effect.promise(() => Bun.write(`${location.directory}/.ycoding/guardrails/native.md`, "---\nid: native-choice\ndecision: ask\nactions: [shell]\nresources: [native-synthetic-command]\nreason: Explicit native choice\n---\n"))
+  }
+  const sessions = yield* Session.Service
+  const root = yield* sessions.create({ location })
+  const managed = yield* sessions.create({ parentID: root.id, model: Schema.decodeUnknownSync(Model.Ref)({ providerID: "test", id: "model" }) })
+  const db = yield* Database.Service
+  const events = yield* EventRuntime.Service
+  const store = yield* SessionStore.Service
+  const execution = yield* SessionExecution.Service
+  const projects = yield* Project.Service
+  const reviews = yield* SessionReview.Service
+  const orchestration = yield* SessionOrchestration.Service
+  const locations = yield* LocationServiceMap.Service
+  yield* events.publish(SessionEvent.Task.Updated, { sessionID: managed.id, change: {
+    type: "launched", parentID: root.id, parentAssistantMessageID: SessionMessage.ID.create(), toolCallID: "native-child", inputID: SessionMessage.ID.create(),
+    description: "Native acceptance child", agent: Agent.ID.make("build"), model: managed.model!, promptDigest: "native-fixture", background: true, delivery: "steer",
+  } })
+  yield* events.publish(SessionEvent.Task.Updated, { sessionID: managed.id, change: { type: "started" } })
+  const f = { root, child: managed, sessions, located: locations.get(location) }
+  const credential = new Credential.Info({ id: Credential.ID.make("cred_native_acceptance"), integrationID: Integration.ID.make("openai"), label: "native-acceptance", value: {
+    type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"), access: "synthetic", refresh: "synthetic", expires: 0, metadata: { accountID: "synthetic-native-account" },
+  } })
+  const access = DotsAccess.make({ db, events, sessions: store, configured: () => Effect.succeed(true) })
+  yield* access.set({ sessionID: f.root.id, enabled: true, expectedRevision: 0 })
+  const host = yield* NativeDots.make({ db, events, store, sessions: f.sessions, execution, projects,
+    config: { snapshot: () => Effect.succeed({ entries: [new Config.Document({ type: "document", scope: "global", info: new Config.Info({ dots: { enabled: true, profile: credential.label } }) })], diagnostics: [] }), subscribe: () => () => {} },
+    credentials: { list: () => Effect.succeed([credential]) }, credential: () => Effect.succeed(undefined),
+    models: () => Effect.succeed([]), skills: () => Effect.succeed([]), selectedModel: (session) => Effect.succeed(session.model),
+    decisions: session => Effect.gen(function* () {
+      const permission = yield* Permission.Service
+      const guardrail = yield* SessionGuardrail.Service
+      const forms = yield* Form.Service
+      const questions = yield* Question.Service
+      return NativeDecisions.make({ permission, guardrail, forms, questions, reviews, orchestration, sessions: f.sessions })
+    }).pipe(Effect.provide(locations.get(session.location))),
+  })
+  const pins: NativeDots.Pins = { profile: credential.label, credentialID: credential.id, accountID: "synthetic-native-account", accountGeneration: 0,
+    environmentID: "synthetic-environment", connectionID: "synthetic-connection", isCurrent: () => true }
+  const connection = yield* Effect.promise(() => host.attach(pins))
+  const channel = connection.channel({ clientID: "native-client", streamID: "native-stream" })
+  const permissions = yield* Permission.Service.pipe(Effect.provide(f.located))
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.located))
+  const agent = Agent.ID.make("native-acceptance")
+  yield* agents.transform(draft => draft.update(agent, entry => { entry.permissions = [{ action: "*", resource: "*", effect: "ask" }] }))
+  const pending = (itemID: string) => Effect.promise(async () => {
+    const request = (await channel.pending(f.root.id)).find(item => item.itemID === itemID)
+    if (!request) throw new Error(`Missing native candidate: ${itemID}`)
+    return request
+  })
+  return { ...f, db, events, store, reviews, orchestration, locations, access, host, channel, permissions, agents, agent, pins, pending }
+})
+const nativeRejects = (promise: Promise<unknown>) => Effect.promise(async () => { await expect(promise).rejects.toThrow() })
+const nativeChoice = (value: string): NativeDots.Answers => ({ answer: { answers: [value] } })
+const nativeValue = (value: string): NativeDots.Answers => ({ value: { answers: [value] }, action: { answers: ["Continue"] } })
+const nativeLog = (sessionID: Session.ID) => EventRuntime.Service.use(events => events.log({ aggregateID: sessionID, follow: false }).pipe(
+  Stream.filter((item): item is EventRuntime.Payload => !EventRuntime.isSynced(item)),
+  Stream.runCollect,
+))
+
+it.live("native candidate permission requires a typed choice and commits one sourced receipt for concurrent duplicates", () => Effect.gen(function* () {
+  const f = yield* nativeSetup()
+  yield* f.sessions.autonomy.set({ sessionID: f.root.id, permissions: "auto" })
+  const asked = yield* f.permissions.ask({ sessionID: f.root.id, agent: f.agent, action: "edit", resources: ["src/feature.ts"], requireExplicitDecision: true,
+    source: { type: "tool", messageID: "msg_native_permission", callID: "call_native_permission" } })
+  expect(asked.effect).toBe("ask")
+  const snapshot = yield* f.permissions.snapshot(asked.id)
+  const request = yield* f.pending(asked.id)
+  yield* Effect.promise(() => f.channel.prompt({ rootID: f.root.id, inputID: "not-a-decision", text: "Allow once", delivery: "queue" }))
+  yield* nativeRejects(f.channel.settle(request.handle, {}))
+  yield* nativeRejects(f.channel.settle(request.handle, { unknown: { answers: ["Allow once"] } }))
+  yield* nativeRejects(f.channel.settle(request.handle, nativeChoice("always")))
+  expect(yield* f.permissions.snapshot(asked.id)).toEqual(snapshot)
+  expect((yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)).toEqual([])
+  const outcomes = yield* Effect.promise(() => Promise.allSettled([f.channel.settle(request.handle, nativeChoice("Allow once")), f.channel.settle(request.handle, nativeChoice("Allow once"))]))
+  expect(outcomes.map(item => item.status).sort()).toEqual(["fulfilled", "rejected"])
+  expect(yield* f.permissions.snapshot(asked.id)).toBeUndefined()
+  const settled = (yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)
+  expect(settled).toHaveLength(1)
+  expect(settled[0]?.data).toMatchObject({ sessionID: f.root.id, reply: "once", target: { kind: "permission", requestID: asked.id, fingerprint: snapshot!.fingerprint },
+    source: { kind: "dots-native", profile: f.pins.profile, credentialID: f.pins.credentialID, accountID: f.pins.accountID, accountGeneration: 0,
+      environmentID: f.pins.environmentID, connectionID: f.pins.connectionID, clientID: "native-client", streamID: "native-stream", rootSessionID: f.root.id, accessRevision: 1, requestID: request.id } })
+}).pipe(Effect.timeout("10 seconds")), 15000)
+
+it.live("native candidate permission cannot override an effective deny captured after projection", () => Effect.gen(function* () {
+  const f = yield* nativeSetup()
+  const asked = yield* f.permissions.ask({ sessionID: f.root.id, agent: f.agent, action: "edit", resources: ["src/denied.ts"], requireExplicitDecision: true })
+  const request = yield* f.pending(asked.id)
+  yield* f.agents.transform(draft => draft.update(f.agent, entry => { entry.permissions = [{ action: "edit", resource: "*", effect: "deny" }] }))
+  yield* nativeRejects(f.channel.settle(request.handle, nativeChoice("Allow once")))
+  expect(yield* f.permissions.snapshot(asked.id)).toBeDefined()
+  expect((yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)).toEqual([])
+  yield* Effect.promise(() => f.channel.settle(request.handle, nativeChoice("Reject")))
+  expect(yield* f.permissions.snapshot(asked.id)).toBeUndefined()
+  expect((yield* f.permissions.ask({ sessionID: f.root.id, agent: f.agent, action: "edit", resources: ["src/denied.ts"] })).effect).toBe("deny")
+}))
+
+it.live("native candidate permission access revision fences reject revoked handles and preserve the pending owner", () => Effect.gen(function* () {
+  const f = yield* nativeSetup()
+  const asked = yield* f.permissions.ask({ sessionID: f.root.id, agent: f.agent, action: "edit", resources: ["src/revoked.ts"], requireExplicitDecision: true })
+  const request = yield* f.pending(asked.id)
+  yield* f.access.set({ sessionID: f.root.id, enabled: false, expectedRevision: 1 })
+  yield* f.access.set({ sessionID: f.root.id, enabled: true, expectedRevision: 2 })
+  yield* nativeRejects(f.channel.settle(request.handle, nativeChoice("Allow once")))
+  expect(yield* f.permissions.snapshot(asked.id)).toBeDefined()
+  const current = yield* f.pending(asked.id)
+  expect(current.handle).not.toBe(request.handle)
+  yield* Effect.promise(() => f.channel.settle(current.handle, nativeChoice("Reject")))
+  const settled = (yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)
+  expect(settled).toHaveLength(1)
+  expect(settled[0]?.data).toMatchObject({ reply: "reject", source: { accessRevision: 3, requestID: current.id } })
+}))
+
+for (const kind of ["hard", "custom"] as const) it.live(`native candidate ${kind} guardrail needs an explicit typed choice under Auto`, () => Effect.gen(function* () {
+  const f = yield* nativeSetup(kind === "custom")
+  yield* f.sessions.autonomy.set({ sessionID: f.root.id, guardrails: "auto" })
+  const guardrails = yield* SessionGuardrail.Service.pipe(Effect.provide(f.located))
+  const input = { sessionID: f.root.id, action: "shell", resources: [kind === "hard" ? "git reset --hard" : "native-synthetic-command"] }
+  const evaluation = yield* guardrails.evaluate(input)
+  expect(evaluation.hardReview).toBe(kind === "hard")
+  const ready = yield* Deferred.make<Guardrail.Request>()
+  const stop = yield* f.events.listen(event => event.type === Guardrail.Event.Asked.type ? Deferred.succeed(ready, Schema.decodeUnknownSync(Guardrail.Request)(event.data)).pipe(Effect.asVoid) : Effect.void)
+  yield* Effect.addFinalizer(() => stop)
+  const waiting = yield* guardrails.assert(input).pipe(Effect.forkScoped)
+  const asked = yield* Effect.raceFirst(Deferred.await(ready), Fiber.await(waiting).pipe(Effect.flatMap(() => Effect.die("Guardrail settled before the required explicit choice"))))
+  const request = yield* f.pending(asked.id)
+  yield* nativeRejects(f.channel.settle(request.handle, nativeChoice("always")))
+  expect(yield* guardrails.requestSnapshot(f.root.id, asked.id)).toBeDefined()
+  yield* Effect.promise(() => f.channel.settle(request.handle, nativeChoice("Allow once")))
+  yield* (yield* Fiber.join(waiting)).release
+  expect(yield* guardrails.requestSnapshot(f.root.id, asked.id)).toBeUndefined()
+  const settled = (yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)
+  expect(settled).toHaveLength(1)
+  expect(settled[0]?.data).toMatchObject({ source: { kind: "dots-native", requestID: request.id }, target: { kind: "guardrail", requestID: asked.id }, reply: "once" })
+}).pipe(Effect.timeout("10 seconds")), 15000)
+
+for (const cancel of [false, true]) it.live(`native candidate Question ${cancel ? "cancellation" : "answer"} settles the real owner with native provenance`, () => Effect.gen(function* () {
+  const f = yield* nativeSetup()
+  const questions = yield* Question.Service.pipe(Effect.provide(f.located))
+  const ready = yield* Deferred.make<Question.Request>()
+  const stop = yield* f.events.listen(event => event.type === Question.Event.Asked.type ? Deferred.succeed(ready, Schema.decodeUnknownSync(Question.Request)(event.data)).pipe(Effect.asVoid) : Effect.void)
+  yield* Effect.addFinalizer(() => stop)
+  const waiting = yield* questions.ask({ sessionID: f.root.id, questions: [{ header: "Feature", question: "Which feature?", options: [{ label: "First", description: "First feature" }], custom: false }] }).pipe(Effect.exit, Effect.forkScoped)
+  const asked = yield* Deferred.await(ready)
+  const request = yield* f.pending(asked.id)
+  yield* nativeRejects(f.channel.settle(request.handle, nativeValue("Other")))
+  expect((yield* questions.list()).some(item => item.id === asked.id)).toBe(true)
+  yield* Effect.promise(() => f.channel.settle(request.handle, cancel ? { action: { answers: ["Cancel request"] } } : nativeValue("1. First")))
+  const outcome = yield* Fiber.join(waiting)
+  expect(outcome._tag).toBe(cancel ? "Failure" : "Success")
+  if (outcome._tag === "Success") expect(outcome.value).toMatchObject({ status: "answered", answers: [["First"]], source: { kind: "dots-native", requestID: request.id } })
+  expect(yield* questions.list()).toEqual([])
+  const settled = (yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)
+  expect(settled).toHaveLength(1)
+  expect(settled[0]?.data).toMatchObject({ source: { kind: "dots-native" }, target: { kind: "question", requestID: asked.id, fingerprint: Question.fingerprint(asked) } })
+  expect((yield* f.sessions.pending(f.root.id))).toEqual([])
+}).pipe(Effect.timeout("10 seconds")), 15000)
+
+it.live("native candidate deferred Form commits synthetic input, decision and receipt before receipt notification", () => Effect.gen(function* () {
+  const f = yield* nativeSetup()
+  yield* f.sessions.autonomy.set({ sessionID: f.root.id, sleep: true })
+  const forms = yield* Form.Service.pipe(Effect.provide(f.located))
+  expect(yield* forms.ask({ sessionID: f.root.id, title: "Deferred evidence", fields: [{ type: "string", key: "evidence", required: true }] })).toMatchObject({ status: "deferred" })
+  const item = (yield* f.reviews.list(f.root.id))[0]!
+  const request = yield* f.pending(item.itemID)
+  const atReceipt: boolean[] = []
+  const stop = yield* f.events.listen(event => event.type !== SessionEvent.DotsDecisionSettled.type ? Effect.void : Effect.gen(function* () {
+    const pending = yield* SessionPending.lookup(f.db.db, f.root.id, SessionReview.promptID(item.itemID))
+    const decided = (yield* SessionReviewFold.fold(f.db.db, [f.root.id])).find(entry => entry.itemID === item.itemID)?.decision
+    atReceipt.push(pending?.type === "synthetic" && decided?.kind === "question")
+  }))
+  yield* Effect.addFinalizer(() => stop)
+  yield* Effect.promise(() => f.channel.settle(request.handle, nativeValue("Literal evidence")))
+  expect(atReceipt).toEqual([true])
+  const log = yield* nativeLog(f.root.id)
+  expect(log.filter(event => [SessionEvent.InputAdmitted.type, SessionEvent.Review.Decided.type, SessionEvent.DotsDecisionSettled.type].some(type => type === event.type)).map(event => event.type)).toEqual([
+    SessionEvent.InputAdmitted.type, SessionEvent.Review.Decided.type, SessionEvent.DotsDecisionSettled.type,
+  ])
+  expect(yield* SessionPending.lookup(f.db.db, f.root.id, SessionReview.promptID(item.itemID))).toMatchObject({ type: "synthetic", data: { metadata: { dotsSource: { kind: "dots-native", requestID: request.id } } } })
+  expect((yield* SessionReviewFold.fold(f.db.db, [f.root.id]))[0]).toMatchObject({ decision: { kind: "question", answers: { evidence: "Literal evidence" } }, source: { kind: "dots-native" } })
+  yield* nativeRejects(f.channel.settle(request.handle, nativeValue("Replacement")))
+  expect((yield* nativeLog(f.root.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)).toHaveLength(1)
+  expect((yield* f.sessions.autonomy.get(f.root.id)).sleep).toEqual({})
+}))
+
+it.live("native candidate child cancellation leaves the owned question unanswered and excludes another family", () => Effect.gen(function* () {
+  const f = yield* nativeSetup()
+  const question = yield* f.orchestration.question(f.child.id, "Need feature evidence")
+  const other = yield* child
+  const foreign = yield* f.orchestration.question(other.child.id, "Other family evidence")
+  const requests = yield* Effect.promise(() => f.channel.pending(f.root.id))
+  expect(requests.map(item => item.itemID)).toEqual([question.question.id])
+  expect(requests.some(item => item.itemID === foreign.question.id)).toBe(false)
+  const request = requests[0]!
+  yield* Effect.promise(() => f.channel.settle(request.handle, { action: { answers: ["Cancel request"] } }))
+  expect((yield* f.orchestration.get(f.root.id, f.child.id))).toMatchObject({ state: "waiting", question: { id: question.question.id } })
+  expect(yield* f.sessions.pending(f.child.id)).toEqual([])
+  expect((yield* nativeLog(f.child.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)).toEqual([])
+  const fresh = yield* f.pending(question.question.id)
+  yield* Effect.promise(() => f.channel.settle(fresh.handle, nativeValue("Owned evidence")))
+  expect((yield* f.orchestration.get(f.root.id, f.child.id)).state).toBe("waiting")
+  const final = yield* f.pending(question.question.id)
+  yield* Effect.promise(() => f.channel.settle(final.handle, { action: { answers: ["Skip field"] } }))
+  expect((yield* f.orchestration.get(f.root.id, f.child.id)).state).toBe("running")
+  expect((yield* f.sessions.pending(f.child.id))[0]).toMatchObject({ type: "synthetic", data: { text: expect.stringContaining("Owned evidence"), metadata: { dotsSource: { kind: "dots-native", requestID: final.id } } } })
+  expect((yield* f.orchestration.get(other.root.id, other.child.id))).toMatchObject({ state: "waiting", question: { id: foreign.question.id } })
+  expect((yield* nativeLog(f.child.id)).filter(event => event.type === SessionEvent.DotsDecisionSettled.type)).toHaveLength(1)
+}))
+
+for (const choice of ["Continue", "Stop"] as const) it.live(`native candidate recovery ${choice} applies the real task transition without replaying tools`, () => Effect.gen(function* () {
+  const f = yield* nativeSetup()
+  const questionID = QuestionID.make("qst_native_recovery")
+  yield* f.events.publish(SessionEvent.Task.Updated, { sessionID: f.child.id, change: { type: "question_asked", question: { id: questionID, text: "Restart recovery", time: 1 } } })
+  const item = yield* f.reviews.open({ sessionID: f.child.id, kind: "recovery", reason: "restart", origin: { questionID }, payload: {
+    type: "recovery", tools: [{ messageID: SessionMessage.ID.make("msg_native_recovery"), callID: "call_native_recovery", name: "edit" }],
+  }, limit: 16 })
+  const request = yield* f.pending(item.itemID)
+  yield* nativeRejects(f.channel.settle(request.handle, nativeChoice("Allow once")))
+  yield* Effect.promise(() => f.channel.settle(request.handle, nativeChoice(choice)))
+  expect((yield* f.orchestration.get(f.root.id, f.child.id)).state).toBe(choice === "Continue" ? "running" : "lost")
+  expect((yield* SessionReviewFold.fold(f.db.db, [f.child.id]))[0]).toMatchObject({ decision: { kind: "recovery", choice: choice === "Continue" ? "continue" : "stop" }, source: { kind: "dots-native", requestID: request.id } })
+  yield* nativeRejects(f.channel.settle(request.handle, nativeChoice(choice)))
+  if (choice === "Stop") {
+    expect(yield* f.sessions.pending(f.child.id)).toEqual([])
+    const resume = yield* f.pending(item.itemID)
+    expect(resume.id).not.toBe(request.id)
+    yield* Effect.promise(() => f.channel.settle(resume.handle, nativeChoice("Continue")))
+    expect((yield* f.orchestration.get(f.root.id, f.child.id)).state).toBe("running")
+  }
+  const pending = yield* f.sessions.pending(f.child.id)
+  expect(pending).toHaveLength(1)
+  expect(pending[0]).toMatchObject({ type: "synthetic", data: { text: expect.stringContaining("they were not retried"), metadata: { dotsSource: { kind: "dots-native" } } } })
+  const log = yield* nativeLog(f.child.id)
+  expect(log.filter(event => event.type === SessionEvent.DotsDecisionSettled.type)).toHaveLength(choice === "Continue" ? 1 : 2)
+  expect(log.filter(event => event.type === SessionEvent.Step.Started.type)).toEqual([])
+}))
 
 for (const version of [1, 2] as const) for (const change of ["none", "metadata", "resources"] as const) it.effect(`historical permission version ${version} matches only its exact preimage with ${change} changed`, () => Effect.gen(function* () {
   const f = yield* setup

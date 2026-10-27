@@ -28,7 +28,7 @@ import { host as testHost } from "./host"
 const it = testEffect(PluginTestLayer)
 
 describe("fromPromise", () => {
-  it.effect("normalizes nullable remote provenance at the Promise prompt adapter", () => Effect.gen(function* () {
+  it.effect("does not forward retired remote provenance at the Promise prompt adapter", () => Effect.gen(function* () {
     const received: Array<Parameters<PluginRuntime.Interface["session"]["prompt"]>[0]> = []
     const host = testHost({ session: { prompt: (input) => {
       received.push(input)
@@ -40,9 +40,10 @@ describe("fromPromise", () => {
     }
     yield* PluginPromise.fromPromise(Plugin.define({ id: "nullable-prompt-source", setup: async (context) => {
       for (const source of [undefined, null, remoteSource])
-        await expect(context.session.prompt({ sessionID: "ses_prompt_source", text: "Synthetic task", remoteSource: source })).rejects.toBeDefined()
+        await expect(context.session.prompt({ sessionID: "ses_prompt_source", text: "Synthetic task", ...{ remoteSource: source } })).rejects.toBeDefined()
     } })).effect(host)
-    expect(received.map((input) => input.remoteSource)).toEqual([undefined, undefined, remoteSource])
+    expect(received).toHaveLength(3)
+    for (const input of received) expect(input).not.toHaveProperty("remoteSource")
   }))
 
   it.effect("marks Promise-plugin prompts with the non-user origin at the host boundary", () => Effect.gen(function* () {

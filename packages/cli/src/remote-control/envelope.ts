@@ -1,19 +1,13 @@
+import { createHash } from "node:crypto"
 import { chunkThresholdBytes, maxChunkEnvelopeBytes, maxMessageBytes, maxSegmentCount } from "./types"
 
-// Text-frame envelopes, controller-verbatim field sets:
-//   server (host->controller): ack | server_message | server_message_chunk | pong,
-//     each with client_id, seq_id, stream_id, env_id (cursor/skip_history omitted).
-//   client (controller->host): client_message | client_message_chunk | ping | client_closed,
-//     each with client_id, stream_id, env_id and NO seq_id; chunk reassembly is by stream_id.
-
 export type EnvelopeEvent =
-  | { readonly kind: "message"; readonly clientID: string; readonly streamID: string; readonly envID: string; readonly text: string }
-  | { readonly kind: "pending" }
-  | { readonly kind: "ping"; readonly clientID: string; readonly streamID: string; readonly envID: string }
-  | { readonly kind: "closed"; readonly clientID: string; readonly streamID: string; readonly envID: string }
+  | ({ readonly kind: "message"; readonly text: string } & Receipt)
+  | ({ readonly kind: "pending" | "ack" | "ping" | "closed" } & Receipt)
   | { readonly kind: "drop"; readonly reason: string }
 
 type Address = { readonly clientID: string; readonly streamID: string; readonly envID: string }
+type Receipt = Address & { readonly seqID: number; readonly segmentID?: number; readonly segmentCount?: number }
 
 export function encodeOutbound(input: {
   readonly text: string
@@ -25,7 +19,7 @@ export function encodeOutbound(input: {
   const bytes = new TextEncoder().encode(input.text)
   const base = { client_id: input.clientID, seq_id: input.seqID, stream_id: input.streamID, env_id: input.envID }
   if (bytes.byteLength <= chunkThresholdBytes)
-    return [JSON.stringify({ type: "server_message", ...base, message: input.text })]
+    return [JSON.stringify({ type: "server_message", ...base, message: JSON.parse(input.text) })]
   let segmentBytes = chunkThresholdBytes
   for (;;) {
     const segmentCount = Math.ceil(bytes.byteLength / segmentBytes)
@@ -61,13 +55,14 @@ export function encodePong(input: Address & { readonly seqID: number }) {
   })
 }
 
-export function encodeAck(input: Address & { readonly seqID: number }) {
+export function encodeAck(input: Receipt) {
   return JSON.stringify({
     type: "ack",
     client_id: input.clientID,
     seq_id: input.seqID,
     stream_id: input.streamID,
     env_id: input.envID,
+    ...(input.segmentID === undefined ? {} : { segment_id: input.segmentID, segment_count: input.segmentCount }),
   })
 }
 
@@ -95,12 +90,24 @@ function address(record: Record<string, unknown>): Address | undefined {
 
 export class Reassembler {
   readonly #partials = new Map<string, Partial>()
+  readonly #receipts = new Map<string, { readonly seqID: number; readonly fingerprints: string[] }>()
   readonly #maxMessageBytes: number
   readonly #maxSegmentCount: number
 
   constructor(options: { readonly maxMessageBytes?: number; readonly maxSegmentCount?: number } = {}) {
     this.#maxMessageBytes = options.maxMessageBytes ?? maxMessageBytes
     this.#maxSegmentCount = options.maxSegmentCount ?? maxSegmentCount
+  }
+
+  forget(target: Address) {
+    const key = JSON.stringify([target.envID, target.clientID, target.streamID])
+    this.#partials.delete(key)
+    this.#receipts.delete(key)
+  }
+
+  clear() {
+    this.#partials.clear()
+    this.#receipts.clear()
   }
 
   push(frame: string): EnvelopeEvent {
@@ -111,30 +118,55 @@ export class Reassembler {
       return { kind: "drop", reason: "invalid_json" }
     }
     if (!isRecord(parsed) || typeof parsed.type !== "string") return { kind: "drop", reason: "invalid_envelope" }
-    if (parsed.type === "ping") {
-      const target = address(parsed)
-      return target === undefined ? { kind: "drop", reason: "missing_address" } : { kind: "ping", ...target }
-    }
+    if (!["ping", "client_closed", "client_message", "client_message_chunk"].includes(parsed.type))
+      return { kind: "drop", reason: "unknown_type" }
+    const target = address(parsed)
+    if (target === undefined) return { kind: "drop", reason: "missing_address" }
+    const seqID = parsed.seq_id
+    if (typeof seqID !== "number" || !Number.isSafeInteger(seqID) || seqID < 0)
+      return { kind: "drop", reason: "invalid_sequence" }
+    const receipt = { ...target, seqID }
+    if (parsed.type === "ping")
+      return this.#accept(receipt, "ping", () => ({ kind: "ping", ...receipt }))
     if (parsed.type === "client_closed") {
-      const target = address(parsed)
-      return target === undefined ? { kind: "drop", reason: "missing_address" } : { kind: "closed", ...target }
+      this.forget(target)
+      return { kind: "closed", ...receipt }
     }
     if (parsed.type === "client_message") {
-      const target = address(parsed)
-      if (target === undefined) return { kind: "drop", reason: "missing_address" }
       const message = parsed.message
       const text = typeof message === "string" ? message : message === undefined ? undefined : JSON.stringify(message)
       if (text === undefined) return { kind: "drop", reason: "missing_message" }
       if (new TextEncoder().encode(text).byteLength > this.#maxMessageBytes) return { kind: "drop", reason: "overflow" }
-      return { kind: "message", ...target, text }
+      return this.#accept(receipt, `message:${text}`, () => ({ kind: "message", ...receipt, text }))
     }
-    if (parsed.type !== "client_message_chunk") return { kind: "drop", reason: "unknown_type" }
-    const target = address(parsed)
-    if (target === undefined) return { kind: "drop", reason: "missing_address" }
-    return this.#chunk(target, parsed)
+    return this.#chunk(receipt, parsed)
   }
 
-  #chunk(target: Address, record: Record<string, unknown>): EnvelopeEvent {
+  #accept(receipt: Receipt, content: string, accept: () => EnvelopeEvent): EnvelopeEvent {
+    const key = JSON.stringify([receipt.envID, receipt.clientID, receipt.streamID])
+    const previous = this.#receipts.get(key)
+    const fingerprint = createHash("sha256").update(content).digest("hex")
+    if (previous !== undefined) {
+      if (receipt.seqID < previous.seqID) return { kind: "ack", ...receipt }
+      if (receipt.seqID === previous.seqID) {
+        const seen = previous.fingerprints[receipt.segmentID ?? 0]
+        if (seen !== undefined) {
+          if (seen !== fingerprint) return { kind: "drop", reason: "sequence_conflict" }
+          return content === "ping" ? { kind: "ping", ...receipt } : { kind: "ack", ...receipt }
+        }
+        if (!this.#partials.has(key)) return { kind: "drop", reason: "sequence_conflict" }
+      }
+      if (receipt.seqID > previous.seqID && this.#partials.has(key)) return { kind: "drop", reason: "out_of_order" }
+    }
+    const event = accept()
+    if (event.kind === "drop") return event
+    const current = previous?.seqID === receipt.seqID ? previous : { seqID: receipt.seqID, fingerprints: [] }
+    current.fingerprints[receipt.segmentID ?? 0] = fingerprint
+    this.#receipts.set(key, current)
+    return event
+  }
+
+  #chunk(target: Receipt, record: Record<string, unknown>): EnvelopeEvent {
     const segmentID = record.segment_id
     const segmentCount = record.segment_count
     const sizeBytes = record.message_size_bytes
@@ -146,40 +178,45 @@ export class Reassembler {
       typeof base64 !== "string"
     )
       return { kind: "drop", reason: "invalid_chunk_metadata" }
+    if (segmentID >= segmentCount) return { kind: "drop", reason: "invalid_chunk_metadata" }
     if (sizeBytes > this.#maxMessageBytes || segmentCount > this.#maxSegmentCount) return { kind: "drop", reason: "overflow" }
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64))
       return { kind: "drop", reason: "invalid_base64" }
     const part = Buffer.from(base64, "base64")
-    const mapKey = `${target.clientID}\0${target.streamID}`
+    const receipt = { ...target, segmentID, segmentCount }
+    return this.#accept(receipt, `chunk:${segmentCount}:${sizeBytes}:${base64}`, () => this.#append(receipt, part, sizeBytes))
+  }
+
+  #append(target: Receipt & { readonly segmentID: number; readonly segmentCount: number }, part: Buffer, sizeBytes: number): EnvelopeEvent {
+    const { segmentID, segmentCount } = target
+    const mapKey = JSON.stringify([target.envID, target.clientID, target.streamID])
     const existing = this.#partials.get(mapKey)
     if (existing === undefined) {
       if (segmentID !== 0) return { kind: "drop", reason: "out_of_order" }
+      if (part.byteLength > sizeBytes) return { kind: "drop", reason: "overflow" }
       const created: Partial = { segmentCount, sizeBytes, nextSegment: 1, received: part.byteLength, parts: [part] }
       if (segmentCount === 1) return this.#finish(target, created)
       this.#partials.set(mapKey, created)
-      return { kind: "pending" }
+      return { kind: "pending", ...target }
     }
     if (existing.segmentCount !== segmentCount || existing.sizeBytes !== sizeBytes) {
-      this.#partials.delete(mapKey)
       return { kind: "drop", reason: "metadata_mismatch" }
     }
     if (segmentID !== existing.nextSegment) {
-      this.#partials.delete(mapKey)
       return { kind: "drop", reason: "out_of_order" }
     }
+    if (existing.received + part.byteLength > existing.sizeBytes) return { kind: "drop", reason: "overflow" }
+    if (existing.nextSegment + 1 === existing.segmentCount && existing.received + part.byteLength !== existing.sizeBytes)
+      return { kind: "drop", reason: "size_mismatch" }
     existing.parts.push(part)
     existing.received += part.byteLength
     existing.nextSegment++
-    if (existing.received > existing.sizeBytes) {
-      this.#partials.delete(mapKey)
-      return { kind: "drop", reason: "overflow" }
-    }
-    if (existing.nextSegment < existing.segmentCount) return { kind: "pending" }
+    if (existing.nextSegment < existing.segmentCount) return { kind: "pending", ...target }
     this.#partials.delete(mapKey)
     return this.#finish(target, existing)
   }
 
-  #finish(target: Address, partial: Partial): EnvelopeEvent {
+  #finish(target: Receipt, partial: Partial): EnvelopeEvent {
     const bytes = Buffer.concat(partial.parts)
     if (bytes.byteLength !== partial.sizeBytes) return { kind: "drop", reason: "size_mismatch" }
     return { kind: "message", ...target, text: bytes.toString("utf8") }

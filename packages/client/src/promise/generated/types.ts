@@ -8,14 +8,6 @@ export type TelemetryRequestSample = {
   kind: "request"
   at: string
   operation:
-    | "artifact.demo.preview"
-    | "local.app.register"
-    | "local.app.list"
-    | "local.app.revoke"
-    | "local.app.open"
-    | "local.app.status"
-    | "local.app.http"
-    | "artifact.demo.export"
     | "provider.auth.list"
     | "provider.auth.key"
     | "provider.auth.begin"
@@ -85,22 +77,8 @@ export type TelemetryRequestSample = {
     | "session.switchModel"
     | "session.switchAgent"
     | "session.command"
-    | "session.dots.targets"
-    | "session.dots.status"
-    | "session.dots.bind"
-    | "session.dots.unbind"
-    | "session.dots.send"
-    | "session.dots.pause"
-    | "session.dots.resume"
-    | "session.dots.exchange.create"
-    | "session.dots.exchange.read"
-    | "session.dots.delegation.device.create"
-    | "session.dots.delegation.device.read"
-    | "session.dots.delegation.device.revoke"
-    | "session.dots.decisions.list"
-    | "session.dots.delegation.status"
-    | "session.dots.delegation.create"
-    | "session.dots.delegation.revoke"
+    | "session.dots.access.get"
+    | "session.dots.access.set"
     | "session.skill"
     | "usage.providers"
     | "usage.summary"
@@ -407,6 +385,21 @@ export type FormValue = string | number | boolean | Array<string>
 export type QuestionAnswer = Array<string>
 
 export type McpEventsPrincipal = { ownerID: string; deviceID: string; clientID: string; grantID: string; epoch: string }
+
+export type FormNativeReplySource = {
+  kind: "dots-native"
+  profile: string
+  credentialID: string
+  accountID: string
+  accountGeneration: number
+  environmentID: string
+  connectionID: string
+  clientID: string
+  streamID: string
+  rootSessionID: string
+  accessRevision: number
+  requestID: string
+}
 
 export type SessionPendingSyntheticData1 = { text: string; description?: string; metadata?: { [x: string]: any } }
 
@@ -825,35 +818,18 @@ export type ConfigDiagnosticReason = "invalid-json" | "invalid-values" | "remove
 
 export type SessionReviewSubagentQuestionPayload1 = { type: "subagent_question"; text: string; data?: JsonValue }
 
-export type McpEventsName =
-  | "session.guardrail.changed"
-  | "session.permission.changed"
-  | "session.question.changed"
-  | "session.form.changed"
-  | "session.progress"
-  | "session.completed"
-  | "session.error"
-
-export type McpEventsJsonSchemaObject = { [x: string]: any }
-
-export type McpEventsSubscription = {
-  id: string
-  refreshBefore: string | null
-  cursor: string | null
-  truncated: boolean
-}
-
 export type CoordinationPausedReason = "interrupted" | "restart"
 
 export type CoordinationMemberState = "idle" | "running" | "waiting" | "failed"
 
-export type DotsSessionDelegationScope = { operations: ["task" | "decision", ...Array<"task" | "decision">] }
-
-export type DotsState = "disconnected" | "connecting" | "connected" | "failed"
-
-export type DotsRuntimeState = "paused" | "unpaused" | "unknown"
-
-export type DotsDelivery = { messageID: string; status: "accepted" | "unknown"; turnID?: string }
+export type DotsAccess = {
+  sessionID: string
+  rootSessionID: string
+  enabled: boolean
+  revision: number
+  inherited: boolean
+  configured: boolean
+}
 
 export type TelemetrySample = TelemetryRequestSample | TelemetryLongTaskSample | TelemetryClientSample
 
@@ -962,6 +938,17 @@ export type AgentUpdated = {
   type: "agent.updated"
   location?: LocationRef
   data: {}
+}
+
+export type SessionDotsAccessChanged = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.dots.access.changed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; enabled: boolean; revision: number }
 }
 
 export type SessionDaybreakSet = {
@@ -2289,8 +2276,6 @@ export type SessionDotsReportRecorded = {
   }
 }
 
-export type DotsExchangeOutput = { deliveryID: string; messageID: string; text: string; envelope: DotsReportEnvelope }
-
 export type SessionShellStarted = {
   id: string
   created: number
@@ -2725,34 +2710,6 @@ export type ConfigDiagnostic = {
   message: string
 }
 
-export type McpEventsEventDefinition = {
-  name: McpEventsName
-  description: string
-  delivery: Array<"webhook">
-  inputSchema: McpEventsJsonSchemaObject
-  payloadSchema: McpEventsJsonSchemaObject
-}
-
-export type DotsSessionDelegationInfo = {
-  id: string
-  revision: number
-  sourceExchangeID: string
-  targetSessionID: string
-  basis: "session"
-  principal: McpEventsPrincipal
-  scope: DotsSessionDelegationScope
-  expiresAt: number
-  active: boolean
-}
-
-export type DotsStatus = {
-  enabled: boolean
-  target?: DotsTarget
-  state: DotsState
-  error?: string
-  runtimeState?: DotsRuntimeState
-}
-
 export type TelemetryPage = { data: Array<{ receivedAt: number; sample: TelemetrySample }>; cursor: { next?: string } }
 
 export type SessionMessageModelSelected = {
@@ -3087,12 +3044,6 @@ export type SessionAutonomyView = {
   effective: SessionAutonomyEffective
 }
 
-export type DotsDecisionOutcome = {
-  target: DotsDecisionTarget
-  state: "pending" | "settled" | "stale" | "unknown"
-  reply?: "once" | "reject"
-}
-
 export type GuardrailEscalation = {
   authority?: GuardrailAuthority
   reason?: GuardrailEscalationReason
@@ -3268,14 +3219,7 @@ export type FormState =
   | { status: "timed_out"; seconds: number }
   | { status: "deferred"; itemID: SessionReviewID }
 
-export type FormExternalReplySource = FormDelegatedReplySource | FormDotsClientReplySource
-
-export type SessionOrchestrationAnswer = {
-  questionID: string
-  text?: string
-  data?: JsonValue
-  source?: FormDotsClientReplySource
-}
+export type FormClientReplySource = FormDotsClientReplySource | FormNativeReplySource
 
 export type SessionDotsDeviceDelegationCreated = {
   id: string
@@ -3286,12 +3230,6 @@ export type SessionDotsDeviceDelegationCreated = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; exchangeID: string; fingerprint: string; grant: DotsDeviceDelegationInfo }
-}
-
-export type DotsDeviceDelegationStatus = {
-  binding: { id: string; target: DotsTarget }
-  grants: Array<DotsDeviceDelegationInfo>
-  nextCursor?: string
 }
 
 export type ModelInfo = {
@@ -3505,26 +3443,6 @@ export type IsolatedBrowserObservation = {
   instanceID: string
 }
 
-export type McpEventsListResult = { events: Array<McpEventsEventDefinition> }
-
-export type DotsDelegationInfo =
-  | {
-      id: string
-      revision: number
-      sourceExchangeID: string
-      targetSessionID: string
-      taskInputID: string
-      principal: McpEventsPrincipal
-      scope: {
-        operations: ["continue" | "presentation", ...Array<"continue" | "presentation">]
-        format?: ["prose" | "bullets", ...Array<"prose" | "bullets">]
-        detail?: ["concise" | "standard" | "detailed", ...Array<"concise" | "standard" | "detailed">]
-      }
-      expiresAt: number
-      active: boolean
-    }
-  | DotsSessionDelegationInfo
-
 export type SessionGenerationSpeedHistory = {
   model?: ModelRef
   unreportedReason?: string
@@ -3715,22 +3633,6 @@ export type GuardrailAsked = {
 
 export type FormFields = [FormField, ...Array<FormField>]
 
-export type SessionReviewDecided = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.review.decided"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    sessionID: string
-    itemID: SessionReviewID
-    decision: SessionReviewDecision
-    source?: FormDotsClientReplySource
-  }
-}
-
 export type DotsDelegatedInstruction =
   | { operation: "task"; text: string }
   | {
@@ -3768,66 +3670,24 @@ export type DotsDelegatedInstruction =
       decision: DotsReviewDecision
     }
 
-export type SessionDotsDecisionSettled = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.dots.decision.settled"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { sessionID: string; source: FormExternalReplySource; target: DotsDecisionTarget; reply?: "once" | "reject" }
+export type FormExternalReplySource = FormDelegatedReplySource | FormClientReplySource
+
+export type SessionOrchestrationAnswer = {
+  questionID: string
+  text?: string
+  data?: JsonValue
+  source?: FormClientReplySource
 }
 
-export type FormReplySource =
-  | {
-      kind: "coordinator"
-      coordinatorSessionID: string
-      groupID?: string
-      via?: "auto-answer" | "yolo" | "coordination"
-      confidence?: number
-      rationale?: string
-    }
-  | FormExternalReplySource
-
-export type SessionTaskUpdated = {
+export type SessionReviewDecided = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "session.task.updated"
+  type: "session.review.decided"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: {
-    sessionID: string
-    change:
-      | {
-          type: "launched"
-          parentID: string
-          parentAssistantMessageID: string
-          toolCallID: string
-          inputID: string
-          description: string
-          agent: string
-          model: ModelRef
-          promptDigest: string
-          background: boolean
-          delivery: "steer" | "queue"
-          usageAnchor?: UsageAnchorRef
-        }
-      | { type: "started"; source?: FormDotsClientReplySource }
-      | { type: "backgrounded" }
-      | { type: "progressed"; progress: SessionOrchestrationProgress }
-      | { type: "question_asked"; question: SessionOrchestrationQuestion1 }
-      | { type: "question_answered"; answer: SessionOrchestrationAnswer }
-      | { type: "question_timed_out"; questionID: string }
-      | { type: "cancel_requested" }
-      | { type: "cancelled" }
-      | { type: "completed"; excerpt?: string }
-      | { type: "failed"; error: string; excerpt?: string }
-      | { type: "lost"; excerpt?: string; source?: FormDotsClientReplySource }
-      | { type: "resumed" }
-  }
+  data: { sessionID: string; itemID: SessionReviewID; decision: SessionReviewDecision; source?: FormClientReplySource }
 }
 
 export type IntegrationMethod =
@@ -3941,12 +3801,6 @@ export type ProjectArtifactPromotionPreview = {
   expiresAt: ProjectArtifactTimestampMillis
 }
 
-export type DotsDelegationStatus = {
-  sources: Array<{ sourceExchangeID: string; principal: McpEventsPrincipal }>
-  tasks: Array<{ taskInputID: string; text: string }>
-  grants: Array<DotsDelegationInfo>
-}
-
 export type SessionCacheDiagnostics = {
   model: ModelRef
   contextBreakdown?: SessionContextBreakdown
@@ -4042,14 +3896,66 @@ export type DotsDelegatedReceipt = {
   instruction: DotsDelegatedInstruction
 }
 
-export type FormReplied = {
+export type SessionDotsDecisionSettled = {
   id: string
   created: number
   metadata?: { [x: string]: any }
   sourceEpoch?: string
-  type: "form.replied"
+  type: "session.dots.decision.settled"
+  durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { id: string; sessionID: string; answer: FormAnswer; source?: FormReplySource }
+  data: { sessionID: string; source: FormExternalReplySource; target: DotsDecisionTarget; reply?: "once" | "reject" }
+}
+
+export type FormReplySource =
+  | {
+      kind: "coordinator"
+      coordinatorSessionID: string
+      groupID?: string
+      via?: "auto-answer" | "yolo" | "coordination"
+      confidence?: number
+      rationale?: string
+    }
+  | FormExternalReplySource
+
+export type SessionTaskUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.task.updated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    change:
+      | {
+          type: "launched"
+          parentID: string
+          parentAssistantMessageID: string
+          toolCallID: string
+          inputID: string
+          description: string
+          agent: string
+          model: ModelRef
+          promptDigest: string
+          background: boolean
+          delivery: "steer" | "queue"
+          usageAnchor?: UsageAnchorRef
+        }
+      | { type: "started"; source?: FormClientReplySource }
+      | { type: "backgrounded" }
+      | { type: "progressed"; progress: SessionOrchestrationProgress }
+      | { type: "question_asked"; question: SessionOrchestrationQuestion1 }
+      | { type: "question_answered"; answer: SessionOrchestrationAnswer }
+      | { type: "question_timed_out"; questionID: string }
+      | { type: "cancel_requested" }
+      | { type: "cancelled" }
+      | { type: "completed"; excerpt?: string }
+      | { type: "failed"; error: string; excerpt?: string }
+      | { type: "lost"; excerpt?: string; source?: FormClientReplySource }
+      | { type: "resumed" }
+  }
 }
 
 export type IntegrationInfo = {
@@ -4250,6 +4156,16 @@ export type SessionDotsExchangeCreated = {
   }
 }
 
+export type FormReplied = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "form.replied"
+  location?: LocationRef
+  data: { id: string; sessionID: string; answer: FormAnswer; source?: FormReplySource }
+}
+
 export type ProjectArtifactApiListItem = ProjectArtifactArtifactSummary | ProjectArtifactApiTrashSummary
 
 export type SessionInputAdmitted = {
@@ -4295,18 +4211,6 @@ export type SessionReviewDeferred = {
   }
 }
 
-export type DotsDecisionCandidate = {
-  target: DotsDecisionTarget
-  action?: string
-  resources?: Array<string>
-  ruleIDs?: Array<string>
-  title?: string
-  fields?: FormFields
-  questions?: Array<QuestionInfo>
-  subagentQuestion?: SessionOrchestrationQuestion
-  review?: SessionReviewItem
-}
-
 export type SessionLogItem =
   | {
       id: string
@@ -4328,6 +4232,16 @@ export type SessionLogItem =
         subpath?: string
         created: number
       }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.dots.access.changed"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; enabled: boolean; revision: number }
     }
   | {
       id: string
@@ -4513,7 +4427,7 @@ export type SessionLogItem =
         sessionID: string
         itemID: SessionReviewID
         decision: SessionReviewDecision
-        source?: FormDotsClientReplySource
+        source?: FormClientReplySource
       }
     }
   | {
@@ -4869,7 +4783,7 @@ export type SessionLogItem =
               delivery: "steer" | "queue"
               usageAnchor?: UsageAnchorRef
             }
-          | { type: "started"; source?: FormDotsClientReplySource }
+          | { type: "started"; source?: FormClientReplySource }
           | { type: "backgrounded" }
           | { type: "progressed"; progress: SessionOrchestrationProgress }
           | { type: "question_asked"; question: SessionOrchestrationQuestion1 }
@@ -4879,7 +4793,7 @@ export type SessionLogItem =
           | { type: "cancelled" }
           | { type: "completed"; excerpt?: string }
           | { type: "failed"; error: string; excerpt?: string }
-          | { type: "lost"; excerpt?: string; source?: FormDotsClientReplySource }
+          | { type: "lost"; excerpt?: string; source?: FormClientReplySource }
           | { type: "resumed" }
       }
     }
@@ -5265,25 +5179,6 @@ export type SessionContextObserved = {
   }
 }
 
-export type DotsExchange = {
-  envelope: DotsTaskEnvelope
-  exchangeID: string
-  sessionID: string
-  targetSessionID: string
-  inputID: string
-  channel: "task"
-  state: "pending" | "running" | "completed" | "failed" | "unknown"
-  progress: Array<DotsExchangeOutput>
-  result?: DotsExchangeOutput
-  decisions?: Array<DotsDecisionCandidate>
-  decisionOutcome?: DotsDecisionOutcome
-}
-
-export type DotsDecisionsPage = {
-  data: Array<{ targetSessionID: string; candidate: DotsDecisionCandidate }>
-  nextCursor?: string
-}
-
 export type ServerEvent =
   | ModelsDevRefreshed
   | IntegrationUpdated
@@ -5291,6 +5186,7 @@ export type ServerEvent =
   | CatalogUpdated
   | AgentUpdated
   | SessionCreated
+  | SessionDotsAccessChanged
   | SessionAgentSelected
   | SessionModelSelected
   | SessionDaybreakSet
@@ -5724,33 +5620,6 @@ export type ReviewItemNotFoundError = {
 export const isReviewItemNotFoundError = (value: unknown): value is ReviewItemNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ReviewItemNotFoundError"
 
-export type McpEventsFailure = {
-  readonly _tag: "McpEvents.Failure"
-  readonly category: "invalid_params" | "callback_endpoint" | "unauthorized" | "unavailable"
-  readonly reason:
-    | "invalid_name"
-    | "invalid_arguments"
-    | "invalid_delivery"
-    | "invalid_secret"
-    | "invalid_ttl"
-    | "invalid_cursor"
-    | "session_not_found"
-    | "challenge_failed"
-    | "timeout"
-    | "endpoint_unreachable"
-    | "endpoint_rejected"
-    | "payload_too_large"
-    | "unauthorized_principal"
-    | "grant_expired"
-    | "grant_revoked"
-    | "principal_scope_mismatch"
-    | "authorization_unavailable"
-    | "secure_storage_unavailable"
-    | "service_unavailable"
-}
-export const isMcpEventsFailure = (value: unknown): value is McpEventsFailure =>
-  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "McpEvents.Failure"
-
 export type CoordinationError = {
   readonly _tag: "CoordinationError"
   readonly reason: string
@@ -5774,14 +5643,6 @@ export type ServerTelemetryAppendInput = {
           readonly kind: "request"
           readonly at: string
           readonly operation:
-            | "artifact.demo.preview"
-            | "local.app.register"
-            | "local.app.list"
-            | "local.app.revoke"
-            | "local.app.open"
-            | "local.app.status"
-            | "local.app.http"
-            | "artifact.demo.export"
             | "provider.auth.list"
             | "provider.auth.key"
             | "provider.auth.begin"
@@ -5851,22 +5712,8 @@ export type ServerTelemetryAppendInput = {
             | "session.switchModel"
             | "session.switchAgent"
             | "session.command"
-            | "session.dots.targets"
-            | "session.dots.status"
-            | "session.dots.bind"
-            | "session.dots.unbind"
-            | "session.dots.send"
-            | "session.dots.pause"
-            | "session.dots.resume"
-            | "session.dots.exchange.create"
-            | "session.dots.exchange.read"
-            | "session.dots.delegation.device.create"
-            | "session.dots.delegation.device.read"
-            | "session.dots.delegation.device.revoke"
-            | "session.dots.decisions.list"
-            | "session.dots.delegation.status"
-            | "session.dots.delegation.create"
-            | "session.dots.delegation.revoke"
+            | "session.dots.access.get"
+            | "session.dots.access.set"
             | "session.skill"
             | "usage.providers"
             | "usage.summary"
@@ -6543,11 +6390,6 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["id"]
@@ -6565,11 +6407,6 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["text"]
@@ -6587,11 +6424,6 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["files"]
@@ -6609,11 +6441,6 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["agents"]
@@ -6631,36 +6458,9 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["metadata"]
-  readonly remoteSource?: {
-    readonly id?: string | null
-    readonly text: string
-    readonly files?: ReadonlyArray<{
-      readonly uri: string
-      readonly name?: string
-      readonly description?: string
-      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
-    }>
-    readonly agents?: ReadonlyArray<{
-      readonly name: string
-      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
-    }>
-    readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
-    readonly delivery?: "steer" | "queue" | null
-    readonly resume?: boolean | null
-  }["remoteSource"]
   readonly delivery?: {
     readonly id?: string | null
     readonly text: string
@@ -6675,11 +6475,6 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["delivery"]
@@ -6697,11 +6492,6 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
-    readonly remoteSource?: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    } | null
     readonly delivery?: "steer" | "queue" | null
     readonly resume?: boolean | null
   }["resume"]
@@ -11460,38 +11250,6 @@ export type RemoteSetOutput = {
   data: { state: "off" | "connecting" | "on" | "error"; message?: string | undefined }
 }["data"]
 
-export type RemoteMcpGetOutput = {
-  data: {
-    state: "off" | "connecting" | "on" | "error"
-    message?: string
-    url?: string
-    clientCapabilities?: Array<{
-      protocolVersion?: string
-      elicitation?: boolean
-      form?: boolean
-      url?: boolean
-      observedAt: number
-    }>
-  }
-}["data"]
-
-export type RemoteMcpSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
-
-export type RemoteMcpSetOutput = {
-  data: {
-    state: "off" | "connecting" | "on" | "error"
-    message?: string
-    url?: string
-    clientCapabilities?: Array<{
-      protocolVersion?: string
-      elicitation?: boolean
-      form?: boolean
-      url?: boolean
-      observedAt: number
-    }>
-  }
-}["data"]
-
 export type KeepAwakeGetOutput = { data: KeepAwakeStatus }["data"]
 
 export type KeepAwakeSetInput = { readonly enabled: { readonly enabled: boolean }["enabled"] }
@@ -11542,102 +11300,6 @@ export type ReviewDecideInput = {
 }
 
 export type ReviewDecideOutput = void
-
-export type McpEventsStatusOutput = { data: { available: boolean } }["data"]
-
-export type McpEventsListInput = { readonly cursor?: { readonly cursor?: string | undefined }["cursor"] }
-
-export type McpEventsListOutput = { data: McpEventsListResult }["data"]
-
-export type McpEventsSubscribeInput = {
-  readonly context: {
-    readonly context: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-    readonly subscription: {
-      readonly name:
-        | "session.guardrail.changed"
-        | "session.permission.changed"
-        | "session.question.changed"
-        | "session.form.changed"
-        | "session.progress"
-        | "session.completed"
-        | "session.error"
-      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
-      readonly delivery: { readonly mode: "webhook"; readonly url: string; readonly secret: string }
-      readonly cursor?: string | null
-      readonly ttlMs?: number | null
-    }
-  }["context"]
-  readonly subscription: {
-    readonly context: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-    readonly subscription: {
-      readonly name:
-        | "session.guardrail.changed"
-        | "session.permission.changed"
-        | "session.question.changed"
-        | "session.form.changed"
-        | "session.progress"
-        | "session.completed"
-        | "session.error"
-      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
-      readonly delivery: { readonly mode: "webhook"; readonly url: string; readonly secret: string }
-      readonly cursor?: string | null
-      readonly ttlMs?: number | null
-    }
-  }["subscription"]
-}
-
-export type McpEventsSubscribeOutput = { data: McpEventsSubscription }["data"]
-
-export type McpEventsUnsubscribeInput = {
-  readonly context: {
-    readonly context: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-    readonly subscription: {
-      readonly name:
-        | "session.guardrail.changed"
-        | "session.permission.changed"
-        | "session.question.changed"
-        | "session.form.changed"
-        | "session.progress"
-        | "session.completed"
-        | "session.error"
-      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
-      readonly delivery: { readonly mode: "webhook"; readonly url: string }
-    }
-  }["context"]
-  readonly subscription: {
-    readonly context: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-    readonly subscription: {
-      readonly name:
-        | "session.guardrail.changed"
-        | "session.permission.changed"
-        | "session.question.changed"
-        | "session.form.changed"
-        | "session.progress"
-        | "session.completed"
-        | "session.error"
-      readonly arguments: { readonly session_id: string; readonly include_descendants?: boolean | null }
-      readonly delivery: { readonly mode: "webhook"; readonly url: string }
-    }
-  }["subscription"]
-}
-
-export type McpEventsUnsubscribeOutput = { data: {} }["data"]
 
 export type CoordinationSettingsOutput = { data: CoordinationSettings }["data"]
 
@@ -11752,907 +11414,14 @@ export type CoordinationDeleteInput = { readonly groupID: { readonly groupID: st
 
 export type CoordinationDeleteOutput = void
 
-export type DotsExchangeCreateInput = {
+export type DotsAccessGetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type DotsAccessGetOutput = { data: DotsAccess }["data"]
+
+export type DotsAccessSetInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly payload:
-    | {
-        readonly exchangeID: string
-        readonly expectedAttachment: {
-          readonly profile: string
-          readonly dotID: string
-          readonly threadID: string
-          readonly generation: string
-          readonly label: string
-        }
-        readonly targetSessionID: string
-        readonly channel: "task"
-        readonly delivery: "steer" | "queue"
-        readonly text: string
-        readonly delegation?: never
-        readonly taskInputID?: never
-        readonly instruction?: never
-        readonly remoteSource: {
-          readonly requestID: string
-          readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-          readonly epoch: string
-        }
-      }
-    | {
-        readonly exchangeID: string
-        readonly expectedAttachment: {
-          readonly profile: string
-          readonly dotID: string
-          readonly threadID: string
-          readonly generation: string
-          readonly label: string
-        }
-        readonly targetSessionID: string
-        readonly channel: "task"
-        readonly delivery: "steer" | "queue"
-        readonly delegation: { readonly id: string; readonly revision: number }
-        readonly taskInputID: string
-        readonly instruction:
-          | { readonly operation: "continue" }
-          | {
-              readonly operation: "presentation"
-              readonly preferences: {
-                readonly format?: "prose" | "bullets"
-                readonly detail?: "concise" | "standard" | "detailed"
-              }
-            }
-        readonly remoteSource: {
-          readonly requestID: string
-          readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-          readonly epoch: string
-        }
-      }
-    | {
-        readonly exchangeID: string
-        readonly expectedAttachment: {
-          readonly profile: string
-          readonly dotID: string
-          readonly threadID: string
-          readonly generation: string
-          readonly label: string
-        }
-        readonly targetSessionID: string
-        readonly channel: "task"
-        readonly delivery: "steer" | "queue"
-        readonly delegation: { readonly id: string; readonly revision: number }
-        readonly instruction:
-          | { readonly operation: "task"; readonly text: string }
-          | {
-              readonly operation: "decision"
-              readonly target: { readonly kind: "permission"; readonly requestID: string; readonly fingerprint: string }
-              readonly reply: "once" | "reject"
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: { readonly kind: "guardrail"; readonly requestID: string; readonly fingerprint: string }
-              readonly reply: "once" | "reject"
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: { readonly kind: "form"; readonly formID: string; readonly fingerprint: string }
-              readonly answers: {
-                readonly [x: string]:
-                  | string
-                  | number
-                  | "Infinity"
-                  | "-Infinity"
-                  | "NaN"
-                  | boolean
-                  | ReadonlyArray<string>
-              }
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: { readonly kind: "question"; readonly requestID: string; readonly fingerprint: string }
-              readonly answers: ReadonlyArray<ReadonlyArray<string>>
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: { readonly kind: "form"; readonly formID: string; readonly fingerprint: string }
-              readonly cancelled: true
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: { readonly kind: "question"; readonly requestID: string; readonly fingerprint: string }
-              readonly cancelled: true
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: {
-                readonly kind: "subagent_question"
-                readonly questionID: string
-                readonly fingerprint: string
-              }
-              readonly text?: string
-              readonly data?: JsonValue
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: {
-                readonly kind: "subagent_question"
-                readonly questionID: string
-                readonly fingerprint: string
-              }
-              readonly dismissed: true
-            }
-          | {
-              readonly operation: "decision"
-              readonly target: { readonly kind: "review"; readonly itemID: string; readonly fingerprint: string }
-              readonly decision:
-                | {
-                    readonly kind: "question"
-                    readonly answers:
-                      | {
-                          readonly [x: string]:
-                            | string
-                            | number
-                            | "Infinity"
-                            | "-Infinity"
-                            | "NaN"
-                            | boolean
-                            | ReadonlyArray<string>
-                        }
-                      | ReadonlyArray<ReadonlyArray<string>>
-                  }
-                | { readonly kind: "subagent_question"; readonly text: string; readonly data?: JsonValue }
-                | { readonly kind: "guardrail"; readonly reply: "once" | "reject" }
-                | { readonly kind: "permission"; readonly reply: "once" | "reject" }
-                | { readonly kind: "recovery"; readonly choice: "continue" | "stop" }
-                | { readonly kind: "question" | "subagent_question"; readonly dismissed: true }
-            }
-        readonly remoteSource: {
-          readonly requestID: string
-          readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-          readonly epoch: string
-        }
-      }
+  readonly enabled: { readonly enabled: boolean; readonly expectedRevision: number }["enabled"]
+  readonly expectedRevision: { readonly enabled: boolean; readonly expectedRevision: number }["expectedRevision"]
 }
 
-export type DotsExchangeCreateOutput = { data: DotsExchange }["data"]
-
-export type DotsDelegationStatusInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly expectedAttachment: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-  }["expectedAttachment"]
-  readonly targetSessionID: {
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly targetSessionID: string
-  }["targetSessionID"]
-}
-
-export type DotsDelegationStatusOutput = { data: DotsDelegationStatus }["data"]
-
-export type DotsDelegationCreateInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly payload:
-    | {
-        readonly expectedAttachment: {
-          readonly profile: string
-          readonly dotID: string
-          readonly threadID: string
-          readonly generation: string
-          readonly label: string
-        }
-        readonly targetSessionID: string
-        readonly proposalID: string
-        readonly sourceExchangeID: string
-        readonly taskInputID: string
-        readonly scope: {
-          readonly operations: readonly ["continue" | "presentation", ...Array<"continue" | "presentation">]
-          readonly format?: readonly ["prose" | "bullets", ...Array<"prose" | "bullets">]
-          readonly detail?: readonly [
-            "concise" | "standard" | "detailed",
-            ...Array<"concise" | "standard" | "detailed">,
-          ]
-        }
-        readonly expiresAt: number
-      }
-    | {
-        readonly expectedAttachment: {
-          readonly profile: string
-          readonly dotID: string
-          readonly threadID: string
-          readonly generation: string
-          readonly label: string
-        }
-        readonly targetSessionID: string
-        readonly proposalID: string
-        readonly sourceExchangeID: string
-        readonly basis: "session"
-        readonly taskInputID?: never
-        readonly scope: { readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">] }
-        readonly expiresAt: number
-      }
-}
-
-export type DotsDelegationCreateOutput = { data: DotsDelegationInfo }["data"]
-
-export type DotsDelegationRevokeInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly id: {
-    readonly id: string
-    readonly revision: number
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["id"]
-  readonly revision: {
-    readonly id: string
-    readonly revision: number
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["revision"]
-  readonly expectedAttachment: {
-    readonly id: string
-    readonly revision: number
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["expectedAttachment"]
-}
-
-export type DotsDelegationRevokeOutput = { data: DotsDelegationInfo }["data"]
-
-export type DotsDelegationDeviceCreateInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly id: {
-    readonly id: string
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly scope: {
-      readonly target: "device"
-      readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">]
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["id"]
-  readonly exchangeID: {
-    readonly id: string
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly scope: {
-      readonly target: "device"
-      readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">]
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["exchangeID"]
-  readonly bindingID: {
-    readonly id: string
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly scope: {
-      readonly target: "device"
-      readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">]
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["bindingID"]
-  readonly expectedAttachment: {
-    readonly id: string
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly scope: {
-      readonly target: "device"
-      readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">]
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["expectedAttachment"]
-  readonly scope: {
-    readonly id: string
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly scope: {
-      readonly target: "device"
-      readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">]
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["scope"]
-  readonly remoteSource: {
-    readonly id: string
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly scope: {
-      readonly target: "device"
-      readonly operations: readonly ["task" | "decision", ...Array<"task" | "decision">]
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["remoteSource"]
-}
-
-export type DotsDelegationDeviceCreateOutput = { data: DotsDeviceDelegationInfo }["data"]
-
-export type DotsDelegationDeviceReadInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly cursor?: {
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["cursor"]
-  readonly limit?: {
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["limit"]
-  readonly remoteSource: {
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["remoteSource"]
-}
-
-export type DotsDelegationDeviceReadOutput = { data: DotsDeviceDelegationStatus }["data"]
-
-export type DotsDelegationDeviceRevokeInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly id: {
-    readonly id: string
-    readonly revision: number
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["id"]
-  readonly revision: {
-    readonly id: string
-    readonly revision: number
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["revision"]
-  readonly exchangeID: {
-    readonly id: string
-    readonly revision: number
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["exchangeID"]
-  readonly bindingID: {
-    readonly id: string
-    readonly revision: number
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["bindingID"]
-  readonly expectedAttachment: {
-    readonly id: string
-    readonly revision: number
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["expectedAttachment"]
-  readonly remoteSource: {
-    readonly id: string
-    readonly revision: number
-    readonly exchangeID: string
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["remoteSource"]
-}
-
-export type DotsDelegationDeviceRevokeOutput = { data: DotsDeviceDelegationInfo }["data"]
-
-export type DotsDecisionsListInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly bindingID: {
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly delegation: { readonly id: string; readonly revision: number }
-    readonly targetSessionID?: string
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["bindingID"]
-  readonly expectedAttachment: {
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly delegation: { readonly id: string; readonly revision: number }
-    readonly targetSessionID?: string
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["expectedAttachment"]
-  readonly delegation: {
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly delegation: { readonly id: string; readonly revision: number }
-    readonly targetSessionID?: string
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["delegation"]
-  readonly targetSessionID?: {
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly delegation: { readonly id: string; readonly revision: number }
-    readonly targetSessionID?: string
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["targetSessionID"]
-  readonly cursor?: {
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly delegation: { readonly id: string; readonly revision: number }
-    readonly targetSessionID?: string
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["cursor"]
-  readonly limit?: {
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly delegation: { readonly id: string; readonly revision: number }
-    readonly targetSessionID?: string
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["limit"]
-  readonly remoteSource: {
-    readonly bindingID: string
-    readonly expectedAttachment: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-    readonly delegation: { readonly id: string; readonly revision: number }
-    readonly targetSessionID?: string
-    readonly cursor?: string
-    readonly limit?: number
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["remoteSource"]
-}
-
-export type DotsDecisionsListOutput = { data: DotsDecisionsPage }["data"]
-
-export type DotsExchangeReadInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly exchangeID: {
-    readonly exchangeID: string
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["exchangeID"]
-  readonly remoteSource: {
-    readonly exchangeID: string
-    readonly remoteSource: {
-      readonly requestID: string
-      readonly principal: { readonly ownerID: string; readonly deviceID: string; readonly clientID: string }
-      readonly epoch: string
-    }
-  }["remoteSource"]
-}
-
-export type DotsExchangeReadOutput = { data: DotsExchange }["data"]
-
-export type DotsTargetsInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly profile: { readonly profile: string }["profile"]
-}
-
-export type DotsTargetsOutput = { data: Array<DotsTarget> }["data"]
-
-export type DotsStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
-
-export type DotsStatusOutput = { data: DotsStatus }["data"]
-
-export type DotsBindInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly profile: {
-    readonly profile: string
-    readonly dotID: string
-    readonly threadID: string
-    readonly generation: string
-    readonly label: string
-  }["profile"]
-  readonly dotID: {
-    readonly profile: string
-    readonly dotID: string
-    readonly threadID: string
-    readonly generation: string
-    readonly label: string
-  }["dotID"]
-  readonly threadID: {
-    readonly profile: string
-    readonly dotID: string
-    readonly threadID: string
-    readonly generation: string
-    readonly label: string
-  }["threadID"]
-  readonly generation: {
-    readonly profile: string
-    readonly dotID: string
-    readonly threadID: string
-    readonly generation: string
-    readonly label: string
-  }["generation"]
-  readonly label: {
-    readonly profile: string
-    readonly dotID: string
-    readonly threadID: string
-    readonly generation: string
-    readonly label: string
-  }["label"]
-}
-
-export type DotsBindOutput = { data: DotsStatus }["data"]
-
-export type DotsSendInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly id: {
-    readonly id: string
-    readonly text: string
-    readonly files?: ReadonlyArray<{
-      readonly uri: string
-      readonly name?: string
-      readonly description?: string
-      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
-    }>
-    readonly causalMessageID?: string
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["id"]
-  readonly text: {
-    readonly id: string
-    readonly text: string
-    readonly files?: ReadonlyArray<{
-      readonly uri: string
-      readonly name?: string
-      readonly description?: string
-      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
-    }>
-    readonly causalMessageID?: string
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["text"]
-  readonly files?: {
-    readonly id: string
-    readonly text: string
-    readonly files?: ReadonlyArray<{
-      readonly uri: string
-      readonly name?: string
-      readonly description?: string
-      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
-    }>
-    readonly causalMessageID?: string
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["files"]
-  readonly causalMessageID?: {
-    readonly id: string
-    readonly text: string
-    readonly files?: ReadonlyArray<{
-      readonly uri: string
-      readonly name?: string
-      readonly description?: string
-      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
-    }>
-    readonly causalMessageID?: string
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["causalMessageID"]
-  readonly expectedTarget: {
-    readonly id: string
-    readonly text: string
-    readonly files?: ReadonlyArray<{
-      readonly uri: string
-      readonly name?: string
-      readonly description?: string
-      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
-    }>
-    readonly causalMessageID?: string
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["expectedTarget"]
-}
-
-export type DotsSendOutput = { data: DotsDelivery }["data"]
-
-export type DotsPauseInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly expectedTarget: {
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["expectedTarget"]
-}
-
-export type DotsPauseOutput = { data: DotsStatus }["data"]
-
-export type DotsResumeInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly expectedTarget: {
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["expectedTarget"]
-}
-
-export type DotsResumeOutput = { data: DotsStatus }["data"]
-
-export type DotsUnbindInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly expectedTarget: {
-    readonly expectedTarget: {
-      readonly profile: string
-      readonly dotID: string
-      readonly threadID: string
-      readonly generation: string
-      readonly label: string
-    }
-  }["expectedTarget"]
-}
-
-export type DotsUnbindOutput = { data: DotsStatus }["data"]
+export type DotsAccessSetOutput = { data: DotsAccess }["data"]

@@ -67,7 +67,7 @@ export interface Folded {
   readonly withdrawn?: "reverted" | "task_closed"
   readonly consumed: boolean
   readonly revision: number
-  readonly source?: Form.DotsClientReplySource
+  readonly source?: Form.ClientReplySource
 }
 
 type DatabaseClient = Database.Interface["db"]

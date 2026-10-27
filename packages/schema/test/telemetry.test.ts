@@ -41,19 +41,8 @@ test("accepts telemetry for deleting a Session through the remote operation", ()
 
 test("accepts request telemetry for every Session Dots control in closed samples and batches", () => {
   const names = [
-    "session.dots.targets",
-    "session.dots.status",
-    "session.dots.bind",
-    "session.dots.unbind",
-    "session.dots.send",
-    "session.dots.pause",
-    "session.dots.resume",
-    "session.dots.exchange.create",
-    "session.dots.exchange.read",
-    "session.dots.delegation.device.create",
-    "session.dots.delegation.device.read",
-    "session.dots.delegation.device.revoke",
-    "session.dots.decisions.list",
+    "session.dots.access.get",
+    "session.dots.access.set",
   ] as const
   for (const operation of names) {
     expect(Schema.decodeUnknownSync(Telemetry.Operation)(operation)).toBe(operation)

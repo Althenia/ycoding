@@ -1958,7 +1958,7 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.live("reports a nonempty diagnostic when a non-native tool input cannot switch a child model", () =>
+  it.live("selects an owned child model and reports actual ownership failures", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -1970,6 +1970,9 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
+          yield* Catalog.Service.use(catalog => catalog.transform(draft => draft.model.update(parentModel.providerID, parentModel.id, model => {
+            model.limit = { context: 128_000, output: 4096 }
+          }))).pipe(Effect.provide(locations.get(parent.location)))
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           yield* waitForTool(registry, SubagentTool.name)
           yield* waitForTool(registry, SubagentControlTool.name)
@@ -1996,8 +1999,21 @@ describe("SubagentTool", () => {
                 input: { action: "switch_model", sessionID: childID, expectedModel: before, model: parentModel },
               },
             }),
-          ).toEqual({ type: "error", value: expect.stringContaining("native user prompt") })
-          expect((yield* sessions.get(childID)).model).toEqual(before)
+          ).toMatchObject({ type: "text" })
+          expect((yield* sessions.get(childID)).model).toEqual(parentModel)
+          const foreign = yield* sessions.create({ location, model: parentModel })
+          expect(
+            yield* executeTool(registry, {
+              sessionID: parent.id,
+              ...toolIdentity,
+              call: {
+                type: "tool-call",
+                id: "call-switch-diagnostic-foreign",
+                name: SubagentControlTool.name,
+                input: { action: "switch_model", sessionID: foreign.id, expectedModel: parentModel, model: parentModel },
+              },
+            }),
+          ).toEqual({ type: "error", value: `Model selection for child ${foreign.id} was rejected: the child is not a direct managed child of this Session.` })
           expect(
             yield* executeTool(registry, {
               sessionID: parent.id,

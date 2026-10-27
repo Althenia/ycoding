@@ -304,6 +304,7 @@ export type RemoteStore = {
   readonly latency: ReturnType<typeof createLatencyDiagnostics>
   readonly queryClient: QueryClient
   readonly link: RemoteLink
+  readonly selectionFence: () => number
   readonly state: () => RemoteStoreState
   readonly subscribe: (listener: () => void) => () => void
   readonly readStoredLatency: (before?: string) => Promise<
@@ -2933,6 +2934,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     latency,
     queryClient,
     link,
+    selectionFence: () => selectionToken,
     state: () => container.state,
     subscribe: (listener) => {
       const subscription = container.subscribe(() => listener())
@@ -3266,6 +3268,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         onEvents: (sessionID, events) => {
           if (!isCurrentConnection(created)) return
           for (const event of events) {
+            if (typeof event === "object" && event !== null && Reflect.get(event, "type") === "session.dots.access.changed") {
+              const scope = { deviceID, generation: container.state.generation }
+              void queryClient.invalidateQueries({ queryKey: [...remoteKeys.scope(scope), "dots-access"] })
+            }
             const createdAt = typeof event === "object" && event !== null ? Reflect.get(event, "created") : undefined
             if (typeof createdAt === "string" && Number.isFinite(Date.parse(createdAt))) latency.recordClient("stream.delay", now() - Date.parse(createdAt))
             queueEvent(sessionID, event)

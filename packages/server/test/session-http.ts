@@ -2,8 +2,6 @@ import { Session } from "@ycoding-ai/core/session"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionReview } from "@ycoding-ai/core/session/review"
-import { SessionMcpEvents } from "@ycoding-ai/core/mcp-events/index"
-import { McpEvents } from "@ycoding-ai/protocol/groups/mcp-events"
 import { Authorization } from "@ycoding-ai/protocol/middleware/authorization"
 import { SchemaErrorMiddleware } from "@ycoding-ai/protocol/middleware/schema-error"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
@@ -31,11 +29,7 @@ export function sessionHttp(
   } = {},
 ) {
   const location = Context.makeUnsafe<LocationServices>(options.location?.mapUnsafe ?? new Map())
-  const requestContext = Context.make(SessionMcpEvents.Authorization.Service, {
-    capabilities: Effect.succeed(false),
-    resolve: () => Effect.fail(new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" })),
-    check: () => Effect.fail(new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" })),
-  })
+  const requestContext = Context.empty()
   const services = Layer.mergeAll(
     Layer.mock(Session.Service, {
       autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused"), effective: () => Effect.die("unused") },

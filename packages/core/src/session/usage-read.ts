@@ -832,8 +832,9 @@ const speed = Effect.fnUntraced(function* (
       yield* db
         .run(
           sql`
-      INSERT INTO temp.usage_metric SELECT slot, ${metric}, ${value}, 1 FROM temp.usage_sample WHERE ${present}
-      ON CONFLICT (slot, metric, value) DO UPDATE SET count = count + 1
+      INSERT INTO temp.usage_metric SELECT slot, ${metric}, ${value} AS value, count(*)
+      FROM temp.usage_sample WHERE ${present} GROUP BY slot, value
+      ON CONFLICT (slot, metric, value) DO UPDATE SET count = count + excluded.count
     `,
         )
         .pipe(Effect.orDie)

@@ -1,6 +1,6 @@
 export * as Config from "./config"
 
-import { makeLocationNode } from "./effect/app-node"
+import { makeGlobalNode, makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { type ParseError, parse, printParseErrorCode } from "jsonc-parser"
@@ -180,6 +180,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
 
 export class Document extends Schema.Class<Document>("Config.Document")({
   type: Schema.Literal("document"),
+  scope: Schema.optional(Schema.Literal("global")),
   path: Schema.String.pipe(Schema.optional),
   info: Info,
 }) {}
@@ -214,11 +215,18 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 
 export function capabilities(entries: readonly Entry[]): ConfigCapabilities.Resolved {
   const documents = entries.filter((entry): entry is Document => entry.type === "document")
-  const dots = documents.findLast((entry) => entry.info.dots?.enabled !== undefined)?.info.dots?.enabled
   return {
     ...ConfigCapabilities.resolve(documents.map((entry) => entry.info.capabilities)),
-    ...(dots === undefined ? {} : { dots }),
+    ...(documents.some((entry) => entry.info.dots !== undefined) ? { dots: dots(entries).enabled } : {}),
   }
+}
+
+export function dots(entries: readonly Entry[]): { readonly enabled: false } | { readonly enabled: true; readonly profile: string } {
+  const configured = entries.filter((entry): entry is Document => entry.type === "document" && entry.scope === "global")
+    .findLast((entry) => entry.info.dots !== undefined)?.info.dots
+  return configured?.enabled === true && configured.profile !== undefined
+    ? { enabled: true, profile: configured.profile }
+    : { enabled: false }
 }
 
 export interface Interface {
@@ -237,12 +245,79 @@ export type Options = typeof Options.Type
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Config") {}
 
+export interface GlobalDocuments {
+  readonly entries: readonly Document[]
+  readonly diagnostics: readonly Diagnostic[]
+}
+
+export class GlobalService extends Context.Service<GlobalService, {
+  readonly snapshot: () => Effect.Effect<GlobalDocuments>
+  readonly reload: () => Effect.Effect<void>
+  readonly subscribe: (listener: () => void) => () => void
+}>()("@ycoding/Config.Global") {}
+
+const parseDocument = Effect.fnUntraced(function* (text: string, target: string) {
+  const errors: ParseError[] = []
+  const input: unknown = parse(text, errors, { allowTrailingComma: true })
+  if (errors.length) {
+    const message = errors.map((error) => `${printParseErrorCode(error.error)} at offset ${error.offset}`).join("; ")
+    yield* Effect.logWarning("ignored config file with invalid JSON", { target, message })
+    return { info: undefined, diagnostics: [{ path: target, reason: "invalid-json" as const, message }] }
+  }
+  const recovered = recoverInfo(input, target)
+  for (const diagnostic of recovered.diagnostics) yield* Effect.logWarning("recovered config item", diagnostic)
+  return recovered
+})
+
+export const globalLayer = Layer.effect(GlobalService, Effect.gen(function* () {
+  const fs = yield* FSUtil.Service
+  const global = yield* Global.Service
+  const watcher = yield* Watcher.Service
+  const listeners = new Set<() => void>()
+  const lock = Semaphore.makeUnsafe(1)
+  const load = Effect.fnUntraced(function* () {
+    const entries: Document[] = []
+    const diagnostics: Diagnostic[] = []
+    for (const name of ["ycoding.json", "ycoding.jsonc"]) {
+      const target = path.join(global.config, name)
+      const text = yield* fs.readFileStringSafe(target).pipe(Effect.orDie)
+      if (!text) continue
+      const substituted = yield* ConfigVariable.substitute({ type: "path", path: target, text }).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+        Effect.orDie,
+      )
+      const parsed = yield* parseDocument(substituted, target)
+      diagnostics.push(...parsed.diagnostics)
+      if (parsed.info) entries.push(new Document({ type: "document", scope: "global", path: target, info: parsed.info }))
+    }
+    return { entries, diagnostics } satisfies GlobalDocuments
+  })
+  let snapshot = yield* load()
+  const reload = () => lock.withPermit(Effect.gen(function* () {
+    const next = yield* load()
+    if (isDeepStrictEqual(snapshot, next)) return
+    snapshot = next
+    yield* Effect.sync(() => { for (const listener of listeners) listener() })
+  }))
+  yield* watcher.subscribe({ type: "directory", path: AbsolutePath.make(global.config) }).pipe(
+    Stream.runForEach(() => reload().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload global config", { cause })))),
+    Effect.forkScoped({ startImmediately: true }),
+  )
+  return GlobalService.of({ snapshot: () => Effect.sync(() => snapshot), reload, subscribe: (listener) => {
+    listeners.add(listener)
+    return () => { listeners.delete(listener) }
+  } })
+}))
+
+export const globalNode = makeGlobalNode({ service: GlobalService, layer: globalLayer, deps: [Global.node, FSUtil.node, Watcher.node] })
+
 export const layer = (options?: Options) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
       const global = yield* Global.Service
+      const globalDocuments = yield* GlobalService
       const location = yield* Location.Service
       const policy = yield* Policy.Service
       const watcher = yield* Watcher.Service
@@ -254,31 +329,18 @@ export const layer = (options?: Options) =>
       const context = yield* Effect.context<Scope.Scope | FSUtil.Service>()
       let discoveredDiagnostics: Diagnostic[] = []
       const parseInfo = Effect.fnUntraced(function* (text: string, target: string) {
-        const errors: ParseError[] = []
-        const input: unknown = parse(text, errors, { allowTrailingComma: true })
-        if (errors.length) {
-          const message = errors
-            .map((error) => `${printParseErrorCode(error.error)} at offset ${error.offset}`)
-            .join("; ")
-          yield* Effect.logWarning("ignored config file with invalid JSON", { target, message })
-          discoveredDiagnostics.push({ path: target, reason: "invalid-json", message })
-          return undefined
-        }
-        const recovered = recoverInfo(input, target)
-        for (const diagnostic of recovered.diagnostics) {
-          yield* Effect.logWarning("recovered config item", diagnostic)
-          discoveredDiagnostics.push(diagnostic)
-        }
+        const recovered = yield* parseDocument(text, target)
+        discoveredDiagnostics.push(...recovered.diagnostics)
         return recovered.info
       })
 
-      const loadFile = Effect.fnUntraced(function* (filepath: string) {
+      const loadFile = Effect.fnUntraced(function* (filepath: string, scope?: "global") {
         const text = yield* fs.readFileStringSafe(filepath)
         if (!text) return undefined
         const substituted = yield* ConfigVariable.substitute({ type: "path", path: filepath, text })
         const info = yield* parseInfo(substituted, filepath)
         if (!info) return undefined
-        return new Document({ type: "document", path: filepath, info })
+        return new Document({ type: "document", path: filepath, info, ...(scope === undefined ? {} : { scope }) })
       })
 
       const loadWellknown = Effect.fn("Config.loadWellknown")(function* () {
@@ -316,8 +378,14 @@ export const layer = (options?: Options) =>
       })
 
       const loadDirectory = Effect.fnUntraced(function* (directory: AbsolutePath) {
+        if (directory === global.config) {
+          yield* globalDocuments.reload()
+          const snapshot = yield* globalDocuments.snapshot()
+          discoveredDiagnostics.push(...snapshot.diagnostics)
+          return [...snapshot.entries, new Directory({ type: "directory", path: directory })]
+        }
         return [
-          ...(yield* Effect.forEach(names, (file) => loadFile(path.join(directory, file))).pipe(
+          ...(yield* Effect.forEach(names, (file) => loadFile(path.join(directory, file), directory === global.config ? "global" : undefined)).pipe(
             Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),
           )),
           new Directory({ type: "directory", path: directory }),
@@ -436,9 +504,13 @@ export const layer = (options?: Options) =>
       let configs = initial.entries
       let diagnostics = initial.diagnostics
       const updates = yield* PubSub.unbounded<Watcher.Update>()
+      yield* Effect.acquireRelease(
+        Effect.sync(() => globalDocuments.subscribe(() => { PubSub.publishUnsafe(updates, { path: global.config, type: "update" as const }) })),
+        (unsubscribe) => Effect.sync(unsubscribe),
+      )
       const subscriptions = new Map<string, Effect.Effect<unknown>>()
       const reconcile = Effect.fn("Config.reconcileWatches")(function* (entries: readonly Entry[]) {
-        const directories = entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : []))
+        const directories = entries.flatMap((entry) => (entry.type === "directory" && entry.path !== global.config ? [entry.path] : []))
         const files = entries.flatMap((entry) => (entry.type === "file" ? [entry.path] : []))
         const targets = [
           ...directories.map((path) => ({ path, type: "directory" as const })),
@@ -552,6 +624,7 @@ export function configured(options?: Options) {
       EventRuntime.node,
       FSUtil.node,
       Global.node,
+      globalNode,
       Location.node,
       Policy.node,
       Credential.node,

@@ -21,7 +21,7 @@ Data responses use `{ data }`. Revision conflicts and invalid membership are exp
 
 Creating a Session for a Project composes the existing Session create operation with `coordination.update`, or with `coordination.create` for a new Master. Removing a member from a Project uses `coordination.update` and leaves it running with its history intact. Deleting a member Session uses the existing Session delete and removes its membership. Deleting the Master Session deletes its Project. Deleting only the Project preserves all Sessions and their histories.
 
-The CLI operation set is `ycoding coordination list|get|create|update|delete`. Remote operations and Relay MCP use the same coordination-prefixed names, validation, ownership, and backend-resolved Locations. Uncertain mutation outcomes require reconciliation, not an automatic retry with a new identity.
+The CLI operation set is `ycoding coordination list|get|create|update|delete`. Browser relay operations use the same coordination-prefixed names, validation, ownership, and backend-resolved Locations. Uncertain mutation outcomes require reconciliation, not an automatic retry with a new identity.
 
 ## Activation
 

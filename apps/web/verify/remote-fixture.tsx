@@ -25,7 +25,7 @@ import type {
   RemoteTransportStatus,
 } from "../src/remote/transport"
 import { RemoteLimits, isRemoteLatencySample, noticePageValue, noticeSequence, type RemoteCapturedChangesPage, type RemoteDeviceInfo, type RemoteLatencySample, type RemoteNotice, type RemoteNoticeFrame, type RemoteNoticeOperation, type RemoteOperation } from "@ycoding-ai/remote"
-import { remoteScenario } from "./remote-scenarios"
+import { remoteScenario, type WireSession } from "./remote-scenarios"
 import { createProviderAuthFixture } from "./provider-auth-fixture"
 import type { Form } from "../../../packages/schema/src/form"
 import "../src/styles/tokens.css"
@@ -184,7 +184,7 @@ const syntheticHttp: RemoteHttp = {
   logout: async () => ok(undefined),
 }
 
-const defaultSessions = [
+const defaultSessions: readonly WireSession[] = [
   { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
@@ -194,7 +194,7 @@ const defaultSessions = [
   ...(accountParams.get("team") === "two" ? [{ id: "ses_second", title: "Child: inspect source", parentID: sessionID, time: { created: ago(20), updated: ago(2) } }] : []),
   ...(accountParams.get("team") === "two" ? [{ id: "ses_btw", title: "Side question", parentID: sessionID, agent: "btw", time: { created: ago(19), updated: ago(2) } }] : []),
 ]
-const sessions = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
+const sessions: readonly WireSession[] = [...(remoteScenarioData?.sessions ?? defaultSessions), ...(accountParams.get("masterInput") === "1" ? [{ id: "ses_master", title: "Release master", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(50), updated: ago(1) } }] : []), ...(accountParams.has("carouselFamily") ? [{
   id: "ses_postgres_child", title: "Inspect Postgres indexes", parentID: "ses_postgres", projectID: "project-auth",
   location: { directory: "/workspace/db-pruner" }, time: { created: ago(15), updated: ago(2) }, running: true,
 }] : [])]
@@ -647,14 +647,22 @@ function createFixtureStore(): Fixture {
   let createdSideChatID: string | undefined
   let liveReads = 0
   let backgroundReads = 0
-  const dotsTarget = { profile: "fixture", dotID: "dot-1", threadID: "thread-1", generation: "generation-1", label: "Fixture Dot" }
-  let dotsBound = accountParams.get("dots") !== "unbound"
-  let dotsRuntime: "paused" | "unpaused" | "unknown" | undefined = accountParams.get("dots") === "missing" ? undefined : accountParams.get("dots") === "unknown" ? "unknown" : accountParams.get("dots") === "paused" ? "paused" : "unpaused"
-  let dotsUncertain = false
+  const dotsAccess = new Map([[sessionID, { enabled: accountParams.get("dots") === "on", revision: 1 }]])
+  const dotsState = (id: string) => {
+    const rootSessionID = sessions.find((session) => session.id === id)?.parentID ?? id
+    const state = dotsAccess.get(rootSessionID) ?? { enabled: false, revision: 1 }
+    dotsAccess.set(rootSessionID, state)
+    return { state, rootSessionID }
+  }
   let releaseDotsRuntime: (() => void) | undefined
   Object.assign(window, { dotsFixture: {
-    runtime: (state: "paused" | "unpaused" | "unknown") => { dotsRuntime = state },
     release: () => releaseDotsRuntime?.(),
+    change: (enabled: boolean, notify: boolean) => {
+      const { state } = dotsState(sessionID)
+      state.enabled = enabled
+      state.revision++
+      if (notify) handlers?.onEvents?.(sessionID, [{ type: "session.dots.access.changed", data: { sessionID, enabled, revision: state.revision } }])
+    },
   } })
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
@@ -902,30 +910,21 @@ function createFixtureStore(): Fixture {
     if (transcriptProbe && operation === "session.capturedChanges.list") return { status: "ok", value: { data: [{ placementMessageID: "probe_reply_4", path: "src/probe.ts", additions: 1, deletions: 1, status: "modified", files: [{ path: "src/probe.ts", diff: `@@ -1 +1 @@\n-before\n+${probeCaptured}`, additions: 1, deletions: 1, status: "modified" }] }] } }
     if (connectionMode === "offline") return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     if (operation.startsWith("coordination.")) return coordinationOutcome(operation, input)
-    if (operation === "session.dots.status") {
-      const capability = accountParams.get("dotsCapability")
-      if (capability === "unavailable") return { status: "failed", error: { code: "agent_unavailable", message: "Dots status is unavailable" } }
-      if (capability === "off") return { status: "ok", value: { data: { enabled: false, state: "disconnected" } } }
-      return { status: "ok", value: { data: {
-        ...(capability === "omitted" ? {} : { enabled: true }),
-        state: accountParams.get("dots") === "disconnected" ? "disconnected" : "connected", ...(dotsBound ? { target: dotsTarget } : {}),
-        ...(dotsBound && dotsRuntime ? { runtimeState: dotsUncertain ? "unknown" : dotsRuntime } : {}),
-      } } }
+    if (operation === "session.dots.access.get") {
+      if (accountParams.get("dotsCapability") === "unavailable") return { status: "failed", error: { code: "agent_unavailable", message: "Dots access is unavailable" } }
+      const { state, rootSessionID } = dotsState(targetSessionID)
+      return { status: "ok", value: { data: { sessionID: targetSessionID, rootSessionID, ...state, inherited: targetSessionID !== rootSessionID, configured: accountParams.get("dotsCapability") !== "off" } } }
     }
-    if (operation === "session.dots.targets") return { status: "ok", value: { data: [dotsTarget] } }
-    if (operation === "session.dots.bind") {
+    if (operation === "session.dots.access.set") {
       mutationRequests.push({ operation, input })
-      dotsBound = true
-      dotsUncertain = false
-      return { status: "ok", value: { data: { enabled: true, state: "connected", target: dotsTarget, ...(dotsRuntime ? { runtimeState: dotsRuntime } : {}) } } }
-    }
-    if (operation === "session.dots.pause" || operation === "session.dots.resume") {
-      mutationRequests.push({ operation, input })
-      if (accountParams.get("dotsOutcome") === "failed") return { status: "failed", error: { code: "invalid_message", message: "The Dot target changed. Reconfirm the destination." } }
-      if (accountParams.get("dotsOutcome") === "unknown") { dotsUncertain = true; return { status: "unknown", error: { code: "outcome_unknown", message: "Runtime control outcome is unknown. Reconfirm the destination." } } }
+      const { state, rootSessionID } = dotsState(targetSessionID)
+      if (targetSessionID !== rootSessionID) return { status: "failed", error: { code: "forbidden", message: "Only a root Session can change Dots access." } }
+      if (accountParams.get("dotsOutcome") === "failed" || input?.expectedRevision !== state.revision) return { status: "failed", error: { code: "invalid_message", message: "Dots access changed." } }
+      if (accountParams.get("dotsOutcome") === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Dots access outcome is unknown." } }
       const settle = (): RemoteRequestOutcome => {
-        dotsRuntime = operation === "session.dots.pause" ? "paused" : "unpaused"
-        return { status: "ok", value: { data: { enabled: true, state: "connected", target: dotsTarget, runtimeState: dotsRuntime } } }
+        state.enabled = input?.enabled === true
+        state.revision++
+        return { status: "ok", value: { data: { sessionID: targetSessionID, rootSessionID, ...state, inherited: false, configured: true } } }
       }
       if (accountParams.get("dotsOutcome") === "hold") return new Promise<RemoteRequestOutcome>((resolve) => { releaseDotsRuntime = () => resolve(settle()) })
       return settle()

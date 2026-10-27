@@ -57,11 +57,7 @@ Client, TUI, and Web code must not import Core or Server implementation modules 
 
 The local CLI connects outbound to the relay and maps a fixed operation set onto the existing authenticated local service. An enrolled machine's authenticated owner can access every Session in that backend. The bridge derives each Location from the paginated backend inventory; a browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header.
 
-Relay MCP is a second ingress to the same operation set. The relay authenticates MCP clients as an OAuth authorization server (opaque, hashed grant and token metadata in D1) and forwards only the fixed `mcp.request` operation with a verified owner, device, and client identity. `packages/remote` owns its frame vocabulary; Core owns the SDK-based MCP transport, which takes tool definitions and a callback and imports neither CLI nor Server; `packages/cli` owns the tool mapping, which calls `executeRemoteOperation` for every tool, and the directory-creation operation. The server state file `remote-mcp.json` holds the toggle and enable epoch, and the existing remote status interface carries the Relay MCP state to the authenticated `/api/remote/mcp` routes.
-
-Core's global MCP Events service owns local subscription/outbox persistence, callback signing, and bounded delivery independently of the lazy MCP request handler. Server supplies the CLI connector's authorization interface through a replaceable global node. The connector uses its existing device credential to resolve forwarded requests and recheck exact grants at the relay; no OAuth bearer is added to connector frames. Protocol owns the authenticated global Events endpoints. See [MCP Events](../specs/mcp-events.md).
-
-CLI owns the ephemeral local HTTP-app registry, constrained upstream dispatcher, MCP facade, trusted embedded wrapper, and the connector's preview host, which runs the gateway against that registry. Remote owns the injectable preview-gateway component, which authenticates short-lived app cookies and delegates each HTTP request to a grant-checked dispatcher, and the preview relay frames. `infra/cloudflare` owns the separate `ycoding-preview` Worker and the `PreviewDirectory` Durable Object, which binds each single-use preview origin permanently to one owner, device, and registration and maps ticket and cookie digests to one lease; the preview Worker reaches devices only through the relay's `DEVICE_RELAY` namespace. Application HTML never shares the primary authentication origin or another registration's origin. The checked-in configuration leaves preview disabled. See [registered local HTTP apps](../specs/local-http-apps.md).
+The browser relay carries a closed operation set. Native Dots task and decision traffic uses a private Core Host injected into the server-process callback; it does not pass through the relay or a public HTTP adapter. Generic preview infrastructure retains its isolated-origin wire helpers and is disabled in checked-in deployment configuration.
 
 The browser batches fixed, content-free latency samples through this same authenticated device connection. The relay forwards them without persistence; the connector writes through a machine-global authenticated Server operation into Core's bounded SQLite store. The browser reads only the selected machine's saved samples through a separate bounded operation, and account/relay-only events are never misattributed to that machine.
 
@@ -164,7 +160,7 @@ The TUI keeps bounded read models. It does not own canonical Session state.
 
 ### Remote ingress infrastructure
 
-`infra/cloudflare` owns the `ycoding-cloud` Worker configuration, D1 binding, and SQLite-backed `DeviceRelay` declaration. A relay instance is addressed by `userId:deviceId` and serializes per-WebSocket role and connection metadata so hibernation never depends on ordinary JavaScript memory. The Worker also serves the OAuth endpoints and MCP resource for each device under `/api/mcp` and `/.well-known`, using the same `DB` and `DEVICE_RELAY` bindings.
+`infra/cloudflare` owns the `ycoding-cloud` Worker configuration, D1 binding, and SQLite-backed `DeviceRelay` declaration. A relay instance is addressed by `userId:deviceId` and serializes per-WebSocket role and connection metadata so hibernation never depends on ordinary JavaScript memory. The Worker authenticates browser users and enrolled devices before forwarding closed relay operations.
 
 The local outbound WebSocket client is process-owned in `packages/cli`. It is transport-only and opt-in through the remote connection toggle. One socket carries three delivery classes scheduled by the connector under the relay's frame rate: control frames (responses, status, inventory invalidations, receipts, heartbeats) first, then per-Session `events` batches and chunked bulk responses interleaved so no Session's stream or large read blocks another; socket backpressure defers bulk only. A browser's `priority` hint lengthens the coalescing window for its Sessions while it is hidden, and a browser `cancel` releases a pending request on the relay and aborts it on the connector. The server process that hosts the local backend owns it: `packages/cli` creates one remote host per server listener, the managed service or a `--standalone` private server, and passes `packages/server` a narrow status and on/off interface that backs the authenticated `/api/remote` routes, so Server never imports the connector. Core remains the owner of durable Sessions, Location-scoped execution, tools, filesystem access, and model calls; the TUI remains a client and never owns the remote connection's agent Session.
 
@@ -247,15 +243,13 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 
 Core owns account connector composition and ChatGPT discovery in `account-connectors.ts`, Claude account-list and fixed-proxy transport in `account-connectors/claude.ts`, and shared canonical tool construction in `account-connectors/tools.ts`. Configuration selects each provider independently. ChatGPT reuses Integration credential snapshots and refresh; Claude resolves its existing managed profile reference through the Claude credential source and refresh implementation. Both reuse the MCP client, Permission, and SessionGuardrail. Session model-request preparation supplies provider-specific profile bindings and request-local registrations to ToolRegistry; materialization captures executable bindings without changing Location-wide registrations. Schema owns the default ask rules for account connector actions. Permission owns mandatory human-only decisions for Claude organization controls. No native client process, desktop bridge, copied credential store, or browser execution participates.
 
-## Dots conversation peer
+## Native Dots
 
-- **Core:** `dots.ts` owns the Location-scoped Dots runtime, covering profile resolution, bindings, delivery, recovery, and peer admission. `dots/` owns the fixed-origin HTTP boundary, pub/sub client, room transport, attachment staging, peer context, and agent tool.
-- **Node wiring:** `DotsRuntimeNode.node` is a Location service. It admits peer replies through `PluginRuntime`'s `session.synthetic`, so it never depends on the global Session runtime. `DotsRuntimeNode.requestToolsNode` gives `SessionModelRequest` request-local `dots_send` and runtime-state-specific `dots_pause` or `dots_resume` registrations only for a bound Session; no Dots tool is registered Location-wide.
-- **Schema:** owns `Dots` shapes and peer metadata.
-- **Protocol:** owns the Session-scoped `server.dots` group.
-- **Server:** mounts its handlers.
-- **Client:** exposes the generated `dots` methods and the `@ycoding-ai/client/dots-peer` transcript label.
-- **Remote:** carries the six `session.dots.*` operations. Relay MCP excludes them.
+- **Core:** `dots/native.ts` owns the private Host and Channels; `native-decisions.ts` and `native-projection.ts` own exact typed decision handling and staged projection. `dots/access.ts` reads and changes persisted root-family access.
+- **Server:** builds the Host in global services and passes it as the fifth server-process callback argument. CLI consumes the Channel directly.
+- **Schema:** owns access, native source receipts, and historical Dots event/attribution decoders.
+- **Protocol, Client, Remote:** expose only `session.dots.access.get/set` for Dots. HTTP does not carry native task or settlement authority.
+- **Promotion:** normal pending-input promotion rejects queued historical routine/delegated task authority with the existing durable rejection receipt, without rewriting stored history.
 
 ## Task MCP gateway
 

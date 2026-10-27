@@ -118,6 +118,49 @@ const insertAnalytics = (db: Effect.Success<typeof database>, rows: ReadonlyArra
 const rank = (values: ReadonlyArray<number>, percent: number) =>
   values.toSorted((left, right) => left - right)[Math.ceil((values.length * percent) / 100) - 1]
 
+test("speed observations preserve repeated-value populations across slices and model groups", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const db = yield* database
+      yield* db.run(sql`
+        WITH RECURSIVE n(value) AS (SELECT 0 UNION ALL SELECT value + 1 FROM n WHERE value < 10050)
+        INSERT INTO usage_analytics_request
+          (id, session_id, project_id, directory, session_updated, agent, source, model, task_path, request, attempts,
+            continuation, invalidation, prompt_cache_key, tokens, cost, timing, time_created)
+        SELECT printf('prq_weighted_%07d', value), 'ses_weighted', 'global', '/sample', 1, 'build', 'step',
+          ${first}, '[]', value + 1, 1, 'full', 'first-request', 'cache',
+          '{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}', 0.5,
+          CASE WHEN value < 10000
+            THEN '{"firstOutputMs":5,"totalMs":9,"generatedTokens":3,"generationDurationNs":1000000000}'
+            ELSE '{"firstOutputMs":9000,"totalMs":90000,"generatedTokens":30,"generationDurationNs":1000000000}' END,
+          value
+        FROM n
+      `)
+      yield* insertAnalytics(db, [{ id: "prq_other", request: 10052, model: '{"providerID":"p","id":"other"}', timing: timing(7, 1_000_000_000) }])
+      const result = yield* report(db)
+      expect(result.rows).toHaveLength(2)
+      expect(result.rows.find((row) => row.key === "p/m")?.speed).toMatchObject({
+        samples: 10051,
+        generationSamples: 10051,
+        providerTimedSamples: 10051,
+        observedSamples: 0,
+        firstOutputP50Ms: 5,
+        firstOutputP95Ms: 5,
+        totalP50Ms: 9,
+        totalP95Ms: 9,
+        generationP50TokensPerSecond: 3,
+        generationP90TokensPerSecond: 3,
+        outputTokensPerSecond: (10000 * 3 + 51 * 30) / 10051,
+      })
+      expect(result.rows.find((row) => row.key === "p/other")?.speed).toMatchObject({
+        samples: 1,
+        generationSamples: 1,
+        generationP50TokensPerSecond: 7,
+        generationP90TokensPerSecond: 7,
+      })
+    }).pipe(Effect.provide(sqliteLayer({ filename: ":memory:" })), Effect.scoped),
+  ), 120_000)
+
 const shapes: ReadonlyArray<[string, (index: number, size: number) => number]> = [
   ["distinct values", (index, size) => ((index * 7) % size) + 1],
   ["tied values", (index) => (index % 3 === 0 ? 5 : 9)],

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createLocalServer } from "../src/remote-local"
-import { createSessionRegistry, createSubscriptions, executeRemoteDirectorySession } from "../src/remote-operations"
+import { createSessionRegistry, createSubscriptions, executeRemoteOperation } from "../src/remote-operations"
 import { createSession, password, startServer } from "./remote-harness"
 
 test("local Project adapter preserves owner authorization, revisions and Session deletion cascades", async () => {
@@ -36,23 +36,27 @@ test("local Project adapter preserves owner authorization, revisions and Session
 }, 30000)
 
 test("remote Session creation honors an explicit title for a new Master and members, and adoption keeps the stored title", async () => {
-  const home = await realpath(await mkdtemp(join(tmpdir(), "ycoding-project-title-")))
+  const home = await realpath(await mkdtemp(join(import.meta.dir, ".remote-coordination-")))
   const directory = join(home, "release")
   await mkdir(directory)
   const server = await startServer(directory)
   try {
     const local = createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } })
+    await createSession(server, "ses_existing_member", directory)
     const sessions = createSessionRegistry({ local })
     await sessions.refresh()
     const subscriptions = createSubscriptions()
+    const [listed] = await executeRemoteOperation({ request: { type: "request", id: "req_workspaces", operation: "workspace.list" }, local, sessions, subscriptions })
+    expect(listed).toMatchObject({ ok: true })
+    const workspace = (listed as { value: { data: Array<{ id: string; directory: string }> } }).value.data.find((item) => item.directory === directory)?.id
+    if (workspace === undefined) throw new Error("Recorded Session workspace is missing")
     const create = async (id: string, title?: string) => {
-      const [frame] = await executeRemoteDirectorySession({ id: `req_${id}`, home, input: { id, directory, ...(title === undefined ? {} : { title }) }, local, sessions, subscriptions })
+      const [frame] = await executeRemoteOperation({ request: { type: "request", id: `req_${id}`, operation: "session.create", input: { id, workspace, ...(title === undefined ? {} : { title }) } }, local, sessions, subscriptions })
       expect(frame).toMatchObject({ type: "response", ok: true })
       return (frame as { value: { data: { id: string; title: string } } }).value.data
     }
     expect(await create("ses_master", "Release Project")).toMatchObject({ id: "ses_master", title: "Release Project" })
     expect(await create("ses_new_member", "Docs member")).toMatchObject({ id: "ses_new_member", title: "Docs member" })
-    await createSession(server, "ses_existing_member", directory)
     const untitled = (await local.getSession("ses_existing_member", { directory })).title
     expect(untitled).not.toBe("Docs member")
     const group = await local.coordinationCreate({ name: "Release Project", masterSessionID: "ses_master", memberSessionIDs: ["ses_new_member"] })

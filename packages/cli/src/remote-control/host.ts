@@ -1,5 +1,8 @@
 import { hostname } from "node:os"
-import { createRemoteControlAppServer, type RemoteControlBackend } from "./app-server"
+import { randomUUID } from "node:crypto"
+import type { NativeDots } from "@ycoding-ai/core/dots/native"
+import { createRemoteControlAppServer } from "./app-server"
+import { createRemoteControlBackend } from "./backend"
 import { Reassembler, encodeAck, encodeOutbound, encodePong } from "./envelope"
 import { accountHash, type RemoteControlStateStore } from "./state"
 import {
@@ -8,10 +11,10 @@ import {
   buildEnrollRequest,
   pingIntervalMs,
   pongTimeoutMs,
-  streamCloseCode,
   decodeEnrollResponse,
   enrollURL,
   nextActionForHttp,
+  maxMessageBytes,
   parseRetryAfterMs,
   recognizedMissingAppServer,
   reconnectDelay,
@@ -42,9 +45,8 @@ type FetchFn = (url: string, init?: RequestInit) => Promise<Response>
 
 export type RemoteControlHostDeps = {
   readonly store: RemoteControlStateStore
-  readonly backend: RemoteControlBackend
+  readonly native: NativeDots.Host
   readonly codexHome: string
-  readonly resolveCredential: (profile: string, rejectedAccessToken?: string) => Promise<Credential | undefined>
   readonly fetchFn?: FetchFn
   readonly connect: (url: string, headers: Record<string, string>) => Promise<RemoteControlSocket>
   readonly hostname?: () => string
@@ -90,6 +92,11 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
   let heartbeat: ReturnType<typeof setInterval> | undefined
   let lastSeen = 0
   let closedWait: (() => void) | undefined
+  let retireSocket: (() => void) | undefined
+  let unsubscribeConfiguration: (() => void) | undefined
+  let configurationWork = Promise.resolve()
+  let selected = ""
+  let cancelBackoff: (() => void) | undefined
 
   async function post(url: string, credential: Credential, installationID: string, serverID?: string) {
     const name = serverNameForHost((deps.hostname ?? hostname)())
@@ -168,79 +175,156 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
     return enroll(credential, installationID, hash)
   }
 
-  async function openSocket(enrolled: EnrollResponse, installationID: string) {
+  async function openSocket(enrolled: EnrollResponse, credential: Credential, installationID: string) {
     const serverName = serverNameForHost((deps.hostname ?? hostname)())
     const kind = deps.deviceKind === undefined ? undefined : await deps.deviceKind().catch(() => undefined)
     return deps.connect(websocketURL(), buildConnectHeaders({
       serverID: enrolled.serverID,
       serverName,
       token: enrolled.remoteControlToken,
+      credential,
       installationID,
       ...(kind === undefined ? {} : { deviceKind: kind }),
     }))
   }
 
   async function connectOnce(): Promise<void> {
+    const connectingGeneration = generation
     const state = await deps.store.load()
-    if (!state.enabled) { current = { state: "off" }; return }
-    if (state.profile === undefined) throw new HostError("Remote control requires a pinned ChatGPT profile")
-    current = { state: "connecting", profile: state.profile }
-    let credential = await deps.resolveCredential(state.profile)
+    const configuration = await deps.native.configuration()
+    if (!configuration.enabled) { current = { state: "off" }; return }
+    current = { state: "connecting", profile: configuration.profile }
+    let credential = await deps.native.credential(configuration.profile)
     if (credential === undefined) throw new HostError("The pinned ChatGPT profile is unavailable")
+    if (credential.accountID !== configuration.accountID || credential.credentialID !== configuration.credentialID || credential.accountGeneration !== configuration.accountGeneration)
+      throw new HostError("The pinned ChatGPT profile changed")
+    if (connectingGeneration !== generation) return
     const hash = accountHash(credential.accountID)
     let enrolled = await ensureEnrolled(credential, state.installationID, hash)
+    if (connectingGeneration !== generation) return
     let opened: RemoteControlSocket
     try {
-      opened = await openSocket(enrolled, state.installationID)
+      opened = await openSocket(enrolled, credential, state.installationID)
     } catch (error) {
       const status = httpStatus(error)
       if (status === undefined || nextActionForHttp({ phase: "websocket", status }) !== "refresh_reconnect") throw error
+      const refreshed = await deps.native.credential(configuration.profile, credential.access)
+      if (!refreshed || refreshed.credentialID !== configuration.credentialID || refreshed.accountID !== configuration.accountID || refreshed.accountGeneration !== configuration.accountGeneration)
+        throw new HostError("The pinned ChatGPT profile is unavailable")
+      credential = refreshed
+      if (connectingGeneration !== generation) return
       const existing = await deps.store.enrollment({ websocketURL: websocketURL(), accountHash: hash })
       token = undefined
       enrolled = existing === undefined ? await enroll(credential, state.installationID, hash) : await refresh(credential, state.installationID, hash, existing.serverID)
-      opened = await openSocket(enrolled, state.installationID)
+      if (connectingGeneration !== generation) return
+      opened = await openSocket(enrolled, credential, state.installationID)
     }
+    if (connectingGeneration !== generation) { opened.close(); return }
+    retireSocket?.()
+    socket?.close()
     socket = opened
     lastSeen = now()
     attempt = 0
     const gen = generation
     const envID = enrolled.environmentID
-    let seq = 0
-    let lastAddress: { readonly clientID: string; readonly streamID: string } | undefined
     const reassembler = new Reassembler()
-    const appServer = createRemoteControlAppServer({
-      backend: deps.backend,
-      codexHome: deps.codexHome,
-      notify: (method, params) => {
-        if (lastAddress === undefined) return
-        const text = JSON.stringify({ jsonrpc: "2.0", method, params })
-        for (const frame of encodeOutbound({ text, clientID: lastAddress.clientID, streamID: lastAddress.streamID, envID, seqID: seq++ })) opened.send(frame)
-      },
-    })
+    const streams = new Map<string, { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number }>()
+    const retired = new Set<string>()
+    let active = true
+    const isCurrent = () => active && gen === generation && socket === opened
+    let connection: NativeDots.Connection | undefined
+    let dispatch: ((text: string) => void) | undefined
+    const buffered: string[] = []
+    let bufferedBytes = 0
+    const retire = () => {
+      if (!active) return
+      active = false
+      stopHeartbeat()
+      buffered.length = 0
+      for (const stream of streams.values()) stream.server.retire()
+      streams.clear(); retired.clear(); reassembler.clear()
+      connection?.retire()
+    }
+    retireSocket = retire
+    opened.onClose(() => { if (!isCurrent()) return; retire(); current = { state: running ? "connecting" : "off", profile: configuration.profile }; closedWait?.() })
+    opened.onError(() => { if (isCurrent()) opened.close() })
     opened.onMessage((text) => {
+      if (!isCurrent()) return
+      if (dispatch) { dispatch(text); return }
+      bufferedBytes += Buffer.byteLength(text)
+      if (bufferedBytes > maxMessageBytes) { retire(); opened.close(); return }
+      buffered.push(text)
+    })
+    connection = await deps.native.attach({
+      profile: configuration.profile, credentialID: configuration.credentialID,
+      accountID: configuration.accountID, accountGeneration: configuration.accountGeneration,
+      environmentID: envID, connectionID: randomUUID(), isCurrent,
+    }).catch((error: unknown) => { retire(); opened.close(); throw error })
+    if (!isCurrent()) { connection.retire(); opened.close(); return }
+    const streamFor = (event: { readonly clientID: string; readonly streamID: string; readonly envID: string }) => {
+      const key = JSON.stringify([event.envID, event.clientID, event.streamID])
+      const existing = streams.get(key)
+      if (existing) return existing
+      const current: { readonly server: ReturnType<typeof createRemoteControlAppServer>; seq: number } = { seq: 0, server: createRemoteControlAppServer({
+        backend: createRemoteControlBackend({ channel: connection!.channel({ clientID: event.clientID, streamID: event.streamID }), profile: configuration.profile }),
+        codexHome: deps.codexHome,
+        requestScope: JSON.stringify([event.clientID, event.streamID]),
+        send: (text) => {
+          if (!isCurrent() || streams.get(key) !== current) return
+          for (const frame of encodeOutbound({ text, clientID: event.clientID, streamID: event.streamID, envID, seqID: current.seq++ })) opened.send(frame)
+        },
+      }) }
+      streams.set(key, current)
+      return current
+    }
+    dispatch = (text) => {
+      if (!isCurrent()) return
+      const raw = safeJSON(text)
+      if (typeof raw === "object" && raw !== null && "env_id" in raw && typeof raw.env_id === "string" && raw.env_id !== "" && raw.env_id !== envID) return
+      if (typeof raw === "object" && raw !== null && "client_id" in raw && "stream_id" in raw && "env_id" in raw &&
+        retired.has(JSON.stringify([raw.env_id, raw.client_id, raw.stream_id]))) return
       lastSeen = now()
       const event = reassembler.push(text)
-      if (event.kind === "ping") {
-        lastAddress = { clientID: event.clientID, streamID: event.streamID }
-        opened.send(encodePong({ clientID: event.clientID, streamID: event.streamID, envID, seqID: seq++ }))
+      if (event.kind === "closed") {
+        const key = JSON.stringify([event.envID, event.clientID, event.streamID])
+        streams.get(key)?.server.retire()
+        streams.delete(key)
+        retired.add(key)
+        reassembler.forget(event)
         return
       }
-      if (event.kind === "closed") { opened.close(streamCloseCode); return }
-      if (event.kind === "drop") deps.onDiagnostic?.(`Dropped remote-control frame: ${event.reason}`)
+      if (event.kind !== "drop") opened.send(encodeAck(event))
+      if (event.kind === "ping") {
+        const key = JSON.stringify([event.envID, event.clientID, event.streamID])
+        if (retired.has(key)) return
+        const stream = streamFor(event)
+        opened.send(encodePong({ clientID: event.clientID, streamID: event.streamID, envID, seqID: stream.seq++ }))
+        return
+      }
+      if (event.kind === "drop") {
+        const record = event.reason === "missing_address" || event.reason === "unknown_type" ? safeJSON(text) : undefined
+        const metadata = typeof record === "object" && record !== null && !Array.isArray(record) && typeof Reflect.get(record, "type") === "string"
+          ? JSON.stringify({
+              type: Reflect.get(record, "type").slice(0, 80),
+              keys: Object.keys(record).sort().slice(0, 32).map((key) => key.slice(0, 80)),
+              address: ["client_id", "env_id", "stream_id"].filter((key) => Object.hasOwn(record, key)),
+            })
+          : undefined
+        deps.onDiagnostic?.(`Dropped remote-control frame: ${event.reason}${metadata === undefined ? "" : ` ${metadata}`}`)
+      }
       if (event.kind !== "message") return
-      lastAddress = { clientID: event.clientID, streamID: event.streamID }
-      opened.send(encodeAck({ clientID: event.clientID, streamID: event.streamID, envID, seqID: seq++ }))
-      void appServer.handle(event.text).then((reply) => {
-        if (reply === undefined || gen !== generation) return
-        for (const frame of encodeOutbound({ text: reply, clientID: event.clientID, streamID: event.streamID, envID, seqID: seq++ })) opened.send(frame)
+      const key = JSON.stringify([event.envID, event.clientID, event.streamID])
+      if (retired.has(key)) return
+      const owner = streamFor(event)
+      void owner.server.handle(event.text).then((reply) => {
+        if (reply === undefined || !isCurrent() || streams.get(key) !== owner) return
+        for (const frame of encodeOutbound({ text: reply, clientID: event.clientID, streamID: event.streamID, envID, seqID: owner.seq++ })) opened.send(frame)
       })
-    })
-    const closed = new Promise<void>((resolve) => { closedWait = resolve })
-    opened.onClose(() => { if (gen === generation) current = { state: running ? "connecting" : "off", profile: state.profile }; closedWait?.() })
-    opened.onError(() => { opened.close() })
-    current = { state: "on", profile: state.profile, environmentID: enrolled.environmentID, serverName: serverNameForHost((deps.hostname ?? hostname)()) }
+    }
+    for (const text of buffered) dispatch(text)
+    buffered.length = 0
+    current = { state: "on", profile: configuration.profile, environmentID: enrolled.environmentID, serverName: serverNameForHost((deps.hostname ?? hostname)()) }
     startHeartbeat(opened, gen)
-    void closed
   }
 
   function startHeartbeat(opened: RemoteControlSocket, gen: number) {
@@ -259,7 +343,8 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
 
   async function loop(gen: number): Promise<void> {
     while (running && gen === generation) {
-      const closed = new Promise<void>((resolve) => { const prev = closedWait; closedWait = () => { prev?.(); resolve() } })
+      let signalClosed: () => void = () => {}
+      const closed = new Promise<void>((resolve) => { signalClosed = resolve; closedWait = resolve })
       try {
         await connectOnce()
         if (!running || gen !== generation) return
@@ -269,46 +354,69 @@ export function createRemoteControlHost(deps: RemoteControlHostDeps) {
         if (!running || gen !== generation) return
         current = { state: "connecting", message: error instanceof Error ? error.message : "Remote control connection failed" }
         const delay = reconnectDelay({ attempt: attempt++, ...(error instanceof HostError && error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}) })
-        await new Promise((resolve) => setTimeout(resolve, delay).unref?.())
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => { cancelBackoff = undefined; resolve() }, delay)
+          timer.unref?.()
+          cancelBackoff = () => { clearTimeout(timer); cancelBackoff = undefined; resolve() }
+        })
+      } finally {
+        if (closedWait === signalClosed) closedWait = undefined
       }
     }
   }
 
+  async function hostStatus(): Promise<RemoteControlStatus> {
+    const state = await deps.native.configuration()
+    if (!state.enabled) return { state: "off" }
+    return current.state === "off" ? { state: "connecting", profile: state.profile } : current
+  }
+
   return {
-    status: async (): Promise<RemoteControlStatus> => {
-      const state = await deps.store.load()
-      if (!state.enabled) return { state: "off", ...(state.profile === undefined ? {} : { profile: state.profile }) }
-      return current.state === "off" ? { state: "connecting", ...(state.profile === undefined ? {} : { profile: state.profile }) } : current
+    status: hostStatus,
+    start: async () => {
+      unsubscribeConfiguration ??= deps.native.subscribeConfiguration(() => { invalidate(); void reconcile() })
+      await reconcile()
     },
-    set: async (input: { readonly enabled: boolean; readonly profile?: string }): Promise<RemoteControlStatus> => {
-      await deps.store.save(input.profile === undefined ? { enabled: input.enabled } : { enabled: input.enabled, profile: input.profile })
-      if (input.enabled) { await startLoop(); return hostStatus() }
-      await stop()
-      return { state: "off" }
-    },
-    start: async () => startLoop(),
     connectOnce,
     stop,
     shutdown: stop,
   }
 
-  async function startLoop(): Promise<void> {
-    const state = await deps.store.load()
-    if (!state.enabled) { current = { state: "off" }; return }
-    if (running) return
-    running = true
-    const gen = ++generation
-    void loop(gen)
+  function reconcile() {
+    const work = configurationWork.then(async () => {
+      if (!unsubscribeConfiguration) return
+      const configuration = await deps.native.configuration()
+      const key = JSON.stringify(configuration)
+      if (selected === key) return
+      invalidate()
+      selected = key
+      token = undefined
+      if (!configuration.enabled) return
+      running = true
+      current = { state: "connecting", profile: configuration.profile }
+      void loop(generation)
+    })
+    configurationWork = work.catch(() => { current = { state: "error", message: "Native configuration is unavailable" } })
+    return configurationWork
   }
-  async function hostStatus(): Promise<RemoteControlStatus> { return current }
-  async function stop(): Promise<void> {
+  function invalidate() {
     running = false
     generation++
+    selected = ""
+    cancelBackoff?.()
     stopHeartbeat()
+    retireSocket?.()
+    retireSocket = undefined
     socket?.close()
     socket = undefined
     current = { state: "off" }
     closedWait?.()
+  }
+  async function stop(): Promise<void> {
+    unsubscribeConfiguration?.()
+    unsubscribeConfiguration = undefined
+    invalidate()
+    await configurationWork
   }
 }
 

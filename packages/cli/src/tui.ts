@@ -28,11 +28,6 @@ const handlers = Runtime.handlers(TuiCommand, {
     connect: () => import("./commands/handlers/remote/connect"),
     disconnect: () => import("./commands/handlers/remote/disconnect"),
     status: () => import("./commands/handlers/remote/status"),
-    mcp: {
-      on: () => import("./commands/handlers/remote/mcp/on"),
-      off: () => import("./commands/handlers/remote/mcp/off"),
-      status: () => import("./commands/handlers/remote/mcp/status"),
-    },
     sessions: () => import("./commands/handlers/remote/sessions"),
   },
   serve: () => import("./commands/handlers/tui-serve"),

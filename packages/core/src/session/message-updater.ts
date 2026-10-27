@@ -273,6 +273,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
     yield* SessionEvent.match(event, {
       "session.created": () => Effect.void,
       "session.profile.bound": () => Effect.void,
+      "session.dots.access.changed": () => Effect.void,
       "session.dots.binding.bound": () => Effect.void,
       "session.dots.binding.unbound": () => Effect.void,
       "session.dots.device-delegation.created": () => Effect.void,

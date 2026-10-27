@@ -504,6 +504,33 @@ export const resolve = (
 
 export const supported = (model: CatalogModel.Info) => Boolean(model.package)
 
+export const selection = Effect.fn("SessionRunnerModel.selection")(function* (
+  session: SessionSchema.Info,
+  catalog: Pick<Catalog.Interface["model"], "defaultSelection" | "default" | "available">,
+) {
+  const defaultSelection = session.model ? undefined : yield* catalog.defaultSelection()
+  const configured = session.model ?? defaultSelection
+  const defaultModel = configured ? undefined : yield* catalog.default()
+  const model = configured
+    ? (yield* catalog.available()).find((model) => model.providerID === configured.providerID && model.id === configured.id)
+    : defaultModel && supported(defaultModel)
+      ? defaultModel
+      : (yield* catalog.available()).find(supported)
+  if (!model && session.model)
+    return yield* new ModelUnavailableError({ providerID: session.model.providerID, modelID: session.model.id })
+  if (!model && defaultSelection) return yield* new ModelNotSelectedError({ sessionID: session.id })
+  if (!model) return undefined
+  return {
+    model,
+    ref: CatalogModel.Ref.make({
+      id: model.id,
+      providerID: model.providerID,
+      ...(configured?.variant === undefined ? {} : { variant: configured.variant }),
+      ...(configured?.profile === undefined ? {} : { profile: configured.profile }),
+    }),
+  }
+})
+
 /** Resolves models from the catalog belonging to the current Location runtime. */
 const layer = Layer.effect(
   Service,
@@ -516,24 +543,10 @@ const layer = Layer.effect(
     const db = (yield* Database.Service).db
     return Service.of({
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session, options) {
-        // Location plugins populate and filter the catalog asynchronously during layer startup.
-        const defaultSelection = session.model ? undefined : yield* catalog.model.defaultSelection()
-        const effectiveSession = session.model || !defaultSelection ? session : { ...session, model: defaultSelection }
-        const defaultModel = effectiveSession.model ? undefined : yield* catalog.model.default()
-        const selected = effectiveSession.model
-          ? (yield* catalog.model.available()).find(
-              (model) =>
-                model.providerID === effectiveSession.model?.providerID && model.id === effectiveSession.model.id,
-            )
-          : defaultModel && supported(defaultModel)
-            ? defaultModel
-            : (yield* catalog.model.available()).find(supported)
-        if (!selected && session.model)
-          return yield* new ModelUnavailableError({
-            providerID: session.model.providerID,
-            modelID: session.model.id,
-          })
-        if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
+        const selectedConfiguration = yield* selection(session, catalog.model)
+        if (!selectedConfiguration) return yield* new ModelNotSelectedError({ sessionID: session.id })
+        const selected = selectedConfiguration.model
+        const effectiveSession = { ...session, model: selectedConfiguration.ref }
         const provider = yield* catalog.provider.get(selected.providerID)
         const integrationID = provider?.integrationID ?? Integration.ID.make(selected.providerID)
         const storedBinding = options?.rebind
@@ -607,12 +620,7 @@ const layer = Layer.effect(
           : exactAuthIdentityDigest(yield* withVariant(contextual, variant), model, credential, integrationID)
         return {
           model,
-          ref: CatalogModel.Ref.make({
-            id: selected.id,
-            providerID: selected.providerID,
-            ...(variant === undefined ? {} : { variant }),
-            ...(profile === undefined ? {} : { profile }),
-          }),
+          ref: selectedConfiguration.ref,
           cost: contextual.cost,
           accountIdentityDigest: identity,
           ...(profile === undefined || !credentialInfo

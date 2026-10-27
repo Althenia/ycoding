@@ -7,26 +7,6 @@ import { createRemoteConnector } from "../src/commands/handlers/remote/connector
 import { startServer } from "./remote-harness"
 import { RemoteSetupError } from "../src/remote-error"
 import { DeviceAuthorizationError } from "../src/remote-credentials"
-import type { RemoteMcpPreference } from "../src/remote-mcp-host"
-
-test("MCP event authority stays unavailable without a connected registration", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-event-authority-"))
-  const host = await createRemoteHost({
-    file: path.join(directory, "remote.json"),
-    create: async () => createRemoteConnector({
-      directory,
-      notice: "Owner access",
-      makeBridge: () => ({ connect: async () => {}, close: async () => {} }),
-    }),
-  })
-  try {
-    expect(await host.mcpEvents?.capabilities()).toBe(false)
-    await expect(host.mcpEvents?.resolve({ requestID: "request_fixture", principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" }, epoch: "epoch_fixture" })).rejects.toMatchObject({ _tag: "McpEvents.Failure", reason: "authorization_unavailable" })
-  } finally {
-    await host.shutdown()
-    await rm(directory, { recursive: true, force: true })
-  }
-})
 
 test("the server host persists one switch, resumes on restart, and stops without clearing preference", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-host-"))
@@ -185,72 +165,6 @@ test("a malformed remote preference leaves the server host available with a visi
     expect(await host.status()).toMatchObject({ state: "error", message: expect.any(String) })
     await host.shutdown()
   } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
-test("startup retires a saved MCP enablement when the Remote preference is off", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-host-"))
-  const file = path.join(directory, "remote-mcp.json")
-  await Bun.write(file, JSON.stringify({ enabled: true, epoch: "epoch_saved" }))
-  const host = await createRemoteHost({ file: path.join(directory, "remote.json"), create: async () => {
-    throw new Error("Remote must remain disabled")
-  } })
-  try {
-    expect(await host.status()).toEqual({ state: "off" })
-    expect(await host.mcpStatus()).toMatchObject({ state: "error", message: expect.stringContaining("ycoding remote connect") })
-    expect(await Bun.file(file).json()).toMatchObject({ enabled: false, pendingRevocation: true })
-  } finally {
-    await host.shutdown()
-    await rm(directory, { recursive: true, force: true })
-  }
-})
-
-test("explicit Remote off/on retires MCP authorization and does not re-enable it", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "ycoding-remote-revocation-"))
-  const first = Promise.withResolvers<void>()
-  const second = Promise.withResolvers<void>()
-  const ready = [first, second]
-  const advertised: RemoteMcpPreference[] = []
-  const host = await createRemoteHost({
-    file: path.join(directory, "remote.json"),
-    create: async (mcp) => {
-      const connector = createRemoteConnector({
-        directory,
-        notice: "Fixture owner access",
-        makeBridge: () => ({
-          connect: async () => { await mcp.attach("https://relay.example.invalid/api/mcp/devices/dev_fixture", async (state) => { advertised.push(state) }) },
-          close: async () => mcp.detach(),
-        }),
-      })
-      connector.subscribe((state) => {
-        if (state.state === "on") ready.shift()?.resolve()
-      })
-      return connector
-    },
-  })
-  try {
-    await host.set(true)
-    await first.promise
-    expect((await host.setMcp(true)).state).toBe("on")
-    const enabled = await Bun.file(path.join(directory, "remote-mcp.json")).json()
-    expect(enabled.enabled).toBe(true)
-
-    expect((await host.set(false)).state).toBe("off")
-    const disabled = await Bun.file(path.join(directory, "remote-mcp.json")).json()
-    expect(disabled.enabled).toBe(false)
-    expect(disabled.epoch).not.toBe(enabled.epoch)
-    expect(await host.mcpStatus()).toMatchObject({ state: "off", message: expect.stringContaining("fresh sign-in") })
-
-    await host.set(true)
-    await second.promise
-    expect((await host.status()).state).toBe("on")
-    expect(await host.mcpStatus()).toMatchObject({ state: "off", message: expect.stringContaining("fresh sign-in") })
-    expect(await Bun.file(path.join(directory, "remote-mcp.json")).json()).toEqual(disabled)
-    expect(advertised.filter((state) => state.enabled)).toHaveLength(1)
-    expect(advertised.at(-1)).toEqual({ enabled: false, epoch: disabled.epoch })
-  } finally {
-    await host.shutdown()
     await rm(directory, { recursive: true, force: true })
   }
 })

@@ -9,7 +9,5 @@ export const RemoteHandler = HttpApiBuilder.group(Api, "server.remote", (handler
     return handlers
       .handle("remote.get", () => Effect.promise(() => remote.status()).pipe(Effect.map((data) => ({ data }))))
       .handle("remote.set", (ctx) => Effect.promise(() => remote.set(ctx.payload.enabled)).pipe(Effect.map((data) => ({ data }))))
-      .handle("remote.mcp.get", () => Effect.promise(() => remote.mcpStatus()).pipe(Effect.map((data) => ({ data }))))
-      .handle("remote.mcp.set", (ctx) => Effect.promise(() => remote.setMcp(ctx.payload.enabled)).pipe(Effect.map((data) => ({ data }))))
   }),
 )

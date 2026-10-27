@@ -741,9 +741,9 @@ describe("remote shell layout", () => {
           const input = document.querySelector('.composer__input'); input.value = 'Keep this viewport draft'; input.dispatchEvent(new InputEvent('input', { bubbles:true })); input.focus();
           window.metadataOriginal = { input, autonomous:document.querySelector('.composer__summary .session-status__autonomous-trigger'), goal:document.querySelector('.composer__summary .session-status__goal-trigger') };
         })()`)
-        const composerReads = () => page.evaluate<readonly string[]>(`window.requestLog.filter(request => request.operation === 'session.catalog' || request.operation === 'session.dots.status').map(request => request.operation).sort()`)
+        const composerReads = () => page.evaluate<readonly string[]>(`window.requestLog.filter(request => request.operation === 'session.catalog').map(request => request.operation).sort()`)
         const reads = await composerReads()
-        expect(reads).toEqual(["session.catalog", "session.dots.status"])
+        expect(reads).toEqual(["session.catalog"])
         const placement = () => page.evaluate<{ readonly detached: boolean; readonly emptyHeight: number; readonly primary: number; readonly slots: number; readonly modes: number; readonly goals: number; readonly same: boolean; readonly focused: boolean; readonly draft: string; readonly visible: boolean; readonly targets: boolean; readonly scrollOwner: boolean }>(`(() => {
           const mount = document.querySelector('.conversation-metadata'), composer = document.querySelector('.composer'), row = composer.querySelector('.composer__row').getBoundingClientRect(), nav = document.querySelector('.bottom-nav').getBoundingClientRect();
           return { detached:mount?.querySelector('.session-status--metadata') !== null && mount !== null, emptyHeight:mount?.getBoundingClientRect().height ?? -1,

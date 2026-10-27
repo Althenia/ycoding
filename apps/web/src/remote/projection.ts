@@ -1418,11 +1418,23 @@ export function readFormAssessment(value: unknown): Form.Assessment | undefined 
 
 type FormReplySource = (typeof Form.ReplySource)["Encoded"]
 type DotsClientReplySource = Extract<FormReplySource, { kind: "dots-client" }>
-export type FormReplySourceView = Exclude<FormReplySource, DotsClientReplySource> | Omit<DotsClientReplySource, "bindingID" | "principal">
+type DotsNativeReplySource = Extract<FormReplySource, { kind: "dots-native" }>
+export type FormReplySourceView = Exclude<FormReplySource, DotsClientReplySource | DotsNativeReplySource>
+  | Omit<DotsClientReplySource, "bindingID" | "principal">
+  | Pick<DotsNativeReplySource, "kind" | "rootSessionID" | "accessRevision">
 
 export function readFormReplySource(value: unknown): FormReplySourceView | undefined {
   const source = recordField(value)
   if (!source) return undefined
+  if (source.kind === "dots-native") {
+    if (["profile", "credentialID", "accountID", "environmentID", "connectionID", "clientID", "streamID", "requestID"].some((key) => {
+      const value = source[key]
+      return typeof value !== "string" || value.length === 0
+    }) || typeof source.rootSessionID !== "string" || !source.rootSessionID.startsWith("ses") ||
+      typeof source.accountGeneration !== "number" || !Number.isSafeInteger(source.accountGeneration) || source.accountGeneration < 0 ||
+      typeof source.accessRevision !== "number" || !Number.isSafeInteger(source.accessRevision) || source.accessRevision < 0) return undefined
+    return { kind: source.kind, rootSessionID: source.rootSessionID, accessRevision: source.accessRevision }
+  }
   if (source.kind === "dots-delegation") {
     if (typeof source.anchorSessionID !== "string" || !source.anchorSessionID.startsWith("ses") ||
       typeof source.delegationID !== "string" || source.delegationID.length === 0 || source.delegationID.length > 256 ||

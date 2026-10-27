@@ -4,9 +4,6 @@ import { createDebouncer, createThrottler } from "@tanstack/solid-pacer"
 import { Icon } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { watchVisualViewport } from "../../ui/visual-viewport"
-import type { RemoteDotsTarget } from "@ycoding-ai/remote"
-import { createDotsCapabilityReader, dotsClient, dotsDisabledMessage } from "../dots"
-import { DotsDialog } from "./dots-dialog"
 import { catalogKey, type CatalogTarget, type CatalogView, type FileOption } from "../catalog"
 import { useRemote } from "../context"
 import { defaultComposerModel, readPreferredModel, readRecentModels, rememberRecentModel, writePreferredModel } from "../preferences"
@@ -70,57 +67,6 @@ export function MiniComposer(props: {
   const [contextLeaving, setContextLeaving] = createSignal(false)
   const [dockCollapsed, setDockCollapsed] = createSignal(readComposerDockCollapsed())
   const [promptGenerate, setPromptGenerate] = createSignal<{ readonly intent: string; readonly returnFocus: HTMLElement }>()
-  const [dotsTarget, setDotsTarget] = createSignal<RemoteDotsTarget>()
-  const [dotsDialog, setDotsDialog] = createSignal<HTMLElement>()
-  const [dotsBusy, setDotsBusy] = createSignal(false)
-  let dotsAbort: AbortController | undefined
-  let dotsRetry: { fingerprint: string; id: string } | undefined
-  const [dotsEnabled, setDotsEnabled] = createSignal(false)
-  const dotsSessionID = () => props.target && "sessionID" in props.target ? props.target.sessionID : undefined
-  const dotsReader = createDotsCapabilityReader({
-    read: async (signal) => {
-      const sessionID = dotsSessionID()
-      const scope = remote.scope()
-      if (!sessionID || !scope) return false
-      return (await dotsClient(remote.store.link, scope, sessionID).status(signal)).enabled
-    },
-    reset: () => {
-      setDotsTarget(undefined)
-      setDotsDialog(undefined)
-      dotsAbort?.abort()
-      dotsAbort = undefined
-      setDotsBusy(false)
-      dotsRetry = undefined
-    },
-    publish: setDotsEnabled,
-  })
-  const dotsKey = createMemo(() => {
-    const sessionID = dotsSessionID()
-    const scope = remote.scope()
-    return sessionID && scope ? `${scope.deviceID}:${scope.generation}:${sessionID}` : undefined
-  })
-  createEffect(() => {
-    const selected = dotsKey() !== undefined
-    untrack(() => dotsReader.start(selected))
-  })
-  const dotsCall = () => {
-    const sessionID = dotsSessionID()
-    const scope = remote.scope()
-    if (!dotsEnabled() || !sessionID || !scope) throw new Error(dotsDisabledMessage)
-    const fence = dotsReader.fence()
-    return {
-      client: dotsClient(remote.store.link, scope, sessionID),
-      requireCurrent: () => {
-        if (fence !== dotsReader.fence()) throw new Error("The selected Session changed.")
-      },
-      settle: <T extends { readonly enabled: boolean }>(status: T) => {
-        if (fence !== dotsReader.fence()) throw new Error("The selected Session changed.")
-        if (!status.enabled) dotsReader.disable()
-        return status
-      },
-    }
-  }
-  onCleanup(() => dotsReader.disable())
   let input: HTMLTextAreaElement | undefined
   let dockToggle: HTMLButtonElement | undefined
   let inputWrap: HTMLDivElement | undefined
@@ -287,7 +233,7 @@ export function MiniComposer(props: {
   }
   const queueContextClose = () => contextClose.maybeExecute()
   const trigger = createMemo(() => suggestionTrigger(props.text, cursor(), dismissed()))
-  const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult(), !!props.target && "sessionID" in props.target, dotsEnabled()) : []
+  const options = () => trigger() ? optionsForTrigger(trigger()!.trigger, trigger()!.query, catalog(), fileResult(), !!props.target && "sessionID" in props.target) : []
   const suggesting = () => options().length > 0 || fileError() !== undefined
   const dismissSuggestions = (returnFocus = true) => {
     const match = trigger()
@@ -454,52 +400,13 @@ export function MiniComposer(props: {
     }
   }
   const send = async () => {
-    if (props.disabled || reading() || dotsBusy() || (!props.allowEmpty && !props.text.trim() && !attachments().length)) return
+    if (props.disabled || reading() || (!props.allowEmpty && !props.text.trim() && !attachments().length)) return
     const chosenAgent = selectedAgent()
     const chosenModel = selectedModel()
     const pendingAgent = current()?.agent === chosenAgent ? undefined : chosenAgent
     const pendingModel = current() === undefined || modelPending() ? chosenModel : undefined
     const requested = submission(props.text, parts(), catalog(), queuedDraftDelivery(props.text, queuedDraft(), delivery()), pendingAgent, pendingModel, modelPending() && forcedModelSwitches()[modelKey() ?? ""] !== undefined)
     if (requested.kind === "invalid") { setAttachmentError(requested.message); return }
-    if (requested.kind === "dots") {
-      if (!dotsEnabled()) { setAttachmentError(dotsDisabledMessage); return }
-      const sessionID = dotsSessionID()
-      const scope = remote.scope()
-      if (!sessionID || !scope) { setAttachmentError("Open a Session before selecting a Dots destination."); return }
-      const files = [...requested.input.files ?? [], ...attachments().map((item) => ({ uri: item.uri, name: item.name }))]
-      if (files.length > 64) { setAttachmentError("A message can contain at most 64 files."); return }
-      const expectedTarget = dotsTarget()
-      if ((!requested.input.text.trim() && files.length === 0) || !expectedTarget) {
-        const active = document.activeElement
-        const focus = active instanceof HTMLElement ? active : input
-        if (focus) setDotsDialog(focus)
-        return
-      }
-      const text = props.text
-      const generation = attachmentGeneration
-      const fingerprint = JSON.stringify({ sessionID, scope, expectedTarget, text: requested.input.text, files })
-      if (dotsRetry?.fingerprint !== fingerprint) dotsRetry = { fingerprint, id: `msg_${crypto.randomUUID().replaceAll("-", "")}` }
-      setDotsBusy(true)
-      const controller = new AbortController()
-      dotsAbort = controller
-      setAttachmentError(undefined)
-      try {
-        const result = await dotsClient(remote.store.link, scope, sessionID).send({ id: dotsRetry.id, text: requested.input.text, ...(files.length ? { files } : {}), expectedTarget }, controller.signal)
-        if (dotsAbort !== controller || generation !== attachmentGeneration || props.target && "sessionID" in props.target && props.target.sessionID !== sessionID) return
-        if (result.status === "unknown") { setAttachmentError("Dots delivery is uncertain. The draft and message identity are retained."); return }
-        if (props.text === text) {
-          props.onText("")
-          setParts([])
-          setAttachments([])
-          attachmentGeneration++
-        }
-        dotsRetry = undefined
-      } catch (error) {
-        if (error instanceof Error && error.message === dotsDisabledMessage) { dotsReader.disable(); setAttachmentError(dotsDisabledMessage) }
-        else if (dotsAbort === controller && generation === attachmentGeneration) setAttachmentError("Dots send did not settle. Keep the draft; verify the destination before retrying.")
-      } finally { if (dotsAbort === controller) { dotsAbort = undefined; setDotsBusy(false) } }
-      return
-    }
     if (requested.kind === "promptGenerate") {
       const intent = requested.input.intent
       if (!intent) {
@@ -604,8 +511,6 @@ export function MiniComposer(props: {
           onPaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (!files.length) return; event.preventDefault(); void addFiles(files) }}
           onClick={(event) => setCursor(event.currentTarget.selectionStart)}
           onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) setCursor(event.currentTarget.selectionStart) }} onKeyDown={keyDown} />
-        <Show when={dotsEnabled() ? dotsTarget() : undefined}>{(target) => <p class="field__hint" role="status">Dots · {target().label} · {target().threadID}</p>}</Show>
-        <Show when={dotsBusy()}><button type="button" class="button button--secondary" onClick={() => dotsAbort?.abort()}>Cancel Dots send</button></Show>
         <Show when={queuedPromptIndicator(props.text, queuedDraft())}>{(label) => <p class="composer__queue-indicator" role="status">{label()}</p>}</Show>
         <Show when={suggesting()}><div class="mini-composer__suggestions" style={{ "--composer-suggest-max": bound() === undefined ? undefined : `${bound()}px` }}>
           <div class="mini-composer__suggestions-head"><strong>Suggestions</strong><button type="button" aria-label="Close suggestions" onPointerDown={(event) => event.preventDefault()} onClick={() => dismissSuggestions()}><Icon name="close" size={16} />Close</button></div>
@@ -651,27 +556,6 @@ export function MiniComposer(props: {
     }}><Icon name="chevron-down" size={16} /><span>{collapsed() ? "Show composer" : "Hide composer"}</span></button>
     </div></Show>
     </div>
-    <Show when={dotsEnabled() ? dotsDialog() : undefined}>{(returnFocus) => <DotsDialog returnFocus={returnFocus()} onClose={() => setDotsDialog(undefined)} load={async (profile) => {
-      const call = dotsCall()
-      const targets = await call.client.targets(profile)
-      call.requireCurrent()
-      return targets
-    }} confirm={async (target) => {
-      const call = dotsCall()
-      const status = call.settle(await call.client.bind(target))
-      if (status.enabled) setDotsTarget(target)
-    }} status={async () => {
-      const call = dotsCall()
-      const status = call.settle(await call.client.status())
-      if (status.enabled) setDotsTarget(status.target)
-      return status
-    }} pause={async (expectedTarget) => {
-      const call = dotsCall()
-      return call.settle(await call.client.pause(expectedTarget))
-    }} resume={async (expectedTarget) => {
-      const call = dotsCall()
-      return call.settle(await call.client.resume(expectedTarget))
-    }} />}</Show>
     <Show when={promptGenerate()} keyed>{(request) => <PromptGenerateDialog sessionSelected={sessionTarget()} returnFocus={request.returnFocus} onClose={() => setPromptGenerate(undefined)} onConfirm={(mode, memory) => {
       if (sessionTarget()) {
         void remote.store.requestPromptGenerate({ mode, intent: request.intent, memory })

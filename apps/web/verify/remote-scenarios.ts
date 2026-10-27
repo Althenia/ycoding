@@ -4,8 +4,9 @@ type RemoteScenarioName = "conversation-workspace" | "conversation-landing" | "s
 type RemoteScenarioViewport = 1440 | 768 | 390
 type RemoteScenarioView = "chat" | "sessions" | "projects" | "usage" | "settings"
 
-type WireSession = {
+export type WireSession = {
   readonly id: string
+  readonly parentID?: string
   readonly title: string
   readonly projectID?: string
   readonly location?: { readonly directory: string }

@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
-import { remoteOperationAccess, type RemoteRequest } from "@ycoding-ai/remote"
+import type { RemoteRequest } from "@ycoding-ai/remote"
 import { LocalFailure, type LocalServer } from "../src/remote-local"
 import { coordinationCoordinatorMap, createSessionRegistry, createSubscriptions, executeRemoteOperation } from "../src/remote-operations"
-import { excludedOperations, laneOf, tools } from "../src/remote-mcp-schemas"
 
 const participant = (sessionID: string) => ({ sessionID, title: sessionID, state: "idle", lastActivity: 1, pending: [], location: { directory: "/work" } })
 const group = { id: "cgrp_1", name: "Project", revision: 3, active: false, master: participant("ses_master"), members: [participant("ses_member")], settings: { concurrency: null }, time: { created: 1, updated: 2 } }
@@ -92,25 +91,4 @@ test("unconfirmed Project and Session mutations are never replayed", async () =>
     expect(await fixture.run(operation, input, sessionID)).toEqual(failure("outcome_unknown"))
     expect(fixture.calls.filter((call) => call.method === method)).toHaveLength(1)
   }
-})
-
-test("Relay MCP publishes the six Project tools and scoped Session deletion", () => {
-  const operations = tools.filter((tool) => tool.operation.startsWith("coordination."))
-  expect(operations.map((tool) => tool.name).sort()).toEqual(["coordination_create", "coordination_delete", "coordination_get", "coordination_list", "coordination_settings", "coordination_update"])
-  for (const tool of operations) {
-    expect((excludedOperations as readonly string[]).includes(tool.operation)).toBe(false)
-    const mutation = remoteOperationAccess[tool.operation as keyof typeof remoteOperationAccess] === "mutation"
-    expect(tool.mutation).toBe(mutation)
-    expect(tool.annotations.readOnlyHint).toBe(!mutation)
-    expect(tool.inputSchema.additionalProperties).toBe(false)
-    expect(JSON.stringify(tool.inputSchema)).not.toContain("directory")
-  }
-  const create = operations.find((tool) => tool.operation === "coordination.create")!
-  const update = operations.find((tool) => tool.operation === "coordination.update")!
-  expect(JSON.stringify(create.inputSchema)).toContain("masterSessionID")
-  expect(JSON.stringify(update.inputSchema)).toContain("concurrency")
-  expect(laneOf(update, { input: { groupID: "cgrp_1" } })).toBe("coordination:cgrp_1")
-  const deletion = tools.find((tool) => tool.operation === "session.delete")!
-  expect(deletion.inputSchema).toMatchObject({ required: ["sessionID"] })
-  expect(deletion.annotations).toMatchObject({ destructiveHint: true, idempotentHint: false })
 })

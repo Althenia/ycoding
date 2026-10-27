@@ -13,7 +13,6 @@ import { Event } from "@ycoding-ai/schema/event"
 import { Workspace } from "@ycoding-ai/schema/workspace"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { SessionDelivery } from "@ycoding-ai/schema/session-delivery"
-import { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Context, Effect, Encoding, Result, Schema, SchemaGetter, Struct, Tuple } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import {
@@ -784,10 +783,9 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           id: SessionMessage.ID.pipe(Schema.optional),
           ...PromptInput.Prompt.fields,
           metadata: SessionPending.UserData.fields.metadata,
-          remoteSource: Schema.optional(McpEvents.RequestContext),
           delivery: SessionPending.Delivery.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
-        }),
+        }).annotate({ parseOptions: { onExcessProperty: "error" } }),
         success: Schema.Struct({ data: SessionPending.User }),
         error: [ConflictError, InvalidRequestError, SessionNotFoundError],
       })

@@ -1,6 +1,4 @@
 export * as RemoteBridge from "./remote-bridge"
-import { parseMcpRequest, parseMcpStateAck, parsePreviewAllocateAck, parsePreviewLeaseAck, parsePreviewRequest, parsePreviewStateAck, type McpRequest, type PreviewAllocateAck, type PreviewLeaseAck, type PreviewRequest, type PreviewStateAck, type RemoteMcpEvents } from "@ycoding-ai/remote"
-import type { RemoteMcpHost, RemoteMcpPreference } from "./remote-mcp-host"
 
 import {
   RemoteCloseCode,
@@ -31,7 +29,6 @@ import {
   createSubscriptions,
   executeRemoteOperation,
   coordinationCoordinatorMap,
-  successFrames,
   sessionStatus,
   lossOnly,
   type OperationCache,
@@ -44,10 +41,6 @@ import { CloudflareRemoteTransport } from "./remote-transport"
 import { SessionWorkCompletion } from "@ycoding-ai/schema/session-work-completion"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { Schema } from "effect"
-import { McpEvents } from "@ycoding-ai/schema/mcp-events"
-import type { RemoteConnection } from "@ycoding-ai/server/remote-connection"
-import { RemoteMcpAuthorization } from "./remote-mcp-authorization"
-import type { RemoteAppPreviewHost } from "./remote-app-preview"
 
 // The local relay agent. It dials out to the relay over WSS and never listens,
 // never proxies a caller-supplied URL or method, and never follows a remote
@@ -78,7 +71,6 @@ export type ConnectionInput = {
 export type BridgeCredentials = { readonly accessToken: string; readonly accessExpiresAt: number }
 
 export type RemoteBridgeOptions = {
-  readonly mcp?: { readonly host: RemoteMcpHost; readonly resource: string; readonly deviceID: string; readonly home: string; readonly authorizationFetch?: RemoteMcpAuthorization.Fetcher; readonly appPreview?: RemoteAppPreviewHost.Config }
   /** Enrolled relay origin. Device credentials are only ever sent here. */
   readonly relayURL: string
   readonly local: LocalServer
@@ -115,20 +107,11 @@ const terminalCloseCodes: readonly number[] = [RemoteCloseCode.unauthorized, Rem
 const maxPendingEvents = 4_096
 const maxPendingQuotas = 256
 const slowRequestMs = 1_000
-const authorizationLogIntervalMs = 60_000
 const agentFrameIntervalMs = 25
 const interactiveCoalesceMs = 40
 const backgroundCoalesceMs = 750
 
 export class RemoteAgent {
-  readonly mcpEvents: RemoteConnection.EventAuthorization
-  private credential?: BridgeCredentials
-  private readonly mcpAcknowledgements = new Map<string, { state: RemoteMcpPreference; resolve: () => void; reject: () => void }>()
-  private mcpServer?: Promise<ReturnType<typeof import("./remote-mcp")["createRemoteMcp"]>>
-  private mcpCleanup = Promise.resolve()
-  private previewHost?: RemoteAppPreviewHost.Host
-  private previewEnabled = false
-  private readonly previewAcks = new Map<string, (ack: PreviewStateAck | PreviewAllocateAck | PreviewLeaseAck | undefined) => void>()
   private readonly registry: SessionRegistry
   private readonly subscriptions: SubscriptionRegistry
   private uploads = createAttachmentUploads()
@@ -140,9 +123,6 @@ export class RemoteAgent {
   private readonly authRetryWindowMs: number
 
   private connection?: RelayConnection
-  private readonly relayAuthorization?: (request: RemoteMcpEvents.AuthorizationRequest, signal?: AbortSignal) => Promise<RemoteMcpEvents.AuthorizationResponse>
-  private capabilityProbe?: { readonly connection: RelayConnection | undefined; readonly signal: AbortSignal; readonly probe: Promise<boolean> }
-  private readonly authorizationLogged = new Map<string, number>()
   private state: BridgeState = "idle"
   private generation = 0
   private readonly lifetime = new AbortController()
@@ -186,61 +166,6 @@ export class RemoteAgent {
 
   constructor(private readonly options: RemoteBridgeOptions) {
     this.now = options.now ?? Date.now
-    const mcp = options.mcp
-    const authorization = mcp === undefined ? undefined : RemoteMcpAuthorization.create({
-      relayURL: options.relayURL,
-      deviceID: mcp.deviceID,
-      credential: () => this.credential,
-      allowed: (epoch) => this.connected && mcp.host.allowed(epoch ?? mcp.host.advertisement().epoch),
-      signal: () => mcp.host.authorizationSignal(),
-      now: this.now,
-      ...(mcp.authorizationFetch === undefined ? {} : { fetcher: mcp.authorizationFetch }),
-    })
-    const unavailable = () => new McpEvents.Failure({ category: "unavailable", reason: "authorization_unavailable" })
-    this.relayAuthorization = authorization === undefined ? undefined : (request, signal) =>
-      authorization.authorize(request, signal).catch((error: unknown) => {
-        this.authorizationFailed(request.action, error)
-        throw error
-      })
-    const authorize = async (request: RemoteMcpEvents.AuthorizationRequest, signal?: AbortSignal) => {
-      if (this.relayAuthorization === undefined) throw unavailable()
-      const response = await this.relayAuthorization(request, signal).catch(() => { throw unavailable() })
-      if (response.action === "capabilities") throw unavailable()
-      if (!response.authorized) throw new McpEvents.Failure({
-        category: response.reason === "unavailable" ? "unavailable" : "unauthorized",
-        reason: response.reason === "unavailable" ? "authorization_unavailable" : "grant_revoked",
-      })
-      return response
-    }
-    this.mcpEvents = {
-      capabilities: async () => {
-        if (authorization === undefined || mcp === undefined) return false
-        const signal = mcp.host.authorizationSignal()
-        const held = this.capabilityProbe
-        if (held !== undefined && held.connection === this.connection && held.signal === signal && !signal.aborted) return held.probe
-        const probe: Promise<boolean> = authorization.authorize({ action: "capabilities" })
-          .then((response) => response.action === "capabilities" && response.supported, (error: unknown) => {
-            this.authorizationFailed("capabilities", error)
-            return false
-          })
-          .then((supported) => {
-            if (!supported && this.capabilityProbe?.probe === probe) this.capabilityProbe = undefined
-            return supported
-          })
-        this.capabilityProbe = { connection: this.connection, signal, probe }
-        return probe
-      },
-      resolve: (context, signal) => authorize({ action: "resolve", ...context }, signal)
-        .then((response) => ({ grantID: response.grantID, expiresAt: response.expiresAt })),
-      check: async (principal, signal) => {
-        const response = await authorize({
-          action: "check", grantID: principal.grantID, epoch: principal.epoch,
-          principal: { ownerID: principal.ownerID, deviceID: principal.deviceID, clientID: principal.clientID },
-        }, signal)
-        if (mcp === undefined) throw unavailable()
-        return { expiresAt: response.expiresAt, signal: mcp.host.authorizationSignal() }
-      },
-    }
     this.cache = createOperationCache(this.now)
     this.refreshIntervalMs = options.refreshIntervalMs ?? defaults.refreshIntervalMs
     this.eventRetryInitialMs = options.eventRetryInitialMs ?? defaults.eventRetryInitialMs
@@ -277,17 +202,6 @@ export class RemoteAgent {
 
   private setConnected(connected: boolean) {
     this.connected = connected
-    this.capabilityProbe = undefined
-    if (!connected) {
-      this.credential = undefined
-      this.previewEnabled = false
-      for (const settle of this.previewAcks.values()) settle(undefined)
-      this.previewAcks.clear()
-      this.clearMcpAccess()
-      this.options.mcp?.host.detach()
-      for (const pending of this.mcpAcknowledgements.values()) pending.reject()
-      this.mcpAcknowledgements.clear()
-    }
     this.listeners.forEach((listener) => listener(connected))
   }
 
@@ -323,9 +237,6 @@ export class RemoteAgent {
       await this.stopEventStream()
     } finally {
       await connection?.disconnect(code, reason)
-      await this.mcpCleanup
-      await (await this.mcpServer)?.close()
-      this.previewHost?.close()
     }
   }
 
@@ -341,21 +252,17 @@ export class RemoteAgent {
     const cycle = this.generation
     const credentials = await this.options.credentials(this.lifetime.signal)
     if (cycle !== this.generation) return
-    this.credential = credentials
     this.accessExpiresAt = credentials.accessExpiresAt
     const connection = (this.options.createConnection ?? createRelayConnection)({
       url: agentURL(this.options.relayURL),
       accessToken: credentials.accessToken,
       onOpen: () => {
         if (this.connection !== connection || cycle !== this.generation) return
-        this.credential = credentials
         this.setConnected(true)
         this.resetStatusRetry()
         this.resetCompletionRetry()
         this.statusOwner = {}
         this.scheduler.reset()
-        if (this.options.mcp) void this.options.mcp.host.attach(this.options.mcp.resource, (state) => this.sendMcpState(state))
-        void this.advertisePreview(connection)
         this.subscriptions.clear()
         this.uploads.clear()
         this.uploads = createAttachmentUploads()
@@ -399,38 +306,6 @@ export class RemoteAgent {
 
   private onFrame(frame: unknown) {
     const raw = typeof frame === "string" ? frame : JSON.stringify(frame)
-    const acknowledgement = parseMcpStateAck(raw)
-    if (acknowledgement) {
-      const pending = this.mcpAcknowledgements.get(acknowledgement.id)
-      if (pending && pending.state.epoch === acknowledgement.epoch && pending.state.enabled === acknowledgement.enabled) {
-        this.mcpAcknowledgements.delete(acknowledgement.id)
-        pending.resolve()
-      }
-      return
-    }
-    const previewAck = parsePreviewStateAck(raw) ?? parsePreviewAllocateAck(raw) ?? parsePreviewLeaseAck(raw)
-    if (previewAck) {
-      this.previewAcks.get(previewAck.id)?.(previewAck)
-      return
-    }
-    const preview = parsePreviewRequest(raw)
-    if (preview) {
-      const controller = new AbortController()
-      this.inFlight.set(preview.id, controller)
-      void this.handlePreviewRequest(preview, controller)
-      return
-    }
-    const mcp = parseMcpRequest(raw)
-    if (mcp && this.options.mcp) {
-      if (this.inFlight.has(mcp.id)) {
-        this.diagnostic("ignored a repeated MCP request ID while the first is in flight")
-        return
-      }
-      const controller = new AbortController()
-      this.inFlight.set(mcp.id, controller)
-      void this.handleMcpRequest(mcp, controller)
-      return
-    }
     // The transport already decoded the frame; re-encoding runs the shared parser
     // so no frame reaches the local server without contract validation.
     const parsed = parseRelayToAgentMessage(raw)
@@ -504,176 +379,6 @@ export class RemoteAgent {
   private abortRequests() {
     for (const controller of this.inFlight.values()) controller.abort()
     this.inFlight.clear()
-  }
-
-  private async sendMcpState(state: RemoteMcpPreference) {
-    if (!state.enabled) await this.clearMcpAccess()
-    const id = crypto.randomUUID()
-    const result = Promise.withResolvers<void>()
-    const timeout = setTimeout(() => result.reject(new Error("Relay MCP acknowledgement timed out")), 5_000)
-    this.mcpAcknowledgements.set(id, { state, resolve: () => result.resolve(), reject: () => result.reject(new Error("Remote disconnected")) })
-    try {
-      if (!await this.send(JSON.stringify({ type: "mcp.state", id, ...state }))) result.reject(new Error("Remote disconnected"))
-      await result.promise
-    } finally {
-      clearTimeout(timeout)
-      this.mcpAcknowledgements.delete(id)
-    }
-  }
-
-  private clearMcpAccess() {
-    const server = this.mcpServer
-    if (server === undefined) return this.mcpCleanup
-    this.mcpCleanup = Promise.all([this.mcpCleanup, server.then((value) => value.clearAccess())])
-      .then(() => {}, () => this.diagnostic("Could not clear MCP access state"))
-    return this.mcpCleanup
-  }
-
-  private async handleMcpRequest(request: McpRequest, controller: AbortController) {
-    const owner = this.connection
-    const mcp = this.options.mcp
-    try {
-      if (!mcp || request.input.principal.deviceID !== mcp.deviceID || !mcp.host.allowed(request.input.epoch)) {
-        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "forbidden", message: "Relay MCP is off or its authorization epoch changed" } }), owner)
-        return
-      }
-      this.mcpServer ??= (async () => {
-        const { createRemoteMcp } = await import("./remote-mcp")
-        const { RemoteLocalApp } = await import("./remote-local-app")
-        const { RemoteMcpApps } = await import("./remote-mcp-apps")
-        const { RemoteAppPreviewHost } = await import("./remote-app-preview")
-        const authorize = async (scope: McpEvents.Principal, signal: AbortSignal) => this.mcpEvents.check(scope, signal)
-          .then((result) => !result.signal.aborted && result.expiresAt > this.now(), () => false)
-        const appAuthorization = async (request: RemoteMcpEvents.AuthorizationRequest, signal: AbortSignal) => {
-          if (this.relayAuthorization === undefined) throw new RemoteMcpApps.Error("access_unavailable")
-          const response = await this.relayAuthorization(request, signal).catch((error: unknown) => {
-            throw new RemoteMcpApps.Error(transientAuthorization(error) ?? "access_unavailable")
-          })
-          if (response.action === "capabilities") throw new RemoteMcpApps.Error("access_unavailable")
-          if (!response.authorized) throw new RemoteMcpApps.Error(response.reason === "unavailable" ? "authorization_unavailable" : "access_unavailable")
-          return response
-        }
-        const registry = RemoteLocalApp.create({
-          now: this.now,
-          verifySession: async (sessionID) => await this.registry.renew(sessionID) !== undefined,
-          authorize: async (scope, signal) => {
-            await appAuthorization({
-              action: "check", grantID: scope.grantID, epoch: scope.epoch,
-              principal: { ownerID: scope.ownerID, deviceID: scope.deviceID, clientID: scope.clientID },
-            }, signal).catch((error: unknown) => {
-              const reason = error instanceof RemoteMcpApps.Error ? error.reason : undefined
-              throw new RemoteLocalApp.Error(reason === "rate_limited" || reason === "authorization_unavailable" ? reason : "forbidden")
-            })
-            if (mcp.host.authorizationSignal().aborted) throw new RemoteLocalApp.Error("forbidden")
-            return true
-          },
-        })
-        this.previewHost = mcp.appPreview === undefined ? undefined : RemoteAppPreviewHost.create({
-          config: mcp.appPreview,
-          registry,
-          now: this.now,
-          authorize,
-          relay: {
-            enabled: () => this.previewEnabled,
-            allocate: async (input) => {
-              const ack = await this.previewExchange({ type: "preview.allocate", ...input })
-              if (ack?.type !== "preview.allocate.ack") return { reason: "rejected" }
-              return "origin" in ack ? { origin: ack.origin } : { reason: ack.reason }
-            },
-            lease: async (lease) => {
-              const ack = await this.previewExchange({ type: "preview.lease", ...lease })
-              return ack?.type === "preview.lease.ack" && ack.ok
-            },
-            revoke: (target) => void this.send(JSON.stringify({ type: "preview.revoke", ...target })),
-          },
-        })
-        const apps = RemoteMcpApps.create({
-          registry,
-          now: this.now,
-          resolve: async (context, signal) => {
-            const response = await appAuthorization({ action: "resolve", ...context }, signal)
-            if (response.action !== "resolve") throw new RemoteMcpApps.Error("access_unavailable")
-            return { ...context.principal, grantID: response.grantID, epoch: context.epoch }
-          },
-          ...(this.previewHost === undefined ? {} : { preview: this.previewHost.preview }),
-        })
-        return createRemoteMcp({ local: this.options.local, sessions: this.registry, subscriptions: this.subscriptions,
-          cache: this.cache, home: mcp.home, resource: mcp.resource, apps, allowed: (epoch) => mcp.host.allowed(epoch), now: this.now,
-          onCapabilities: (observations) => mcp.host.setClientCapabilities(observations), onLaneHold: (held) => mcp.host.setLaneHold(held) })
-      })()
-      const server = await this.mcpServer
-      await this.mcpCleanup
-      if (controller.signal.aborted || !mcp.host.allowed(request.input.epoch)) return
-      const response = await server.fetch(new Request(mcp.resource, { method: "POST", body: request.input.body,
-        headers: request.input.headers, signal: controller.signal }), { requestID: request.id, epoch: request.input.epoch, principal: request.input.principal })
-      const reader = response.body?.getReader()
-      const chunks: Uint8Array[] = []
-      let bytes = 0
-      if (reader) {
-        for (;;) {
-          const next = await reader.read()
-          if (next.done) break
-          bytes += next.value.byteLength
-          if (bytes > RemoteLimits.maxAgentMessageChars * RemoteLimits.maxChunksPerResponse) {
-            await reader.cancel()
-            await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "message_too_large", message: "MCP response exceeds the relay response bound" } }), owner)
-            return
-          }
-          chunks.push(next.value)
-        }
-      }
-      if (this.connection !== owner || controller.signal.aborted || !mcp.host.allowed(request.input.epoch)) return
-      const body = Buffer.concat(chunks).toString("utf8")
-      for (const frame of successFrames(request.id, { status: response.status, contentType: response.headers.get("content-type") ?? "application/json", body })) {
-        if (controller.signal.aborted || this.connection !== owner) return
-        await this.send(serializeResponse(frame), owner)
-      }
-    } catch {
-      if (!controller.signal.aborted && this.connection === owner)
-        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "outcome_unknown", message: "MCP request outcome is unknown; inspect the Session before retrying" } }), owner)
-    } finally {
-      if (this.inFlight.get(request.id) === controller) this.inFlight.delete(request.id)
-    }
-  }
-
-  private async advertisePreview(connection: RelayConnection) {
-    const origins = this.options.mcp?.appPreview?.origins
-    if (origins === undefined) return
-    const ack = await this.previewExchange({ type: "preview.state", origins }, connection)
-    if (this.connection === connection && this.connected) this.previewEnabled = ack?.type === "preview.state.ack" && ack.enabled
-  }
-
-  private previewExchange(frame: Record<string, unknown>, connection = this.connection) {
-    const id = crypto.randomUUID()
-    const result = Promise.withResolvers<PreviewStateAck | PreviewAllocateAck | PreviewLeaseAck | undefined>()
-    const timeout = setTimeout(() => result.resolve(undefined), 5_000)
-    this.previewAcks.set(id, result.resolve)
-    void this.send(JSON.stringify({ ...frame, id }), connection).then((sent) => { if (!sent) result.resolve(undefined) })
-    return result.promise.finally(() => {
-      clearTimeout(timeout)
-      this.previewAcks.delete(id)
-    })
-  }
-
-  private async handlePreviewRequest(request: PreviewRequest, controller: AbortController) {
-    const owner = this.connection
-    try {
-      const host = this.previewHost
-      if (host === undefined || !this.previewEnabled) {
-        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "agent_unavailable", message: "App preview is unavailable on this machine" } }), owner)
-        return
-      }
-      const result = await host.fetch(request.input, controller.signal)
-      for (const frame of successFrames(request.id, result)) {
-        if (controller.signal.aborted || this.connection !== owner) return
-        await this.send(serializeResponse(frame), owner)
-      }
-    } catch {
-      if (!controller.signal.aborted && this.connection === owner)
-        await this.send(serializeResponse({ type: "response", id: request.id, ok: false, error: { code: "internal_error", message: "App preview request failed" } }), owner)
-    } finally {
-      if (this.inFlight.get(request.id) === controller) this.inFlight.delete(request.id)
-    }
   }
 
   private send(frame: string, connection = this.connection) {
@@ -1318,21 +1023,6 @@ export class RemoteAgent {
     this.options.onDiagnostic?.(message)
   }
 
-  private authorizationFailed(action: string, error: unknown) {
-    if (!(error instanceof RemoteMcpAuthorization.Error) || !error.relay) return
-    const key = `${action}:${error.reason}`
-    const last = this.authorizationLogged.get(key)
-    if (last !== undefined && this.now() - last < authorizationLogIntervalMs) return
-    this.authorizationLogged.set(key, this.now())
-    this.diagnostic(`MCP Events authorization ${action} failed: ${error.reason}`)
-  }
-}
-
-function transientAuthorization(error: unknown) {
-  if (!(error instanceof RemoteMcpAuthorization.Error) || !error.relay) return undefined
-  if (error.reason === "rate_limited") return "rate_limited" as const
-  if (error.reason === "unavailable") return "authorization_unavailable" as const
-  return undefined
 }
 
 function createRelayConnection(input: ConnectionInput): RelayConnection {

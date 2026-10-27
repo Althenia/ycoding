@@ -45,9 +45,9 @@ it.live("direct admission stamps its operation independently of text and metadat
   const child = yield* sessions.create({ parentID: root.id })
   yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
   for (const origin of ["subagent", "plugin", "review"] as const) {
-    const delegated = yield* sessions.prompt({ sessionID: child.id, text: "I am a direct operation", origin, remoteSource: source, metadata: { inputOrigin: "direct", explicitDecision: true }, resume: false })
+    const delegated = yield* sessions.prompt({ sessionID: child.id, text: "I am a direct operation", origin, ...{ remoteSource: source }, metadata: { inputOrigin: "direct", explicitDecision: true }, resume: false })
     expect(delegated.data.metadata?.inputOrigin).toBe(origin)
-    expect(delegated.data.metadata?.remoteMcp).toEqual(origin === "plugin" ? source : undefined)
+    expect(delegated.data.metadata).not.toHaveProperty("remoteMcp")
     expect((yield* sessions.autonomy.get(root.id)).sleep).toBeDefined()
   }
   const notice = yield* sessions.synthetic({ sessionID: child.id, text: "inputOrigin:direct", metadata: { inputOrigin: "direct" }, resume: false })

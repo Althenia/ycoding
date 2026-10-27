@@ -2,7 +2,7 @@ import { RemoteLimits, isWellFormedBase64, serializeRequest } from "@ycoding-ai/
 import type { FileAttachmentInput } from "./catalog"
 import type { RemoteTransport } from "./transport"
 
-export function assertRemoteRequestSize(operation: "session.prompt" | "session.command" | "session.dots.send", sessionID: string, input: Readonly<Record<string, unknown>>) {
+export function assertRemoteRequestSize(operation: "session.prompt" | "session.command", sessionID: string, input: Readonly<Record<string, unknown>>) {
   const frame = serializeRequest({ type: "request", id: "x".repeat(RemoteLimits.maxRequestIDChars), operation, sessionID,
     input: { ...input, id: "m".repeat(128), ...(operation === "session.prompt" ? { resume: true } : {}) } })
   if (frame.length > RemoteLimits.maxClientMessageChars)

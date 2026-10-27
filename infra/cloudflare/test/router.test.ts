@@ -1202,7 +1202,7 @@ describe("router: revocation pushes, failure boundaries, and cookie hygiene", ()
   })
 })
 
-describe("router: MCP events grant authorization", () => {
+describe("router: retired MCP events authorization", () => {
   async function issueDeviceTokens(h: Harness, device: Awaited<ReturnType<typeof enrollDevice>>) {
     const challenge = await h.router(jsonRequest(`${origin}/api/devices/challenge`, { deviceID: device.deviceID }))
     expect(challenge.status).toBe(200)
@@ -1221,149 +1221,21 @@ describe("router: MCP events grant authorization", () => {
     return (await issued.json()) as { accessToken: string; refreshToken: string }
   }
 
-  const sharedAddress = "198.51.100.7"
-  const otherAddress = "203.0.113.7"
-
-  async function connector(h: Harness, userID: string, name: string) {
-    const device = await enrollDevice(h, userID, name)
-    return { deviceID: device.deviceID, token: (await issueDeviceTokens(h, device)).accessToken }
-  }
-
-  function authorize(h: Harness, deviceID: string, address: string, token?: string, body: unknown = { action: "capabilities" }) {
-    return h.router(jsonRequest(`${origin}/api/devices/${deviceID}/mcp/events/authorize`, body, {
-      "cf-connecting-ip": address,
-      ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
-    }))
-  }
-
-  test("requires the enrolled device access token, forwards only the typed control to that device's relay, and never rotates credentials", async () => {
-    const calls: { readonly name: string; readonly request: Request }[] = []
-    const h = await harness({
-      relay: {
-        getByName: (name) => ({
-          fetch: async (request) => {
-            calls.push({ name, request })
-            return Response.json({ action: "capabilities", supported: true })
-          },
-        }),
-      },
-    })
+  test("returns 404 for anonymous, browser and enrolled-device credentials without forwarding or rotation", async () => {
+    const h = await harness()
     const owner = await signIn(h, "owner")
     const device = await enrollDevice(h, owner.userID)
     const tokens = await issueDeviceTokens(h, device)
     const url = `${origin}/api/devices/${device.deviceID}/mcp/events/authorize`
-    const post = (body: unknown, headers: Record<string, string> = {}) => h.router(jsonRequest(url, body, headers))
-
-    expect((await post({ action: "capabilities" })).status).toBe(401)
-    expect((await post({ action: "capabilities" }, { authorization: "Bearer not-a-device-token" })).status).toBe(401)
-    expect((await h.router(new Request(url, { headers: { authorization: `Bearer ${tokens.accessToken}` } }))).status).toBe(405)
-    expect((await post({ action: "subscribe", url: "https://example.invalid/hook" }, { authorization: `Bearer ${tokens.accessToken}` })).status).toBe(400)
-    expect(calls).toHaveLength(0)
-
-    const other = await enrollDevice(h, owner.userID, "Other Mac")
-    expect((await h.router(jsonRequest(`${origin}/api/devices/${other.deviceID}/mcp/events/authorize`, { action: "capabilities" }, { authorization: `Bearer ${tokens.accessToken}` }))).status).toBe(403)
-    expect(calls).toHaveLength(0)
-
-    const accepted = await post({ action: "capabilities" }, { authorization: `Bearer ${tokens.accessToken}`, "x-ycoding-owner": "intruder" })
-    expect(accepted.status).toBe(200)
-    expect(await accepted.json()).toEqual({ action: "capabilities", supported: true })
-    expect(calls).toHaveLength(1)
-    expect(calls[0].name).toBe(`${owner.userID}:${device.deviceID}`)
-    expect(new URL(calls[0].request.url).pathname).toBe("/_ycoding/mcp-events/authorize")
-    expect(calls[0].request.headers.get("x-ycoding-internal")).toBe("1")
-    expect(calls[0].request.headers.get("x-ycoding-owner")).toBe(owner.userID)
-    expect(calls[0].request.headers.get("x-ycoding-device")).toBe(device.deviceID)
-    expect(calls[0].request.headers.get("x-ycoding-mcp-resource")).toBe(`${origin}/api/mcp/devices/${device.deviceID}`)
-    expect(calls[0].request.headers.get("authorization")).toBeNull()
-    expect(await calls[0].request.clone().json()).toEqual({ action: "capabilities" })
-
-    const again = await post({ action: "capabilities" }, { authorization: `Bearer ${tokens.accessToken}` })
-    expect(again.status).toBe(200)
+    for (const headers of [{}, sessionCookie(owner.token), { authorization: `Bearer ${tokens.accessToken}` }])
+      for (const method of ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+        const response = await h.router(new Request(url, { method, headers }))
+        expect(response.status).toBe(404)
+        expect(await response.json()).toEqual({ error: { code: "invalid_message", message: "Not found" } })
+      }
+    expect(h.relayCalls).toEqual([])
     const refreshed = await h.router(jsonRequest(`${origin}/api/devices/refresh`, { deviceID: device.deviceID, refreshToken: tokens.refreshToken }))
     expect(refreshed.status).toBe(200)
   })
 
-  test("forwards a 35-trigger resolve and check burst from each of two devices behind one address", async () => {
-    const h = await harness()
-    const owner = await signIn(h, "owner")
-    const devices = [await connector(h, owner.userID, "Studio Mac"), await connector(h, owner.userID, "Laptop")]
-    const statuses = await Promise.all(devices.flatMap((device) => {
-      const principal = { ownerID: owner.userID, deviceID: device.deviceID, clientID: "client_1" }
-      return Array.from({ length: 35 }).flatMap((_, trigger) => [
-        { action: "resolve", requestID: `request_${trigger}`, principal, epoch: "epoch_1" },
-        { action: "check", grantID: `grant_${trigger}`, principal, epoch: "epoch_1" },
-      ]).map(async (body) => (await authorize(h, device.deviceID, sharedAddress, device.token, body)).status)
-    }))
-    expect(statuses).toEqual(Array.from({ length: 140 }, () => 200))
-    expect(devices.map((device) => h.relayCalls.filter((call) => call.name === `${owner.userID}:${device.deviceID}`).length)).toEqual([70, 70])
-  })
-
-  test("limits each authenticated device to 300 requests per window while another device behind the address continues", async () => {
-    const h = await harness()
-    const owner = await signIn(h, "owner")
-    const studio = await connector(h, owner.userID, "Studio Mac")
-    const laptop = await connector(h, owner.userID, "Laptop")
-    const burst = await Promise.all(Array.from({ length: 300 }, async () => (await authorize(h, studio.deviceID, sharedAddress, studio.token)).status))
-    expect(burst).toEqual(Array.from({ length: 300 }, () => 200))
-
-    const limited = await authorize(h, studio.deviceID, sharedAddress, studio.token)
-    expect(limited.status).toBe(429)
-    expect(await limited.json()).toEqual({ error: { code: "rate_limited", message: "Too many requests" } })
-    expect(h.relayCalls).toHaveLength(300)
-    expect((await authorize(h, laptop.deviceID, sharedAddress, laptop.token)).status).toBe(200)
-    expect(h.relayCalls.slice(300).map((call) => call.name)).toEqual([`${owner.userID}:${laptop.deviceID}`])
-
-    h.advance(59_999)
-    expect((await authorize(h, studio.deviceID, sharedAddress, studio.token)).status).toBe(429)
-    h.advance(1)
-    expect((await authorize(h, studio.deviceID, sharedAddress, studio.token)).status).toBe(200)
-    expect(h.relayCalls).toHaveLength(302)
-  })
-
-  test("refuses an address with 30 authentication failures in its window before consulting credentials", async () => {
-    const base = createAuthService(createMemoryAuthStore(), { now: () => 1_700_000_000_000 })
-    let authorizations = 0
-    const h = await harness({
-      service: {
-        ...base,
-        authorizeAgentToken: (token) => {
-          authorizations += 1
-          return base.authorizeAgentToken(token)
-        },
-      },
-    })
-    const owner = await signIn(h, "owner")
-    const studio = await connector(h, owner.userID, "Studio Mac")
-    const statuses = [(await authorize(h, studio.deviceID, otherAddress, "not-a-device-token")).status]
-    h.advance(30_000)
-    for (let attempt = 1; attempt < 30; attempt += 1) statuses.push((await authorize(h, studio.deviceID, otherAddress, "not-a-device-token")).status)
-    expect(statuses).toEqual(Array.from({ length: 30 }, () => 401))
-    expect(authorizations).toBe(30)
-
-    const refused = await authorize(h, studio.deviceID, otherAddress, studio.token)
-    expect(refused.status).toBe(429)
-    expect(await refused.json()).toEqual({ error: { code: "rate_limited", message: "Too many requests" } })
-    expect(authorizations).toBe(30)
-    expect(h.relayCalls).toHaveLength(0)
-    expect((await authorize(h, studio.deviceID, sharedAddress, studio.token)).status).toBe(200)
-
-    h.advance(29_999)
-    expect((await authorize(h, studio.deviceID, otherAddress, studio.token)).status).toBe(429)
-    h.advance(1)
-    expect((await authorize(h, studio.deviceID, otherAddress, studio.token)).status).toBe(200)
-    expect(h.relayCalls).toHaveLength(2)
-  })
-
-  test("counts a missing, invalid, or other device's credential as one failure for the address", async () => {
-    const h = await harness()
-    const owner = await signIn(h, "owner")
-    const studio = await connector(h, owner.userID, "Studio Mac")
-    const laptop = await connector(h, owner.userID, "Laptop")
-    const statuses: number[] = []
-    for (let round = 0; round < 10; round += 1)
-      for (const token of [undefined, "not-a-device-token", laptop.token]) statuses.push((await authorize(h, studio.deviceID, otherAddress, token)).status)
-    expect(statuses).toEqual(Array.from({ length: 10 }).flatMap(() => [401, 401, 403]))
-    expect((await authorize(h, studio.deviceID, otherAddress, studio.token)).status).toBe(429)
-    expect(h.relayCalls).toHaveLength(0)
-  })
 })

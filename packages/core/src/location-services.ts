@@ -11,7 +11,7 @@ import { Computer } from "./computer"
 import { Command } from "./command"
 import { Config } from "./config"
 import { Decision } from "./decision"
-import { DotsRuntimeNode } from "./dots/node"
+import { DotsAccess } from "./dots/access"
 import { LayerNode } from "./effect/layer-node"
 import { Node } from "./effect/app-node"
 import { FileMutation } from "./file-mutation"
@@ -108,7 +108,7 @@ const locationServiceNodes = [
   ToolOutputStore.node,
   ToolRegistry.node,
   ToolRegistry.toolsNode,
-  DotsRuntimeNode.node,
+  DotsAccess.node,
   Image.node,
   SkillInstructions.node,
   ReferenceInstructions.node,

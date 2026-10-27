@@ -1,6 +1,5 @@
 import { useData } from "../context/data"
 import { createMemo } from "solid-js"
-import { useTerminalDimensions } from "@opentui/solid"
 import { DialogSelect } from "../ui/dialog-select"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { keepAwakeAssertionLabel, keepAwakeStatusLabel, useKeepAwake } from "../keep-awake"
@@ -25,7 +24,6 @@ export function DialogStatus(props: DialogStatusProps = {}) {
   const keepAwake = useKeepAwake()
   const telemetry = useTelemetry()
   const dialog = useDialog()
-  const dimensions = useTerminalDimensions()
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
   const diagnostics = createMemo(() => data.location.config.diagnostics.list() ?? [])
   const connected = createMemo(() => mcp().filter((server) => server.status.status === "connected").length)
@@ -63,22 +61,6 @@ export function DialogStatus(props: DialogStatusProps = {}) {
                 : undefined,
           category: "Services",
           value: "remote",
-        },
-        {
-          title: "Relay MCP",
-          details: [remote.mcp().message, ...urlLines(remote.mcp().url, Math.max(1, Math.min(76, dimensions().width - 12)))].filter((value) => value !== undefined),
-          detailsWrap: true,
-          footer: remote.mcp().state,
-          state:
-            remote.mcp().state === "error"
-              ? ("error" as const)
-              : remote.mcp().state === "on"
-                ? ("connected" as const)
-                : remote.mcp().state === "connecting"
-                  ? ("connecting" as const)
-                  : undefined,
-          category: "Services",
-          value: "relayMcp",
         },
         {
           title: "Keep awake",
@@ -156,9 +138,4 @@ export function DialogStatus(props: DialogStatusProps = {}) {
       }}
     />
   )
-}
-
-function urlLines(url: string | undefined, width: number) {
-  if (url === undefined) return []
-  return Array.from({ length: Math.ceil(url.length / width) }, (_, index) => url.slice(index * width, (index + 1) * width))
 }

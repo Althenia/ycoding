@@ -46,6 +46,14 @@ const base: PaletteContext = {
 const ids = (context: PaletteContext) => paletteActions(context).map((action) => action.id)
 
 describe("palette availability", () => {
+  test("Dots access is an explicit root permission, not connection status", () => {
+    const access = { sessionID: "ses_a", rootSessionID: "ses_a", enabled: false, revision: 1, inherited: false, configured: true }
+    const action = (value: typeof access) => paletteActions({ ...base, session: { ...base.session!, dotsAccess: value } }).find((entry) => entry.id === "session.dots.access")
+    expect(action(access)).toMatchObject({ title: "Enable Dots access", intent: { type: "dotsAccess", enabled: true, revision: 1 } })
+    expect(action({ ...access, enabled: true, revision: 2 })).toMatchObject({ title: "Disable Dots access", intent: { type: "dotsAccess", enabled: false, revision: 2 } })
+    expect(action({ ...access, configured: false })).toBeUndefined()
+    expect(ids({ ...base, session: { ...base.session!, managedChild: true, dotsAccess: { ...access, inherited: true } } })).not.toContain("session.dots.access")
+  })
   test("provider actions expose the existing selection owner and the explicit connection flow", () => {
     expect(paletteActions(base).find((action) => action.id === "settings.model")?.intent).toEqual({ type: "model" })
     expect(paletteActions(base).find((action) => action.id === "settings.provider.connect")?.intent).toEqual({ type: "connectProvider" })

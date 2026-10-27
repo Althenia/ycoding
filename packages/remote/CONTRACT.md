@@ -41,25 +41,15 @@ vocabulary changes the contract for all three at once.
 | `GET` | `/ws/v4/client` | browser session cookie | same-origin required | Browser/phone relay connection |
 | `GET` | `/ws/v4/agent` | device access token | not required | Local agent relay connection |
 | `GET` | `/health` | none | not required | Database liveness probe |
-| `POST` | `/api/mcp/devices/:deviceID` | MCP access token | none (OAuth client) | Relay MCP resource; exact audience `<origin>/api/mcp/devices/:deviceID` |
-| `GET` | `/.well-known/oauth-protected-resource/api/mcp/devices/:deviceID` | none | none | Resource metadata: resource, issuer, scope `ycoding:remote`, bearer in header |
-| `GET` | `/.well-known/oauth-authorization-server` | none | none | Relay OAuth metadata |
-| `POST` | `/api/mcp/oauth/register` | none (rate limited) | none (OAuth client) | Public-client DCR; returns a client ID and no secret |
-| `GET` | `/api/mcp/oauth/authorize` | none (rate limited) | not required (navigation) | Validate the request; show the client and authority before Google navigation |
-| `POST` | `/api/mcp/oauth/login` | transaction cookie + CSRF | same-origin required | Continue to Google for this authorization transaction |
-| `GET` | `/api/mcp/oauth/google/callback` | transaction cookie | not required (provider redirect) | Verify Google sign-in, allowlist, and device ownership; show consent |
-| `POST` | `/api/mcp/oauth/consent` | transaction cookie + CSRF | same-origin required | Allow or Deny the exact client/device/resource/redirect binding |
-| `POST` | `/api/mcp/oauth/token` | none (rate limited) | none (OAuth client) | Authorization-code exchange or rotating refresh |
-| `POST` | `/api/mcp/oauth/revoke` | none (rate limited) | none (OAuth client) | Revoke a token's grant; unknown credentials also succeed |
 
 `RemoteDeviceInfo.alias` is optional and nullable account-owned metadata. An alias is a trimmed single-line string of 1–48 characters; null clears it. Device `name` remains the real hostname. Alias requests accept only `alias`, never an owner, hostname, or replacement identity. The update is conditional on the stable device ID, authenticated owner, and absence of revocation in one database statement. Unknown, foreign, and revoked devices return the same `404`; absent or expired browser authentication returns `401`, failed origin checks return `403`, malformed input returns `400`, and methods other than PATCH return `405`. Device credentials do not authorize this route. Reads through `/api/me` and `/api/devices` expose the canonical alias only to the owning account. Saving an alias does not change credentials, presence, enrollment, or relay connections.
 
 The web client displays the canonical alias, or the hostname when it is absent or null, on every machine surface. It never reads or imports browser-local alias storage. Saves retain the reported name until acknowledged, preserve the draft on failure, and are not replayed automatically. Other clients obtain updated names through their account reads; alias changes do not create a relay notification or a polling loop.
 
-Every WebSocket connection is authenticated. The only unauthenticated relay paths are
-the public Relay MCP discovery, registration, and OAuth navigation routes in the
-Relay MCP rows above; every MCP request to a device resource requires a valid access
-token (section 2.5).
+Every WebSocket connection is authenticated. Browser sign-in, enrollment, device
+challenge/token exchange, and liveness retain the explicit authentication rules in
+the table. Incoming MCP resources, MCP OAuth, discovery, and Events routes are not
+served; unmatched worker-owned paths return JSON `404`.
 
 Static assets are served from the web lane's build (`apps/web/dist`) through the
 `ASSETS` binding with `not_found_handling: single-page-application`. Routing is
@@ -109,15 +99,10 @@ JavaScript cannot set it):
 - `/api/auth/google/start` and `/api/auth/google/callback` are navigations and
   require no `Origin`; they are protected by the one-use transaction cookie,
   `state`, PKCE, and the ID token binding.
-- Relay MCP browser steps (`/api/mcp/oauth/authorize`, `login`, `google/callback`,
-  `consent`) are protected by their HttpOnly transaction cookie, one-use CSRF value,
-  `state`, nonce, and PKCE; the `POST` steps additionally require an exactly matching
-  `Origin`. Registration, token, revoke, and MCP resource requests come from OAuth
-  clients, carry no cookie, and never require an `Origin`.
 - Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v4/agent`)
   carry no browser cookie and never require an `Origin`; they are rate limited.
 
-`GET /api/*` responses and every OAuth and MCP response are `Cache-Control: no-store`. No `GET` route writes
+`GET /api/*` responses and authentication responses are `Cache-Control: no-store`. No `GET` route writes
 cookies: browser session rotation is only `POST /api/auth/session/refresh`.
 
 ## 2. Authentication
@@ -248,67 +233,11 @@ invalid everywhere afterward. Another invite creates a new independent owner.
 
 ### 2.4 Authorization invariant
 
-Every relay command path requires an authenticated owner, an authenticated device
+Every browser relay command path requires an authenticated owner, an authenticated device
 owned by that account, a non-revoked device, and a live browser session. The local
 agent resolves scoped Session IDs against its backend before execution. The relay
 checks session expiry and applies the bounded D1 revalidation policy below rather
 than trusting the connection's upgrade state for its lifetime.
-
-Relay MCP requests use a separate principal: an unexpired access token bound to one
-grant, client, owner, device, exact resource, and the device's current MCP enable
-epoch, in addition to a non-revoked device with a live agent. A browser session never
-authenticates an MCP request, and an MCP token never authenticates a browser route.
-
-### 2.5 Relay MCP OAuth
-
-The relay is the OAuth authorization server and protected-resource issuer for each
-enrolled device's MCP resource `<origin>/api/mcp/devices/:deviceID`. The origin is the
-enrolled relay's canonical HTTPS origin (plain HTTP only for loopback development);
-the device ID is stable across reconnects. One scope, `ycoding:remote`, grants the
-complete tool set in section 3.4a. Metadata advertises authorization-code and refresh
-grants, `response_types_supported: ["code"]`, `code_challenge_methods_supported:
-["S256"]`, `token_endpoint_auth_methods_supported: ["none"]`,
-`client_id_metadata_document_supported: true`, and
-`authorization_response_iss_parameter_supported: true`; every authorization redirect
-to a validated redirect URI carries the relay issuer.
-
-- Clients register by Client ID Metadata Document (CIMD) or Dynamic Client
-  Registration (DCR); both are public clients using PKCE and no client secret. CIMD
-  fetches use HTTPS, no redirects, no credentials, IP literals, or local/private
-  hosts, a five-second deadline, a 32 KiB streamed cap, at most ten redirect URIs,
-  and a cache of at most 128 documents with a five-minute lifetime ceiling. The
-  relay never fetches logos, client links, or key sets. Redirect URIs are HTTPS or
-  explicit loopback HTTP and match exactly; an invalid client or redirect URI is never
-  redirected to. Registration alone grants no access.
-- Authorization creates a ten-minute transaction bound to an HttpOnly, Secure,
-  SameSite=Lax cookie. The relay first shows the client name, redirect host, resource,
-  and full authority without naming the device, and continues to Google only after an
-  explicit CSRF-protected Continue. The Google sign-in is a fresh authorization-code
-  and S256 flow; an invite or browser cookie never substitutes for it. The relay
-  requires a Google-verified email on the operator allowlist, resolves the Google
-  subject to the existing relay owner, and requires that owner to own the active
-  device. It retains neither the email nor Google tokens.
-- Consent is required on every new authorization, even after a prior grant, and covers
-  exactly the shown client, device, resource, and redirect. Allow issues a one-use
-  code; Deny redirects `access_denied` with the original state and issuer.
-- Codes, access tokens, and refresh tokens are opaque 32-byte random values stored
-  only as SHA-256 digests. Code lifetime is one minute, access lifetime five minutes,
-  and a refresh family lasts 30 days absolute; rotation never extends it. Code
-  exchange and refresh rotation consume atomically: a concurrent or repeated exchange
-  fails with `invalid_grant`, and refresh reuse revokes the family. Exchanges require
-  the matching client, redirect, resource, and S256 verifier. No signing key or JWKS
-  exists for these tokens.
-- A missing, expired, revoked, or foreign-resource token returns `401` with
-  `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource/api/mcp/devices/:deviceID", scope="ycoding:remote"`;
-  insufficient scope returns `403`. An enabled device whose agent is unavailable
-  returns a bounded unavailable error without forwarding. The resource accepts `POST`
-  only (`405` otherwise); unknown paths under `/api/mcp` and `/.well-known` return JSON
-  `404`. Registration, authorization, token, and revoke routes are rate limited per
-  address in separate groups.
-- The relay forwards only the verified owner, device, and client identity, never the
-  bearer, cookies, or Google tokens. Turning MCP off, changing its epoch, or revoking
-  the device deletes that device's grants, codes, and tokens; deleting an account
-  removes its authorization rows.
 
 ## 3. Relay transport
 
@@ -686,8 +615,6 @@ grouping and Session-list filters are derived from backend metadata.
 
 | Remote operation | Session-scoped | Local Protocol identifier | Local route | `input` fields |
 | --- | --- | --- | --- | --- |
-| `artifact.demo.preview` | no | Connector-owned fixed demo | Relay MCP only; no local HTTP route | — |
-| `artifact.demo.export` | no | Connector-owned fixed demo | Relay MCP only; no local HTTP route | — |
 | `workspace.list` | no | `session.list`, `project.list`, `project.directories` | `GET /api/session`, `GET /api/project`, `GET /api/project/:projectID/directories` | `sessionsOnly?` |
 | `workspace.catalog` | no | Location-scoped catalog reads | `GET /api/agent`, `/api/model`, `/api/model/default`, `/api/provider`, `/api/command`, `/api/skill`, `/api/reference`, `/api/mcp/resource` | `workspace` |
 | `workspace.file.find` | no | `fs.find` | `GET /api/fs/find` | `workspace`, `query`, `limit?` |
@@ -741,6 +668,8 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.command` | yes | `session.command` | `POST /api/session/:sessionID/command` | `id?`, `command`, `arguments?`, `files?`, `agents?`, `delivery?` |
 | `session.skill` | yes | `session.skill` | `POST /api/session/:sessionID/skill` | `id?`, `skill`, `resume?` |
 | `session.switchModel` | yes | `session.switchModel` | `POST /api/session/:sessionID/model` | `model` |
+| `session.dots.access.get` | yes | `session.dots.access.get` | `GET /api/session/:sessionID/dots/access` | — |
+| `session.dots.access.set` | yes | `session.dots.access.set` | `POST /api/session/:sessionID/dots/access` | exactly `enabled` boolean and non-negative integer `expectedRevision` |
 | `session.switchAgent` | yes | `session.switchAgent` | `POST /api/session/:sessionID/agent` | `agent` |
 | `session.interrupt` | yes | `session.interrupt` | `POST /api/session/:sessionID/interrupt` | — |
 | `session.prediction` | yes | `session.prediction` | `POST /api/session/:sessionID/prediction` at the verified Session Location | `memory` (unique `repository` or `knowledge`, at most 2), `hint?` (string, at most 2000 characters) |
@@ -759,7 +688,9 @@ grouping and Session-list filters are derived from backend metadata.
 | `session.goal.stop` | yes | `session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `goal: null` |
 | `session.create` | no | `session.create`, `project.current` | `POST /api/session`, `GET /api/project/current` | `id`, `workspace`, `agent?`, `model?`, `title?` |
 
-Coordination operations address the connected backend, never a frame `sessionID`, a directory, a workspace, or a caller-provided actor. Reads are `settings`, `list` and `get`; mutations are `create`, `update` and `delete`, ordered per Project by Relay MCP. The connector verifies supplied Master and member Session IDs against the backend inventory before creating or updating a Project. Locations and membership eligibility remain backend-owned. Each Project has one Master and up to 64 members. Updates require the expected non-negative `revision`; omitted fields are preserved, while `memberSessionIDs` and `settings` replace their whole values. Settings contain `concurrency` (positive integer or null) and optional `delegatedDecisions` narrowing. Names contain 1–120 characters and Project IDs use `cgrp_`. Successful reads, creates and updates return `{ data }`; deletion returns `{}` after the local 204 response. Owner authorization, native permission ceilings and uncertain-outcome handling are unchanged. Plain transport DTOs are `RemoteCoordinationSettings`, `RemoteCoordinationGroupSettings`, `RemoteCoordinationDelegatedDecisions`, `RemoteCoordinationMemberState`, `RemoteCoordinationPendingRequest`, `RemoteCoordinationParticipant`, `RemoteCoordinationGroup` and `RemoteCoordinationGroupSummary`. Participants carry backend-resolved Locations, live state, last activity, pending requests and optional `drivenBy`; Projects carry `active` and optional `pausedReason`.
+`session.dots.access.get` returns `{ sessionID, rootSessionID, enabled, revision, inherited, configured }`. Access is a persisted root-family choice, not connection status; existing roots default off and newly native-created roots are enabled atomically. Children inherit and cannot change access independently. `session.dots.access.set` uses the displayed exact revision; child writes and stale revisions fail. The browser relay exposes no other Dots operation or private Channel. Native admission and typed decisions require trusted global enablement, an explicit pinned OpenAI OAuth profile, and the private server-process Host; they have no HTTP fallback. Exact candidate, source, revision, access, ownership, archive, deny, ceiling, and connection-lifetime checks remain native-owned.
+
+Coordination operations address the connected backend, never a frame `sessionID`, a directory, a workspace, or a caller-provided actor. Reads are `settings`, `list` and `get`; mutations are `create`, `update` and `delete`. The connector verifies supplied Master and member Session IDs against the backend inventory before creating or updating a Project. Locations and membership eligibility remain backend-owned. Each Project has one Master and up to 64 members. Updates require the expected non-negative `revision`; omitted fields are preserved, while `memberSessionIDs` and `settings` replace their whole values. Settings contain `concurrency` (positive integer or null) and optional `delegatedDecisions` narrowing. Names contain 1–120 characters and Project IDs use `cgrp_`. Successful reads, creates and updates return `{ data }`; deletion returns `{}` after the local 204 response. Owner authorization, native permission ceilings and uncertain-outcome handling are unchanged. Plain transport DTOs are `RemoteCoordinationSettings`, `RemoteCoordinationGroupSettings`, `RemoteCoordinationDelegatedDecisions`, `RemoteCoordinationMemberState`, `RemoteCoordinationPendingRequest`, `RemoteCoordinationParticipant`, `RemoteCoordinationGroup` and `RemoteCoordinationGroupSummary`. Participants carry backend-resolved Locations, live state, last activity, pending requests and optional `drivenBy`; Projects carry `active` and optional `pausedReason`.
 
 `session.delete` requires the frame's `sessionID`, accepts no input fields, and resolves the Location from the backend inventory before calling `session.remove`. Success returns `{}`. Deleting a member Session removes its membership; deleting a Master Session deletes its Project. A Project deletion alone preserves all Sessions and their histories. Unconfirmed mutations return `outcome_unknown` and are not automatically replayed.
 
@@ -994,120 +925,19 @@ parameter. `session.form.reply` and `session.form.cancel` map a `formID` path
 parameter. The corresponding identifier is therefore explicit in each mutation's
 `input`.
 
-### 3.4a Relay MCP operation
-
-Relay MCP adds one agent-bound request operation, `mcp.request`, outside the browser
-allowlist: a browser frame cannot send it, and it carries a bounded HTTP body (within
-the 32,768-character client-frame bound), the allowlisted headers `content-type`,
-`accept`, `mcp-protocol-version`, `mcp-method`, and `mcp-name`, the verified
-principal `{ ownerID, deviceID, clientID }`, and the enable epoch. It never carries a
-URL, path, HTTP method, bearer, or cookie. The agent dispatches it only to its local
-MCP handler at the device's fixed resource. The relay does not parse tool arguments,
-validate domain inputs, inspect Session state, or execute decisions.
-
-Two authenticated agent controls manage the gate: the agent sends `mcp.state`
-`{ id, enabled, epoch }` on every connection and on every change, and the relay replies
-`mcp.state.ack` after recording it. The gate stays closed until acknowledgment; a late
-control from a replaced socket is rejected, and a changed epoch deletes old grants
-before the gate opens. Requests recheck live authority and the epoch before forwarding
-and before local dispatch.
-
-The endpoint speaks MCP revision 2026-07-28 through the SDK's JSON response mode and
-rejects legacy transports. It exposes 88 tools: one per closed remote operation in sections 3.4 and 3.4b
-except `session.subscribe`, `session.unsubscribe`, `session.message.stream`,
-`session.attachment.upload`, `machine.telemetry.consent.get`,
-`machine.telemetry.consent.set`, `machine.latency.append`, and `machine.latency.list`
-(87 operations), plus `session_create_in_directory`. The six `coordination_*`
-tools are part of that set with no exclusion; mutation tools order per coordination
-group, and read tools carry read-only hints. Tool names are the operation
-names in snake_case with dots and hyphens replaced by underscores (for example
-`session_permission_reply`, `machine_keep_awake_set`); clients poll snapshots, pending
-interactions, and status instead of subscribing. Session-scoped tools take
-`{ sessionID, input }`, others `{ input }`, with `input` omitted when the operation has
-none. Each tool's JSON Schema is published by the server and each call is validated by
-the same validator and executed through the same adapter as the browser operation, so
-persistent approvals (`always` where the runtime offers it), autonomy (the `permissions`,
-`guardrails`, and `answers` modes, each `manual`, `yolo`, or `auto`) and goal changes, hard-review restrictions (model grading
-can only reject or escalate; approval is human-only), and every other runtime
-rule apply identically. The two `artifact_demo_*` tools accept only `{}` and dispatch through
-the adapter's explicit connector-owned demo context. They select no Session,
-Location, workspace file or generated HTML. `resources/list`,
-`resources/templates/list` and `resources/read` retain per-request authority;
-templates are empty, and reads resolve only the fixed HTML or unexpired PNG.
-The preview descriptor points to `ui://ycoding/artifact-demo/v1.html` with MIME
-`text/html;profile=mcp-app`. Export returns a resource link and integrity metadata,
-not a native attachment. Its opaque PNG resource expires 15 minutes after the
-handler initializes on the first forwarded MCP request, including discovery;
-calls and retries do not renew it. The preview does not expire. Actual-host
-rendering and native-file delivery require separate verification. See
-[the fixed demo contract](../../specs/relay-mcp-demo.md).
-
-`session_create` and `session_prompt` require a client-generated
-`input.id`; the connector never fabricates one. Message IDs match
-`^msg_[A-Za-z0-9_-]+$` and are at most 128 characters. Permission and guardrail
-request IDs use the same nonempty suffix with `per_` and `grq_`, respectively.
-The catalog publishes complete-string patterns, including multiline nonblank text,
-so clients that validate patterns as full matches accept the same valid values.
-Bare ID prefixes are invalid. Use a fresh message ID for each new prompt and reuse
-an ID only to retry the original prompt in its original Session. Its first admission
-wins even if retry content or delivery differs; changing the input kind or Session
-with an admitted ID is a conflict.
-
-`session_create_in_directory` takes `{ input: { id, directory, agent?, model?, title? } }`, the
-only operation that selects a Location from caller input. `directory` must be an absolute
-path to an existing directory whose `realpath` is strictly below the `realpath` of the
-owner's home directory; the home directory itself, missing paths, paths outside home,
-and symlinks or traversal that escape it are rejected before any Session API call. The
-directory is never created. Git and non-Git directories and global project placement
-are allowed, creation reuses the `session.create` agent, model, title, and ID reconciliation,
-and the created Session joins the connector registry with its backend-reported Location.
-The browser `session.create` keeps its recorded-workspace rule.
-
-Ordering: the relay holds one device admission queue before any asynchronous authority
-read and releases it on send. The connector orders mutations in received order per
-backend Session ID (the created ID for both creation tools; provider-authentication
-tools use `input.target.sessionID`) and holds each lane until the response settles;
-mutations without a Session share one backend lane. Reads and protocol discovery bypass
-mutation lanes, and pending MCP requests never occupy browser read lanes. A
-`session_interrupt` joins its Session lane, so it can wait behind a preceding
-`session_compact` or goal calculation for up to that operation's five-minute timeout.
-
-Results: the complete connector value is returned as `structuredContent` and matching
-JSON text. A failure sets `isError` with the error code and message; `outcome_unknown`
-asks the client to inspect state before retrying, and the request is never replayed
-automatically. A mutation that ends with `outcome_unknown` holds its Session or backend
-lane while reads and other Session lanes keep working. Before another mutation on a
-held model-selection lane, the connector performs a fresh authorized Session read at
-the backend-recorded Location. An exact provider, model ID, variant, and profile match
-releases that hold without repeating the earlier switch. An exact retry of that switch
-returns `null` as confirmation of the current selection, not proof that the original
-physical request executed. An explicit profile already selected before dispatch, or
-without an established baseline, cannot be confirmed as a profile rebind from this read.
-For an uncertain prompt, only an explicit retry with the same prompt ID passes the
-hold; Core's first admission wins, and a successful receipt releases it. Failed reads,
-mismatches, failed retries, and other uncertain mutations remain held. Refused mutations
-return `outcome_unknown` and explicitly state that this request was not executed.
-Holds survive socket reconnection and are in memory for that connector instance;
-shutdown discards them without restoring or replaying requests. While any lane remains
-held, Relay MCP retains its transport state and URL and reports
-`MCP lane read-only; recovery needed.` through its existing status message. This is
-not a device-wide write lock or an authorization change. `unknown_operation` from an older connector asks for a machine update.
-The connector rejects a result above 2 MiB with `message_too_large`, and the relay
-accepts at most 64 response chunks of 262,144 characters; overflow is an explicit
-error, never truncation. A disconnecting HTTP client cancels its pending request.
-
 ### 3.4b Local app preview
 
-App preview is an additive, agent-bound extension of the v4 agent surface. It serves
-registered local HTTP apps (`specs/local-http-apps.md`) to a browser through a separate
-preview Worker. It is off unless the relay's `PREVIEW_ORIGINS` lists at least one exact
-HTTPS origin and the connector is configured with exactly the same list. Browser frames
-cannot carry any preview frame, and a relay never sends a preview frame to an agent that
-has not advertised the capability; agents that never send `preview.state` are unaffected.
+Preview is a generic, agent-bound extension of the v4 agent surface with a separate
+preview Worker. It is disabled unless the relay's `PREVIEW_ORIGINS` lists at least one
+exact HTTPS origin and an authenticated agent advertises exactly the same list. Browser
+frames cannot carry preview frames, and the relay never sends a preview request to an
+agent that has not advertised capability. The current CLI has no preview settings,
+registration, lease-issuance, or HTTP-dispatch producer. The retained wire/Worker boundary
+does not expose a local service by itself; see [Preview wire boundary](../../specs/local-http-apps.md).
 
 | `type` | Direction | Shape |
 | --- | --- | --- |
-| `preview.state` | agent → relay | `{ type:"preview.state", id, origins:[origin,...] }`, sent on every connection open by a configured connector |
+| `preview.state` | agent → relay | `{ type:"preview.state", id, origins:[origin,...] }`, capability advertisement by an authenticated agent |
 | `preview.state.ack` | relay → agent | `{ type:"preview.state.ack", id, enabled }` |
 | `preview.allocate` | agent → relay | `{ type:"preview.allocate", id, registration, expiresAt }` |
 | `preview.allocate.ack` | relay → agent | `{ type:"preview.allocate.ack", id, origin }` or `{ type:"preview.allocate.ack", id, reason:"exhausted"\|"rejected" }` |
@@ -1119,8 +949,8 @@ has not advertised the capability; agents that never send `preview.state` are un
 
 - Each origin is an exact HTTPS origin with no path, credentials, or wildcard; `origins`
   holds 1–64 distinct entries. `id` follows the correlation-ID pattern. `registration` is the
-  lowercase hex SHA-256 of the connector's app ID and generation, and `ticketHash` that of the
-  bootstrap ticket; neither the app ID nor the ticket crosses the relay. `leaseTag` is 16
+  lowercase hex SHA-256 registration digest supplied by the agent, and `ticketHash` that of the
+  bootstrap ticket; plaintext registration identity and ticket do not cross the relay. `leaseTag` is 16
   random lowercase hex characters. `expiresAt` values are future safe-integer epoch
   milliseconds; the relay caps a registration binding at one hour and a lease at 15 minutes
   after it records them.
@@ -1198,10 +1028,7 @@ Sessions in that device's backend. The agent resolves every scoped Session ID by
 paging the backend's global list without a page-count cap, derives the current
 Location from that record, and verifies the Session there before executing the
 operation. Deleted and unknown IDs fail with `session_not_allowed`; moved Sessions
-use their new backend-derived Location. No browser field selects a folder or URL. The
-sole exception is the Relay MCP tool `session_create_in_directory` (section 3.4a),
-which validates an existing directory strictly below the home directory; every other
-MCP tool resolves Locations from backend records exactly as the browser does.
+use their new backend-derived Location. No browser field selects a folder or URL.
 
 The agent sends `{ "type": "sessions" }` after connect and when an inventory
 refresh changes membership or Session metadata used for grouping, filtering, and
@@ -1265,13 +1092,14 @@ disconnected; the command may or may not have executed.
 
 ## 4. Storage
 
-D1 stores authentication and device metadata only: `user`, `identity`,
+D1 stores authentication and device metadata: `user`, `identity`,
 `browser_session`, `oauth_transaction`, `device`, `enrollment`, `device_challenge`,
-`device_credential`. Migration: `infra/cloudflare/migrations/0001_auth.sql`. Relay MCP
-adds `mcp_device`, `mcp_client`, `mcp_authorization`, `mcp_grant`, `mcp_code`, and
-`mcp_token` (`infra/cloudflare/migrations/0006_relay_mcp.sql`): client registrations,
-consent transactions, grants, and credential digests with their device enable epoch.
-They store no prompt, tool argument or result, Session ID, email, or Google token.
+`device_credential`. Migration: `infra/cloudflare/migrations/0001_auth.sql`. Web Push
+and invitation metadata retain their separate tables and migrations. Historical
+`mcp_device`, `mcp_client`, `mcp_authorization`, `mcp_grant`, `mcp_code`, and `mcp_token`
+tables from `0006_relay_mcp.sql` remain stored; no current route issues or admits
+credentials through them. Retained local events, migrations, and provenance are not
+rewritten or deleted by ingress retirement.
 
 The global `PreviewDirectory` Durable Object (one instance named `global`, SQLite storage)
 stores origin bindings and lease rows. A binding holds the origin, owner and device IDs,
@@ -1294,20 +1122,17 @@ data stay on the user's machine and cross the relay only as live WebSocket frame
 
 Device private keys never leave the device. Stored as SHA-256 hashes: browser
 session IDs (`yc_session` cookie tokens), enrollment codes, device credential
-IDs (access and refresh tokens), and the MCP transaction cookie, CSRF values, Google
-callback state, authorization codes, and access and refresh tokens. Stored in plaintext in this database because the
+IDs (access and refresh tokens). Historical MCP tables retain their credential digests
+and authorization metadata without active admission. Stored in plaintext in this database because the
 protocol needs them: the OAuth transaction's `nonce` and PKCE `code_verifier`
-(10-minute lifetime), the MCP authorization's Google nonce and verifier (10-minute
-lifetime, cleared when the Google result is consumed), and the device challenge `nonce` (2-minute lifetime). Neither
-is ever returned to a browser or logged; both live in single-use rows that are
-consumed once and expire.
+(10-minute lifetime), and the device challenge `nonce` (2-minute lifetime). The OAuth
+nonce travels in its authorization redirect, and the device nonce is returned for
+signing; the verifier remains server-side. These values are never logged. Historical
+MCP authorization rows may retain their former nonce and verifier fields.
 
 Retention: expired or consumed `oauth_transaction`, `device_challenge`, and
 `enrollment` rows, and expired `browser_session` and `device_credential` rows, are
-deleted `7` days after expiry (enough to answer a recent-activity question), as are
-expired `mcp_authorization`, `mcp_grant`, `mcp_code`, and `mcp_token` rows (registered
-`mcp_client` rows that were ever authorized are kept; registrations that never
-received an authorization are bounded and swept), by a
+deleted `7` days after expiry (enough to answer a recent-activity question) by a
 bounded sweep: at most `500` rows per table, run at most once per hour per isolate
 on request handling and hourly by the Worker's `scheduled` cron trigger. Both
 triggers call the same sweep. `CLEANUP_INTERVAL_MS` optionally overrides the
@@ -1315,6 +1140,8 @@ request-path cadence; values outside `10000`–`86400000` ms fall back to the
 one-hour default. Revoked
 rows follow the same expiry-based retention; a revoked credential is still refused
 immediately through its `revoked_at` marker long before deletion.
+
+Historical MCP tables are outside the active retention sweep.
 
 ## 5. Configuration
 
@@ -1327,9 +1154,6 @@ Configuration:
   that forgets it accepts nobody. Never add real addresses to this repository.
 - Optional overrides used by local integration tests only: `GOOGLE_ISSUER`,
   `GOOGLE_AUTHORIZATION_ENDPOINT`, `GOOGLE_TOKEN_ENDPOINT`, `GOOGLE_JWKS_URI`.
-- Relay MCP reuses these Google settings and allowlist; the operator adds the exact
-  callback `<origin>/api/mcp/oauth/google/callback` to the Google OAuth client. It
-  needs no additional binding, secret, signing key, or dependency.
 - `PREVIEW_ORIGINS` — the exact single-use app-preview origins, separated by commas or
   whitespace. The checked-in value is empty, and an empty list or any invalid entry declines
   every `preview.state`, which disables app preview. `PREVIEW_DIRECTORY` binds
@@ -1391,11 +1215,12 @@ Verification limits, stated so they are not mistaken for covered behaviour:
 - No second execution runtime: the relay routes frames and never runs sessions,
   models, tools, or permissions logic.
 - No arbitrary proxy: the operation allowlist is closed, and the relay does not
-  accept a URL, path, or method from a client. Relay MCP forwards only `mcp.request`
-  to a fixed local resource. App preview forwards only `GET` and `HEAD` paths on a
-  single-use origin to the connector-registered loopback app selected by a directory
-  credential.
-- No MCP tool for subscriptions, streaming, attachment upload, telemetry consent, or
-  latency samples, and no export of third-party MCP servers.
+  accept a URL, path, or method from a browser client. Preview independently forwards
+  only bounded `GET` and `HEAD` paths on a single-use origin to an authenticated
+  advertising agent selected by a directory credential.
+- No incoming MCP/OAuth tool gateway, webhook Events, local-app registration, or
+  artifact demos. Configured external MCP integrations are outside this relay contract.
+- No public native Dots task or decision transport; only root-family access
+  administration crosses HTTP and the browser relay.
 - No transcript, event, or delta persistence anywhere in D1.
 - No browser credentials on `/ws/v4/agent` and no device credentials on `/ws/v4/client`.

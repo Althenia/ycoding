@@ -41,7 +41,7 @@ export interface DecideInput {
 export interface DelegatedDecideInput extends DecideInput {
   readonly explicitDecision?: true
   readonly fingerprint: string
-  readonly source: Form.DotsClientReplySource
+  readonly source: Form.ClientReplySource
   readonly validate: () => Effect.Effect<boolean>
 }
 
@@ -88,7 +88,7 @@ const layer = Layer.effect(
       rootID: Session.ID,
       item: SessionReviewFold.Folded,
       decision: SessionReview.Decision,
-      source?: Form.DotsClientReplySource,
+      source?: Form.ClientReplySource,
       admit?: (text: string) => Effect.Effect<void, DecideError>,
     ) {
       const owner = item.sessionID
@@ -186,7 +186,7 @@ const layer = Layer.effect(
       text: string,
       data: Schema.Json | undefined,
       decision: SessionReview.Decision,
-      source?: Form.DotsClientReplySource,
+      source?: Form.ClientReplySource,
       dots?: SessionOrchestration.DotsSettlement,
     ) {
       if (!("questionID" in item.origin)) return yield* Effect.die(new Error("Subagent review item has no question"))

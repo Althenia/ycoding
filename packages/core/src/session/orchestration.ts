@@ -22,7 +22,6 @@ import { DecisionChoice } from "../decision-choice"
 import { LocationServiceMap } from "../location-service-map"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
-import { EventTable } from "../event/sql"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { Permission } from "../permission"
 import { Hash } from "../util/hash"
@@ -43,7 +42,7 @@ import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionOrchestrationIdentity } from "./orchestration-identity"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
-import { SessionMessageTable, SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
+import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 import { isTerminal, readTeamView, renderTeamView, taskFromRow, withReviewState } from "./orchestration-view"
 import { SessionReviewFold } from "./review-fold"
 import { SessionPending } from "./pending"
@@ -57,7 +56,7 @@ export const failureText = (input: string) => truncateUtf8(input, 16 * 1024)
 
 export interface DotsSettlement {
   readonly explicitDecision?: true
-  readonly source: Form.DotsClientReplySource
+  readonly source: Form.ClientReplySource
   readonly fingerprint: string
   readonly validate: () => Effect.Effect<boolean>
   readonly target?: { readonly kind: "review"; readonly itemID: SessionReview.ID; readonly fingerprint: string }
@@ -570,46 +569,6 @@ const layer = Layer.effect(
       return (yield* withReviewState(db, [taskFromRow(row)]))[0]!
     })
 
-    const causalInput = Effect.fn("SessionOrchestration.causalInput")(function* (
-      sessionID: SessionSchema.ID,
-      beforeSeq: number,
-    ): Effect.fn.Return<typeof SessionMessageTable.$inferSelect | undefined> {
-      const input = yield* db.select({ message: SessionMessageTable, event: EventTable }).from(SessionMessageTable)
-        .leftJoin(EventTable, and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.seq, SessionMessageTable.seq)))
-        .where(and(eq(SessionMessageTable.session_id, sessionID), lt(SessionMessageTable.seq, beforeSeq), inArray(SessionMessageTable.type, ["user", "synthetic"])))
-        .orderBy(desc(SessionMessageTable.seq)).limit(1).get().pipe(Effect.orDie)
-      if (!input) return undefined
-      if (input.message.type === "user") return input.message
-      const synthetic = Schema.decodeUnknownOption(SessionMessage.Synthetic)({ ...input.message.data, id: input.message.id, type: input.message.type })
-      if (synthetic._tag === "None") return undefined
-      if (input.event?.type !== EventRuntime.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version) ||
-        input.event.data.sessionID !== sessionID || input.event.data.source !== "team-view" ||
-        SessionMessage.ID.fromEvent(input.event.id) !== input.message.id || input.event.data.text !== synthetic.value.text)
-        return undefined
-      return yield* causalInput(sessionID, input.message.seq)
-    })
-
-    const nativeCause = Effect.fn("SessionOrchestration.nativeCause")(function* (
-      sessionID: SessionSchema.ID,
-      messageID: SessionMessage.ID,
-      seen: ReadonlySet<SessionSchema.ID> = new Set(),
-    ): Effect.fn.Return<boolean> {
-      if (seen.has(sessionID) || seen.size >= 64) return false
-      const assistant = yield* db.select({ seq: SessionMessageTable.seq }).from(SessionMessageTable)
-        .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, messageID), eq(SessionMessageTable.type, "assistant")))
-        .get().pipe(Effect.orDie)
-      if (!assistant) return false
-      const input = yield* causalInput(sessionID, assistant.seq)
-      if (!input) return false
-      const decoded = Schema.decodeUnknownOption(SessionMessage.User)({ ...input.data, id: input.id, type: input.type })
-      if (decoded._tag === "None") return false
-      if (decoded.value.metadata?.inputOrigin === "direct") return true
-      if (decoded.value.metadata?.inputOrigin !== "subagent") return false
-      const child = yield* task(sessionID)
-      if (!child) return false
-      return yield* nativeCause(child.parent_id, child.parent_assistant_message_id, new Set([...seen, sessionID]))
-    })
-
     const switchable = Effect.fn("SessionOrchestration.switchable")(function* (input: Parameters<Interface["switchModel"]>[0]) {
       const row = yield* owned(input.parentID, input.childID)
       if (row.state === "starting" || row.state === "cancelling")
@@ -620,8 +579,6 @@ const layer = Layer.effect(
       const child = yield* sessions.get(input.childID)
       if (parent.time.archived !== undefined || child.time.archived !== undefined)
         return yield* new ConflictError({ message: "Archived Sessions cannot change a child model" })
-      if (input.source.type === "tool" && !(yield* nativeCause(input.parentID, input.source.messageID)))
-        return yield* new ForbiddenError({ parentID: input.parentID, childID: input.childID })
       if (yield* CoordinationModel.override(db, input.childID))
         return yield* new ConflictError({ message: "The child has an active coordination model override" })
       return row

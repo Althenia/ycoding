@@ -348,7 +348,7 @@ function exchange(code: string, redirect: string, pkce: Pkce) {
   })
 }
 
-function refresh(methodID: Integration.MethodID, value: Pick<Credential.OAuth, "refresh" | "metadata">) {
+export function refresh(methodID: Integration.MethodID, value: Pick<Credential.OAuth, "refresh" | "metadata">) {
   return request<TokenResponse>(`${issuer}/oauth/token`, {
     method: "POST",
     headers: headers("application/x-www-form-urlencoded"),

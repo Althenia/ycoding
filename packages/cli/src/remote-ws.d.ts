@@ -11,6 +11,8 @@ declare module "ws" {
     readonly addEventListener: (type: string, listener: (event: { readonly type?: string; readonly data?: unknown }) => void) => void
     readonly removeEventListener: (type: string, listener: (event: { readonly type?: string; readonly data?: unknown }) => void) => void
     readonly send: (value: string) => void
+    readonly ping: () => void
+    readonly pong: () => void
     readonly close: (code?: number, reason?: string) => void
   }
 

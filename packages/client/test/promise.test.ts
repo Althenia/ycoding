@@ -145,58 +145,6 @@ test("generated telemetry methods address one local machine without Session or L
   expect(requests.every((request) => !request.headers.has("x-ycoding-directory"))).toBe(true)
 })
 
-test("sends global MCP Events requests through the generated client without Location input", async () => {
-  const requests: Request[] = []
-  const context = {
-    requestID: "request_fixture",
-    principal: { ownerID: "owner_fixture", deviceID: "device_fixture", clientID: "client_fixture" },
-    epoch: "epoch_fixture",
-  }
-  const subscription = {
-    name: "session.completed" as const,
-    arguments: { session_id: "ses_fixture", include_descendants: false },
-    delivery: { mode: "webhook" as const, url: "https://callback.example/events", secret: "fixture-secret" },
-  }
-  const subscribed = { id: "subscription_fixture", refreshBefore: null, cursor: null, truncated: false }
-  const client = YCoding.make({
-    baseUrl: "http://localhost:3000",
-    fetch: async (input, init) => {
-      const request = input instanceof Request ? input : new Request(input, init)
-      requests.push(request)
-      const route = new URL(request.url).pathname.split("/").at(-1)
-      return Response.json({
-        data:
-          route === "status"
-            ? { available: true }
-            : route === "catalog"
-              ? { events: [] }
-              : route === "subscribe"
-                ? subscribed
-                : {},
-      })
-    },
-  })
-  expect(await client.mcpEvents.status()).toEqual({ available: true })
-  expect(await client.mcpEvents.list({ cursor: "next+page" })).toEqual({ events: [] })
-  expect(await client.mcpEvents.subscribe({ context, subscription })).toEqual(subscribed)
-  const unsubscribe = { ...subscription, delivery: { mode: "webhook" as const, url: subscription.delivery.url } }
-  expect(await client.mcpEvents.unsubscribe({ context, subscription: unsubscribe })).toEqual({})
-  expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
-    ["GET", "/api/remote/mcp/events/status"],
-    ["GET", "/api/remote/mcp/events/catalog"],
-    ["POST", "/api/remote/mcp/events/subscribe"],
-    ["POST", "/api/remote/mcp/events/unsubscribe"],
-  ])
-  expect(new URL(requests[1]!.url).searchParams.get("cursor")).toBe("next+page")
-  expect(await requests[2]!.json()).toEqual({ context, subscription })
-  expect(await requests[3]!.json()).toEqual({ context, subscription: unsubscribe })
-  expect(
-    requests.every(
-      (request) => !request.headers.has("x-ycoding-directory") && !new URL(request.url).searchParams.has("location"),
-    ),
-  ).toBe(true)
-})
-
 test("exposes every standard HTTP API group", () => {
   const client = YCoding.make({ baseUrl: "http://localhost:3000" })
 
@@ -239,26 +187,12 @@ test("exposes every standard HTTP API group", () => {
     "keepAwake",
     "config",
     "review",
-    "mcpEvents",
     "coordination",
     "dots",
   ])
   expect(Object.keys(client.coordination)).toEqual(["settings", "list", "create", "get", "update", "delete"])
-  expect(Object.keys(client.dots)).toEqual([
-    "exchange",
-    "delegation",
-    "decisions",
-    "targets",
-    "status",
-    "bind",
-    "send",
-    "pause",
-    "resume",
-    "unbind",
-  ])
-  expect(Object.keys(client.dots.delegation.device)).toEqual(["create", "read", "revoke"])
-  expect(Object.keys(client.dots.decisions)).toEqual(["list"])
-  expect(Object.keys(client.mcpEvents)).toEqual(["status", "list", "subscribe", "unsubscribe"])
+  expect(Object.keys(client.dots)).toEqual(["access"])
+  expect(Object.keys(client.dots.access)).toEqual(["get", "set"])
   expect(Object.keys(client.keepAwake)).toEqual(["get", "set"])
   expect(Object.keys(client.incident)).toEqual(["report", "recent", "guidance"])
   expect(Object.keys(client.incident.guidance)).toEqual(["get", "clear"])

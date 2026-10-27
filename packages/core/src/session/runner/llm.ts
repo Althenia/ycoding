@@ -64,7 +64,6 @@ import { ModelIncident } from "../../model-incident/index"
 import { MAX_STEPS_PROMPT, MAX_STEPS_RESET_PROMPT } from "./max-steps"
 import { DotsPeer } from "../../dots/peer"
 import { DotsContext } from "../../dots/context"
-import { DotsRuntimeNode } from "../../dots/node"
 import { and, eq, inArray, sql } from "drizzle-orm"
 
 type StepEnd = {
@@ -109,11 +108,6 @@ const layer = Layer.effect(
     const snapshots = yield* Snapshot.Service
     const database = yield* Database.Service
     const db = database.db
-    const dotsTools = yield* DotsRuntimeNode.RequestTools
-    const promoteRoutine: SessionPending.PromotionGuard<StepFailedError> = (entry, promote) =>
-      dotsTools.promoteRoutine(entry, promote).pipe(
-        Effect.catchTag("DotsRuntime.Error", (error) => Effect.fail(new StepFailedError({ error: toSessionError(error) }))),
-      )
     const dotsContext = DotsContext.make({ db, events })
     const compaction = yield* SessionCompaction.Service
     const compactionJobs = yield* SessionCompactionJob.Service
@@ -267,11 +261,7 @@ const layer = Layer.effect(
           }),
         { discard: true },
       )
-      yield* dotsContext.observe(selected.session.id, yield* dotsTools.observation(
-        selected.session.id,
-        SessionContext.toolPermissions(selected.agent.info, selected.session.permissionCeiling ?? []),
-        terminalResponseRecovery || stepLimitReached,
-      ))
+      yield* dotsContext.observe(selected.session.id, { state: "disabled", reason: "tool_unavailable" })
     })
 
     const attemptStep = Effect.fn("SessionRunner.attemptStep")(function* (
@@ -324,11 +314,10 @@ const layer = Layer.effect(
             selected.session.id,
             prepareInput,
             activateInputSkills,
-            promoteRoutine,
           )
         if (promotion === "queue") {
           promoted += Number(
-            yield* SessionPending.promoteNextQueued(db, events, selected.session.id, prepareInput, activateInputSkills, promoteRoutine),
+            yield* SessionPending.promoteNextQueued(db, events, selected.session.id, prepareInput, activateInputSkills),
           )
           promoted += yield* SessionPending.promoteSteers(
             db,
@@ -336,7 +325,6 @@ const layer = Layer.effect(
             selected.session.id,
             prepareInput,
             activateInputSkills,
-            promoteRoutine,
           )
         }
         if (promoted > 0) {
@@ -1476,7 +1464,6 @@ export const node = makeLocationNode({
     SessionContext.node,
     SessionLiveState.node,
     SessionModelRequest.node,
-    DotsRuntimeNode.requestToolsNode,
     SessionProviderRequest.node,
     SessionContinuation.node,
     SessionProviderState.node,

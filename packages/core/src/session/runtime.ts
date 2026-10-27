@@ -3,7 +3,6 @@ import { ListAnchor } from "@ycoding-ai/schema/session"
 import { History } from "@ycoding-ai/schema/session-compaction"
 import { Event } from "@ycoding-ai/schema/event"
 import type { Model } from "@ycoding-ai/schema/model"
-import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Money } from "@ycoding-ai/schema/money"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql, type SQL } from "drizzle-orm"
@@ -165,6 +164,7 @@ type CreateBaseInput = {
   model?: CatalogModel.Ref
   profileBinding?: SessionEvent.ProfileBinding
   permissionCeiling?: SessionSchema.Info["permissionCeiling"]
+  native?: { readonly validate: () => Effect.Effect<boolean> }
 }
 type CreateInput = CreateBaseInput &
   ({ location: Location.Ref; parentID?: never } | { parentID: SessionSchema.ID; location?: never })
@@ -407,7 +407,6 @@ export interface Interface {
     sessionID: SessionSchema.ID
     text: string
     origin?: "subagent" | "plugin" | "review"
-    remoteSource?: McpEvents.RequestContext
     files?: PromptInput.Prompt["files"]
     agents?: PromptInput.Prompt["agents"]
     metadata?: Record<string, unknown>
@@ -415,6 +414,7 @@ export interface Interface {
     delivery?: SessionPending.Delivery
     resume?: boolean
     causedBy?: UsageAnchor.Ref
+    native?: { readonly source: Form.NativeReplySource; readonly validate: () => Effect.Effect<boolean> }
   }) => Effect.Effect<SessionPending.User, NotFoundError | PromptConflictError | AttachmentError>
   /** Generates text from current Session context without admitting input or mutating history. */
   readonly generate: (input: {
@@ -1802,6 +1802,8 @@ const layer = Layer.effect(
     const result = Service.of({
       create: Effect.fn("Session.create")(function* (input) {
         const sessionID = input.id ?? SessionSchema.ID.create()
+        if (input.native && (input.parentID !== undefined || !(yield* input.native.validate())))
+          return yield* new NotFoundError({ sessionID })
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
         if (input.agent && decisionAgents.has(input.agent)) return yield* new AgentNotSelectableError({ agent: input.agent })
@@ -1888,9 +1890,10 @@ const layer = Layer.effect(
                   },
                 ]
               : []),
-          ])
+            ...(input.native ? [{ definition: SessionEvent.DotsAccessChanged, data: { sessionID, enabled: true, revision: 1 }, options: { location } }] : []),
+          ], input.native ? { when: input.native.validate() } : undefined)
           .pipe(
-            Effect.as({ type: "created" } as const),
+            Effect.flatMap((committed) => committed.length > 0 ? Effect.succeed({ type: "created" } as const) : new NotFoundError({ sessionID })),
             Effect.catchDefect((defect) => {
               if (!(defect instanceof SessionProjector.SessionAlreadyProjected)) {
                 return Effect.die(defect)
@@ -2439,6 +2442,7 @@ const layer = Layer.effect(
       prompt: Effect.fn("Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
+            if (input.native && !(yield* input.native.validate())) return yield* new NotFoundError({ sessionID: input.sessionID })
             const session = yield* result.get(input.sessionID)
             // A staged revert must be committed before admitting new input so the prompt
             // continues from the reverted boundary rather than stale post-boundary history.
@@ -2491,12 +2495,12 @@ const layer = Layer.effect(
                       : undefined
                     const metadata = {
                       ...(shared
-                        ? { ...Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== "remoteMcp")), sharedContext: shared.sharedContext }
+                        ? { ...Object.fromEntries(Object.entries(input.metadata ?? {}).filter(([key]) => key !== "remoteMcp" && key !== "nativeSource")), sharedContext: shared.sharedContext }
                         : Object.fromEntries(
-                            Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext" && key !== "remoteMcp"),
+                            Object.entries(input.metadata ?? {}).filter(([key]) => key !== "sharedContext" && key !== "remoteMcp" && key !== "nativeSource"),
                           )),
-                      ...(input.origin === "plugin" && input.remoteSource ? { remoteMcp: input.remoteSource } : {}),
                       inputOrigin: input.origin ?? "direct",
+                      ...(input.native ? { nativeSource: input.native.source } : {}),
                     }
                     const admitted = yield* Effect.gen(function* () {
                       const existing = yield* SessionPending.lookup(db, input.sessionID, messageID)
@@ -2524,7 +2528,7 @@ const layer = Layer.effect(
                           },
                           delivery: input.delivery ?? "steer",
                         }),
-                      })
+                      }, input.native ? { when: input.native.validate() } : undefined)
                       freshlyAdmitted = true
                       // Waking under the inbox lock keeps the runner from promoting this input
                       // while the family still sleeps; a reused ID never wakes.

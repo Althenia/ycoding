@@ -16,6 +16,7 @@ import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model";
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache";
 import { Session } from "@ycoding-ai/core/session";
 import { AbsolutePath } from "@ycoding-ai/core/schema";
+import type { Catalog } from "@ycoding-ai/core/catalog";
 import { it } from "./lib/effect";
 
 interface ModelOptions {
@@ -102,6 +103,32 @@ const chatgptCredential = () =>
     expires: Date.now() + 600_000,
     metadata: { accountID: "fixture-account" },
   });
+
+describe("metadata selection", () => {
+  const catalog = (models: CatalogModel.Info[], defaultSelection?: CatalogModel.Ref): Pick<Catalog.Interface["model"], "available" | "default" | "defaultSelection"> => ({
+    available: () => Effect.succeed(models), default: () => Effect.succeed(models[0]), defaultSelection: () => Effect.succeed(defaultSelection),
+  })
+
+  it.effect("reads configured non-OpenAI defaults and profile variants without execution services", () => Effect.gen(function* () {
+    const selected = model("uninstalled-metadata-package", { providerID: "synthetic-anthropic", id: "catalog-model", modelID: "api-alias" })
+    const ref = CatalogModel.Ref.make({ providerID: selected.providerID, id: selected.id, profile: "configured-profile", variant: CatalogModel.VariantID.make("high") })
+    expect(yield* SessionRunnerModel.selection(sessionInfo("ses_metadata_default"), catalog([selected], ref))).toEqual({ model: selected, ref })
+    expect(yield* SessionRunnerModel.selection(sessionInfo("ses_metadata_fallback"), catalog([selected]))).toEqual({ model: selected, ref: { providerID: selected.providerID, id: selected.id } })
+  }))
+
+  it.effect("preserves explicit selection and known missing-model errors", () => Effect.gen(function* () {
+    const selected = model("uninstalled-metadata-package")
+    const other = model("uninstalled-other-package", { id: "default", providerID: "default-provider" })
+    const ref = CatalogModel.Ref.make({ providerID: selected.providerID, id: selected.id })
+    const session = { ...sessionInfo("ses_metadata_explicit"), model: ref }
+    expect(yield* SessionRunnerModel.selection(session, catalog([other, selected]))).toEqual({ model: selected, ref })
+    const missing = yield* SessionRunnerModel.selection(session, catalog([other])).pipe(Effect.flip)
+    expect(missing).toBeInstanceOf(SessionRunnerModel.ModelUnavailableError)
+    expect(missing).toMatchObject({ providerID: selected.providerID, modelID: selected.id })
+    expect(yield* SessionRunnerModel.selection(sessionInfo("ses_metadata_empty"), catalog([]))).toBeUndefined()
+    expect(yield* SessionRunnerModel.selection(sessionInfo("ses_metadata_bad_default"), catalog([], ref)).pipe(Effect.flip)).toBeInstanceOf(SessionRunnerModel.ModelNotSelectedError)
+  }))
+})
 
 const captureRequestBody = (model: Model) => Effect.gen(function* () {
   const requests: unknown[] = [];

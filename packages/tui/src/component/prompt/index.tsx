@@ -6,8 +6,7 @@ import {
   decodePasteBytes,
   type KeyEvent,
 } from "@opentui/core"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, runWithOwner } from "solid-js"
-import { escapeDisplayText } from "@ycoding-ai/client/tool-display"
+import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show } from "solid-js"
 import { registerYCodingSpinner } from "../register-spinner"
 import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
@@ -26,13 +25,7 @@ import { useExit } from "../../context/exit"
 import { promptCommandPalette, promptOffsetWidth } from "../../prompt/display"
 import { expandPromptInputPastedText, realignPromptInputMentions } from "../../prompt/mention"
 import { parseSlashHead } from "../../prompt/parse"
-import { createDotsCapability, dotsInput } from "../../prompt/dots"
-import { DialogDots } from "../dialog-dots"
-import { DialogDotsBindings, type DotsBindingTarget } from "../dialog-dots-delegation"
-import { DialogConfirm } from "../../ui/dialog-confirm"
-import { Dots } from "@ycoding-ai/schema/dots"
-import { Schema } from "effect"
-import { isDeepEqual } from "remeda"
+import { createDotsAccess, dotsAccessCommand } from "../../prompt/dots-access"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { emptyPrompt, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
@@ -236,34 +229,6 @@ const stashed = new WeakMap<
 >()
 const activePrompts = new WeakMap<object, { clear: (sessionID: string | undefined, prompt: PromptInfo) => void }>()
 const fillEmptyPrompt = new WeakMap<PromptRef, (text: string, delivery?: "queue") => boolean>()
-type DelegationRequest = (
-  { kind: "create"; input: Dots.SessionDelegationCreate; principal: Dots.SessionDelegationInfo["principal"]; permissionID?: string; replyWait?: Promise<string>; resolveReply?: (reply: string) => void } |
-  { kind: "revoke"; input: Dots.DelegationRevoke; grant: Dots.DelegationInfo }
-) & { state: "pending" | "unknown" | "rejected" }
-const delegationRequests = new WeakMap<object, Map<string, DelegationRequest>>()
-const decodeSessionDelegationReview = Schema.decodeUnknownOption(Dots.SessionDelegationReview)
-
-function sameDotsAttachment(left: Dots.Target | undefined, right: Dots.Target) {
-  return left?.profile === right.profile && left.dotID === right.dotID && left.threadID === right.threadID && left.generation === right.generation
-}
-
-function delegationSettled(request: DelegationRequest, grant: Dots.DelegationInfo) {
-  if (request.kind === "revoke") return grant.id === request.input.id && grant.revision === request.input.revision && !grant.active &&
-    isDeepEqual({ ...grant, active: true }, request.grant)
-  return "basis" in grant && grant.id === request.input.proposalID && grant.revision === 1 &&
-    grant.sourceExchangeID === request.input.sourceExchangeID && grant.targetSessionID === request.input.targetSessionID &&
-    grant.expiresAt === request.input.expiresAt &&
-    isDeepEqual(grant.scope, request.input.scope) && isDeepEqual(grant.principal, request.principal)
-}
-
-function delegationReviewMatches(request: DelegationRequest, review: Dots.SessionDelegationReview) {
-  return request.kind === "create" && review.proposalID === request.input.proposalID &&
-    review.sourceExchangeID === request.input.sourceExchangeID && review.targetSessionID === request.input.targetSessionID &&
-    review.expiresAt === request.input.expiresAt &&
-    sameDotsAttachment(review.expectedAttachment, request.input.expectedAttachment) &&
-    isDeepEqual(review.principal, request.principal) && isDeepEqual(review.scope, request.input.scope)
-}
-
 function goalComposerText(text: string) {
   const trimmed = text.trim()
   if (trimmed === "/goal" || trimmed.startsWith("/goal ") || trimmed.startsWith("/goal\n")) return trimmed
@@ -303,256 +268,22 @@ export function Prompt(props: PromptProps) {
   const config = useConfig().data
   const dialog = useDialog()
   const toast = useToast()
-  const [dotsTarget, setDotsTarget] = createSignal<Dots.Target>()
-  let dotsRetry: { fingerprint: string; id: string } | undefined
-  let dotsDialogOpen = false
-  let delegationDialogOpen = false
-  const delegationPending = delegationRequests.get(client) ?? new Map<string, DelegationRequest>()
-  if (!delegationRequests.has(client)) {
-    delegationRequests.set(client, delegationPending)
-    runWithOwner(null, () => {
-      client.event.on("permission.asked", (event) => {
-        const request = delegationPending.get(event.data.sessionID)
-        if (event.data.action !== "dots_delegate" || request?.kind !== "create" || request.permissionID !== undefined) return
-        const review = decodeSessionDelegationReview(structuredClone(unwrap(event.data.metadata)))
-        if (review._tag === "Some" && delegationReviewMatches(request, review.value)) request.permissionID = event.data.id
-      })
-      client.event.on("permission.replied", (event) => {
-        const request = delegationPending.get(event.data.sessionID)
-        if (request?.kind === "create" && request.permissionID === event.data.requestID) {
-          if (event.data.reply === "reject") request.state = "rejected"
-          request.resolveReply?.(event.data.reply)
-        }
-      })
-    })
-  }
-  const delegationLocked = (sessionID: string) => {
-    const state = delegationPending.get(sessionID)?.state
-    return state === "pending" || state === "unknown" ? state : undefined
-  }
-  const dotsCapability = createDotsCapability({
+  const dotsAccess = createDotsAccess({
     sessionID: () => props.sessionID,
+    rootSessionID: () => props.sessionID ? data.session.root(props.sessionID) : undefined,
+    location: () => {
+      const location = currentLocation.current ?? data.location.default()
+      const session = props.sessionID ? data.session.get(props.sessionID)?.location : undefined
+      return JSON.stringify([location.directory, location.workspaceID, session?.directory, session?.workspaceID])
+    },
     connected: () => client.connection.status() === "connected",
-    read: async (sessionID, signal) => {
-      const status = await client.api.dots.status({ sessionID }, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) })
-      if (!signal.aborted && !disposed && props.sessionID === sessionID) setDotsTarget(status.enabled ? status.target : undefined)
-      return status.enabled === true
-    },
-    reset: () => {
-      setDotsTarget(undefined)
-      dotsRetry = undefined
-      if (dotsDialogOpen || delegationDialogOpen) dialog.clear()
-    },
+    owner: () => client.api,
+    paletteOpen: () => dialog.size === "command-palette" && dialog.stack.length > 0,
+    get: (sessionID, signal) => client.api.dots.access.get({ sessionID }, { signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) }),
+    set: (request) => client.api.dots.access.set(request),
+    error: (error) => toast.error(error),
   })
-
-  function dotsDisabled() {
-    toast.show({ message: "Dots is disabled for this Location.", variant: "warning" })
-  }
-
-  async function selectDots() {
-    const sessionID = props.sessionID
-    if (!sessionID) {
-      toast.show({ message: "Open a Session before selecting a Dots destination.", variant: "warning" })
-      return
-    }
-    if (!dotsCapability.enabled()) return dotsDisabled()
-    const fence = dotsCapability.fence()
-    const stale = () => disposed || fence !== dotsCapability.fence()
-    const location = data.session.get(sessionID)?.location ?? currentLocation.current
-    const response = await client.api.integration.get({ integrationID: "openai", location: { directory: location.directory, workspace: location.workspaceID } }, { signal: AbortSignal.timeout(5000) }).catch(() => {
-      if (!disposed) toast.show({ message: "Could not read ChatGPT profiles. Draft retained.", variant: "error" })
-      return undefined
-    })
-    if (!response || stale()) return
-    const integration = response.data
-    const profiles = integration?.connections.flatMap((connection) => connection.type === "credential" ? [connection.label] : []) ?? []
-    const requireCurrent = () => {
-      if (stale()) throw new Error("The selected Session changed.")
-    }
-    const settle = (status: Dots.Status) => {
-      requireCurrent()
-      if (!status.enabled) dotsCapability.disable()
-      return status
-    }
-    dotsDialogOpen = true
-    const target = await DialogDots.show(dialog, {
-      profiles,
-      load: async (profile) => {
-        requireCurrent()
-        return await client.api.dots.targets({ sessionID, profile })
-      },
-      confirm: async (target) => {
-        requireCurrent()
-        await client.api.dots.bind({ sessionID, ...target })
-      },
-      status: async () => {
-        requireCurrent()
-        const status = settle(await client.api.dots.status({ sessionID }))
-        if (status.enabled) setDotsTarget(status.target)
-        return status
-      },
-      unbind: async (expectedTarget) => {
-        requireCurrent()
-        const result = settle(await client.api.dots.unbind({ sessionID, expectedTarget }))
-        setDotsTarget(result.target)
-        dotsRetry = undefined
-        return result
-      },
-      pause: async (expectedTarget) => {
-        requireCurrent()
-        return settle(await client.api.dots.pause({ sessionID, expectedTarget }))
-      },
-      resume: async (expectedTarget) => {
-        requireCurrent()
-        return settle(await client.api.dots.resume({ sessionID, expectedTarget }))
-      },
-    })
-    dotsDialogOpen = false
-    if (!stale() && target) setDotsTarget(target)
-  }
-  async function unbindDots() {
-    const sessionID = props.sessionID
-    const expectedTarget = dotsTarget()
-    if (!sessionID || !expectedTarget || !dotsCapability.enabled()) return
-    const fence = dotsCapability.fence()
-    const stale = () => disposed || fence !== dotsCapability.fence() || props.sessionID !== sessionID
-    const confirmed = await DialogConfirm.show(dialog, "Unbind Dots destination", "Release this Session's local Dots attachment? The external Dot keeps running. Its conversation, credentials and subscriptions stay unchanged.", "Unbind")
-    if (!confirmed || stale()) return
-    const result = await client.api.dots.unbind({ sessionID, expectedTarget }).catch((error: unknown) => {
-      if (!stale()) toast.error(error)
-      return undefined
-    })
-    if (!result || stale()) return
-    setDotsTarget(result.target)
-    dotsRetry = undefined
-    if (!result.enabled) dotsCapability.disable()
-  }
-  async function selectDotsDelegation() {
-    const sessionID = props.sessionID
-    const expectedAttachment = dotsTarget()
-    if (!sessionID || !expectedAttachment || !dotsCapability.enabled() || client.connection.status() !== "connected") return
-    const api = client.api
-    const stale = () => props.sessionID !== sessionID || api !== client.api ||
-      client.connection.status() !== "connected" || !sameDotsAttachment(dotsTarget(), expectedAttachment)
-    const requireCurrent = () => {
-      if (stale()) throw new Error("Delegation context changed.")
-    }
-    const statusFor = async (targetSessionID: string) => {
-      requireCurrent()
-      const binding = await api.dots.status({ sessionID })
-      requireCurrent()
-      if (!binding.enabled) { dotsCapability.disable(); throw new Error("Dots is disabled.") }
-      if (!sameDotsAttachment(binding.target, expectedAttachment)) {
-        setDotsTarget(binding.target)
-        throw new Error("Dots binding changed.")
-      }
-      const result = Schema.decodeUnknownSync(Dots.DelegationStatus)(await api.dots.delegation.status({ sessionID, targetSessionID, expectedAttachment }))
-      requireCurrent()
-      const pending = delegationPending.get(sessionID)
-      if (pending && pending.state !== "rejected" && result.grants.some((grant) => delegationSettled(pending, grant))) delegationPending.delete(sessionID)
-      return result
-    }
-    const load = async (): Promise<readonly DotsBindingTarget[]> => {
-      const location = data.session.get(sessionID)?.location ?? currentLocation.current
-      const roots: { id: string; title: string }[] = []
-      let cursor: string | undefined
-      do {
-        requireCurrent()
-        const page = await api.session.list({ parentID: null, limit: 200, ...(cursor === undefined ? {} : { cursor }) })
-        requireCurrent()
-        roots.push(...page.data
-          .filter((item) => item.time.archived === undefined && item.location.directory === location.directory)
-          .map((item) => ({ id: item.id, title: item.title })))
-        cursor = page.cursor.next ?? undefined
-      } while (cursor !== undefined)
-      const targets: DotsBindingTarget[] = []
-      for (const root of roots) {
-        const result = await statusFor(root.id).catch(() => {
-          requireCurrent()
-          return undefined
-        })
-        targets.push(result
-          ? { sessionID: root.id, title: root.title, sources: result.sources, grants: result.grants }
-          : { sessionID: root.id, title: root.title, sources: [], grants: [], unavailable: "Delegation status unavailable" })
-      }
-      return targets
-    }
-    const dispatch = async (request: DelegationRequest, validate: (status: Dots.DelegationStatus) => boolean, targetSessionID: string) => {
-      delegationPending.set(sessionID, request)
-      let dispatched = false
-      try {
-        const status = await statusFor(targetSessionID)
-        requireCurrent()
-        if (!validate(status)) throw new Error("The delegation context changed.")
-        requireCurrent()
-        if (request.kind === "create" && !request.replyWait) {
-          const reply = Promise.withResolvers<string>()
-          request.replyWait = reply.promise
-          request.resolveReply = reply.resolve
-        }
-        dispatched = true
-        const result = Schema.decodeUnknownSync(Dots.DelegationInfo)(request.kind === "create"
-          ? await api.dots.delegation.create({ sessionID, payload: request.input })
-          : await api.dots.delegation.revoke({ sessionID, ...request.input }))
-        if (!delegationSettled(request, result)) throw new Error("Delegation outcome could not be verified.")
-        if (delegationPending.get(sessionID) === request) delegationPending.delete(sessionID)
-        return "settled" as const
-      } catch {
-        if (request.kind === "create" && request.state !== "rejected" && request.permissionID !== undefined && request.replyWait) {
-          const reply = await Promise.race([
-            request.replyWait,
-            new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 3000)),
-          ])
-          if (reply === "reject") request.state = "rejected"
-        }
-        if (delegationPending.get(sessionID) === request && request.state === "rejected") return "rejected" as const
-        if (!dispatched && delegationPending.get(sessionID) === request) delegationPending.delete(sessionID)
-        if (dispatched) request.state = "unknown"
-        return dispatched ? "unknown" as const : "context" as const
-      }
-    }
-    delegationDialogOpen = true
-    const choice = await DialogDotsBindings.show(dialog, { load, locked: () => delegationLocked(sessionID) })
-    delegationDialogOpen = false
-    if (!choice || stale() || delegationLocked(sessionID)) return
-    if (choice.kind === "unbind") {
-      delegationDialogOpen = true
-      const confirmed = await DialogConfirm.show(dialog, "Unbind coordinator", [
-        `Grant ${escapeDisplayText(choice.grant.id)}, revision ${choice.grant.revision}.`,
-        `Binding: ${escapeDisplayText(expectedAttachment.profile)} / ${escapeDisplayText(expectedAttachment.dotID)} / ${escapeDisplayText(expectedAttachment.threadID)} / ${escapeDisplayText(expectedAttachment.generation)}.`,
-        "Invalidate future admissions and unpromoted delegated inputs. Already executing native work continues.",
-      ].join("\n"), "Unbind")
-      delegationDialogOpen = false
-      if (!confirmed || stale() || delegationLocked(sessionID)) return
-      const grant = choice.grant
-      const outcome = await dispatch(
-        { kind: "revoke", state: "pending", grant, input: { id: grant.id, revision: grant.revision, expectedAttachment } },
-        (status) => status.grants.some((item) => isDeepEqual(item, grant) && item.active && item.expiresAt > Date.now()),
-        grant.targetSessionID,
-      )
-      if (outcome === "settled" || outcome === "rejected" || stale()) return
-      toast.show({ message: outcome === "unknown" ? "Delegation outcome unknown. Refresh status; do not retry." : "Delegation context changed. Refresh status and select again.", variant: "warning" })
-      await selectDotsDelegation()
-      return
-    }
-    for (const target of choice.targets) {
-      if (stale() || delegationLocked(sessionID)) return
-      const outcome = await dispatch(
-        { kind: "create", state: "pending", principal: target.principal, input: Schema.decodeUnknownSync(Dots.SessionDelegationCreate)({
-          proposalID: `delegation_${crypto.randomUUID()}`, sourceExchangeID: target.sourceExchangeID,
-          targetSessionID: target.sessionID, basis: "session", expectedAttachment,
-          scope: { operations: choice.operations }, expiresAt: Date.now() + choice.minutes * 60_000,
-        }) },
-        (status) => status.sources.some((source) => source.sourceExchangeID === target.sourceExchangeID && isDeepEqual(source.principal, target.principal)),
-        target.sessionID,
-      )
-      if (outcome === "settled" || outcome === "rejected") continue
-      if (stale()) return
-      toast.show({ message: outcome === "unknown" ? "Delegation outcome unknown. Refresh status; do not retry." : "Delegation context changed. Refresh status and select again.", variant: "warning" })
-      await selectDotsDelegation()
-      return
-    }
-  }
+  onCleanup(data.on("session.dots.access.changed", (event) => dotsAccess.changed(event.data)))
   const connected = useConnected()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
   const btwSession = createMemo(() => {
@@ -1111,31 +842,7 @@ export function Prompt(props: PromptProps) {
           toast.show({ message: "No suggestion available for the latest reply", variant: "info" })
         },
       },
-      {
-        title: "Select Dots destination",
-        name: "session.dots",
-        category: "Session",
-        palette: props.sessionID !== undefined,
-        enabled: dotsCapability.enabled(),
-        slash: { name: "dots", arguments: true as const },
-        run: async () => { await selectDots() },
-      },
-      {
-        title: "Unbind Dots destination",
-        name: "session.dots.unbind",
-        category: "Session",
-        palette: props.sessionID !== undefined,
-        enabled: dotsCapability.enabled() && dotsTarget() !== undefined,
-        run: unbindDots,
-      },
-      {
-        title: "Coordinator bindings",
-        name: "session.dots.delegation",
-        category: "Session",
-        palette: props.sessionID !== undefined,
-        enabled: dotsCapability.enabled() && dotsTarget() !== undefined && client.connection.status() === "connected",
-        run: selectDotsDelegation,
-      },
+      dotsAccessCommand(dotsAccess),
       {
         title: "Generate prompt",
         description: "Draft a prompt from a rough intent",
@@ -2194,54 +1901,6 @@ export function Prompt(props: PromptProps) {
     // the objective, active or not; the bare form stops, resumes the retained objective, or asks for
     // one. Only tracked-paste expansion happens before parsing, so multiline and Unicode survive.
     const normalized = inputText.trim()
-    const dotsFiles = structuredClone(unwrap(store.prompt.files ?? []))
-    const dots = dotsInput(inputText, dotsFiles, "pending")
-    if (dots) {
-      if (!dotsCapability.enabled()) {
-        dotsDisabled()
-        return false
-      }
-      if (store.mode !== "normal" || store.prompt.agents?.length || store.prompt.skills?.length) {
-        toast.show({ message: "Use Dots in normal mode with only the text and files to send.", variant: "warning" })
-        return false
-      }
-      const sessionID = props.sessionID
-      if (!sessionID) { await selectDots(); return false }
-      if (dots.kind === "select") { await selectDots(); return false }
-      const expectedTarget = dotsTarget()
-      if (!expectedTarget) { await selectDots(); return false }
-      const fence = dotsCapability.fence()
-      const status = await client.api.dots.status({ sessionID }, requestOptions(currentOperation)).catch(() => {
-        if (!disposed) toast.show({ message: "Could not verify the Dots destination. Draft retained.", variant: "error" })
-        return undefined
-      })
-      if (!status || disposed || fence !== dotsCapability.fence()) return false
-      if (!status.enabled) {
-        dotsCapability.disable()
-        dotsDisabled()
-        return false
-      }
-      if (JSON.stringify(status.target) !== JSON.stringify(expectedTarget)) { await selectDots(); return false }
-      const fingerprint = JSON.stringify({ sessionID, target: status.target, text: dots.input.text, files: dots.input.files })
-      if (dotsRetry?.fingerprint !== fingerprint) dotsRetry = { fingerprint, id: `msg_${crypto.randomUUID().replaceAll("-", "")}` }
-      const submittedText = input.plainText
-      const result = await client.api.dots.send({ sessionID, ...dots.input, id: dotsRetry.id, expectedTarget }, requestOptions(currentOperation)).catch(() => {
-        if (!disposed) toast.show({ message: "Dots send did not settle. Draft and message identity retained.", variant: "error" })
-        return undefined
-      })
-      if (!result) return false
-      if (fence !== dotsCapability.fence() || disposed) return false
-      if (result.status === "unknown") {
-        toast.show({ message: "Dots delivery is uncertain. Draft and message identity retained.", variant: "warning" })
-        return false
-      }
-      if (input.plainText === submittedText && JSON.stringify(store.prompt.files ?? []) === JSON.stringify(dotsFiles)) {
-        await releaseTemporaryAttachments()
-        clearPrompt()
-      }
-      dotsRetry = undefined
-      return true
-    }
     if (normalized === "/goal" || normalized.startsWith("/goal ") || normalized.startsWith("/goal\n")) {
       await applyGoalCommand(normalized.slice(5).trim() || undefined)
       return true
@@ -2857,7 +2516,6 @@ export function Prompt(props: PromptProps) {
 
   return (
     <>
-      <Show when={dotsCapability.enabled() ? dotsTarget() : undefined}>{(target) => <text fg={theme.text.subdued}>Dots · {escapeDisplayText(target().label)}</text>}</Show>
       <box
         ref={(r: BoxRenderable) => (anchor = r)}
         visible={props.visible !== false}

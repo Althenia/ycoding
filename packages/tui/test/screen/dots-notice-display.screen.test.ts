@@ -65,7 +65,6 @@ async function withMessages(messages: SessionMessageInfo[], width: number, run: 
           [...messages, { id: "msg_boundary", type: "user", text: "Boundary marker", time: { created: 100 } }],
           { session },
         )
-      if (url.pathname.endsWith("/dots")) return json({ data: { enabled: true, state: "disconnected" } })
       if (url.pathname.endsWith("/subagent"))
         return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
       if (url.pathname.endsWith("/guardrail"))
@@ -223,7 +222,7 @@ for (const width of [60, 120]) {
           {
             id: "msg_state",
             type: "system",
-            text: DotsContext.render(context),
+            text: context.state === "disabled" ? DotsContext.render(context) : "Dots coordination enabled.",
             metadata: { contextSource: "dots", dotsCoordination: wireContext(context) },
             time: { created: 1 },
           },

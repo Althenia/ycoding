@@ -8,7 +8,7 @@ import {
   type PreviewMethod,
   type PreviewResult,
 } from "../../../../packages/remote/src/index"
-import { readBoundedText } from "../relay/mcp"
+import { readBoundedText } from "../http"
 import type { PreviewAccess, PreviewDevice, PreviewLeaseRecord } from "./directory-store"
 
 export type PreviewWorkerDeps = {

@@ -19,6 +19,7 @@ import { ServerInfo } from "./server-info"
 import { Status } from "./service-status"
 import type { ServerOptions } from "./options"
 import { RemoteConnection } from "./remote-connection"
+import { NativeDots } from "@ycoding-ai/core/dots/native"
 
 export interface Lifecycle<E = never, R = never> {
   readonly instanceID: string
@@ -39,6 +40,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   lifecycle?: Lifecycle<E, R>,
   remoteFactory?: (address: HttpServer.Address, password: string) => Promise<RemoteConnection.Interface>,
   plugins: ReadonlyArray<Parameters<SdkPlugins.Interface["register"]>[0]> = [],
+  nativeFactory?: (host: NativeDots.Host) => Promise<void | (() => Promise<void>)>,
 ) {
   const password = options.password
   if (!password) return yield* Effect.fail(new Error("Missing server password"))
@@ -102,6 +104,11 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
     )
     const hostPlugins = Context.get(context, SdkPlugins.Service)
     yield* Effect.forEach(plugins, (plugin) => hostPlugins.register(plugin), { discard: true })
+    if (nativeFactory) {
+      const host = yield* NativeDots.live.pipe(Effect.provideContext(Context.add(context, Scope.Scope, applicationScope)))
+      const stop = yield* Effect.promise(() => nativeFactory(host))
+      if (stop) yield* Effect.addFinalizer(() => Effect.promise(stop)).pipe(Effect.provideService(Scope.Scope, applicationScope))
+    }
     const restart = Context.get(context, SessionRestart.Service)
     if (lifecycle) yield* installRestartContinuity(restart).pipe(Effect.provideService(Scope.Scope, applicationScope))
     if (!lifecycle) yield* restart.loseStaleTasks

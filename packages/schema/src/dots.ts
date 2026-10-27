@@ -2,7 +2,7 @@ export * as Dots from "./dots.js"
 
 import { Option, Schema } from "effect"
 import { PromptInput } from "./prompt-input.js"
-import { optional, PositiveInt } from "./schema.js"
+import { NonNegativeInt, optional, PositiveInt } from "./schema.js"
 import { SessionID } from "./session-id.js"
 import { ID } from "./session-message-id.js"
 import { McpEvents } from "./mcp-events.js"
@@ -15,6 +15,20 @@ import { SessionReview } from "./session-review.js"
 import { Event } from "./event.js"
 
 const Identity = Schema.String.check(Schema.isNonEmpty())
+
+export interface Access extends Schema.Schema.Type<typeof Access> {}
+export const Access = Schema.Struct({
+  sessionID: SessionID,
+  rootSessionID: SessionID,
+  enabled: Schema.Boolean,
+  revision: NonNegativeInt,
+  inherited: Schema.Boolean,
+  configured: Schema.Boolean,
+}).annotate({ identifier: "Dots.Access" })
+
+export interface AccessSet extends Schema.Schema.Type<typeof AccessSet> {}
+export const AccessSet = Schema.Struct({ enabled: Schema.Boolean, expectedRevision: NonNegativeInt })
+  .annotate({ identifier: "Dots.AccessSet", parseOptions: { onExcessProperty: "error" } })
 
 export interface Target extends Schema.Schema.Type<typeof Target> {}
 export const Target = Schema.Struct({

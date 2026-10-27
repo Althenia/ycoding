@@ -1,12 +1,7 @@
 export * as RemoteOperations from "./remote-operations"
 
-import { RemoteMcpDemo } from "./remote-mcp-demo"
-import type { RemoteMcpApps } from "./remote-mcp-apps"
-import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
-
 import { createHash } from "node:crypto"
 import { Dots } from "@ycoding-ai/schema/dots"
-import { Schema } from "effect"
 import { realpath, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, isAbsolute, relative, resolve, sep } from "node:path"
@@ -17,7 +12,6 @@ import { capturedChildSessionIDs, summarizeCapturedChanges } from "@ycoding-ai/c
 import { SessionOrchestrationIdentity } from "@ycoding-ai/core/session/orchestration-identity"
 import {
   RemoteLimits,
-  localAppOperations,
   alertTitle,
   isRemoteLatencySample,
   isRemoteReviewItemID,
@@ -770,17 +764,7 @@ export type OperationInput = {
   readonly subscriptions: SubscriptionRegistry
   readonly local: LocalServer
   readonly cache?: OperationCache
-  readonly demo?: ReturnType<typeof RemoteMcpDemo.create>
-  readonly apps?: ReturnType<typeof RemoteMcpApps.create>
-  readonly appContext?: McpEvents.RequestContext
 }
-
-const authenticatedDotsOperations: ReadonlySet<RemoteOperation> = new Set([
-  "session.dots.delegation.device.create",
-  "session.dots.delegation.device.read",
-  "session.dots.delegation.device.revoke",
-  "session.dots.decisions.list",
-])
 
 export async function executeRemoteOperation(input: OperationInput): Promise<readonly RemoteResponse[]> {
   return settle(input.request, () => run(input))
@@ -798,47 +782,8 @@ async function settle(request: RemoteRequest, work: () => Promise<unknown>): Pro
   }
 }
 
-export type DirectorySessionInput = Omit<OperationInput, "request" | "uploads" | "cache"> & {
-  readonly id: string
-  readonly home: string
-  readonly input: Readonly<Record<string, unknown>>
-}
-
-export async function executeRemoteDirectorySession(input: DirectorySessionInput): Promise<readonly RemoteResponse[]> {
-  return settle({ type: "request", id: input.id, operation: "session.create" }, async () => {
-    for (const key of Object.keys(input.input))
-      if (!["id", "directory", "agent", "model", "title"].includes(key)) throw new OperationError("invalid_message", `Unknown input field "${key}"`)
-    const id = sessionID(input.input.id, "id")
-    const directory = requireString(input.input.directory, "directory", 4_096)
-    const agent = input.input.agent === undefined ? undefined : requireString(input.input.agent, "agent", 128)
-    const model = input.input.model === undefined ? undefined : modelSelection(input.input.model)
-    const title = input.input.title === undefined ? undefined : sessionTitle(input.input.title)
-    const location = { directory: await homeDescendant(input.home, directory) }
-    const current = await input.local.projectCurrent(location)
-    const candidate: WorkspaceCandidate = {
-      location,
-      info: { id: workspaceKey(current.id, location.directory), projectID: current.id, directory: location.directory, name: basename(location.directory) },
-    }
-    return { data: await adoptOrCreateRoot(input, id, candidate, { agent, model, title }) }
-  })
-}
-
-async function homeDescendant(home: string, directory: string) {
-  if (!isAbsolute(directory)) throw new OperationError("invalid_message", "Directory must be an absolute path")
-  const root = await realpath(home).catch(() => undefined)
-  if (root === undefined) throw new OperationError("internal_error", "The home directory is unavailable")
-  const canonical = await realpath(directory).catch(() => undefined)
-  if (canonical === undefined || !(await stat(canonical).then((value) => value.isDirectory(), () => false)))
-    throw new OperationError("invalid_message", "Directory does not exist")
-  const path = relative(root, canonical)
-  if (path === "" || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path))
-    throw new OperationError("invalid_message", "Directory must be strictly below the home directory")
-  return canonical
-}
-
 async function run(input: OperationInput) {
   const request = input.request
-  if (authenticatedDotsOperations.has(request.operation) && input.appContext === undefined) return unknownOperation()
   if (request.operation.startsWith("provider.auth.")) {
     const fields = parseProviderAuthInput(request.operation, request.input)
     if (!fields || request.sessionID !== undefined) throw new OperationError("invalid_message", "Invalid provider authentication request")
@@ -854,34 +799,6 @@ async function run(input: OperationInput) {
   // Validation is complete before any local call, so a malformed request never
   // causes local side effects.
   const validated = validate(request)
-  if (validated.kind === "local.app") {
-    if (input.apps === undefined || input.appContext === undefined) return unknownOperation()
-    if (request.sessionID === undefined || await input.sessions.renew(request.sessionID) === undefined)
-      throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
-    const { RemoteMcpApps } = await import("./remote-mcp-apps")
-    try {
-      return await input.apps.execute(validated.operation, {
-        sessionID: request.sessionID,
-        ...(request.input === undefined ? {} : { input: request.input }),
-      }, input.appContext, input.signal ?? new AbortController().signal)
-    } catch (error) {
-      if (error instanceof RemoteMcpApps.Error) throw new OperationError(
-        error.reason === "too_large" ? "message_too_large" : error.reason === "access_unavailable" ? "forbidden"
-          : error.reason === "rate_limited" ? "rate_limited" : error.reason === "authorization_unavailable" ? "agent_unavailable" : "invalid_message",
-        `Registered app request failed: ${error.reason}`,
-      )
-      throw error
-    }
-  }
-  if (validated.kind === "artifact.demo.preview" || validated.kind === "artifact.demo.export") {
-    if (!input.demo) return unknownOperation()
-    try {
-      return input.demo.data(validated.kind)
-    } catch (error) {
-      if (error instanceof RemoteMcpDemo.ExpiredError) throw new OperationError("invalid_message", "Demo resource expired")
-      throw error
-    }
-  }
   if (validated.kind === "workspace.list") return { data: validated.sessionsOnly
     ? await sessionWorkspaces(input.local, input.sessions.snapshot(), input.cache)
     : await workspaceList(input) }
@@ -956,7 +873,7 @@ async function run(input: OperationInput) {
   if (verified === undefined)
     throw new OperationError("session_not_allowed", "Session is not available at its recorded location")
   if (verified.parentID !== undefined && verified.agent !== "btw" && [
-    "session.dots.bind", "session.dots.unbind", "session.dots.send", "session.dots.pause", "session.dots.resume", "session.dots.exchange.create",
+    "session.dots.access.set",
     "session.prompt", "session.command", "session.compact", "session.skill", "session.attachment.upload",
     "session.switchModel", "session.switchAgent", "session.autonomy.set", "session.goal.set", "session.goal.stop",
     "incident.guidance.clear",
@@ -968,35 +885,8 @@ async function run(input: OperationInput) {
     return input.uploads.append(sessionID, validated.uploadID, validated.index, validated.last, validated.data)
   }
   switch (validated.kind) {
-    case "dots.exchange.create":
-      if (input.appContext === undefined) return unknownOperation()
-      const recipient = await input.sessions.verify(validated.input.targetSessionID, input.signal)
-      if (recipient === undefined) throw new OperationError("session_not_allowed", "The exchange target is not available in this device's Session inventory")
-      if (recipient.parentID !== undefined && recipient.agent !== "btw")
-        throw new OperationError("subagent_read_only", "Managed subagents accept input only from their parent Session")
-      return { data: await input.local.dotsExchangeCreate(sessionID, location, validated.input, input.appContext, input.signal) }
-    case "dots.exchange.read":
-      if (input.appContext === undefined) return unknownOperation()
-      return { data: await input.local.dotsExchangeRead(sessionID, location, validated.input, input.appContext, input.signal) }
-    case "dots.deviceDelegation.create":
-      return { data: await input.local.dotsDeviceDelegationCreate(sessionID, location, validated.input, input.appContext!) }
-    case "dots.deviceDelegation.read":
-      return { data: await input.local.dotsDeviceDelegationRead(sessionID, location, validated.input, input.appContext!) }
-    case "dots.deviceDelegation.revoke":
-      return { data: await input.local.dotsDeviceDelegationRevoke(sessionID, location, validated.input, input.appContext!) }
-    case "dots.decisions.list":
-      return { data: await input.local.dotsDecisionsList(sessionID, location, validated.input, input.appContext!) }
-    case "dots.targets": return { data: await input.local.dotsTargets(sessionID, location, validated.profile) }
-    case "dots.status": return { data: await input.local.dotsStatus(sessionID, location) }
-    case "dots.bind": return { data: await input.local.dotsBind(sessionID, location, validated.target) }
-    case "dots.unbind": return { data: await input.local.dotsUnbind(sessionID, location, validated.expectedTarget) }
-    case "dots.pause": return { data: await input.local.dotsPause(sessionID, location, validated.expectedTarget) }
-    case "dots.resume": return { data: await input.local.dotsResume(sessionID, location, validated.expectedTarget) }
-    case "dots.send": {
-      const files = await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID)
-      const payload = Schema.decodeUnknownSync(Dots.Send)({ ...validated.input, ...(files === undefined ? {} : { files }) })
-      return { data: await input.local.dotsSend(sessionID, location, payload) }
-    }
+    case "dots.access.get": return { data: await input.local.dotsAccessGet(sessionID, location) }
+    case "dots.access.set": return { data: await input.local.dotsAccessSet(sessionID, location, validated.input) }
     case "session.usageReport":
       return { data: await input.local.sessionUsageReport(sessionID, location, validated.input) }
     case "session.promptCosts":
@@ -1196,7 +1086,7 @@ async function run(input: OperationInput) {
       return null
     case "prompt":
       await requireAgentMentions(input.local, location, validated.input.agents)
-      return { data: await input.local.prompt(sessionID, location, { ...validated.input, ...(input.appContext === undefined ? {} : { remoteSource: input.appContext }), ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
+      return { data: await input.local.prompt(sessionID, location, { ...validated.input, ...(validated.input.files === undefined ? {} : { files: await requireFileAttachments(input.local, location, validated.input.files, input.uploads, sessionID) }) }) }
     case "interrupt":
       await input.local.interrupt(sessionID, location)
       return null
@@ -1252,19 +1142,8 @@ function unknownOperation(): never {
 type Reply = "once" | "always" | "reject"
 
 type Validated =
-  | { readonly kind: "dots.exchange.create"; readonly input: Dots.ExchangeCreate }
-  | { readonly kind: "dots.exchange.read"; readonly input: Dots.ExchangeRead }
-  | { readonly kind: "dots.deviceDelegation.create"; readonly input: Dots.DeviceDelegationCreate }
-  | { readonly kind: "dots.deviceDelegation.read"; readonly input: Dots.DeviceDelegationRead }
-  | { readonly kind: "dots.deviceDelegation.revoke"; readonly input: Dots.DeviceDelegationRevoke }
-  | { readonly kind: "dots.decisions.list"; readonly input: Dots.DecisionsList }
-  | { readonly kind: "dots.targets"; readonly profile: string }
-  | { readonly kind: "dots.status" }
-  | { readonly kind: "dots.bind"; readonly target: Dots.Target }
-  | { readonly kind: "dots.send"; readonly input: Dots.Send }
-  | { readonly kind: "dots.pause" | "dots.resume" | "dots.unbind"; readonly expectedTarget: Dots.Target }
-  | { readonly kind: "local.app"; readonly operation: RemoteMcpApps.Operation }
-  | { readonly kind: "artifact.demo.preview" | "artifact.demo.export" }
+  | { readonly kind: "dots.access.get" }
+  | { readonly kind: "dots.access.set"; readonly input: Dots.AccessSet }
   | { readonly kind: "latency.append"; readonly samples: readonly RemoteLatencySample[] }
   | { readonly kind: "latency.list"; readonly input: { readonly limit?: number; readonly before?: string } }
   | { readonly kind: "keepAwake.get" }
@@ -1340,7 +1219,7 @@ type Validated =
   | { readonly kind: "coordination"; readonly operation: RemoteOperation; readonly input?: Readonly<Record<string, unknown>> }
 
 const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
-  "session.dots.status": "dots.status",
+  "session.dots.access.get": "dots.access.get",
   "session.get": "get",
   "session.delete": "delete",
   "session.pending.list": "pending.list",
@@ -1461,12 +1340,6 @@ function validate(request: RemoteRequest): Validated {
   if (request.operation.startsWith("coordination.")) {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Coordination operations do not accept a Session")
     return { kind: "coordination", operation: request.operation, input: coordinationPayload(request.operation, fields) }
-  }
-  if ((localAppOperations as readonly string[]).includes(request.operation))
-    return { kind: "local.app", operation: request.operation as RemoteMcpApps.Operation }
-  if (request.operation === "artifact.demo.preview" || request.operation === "artifact.demo.export") {
-    if (request.sessionID !== undefined || request.input !== undefined) throw new OperationError("invalid_message", "Fixed demo does not accept a Session or input")
-    return { kind: request.operation }
   }
   if (request.operation === "machine.latency.append" || request.operation === "machine.latency.list") {
     if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Machine latency does not accept a Session")
@@ -1617,30 +1490,12 @@ function validate(request: RemoteRequest): Validated {
   const plain = plainKinds[request.operation]
   if (plain !== undefined) return { kind: plain } as Validated
   switch (request.operation) {
-    case "session.dots.exchange.create": return { kind: "dots.exchange.create", input: Schema.decodeUnknownSync(Dots.ExchangeCreate)(fields, { onExcessProperty: "error" }) }
-    case "session.dots.exchange.read": return { kind: "dots.exchange.read", input: Schema.decodeUnknownSync(Dots.ExchangeRead)(fields, { onExcessProperty: "error" }) }
-    case "session.dots.delegation.device.create": return { kind: "dots.deviceDelegation.create", input: Schema.decodeUnknownSync(Dots.DeviceDelegationCreate)(fields, { onExcessProperty: "error" }) }
-    case "session.dots.delegation.device.read": return { kind: "dots.deviceDelegation.read", input: Schema.decodeUnknownSync(Dots.DeviceDelegationRead)(fields, { onExcessProperty: "error" }) }
-    case "session.dots.delegation.device.revoke": return { kind: "dots.deviceDelegation.revoke", input: Schema.decodeUnknownSync(Dots.DeviceDelegationRevoke)(fields, { onExcessProperty: "error" }) }
-    case "session.dots.decisions.list": return { kind: "dots.decisions.list", input: Schema.decodeUnknownSync(Dots.DecisionsList)(fields, { onExcessProperty: "error" }) }
-    case "session.dots.targets": return { kind: "dots.targets", profile: requireString(fields.profile, "profile", 256) }
-    case "session.dots.bind": return { kind: "dots.bind", target: {
-      profile: requireString(fields.profile, "profile", 256),
-      dotID: requireString(fields.dotID, "dotID", 512),
-      threadID: requireString(fields.threadID, "threadID", 512),
-      generation: requireString(fields.generation, "generation", 512),
-      label: requireString(fields.label, "label", 512),
-    } }
-    case "session.dots.send": return { kind: "dots.send", input: {
-      expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget),
-      id: messageID(fields.id),
-      text: requireString(fields.text, "text", RemoteLimits.maxClientMessageChars, { allowEmpty: true }),
-      ...(fields.files === undefined ? {} : { files: fileAttachments(fields.files) }),
-      ...(fields.causalMessageID === undefined ? {} : { causalMessageID: requireString(fields.causalMessageID, "causalMessageID", 128) }),
-    } }
-    case "session.dots.pause": return { kind: "dots.pause", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
-    case "session.dots.unbind": return { kind: "dots.unbind", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
-    case "session.dots.resume": return { kind: "dots.resume", expectedTarget: Schema.decodeUnknownSync(Dots.Target)(fields.expectedTarget) }
+    case "session.dots.access.set": {
+      const enabled = requireBoolean(fields.enabled, "enabled")
+      if (typeof fields.expectedRevision !== "number" || !Number.isSafeInteger(fields.expectedRevision) || fields.expectedRevision < 0)
+        throw new OperationError("invalid_message", "Expected revision must be a non-negative integer")
+      return { kind: "dots.access.set", input: { enabled, expectedRevision: fields.expectedRevision } }
+    }
     case "session.compact": {
       const id = requireString(fields.id, "id", 128)
       if (!/^cmp_[A-Za-z0-9_-]+$/.test(id)) throw new OperationError("invalid_message", "Invalid compaction ID")
@@ -2277,12 +2132,6 @@ function afterAnchor(session: SessionInfo, anchor: Cursor, order: "asc" | "desc"
 }
 
 const allowedFields: Readonly<Record<string, readonly string[]>> = {
-  "local.app.register": ["host", "port", "entryPath", "routes", "ttlMs"],
-  "local.app.list": [],
-  "local.app.revoke": ["id"],
-  "local.app.open": ["id", "generation"],
-  "local.app.status": ["id"],
-  "local.app.http": ["id", "generation", "method", "path", "headers", "body"],
   "machine.latency.append": ["samples"],
   "machine.latency.list": ["limit", "before"],
   "machine.keepAwake.get": [],
@@ -2317,19 +2166,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.switchModel": ["model"],
   "session.switchAgent": ["agent"],
   "session.command": ["id", "command", "arguments", "files", "agents", "delivery"],
-  "session.dots.targets": ["profile"],
-  "session.dots.status": [],
-  "session.dots.bind": ["profile", "dotID", "threadID", "generation", "label"],
-  "session.dots.unbind": ["expectedTarget"],
-  "session.dots.send": ["id", "text", "files", "causalMessageID", "expectedTarget"],
-  "session.dots.exchange.create": ["exchangeID", "expectedAttachment", "targetSessionID", "channel", "delivery", "text", "delegation", "taskInputID", "instruction"],
-  "session.dots.exchange.read": ["exchangeID"],
-  "session.dots.delegation.device.create": ["id", "exchangeID", "bindingID", "expectedAttachment", "scope"],
-  "session.dots.delegation.device.read": ["cursor", "limit"],
-  "session.dots.delegation.device.revoke": ["id", "revision", "exchangeID", "bindingID", "expectedAttachment"],
-  "session.dots.decisions.list": ["bindingID", "expectedAttachment", "delegation", "targetSessionID", "cursor", "limit"],
-  "session.dots.pause": ["expectedTarget"],
-  "session.dots.resume": ["expectedTarget"],
+  "session.dots.access.get": [],
+  "session.dots.access.set": ["enabled", "expectedRevision"],
   "session.attachment.upload": ["uploadID", "index", "last", "data"],
   "session.skill": ["id", "skill", "resume"],
   "session.get": [],
@@ -2408,12 +2246,7 @@ const mutations: ReadonlySet<string> = new Set([
   "session.switchModel",
   "session.switchAgent",
   "session.command",
-  "session.dots.bind",
-  "session.dots.unbind",
-  "session.dots.send",
-  "session.dots.exchange.create",
-  "session.dots.pause",
-  "session.dots.resume",
+  "session.dots.access.set",
   "session.skill",
   "session.prompt",
   "session.interrupt",

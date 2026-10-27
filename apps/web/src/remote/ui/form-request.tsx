@@ -136,8 +136,9 @@ export function FormAssessment(props: { readonly value: unknown; readonly fieldK
   const settlement = () => {
     if (!props.settled) return "awaiting an authorized client decision"
     const reply = source()
+    if (reply?.kind === "dots-native") return `answered via native Dots · root ${reply.rootSessionID}`
     if (reply?.kind === "dots-delegation" || reply?.kind === "dots-client") return `answered by external client via Dots delegation ${reply.delegationID} · anchor ${reply.anchorSessionID}`
-    if (reply) return `answered by coordinator ${reply.coordinatorSessionID}${reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
+    if (reply?.kind === "coordinator") return `answered by coordinator ${reply.coordinatorSessionID}${reply.via === "yolo" ? " via Answers YOLO" : reply.via === "auto-answer" ? " via Answers Auto" : ""}`
     if (props.source !== undefined) return "answer source unreported"
     return props.settled === "automatic" ? "automatically answered" : "answered by client"
   }

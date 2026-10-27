@@ -65,7 +65,6 @@ export const groupNames = {
   "server.pty": "pty",
   "server.shell": "shell",
   "server.mcp": "mcp",
-  "server.mcpEvents": "mcpEvents",
   "server.coordination": "coordination",
   "server.config": "config",
   "server.question": "question",

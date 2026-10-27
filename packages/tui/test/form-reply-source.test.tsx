@@ -6,16 +6,16 @@ import { ThemeProvider } from "../src/context/theme"
 import { FormAssessment } from "../src/routes/session/form"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
-async function render(source: unknown) {
+async function render(source: unknown, mode: "dark" | "light" = "dark", width = 120) {
   const app = await testRender(
     () => (
       <ConfigProvider config={createTuiResolvedConfig()}>
-        <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+        <ThemeProvider mode={mode} source={{ discover: () => Promise.resolve({}) }}>
           <FormAssessment value={undefined} source={source} settled="client" />
         </ThemeProvider>
       </ConfigProvider>
     ),
-    { width: 120, height: 10 },
+    { width, height: 10 },
   )
   app.renderer.start()
   return app
@@ -82,6 +82,31 @@ test("a native coordinator reply keeps its coordinator attribution", async () =>
   } finally {
     app.renderer.destroy()
   }
+})
+
+for (const mode of ["dark", "light"] as const) for (const width of [32, 120]) test(`native Dots reply ${mode} at ${width} retains safe attribution`, async () => {
+  const privateFields = {
+    profile: "private_profile", credentialID: "private_credential", accountID: "private_account", accountGeneration: 491,
+    environmentID: "private_environment", connectionID: "private_connection", clientID: "private_client", streamID: "private_stream", requestID: "private_request",
+  }
+  const app = await render({ kind: "dots-native", rootSessionID: "ses_native_root", accessRevision: 17, ...privateFields }, mode, width)
+  try {
+    await app.waitForFrame((frame) => frame.replace(/\s+/g, " ").includes("answered by native Dots client"))
+    const frame = app.captureCharFrame().replace(/\s+/g, " ")
+    expect(frame).toContain("answered by native Dots client · root ses_native_root")
+    for (const value of Object.values(privateFields)) expect(frame).not.toContain(String(value))
+    expect(frame).not.toContain("coordinator")
+    expect(frame).not.toContain("via Dots delegation")
+  } finally { app.renderer.destroy() }
+}, 10000)
+
+test("a malformed native Dots source remains unreported without displaying private fields", async () => {
+  const app = await render({ kind: "dots-native", profile: "private_profile", credentialID: "private_credential", accountID: "private_account" })
+  try {
+    await app.waitForFrame((frame) => frame.includes("answer source unreported"))
+    const frame = app.captureCharFrame()
+    for (const value of ["private_profile", "private_credential", "private_account", "coordinator", "native Dots client"]) expect(frame).not.toContain(value)
+  } finally { app.renderer.destroy() }
 })
 
 test("a malformed reply source is unreported rather than attributed to the human", async () => {

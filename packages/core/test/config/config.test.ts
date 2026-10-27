@@ -109,6 +109,35 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.live("Dots opt-in follows global file provenance across reload and ignores project and inline configuration", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => fs.mkdtemp(path.join(process.cwd(), "test/fixture/.dots-config-"))),
+      (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+    ).pipe(Effect.flatMap((directory) => Effect.gen(function* () {
+      const global = path.join(directory, "global")
+      const project = path.join(directory, "project")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(global)
+        await fs.mkdir(project)
+        await fs.writeFile(path.join(global, "ycoding.json"), JSON.stringify({ dots: { enabled: true, profile: "trusted" } }))
+        await fs.writeFile(path.join(project, "ycoding.json"), JSON.stringify({ dots: { enabled: true, profile: "project" } }))
+      })
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        expect(Config.dots(yield* config.entries())).toEqual({ enabled: true, profile: "trusted" })
+        yield* Effect.promise(() => fs.writeFile(path.join(global, "ycoding.json"), JSON.stringify({ dots: { enabled: false } })))
+        yield* config.reload()
+        expect(Config.dots(yield* config.entries())).toEqual({ enabled: false })
+        expect(Config.capabilities(yield* config.entries()).dots).toBe(false)
+        yield* Effect.promise(() => fs.writeFile(path.join(global, "ycoding.json"), JSON.stringify({ dots: { enabled: true } })))
+        yield* config.reload()
+        expect(Config.dots(yield* config.entries())).toEqual({ enabled: false })
+      }).pipe(Effect.provide(testLayer(project, global, project, undefined, undefined, emptyCredentialNode, emptyWellknownNode, {
+        content: JSON.stringify({ dots: { enabled: true, profile: "inline" } }),
+      })))
+    }))),
+  )
+
   for (const example of [
     {
       name: "unknown top-level key",

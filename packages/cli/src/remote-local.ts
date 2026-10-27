@@ -21,10 +21,10 @@ import {
   type Project,
   type ProjectDirectory,
   type SessionInfo,
+  type DotsAccess,
   type SessionCompletionsOutput,
   type SessionMessageInfo,
   type YCodingClient,
-  type DotsExchange,
   type IntegrationInfo,
   type ProviderIntegrationRef,
   type IntegrationAttemptStatus,
@@ -32,15 +32,11 @@ import {
   type IntegrationCommandAttemptStatus,
   type ReviewDecideInput,
   type ReviewListOutput,
-  type JsonValue,
-  type DotsExchangeCreateInput,
 } from "@ycoding-ai/client/promise"
-import { Schema } from "effect"
 import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
-import type { McpEvents } from "@ycoding-ai/schema/mcp-events"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { RemoteLimits, type RemoteCompactionHistory, type RemoteLatencySample, type RemoteTelemetryConsent, type RemoteTelemetryConsentState, type RemoteUsageReportInput, type RemoteIncidentGuidance, type RemoteIncidentGuidanceInput, type RemoteIncidentRecent, type RemoteIncidentRecentInput, type RemoteIncidentReport, type RemoteIncidentReportInput } from "@ycoding-ai/remote"
 
@@ -58,7 +54,6 @@ export type LocalPrompt = {
   readonly metadata?: { readonly skills: readonly { readonly id: string }[] }
   readonly delivery?: "steer" | "queue"
   readonly resume?: boolean
-  readonly remoteSource?: McpEvents.RequestContext
 }
 
 export type LocalAutonomyMode = "manual" | "yolo" | "auto"
@@ -98,10 +93,6 @@ export type LocalEventStream = {
 }
 
 export type LocalServer = {
-  readonly mcpEventsStatus: (signal?: AbortSignal) => Promise<{ available: boolean }>
-  readonly mcpEventsList: (input: { cursor?: string }, signal?: AbortSignal) => Promise<McpEvents.ListResult>
-  readonly mcpEventsSubscribe: (input: { context: McpEvents.RequestContext; subscription: McpEvents.Subscribe }, signal?: AbortSignal) => Promise<McpEvents.Subscription>
-  readonly mcpEventsUnsubscribe: (input: { context: McpEvents.RequestContext; subscription: McpEvents.Unsubscribe }, signal?: AbortSignal) => Promise<{}>
   readonly integrationList: (location: LocalLocation) => Promise<readonly IntegrationInfo[]>
   readonly providerIntegrations: (location: LocalLocation) => Promise<readonly ProviderIntegrationRef[]>
   readonly integrationKey: (location: LocalLocation, integrationID: string, key: string, label: string) => Promise<void>
@@ -197,19 +188,8 @@ export type LocalServer = {
   readonly switchModel: (sessionID: string, location: LocalLocation, model: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string }) => Promise<void>
   readonly switchAgent: (sessionID: string, location: LocalLocation, agent: string) => Promise<void>
   readonly command: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly command: string; readonly arguments?: string; readonly files?: LocalPrompt["files"]; readonly agents?: LocalPrompt["agents"]; readonly delivery?: LocalPrompt["delivery"] }) => Promise<unknown>
-  readonly dotsTargets: (sessionID: string, location: LocalLocation, profile: string) => Promise<unknown>
-  readonly dotsDeviceDelegationCreate: (sessionID: string, location: LocalLocation, input: Dots.DeviceDelegationCreate, remoteSource: McpEvents.RequestContext) => Promise<Dots.DeviceDelegationInfo>
-  readonly dotsDeviceDelegationRead: (sessionID: string, location: LocalLocation, input: Dots.DeviceDelegationRead, remoteSource: McpEvents.RequestContext) => Promise<Dots.DeviceDelegationStatus>
-  readonly dotsDeviceDelegationRevoke: (sessionID: string, location: LocalLocation, input: Dots.DeviceDelegationRevoke, remoteSource: McpEvents.RequestContext) => Promise<Dots.DeviceDelegationInfo>
-  readonly dotsDecisionsList: (sessionID: string, location: LocalLocation, input: Dots.DecisionsList, remoteSource: McpEvents.RequestContext) => Promise<Dots.DecisionsPage>
-  readonly dotsExchangeCreate: (sessionID: string, location: LocalLocation, input: Dots.ExchangeCreate, remoteSource: McpEvents.RequestContext, signal?: AbortSignal) => Promise<DotsExchange>
-  readonly dotsExchangeRead: (sessionID: string, location: LocalLocation, input: Dots.ExchangeRead, remoteSource: McpEvents.RequestContext, signal?: AbortSignal) => Promise<DotsExchange>
-  readonly dotsStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
-  readonly dotsBind: (sessionID: string, location: LocalLocation, target: Dots.Target) => Promise<unknown>
-  readonly dotsUnbind: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<unknown>
-  readonly dotsSend: (sessionID: string, location: LocalLocation, input: Dots.Send) => Promise<unknown>
-  readonly dotsPause: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<Dots.Status>
-  readonly dotsResume: (sessionID: string, location: LocalLocation, expectedTarget: Dots.Target) => Promise<Dots.Status>
+  readonly dotsAccessGet: (sessionID: string, location: LocalLocation) => Promise<DotsAccess>
+  readonly dotsAccessSet: (sessionID: string, location: LocalLocation, input: Dots.AccessSet) => Promise<DotsAccess>
   readonly skill: (sessionID: string, location: LocalLocation, input: { readonly id?: string; readonly skill: string; readonly resume?: boolean }) => Promise<void>
   readonly interrupt: (sessionID: string, location: LocalLocation) => Promise<void>
   readonly deleteSession: (sessionID: string, location: LocalLocation) => Promise<void>
@@ -271,10 +251,6 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
   }
 
   return {
-    mcpEventsStatus: (signal) => client.mcpEvents.status({ signal: signal ?? AbortSignal.timeout(timeoutMs) }),
-    mcpEventsList: (input, signal) => client.mcpEvents.list(input, { signal: signal ?? AbortSignal.timeout(timeoutMs) }),
-    mcpEventsSubscribe: (input, signal) => client.mcpEvents.subscribe(input, { signal: signal ?? AbortSignal.timeout(timeoutMs) }),
-    mcpEventsUnsubscribe: (input, signal) => client.mcpEvents.unsubscribe(input, { signal: signal ?? AbortSignal.timeout(timeoutMs) }),
     latencyAppend: (samples) => call(() => client.server.telemetry.append({ samples }, { signal: AbortSignal.timeout(timeoutMs) })),
     latencyList: (input) => call(() => client.server.telemetry.list(input, { signal: AbortSignal.timeout(timeoutMs) })),
     telemetryConsentGet: () => call(() => client.server.telemetry.consent.get({ signal: AbortSignal.timeout(timeoutMs) })),
@@ -447,7 +423,6 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
             ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
             ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
             ...(input.resume === undefined ? {} : { resume: input.resume }),
-            ...(input.remoteSource === undefined ? {} : { remoteSource: input.remoteSource }),
           } as Parameters<YCodingClient["session"]["prompt"]>[0],
           request(location, timeoutMs),
         ),
@@ -459,19 +434,8 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       await client.session.switchAgent({ sessionID, agent }, request(location, timeoutMs))
     }),
     command: (sessionID, location, input) => call(() => client.session.command({ sessionID, ...input } as Parameters<YCodingClient["session"]["command"]>[0], request(location, timeoutMs))),
-    dotsTargets: (sessionID, location, profile) => call(() => client.dots.targets({ sessionID, profile }, request(location, timeoutMs))),
-    dotsDeviceDelegationCreate: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DeviceDelegationInfo)(await client.dots.delegation.device.create({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
-    dotsDeviceDelegationRead: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DeviceDelegationStatus)(await client.dots.delegation.device.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
-    dotsDeviceDelegationRevoke: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DeviceDelegationInfo)(await client.dots.delegation.device.revoke({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
-    dotsDecisionsList: (sessionID, location, input, remoteSource) => call(async () => Schema.decodeUnknownSync(Dots.DecisionsPage)(await client.dots.decisions.list({ sessionID, ...input, remoteSource }, request(location, timeoutMs)))),
-    dotsExchangeCreate: (sessionID, location, input, remoteSource, signal) => call(() => client.dots.exchange.create({ sessionID, payload: exchangePayload(input, remoteSource) }, request(location, timeoutMs, signal))),
-    dotsExchangeRead: (sessionID, location, input, remoteSource, signal) => call(() => client.dots.exchange.read({ sessionID, ...input, remoteSource }, request(location, timeoutMs, signal))),
-    dotsStatus: (sessionID, location) => call(() => client.dots.status({ sessionID }, request(location, timeoutMs))),
-    dotsBind: (sessionID, location, target) => call(() => client.dots.bind({ sessionID, ...target }, request(location, timeoutMs))),
-    dotsUnbind: (sessionID, location, expectedTarget) => call(() => client.dots.unbind({ sessionID, expectedTarget }, request(location, timeoutMs))),
-    dotsSend: (sessionID, location, input) => call(() => client.dots.send({ sessionID, ...input }, request(location, timeoutMs))),
-    dotsPause: (sessionID, location, expectedTarget) => call(() => client.dots.pause({ sessionID, expectedTarget }, request(location, timeoutMs))),
-    dotsResume: (sessionID, location, expectedTarget) => call(() => client.dots.resume({ sessionID, expectedTarget }, request(location, timeoutMs))),
+    dotsAccessGet: (sessionID, location) => call(() => client.dots.access.get({ sessionID }, request(location, timeoutMs))),
+    dotsAccessSet: (sessionID, location, input) => call(() => client.dots.access.set({ sessionID, ...input }, request(location, timeoutMs))),
     skill: (sessionID, location, input) => call(async () => {
       await client.session.skill({ sessionID, ...input }, request(location, timeoutMs))
     }),
@@ -584,27 +548,6 @@ async function requireDirectory(location: LocalLocation) {
   if (!info?.isDirectory()) throw new LocalFailure("location_unavailable", "The recorded directory is unavailable on this device")
 }
 
-function exchangePayload(input: Dots.ExchangeCreate, remoteSource: McpEvents.RequestContext): DotsExchangeCreateInput["payload"] {
-  if ("text" in input) return { ...input, remoteSource }
-  if ("taskInputID" in input) return { ...input, remoteSource }
-  const instruction = input.instruction
-  if (instruction.operation !== "decision" || "reply" in instruction || "answers" in instruction || "cancelled" in instruction || "dismissed" in instruction)
-    return { ...input, instruction, remoteSource }
-  if ("decision" in instruction) {
-    const decision = instruction.decision
-    if (decision.kind === "subagent_question" && "text" in decision)
-      return { ...input, instruction: { ...instruction, decision: { ...decision, data: decision.data === undefined ? undefined : jsonValue(decision.data) } }, remoteSource }
-    return { ...input, instruction: { ...instruction, decision }, remoteSource }
-  }
-  return { ...input, instruction: { ...instruction, data: instruction.data === undefined ? undefined : jsonValue(instruction.data) }, remoteSource }
-}
-
-function jsonValue(value: Schema.Json): JsonValue {
-  if (value === null || typeof value !== "object") return value
-  if (Array.isArray(value)) return value.map(jsonValue)
-  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, jsonValue(entry)]))
-}
-
 function classify(cause: unknown, timeoutMs: number): LocalFailure {
   if (cause instanceof LocalFailure) return cause
   if (typeof cause === "object" && cause !== null && Reflect.get(cause, "_tag") === "TelemetryDisabled")
@@ -617,8 +560,6 @@ function classify(cause: unknown, timeoutMs: number): LocalFailure {
     return new LocalFailure("transport", message, { cause })
   }
   const tag = typeof cause === "object" && cause !== null ? Reflect.get(cause, "_tag") : undefined
-  if (typeof cause === "object" && cause !== null && tag === "InvalidRequestError" && Reflect.get(cause, "field") === "dots" && Reflect.get(cause, "kind") === "outcome_unknown")
-    return new LocalFailure("transport", "The exchange admission return is unconfirmed", { cause })
   if (tag === "InvalidRequestError" || tag === "InvalidCursorError" || tag === "SchemaError")
     return new LocalFailure("invalid", "Local server rejected the request", { cause })
   if (

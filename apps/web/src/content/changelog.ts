@@ -22,6 +22,22 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.11.5",
+    date: "2026-10-27",
+    title: "Native Dots and Session-family access",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Native Dots task admission and typed decisions use private server-process Channels. Live turns stream assistant text and canonical Session events, with distinct completed, failed and interrupted execution outcomes." },
+      { tag: "Added", text: "Persistent Session-family Dots access: existing roots default off, native-created roots are enabled atomically, and children inherit. Root Session command palettes in the TUI and web offer Enable Dots access and Disable Dots access with revision checks." },
+      { tag: "Changed", text: "Breaking Change: incoming Relay MCP/OAuth, webhook Events, local.app and artifact.demo tools, and old Dots peer controls are retired, including ycoding remote mcp, /dots and the old send/pause/resume/report tools. Replace that setup with global dots.enabled: true and dots.profile naming an exact OpenAI OAuth profile, then enable each existing root Session. Project configuration cannot enable Dots or replace its pinned account. The ordinary browser Remote, configured outbound MCP and Task MCP remain available." },
+      { tag: "Changed", text: "Native decisions require the exact typed candidate and current source/revision. YCoding permissions, explicit denies, ceilings, guardrails and autonomy remain authoritative. Ownership, archive state, account replacement, access revocation and connection retirement invalidate stale authority. Unknown outcomes are not replayed automatically; prompt text cannot settle a decision." },
+      { tag: "Changed", text: "Native approval, reviewer and sandbox labels are adapter-specific, not strict Codex policy equivalence: they describe surfaced typed reviews and no Codex-enforced OS sandbox, not unrestricted YCoding authority or every automatic decision. Non-null model, provider, approval, reviewer, sandbox or configuration overrides reject before effects, including matching values; null or omitted fields preserve defaults. Resume and turn requests cannot change the recorded directory. Exact external ChatGPT decoder compatibility is unverified." },
+      { tag: "Changed", text: "Historical native transcript summaries project actual user and assistant messages, omitting internal records without relabeling them. A completed summary means its stored projection is complete, not original execution success; pruning can remove those old outcome associations. Live execution status uses canonical events, unrecorded metadata stays unknown or null, and stored history and retention policy are unchanged. No lost execution outcome is reconstructed." },
+      { tag: "Changed", text: "A parent can select a directly owned child's model regardless of causal input origin. Direct ownership, effective permission, final deny, revision and logical Step-boundary checks remain enforced; selection does not interrupt or replay work." },
+      { tag: "Fixed", text: "Usage speed percentiles batch repeated histogram updates while preserving exact results. Large Usage dashboards can still exceed the two-second warm-read target." },
+    ],
+  },
+  {
     version: "0.11.4",
     date: "2026-10-27",
     title: "Device-scoped Dots decisions, display keep-awake and received-output speed",

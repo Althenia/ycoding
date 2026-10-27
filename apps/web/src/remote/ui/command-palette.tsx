@@ -6,6 +6,9 @@ import { Modal } from "../../ui/modal"
 import { useTheme } from "../../theme/theme-store"
 import { catalogKey, type CatalogTarget } from "../catalog"
 import { useRemote } from "../context"
+import { dotsClient } from "../dots"
+import { createRemoteQuery } from "../query"
+import { describeOutcome } from "../outcome"
 import { workspaceLabels } from "../view-model"
 import {
   filterPaletteActions,
@@ -56,6 +59,40 @@ export function CommandPalette(props: {
   let trigger: HTMLButtonElement | undefined
   let opener: HTMLElement | undefined
   let requestClose: (() => void) | undefined
+  const [dotsMutation, setDotsMutation] = createSignal<{ key: string; selection: number; status: "pending" | "error"; message?: string }>()
+  const dotsKey = () => {
+    const scope = remote.scope()
+    const sessionID = props.sessionSelected ? remote.state().activeSessionID : undefined
+    return scope && sessionID && remote.state().transport.kind === "open" ? ["remote", scope.deviceID, scope.generation, "dots-access", sessionID] as const : undefined
+  }
+  createEffect(() => {
+    const key = JSON.stringify(dotsKey())
+    const selection = remote.store.selectionFence()
+    const mutation = dotsMutation()
+    if (mutation && (mutation.key !== key || mutation.selection !== selection)) setDotsMutation(undefined)
+  })
+  onCleanup(() => setDotsMutation(undefined))
+  const dotsQuery = createRemoteQuery(remote.store.queryClient, () => {
+    const key = dotsKey()
+    const scope = remote.scope()
+    return {
+      queryKey: key ?? ["remote", "dots-access", "idle"],
+      enabled: open() && !props.managedChild && key !== undefined && scope !== undefined,
+      staleTime: 0,
+      retry: false,
+      refetchOnMount: "always" as const,
+      queryFn: ({ signal }: { signal: AbortSignal }) => dotsClient(remote.store.link, scope!, key![4]).get(signal),
+    }
+  })
+  const dotsStatus = () => {
+    if (!props.sessionSelected || props.managedChild || !dotsKey()) return undefined
+    const mutation = dotsMutation()
+    if (mutation?.key === JSON.stringify(dotsKey()) && mutation.selection === remote.store.selectionFence()) return mutation.status === "pending" ? "Changing Dots access…" : mutation.message
+    if (dotsQuery().isFetching || dotsQuery().isPending) return "Loading Dots access…"
+    if (dotsQuery().isError) return "Dots access is unavailable. Reopen the palette to retry."
+    if (dotsQuery().data?.configured === false) return "Dots is not configured on this machine."
+    return undefined
+  }
 
   const target = (): CatalogTarget | undefined => props.view === "/remote"
     ? props.workspaceID === undefined ? undefined : { workspaceID: props.workspaceID }
@@ -78,6 +115,7 @@ export function CommandPalette(props: {
         id: sessionID,
         running: state.view?.id === sessionID && state.view.status === "running",
         managedChild: props.managedChild,
+        ...(!dotsStatus() && dotsQuery().data?.sessionID === sessionID ? { dotsAccess: dotsQuery().data } : {}),
         ...(state.view?.id === sessionID && state.view.autonomy !== undefined ? { autonomous: state.view.autonomy.effective ?? state.view.autonomy } : {}),
         goalActive: state.view?.id === sessionID && state.view.autonomy?.goal?.status === "active",
         ...(state.view?.id === sessionID && state.view.autonomy !== undefined
@@ -112,6 +150,7 @@ export function CommandPalette(props: {
   const actions = createMemo(() => paletteActions(context()))
 
   const openPalette = () => {
+    if (dotsMutation()?.status !== "pending" || dotsMutation()?.selection !== remote.store.selectionFence()) setDotsMutation(undefined)
     const active = document.activeElement
     opener = active instanceof HTMLElement && active !== document.body && active.isConnected ? active : trigger
     if (closing()) setGeneration((current) => current + 1)
@@ -146,6 +185,30 @@ export function CommandPalette(props: {
       case "stopGoal": void remote.store.stopGoal(); return
       case "autonomous": requestAutonomousDialog(); return
       case "sleep": void remote.store.setSleep(intent.sleep); return
+      case "dotsAccess": {
+        const key = dotsKey()
+        const scope = remote.scope()
+        const access = dotsQuery().data
+        if (!key || !scope || !access || dotsStatus() || props.managedChild || access.inherited || !access.configured || access.revision !== intent.revision) return
+        const identity = JSON.stringify(key)
+        const selection = remote.store.selectionFence()
+        const mutation = { key: identity, selection, status: "pending" as const }
+        setDotsMutation(mutation)
+        const owns = () => dotsMutation() === mutation && identity === JSON.stringify(dotsKey()) && selection === remote.store.selectionFence()
+        void dotsClient(remote.store.link, scope, key[4]).set(intent.enabled, intent.revision).then(async (outcome) => {
+          if (!owns()) return
+          if (outcome.status === "ok") {
+            await remote.store.queryClient.invalidateQueries({ queryKey: key, exact: true })
+            if (owns()) setDotsMutation(undefined)
+            return
+          }
+          setDotsMutation({ key: identity, selection, status: "error", message: describeOutcome(outcome, "Dots access") })
+          await remote.store.queryClient.invalidateQueries({ queryKey: key, exact: true })
+        }, () => {
+          if (owns()) setDotsMutation({ key: identity, selection, status: "error", message: "Dots access outcome is unknown. Reopen the palette to check." })
+        })
+        return
+      }
       case "keepAwake": {
         const scope = remote.scope()
         if (scope) void remote.queries.toggleKeepAwake(scope)
@@ -202,7 +265,7 @@ export function CommandPalette(props: {
             onDismiss={() => { setClosing(true); setOpen(false) }}
             onClose={() => { if (generation() === current) setClosing(false) }}
           >
-            <PaletteBody view={props.view} actions={actions()} onRun={(action) => { requestClose?.(); run(action.intent) }} />
+            <PaletteBody view={props.view} actions={actions()} status={dotsStatus()} onRun={(action) => { if (action.intent.type !== "dotsAccess") requestClose?.(); run(action.intent) }} />
           </Modal>
           </Portal>
         )}</Show>
@@ -214,6 +277,7 @@ export function CommandPalette(props: {
 function PaletteBody(props: {
   readonly view: RemoteView
   readonly actions: readonly PaletteAction[]
+  readonly status?: string
   readonly onRun: (action: PaletteAction) => void
 }): JSX.Element {
   const [query, setQuery] = createSignal("")
@@ -292,6 +356,7 @@ function PaletteBody(props: {
 
   return (
     <div class="command-palette">
+      <Show when={props.status}><p class="field__hint" role="status">{props.status}</p></Show>
       <label class="command-palette__search" for="command-palette-input">
         <span class="visually-hidden">Search actions</span>
         <Icon name="search" size={16} />

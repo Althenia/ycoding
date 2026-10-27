@@ -7,14 +7,14 @@ export type MentionPart =
   | { readonly kind: "agent"; readonly name: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
   | { readonly kind: "skill"; readonly id: string; readonly mention: { readonly start: number; readonly end: number; readonly text: string } }
 export type ComposerOption = { readonly label: string; readonly description?: string; readonly kind: "command" | "file" | "agent" | "skill"; readonly value: string; readonly uri?: string }
-const unsupportedSlashActions = new Set(["cd", "editor", "skills", "btw", "btw-send", "daybreak", "move"])
+const unsupportedSlashActions = new Set(["cd", "editor", "skills", "btw", "btw-send", "daybreak", "move", "dots"])
 const autonomyActions = {
   sleep: { kind: "sleep", description: "Put this Session family to sleep" },
   wake: { kind: "wake", description: "Wake this Session family" },
   "keep-awake": { kind: "keepAwake", description: "Toggle keeping this machine awake" },
   autonomous: { kind: "autonomous", description: "Open Autonomous controls" },
 } as const
-const localSessionActions = new Set(["goal", "suggest", "dots", ...Object.keys(autonomyActions)])
+const localSessionActions = new Set(["goal", "suggest", ...Object.keys(autonomyActions)])
 
 export type PromptGenerateMode = "start" | "steer" | "queue" | "goal"
 
@@ -188,7 +188,7 @@ export function needsCatalogRead(target: CatalogTarget | undefined, catalog: Cat
   return target !== undefined && transportOpen && catalog === undefined
 }
 
-export function optionsForTrigger(trigger: Trigger, query: string, catalog: CatalogView | undefined, files: readonly FileOption[], sessionActions = true, dotsEnabled = false): ComposerOption[] {
+export function optionsForTrigger(trigger: Trigger, query: string, catalog: CatalogView | undefined, files: readonly FileOption[], sessionActions = true): ComposerOption[] {
   if (!catalog || catalog.status !== "ready") return []
   const skills: ComposerOption[] = catalog.skills.map((skill) => ({ label: `$${skill.id}`, description: skill.description ?? skill.name, kind: "skill", value: skill.id }))
   const agents: ComposerOption[] = catalog.agents.filter((agent) => !agent.hidden && agent.mode !== "primary" && agent.id !== "btw")
@@ -199,7 +199,6 @@ export function optionsForTrigger(trigger: Trigger, query: string, catalog: Cata
     ? [...(sessionActions ? [{ label: "/compact", description: "Compact this Session's context", kind: "command" as const, value: "compact" }, { label: "/goal", description: "Set an autonomous goal", kind: "command" as const, value: "goal" }, { label: "/suggest", description: "Suggest your next message", kind: "command" as const, value: "suggest" }, ...Object.entries(autonomyActions).map(([name, action]) => ({ label: `/${name}`, description: action.description, kind: "command" as const, value: name }))] : []), { label: "/prompt", description: "Generate a prompt from a rough intent", kind: "command" as const, value: "prompt" }, ...catalog.commands.filter((command) => !unsupportedSlashActions.has(command.name) && command.name !== "compact" && command.name !== "prompt" && (!sessionActions || !localSessionActions.has(command.name))).map((command) => ({ label: `/${command.name}`, description: command.description, kind: "command" as const, value: command.name })), ...(sessionActions ? skills.filter((skill) => catalog.skills.find((entry) => entry.id === skill.value)?.slash).map((skill) => ({ ...skill, label: `/${skill.value}` })) : [])]
     : trigger === "@" ? [...catalog.references.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...agents, ...catalog.resources.map((resource) => resources.find((item) => item.uri === resource.uri)!), ...files.map((file) => ({ label: `@${file.path}`, kind: "file" as const, value: file.path, uri: file.uri }))]
       : trigger === "$" ? skills : [...skills.map((skill) => ({ ...skill, label: catalog.skills.find((item) => item.id === skill.value)?.name ?? skill.label })), ...agents.map((agent) => ({ ...agent, label: catalog.agents.find((item) => item.id === agent.value)?.name ?? agent.label }))]
-  if (trigger === "/" && sessionActions && dotsEnabled) candidates.unshift({ label: "/dots", description: "Choose a Dot and conversation", kind: "command", value: "dots" })
   return candidates.map((option) => ({ option, score: Math.max(fuzzy(option.value, query), fuzzy(option.description ?? "", query) - 20) }))
     .filter((entry) => entry.score > -Infinity)
     .sort((a, b) => b.score - a.score || a.option.label.localeCompare(b.option.label))
@@ -260,11 +259,6 @@ export function submission(text: string, parts: readonly MentionPart[], catalog:
   if (command && unsupportedSlashActions.has(command[1]!)) return { kind: "invalid" as const, message: "This slash action is unavailable in the web composer." }
   const files: FileAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "file" }> => part.kind === "file")
     .map((part) => ({ uri: part.uri, name: part.name, description: part.description, mention: part.mention }))
-  if (command?.[1] === "dots") {
-    if (parts.some((part) => part.kind === "agent" || part.kind === "skill"))
-      return { kind: "invalid" as const, message: "Remove agent and skill mentions before sending to Dots." }
-    return { kind: "dots" as const, input: { text: command[2] ?? "", ...(files.length ? { files } : {}) } }
-  }
   const agents: AgentAttachmentInput[] = parts.filter((part): part is Extract<MentionPart, { kind: "agent" }> => part.kind === "agent")
     .map((part) => ({ name: part.name, mention: part.mention }))
   const base = { delivery, ...(files.length ? { files } : {}), ...(agents.length ? { agents } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(forceModelSwitch ? { forceModelSwitch: true } : {}) }

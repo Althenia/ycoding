@@ -6,9 +6,9 @@ import { CommandPaletteDialog } from "../src/component/command-palette"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider, useTheme } from "../src/context/theme"
-import { RemoteProvider, useRemote, type RemoteMcpStatus, type RemoteStatus } from "../src/remote-connector"
+import { RemoteProvider, useRemote, type RemoteStatus } from "../src/remote-connector"
 import { DialogProvider, useDialog } from "../src/ui/dialog"
-import { Toast, ToastProvider, useToast } from "../src/ui/toast"
+import { Toast, ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
@@ -27,21 +27,6 @@ function fakeServer() {
   }
 }
 
-function fakeMcp() {
-  let state: RemoteMcpStatus = { state: "off" }
-  const writes: boolean[] = []
-  return {
-    get: async () => state,
-    set: async (enabled: boolean) => {
-      writes.push(enabled)
-      state = enabled ? { state: "on", url: "https://relay.example/api/mcp/devices/dev_1" } : { state: "off" }
-      return state
-    },
-    change: (value: RemoteMcpStatus) => { state = value },
-    writes,
-  }
-}
-
 async function awaitFrame(app: Awaited<ReturnType<typeof testRender>>, matches: (frame: string) => boolean) {
   const deadline = Date.now() + 8_000
   while (Date.now() < deadline) {
@@ -51,18 +36,15 @@ async function awaitFrame(app: Awaited<ReturnType<typeof testRender>>, matches: 
   expect(matches(app.captureCharFrame())).toBe(true)
 }
 
-async function renderRemote(server: ReturnType<typeof fakeServer>, mcp: ReturnType<typeof fakeMcp> = fakeMcp(), width = 80) {
+async function renderRemote(server: ReturnType<typeof fakeServer>, width = 80) {
   let remote!: ReturnType<typeof useRemote>
   let dispatch!: (id: string) => void
-  let toastMessage!: () => string | undefined
   let commands!: () => readonly { id?: string; title?: string }[]
   let colors!: () => { active: [number, number, number, number]; inactive: [number, number, number, number] }
   function Probe() {
     remote = useRemote()
     const keymap = Keymap.use()
     const dialog = useDialog()
-    const toast = useToast()
-    toastMessage = () => toast.currentToast?.message
     const theme = useTheme().contextual("elevated")
     colors = () => ({ active: theme.theme.text.feedback.success.default.toInts(), inactive: theme.theme.text.subdued.toInts() })
     commands = Keymap.useCommands()
@@ -71,25 +53,25 @@ async function renderRemote(server: ReturnType<typeof fakeServer>, mcp: ReturnTy
       { id: "test.shortcut", title: "Other command", palette: true, bind: "ctrl+o", run: () => {} },
     ] }))
     onMount(() => { dispatch = (id) => keymap.dispatch(id) })
-    return <><text>Remote fixture: {remote.status().state} mcp: {remote.mcp().state}</text><Toast /></>
+    return <><text>Remote fixture: {remote.status().state}</text><Toast /></>
   }
   const app = await testRender(() => (
     <TestTuiContexts><ConfigProvider config={createTuiResolvedConfig()}>
       <Keymap.Provider><ToastProvider><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}><DialogProvider>
-        <RemoteProvider server={server} mcp={mcp}><Probe /></RemoteProvider>
+        <RemoteProvider server={server}><Probe /></RemoteProvider>
       </DialogProvider></ThemeProvider></ToastProvider></Keymap.Provider>
     </ConfigProvider></TestTuiContexts>
   ), { width, height: 24 })
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Remote fixture: off mcp: off"))
-  return { app, status: () => remote.status(), dispatch: (id: string) => dispatch(id), commands: () => commands(), toastMessage: () => toastMessage(), colors: () => colors() }
+  await app.waitForFrame((frame) => frame.includes("Remote fixture: off"))
+  return { app, status: () => remote.status(), dispatch: (id: string) => dispatch(id), commands: () => commands(), colors: () => colors() }
 }
 
 test("the one remote row shows colored server states even when highlighted", async () => {
   const server = fakeServer()
   const view = await renderRemote(server)
   try {
-    expect(view.commands().filter((command) => command.id?.startsWith("remote.")).map((command) => command.title)).toEqual(["Remote connection", "Relay MCP"])
+    expect(view.commands().filter((command) => command.id?.startsWith("remote.")).map((command) => command.title)).toEqual(["Remote connection"])
     view.dispatch("command.palette.show")
     await view.app.waitForFrame((frame) => frame.includes("Remote connection"))
     await view.app.mockInput.typeText("Remote connection")
@@ -186,7 +168,6 @@ test("a second toggle cancels pending enable intent and ignores its late reply",
 
 test("two TUIs display one server state and reflect the other's switch within a probe", async () => {
   const server = fakeServer()
-  const mcp = fakeMcp()
   const controls: Partial<Record<"first" | "second", () => void>> = {}
   function Probe(props: { id: "first" | "second" }) {
     const remote = useRemote()
@@ -197,8 +178,8 @@ test("two TUIs display one server state and reflect the other's switch within a 
   const app = await testRender(() => (
     <TestTuiContexts><ConfigProvider config={createTuiResolvedConfig()}>
       <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}><ToastProvider>
-        <Keymap.Provider><DialogProvider><RemoteProvider server={server} mcp={mcp}><Probe id="first" /></RemoteProvider></DialogProvider></Keymap.Provider>
-        <Keymap.Provider><DialogProvider><RemoteProvider server={server} mcp={mcp}><Probe id="second" /></RemoteProvider></DialogProvider></Keymap.Provider>
+        <Keymap.Provider><DialogProvider><RemoteProvider server={server}><Probe id="first" /></RemoteProvider></DialogProvider></Keymap.Provider>
+        <Keymap.Provider><DialogProvider><RemoteProvider server={server}><Probe id="second" /></RemoteProvider></DialogProvider></Keymap.Provider>
       </ToastProvider></ThemeProvider>
     </ConfigProvider></TestTuiContexts>
   ), { width: 80, height: 24 })
@@ -220,133 +201,11 @@ test("two TUIs display one server state and reflect the other's switch within a 
   }
 }, 12_000)
 
-test("Relay MCP palette row shows its own colored state and toggles the shared MCP switch", async () => {
-  const server = fakeServer()
-  const mcp = fakeMcp()
-  const view = await renderRemote(server, mcp)
-  try {
-    server.change({ state: "on" })
-    await awaitFrame(view.app, (frame) => frame.includes("Remote fixture: on"))
-    view.dispatch("command.palette.show")
-    await view.app.waitForFrame((frame) => frame.includes("Relay MCP"))
-    await view.app.mockInput.typeText("Relay MCP")
-    const check = async (label: string, color: [number, number, number, number]) => {
-      await awaitFrame(view.app, (frame) => frame.includes(`● ${label}`) && !frame.includes("Other command"))
-      const row = view.app.captureSpans().lines.find((line) => line.spans.some((span) => span.text.includes(`● ${label}`)))
-      expect(row?.spans.find((span) => span.text.includes(`● ${label}`))?.fg.toInts()).toEqual(color)
-    }
-    await check("off", view.colors().inactive)
-    mcp.change({ state: "on", url: "https://relay.example/api/mcp/devices/dev_1" })
-    await check("on", view.colors().active)
-    mcp.change({ state: "connecting" })
-    await check("connecting", view.colors().inactive)
-    mcp.change({ state: "error", message: "Relay rejected MCP" })
-    await check("error", view.colors().inactive)
-  } finally {
-    view.app.renderer.destroy()
-  }
-}, 15_000)
-
-test("Relay MCP enables from off and disables from connecting, on, or error with an authority notice", async () => {
-  const server = fakeServer()
-  const mcp = fakeMcp()
-  const view = await renderRemote(server, mcp)
-  try {
-    server.change({ state: "on" })
-    await awaitFrame(view.app, (frame) => frame.includes("Remote fixture: on"))
-    view.dispatch("remote.mcp.toggle")
-    await view.app.waitForFrame((frame) => frame.includes("mcp: on"))
-    await view.app.waitForFrame((frame) => frame.includes("Relay MCP") && frame.includes("Info"))
-    for (const phrase of ["existing and", "future Sessions", "home", "Always approvals", "YOLO"])
-      expect(view.app.captureCharFrame()).toContain(phrase)
-    view.dispatch("remote.mcp.toggle")
-    await view.app.waitForFrame((frame) => frame.includes("mcp: off"))
-    expect(mcp.writes).toEqual([true, false])
-    for (const state of ["connecting", "error"] as const) {
-      mcp.change({ state, ...(state === "error" ? { message: "needs attention" } : {}) })
-      await awaitFrame(view.app, (frame) => frame.includes(`mcp: ${state}`))
-      view.dispatch("remote.mcp.toggle")
-      await view.app.waitForFrame((frame) => frame.includes("mcp: off"))
-    }
-    expect(mcp.writes).toEqual([true, false, false, false])
-    expect(server.writes).toEqual([])
-  } finally {
-    view.app.renderer.destroy()
-  }
-}, 15_000)
-
-test("Relay MCP refuses to enable while Remote is off and names the connect command", async () => {
-  const server = fakeServer()
-  const mcp = fakeMcp()
-  const view = await renderRemote(server, mcp)
-  try {
-    view.dispatch("remote.mcp.toggle")
-    await view.app.waitForFrame((frame) => frame.includes("Error"))
-    expect(view.toastMessage()).toContain("ycoding remote connect")
-    expect(mcp.writes).toEqual([])
-    expect(view.app.captureCharFrame()).toContain("mcp: off")
-  } finally {
-    view.app.renderer.destroy()
-  }
-}, 10_000)
-
 test("the Remote authority notice keeps its wrapped final line visible", async () => {
-  const view = await renderRemote(fakeServer(), fakeMcp(), 32)
+  const view = await renderRemote(fakeServer(), 32)
   try {
     view.dispatch("remote.toggle")
     await view.app.waitForFrame((frame) => frame.includes("backend."))
     expect(view.app.captureCharFrame()).toContain("Connecting grants")
   } finally { view.app.renderer.destroy() }
-}, 10_000)
-
-test("the complete Relay MCP authority notice fits a narrow terminal", async () => {
-  const server = fakeServer()
-  const view = await renderRemote(server, fakeMcp(), 32)
-  try {
-    server.change({ state: "on" })
-    await awaitFrame(view.app, (frame) => frame.includes("Remote fixture: on"))
-    view.dispatch("remote.mcp.toggle")
-    await view.app.waitForFrame((frame) => frame.includes("Runtime limits apply."))
-    for (const phrase of ["All existing and", "future Sessions on", "this machine.", "existing folders", "strictly below home.", "Give Always approvals.", "Change YOLO/autonomy."])
-      expect(view.app.captureCharFrame()).toContain(phrase)
-  } finally { view.app.renderer.destroy() }
-}, 10_000)
-
-test("a second Relay MCP toggle cancels a pending enable and ignores its late reply", async () => {
-  const started = Promise.withResolvers<void>()
-  const release = Promise.withResolvers<void>()
-  const settled = Promise.withResolvers<void>()
-  const fixture = fakeMcp()
-  const mcp = {
-    ...fixture,
-    set: async (enabled: boolean): Promise<RemoteMcpStatus> => {
-      fixture.writes.push(enabled)
-      if (!enabled) {
-        fixture.change({ state: "off" })
-        return { state: "off" }
-      }
-      started.resolve()
-      await release.promise
-      settled.resolve()
-      return { state: "on", url: "https://relay.example/api/mcp/devices/dev_1" }
-    },
-  }
-  const server = fakeServer()
-  const view = await renderRemote(server, mcp)
-  try {
-    server.change({ state: "on" })
-    await awaitFrame(view.app, (frame) => frame.includes("Remote fixture: on"))
-    view.dispatch("remote.mcp.toggle")
-    await started.promise
-    view.dispatch("remote.mcp.toggle")
-    await view.app.waitForFrame((frame) => frame.includes("mcp: off"))
-    release.resolve()
-    await settled.promise
-    await view.app.renderOnce()
-    expect(view.app.captureCharFrame()).toContain("mcp: off")
-    expect(fixture.writes).toEqual([true, false])
-  } finally {
-    release.resolve()
-    view.app.renderer.destroy()
-  }
 }, 10_000)

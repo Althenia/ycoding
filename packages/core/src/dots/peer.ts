@@ -2,25 +2,9 @@ export * as DotsPeer from "./peer"
 
 import { Dots } from "@ycoding-ai/schema/dots"
 import type { SessionPending } from "@ycoding-ai/schema/session-pending"
-import { SessionMessage } from "../session/message"
-import type { SessionSchema } from "../session/schema"
-import { Hash } from "../util/hash"
-
-export const messageID = (input: {
-  readonly sessionID: SessionSchema.ID
-  readonly accountID: string
-  readonly dotID: string
-  readonly threadID: string
-  readonly itemID: string
-}) =>
-  SessionMessage.ID.make(
-    `msg_dots_${Hash.sha256([input.sessionID, input.accountID, input.dotID, input.threadID, input.itemID].join("\0")).slice(0, 32)}`,
-  )
 
 export const resetsStepAllowance = (entry: SessionPending.Info) =>
-  entry.type === "user" && entry.data.metadata?.inputOrigin === "plugin" && Dots.routine(entry.data.metadata) !== undefined
-    ? false
-    : entry.type !== "synthetic" || Dots.peer(entry.data.metadata) === undefined
+  entry.type !== "synthetic" || Dots.peer(entry.data.metadata) === undefined
 
 export const context = (peer: Dots.Peer, text: string) =>
   [

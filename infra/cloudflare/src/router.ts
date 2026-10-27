@@ -27,7 +27,6 @@ import {
   type PushKeyResponse,
   type PushTestResponse,
 } from "../../../packages/remote/src/index"
-import { parseAuthorizationRequest } from "../../../packages/remote/src/mcp-events"
 import { sendTestPush } from "./push/send"
 import type { PushStore } from "./push/store"
 import type { AuthRejection, AuthService } from "./auth/service"
@@ -44,7 +43,6 @@ import {
   withSecurityHeaders,
   clientAddress,
   createRateLimiter,
-  type RateLimiter,
   isCrossSiteRequest,
   isSameOrigin,
   isWebSocketUpgrade,
@@ -63,8 +61,6 @@ export type RelayNamespace = {
 }
 
 export type RouterDeps = {
-  readonly mcp?: (request: Request, rateLimit: (key: string) => boolean) => Promise<Response | undefined>
-  readonly cleanupMcp?: () => Promise<unknown>
   readonly service: AuthService
   readonly relay: RelayNamespace
   readonly endpoints: GoogleEndpoints
@@ -88,10 +84,6 @@ export const cleanupIntervalMs = 60 * 60 * 1000
 export const minCleanupIntervalMs = 10_000
 export const maxCleanupIntervalMs = 24 * 60 * 60 * 1000
 
-export const mcpEventsAuthorizeFailureLimit = 30
-export const mcpEventsAuthorizeDeviceLimit = 300
-export const mcpEventsAuthorizeWindowMs = 60_000
-
 export function boundedCleanupInterval(value: string | undefined): number {
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed < minCleanupIntervalMs || parsed > maxCleanupIntervalMs) return cleanupIntervalMs
@@ -106,10 +98,6 @@ export function createRouter(deps: RouterDeps) {
   const limiter = createRateLimiter({ limit: 30, windowMs: 60_000 })
   const rateLimit = deps.rateLimit ?? limiter.take
   const now = deps.now ?? Date.now
-  const mcpEventsLimits = {
-    failures: createRateLimiter({ limit: mcpEventsAuthorizeFailureLimit, windowMs: mcpEventsAuthorizeWindowMs, now }),
-    devices: createRateLimiter({ limit: mcpEventsAuthorizeDeviceLimit, windowMs: mcpEventsAuthorizeWindowMs, now }),
-  }
   const cleanupEveryMs = deps.cleanupEveryMs ?? cleanupIntervalMs
   let lastCleanupAt = 0
 
@@ -133,11 +121,8 @@ export function createRouter(deps: RouterDeps) {
     if (now() - lastCleanupAt >= cleanupEveryMs) {
       lastCleanupAt = now()
       await deps.service.cleanup().catch(() => undefined)
-      await deps.cleanupMcp?.().catch(() => undefined)
     }
     if (url.pathname === "/health") return health(deps)
-    const mcp = await deps.mcp?.(request, rateLimit)
-    if (mcp) return withSecurityHeaders(mcp)
 
     if (url.pathname.startsWith("/api/admin/")) return adminRoute(deps, request, url, rateLimit, now())
     if (url.pathname === "/api/auth/invite" || url.pathname === "/api/auth/key") {
@@ -214,11 +199,6 @@ export function createRouter(deps: RouterDeps) {
     if (revoke) {
       if (request.method !== "POST") return methodNotAllowed()
       return revokeDevice(deps, request, revoke[1] ?? "")
-    }
-    const mcpEventsAuthorize = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})\/mcp\/events\/authorize$/.exec(url.pathname)
-    if (mcpEventsAuthorize) {
-      if (request.method !== "POST") return methodNotAllowed()
-      return authorizeMcpEvents(deps, request, mcpEventsAuthorize[1] ?? "", mcpEventsLimits)
     }
     const remove = /^\/api\/devices\/([A-Za-z0-9_-]{1,64})$/.exec(url.pathname)
     if (remove) {
@@ -670,40 +650,6 @@ async function streamSessionContent(deps: RouterDeps, request: Request, deviceID
   )))
 }
 
-async function authorizeMcpEvents(deps: RouterDeps, request: Request, deviceID: string, limits: { readonly failures: RateLimiter; readonly devices: RateLimiter }): Promise<Response> {
-  const address = clientAddress(request)
-  if (!limits.failures.check(address)) return apiError(429, "rate_limited", "Too many requests")
-  const recordFailure = (response: Response) => {
-    limits.failures.take(address)
-    return response
-  }
-  const token = parseBearerToken(request.headers.get("authorization"))
-  if (token === undefined) return recordFailure(apiError(401, "unauthorized", "Device credential is required"))
-  const credential = await deps.service.authorizeAgentToken(token)
-  if (!credential.ok) return recordFailure(apiError(401, "unauthorized", "Device credential is not valid"))
-  if (credential.value.deviceID !== deviceID) return recordFailure(apiError(403, "forbidden", "Device credential does not belong to this device"))
-  if (!limits.devices.take(`${credential.value.userID}:${deviceID}`)) return apiError(429, "rate_limited", "Too many requests")
-  const authorization = parseAuthorizationRequest(await readJsonBody(request))
-  if (authorization === undefined) return apiError(400, "invalid_message", "Request is not a valid MCP events authorization")
-  const forwarded = await deps.relay.getByName(`${credential.value.userID}:${deviceID}`).fetch(
-    new Request("https://relay.internal/_ycoding/mcp-events/authorize", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-ycoding-internal": "1",
-        "x-ycoding-owner": credential.value.userID,
-        "x-ycoding-device": deviceID,
-        "x-ycoding-mcp-resource": `${new URL(request.url).origin}/api/mcp/devices/${deviceID}`,
-      },
-      body: JSON.stringify(authorization),
-      signal: request.signal,
-    }),
-  )
-  const headers = new Headers(forwarded.headers)
-  headers.set("cache-control", "no-store")
-  return withSecurityHeaders(new Response(forwarded.body, { status: forwarded.status, statusText: forwarded.statusText, headers }))
-}
-
 async function connectAgent(deps: RouterDeps, request: Request): Promise<Response> {
   if (!isWebSocketUpgrade(request)) return apiError(426, "invalid_message", "WebSocket upgrade required")
   const token = parseBearerToken(request.headers.get("authorization"))
@@ -866,9 +812,10 @@ function callbackURL(url: URL): string {
   return new URL("/api/auth/google/callback", url.origin).toString()
 }
 
-/** `/api`, `/ws`, and `/health` prefixes belong to the worker on every path. */
 function isRelayPath(pathname: string): boolean {
   return (
+    pathname === "/.well-known" ||
+    pathname.startsWith("/.well-known/") ||
     pathname === "/api" ||
     pathname.startsWith("/api/") ||
     pathname === "/ws" ||

@@ -118,6 +118,29 @@ describe("documentation index", () => {
 })
 
 describe("remote workspace documentation", () => {
+  test("documents native Dots profile setup and root-family permission without promising external compatibility", () => {
+    const section = findDocPage("usage/remote")?.sections.find((section) => section.heading === "Native Dots access")
+    expect(section).toBeDefined()
+    const setup = section?.blocks.find((block) => block.kind === "code")
+    expect(setup?.kind === "code" ? JSON.parse(setup.code) : undefined).toEqual({ dots: { enabled: true, profile: "<OpenAI OAuth profile>" } })
+    const text = JSON.stringify(section?.blocks)
+    for (const required of ["global", "OpenAI OAuth", "project configuration", "existing roots", "off", "native-created roots", "Children inherit", "Enable Dots access", "Disable Dots access", "revision", "unknown", "not replayed"]) expect(text).toContain(required)
+    expect(text).toContain("YCoding keeps execution and authorization")
+    for (const limitation of ["not promise strict Codex policy equivalence", "no Codex-enforced OS sandbox", "sole authority", "overrides unset", "recorded working directory", "stored summary projection is complete", "not that the original execution succeeded", "live execution status uses canonical events"]) expect(text).toContain(limitation)
+    for (const projection of ["actual user and assistant messages", "omit internal system/synthetic/compaction records", "without relabeling", "stored Session history unchanged"]) expect(text).toContain(projection)
+    for (const unsupported of ["Codex-compatible", "full compatibility", "bypass", "sandbox override"]) expect(text).not.toContain(unsupported)
+  })
+
+  test("published usage pages retire incoming MCP commands and retain browser Remote and outbound MCP", () => {
+    const retired = ["Connect an MCP client", "Relay MCP", "ycoding remote mcp", "/api/mcp/", "local_app_", "local.app.", "artifact_demo", "artifact.demo", "/dots", "dots_send", "dots_pause", "dots_resume"]
+    expect(DOC_PAGES.filter((page) => retired.some((token) => JSON.stringify(page).includes(token))).map((page) => page.slug)).toEqual([])
+    const remote = JSON.stringify(findDocPage("usage/remote"))
+    for (const command of ["ycoding remote enroll", "ycoding remote connect", "ycoding remote disconnect", "ycoding remote status"]) expect(remote).toContain(command)
+    const mcp = JSON.stringify(findDocPage("configuration/mcp"))
+    expect(mcp).toContain("MCP servers add external tools")
+    expect(mcp).toContain("mcp.servers")
+  })
+
   test("documents Focus navigation, distinguishes creation from detail, and keeps Session links device-scoped", () => {
     const remote = findDocPage("usage/remote")
     const text = JSON.stringify(remote?.sections)

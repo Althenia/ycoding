@@ -22,7 +22,7 @@ test("native archive finalization preserves both TUI shards and every accepted c
     ["Verify ownership upgrade and native decision boundaries", "tui-project", "10cb8dcc5dbb20e82da03b82faeaccf2b3f31da1f68841ac9f2c066093bc12ee"],
     ["Verify footer state and short-terminal controls", "tui-runtime", "01be3653bc1191ba5f3db6120255da2f8f04379edaa62add22258ccad823fb67"],
     ["Verify compact Project and transcript layouts", "tui-runtime", "7b817f020dc3bbccb9d2e63e342377564c8395f551a9453b967c4be65a363528"],
-    ["Verify Dots unbind and notice boundaries", "tui-runtime", "eead0f1b4eb1ae974d487af816dbe02513429e0b22beb5d079a5990b9b94f997"],
+    ["Verify native Dots access and retirement boundaries", "tui-runtime", "356278281642769470eceadc5d1bf76ca6b216d989c951e0a393d0d85d2cf91a"],
     ["Verify question grading and native Form views", "tui-runtime", "ddaed34f767789cff87f5d822d5b2d5b1df5df47ac88e081b37f250969825d98"],
     ["Verify subagent model selection boundaries", "tui-runtime", "a08d919abbe6505424fab1af1ecc2626e53f917794d330ace37dbf537ddd1749"],
   ] as const) {
@@ -274,7 +274,7 @@ test("release workflow verifies the web application and relay before the Cloudfl
   expect(workflow).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
   expect(workflow).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
   expect(workflow).toContain("bun run build:web")
-  expect(workflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts")
+  expect(workflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts")
   expect(workflow).toContain("bun run build:cloudflare")
   expect(workflow.indexOf("bun run build:web")).toBeLessThan(workflow.indexOf("bun run build:cloudflare"))
   expect(workflow).toContain("bun test --cwd packages/cli ./test/import-boundaries.test.ts")
@@ -316,7 +316,9 @@ test("active test manifests resolve every selected file in its owning directory"
 })
 
 for (const [name, file, retained, excluded] of [
-  ["connector", "./test/remote-bridge.test.ts", ["remote bridge", "MCP Events relay authorization budget", "relay MCP mutation lanes", "MCP event authority uses the current connector credential and cancels on detach", "quota observations use the global control frame without Session subscriptions or private fields"], ["registered app authorization failures a rate-limited resolution names its cause in the connector diagnostic"]],
+  ["connector", "./test/remote-bridge.test.ts", ["remote bridge", "quota observations use the global control frame without Session subscriptions or private fields"], ["MCP Events relay authorization budget", "relay MCP mutation lanes", "MCP event authority uses the current connector credential and cancels on detach", "connector reconnect discards registered apps without renewing old access", "connector reconnect retires MRTR tokens and observations while preserving uncertain exchange holds", "relay MCP state is acknowledged only for the current enable epoch"]],
+  ["native control", "./test/remote-control.test.ts", ["remote-control wire types", "remote-control envelope", "remote-control app-server mapping", "state store persists installation and enrollment without configuration or tokens", "host enrolls, connects with headers, serves one RPC, and answers ping with pong", "enabling reports connecting before credentials resolve", "fresh host enrolls when only an old websocket URL key exists", "fresh host refreshes saved enrollment and uses the refreshed token", "refresh 404 deletes the enrollment and re-enrolls; unrecognized enroll 404 preserves and fails closed"], ["socket sends handshake headers over a local websocket"]],
+  ["native access", "./test/remote-access.test.ts", ["Dots access operations verify the Session and preserve exact revision and conflicts"], ["Dots access local adapter sends only bound Location and revision fields"]],
   ["helper", "./test/computer-use-packaging.test.ts", ["filters unsupported targets without planning a native helper", "plans a sibling helper for each supported macOS architecture", "signs with a configured stable identity and a secure timestamp, otherwise ad hoc", "keeps only complete artifacts when the host cannot compile the macOS helper", "plans the explicit source-development helper in Core's ignored cache", "rejects a macOS package without the signed application bundle", "rejects an unexpected macOS application bundle in a non-macOS package"], ["builds a signed YCoding Computer Use app with the product icon", "lists every desktop window with a Space placement consistent with its visibility"]],
   ["transcript", "./test/session-transcript-live-fixes.test.tsx", ["derives pending, running, terminal, cancelled, and overridden tool lifecycle states from durable time"], ["sleeping header does not warn that the machine may sleep before its keep-awake read settles", "caps large transcript at bounded mounted window"]],
   ["picker", "./test/screen/subagent-picker-capture.test.tsx", ["captures populated subagent picker states at reference terminal dimensions", "sizes picker metadata to the measured composer width with and without the docked rail"], ["renders populated subagents in the parent-session rail", "keeps the parent header status informational while subagents are active"]],
@@ -343,18 +345,27 @@ test("release verification covers Antigravity provider and build fixtures", () =
   expect(verify).toContain("./antigravity-build.test.ts")
 })
 
-test("release source gates retain Dots and web unit contracts", () => {
+test("release source gates retain native access, retirement and web unit contracts", () => {
   const verify = workflowJob(workflow, "verify-source")
   for (const file of [
     "./test/dots-context.test.ts",
-    "./test/dots-exchange.test.ts",
-    "./test/dots-report-tool.test.ts",
-    "./test/dots-report.test.ts",
-    "./test/dots-session.test.ts",
-    "./test/dots.test.ts",
+    "./test/dots-access.test.ts",
+    "./test/dots-access-config.test.ts",
+    "./test/dots-native.test.ts",
+    "./test/dots-native-admission.test.ts",
+    "./test/dots-native-projection.test.ts",
+    "./test/dots-native-decisions.test.ts",
+    "./test/dots-native-source.test.ts",
+    "./test/dots-retirement.test.ts",
+    "./test/dots-retirement-promotion.test.ts",
+    "./test/native-dots-only.test.ts",
+    "./test/dots-access-contract.test.ts",
     "./test/dots-report-state.test.ts",
     "./test/dots-peer.test.ts",
-    "./test/cli/tui/dots-dialog.test.tsx",
+    "./test/prompt/dots-access.test.ts",
+    "./test/dots-access-palette.test.tsx",
+    "./test/dots-access-boundary.test.ts",
+    "./test/dots-delegation-review.test.tsx",
     "./test/screen/dots.screen.test.ts",
     "./src/remote/autonomy.test.ts",
     "./src/remote/ui/composer-layout.test.ts",
@@ -365,6 +376,10 @@ test("release source gates retain Dots and web unit contracts", () => {
     "./src/remote/ui/usage-filters.test.ts",
     "./src/remote/ui/usage-layout.test.ts",
   ]) expect(verify).toContain(file)
+  for (const file of ["remote-retirement", "remote-decision-boundary", "remote-control-config", "remote-control-native", "remote-control-native-escalation", "remote-control-projection", "remote-control-sequence", "remote-control-stream-isolation", "mcp-boundary"])
+    expect(verify).toContain(`./test/${file}.test.ts`)
+  for (const file of ["remote-mcp", "remote-mcp-schemas", "remote-mcp-directory", "mcp-consent", "mcp-router", "dots-exchange", "dots-report-tool", "dots-session", "dots-codegen"])
+    expect(verify).not.toContain(`./test/${file}.test.ts`)
   expect(verify).not.toContain("YCODING_WEB_CHROME")
 })
 
@@ -392,7 +407,7 @@ test("release source gates select native task delegation and question grading", 
   )
 })
 
-test("release source gates select Form, Dots codegen, model-selection and runner regressions", () => {
+test("release source gates select Form, access clients, model-selection and runner regressions", () => {
   const verify = workflowJob(workflow, "verify-source")
   for (const file of [
     "./src/remote/form-contract.test.ts",
@@ -402,7 +417,7 @@ test("release source gates select Form, Dots codegen, model-selection and runner
     "./test/session-step-boundary.test.ts",
     "./test/session-subagent-model-switch.test.ts",
     "./test/subagent-model-codegen.test.ts",
-    "./test/dots-codegen.test.ts",
+    "./test/dots-access.test.ts",
     "./test/subagent-model-boundary.test.ts",
     "./test/cli/tui/subagent-model-selection.test.tsx",
     "test/session-runner.test.ts",
@@ -430,7 +445,7 @@ test("release source gates select Form, Dots codegen, model-selection and runner
     "bun test --cwd packages/remote ./test/subagent-model-boundary.test.ts",
     "bun test --cwd packages/protocol ./test/session-orchestration.test.ts",
     "bun test --cwd packages/tui --timeout 40000 ./test/cli/tui/subagent-model-selection.test.tsx",
-    "bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-codegen.test.ts",
+    "bun test --cwd packages/client ./test/dots-peer.test.ts ./test/dots-access.test.ts",
   ])
     expect(verify).toContain(command)
   const runnerCases = [
@@ -481,7 +496,7 @@ test("test workflow verifies the web application and relay before the Cloudflare
   expect(testWorkflow).toContain("bun test --cwd apps/web ./src/content/changelog.test.ts")
   expect(testWorkflow).toContain("bun test --cwd packages/remote ./test/contract.test.ts")
   expect(testWorkflow).toContain("bun run build:web")
-  expect(testWorkflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts")
+  expect(testWorkflow).toContain("bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts")
   expect(testWorkflow).toContain("bun run build:cloudflare")
   expect(testWorkflow.indexOf("bun run build:web")).toBeLessThan(testWorkflow.indexOf("bun run build:cloudflare"))
 })
@@ -491,14 +506,14 @@ test("active verification selects unit and mock boundaries without browser, list
     for (const excluded of [
       "test:integration:", "./verify/", "./test/build-output.test.ts", "./test/commands.test.ts",
       "./test/remote-session.test.ts", "./test/remote-session-send.test.ts", "./test/remote-speed.test.ts",
-      "./test/remote-local-dots.test.ts", "./test/remote-goal-deadline.test.ts",
-      "./test/dots-exchange.integration.test.ts", "./test/remote-coordination.integration.test.ts",
+      "./test/remote-control-flow.integration.test.ts", "./test/remote-goal-deadline.test.ts",
+      "./test/remote-coordination.integration.test.ts",
       "./test/coordination-activation.integration.test.ts", "./test/decision-recovery.integration.test.ts",
       "./test/yolo-continuation.integration.test.ts", "./test/screen/projects-tab.screen.test.tsx",
       "./test/screen/projects-flow.screen.test.tsx", "./test/screen/session-chrome-row.screen.test.tsx",
       "./test/screen/autonomy-summaries.screen.test.tsx", "./test/screen/session-rail-design-match.test.tsx",
       "./test/screen/transcript-chronology.screen.test.tsx", "./test/screen/dots-notice-display.screen.test.ts",
-      "./test/screen/dots-delegation.screen.test.ts", "./test/cli/tui/projects-screen.test.tsx",
+      "./test/cli/tui/projects-screen.test.tsx",
       "script/release-publish.test.ts", "YCODING_WEB_CHROME", "verify-browser-host",
     ]) expect(content, excluded).not.toContain(excluded)
     expect(content).not.toContain("continue-on-error:")
@@ -514,8 +529,8 @@ test("real browser, relay, publisher and runtime suites remain available locally
   for (const file of [
     "infra/cloudflare/test/integration/real-flow.ts", "script/release-publish.test.ts", "script/chrome-for-testing.test.ts",
     "packages/cli/script/isolated-browser-smoke.ts", "packages/cli/script/service-smoke.ts",
-    "packages/cli/test/commands.test.ts", "packages/cli/test/remote-local-dots.test.ts",
-    "packages/cli/test/remote-goal-deadline.test.ts", "packages/cli/test/dots-exchange.integration.test.ts",
+    "packages/cli/test/commands.test.ts", "packages/cli/test/remote-control-flow.integration.test.ts",
+    "packages/cli/test/remote-goal-deadline.test.ts", "packages/cli/test/remote-access.test.ts",
     "packages/cli/test/remote-coordination.integration.test.ts", "packages/cli/test/coordination-activation.integration.test.ts",
     "packages/cli/test/decision-recovery.integration.test.ts", "packages/cli/test/yolo-continuation.integration.test.ts",
     "apps/web/test/build-output.test.ts", "apps/web/test/remote-session.test.ts", "apps/web/test/remote-session-send.test.ts",
@@ -529,7 +544,7 @@ test("real browser, relay, publisher and runtime suites remain available locally
     "packages/tui/test/screen/projects-tab.screen.test.tsx", "packages/tui/test/screen/projects-flow.screen.test.tsx",
     "packages/tui/test/screen/session-chrome-row.screen.test.tsx", "packages/tui/test/screen/autonomy-summaries.screen.test.tsx",
     "packages/tui/test/screen/session-rail-design-match.test.tsx", "packages/tui/test/screen/transcript-chronology.screen.test.tsx",
-    "packages/tui/test/screen/dots-notice-display.screen.test.ts", "packages/tui/test/screen/dots-delegation.screen.test.ts",
+    "packages/tui/test/screen/dots-notice-display.screen.test.ts", "packages/tui/test/screen/dots.screen.test.ts",
     "packages/tui/test/cli/tui/projects-screen.test.tsx",
   ]) expect(await Bun.file(path.join(import.meta.dir, "..", file)).exists(), file).toBe(true)
 })
@@ -713,7 +728,7 @@ test("source contracts and production builds run independently while legacy jobs
     "bun test --cwd apps/web ./src/content/changelog.test.ts",
     "bun test --cwd packages/remote ./test/contract.test.ts",
     "bun run build:web",
-    "bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts",
+    "bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts",
     "bun run build:cloudflare",
     "bun run check:generated",
     "bun run script/build.ts --single",
@@ -738,7 +753,7 @@ test("the independent source verification job runs the Linux-only gates in order
     "bun test --cwd apps/web ./src/content/changelog.test.ts",
     "bun test --cwd packages/remote ./test/contract.test.ts",
     "bun run build:web",
-    "bun test --cwd infra/cloudflare ./test/mcp-consent.test.ts",
+    "bun test --cwd infra/cloudflare ./test/mcp-boundary.test.ts",
     "bun run build:cloudflare",
     "bun run check:generated",
   ].map((command) => source.indexOf(command))

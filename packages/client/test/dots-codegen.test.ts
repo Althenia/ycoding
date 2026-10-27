@@ -15,18 +15,11 @@ test("Dots contracts compile for both clients", () => {
   expect(promise.operations).toEqual(effect.operations)
   expect(promise.operations).toEqual(shape.operations)
   expect(effect.files.find((file) => file.path === "client.ts")?.content).toContain("HttpApiClient.make(ClientApi")
-  expect(promise.operations.map((operation) => operation.name)).toEqual(expect.arrayContaining([
-    "exchange.create", "delegation.status", "delegation.create", "delegation.revoke",
-    "delegation.device.create", "delegation.device.read", "delegation.device.revoke", "decisions.list",
-  ]))
-  const native = ClientApi.groups["server.dots"].endpoints["session.dots.delegation.create"].payload.values().next().value?.schemas[0]
-  const exchange = ClientApi.groups["server.dots"].endpoints["session.dots.exchange.create"].payload.values().next().value?.schemas[0]
-  if (!native || !exchange) throw new Error("Canonical Dots payloads are missing")
-  const expectedAttachment = { profile: "fixture", dotID: "dot", threadID: "thread", generation: "1", label: "Fixture" }
-  const proposal = { proposalID: "proposal", sourceExchangeID: "source", targetSessionID: "ses_target", taskInputID: "msg_human", expectedAttachment, scope: { operations: ["continue"] }, expiresAt: 1 }
-  expect(Schema.decodeUnknownSync(native)(proposal)).toEqual(proposal)
-  for (const scope of [{ operations: ["continue", "continue"] }, { operations: ["continue"], format: ["bullets"] }, { operations: ["presentation"] }])
-    expect(() => Schema.decodeUnknownSync(native)({ ...proposal, scope })).toThrow()
-  const routine = { exchangeID: "routine", expectedAttachment, targetSessionID: "ses_target", channel: "task", delivery: "queue", delegation: { id: "proposal", revision: 1 }, taskInputID: "msg_human", instruction: { operation: "presentation", preferences: {} }, remoteSource: { requestID: "request", epoch: "epoch", principal: { ownerID: "owner", deviceID: "device", clientID: "client" } } }
-  expect(() => Schema.decodeUnknownSync(exchange)(routine)).toThrow()
+  expect(promise.operations.map((operation) => operation.name)).toEqual(["access.get", "access.set"])
+  const access = ClientApi.groups["server.dots"].endpoints["session.dots.access.set"].payload.values().next().value?.schemas[0]
+  if (!access) throw new Error("Canonical Dots access payload is missing")
+  const setter = { enabled: true, expectedRevision: 0 }
+  expect(Schema.decodeUnknownSync(access)(setter)).toEqual(setter)
+  for (const value of [{ enabled: true }, { ...setter, expectedRevision: -1 }, { ...setter, source: {} }, { ...setter, explicitDecision: true }])
+    expect(() => Schema.decodeUnknownSync(access)(value)).toThrow()
 })

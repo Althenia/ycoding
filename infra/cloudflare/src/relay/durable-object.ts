@@ -8,9 +8,8 @@
 
 import { DurableObject } from "cloudflare:workers"
 import { randomToken } from "../auth/crypto"
-import { RemoteCloseCode, RemoteLimits, isSessionID, parseAgentMessage, parsePreviewInput, parsePreviewOrigins, type McpResponse, type RemotePriorityMode } from "../../../../packages/remote/src/index"
+import { RemoteCloseCode, RemoteLimits, isSessionID, parseAgentMessage, parsePreviewInput, parsePreviewOrigins, type RemotePriorityMode } from "../../../../packages/remote/src/index"
 import { createD1AuthStore } from "../auth/d1-store"
-import { createD1McpStore } from "../auth/mcp/d1-store"
 import { createAuthService } from "../auth/service"
 import type { WorkerEnv } from "../env"
 import { createD1PushStore } from "../push/d1-store"
@@ -18,8 +17,7 @@ import { sendPush, sendPushToOwner } from "../push/send"
 import { createNoticeStore } from "./notice-store"
 import { createQuotaClaims, parseQuotaClaimRequest, parseQuotaReservation, type QuotaClaimRequest } from "./quota-claims"
 import { createRelay, type RelayAuthority, type RelayConnection } from "./core"
-import { McpRelayError, createMcpAuthority, createMcpRelay, mcpFailureStatus, parseMcpForward, readBoundedText, routeMcpFrame, type McpAttachment } from "./mcp"
-import { parseAuthorizationRequest } from "../../../../packages/remote/src/mcp-events"
+import { readBoundedText } from "../http"
 import { PreviewRelayError, createPreviewRelay } from "./preview"
 import { previewDirectoryName } from "../preview/directory-store"
 
@@ -34,7 +32,6 @@ type Attachment = {
   readonly noticesSubscribed: boolean
   readonly priority: RemotePriorityMode
   readonly pending: readonly { readonly relayID: string; readonly clientID: string }[]
-  readonly mcp?: McpAttachment
   readonly preview?: boolean
 }
 
@@ -44,7 +41,6 @@ const authorityTtlMs = 5_000
 const heartbeatRequest = '{"type":"ping"}'
 const heartbeatResponse = '{"type":"pong"}'
 const streamIdleTimeoutMs = 30_000
-const mcpMaxBodyBytes = RemoteLimits.maxClientMessageChars * 4
 const previewMaxBodyBytes = RemoteLimits.maxClientMessageChars
 
 type MessageStream = {
@@ -66,30 +62,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     kv: this.ctx.storage.kv,
     transactionSync: (operation) => this.ctx.storage.transactionSync(operation),
   })
-  readonly #mcpAuthority = createMcpAuthority({
-    store: createD1McpStore(this.env.DB),
-    authorizeDevice: (deviceID) => this.#service.authorizeAgentCommand(deviceID),
-  })
-  readonly #mcp = createMcpRelay({
-    send: (agentID, frame) => {
-      const socket = this.#socketFor(agentID)
-      if (!socket || socket.readyState !== webSocketOpen) throw new Error("Agent socket is not open")
-      socket.send(frame)
-    },
-    authorize: this.#mcpAuthority.authorize,
-    authorizeDevice: this.#mcpAuthority.authorizeDevice,
-    authorizeGrant: this.#mcpAuthority.authorizeGrant,
-    validateGate: this.#mcpAuthority.validateGate,
-    revokeGrants: this.#mcpAuthority.revokeGrants,
-    persistState: async (agentID, state) => {
-      const socket = this.#socketFor(agentID)
-      const attachment = socket ? readAttachment(socket) : undefined
-      if (!attachment) throw new Error("Agent connection is gone")
-      await this.#mcpAuthority.persistState(attachment.deviceID, state)
-      this.#patchAttachment(agentID, (current) => ({ ...current, mcp: { enabled: state.enabled, epoch: state.epoch } }))
-    },
-  })
-  #mcpTurn: Promise<void> = Promise.resolve()
   readonly #preview = createPreviewRelay({
     origins: parsePreviewOrigins(this.env.PREVIEW_ORIGINS),
     directory: {
@@ -117,7 +89,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       if (socket && socket.readyState === webSocketOpen) socket.send(message)
     },
     close: (connectionID, code, reason) => {
-      this.#mcp.clearAgent(connectionID)
       this.#releasePreview(connectionID)
       if (this.#messageStreams.has(connectionID)) { this.#finishMessageStream(connectionID, code === 4401 ? 401 : code === 4403 ? 403 : 503); return }
       this.#socketFor(connectionID)?.close(code, reason)
@@ -186,7 +157,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
 
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
-    if (url.pathname === "/_ycoding/mcp") return this.#forwardMcp(request)
     if (url.pathname === "/_ycoding/preview") return this.#forwardPreview(request)
     if (url.pathname.startsWith("/_ycoding/")) return this.#internal(url, request)
 
@@ -210,7 +180,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     await this.#relay.attach(toConnection(attachment))
     if (attachment.role === "agent" && pair[1].readyState === webSocketOpen && this.#relay.agentConnected()) {
       this.#preview.setAgent({ agentID: attachment.connectionID, ownerID: attachment.ownerID, deviceID: attachment.deviceID })
-      await this.#mcp.setAgent({ agentID: attachment.connectionID, ownerID: attachment.ownerID, deviceID: attachment.deviceID })
     }
     await this.#armAlarm()
     return new Response(null, { status: 101, webSocket: pair[0] })
@@ -233,12 +202,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       return
     }
     if (preview === "handled") return
-    const route = attachment.role === "agent" ? await routeMcpFrame(this.#mcp, attachment.connectionID, message) : "core"
-    if (route === "invalid") {
-      socket.close(1003, "Frame is not valid for this connection")
-      return
-    }
-    if (route === "handled") return
     if (attachment.role === "agent") await this.#relay.handleAgentMessage(attachment.connectionID, message)
     else await this.#relay.handleClientMessage(attachment.connectionID, message)
     if (this.#attached.has(attachment.connectionID)) await this.#armAlarm()
@@ -249,7 +212,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     const attachment = readAttachment(socket)
     if (!attachment) return
     this.#attached.delete(attachment.connectionID)
-    if (attachment.role === "agent") this.#mcp.clearAgent(attachment.connectionID)
     if (attachment.role === "agent") await this.#releasePreview(attachment.connectionID)
     if (attachment.role === "agent") await this.#relay.agentClosed(toConnection(attachment))
     else this.#relay.detach(attachment.connectionID)
@@ -266,23 +228,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     await this.#relay.confirmOffline()
     await this.#armAlarm()
     await this.#relay.settleDeliveries()
-  }
-
-  async #forwardMcp(request: Request): Promise<Response> {
-    const previous = this.#mcpTurn
-    let release!: () => void
-    this.#mcpTurn = new Promise<void>((done) => { release = done })
-    const admitted = await this.#admitMcp(request, previous).finally(release)
-    if (admitted instanceof Response) return admitted
-    return admitted.pending.then(
-      (result) => new Response(result.body.length === 0 ? null : result.body, {
-        status: result.status,
-        headers: { "content-type": result.contentType, "cache-control": "no-store" },
-      }),
-      (error: unknown) => error instanceof McpRelayError
-        ? transportError(mcpFailureStatus(error.code), error.code, error.message)
-        : transportError(502, "internal_error", "MCP forwarding failed"),
-    )
   }
 
   async #forwardPreview(request: Request): Promise<Response> {
@@ -310,31 +255,18 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     return agent === undefined ? Promise.resolve() : this.#preview.purge(agent).catch(() => undefined)
   }
 
-  async #admitMcp(request: Request, previous: Promise<void>): Promise<Response | { readonly pending: Promise<McpResponse> }> {
-    if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
-    if (request.method !== "POST") return transportError(405, "invalid_message", "MCP accepts POST only")
-    const forward = parseMcpForward(request.headers)
-    if (!forward) return transportError(400, "invalid_message", "Trusted MCP headers are missing")
-    if (Number(request.headers.get("content-length") ?? 0) > mcpMaxBodyBytes) return transportError(413, "message_too_large", "Request exceeds the frame bound")
-    const body = await readBoundedText(request.body, mcpMaxBodyBytes).catch(() => null)
-    await previous
-    if (body === null) return transportError(400, "invalid_message", "Request body could not be read")
-    if (body === undefined) return transportError(413, "message_too_large", "Request exceeds the frame bound")
-    await this.#restoreConnections()
-    return { pending: this.#mcp.request({ ...forward, body, signal: request.signal }) }
-  }
-
   async #internal(url: URL, request: Request): Promise<Response> {
     if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
     if (url.pathname === "/_ycoding/quota") return this.#answerQuotaClaim(request)
     await this.#restoreConnections()
-    if (url.pathname === "/_ycoding/mcp-events/authorize") return this.#authorizeMcpEvent(request)
     if (url.pathname === "/_ycoding/stream-message" || url.pathname === "/_ycoding/stream-attachment")
       return this.#streamContent(request, url.pathname === "/_ycoding/stream-message")
     if (url.pathname === "/_ycoding/close-device") {
       this.#relay.closeDevice()
       await this.ctx.storage.delete("lastStatus")
       this.#notices.clear()
+      await this.#armAlarm()
+      return new Response(null, { status: 204 })
     }
     if (url.pathname === "/_ycoding/presence")
       return new Response(JSON.stringify({ online: this.#relay.agentConnected() }), {
@@ -344,30 +276,10 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
       const sessionID = request.headers.get("x-ycoding-target-session")
       if (sessionID === null || sessionID.length === 0) return new Response(null, { status: 204 })
       await this.#relay.revokeSession(sessionID)
+      await this.#armAlarm()
+      return new Response(null, { status: 204 })
     }
-    await this.#armAlarm()
-    return new Response(null, { status: 204 })
-  }
-
-  async #authorizeMcpEvent(request: Request): Promise<Response> {
-    if (request.method !== "POST") return transportError(405, "invalid_message", "MCP events authorization accepts POST only")
-    const ownerID = request.headers.get("x-ycoding-owner")
-    const deviceID = request.headers.get("x-ycoding-device")
-    const resource = request.headers.get("x-ycoding-mcp-resource")
-    if (!ownerID || !deviceID || !resource) return transportError(400, "invalid_message", "Trusted device headers are missing")
-    if (Number(request.headers.get("content-length") ?? 0) > mcpMaxBodyBytes) return transportError(413, "message_too_large", "Request exceeds the frame bound")
-    const body = await readBoundedText(request.body, mcpMaxBodyBytes).catch(() => null)
-    if (body === null || body === undefined) return transportError(400, "invalid_message", "Request body could not be read")
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(body)
-    } catch {
-      return transportError(400, "invalid_message", "Request body is not valid JSON")
-    }
-    const authorization = parseAuthorizationRequest(parsed)
-    if (authorization === undefined) return transportError(400, "invalid_message", "Request is not a valid MCP events authorization")
-    const result = await this.#mcp.authorizeEvent({ ownerID, deviceID, resource }, authorization)
-    return new Response(JSON.stringify(result), { headers: { "content-type": "application/json", "cache-control": "no-store" } })
+    return new Response("Not found", { status: 404 })
   }
 
   async #answerQuotaClaim(request: Request): Promise<Response> {
@@ -475,7 +387,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     const agents = restored.filter((entry) => entry.attachment.role === "agent" && entry.socket.readyState === webSocketOpen)
     for (const entry of agents) {
       this.#preview.setAgent({ agentID: entry.attachment.connectionID, ownerID: entry.attachment.ownerID, deviceID: entry.attachment.deviceID }, entry.attachment.preview === true)
-      await this.#mcp.setAgent({ agentID: entry.attachment.connectionID, ownerID: entry.attachment.ownerID, deviceID: entry.attachment.deviceID }, entry.attachment.mcp)
     }
   }
 
@@ -548,9 +459,6 @@ function readAttachment(socket: WebSocket): Attachment | undefined {
     noticesSubscribed: record.noticesSubscribed === true,
     priority: record.priority === "background" ? "background" : "interactive",
     pending: Array.isArray(record.pending) ? record.pending.filter(isPending) : [],
-    ...(isRecord(record.mcp) && typeof record.mcp.enabled === "boolean" && typeof record.mcp.epoch === "string"
-      ? { mcp: { enabled: record.mcp.enabled, epoch: record.mcp.epoch } }
-      : {}),
     ...(record.preview === true ? { preview: true } : {}),
   }
 }

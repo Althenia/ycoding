@@ -394,9 +394,6 @@ import type {
   RemoteGetOutput,
   RemoteSetInput,
   RemoteSetOutput,
-  RemoteMcpGetOutput,
-  RemoteMcpSetInput,
-  RemoteMcpSetOutput,
   KeepAwakeGetOutput,
   KeepAwakeSetInput,
   KeepAwakeSetOutput,
@@ -406,13 +403,6 @@ import type {
   ReviewListOutput,
   ReviewDecideInput,
   ReviewDecideOutput,
-  McpEventsStatusOutput,
-  McpEventsListInput,
-  McpEventsListOutput,
-  McpEventsSubscribeInput,
-  McpEventsSubscribeOutput,
-  McpEventsUnsubscribeInput,
-  McpEventsUnsubscribeOutput,
   CoordinationSettingsOutput,
   CoordinationListOutput,
   CoordinationCreateInput,
@@ -423,38 +413,10 @@ import type {
   CoordinationUpdateOutput,
   CoordinationDeleteInput,
   CoordinationDeleteOutput,
-  DotsExchangeCreateInput,
-  DotsExchangeCreateOutput,
-  DotsDelegationStatusInput,
-  DotsDelegationStatusOutput,
-  DotsDelegationCreateInput,
-  DotsDelegationCreateOutput,
-  DotsDelegationRevokeInput,
-  DotsDelegationRevokeOutput,
-  DotsDelegationDeviceCreateInput,
-  DotsDelegationDeviceCreateOutput,
-  DotsDelegationDeviceReadInput,
-  DotsDelegationDeviceReadOutput,
-  DotsDelegationDeviceRevokeInput,
-  DotsDelegationDeviceRevokeOutput,
-  DotsDecisionsListInput,
-  DotsDecisionsListOutput,
-  DotsExchangeReadInput,
-  DotsExchangeReadOutput,
-  DotsTargetsInput,
-  DotsTargetsOutput,
-  DotsStatusInput,
-  DotsStatusOutput,
-  DotsBindInput,
-  DotsBindOutput,
-  DotsSendInput,
-  DotsSendOutput,
-  DotsPauseInput,
-  DotsPauseOutput,
-  DotsResumeInput,
-  DotsResumeOutput,
-  DotsUnbindInput,
-  DotsUnbindOutput,
+  DotsAccessGetInput,
+  DotsAccessGetOutput,
+  DotsAccessSetInput,
+  DotsAccessSetOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -1119,7 +1081,6 @@ export function make(options: ClientOptions) {
               files: input["files"],
               agents: input["agents"],
               metadata: input["metadata"],
-              remoteSource: input["remoteSource"],
               delivery: input["delivery"],
               resume: input["resume"],
             },
@@ -3264,25 +3225,6 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
-      mcp: {
-        get: (requestOptions?: RequestOptions) =>
-          request<{ readonly data: RemoteMcpGetOutput }>(
-            { method: "GET", path: `/api/remote/mcp`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
-            requestOptions,
-          ).then((value) => value.data),
-        set: (input: RemoteMcpSetInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: RemoteMcpSetOutput }>(
-            {
-              method: "PUT",
-              path: `/api/remote/mcp`,
-              body: { enabled: input["enabled"] },
-              successStatus: 200,
-              declaredStatuses: [401, 400],
-              empty: false,
-            },
-            requestOptions,
-          ).then((value) => value.data),
-      },
     },
     keepAwake: {
       get: (requestOptions?: RequestOptions) =>
@@ -3341,55 +3283,6 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
-    },
-    mcpEvents: {
-      status: (requestOptions?: RequestOptions) =>
-        request<{ readonly data: McpEventsStatusOutput }>(
-          {
-            method: "GET",
-            path: `/api/remote/mcp/events/status`,
-            successStatus: 200,
-            declaredStatuses: [401, 400],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      list: (input?: McpEventsListInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: McpEventsListOutput }>(
-          {
-            method: "GET",
-            path: `/api/remote/mcp/events/catalog`,
-            query: { cursor: input?.["cursor"] },
-            successStatus: 200,
-            declaredStatuses: [401, 400],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      subscribe: (input: McpEventsSubscribeInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: McpEventsSubscribeOutput }>(
-          {
-            method: "POST",
-            path: `/api/remote/mcp/events/subscribe`,
-            body: { context: input["context"], subscription: input["subscription"] },
-            successStatus: 200,
-            declaredStatuses: [400, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      unsubscribe: (input: McpEventsUnsubscribeInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: McpEventsUnsubscribeOutput }>(
-          {
-            method: "POST",
-            path: `/api/remote/mcp/events/unsubscribe`,
-            body: { context: input["context"], subscription: input["subscription"] },
-            successStatus: 200,
-            declaredStatuses: [400, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
     },
     coordination: {
       settings: (requestOptions?: RequestOptions) =>
@@ -3472,239 +3365,31 @@ export function make(options: ClientOptions) {
         ),
     },
     dots: {
-      exchange: {
-        create: (input: DotsExchangeCreateInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsExchangeCreateOutput }>(
+      access: {
+        get: (input: DotsAccessGetInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsAccessGetOutput }>(
             {
-              method: "POST",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/exchanges`,
-              body: input["payload"],
+              method: "GET",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/access`,
               successStatus: 200,
               declaredStatuses: [400, 404, 401],
               empty: false,
             },
             requestOptions,
           ).then((value) => value.data),
-        read: (input: DotsExchangeReadInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsExchangeReadOutput }>(
+        set: (input: DotsAccessSetInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: DotsAccessSetOutput }>(
             {
               method: "POST",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/exchanges/read`,
-              body: { exchangeID: input["exchangeID"], remoteSource: input["remoteSource"] },
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/access`,
+              body: { enabled: input["enabled"], expectedRevision: input["expectedRevision"] },
               successStatus: 200,
-              declaredStatuses: [400, 404, 401],
-              empty: false,
-            },
-            requestOptions,
-          ).then((value) => value.data),
-      },
-      delegation: {
-        status: (input: DotsDelegationStatusInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsDelegationStatusOutput }>(
-            {
-              method: "POST",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/status`,
-              body: { expectedAttachment: input["expectedAttachment"], targetSessionID: input["targetSessionID"] },
-              successStatus: 200,
-              declaredStatuses: [400, 404, 401],
-              empty: false,
-            },
-            requestOptions,
-          ).then((value) => value.data),
-        create: (input: DotsDelegationCreateInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsDelegationCreateOutput }>(
-            {
-              method: "POST",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation`,
-              body: input["payload"],
-              successStatus: 200,
-              declaredStatuses: [400, 404, 401],
-              empty: false,
-            },
-            requestOptions,
-          ).then((value) => value.data),
-        revoke: (input: DotsDelegationRevokeInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsDelegationRevokeOutput }>(
-            {
-              method: "POST",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/revoke`,
-              body: { id: input["id"], revision: input["revision"], expectedAttachment: input["expectedAttachment"] },
-              successStatus: 200,
-              declaredStatuses: [400, 404, 401],
-              empty: false,
-            },
-            requestOptions,
-          ).then((value) => value.data),
-        device: {
-          create: (input: DotsDelegationDeviceCreateInput, requestOptions?: RequestOptions) =>
-            request<{ readonly data: DotsDelegationDeviceCreateOutput }>(
-              {
-                method: "POST",
-                path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/device`,
-                body: {
-                  id: input["id"],
-                  exchangeID: input["exchangeID"],
-                  bindingID: input["bindingID"],
-                  expectedAttachment: input["expectedAttachment"],
-                  scope: input["scope"],
-                  remoteSource: input["remoteSource"],
-                },
-                successStatus: 200,
-                declaredStatuses: [400, 404, 401],
-                empty: false,
-              },
-              requestOptions,
-            ).then((value) => value.data),
-          read: (input: DotsDelegationDeviceReadInput, requestOptions?: RequestOptions) =>
-            request<{ readonly data: DotsDelegationDeviceReadOutput }>(
-              {
-                method: "POST",
-                path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/device/read`,
-                body: { cursor: input["cursor"], limit: input["limit"], remoteSource: input["remoteSource"] },
-                successStatus: 200,
-                declaredStatuses: [400, 404, 401],
-                empty: false,
-              },
-              requestOptions,
-            ).then((value) => value.data),
-          revoke: (input: DotsDelegationDeviceRevokeInput, requestOptions?: RequestOptions) =>
-            request<{ readonly data: DotsDelegationDeviceRevokeOutput }>(
-              {
-                method: "POST",
-                path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/delegation/device/revoke`,
-                body: {
-                  id: input["id"],
-                  revision: input["revision"],
-                  exchangeID: input["exchangeID"],
-                  bindingID: input["bindingID"],
-                  expectedAttachment: input["expectedAttachment"],
-                  remoteSource: input["remoteSource"],
-                },
-                successStatus: 200,
-                declaredStatuses: [400, 404, 401],
-                empty: false,
-              },
-              requestOptions,
-            ).then((value) => value.data),
-        },
-      },
-      decisions: {
-        list: (input: DotsDecisionsListInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: DotsDecisionsListOutput }>(
-            {
-              method: "POST",
-              path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/decisions/list`,
-              body: {
-                bindingID: input["bindingID"],
-                expectedAttachment: input["expectedAttachment"],
-                delegation: input["delegation"],
-                targetSessionID: input["targetSessionID"],
-                cursor: input["cursor"],
-                limit: input["limit"],
-                remoteSource: input["remoteSource"],
-              },
-              successStatus: 200,
-              declaredStatuses: [400, 404, 401],
+              declaredStatuses: [409, 400, 404, 401],
               empty: false,
             },
             requestOptions,
           ).then((value) => value.data),
       },
-      targets: (input: DotsTargetsInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: DotsTargetsOutput }>(
-          {
-            method: "GET",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/targets`,
-            query: { profile: input["profile"] },
-            successStatus: 200,
-            declaredStatuses: [400, 404, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      status: (input: DotsStatusInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: DotsStatusOutput }>(
-          {
-            method: "GET",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots`,
-            successStatus: 200,
-            declaredStatuses: [400, 404, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      bind: (input: DotsBindInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: DotsBindOutput }>(
-          {
-            method: "POST",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/bind`,
-            body: {
-              profile: input["profile"],
-              dotID: input["dotID"],
-              threadID: input["threadID"],
-              generation: input["generation"],
-              label: input["label"],
-            },
-            successStatus: 200,
-            declaredStatuses: [400, 404, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      send: (input: DotsSendInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: DotsSendOutput }>(
-          {
-            method: "POST",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/send`,
-            body: {
-              id: input["id"],
-              text: input["text"],
-              files: input["files"],
-              causalMessageID: input["causalMessageID"],
-              expectedTarget: input["expectedTarget"],
-            },
-            successStatus: 200,
-            declaredStatuses: [400, 404, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      pause: (input: DotsPauseInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: DotsPauseOutput }>(
-          {
-            method: "POST",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/pause`,
-            body: { expectedTarget: input["expectedTarget"] },
-            successStatus: 200,
-            declaredStatuses: [400, 404, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      resume: (input: DotsResumeInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: DotsResumeOutput }>(
-          {
-            method: "POST",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/resume`,
-            body: { expectedTarget: input["expectedTarget"] },
-            successStatus: 200,
-            declaredStatuses: [400, 404, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
-      unbind: (input: DotsUnbindInput, requestOptions?: RequestOptions) =>
-        request<{ readonly data: DotsUnbindOutput }>(
-          {
-            method: "POST",
-            path: `/api/session/${encodeURIComponent(input.sessionID)}/dots/unbind`,
-            body: { expectedTarget: input["expectedTarget"] },
-            successStatus: 200,
-            declaredStatuses: [400, 404, 401],
-            empty: false,
-          },
-          requestOptions,
-        ).then((value) => value.data),
     },
   }
 }

@@ -7,8 +7,20 @@ const byVersion = (version: string) => RELEASES.find((item) => item.version === 
 const after = (version: string) => RELEASES[RELEASES.findIndex((item) => item.version === version) + 1]
 
 describe("release entries", () => {
-  test("lists v0.11.4 device-scoped Dots decisions, keep-awake activity and received-output speed first", () => {
+  test("lists v0.11.5 native Dots and retirement migration first", () => {
     const entry = RELEASES[0]
+    expect(entry).toMatchObject({ version: "0.11.5", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
+    expect(entry?.changes).toHaveLength(8)
+    const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
+    for (const fragment of ["private server-process Channels", "canonical Session events", "completed, failed and interrupted", "existing roots default off", "children inherit", "Enable Dots access", "revision", "Breaking Change:", "incoming Relay MCP/OAuth", "webhook Events", "local.app", "artifact.demo", "old Dots", "ycoding remote mcp", "/dots", "global", "dots.enabled", "dots.profile", "OpenAI OAuth", "ordinary browser Remote", "outbound MCP", "Task MCP", "exact typed candidate", "explicit denies", "ceilings", "autonomy", "not replayed", "not strict Codex policy equivalence", "no Codex-enforced OS sandbox", "non-null", "matching values", "before effects", "completed summary", "not original execution success", "user and assistant messages", "internal records", "stored history", "external ChatGPT decoder compatibility is unverified", "causal input origin", "direct ownership", "Step-boundary"]) expect(text.toLowerCase()).toContain(fragment.toLowerCase())
+    expect(entry?.changes.filter((change) => change.tag === "Fixed").map((change) => change.text)).toEqual([
+      "Usage speed percentiles batch repeated histogram updates while preserving exact results. Large Usage dashboards can still exceed the two-second warm-read target.",
+    ])
+    expect(after("0.11.5")?.version).toBe("0.11.4")
+  })
+
+  test("retains v0.11.4 device-scoped Dots decisions, keep-awake activity and received-output speed", () => {
+    const entry = byVersion("0.11.4")
     expect(entry).toMatchObject({ version: "0.11.4", date: "2026-10-27", tags: ["Added", "Changed", "Fixed"] })
     expect(entry?.changes).toHaveLength(9)
     const text = entry?.changes.map((change) => change.text).join("\n") ?? ""
@@ -1785,7 +1797,8 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 49)).toEqual([
+    expect(versions.slice(0, 50)).toEqual([
+      "0.11.5",
       "0.11.4",
       "0.11.3",
       "0.11.2",

@@ -84,7 +84,7 @@ export const Answer = Schema.Struct({
   questionID: QuestionID,
   text: ControlText.pipe(optional),
   data: AnswerData.pipe(optional),
-  source: Form.DotsClientReplySource.pipe(optional),
+  source: Form.ClientReplySource.pipe(optional),
 }).annotate({ identifier: "SessionOrchestration.Answer" })
 export interface Answer extends Schema.Schema.Type<typeof Answer> {}
 
@@ -202,7 +202,7 @@ export const Change = Schema.Union([
     background: Schema.Boolean,
     delivery: SessionDelivery.Delivery,
   }),
-  Schema.Struct({ type: Schema.Literal("started"), source: Form.DotsClientReplySource.pipe(optional) }),
+  Schema.Struct({ type: Schema.Literal("started"), source: Form.ClientReplySource.pipe(optional) }),
   Schema.Struct({ type: Schema.Literal("backgrounded") }),
   Schema.Struct({ type: Schema.Literal("progressed"), progress: Progress }),
   Schema.Struct({ type: Schema.Literal("question_asked"), question: Question }),
@@ -216,7 +216,7 @@ export const Change = Schema.Union([
     error: FailureText,
     excerpt: TerminalExcerpt.pipe(optional),
   }),
-  Schema.Struct({ type: Schema.Literal("lost"), excerpt: TerminalExcerpt.pipe(optional), source: Form.DotsClientReplySource.pipe(optional) }),
+  Schema.Struct({ type: Schema.Literal("lost"), excerpt: TerminalExcerpt.pipe(optional), source: Form.ClientReplySource.pipe(optional) }),
   Schema.Struct({ type: Schema.Literal("resumed") }),
 ]).pipe(Schema.toTaggedUnion("type"))
 export type Change = typeof Change.Type

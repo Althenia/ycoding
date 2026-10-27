@@ -33,6 +33,8 @@ for (const mode of ["managed", "standalone"] as const)
     const directory = await mkdtemp(join(tmpdir(), "ycoding-restart-boot-"))
     const file = join(directory, "ycoding.db")
     const scope = await Effect.runPromise(Scope.make())
+    let nativeReady = false
+    let nativeClosed = false
     try {
       await seed(file, directory)
       const startingRaw = ServerProcess.start<never, never>(
@@ -45,10 +47,18 @@ for (const mode of ["managed", "standalone"] as const)
           fs: { filewatcher: false, fff: false },
         },
         mode === "managed" ? { instanceID: "restart-boot", onListen: () => Effect.succeed(Effect.void) } : undefined,
+        undefined,
+        [],
+        async (host) => {
+          expect(await host.configuration()).toEqual({ enabled: false })
+          nativeReady = true
+          return async () => { nativeClosed = true }
+        },
       ).pipe(Effect.provideService(Scope.Scope, scope))
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- runtime-owned router requirement markers are not services callers can provide
       const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
       await Effect.runPromise(starting)
+      expect(nativeReady).toBe(true)
       const recovered = await state(file)
       expect(recovered.tasks).toEqual(
         mode === "managed"
@@ -61,6 +71,7 @@ for (const mode of ["managed", "standalone"] as const)
       expect(recovered.loneRootStarts).toBe(1)
     } finally {
       await Effect.runPromise(Scope.close(scope, Exit.void))
+      expect(nativeClosed).toBe(true)
       await rm(directory, { recursive: true, force: true })
     }
   })

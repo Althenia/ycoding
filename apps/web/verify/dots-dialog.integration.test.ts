@@ -3,12 +3,10 @@ import { launchBrowser } from "./cdp"
 
 const port = 4794
 const browserPath = process.env.YCODING_WEB_CHROME
-if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to an installed Chromium or Chrome executable.")
+if (!browserPath) throw new Error("Set YCODING_WEB_CHROME to the pinned Chrome executable.")
 let server: ReturnType<typeof Bun.spawn> | undefined
 let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined
 type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>
-const modal = 'dialog[aria-label="Select Dots destination"]'
-const input = '.workspace__main textarea.composer__input'
 
 beforeAll(async () => {
   server = Bun.spawn(["bun", "run", "dev", "--", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], { cwd: import.meta.dir.replace(/\/verify$/, ""), env: { ...process.env, YCODING_WEB_VERIFY: "1" }, stdout: "ignore", stderr: "ignore" })
@@ -22,176 +20,175 @@ afterAll(async () => { await browser?.close(); server?.kill(); if (server) await
 
 async function wait(page: Page, condition: string) {
   for (let index = 0; index < 80; index++) { if (await page.evaluate<boolean>(condition)) return; await Bun.sleep(50) }
-  throw new Error(`Dots state did not settle: ${condition}`)
+  throw new Error(`Dots state did not settle: ${condition}\n${await page.evaluate<string>(`document.querySelector('dialog[aria-label="Command palette"]')?.textContent`)}`)
 }
-async function load(page: Page, query: string) {
-  await page.injectOnNewDocument(`localStorage.removeItem('ycoding.remote.composer-collapsed')`)
+async function open(page: Page, query = "") {
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&goal=none&${query}`)
-  await wait(page, `document.querySelector('${input}') !== null`)
-  await wait(page, `(window.remoteOperationReport().operations['session.dots.status'] ?? 0) >= 1`)
+  await wait(page, `document.querySelector('button[aria-label="Open command palette"]') !== null`)
+  await page.evaluate(`document.querySelector('button[aria-label="Open command palette"]').click()`)
+  await wait(page, `document.querySelector('dialog[aria-label="Command palette"]')?.open === true`)
 }
-const type = (page: Page, value: string) => page.evaluate(`(() => { const field = document.querySelector('${input}'); field.focus(); field.value = ${JSON.stringify(value)}; field.dispatchEvent(new Event('input', {bubbles:true})); })()`)
-const options = (page: Page) => page.evaluate<string[]>(`[...document.querySelectorAll('.workspace__main [role="option"]')].map(option => option.textContent)`)
-async function open(page: Page, query = "dots=unpaused") {
-  await load(page, query)
-  await type(page, "/dots")
-  await wait(page, `[...document.querySelectorAll('.workspace__main [role="option"]')].some(option => option.textContent.includes('/dots'))`)
-  await page.evaluate(`document.querySelector('.workspace__main button[aria-label="Send prompt"]').click()`)
-  await wait(page, `document.querySelector('${modal}')?.open === true`)
-}
-const click = (page: Page, label: string) => page.evaluate(`[...document.querySelectorAll('${modal} button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})?.click()`)
-const text = (page: Page) => page.evaluate<string>(`document.querySelector('${modal}').textContent`)
-const operations = (page: Page) => page.evaluate<{ operation: string; input: unknown }[]>(`window.remoteMutationReport().filter(entry => entry.operation.startsWith('session.dots.'))`)
 
-test("Dots Pause and Resume use the displayed target and returned runtime state", async () => {
-  for (const width of [390, 1440]) for (const theme of ["light", "dark"]) {
-    const page = await browser!.openPage()
-    try {
-      await page.setViewport(width, 900)
-      await page.setCoarsePointer(width === 390)
-      await open(page, "dots=unpaused&dotsOutcome=hold")
-      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-      await wait(page, `document.querySelector('${modal}')?.textContent.includes('Pause Dot')`)
-      expect(await text(page)).toContain("Fixture Dot")
-      expect(await text(page)).toContain("thread-1")
-      expect(await text(page)).toContain("Not paused")
-      expect(await text(page)).toContain("Pause stops the Dot's autonomous runtime until Resume; Resume may continue its work and goals.")
-      expect(await text(page)).not.toContain("Stop active response")
-      expect(await operations(page)).toEqual([])
-      expect(await page.evaluate<number>(`window.remoteOperationReport().operations['session.dots.status']`)).toBe(2)
-      await click(page, "Pause Dot")
-      await wait(page, `window.remoteMutationReport().some(entry => entry.operation === 'session.dots.pause')`)
-      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('${modal} button')].filter(button => ['Refresh status','Change destination','Pause Dot','Resume Dot'].includes(button.textContent.trim())).every(button => button.disabled)`)).toBe(true)
-      expect(await text(page)).not.toContain("Not paused")
-      await page.evaluate(`window.dotsFixture.release()`)
-      await wait(page, `document.querySelector('${modal}')?.textContent.includes('Resume Dot')`)
-      expect(await text(page)).toContain("Paused")
-      await click(page, "Resume Dot")
-      await wait(page, `window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.resume').length === 1`)
-      await page.evaluate(`window.dotsFixture.release()`)
-      await wait(page, `document.querySelector('${modal}')?.textContent.includes('Pause Dot')`)
-      expect(await operations(page)).toEqual(["pause", "resume"].map((action) => ({ operation: `session.dots.${action}`, input: { expectedTarget: { profile: "fixture", dotID: "dot-1", threadID: "thread-1", generation: "generation-1", label: "Fixture Dot" } } })))
-      expect(await page.evaluate<number>(`window.remoteOperationReport().operations['session.dots.status']`)).toBe(2)
-      expect(await page.evaluate<string>(`document.querySelector('${input}').value`)).toBe("/dots")
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
-      await page.pressEscape()
-      await wait(page, `document.querySelector('${modal}') === null`)
-      expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('${input}')`)).toBe(true)
-    } finally { await page.close() }
-  }
+test("Dots access changes only after the machine confirms it", async () => {
+  const page = await browser!.openPage()
+  try {
+    await open(page, "dotsOutcome=hold")
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)
+    await page.evaluate(`document.getElementById('command-palette-option-session.dots.access').click()`)
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]')?.textContent.includes('Changing Dots access')`)
+    await page.evaluate(`window.dotsFixture.release()`)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Disable Dots access')`)
+    expect(await page.evaluate<{ enabled: boolean; expectedRevision: number }[]>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').map(entry => entry.input)`)).toEqual([{ enabled: true, expectedRevision: 1 }])
+  } finally { await page.close() }
 }, 60_000)
 
-test.each(["failed", "unknown"])("Dots %s runtime action retains the dialog and requires Refresh without replay", async (outcome) => {
+test.each(["off", "unavailable"])("Dots access %s offers no action", async (state) => {
   const page = await browser!.openPage()
   try {
-    await open(page, `dots=unpaused&dotsOutcome=${outcome}`)
-    await wait(page, `document.querySelector('${modal}')?.textContent.includes('Pause Dot')`)
-    await click(page, "Pause Dot")
-    await wait(page, `document.querySelector('${modal} [role="alert"]') !== null`)
-    expect(await text(page)).toContain("not confirmed")
-    expect(await text(page)).not.toContain("Pause Dot")
-    expect(await text(page)).not.toContain("Resume Dot")
-    expect(await operations(page)).toHaveLength(1)
-    await page.evaluate(`window.dotsFixture.runtime('paused')`)
-    await click(page, "Refresh status")
-    await wait(page, `document.querySelector('${modal}')?.textContent.includes(${JSON.stringify(outcome === "unknown" ? "Runtime state unavailable" : "Resume Dot")})`)
-    expect(await operations(page)).toHaveLength(1)
-    if (outcome === "unknown") {
-      expect(await text(page)).not.toContain("Resume Dot")
-      expect(await text(page)).not.toContain("Pause Dot")
-    }
-    await click(page, "Change destination")
-    expect(await text(page)).not.toContain("Resume Dot")
-    expect(await text(page)).not.toContain("Pause Dot")
-    if (outcome === "unknown") {
-      await page.evaluate(`(() => { const field = document.querySelector('${modal} input:not([type="radio"])'); field.value='fixture'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
-      await click(page, "Read destinations")
-      await wait(page, `document.querySelector('${modal} input[type="radio"]') !== null`)
-      await page.evaluate(`document.querySelector('${modal} input[type="radio"]').click()`)
-      await click(page, "Confirm destination")
-      await wait(page, `document.querySelector('${modal}') === null`)
-      await page.evaluate(`document.querySelector('.workspace__main button[aria-label="Send prompt"]').click()`)
-      await wait(page, `document.querySelector('${modal}')?.textContent.includes('Resume Dot')`)
-      expect((await operations(page)).map((entry) => entry.operation)).toEqual(["session.dots.pause", "session.dots.bind"])
-    }
-    await page.pressEscape()
-    expect(await operations(page)).toHaveLength(outcome === "unknown" ? 2 : 1)
+    await open(page, `dotsCapability=${state}`)
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]')?.textContent.includes(${JSON.stringify(state === "off" ? "Dots is not configured" : "Dots access is unavailable")})`)
+    expect(await page.evaluate(`document.getElementById('command-palette-option-session.dots.access')`)).toBeNull()
   } finally { await page.close() }
-}, 30_000)
+}, 60_000)
 
-test("Dots destination confirmation sends no draft and unreported runtime exposes no actions", async () => {
+test.each(["failed", "unknown"])("Dots access %s is not replayed or presented as enabled", async (outcome) => {
   const page = await browser!.openPage()
   try {
-    await open(page, "dots=unbound")
-    await wait(page, `document.querySelector('${modal} input:not([type="radio"])') !== null`)
-    expect(await text(page)).not.toContain("Pause stops")
-    await page.evaluate(`(() => { const field = document.querySelector('${modal} input:not([type="radio"])'); field.value='fixture'; field.dispatchEvent(new Event('input',{bubbles:true})); })()`)
-    await click(page, "Read destinations")
-    await wait(page, `document.querySelector('${modal} input[type="radio"]') !== null`)
-    expect(await page.evaluate<boolean>(`document.querySelector('${modal} input[type="radio"]').checked`)).toBe(false)
-    await page.evaluate(`document.querySelector('${modal} input[type="radio"]').click()`)
-    await click(page, "Confirm destination")
-    await wait(page, `document.querySelector('${modal}') === null`)
-    expect((await operations(page)).map((entry) => entry.operation)).toEqual(["session.dots.bind"])
-    expect(await page.evaluate<string>(`document.querySelector('${input}').value`)).toBe("/dots")
-    await open(page, "dots=missing")
-    await wait(page, `document.querySelector('${modal}')?.textContent.includes('Runtime state unavailable')`)
-    expect(await text(page)).not.toContain("Pause Dot")
-    expect(await text(page)).not.toContain("Resume Dot")
-    await page.pressEscape()
-    expect(await operations(page)).toEqual([])
+    await open(page, `dotsOutcome=${outcome}`)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)
+    await page.evaluate(`document.getElementById('command-palette-option-session.dots.access').click()`)
+    await wait(page, `[...document.querySelectorAll('dialog[aria-label="Command palette"] [role="status"]')].some(node => node.textContent.includes(${JSON.stringify(outcome === "failed" ? "Dots access changed" : "outcome is unknown")}))`)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').length`)).toBe(1)
+    expect(await page.evaluate<boolean>(`document.getElementById('command-palette-option-session.dots.access') === null`)).toBe(true)
   } finally { await page.close() }
-}, 30_000)
+}, 60_000)
 
-test.each(["disconnected", "unknown"])("%s Dots status offers no runtime mutation", async (state) => {
+test("a managed child cannot mutate Dots access", async () => {
   const page = await browser!.openPage()
   try {
-    await open(page, `dots=${state}`)
-    await wait(page, `document.querySelector('${modal}')?.textContent.includes('Runtime state unavailable')`)
-    expect(await text(page)).not.toContain("Pause Dot")
-    expect(await text(page)).not.toContain("Resume Dot")
-    expect(await text(page)).toContain("Refresh status")
-    expect(await operations(page)).toEqual([])
+    await open(page, "session_id=ses_child")
+    await wait(page, `window.providerAuthState().activeSessionID === 'ses_child'`)
+    expect(await page.evaluate<boolean>(`document.getElementById('command-palette-option-session.dots.access') === null`)).toBe(true)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').length`)).toBe(0)
   } finally { await page.close() }
-}, 30_000)
+}, 60_000)
 
-test("closing Dots during Pause ignores late completion without replay", async () => {
+test("a late reply during disconnect cannot leave access pending after reconnect", async () => {
   const page = await browser!.openPage()
   try {
-    await open(page, "dots=unpaused&dotsOutcome=hold")
-    await wait(page, `document.querySelector('${modal}')?.textContent.includes('Pause Dot')`)
-    await click(page, "Pause Dot")
-    await wait(page, `window.remoteMutationReport().some(entry => entry.operation === 'session.dots.pause')`)
+    await open(page, "dotsOutcome=hold")
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access') !== null`)
+    await page.evaluate(`document.getElementById('command-palette-option-session.dots.access').click()`)
+    await wait(page, `window.remoteMutationReport().some(entry => entry.operation === 'session.dots.access.set')`)
+    await page.evaluate(`document.querySelector('.fixture__controls button:nth-child(2)').click(); window.dotsFixture.release()`)
+    await wait(page, `window.providerAuthState().transport.kind === 'connecting'`)
+    expect(await page.evaluate<boolean>(`document.getElementById('command-palette-option-session.dots.access') === null`)).toBe(true)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').length`)).toBe(1)
+    await wait(page, `window.providerAuthState().transport.kind === 'open'`)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Disable Dots access')`)
+  } finally { await page.close() }
+}, 60_000)
+
+test.each([1440, 390])("keyboard Dots access toggles preserve the draft and focus at %i px", async (width) => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(width, 900)
+    await page.setCoarsePointer(width === 390)
+    await open(page, "dots=on")
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Disable Dots access')`)
     await page.pressEscape()
-    await wait(page, `document.querySelector('${modal}') === null`)
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]') === null`)
+    await page.evaluate(`(() => { const input = document.querySelector('.composer__input'); input.value = 'Keep this draft'; input.dispatchEvent(new InputEvent('input', { bubbles: true })); input.focus(); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true })) })()`)
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]')?.open === true`)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access') !== null`)
+    await page.evaluate(`(() => { const input = document.getElementById('command-palette-input'); input.value = 'dots access'; input.dispatchEvent(new InputEvent('input', { bubbles: true })) })()`)
+    await page.pressKey("Enter", "Enter", 13)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)
+    await page.pressKey("Enter", "Enter", 13)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Disable Dots access')`)
+    expect(await page.evaluate<{ enabled: boolean; expectedRevision: number }[]>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').map(entry => entry.input)`)).toEqual([{ enabled: false, expectedRevision: 1 }, { enabled: true, expectedRevision: 2 }])
+    await page.evaluate(`Promise.all(document.querySelector('dialog[aria-label="Command palette"]').getAnimations({ subtree: true }).filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished))`)
+    expect(await page.evaluate<boolean>(`(() => { const row = document.getElementById('command-palette-option-session.dots.access').getBoundingClientRect(); return document.documentElement.scrollWidth <= innerWidth && row.left >= 0 && row.right <= innerWidth && row.height >= 44 && document.activeElement === document.getElementById('command-palette-input') })()`)).toBe(true)
+    await page.pressEscape()
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]') === null`)
+    expect(await page.evaluate<boolean>(`document.activeElement === document.querySelector('.composer__input') && document.activeElement.value === 'Keep this draft'`)).toBe(true)
+  } finally { await page.close() }
+}, 60_000)
+
+test("a late reply after reconnect cannot update the current access read", async () => {
+  const page = await browser!.openPage()
+  try {
+    await open(page, "dotsOutcome=hold")
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access') !== null`)
+    await page.evaluate(`document.getElementById('command-palette-option-session.dots.access').click(); document.querySelector('.fixture__controls button:nth-child(2)').click()`)
+    await wait(page, `window.providerAuthState().transport.kind === 'connecting'`)
+    await wait(page, `window.providerAuthState().transport.kind === 'open' && document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)
+    const reads = await page.evaluate<number>(`window.requestLog.filter(entry => entry.operation === 'session.dots.access.get').length`)
     await page.evaluate(`window.dotsFixture.release()`)
-    await page.evaluate(`new Promise(resolve => requestAnimationFrame(resolve))`)
-    expect(await operations(page)).toHaveLength(1)
-    expect(await page.evaluate<boolean>(`document.querySelector('${modal}') === null`)).toBe(true)
-    expect(await page.evaluate<string>(`document.querySelector('${input}').value`)).toBe("/dots")
+    expect(await page.evaluate<number>(`window.requestLog.filter(entry => entry.operation === 'session.dots.access.get').length`)).toBe(reads)
+    expect(await page.evaluate<boolean>(`document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)).toBe(true)
   } finally { await page.close() }
-}, 30_000)
+}, 60_000)
 
-test.each(["off", "omitted", "unavailable"])("Dots stays hidden and a typed /dots is refused without a model prompt when the capability is %s", async (capability) => {
-  for (const [width, theme] of [[390, "light"], [1440, "dark"]] as const) {
-    const page = await browser!.openPage()
-    try {
-      await page.setViewport(width, 900)
-      await page.setCoarsePointer(width === 390)
-      await load(page, `dotsCapability=${capability}`)
-      await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`)
-      await type(page, "/dots")
-      await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
-      expect((await options(page)).some((option) => option.includes("/dots"))).toBe(false)
-      await page.evaluate(`document.querySelector('.workspace__main button[aria-label="Send prompt"]').click()`)
-      await wait(page, `document.querySelector('.workspace__main [role="alert"]')?.textContent.includes('Dots is disabled')`)
-      expect(await page.evaluate<string>(`document.querySelector('${input}').value`)).toBe("/dots")
-      expect(await page.evaluate<boolean>(`document.querySelector('${modal}') === null`)).toBe(true)
-      const report = await page.evaluate<Record<string, number>>(`window.remoteOperationReport().operations`)
-      expect(Object.keys(report).filter((operation) => operation.startsWith("session.dots.") || operation === "session.prompt" || operation === "session.attachment.upload")).toEqual(["session.dots.status"])
-      expect(report["session.dots.status"]).toBe(1)
-      expect(await page.evaluate<unknown[]>(`window.remoteMutationReport()`)).toEqual([])
-      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
-    } finally { await page.close() }
-  }
+test("a late root reply cannot update a selected child", async () => {
+  const page = await browser!.openPage()
+  try {
+    await open(page, "dotsOutcome=hold")
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access') !== null`)
+    await page.evaluate(`document.getElementById('command-palette-option-session.dots.access').click()`)
+    await page.pressEscape()
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]') === null`)
+    await page.evaluate(`document.querySelector('.app-header [aria-label="Open Team"]').click()`)
+    await wait(page, `document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]') !== null`)
+    await page.evaluate(`document.querySelector('.team-view__task[data-session-id="ses_child"] [data-action="open"]').click()`)
+    await wait(page, `window.providerAuthState().activeSessionID === 'ses_child' && document.querySelector('.subagent-bar') !== null`)
+    await page.evaluate(`document.querySelector('button[aria-label="Open command palette"]').click()`)
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]')?.open === true`)
+    await page.evaluate(`window.dotsFixture.release()`)
+    expect(await page.evaluate<boolean>(`window.providerAuthState().activeSessionID === 'ses_child' && document.getElementById('command-palette-option-session.dots.access') === null`)).toBe(true)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').length`)).toBe(1)
+  } finally { await page.close() }
+}, 60_000)
+
+test("a late reply from another machine cannot change the selected family's access", async () => {
+  const page = await browser!.openPage()
+  try {
+    await open(page, "dotsOutcome=hold&machines=distinct")
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access') !== null`)
+    await page.evaluate(`document.getElementById('command-palette-option-session.dots.access').click(); document.getElementById('command-palette-option-nav.settings').click()`)
+    await wait(page, `location.pathname === '/remote/settings' && document.querySelector('dialog[aria-label="Command palette"]') === null`)
+    await page.evaluate(`document.querySelector('button[aria-label="Open command palette"]').click()`)
+    await wait(page, `document.getElementById('command-palette-option-device.switch.dev_laptop') !== null`)
+    await page.evaluate(`document.getElementById('command-palette-option-device.switch.dev_laptop').click()`)
+    await wait(page, `window.providerAuthState().activeDeviceID === 'dev_laptop' && window.providerAuthState().sessionListStatus === 'ready' && document.querySelector('dialog[aria-label="Command palette"]') === null`)
+    await page.evaluate(`document.querySelector('button[aria-label="Open command palette"]').click()`)
+    await wait(page, `document.getElementById('command-palette-option-session.open.ses_laptop') !== null`)
+    await page.evaluate(`document.getElementById('command-palette-option-session.open.ses_laptop').click()`)
+    await wait(page, `window.providerAuthState().activeSessionID === 'ses_laptop' && document.querySelector('dialog[aria-label="Command palette"]') === null`)
+    await page.evaluate(`document.querySelector('button[aria-label="Open command palette"]').click()`)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)
+    const reads = await page.evaluate<number>(`window.requestLog.filter(entry => entry.operation === 'session.dots.access.get').length`)
+    await page.evaluate(`window.dotsFixture.release()`)
+    expect(await page.evaluate<boolean>(`window.providerAuthState().activeSessionID === 'ses_laptop' && document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)).toBe(true)
+    expect(await page.evaluate<number>(`window.requestLog.filter(entry => entry.operation === 'session.dots.access.get').length`)).toBe(reads)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').length`)).toBe(1)
+  } finally { await page.close() }
+}, 60_000)
+
+test("a stale revision refreshes access without replaying the mutation", async () => {
+  const page = await browser!.openPage()
+  try {
+    await open(page)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access') !== null`)
+    await page.evaluate(`window.dotsFixture.change(true, false); document.getElementById('command-palette-option-session.dots.access').click()`)
+    await wait(page, `[...document.querySelectorAll('dialog[aria-label="Command palette"] [role="status"]')].some(node => node.textContent.includes('Dots access changed'))`)
+    expect(await page.evaluate<{ enabled: boolean; expectedRevision: number }[]>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').map(entry => entry.input)`)).toEqual([{ enabled: true, expectedRevision: 1 }])
+    await page.pressEscape()
+    await wait(page, `document.querySelector('dialog[aria-label="Command palette"]') === null`)
+    await page.evaluate(`document.querySelector('button[aria-label="Open command palette"]').click()`)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Disable Dots access')`)
+    await page.evaluate(`window.dotsFixture.change(false, true)`)
+    await wait(page, `document.getElementById('command-palette-option-session.dots.access')?.textContent.includes('Enable Dots access')`)
+    expect(await page.evaluate<number>(`window.remoteMutationReport().filter(entry => entry.operation === 'session.dots.access.set').length`)).toBe(1)
+  } finally { await page.close() }
 }, 60_000)

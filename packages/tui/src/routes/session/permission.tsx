@@ -19,7 +19,7 @@ import { ProjectEscalation } from "./project-escalation"
 import { toolDisplayName } from "@ycoding-ai/client/tool-display"
 import { Dots } from "@ycoding-ai/schema/dots"
 import { Schema } from "effect"
-import { DotsDelegationReview, DotsSessionDelegationReview } from "../../component/dialog-dots-delegation"
+import { DotsDelegationReview, DotsSessionDelegationReview } from "../../component/dots-delegation-review"
 
 const decodeDelegationReview = Schema.decodeUnknownOption(Dots.DelegationReview)
 const decodeSessionDelegationReview = Schema.decodeUnknownOption(Dots.SessionDelegationReview)

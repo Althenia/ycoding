@@ -24,9 +24,6 @@ import { boundedCleanupInterval, createRouter } from "./router"
 import { createD1PushStore } from "./push/d1-store"
 import { createD1InviteStore } from "./invite/d1-store"
 import { createInviteService } from "./invite/service"
-import { createRelayMcpRoutes } from "./mcp-entry"
-import { createD1McpStore } from "./auth/mcp/d1-store"
-import { cleanupLimit, expiredMetadataRetentionMs } from "./auth/service"
 
 export { DeviceRelay, PreviewDirectory }
 
@@ -37,8 +34,6 @@ export default {
     const service = createAuthService(createD1AuthStore(env.DB))
     router ??= createRouter({
       service,
-      mcp: createRelayMcpRoutes(env, service),
-      cleanupMcp: () => createD1McpStore(env.DB).deleteExpired(Date.now(), expiredMetadataRetentionMs, cleanupLimit),
       relay: env.DEVICE_RELAY,
       endpoints: googleEndpoints(env),
       allowedEmails: parseAllowedEmails(env),
@@ -57,6 +52,5 @@ export default {
   /** Scheduled sweep of expired authentication metadata (no session content). */
   async scheduled(_controller: ScheduledController, env: WorkerEnv): Promise<void> {
     await createAuthService(createD1AuthStore(env.DB)).cleanup()
-    await createD1McpStore(env.DB).deleteExpired(Date.now(), expiredMetadataRetentionMs, cleanupLimit)
   },
 }

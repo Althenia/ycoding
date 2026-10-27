@@ -95,6 +95,13 @@ export const AgentSelected = Event.durable({
 })
 export type AgentSelected = typeof AgentSelected.Type
 
+export const DotsAccessChanged = Event.durable({
+  type: "session.dots.access.changed",
+  ...options,
+  schema: { ...Base, enabled: Schema.Boolean, revision: NonNegativeInt },
+})
+export type DotsAccessChanged = typeof DotsAccessChanged.Type
+
 export const ModelSelected = Event.durable({
   type: "session.model.selected",
   ...options,
@@ -144,7 +151,7 @@ export namespace Review {
   export const Decided = Event.durable({
     type: "session.review.decided",
     ...options,
-    schema: { ...Base, itemID: SessionReview.ID, decision: SessionReview.Decision, source: Form.DotsClientReplySource.pipe(optional) },
+    schema: { ...Base, itemID: SessionReview.ID, decision: SessionReview.Decision, source: Form.ClientReplySource.pipe(optional) },
   })
   export type Decided = typeof Decided.Type
   export const Withdrawn = Event.durable({
@@ -1027,6 +1034,7 @@ export namespace RevertEvent {
 
 export const Definitions = Event.inventory(
   Created,
+  DotsAccessChanged,
   AgentSelected,
   ModelSelected,
   DaybreakSet,

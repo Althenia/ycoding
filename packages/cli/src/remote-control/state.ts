@@ -12,8 +12,6 @@ export type RemoteControlEnrollment = {
 }
 
 export type RemoteControlState = {
-  readonly enabled: boolean
-  readonly profile?: string
   readonly installationID: string
   readonly enrollments: Readonly<Record<string, RemoteControlEnrollment>>
 }
@@ -51,6 +49,7 @@ function decodeEnrollment(value: unknown): RemoteControlEnrollment | undefined {
 
 export function createRemoteControlStateStore(file: string) {
   let pending = Promise.resolve()
+  const installationID = randomUUID()
 
   async function read(): Promise<RemoteControlState> {
     try {
@@ -63,17 +62,15 @@ export function createRemoteControlStateStore(file: string) {
           if (decoded) enrollments[entry[0]] = decoded
         }
       return {
-        enabled: parsed.enabled === true,
-        ...(typeof parsed.profile === "string" && parsed.profile.length > 0 ? { profile: parsed.profile } : {}),
         installationID:
           typeof parsed.installationID === "string" && parsed.installationID.length > 0
             ? parsed.installationID
-            : randomUUID(),
+            : installationID,
         enrollments,
       }
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
-        return { enabled: false, installationID: randomUUID(), enrollments: {} }
+        return { installationID, enrollments: {} }
       throw error
     }
   }
@@ -105,12 +102,6 @@ export function createRemoteControlStateStore(file: string) {
 
   return {
     load: () => pending.then(read),
-    save: (input: { readonly enabled: boolean; readonly profile?: string }) =>
-      update((state) => ({
-        ...state,
-        enabled: input.enabled,
-        ...(input.profile === undefined ? (state.profile === undefined ? {} : { profile: state.profile }) : { profile: input.profile }),
-      })),
     saveEnrollment: (input: {
       readonly websocketURL: string
       readonly accountHash: string
@@ -126,7 +117,7 @@ export function createRemoteControlStateStore(file: string) {
         delete enrollments[enrollmentKey(input)]
         return { ...state, enrollments }
       }),
-    enrollment: async (input: { readonly websocketURL: string; readonly accountHash: string }) =>
+    enrollment: async (input: { readonly websocketURL: string; readonly accountHash: string }): Promise<RemoteControlEnrollment | undefined> =>
       (await pending.then(read)).enrollments[enrollmentKey(input)],
   }
 }

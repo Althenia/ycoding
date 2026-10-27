@@ -24,7 +24,7 @@ export const enrollURL = () => endpoint("enroll")
 export const refreshURL = () => endpoint("refresh")
 export const pairURL = () => endpoint("pair")
 export const pairStatusURL = () => endpoint("pair/status")
-export const websocketURL = () => `${baseURL.replace(/^https:/, "wss:")}wham/remote/control`
+export const websocketURL = () => `${baseURL.replace(/^https:/, "wss:")}wham/remote/control/server`
 
 export type Credential = {
   readonly access: string
@@ -147,11 +147,14 @@ export function buildConnectHeaders(input: {
   readonly serverID: string
   readonly serverName: string
   readonly token: string
+  readonly credential: Credential
   readonly installationID: string
   readonly deviceKind?: string
   readonly subscribeCursor?: string
 }) {
   return {
+    ...OpenAICodex.headers(),
+    "chatgpt-account-id": input.credential.accountID,
     "x-codex-server-id": input.serverID,
     "x-codex-name": input.serverName,
     "x-codex-protocol-version": protocolVersion,

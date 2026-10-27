@@ -59,7 +59,7 @@ test("D1 cleanup removes only owned revoked devices and their dependent metadata
   } finally { sqlite.close() }
 })
 
-test("device revocation atomically removes its MCP grants without touching another owner", async () => {
+test("device revocation preserves retired MCP rows and only revokes owned credentials", async () => {
   const sqlite = new Database(":memory:")
   try {
     sqlite.exec("PRAGMA foreign_keys = ON")
@@ -68,6 +68,7 @@ test("device revocation atomically removes its MCP grants without touching anoth
     sqlite.exec(`INSERT INTO "user" (id, created_at) VALUES ('owner', 1), ('other', 1);
       INSERT INTO device (id, user_id, name, public_key_jwk, key_algorithm, created_at)
         VALUES ('device', 'owner', 'Synthetic device', '{}', 'P-256', 1);
+      INSERT INTO device_credential (id, device_id, kind, created_at, expires_at) VALUES ('credential', 'device', 'access', 1, 100);
       INSERT INTO mcp_device VALUES ('device', 1, 'epoch_test', 1);
       INSERT INTO mcp_client (client_id,kind,name,redirect_uris,auth_method,created_at) VALUES ('client', 'dcr', 'Synthetic client', '[]', 'none', 1);
       INSERT INTO mcp_grant (id,client_id,device_id,owner_id,resource,scope,enable_epoch,consented_at,expires_at)
@@ -76,9 +77,12 @@ test("device revocation atomically removes its MCP grants without touching anoth
     const store = createD1AuthStore(databasePort(sqlite))
     expect(await store.revokeDevice("device", "other", 2)).toBe(false)
     expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_grant").get()?.n).toBe(1)
+    expect(sqlite.prepare("SELECT revoked_at FROM device_credential").get()?.revoked_at).toBeNull()
     expect(await store.revokeDevice("device", "owner", 3)).toBe(true)
-    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_grant").get()?.n).toBe(0)
-    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_token").get()?.n).toBe(0)
-    expect(sqlite.prepare("SELECT enabled FROM mcp_device").get()?.enabled).toBe(0)
+    expect(sqlite.prepare("SELECT revoked_at FROM device").get()?.revoked_at).toBe(3)
+    expect(sqlite.prepare("SELECT revoked_at FROM device_credential").get()?.revoked_at).toBe(3)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_grant").get()?.n).toBe(1)
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM mcp_token").get()?.n).toBe(1)
+    expect(sqlite.prepare("SELECT enabled FROM mcp_device").get()?.enabled).toBe(1)
   } finally { sqlite.close() }
 })

@@ -54,6 +54,10 @@ export type DelegatedReplySource = typeof DelegatedReplySource.Type
 
 export const DotsClientReplySource = Form.DotsClientReplySource
 export type DotsClientReplySource = Form.DotsClientReplySource
+export const NativeReplySource = Form.NativeReplySource
+export type NativeReplySource = Form.NativeReplySource
+export const ClientReplySource = Form.ClientReplySource
+export type ClientReplySource = Form.ClientReplySource
 export const ExternalReplySource = Form.ExternalReplySource
 export type ExternalReplySource = Form.ExternalReplySource
 
@@ -152,7 +156,7 @@ export interface DelegatedReplyInput {
 }
 
 export interface Interface {
-  readonly cancelDelegated: (input: Omit<DelegatedReplyInput, "answer" | "source"> & { readonly source: DotsClientReplySource }) => Effect.Effect<void, AlreadySettledError | NotFoundError>
+  readonly cancelDelegated: (input: Omit<DelegatedReplyInput, "answer" | "source"> & { readonly source: ClientReplySource }) => Effect.Effect<void, AlreadySettledError | NotFoundError>
   readonly replyDelegated: (input: DelegatedReplyInput) => Effect.Effect<void, AlreadySettledError | InvalidAnswerError | NotFoundError>
   readonly create: (input: CreateInput) => Effect.Effect<Info, AlreadyExistsError | InvalidFormError>
   readonly ask: (
@@ -1027,7 +1031,7 @@ export function validateAnswer(form: Pick<Info, "fields">, answer: Answer) {
 
 type InputField = Exclude<Form.Field, Form.ExternalField>
 
-function isActive(field: InputField, answer: Answer) {
+export function isActive(field: InputField, answer: Answer) {
   if (!field.when) return true
   return field.when.every((when) => matches(when, answer[when.key]))
 }
@@ -1079,7 +1083,7 @@ function validateWhen(when: Form.When, target: InputField) {
   }
 }
 
-function validateField(field: InputField, value: Form.Value): string | undefined {
+export function validateField(field: InputField, value: Form.Value): string | undefined {
   if (field.type === "string") {
     if (typeof value !== "string") return `Expected string for form field: ${field.key}`
     if (field.required && value.length === 0) return `Missing required form field: ${field.key}`

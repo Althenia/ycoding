@@ -209,7 +209,26 @@ export const DotsClientReplySource = Schema.Struct({
 }).annotate({ identifier: "Form.DotsClientReplySource" })
 export interface DotsClientReplySource extends Schema.Schema.Type<typeof DotsClientReplySource> {}
 
-export const ExternalReplySource = Schema.Union([DelegatedReplySource, DotsClientReplySource]).annotate({ identifier: "Form.ExternalReplySource" })
+export const NativeReplySource = Schema.Struct({
+  kind: Schema.Literal("dots-native"),
+  profile: Schema.String.check(Schema.isNonEmpty()),
+  credentialID: Schema.String.check(Schema.isNonEmpty()),
+  accountID: Schema.String.check(Schema.isNonEmpty()),
+  accountGeneration: NonNegativeInt,
+  environmentID: Schema.String.check(Schema.isNonEmpty()),
+  connectionID: Schema.String.check(Schema.isNonEmpty()),
+  clientID: Schema.String.check(Schema.isNonEmpty()),
+  streamID: Schema.String.check(Schema.isNonEmpty()),
+  rootSessionID: SessionID,
+  accessRevision: NonNegativeInt,
+  requestID: Schema.String.check(Schema.isNonEmpty()),
+}).annotate({ identifier: "Form.NativeReplySource" })
+export interface NativeReplySource extends Schema.Schema.Type<typeof NativeReplySource> {}
+
+export const ClientReplySource = Schema.Union([DotsClientReplySource, NativeReplySource]).annotate({ identifier: "Form.ClientReplySource" })
+export type ClientReplySource = typeof ClientReplySource.Type
+
+export const ExternalReplySource = Schema.Union([DelegatedReplySource, ClientReplySource]).annotate({ identifier: "Form.ExternalReplySource" })
 export type ExternalReplySource = typeof ExternalReplySource.Type
 
 export const ReplySource = Schema.Union([

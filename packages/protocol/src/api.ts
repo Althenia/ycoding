@@ -32,7 +32,6 @@ import { Authorization } from "./middleware/authorization.js"
 import { LocationGroup } from "./groups/location.js"
 import { IntegrationGroup } from "./groups/integration.js"
 import { McpGroup } from "./groups/mcp.js"
-import { McpEventsGroup } from "./groups/mcp-events.js"
 import { ConfigGroup } from "./groups/config.js"
 import { CredentialGroup } from "./groups/credential.js"
 import { ProjectGroup } from "./groups/project.js"
@@ -109,7 +108,6 @@ type ApiGroups<
   | typeof RemoteGroup
   | typeof KeepAwakeGroup
   | typeof DebugGroup
-  | typeof McpEventsGroup
   | typeof CoordinationGroup
   | LocationGroups<LocationId>
   | FormGroups<LocationId, LocationService, FormLocationId, FormLocationService>
@@ -208,7 +206,6 @@ const makeApiFromGroup = <
     .add(KeepAwakeGroup)
     .add(ConfigGroup.middleware(locationMiddleware))
     .add(makeReviewGroup(sessionLocationMiddleware))
-    .add(McpEventsGroup)
     .add(CoordinationGroup)
     .add(makeDotsGroup(sessionLocationMiddleware))
     .annotateMerge(

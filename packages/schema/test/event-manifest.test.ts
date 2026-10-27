@@ -265,6 +265,7 @@ describe("public event manifest", () => {
         "session.guardrail.decided.1",
         "session.daybreak.set.1",
         "session.decision.audited.1",
+        "session.dots.access.changed.1",
         "session.dots.binding.bound.1",
         "session.dots.binding.unbound.1",
         "session.dots.decision.settled.1",
