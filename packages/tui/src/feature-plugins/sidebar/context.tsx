@@ -94,7 +94,7 @@ export function SidebarCacheContent(props: {
   })
   const speed = createMemo(() => {
     const value = diagnostics()?.generationSpeed
-    const latest = value?.latest
+    const latest = value?.live ? value.live.sample : value?.latest
     const model = latest?.model ?? value?.model
     if (!model) return undefined
     const selected = props.selectedModel?.()

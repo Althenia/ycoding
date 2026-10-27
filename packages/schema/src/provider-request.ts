@@ -88,6 +88,7 @@ export const Timing = Schema.Struct({
   generatedTokens: PositiveInt.pipe(optional),
   estimatedTokens: PositiveInt.pipe(optional),
   estimatedGenerationDurationNs: PositiveInt.pipe(optional),
+  receivedOutput: Schema.Struct({ estimatedTokens: PositiveInt, durationNs: PositiveInt }).pipe(optional),
   loadDurationNs: NonNegativeInt.pipe(optional),
 }).annotate({ identifier: "ProviderRequest.Timing" })
 export interface Timing extends Schema.Schema.Type<typeof Timing> {}

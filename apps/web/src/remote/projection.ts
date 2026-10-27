@@ -52,6 +52,7 @@ type GenerationSpeedHistoryView = {
   readonly model?: ModelRefView
   readonly unreportedReason?: string
   readonly latest?: GenerationSpeedSampleView
+  readonly live?: { readonly requestID: string; readonly attempt: number; readonly sample?: GenerationSpeedSampleView }
   readonly recent: readonly GenerationSpeedSampleView[]
 }
 
@@ -76,9 +77,14 @@ function readGenerationSpeed(value: unknown): GenerationSpeedHistoryView | undef
   if (!recent.every((sample): sample is GenerationSpeedSampleView => sample !== undefined)) return undefined
   const latest = value.latest === undefined ? undefined : readGenerationSpeedSample(value.latest)
   if (value.latest !== undefined && latest === undefined) return undefined
+  const rawLive = value.live
+  if (rawLive !== undefined && (!isRecord(rawLive) || typeof rawLive.requestID !== "string" || !rawLive.requestID.startsWith("prq_") || positiveInteger(rawLive.attempt) === undefined)) return undefined
+  const sample = isRecord(rawLive) && rawLive.sample !== undefined ? readGenerationSpeedSample(rawLive.sample) : undefined
+  if (isRecord(rawLive) && rawLive.sample !== undefined && (!sample || sample.estimated !== true)) return undefined
+  const live = isRecord(rawLive) ? { requestID: rawLive.requestID as string, attempt: rawLive.attempt as number, ...(sample ? { sample } : {}) } : undefined
   const model = readModelRef(value.model)
   const unreportedReason = stringField(value.unreportedReason)
-  return { recent, ...(latest === undefined ? {} : { latest }), ...(model ? { model } : {}),
+  return { recent, ...(latest === undefined ? {} : { latest }), ...(live === undefined ? {} : { live }), ...(model ? { model } : {}),
     ...(unreportedReason ? { unreportedReason } : {}) }
 }
 
@@ -105,8 +111,9 @@ const sameModel = (left: ModelRefView | undefined, right: ModelRefView | undefin
 
 export function generationSpeedDisplay(view: SessionView | undefined, selected: ModelRefView | undefined) {
   const history = view?.generationSpeed
-  const latest = history?.latest
-  const model = latest?.model ?? history?.model
+  if (!history) return undefined
+  const latest = history.live === undefined ? history.latest : history.live.sample
+  const model = latest?.model ?? history.model
   if (!latest || !model || !selected || model.providerID !== selected.providerID || model.id !== selected.id) return undefined
   const rate = latest.tokensPerSecond
   const label = `${latest.estimated ? "≈ " : ""}${rate >= 1 ? Math.round(rate).toLocaleString("en-US") : rate.toPrecision(2)} tok/s`
@@ -115,7 +122,7 @@ export function generationSpeedDisplay(view: SessionView | undefined, selected: 
   const levels = "▁▂▃▄▅▆▇█"
   const trend = latest.estimated || recent.length < 2 ? undefined
     : recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
-  const description = latest.estimated ? "Estimated generation speed across recent output samples" : "Generation speed across recent provider-counted output samples"
+  const description = history.live ? "Estimated live generation speed" : latest.estimated ? "Estimated generation speed across recent output samples" : "Generation speed across recent provider-counted output samples"
   return { label, description, ...(trend === undefined ? {} : { trend }) }
 }
 

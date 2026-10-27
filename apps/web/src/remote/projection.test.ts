@@ -272,6 +272,42 @@ test("labels model-wide estimates across profiles and leaves empty populations b
   expect(generationSpeedDisplay(unreported, selected)).toBeUndefined()
 })
 
+test("live generation speed overrides and then restores settled history", () => {
+  const model = { providerID: "openai", id: "speed", variant: "high", profile: "work" }
+  const first = { model, tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40 }
+  const latest = { model, tokens: 120, durationNs: 2_000_000_000, tokensPerSecond: 60 }
+  const sample = { model, tokens: 90, durationNs: 1_000_000_000, tokensPerSecond: 90, estimated: true }
+  const history = { model, latest, recent: [first, latest] }
+  const update = (speed: unknown) => apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+    sessionID: "ses_a", diagnostics: { generationSpeed: speed },
+  })
+  const live = { requestID: "prq_active", attempt: 1, sample }
+  const active = update({ ...history, live })
+  expect(active.generationSpeed).toEqual({ ...history, live })
+  expect(generationSpeedDisplay(active, { ...model, variant: "low", profile: "other" })).toMatchObject({ label: "≈ 90 tok/s", description: expect.stringContaining("Estimated") })
+  expect(generationSpeedDisplay(active, { ...model, id: "other" })).toBeUndefined()
+  expect(generationSpeedDisplay(active, { ...model, providerID: "other" })).toBeUndefined()
+  expect(generationSpeedDisplay(update({ ...history, live: { requestID: "prq_active", attempt: 2 } }), model)).toBeUndefined()
+  expect(generationSpeedDisplay(update(history), model)).toMatchObject({ label: "60 tok/s", trend: expect.any(String) })
+  expect(readSnapshot({ session: { model }, messages: [], generationSpeed: { ...history, live } })?.generationSpeed).toEqual({ ...history, live })
+})
+
+test("rejects malformed live generation history", () => {
+  const model = { providerID: "openai", id: "speed" }
+  const sample = { model, tokens: 10, durationNs: 1_000_000_000, tokensPerSecond: 10, estimated: true }
+  const valid = { requestID: "prq_active", attempt: 1, sample }
+  for (const live of [null, {}, { ...valid, requestID: "bad" }, { ...valid, requestID: 1 },
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((attempt) => ({ ...valid, attempt })),
+    { ...valid, sample: null }, { ...valid, sample: { ...sample, tokens: 0 } },
+    { ...valid, sample: { ...sample, estimated: false } }, { ...valid, sample: { ...sample, estimated: undefined } }]) {
+    const history = { latest: sample, recent: [sample], live }
+    expect(readSnapshot({ session: { model }, messages: [], generationSpeed: history })?.generationSpeed).toBeUndefined()
+    expect(apply(createSessionView("ses_a"), "session.diagnostics.updated", {
+      sessionID: "ses_a", diagnostics: { generationSpeed: history },
+    }).generationSpeed).toBeUndefined()
+  }
+})
+
 test("terminal live diagnostics replace measured speed and restore an interrupted estimate without provider usage", () => {
   const model = { providerID: "openai", id: "speed-model" }
   const measured = { model, tokens: 80, durationNs: 1_000_000_000, tokensPerSecond: 80 }

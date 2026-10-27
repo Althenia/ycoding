@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import type { ProviderRequestSummary, SessionCacheDiagnostics } from "@ycoding-ai/client"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
@@ -212,6 +213,17 @@ test("retains the model rate across profile changes and hides only an empty popu
       latest: { ...speedDiagnostics.generationSpeed!.latest!, estimated: true }, recent: [] } })
     await app.waitForFrame((frame) => frame.includes("≈ 5,000 tok/s"))
     expect(app.captureCharFrame()).not.toContain("▄█")
+    update({ ...speedDiagnostics, generationSpeed: { ...speedDiagnostics.generationSpeed!,
+      live: { requestID: ProviderRequest.ID.make("prq_live"), attempt: 1,
+        sample: { ...speedDiagnostics.generationSpeed!.latest!, tokensPerSecond: 42, estimated: true } } } })
+    await app.waitForFrame((frame) => frame.includes("≈ 42 tok/s"))
+    expect(app.captureCharFrame()).not.toContain("5,000 tok/s")
+    update({ ...speedDiagnostics, generationSpeed: { ...speedDiagnostics.generationSpeed!,
+      live: { requestID: ProviderRequest.ID.make("prq_live"), attempt: 1 } } })
+    await app.waitForFrame((frame) => !frame.includes("Speed"))
+    expect(app.captureCharFrame()).not.toContain("5,000 tok/s")
+    update({ ...speedDiagnostics, generationSpeed: {
+      latest: { ...speedDiagnostics.generationSpeed!.latest!, estimated: true }, recent: [] } })
     select({ ...diagnostics.model, profile: "other" })
     await app.waitForFrame((frame) => frame.includes("≈ 5,000 tok/s"))
     select({ ...diagnostics.model, variant: "low" })

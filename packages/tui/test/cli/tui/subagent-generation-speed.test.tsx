@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
+import { createSignal } from "solid-js"
 import type { SessionCacheDiagnostics } from "@ycoding-ai/client"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Keymap } from "../../../src/context/keymap"
 import { SubagentEconomicsSurface } from "../../../src/routes/session/subagent-economics"
 import { SubagentFooterContent, subagentEconomics } from "../../../src/routes/session/subagent-footer"
@@ -44,5 +46,33 @@ for (const width of [48, 80, 189]) test(`child economics and footer display spee
     expect(frame.match(/≈ 100 tok\/s/g)?.length).toBeGreaterThanOrEqual(2)
     expect(frame).toContain("Rolls up to")
     expect(frame.split("\n").every((line) => line.length <= width)).toBe(true)
+  } finally { app.renderer.destroy() }
+})
+
+test("child economics and footer update and hide unavailable speed", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([import("../../../src/config"), import("../../../src/context/theme")])
+  const config = createTuiResolvedConfig()
+  const [value, update] = createSignal<SessionCacheDiagnostics>(diagnostics)
+  const app = await testRender(() => <TestTuiContexts><ConfigProvider config={config}>
+    <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}><Keymap.Provider config={config}>
+      <box flexDirection="column">
+        <SubagentEconomicsSurface economics={subagentEconomics(session, value(), "Parent")} />
+        <SubagentFooterContent title="Child" usage={() => undefined} economics={subagentEconomics(session, value(), "Parent")} />
+      </box>
+    </Keymap.Provider></ThemeProvider></ConfigProvider></TestTuiContexts>, { width: 80, height: 45 })
+  app.renderer.start()
+  try {
+    await app.waitForFrame((frame) => (frame.match(/≈ 100 tok\/s/g)?.length ?? 0) >= 2)
+    update({ ...diagnostics, generationSpeed: { ...diagnostics.generationSpeed!, live: {
+      requestID: ProviderRequest.ID.make("prq_live"), attempt: 1,
+      sample: { ...diagnostics.generationSpeed!.latest!, tokensPerSecond: 42 } } } })
+    await app.waitForFrame((frame) => (frame.match(/≈ 42 tok\/s/g)?.length ?? 0) >= 2)
+    expect(app.captureCharFrame()).not.toContain("100 tok/s")
+    update({ ...diagnostics, generationSpeed: { ...diagnostics.generationSpeed!, live: {
+      requestID: ProviderRequest.ID.make("prq_live"), attempt: 1 } } })
+    await app.waitForFrame((frame) => !frame.includes("tok/s"))
+    expect(app.captureCharFrame()).not.toContain("Speed")
+    update(diagnostics)
+    await app.waitForFrame((frame) => (frame.match(/≈ 100 tok\/s/g)?.length ?? 0) >= 2)
   } finally { app.renderer.destroy() }
 })

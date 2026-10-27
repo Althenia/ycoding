@@ -1420,6 +1420,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             void result.session.usage.sync(event.data.sessionID).catch(() => undefined)
           break
         case "session.diagnostics.updated":
+          result.session.diagnostics.invalidate(event.data.sessionID)
           setStore("session", "diagnostics", event.data.sessionID, event.data.diagnostics)
           break
         case "session.prediction.updated": {

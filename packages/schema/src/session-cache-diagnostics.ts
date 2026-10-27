@@ -49,6 +49,11 @@ export const GenerationSpeedHistory = Schema.Struct({
   unreportedReason: Schema.String.pipe(optional),
   latest: GenerationSpeed.pipe(optional),
   recent: Schema.Array(GenerationSpeed).check(Schema.isMaxLength(8)),
+  live: Schema.Struct({
+    requestID: ProviderRequest.ID,
+    attempt: PositiveInt,
+    sample: GenerationSpeed.pipe(optional),
+  }).pipe(optional),
 }).annotate({ identifier: "Session.GenerationSpeedHistory" })
 export interface GenerationSpeedHistory extends Schema.Schema.Type<typeof GenerationSpeedHistory> {}
 

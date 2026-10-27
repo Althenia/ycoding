@@ -114,7 +114,8 @@ export function subagentEconomics(
   const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
   const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
   const spent = money.format(session.cost)
-  const sample = diagnostics?.generationSpeed?.latest
+  const history = diagnostics?.generationSpeed
+  const sample = history?.live ? history.live.sample : history?.latest
   const speed = sample && (!session.model || (session.model.providerID === sample.model.providerID && session.model.id === sample.model.id))
     ? `${sample.estimated ? "≈ " : ""}${sample.tokensPerSecond >= 1 ? Math.round(sample.tokensPerSecond).toLocaleString("en-US") : sample.tokensPerSecond.toPrecision(2)} tok/s`
     : undefined

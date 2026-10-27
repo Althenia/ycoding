@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Money } from "@ycoding-ai/schema/money"
+import { SessionCacheDiagnostics } from "@ycoding-ai/schema/session-cache-diagnostics"
 
 const decode = Schema.decodeUnknownSync(ProviderRequest.Record)
 const decodeSpend = Schema.decodeUnknownSync(ProviderRequest.ModelSpend)
@@ -29,6 +30,13 @@ const record = {
   time: 1,
 }
 
+test("encodes live received-output diagnostics without undefined fields", () => {
+  const live = { requestID: ProviderRequest.ID.make("prq_live"), attempt: 1 }
+  expect(Schema.encodeSync(SessionCacheDiagnostics.GenerationSpeedHistory)({ recent: [], live: { ...live, sample: undefined } }))
+    .toEqual({ recent: [], live })
+  expect(() => Schema.decodeUnknownSync(SessionCacheDiagnostics.GenerationSpeedHistory)({ recent: [], live: { ...live, attempt: 0 } })).toThrow()
+})
+
 test("encodes optional consent-gated timing and report speed without undefined fields", () => {
   const timing = { firstOutputMs: 25, totalMs: 250, retryWaitMs: 100 }
   expect(Schema.decodeUnknownSync(ProviderRequest.Timing)(timing)).toEqual(timing)
@@ -41,6 +49,10 @@ test("encodes optional consent-gated timing and report speed without undefined f
 })
 
 test("decodes content-free provider request records", () => {
+  expect(Schema.decodeUnknownSync(ProviderRequest.Timing)({ receivedOutput: { estimatedTokens: 12, durationNs: 1_000_000_000 } }))
+    .toEqual({ receivedOutput: { estimatedTokens: 12, durationNs: 1_000_000_000 } })
+  expect(() => Schema.decodeUnknownSync(ProviderRequest.Timing)({ receivedOutput: { estimatedTokens: 0, durationNs: 1 } })).toThrow()
+  expect(Schema.encodeSync(ProviderRequest.Timing)({ receivedOutput: undefined })).toEqual({})
   expect(Schema.decodeUnknownSync(ProviderRequest.Timing)({ estimatedTokens: 12, estimatedGenerationDurationNs: 2_000_000_000 }))
     .toEqual({ estimatedTokens: 12, estimatedGenerationDurationNs: 2_000_000_000 })
   expect(() => Schema.decodeUnknownSync(ProviderRequest.Timing)({ estimatedTokens: 0 })).toThrow()

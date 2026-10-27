@@ -4036,6 +4036,9 @@ test("re-registering an existing session is idempotent", async () => {
 
 test("loads and refreshes normalized session diagnostics", async () => {
   const events = createEventStream()
+  const pending = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  let hold = false
   let hitRatio = 0.5
   let diagnosticRequests = 0
   const calls = createFetch((url) => {
@@ -4059,7 +4062,7 @@ test("loads and refreshes normalized session diagnostics", async () => {
       })
     if (url.pathname === "/api/session/ses_test/diagnostics") {
       diagnosticRequests++
-      return json({
+      const response = json({
         data: {
           model: { id: "model", providerID: "openai" },
           context: { total: 1_030, limit: 2_000, remaining: 970, percent: 52 },
@@ -4080,6 +4083,11 @@ test("loads and refreshes normalized session diagnostics", async () => {
           estimatedCost: 0,
         },
       })
+      if (hold) {
+        started.resolve()
+        return pending.promise.then(() => response)
+      }
+      return response
     }
     return undefined
   }, events)
@@ -4107,6 +4115,11 @@ test("loads and refreshes normalized session diagnostics", async () => {
     await data.session.message.sync("ses_test")
     await data.session.diagnostics.sync("ses_test")
     expect(data.session.diagnostics.get("ses_test")?.cache.hitRatio).toBe(0.5)
+
+    data.session.diagnostics.invalidate("ses_test")
+    hold = true
+    const stale = data.session.diagnostics.sync("ses_test")
+    await started.promise
 
     emitEvent(events, {
       id: "evt_diagnostics_live",
@@ -4136,7 +4149,11 @@ test("loads and refreshes normalized session diagnostics", async () => {
       },
     })
     await wait(() => data.session.diagnostics.get("ses_test")?.cache.hitRatio === 0.9)
-    expect(diagnosticRequests).toBe(1)
+    pending.resolve()
+    await stale
+    expect(data.session.diagnostics.get("ses_test")?.cache.hitRatio).toBe(0.9)
+    expect(diagnosticRequests).toBe(2)
+    hold = false
 
     emitEvent(events, {
       id: "evt_diagnostics_started",
@@ -4176,7 +4193,7 @@ test("loads and refreshes normalized session diagnostics", async () => {
       diagnostics: { contextLimit: 2_000 },
     })
     await wait(() => data.session.diagnostics.get("ses_test")?.cache.hitRatio === 0.95)
-    expect(diagnosticRequests).toBe(2)
+    expect(diagnosticRequests).toBe(3)
   } finally {
     app.renderer.destroy()
   }

@@ -12,7 +12,11 @@ const view = () => ({ ...createSessionView("ses_child"), model,
   generationSpeed: { model, recent: [], ...(mode() === "blank" ? {} : { latest: {
     model: { ...model, variant: "high", profile: "other" }, tokens: 100, durationNs: 1_000_000_000,
     tokensPerSecond: 100, ...(mode() === "estimated" ? { estimated: true } : {}),
-  } }) } })
+  } }), ...(mode() === "live" || mode() === "insufficient" ? { live: {
+    requestID: "prq_active", attempt: 1, ...(mode() === "live" ? { sample: {
+      model, tokens: 150, durationNs: 1_000_000_000, tokensPerSecond: 150, estimated: true,
+    } } : {}),
+  } } : {}) } })
 Object.assign(window, { generationSet: setMode })
 render(() => <SubagentBar sessionID="ses_child" parentTitle="Parent Session" agent="Reviewer" status="running"
   economics={{ speed: generationSpeedDisplay(view(), model) }} onMain={() => undefined} onPrevious={() => undefined} onNext={() => undefined} />,

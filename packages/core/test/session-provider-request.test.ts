@@ -96,17 +96,18 @@ it.effect("gates helper timing at record time and preserves always-on timing", (
       yield* tracker.complete({
         continuation: "full",
         tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 0, write: 0 } },
-        timing: { generationDurationNs: 30_000_000, firstOutputMs: 999, totalMs: 999, retryWaitMs: 999 },
+        timing: { generationDurationNs: 30_000_000, receivedOutput: { estimatedTokens: 20, durationNs: 1_000_000_000 }, firstOutputMs: 999, totalMs: 999, retryWaitMs: 999 },
       })
     }
     const records = yield* requests.list(sessionID)
     expect(records[0]?.timing).toEqual({
       generationDurationNs: 30_000_000,
+      receivedOutput: { estimatedTokens: 20, durationNs: 1_000_000_000 },
       firstOutputMs: 70,
       totalMs: 100,
       retryWaitMs: 0,
     })
-    expect(records[1]?.timing).toEqual({ generationDurationNs: 30_000_000 })
+    expect(records[1]?.timing).toEqual({ generationDurationNs: 30_000_000, receivedOutput: { estimatedTokens: 20, durationNs: 1_000_000_000 } })
   }),
 )
 
@@ -140,6 +141,26 @@ it.effect("records failed no-output latency at provider settlement rather than l
       tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     })
     expect((yield* requests.list(sessionID))[0]?.timing).toEqual({ totalMs: 90, retryWaitMs: 20 })
+  }),
+)
+
+it.effect("exposes only active step generation and clears it at completion", () =>
+  Effect.gen(function* () {
+    const sessionID = Session.ID.make("ses_provider_live_generation")
+    yield* insertSession(sessionID)
+    const service = yield* SessionProviderRequest.Service
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("speed"), providerID: Provider.ID.make("openai") })
+    const tracker = yield* service.next({ sessionID, source: "step", agent: Agent.defaultID, model,
+      routeID: "test", promptCacheKey: "cache", systemDigest: "system", toolDigest: "tools" })
+    yield* tracker.updateGeneration({ attempt: 1 })
+    expect(yield* service.generation(sessionID)).toEqual({ model, live: { requestID: ProviderRequest.ID.make(tracker.requestID), attempt: 1 } })
+    const sample = { model, tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40, estimated: true }
+    yield* tracker.updateGeneration({ attempt: 1, sample })
+    expect((yield* service.generation(sessionID))?.live.sample).toEqual(sample)
+    yield* tracker.updateGeneration({ attempt: 2 })
+    expect((yield* service.generation(sessionID))?.live).toEqual({ requestID: ProviderRequest.ID.make(tracker.requestID), attempt: 2 })
+    yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+    expect(yield* service.generation(sessionID)).toBeUndefined()
   }),
 )
 
@@ -223,13 +244,13 @@ it.effect("restores selected-model samples beyond newer requests with indexed bo
         model: index < 2 ? { ...model, ...(index === 1 ? { profile: "work" } : {}) } : { ...model, id: CatalogModel.ID.make("newer") },
         routeID: "openai-responses", promptCacheKey: "cache", systemDigest: "system", toolDigest: "tools" })
       yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
-        timing: index === 1 ? { estimatedTokens: 60, estimatedGenerationDurationNs: 900_000_000 }
-          : { generatedTokens: 40, observedGenerationDurationNs: 100_000_000 } })
+        timing: index === 1 ? { receivedOutput: { estimatedTokens: 60, durationNs: 2_000_000_000 } }
+          : { receivedOutput: { estimatedTokens: 40, durationNs: 1_000_000_000 } } })
     }
     expect((yield* service.recentSteps(sessionID, model)).map((row) => row.model.id)).toEqual([model.id, model.id])
     yield* db.update(SessionTable).set({ model }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
     const read = yield* SessionCacheDiagnostics.read(db, sessionID)
-    expect(read?.generationSpeed?.latest).toMatchObject({ tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100, estimated: true })
+    expect(read?.generationSpeed?.latest).toMatchObject({ tokens: 100, durationNs: 3_000_000_000, tokensPerSecond: 100 / 3, estimated: true })
     expect((yield* SessionCacheDiagnostics.read(db, sessionID))?.generationSpeed).toEqual(read?.generationSpeed)
     const plan = yield* db.all<{ detail: string }>(sql`EXPLAIN QUERY PLAN SELECT * FROM session_provider_request
       WHERE session_id = ${sessionID} AND request < ${Number.MAX_SAFE_INTEGER} ORDER BY request DESC LIMIT 10000`).pipe(Effect.orDie)

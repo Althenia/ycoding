@@ -18,6 +18,7 @@ import { InstructionState } from "./instruction-state"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionProviderRequest } from "./provider-request"
 import { SessionUsage } from "./usage"
+import { SessionCacheDiagnostics } from "./cache-diagnostics"
 import { SessionUsageRead, type Aggregate, type PricingRef } from "./usage-read"
 import { SessionUsagePricing } from "./usage-pricing"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
@@ -863,6 +864,24 @@ const layer = Layer.effect(
     const contextState = yield* SessionContextState.Service
     const store = yield* SessionStore.Service
     const providerRequests = yield* SessionProviderRequest.Service
+    const overlayGeneration = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      diagnostics: Session.CacheDiagnostics | undefined,
+      historical: boolean,
+    ) {
+      if (historical) return diagnostics
+      const active = yield* providerRequests.generation(sessionID)
+      if (!active) return diagnostics
+      const history = diagnostics?.generationSpeed
+      const same = history?.model?.providerID === active.model.providerID && history.model.id === active.model.id
+      const generationSpeed = same && history
+        ? { ...history, model: active.model, live: active.live }
+        : { ...SessionCacheDiagnostics.generationSpeed(yield* providerRequests.recentSteps(sessionID, active.model), { model: active.model })!, live: active.live }
+      const base = diagnostics ?? SessionCacheDiagnostics.calculate({
+        model: active.model, tokens: SessionUsage.tokens(undefined), estimatedCost: Money.USD.zero,
+      })
+      return { ...base, generationSpeed }
+    })
     const retentionSettings = yield* RetentionSettings.Service
     const locations = yield* LocationServiceMap.Service
     const fs = yield* FSUtil.Service
@@ -1947,7 +1966,9 @@ const layer = Layer.effect(
                 aggregateID: sessionID,
                 ...(sequence < 0 ? {} : { seq: EventRuntime.Seq.make(sequence) }),
               }
-              const generationSpeed = (yield* store.diagnostics(sessionID, session.revert?.messageID))?.generationSpeed
+              const generationSpeed = (yield* overlayGeneration(sessionID,
+                yield* store.diagnostics(sessionID, session.revert?.messageID),
+                session.revert?.messageID !== undefined || before !== undefined))?.generationSpeed
               return {
                 session,
                 ...history,
@@ -2067,7 +2088,8 @@ const layer = Layer.effect(
       }),
       diagnostics: Effect.fn("Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        const diagnostics = yield* store.diagnostics(sessionID, session.revert?.messageID)
+        const diagnostics = yield* overlayGeneration(sessionID,
+          yield* store.diagnostics(sessionID, session.revert?.messageID), session.revert?.messageID !== undefined)
         if (!diagnostics) return diagnostics
         return {
           ...diagnostics,

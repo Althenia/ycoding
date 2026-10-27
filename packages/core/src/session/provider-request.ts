@@ -19,6 +19,7 @@ import { SessionCacheDiagnostics } from "./cache-diagnostics"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { UsageAnalytics } from "../usage-analytics"
 import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
+import type { GenerationSpeed, GenerationSpeedHistory } from "@ycoding-ai/schema/session-cache-diagnostics"
 import {
   SessionCompactionJobTable,
   SessionContextStateTable,
@@ -67,12 +68,16 @@ export interface Tracker {
   readonly retryWait: () => Effect.Effect<void>
   readonly retryResume: () => Effect.Effect<void>
   readonly settle: () => Effect.Effect<void>
+  readonly updateGeneration: (live: { readonly attempt: number; readonly sample?: GenerationSpeed }) => Effect.Effect<void>
   readonly complete: (input: CompleteInput) => Effect.Effect<void>
 }
 
 export interface Interface {
   readonly activeRequests: Effect.Effect<
     ReadonlyArray<{ readonly sessionID: ProviderRequest.Record["sessionID"]; readonly usageAnchor?: UsageAnchor.Ref }>
+  >
+  readonly generation: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<
+    { readonly model: ProviderRequest.Record["model"]; readonly live: NonNullable<GenerationSpeedHistory["live"]> } | undefined
   >
   readonly next: {
     (input: BeginInput & { readonly expectedContextRevision: number }): Effect.Effect<Tracker, StaleContextRevision>
@@ -107,6 +112,7 @@ type Pending = {
   ended?: bigint
   waiting?: bigint
   retryWaitNs: bigint
+  live?: NonNullable<GenerationSpeedHistory["live"]>
 }
 
 type PreviousRequest = {
@@ -141,10 +147,12 @@ export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.S
   const generation = records.flatMap((record) => {
     const duration = record.timing?.generationDurationNs ?? record.timing?.observedGenerationDurationNs
     if (record.timing?.generationDurationNs === undefined && (duration ?? 0) < 1_000_000_000) return []
-    const sample = SessionCacheDiagnostics.generationSample({ ...record.timing, observedGenerationDurationNs: duration })
-    return sample === undefined || sample.estimated
-      ? []
-      : [{ ...sample, providerTimed: record.timing?.generationDurationNs !== undefined }]
+    const tokens = record.timing?.generatedTokens
+    if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
+      !Number.isSafeInteger(duration) || !duration || duration <= 0) return []
+    const tokensPerSecond = tokens * 1_000_000_000 / duration
+    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return []
+    return [{ tokens, durationNs: duration, tokensPerSecond, providerTimed: record.timing?.generationDurationNs !== undefined }]
   })
   const duration = generation.reduce((sum, sample) => sum + sample.durationNs, 0)
   const rates = generation.map((sample) => sample.tokensPerSecond).toSorted((a, b) => a - b)
@@ -622,6 +630,9 @@ const layer = Layer.effect(
                             ...(completion.timing.loadDurationNs === undefined
                               ? {}
                               : { loadDurationNs: completion.timing.loadDurationNs }),
+                            ...(completion.timing.receivedOutput === undefined
+                              ? {}
+                              : { receivedOutput: completion.timing.receivedOutput }),
                           }
                     const millis = (duration: bigint) => Math.max(0, Number(duration / 1_000_000n))
                     const timing = {
@@ -685,6 +696,11 @@ const layer = Layer.effect(
               ...(usageAnchor === undefined ? {} : { usageAnchor }),
               defaultInvalidation: pending.get(requestID)?.defaultInvalidation ?? "first-request",
               observeAttempt,
+              updateGeneration: (live: Parameters<Tracker["updateGeneration"]>[0]) => Effect.sync(() => {
+                const current = pending.get(requestID)
+                if (current && !current.completed && current.input.source === "step")
+                  current.live = { requestID, ...live }
+              }),
               observeEvent: Effect.fnUntraced(function* (event) {
                 const current = pending.get(requestID)
                 if (!current || current.completed) return
@@ -733,6 +749,11 @@ const layer = Layer.effect(
           .filter((request) => !request.completed)
           .map((request) => ({ sessionID: request.input.sessionID, usageAnchor: request.usageAnchor })),
       ),
+      generation: (sessionID) => Effect.sync(() => {
+        const current = [...pending.values()].findLast((request) =>
+          request.input.sessionID === sessionID && !request.completed && request.live !== undefined)
+        return current?.live ? { model: current.input.model, live: current.live } : undefined
+      }),
     })
   }),
 )

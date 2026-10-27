@@ -38,6 +38,35 @@ test("windowed snapshot query bounds and optional cursor are published on the Se
   }).generationSpeed).toEqual({ latest: sample, recent: [sample] })
 })
 
+test("snapshot roundtrips active generation speed and rejects invalid windows", () => {
+  const snapshot = {
+    sourceEpoch: "epoch_test",
+    session: { id: "ses_test", projectID: "project", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 }, title: "Test", location: { directory: "/project" } },
+    messages: [], watermark: { type: "log.synced" as const, aggregateID: "ses_test", seq: 0 },
+  }
+  const sample = { model: { providerID: "openai", id: "gpt" }, tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6, estimated: true }
+  const history = { latest: sample, recent: [sample] }
+  const decode = Schema.decodeUnknownSync(SessionProjection)
+  const encode = Schema.encodeSync(SessionProjection)
+  for (const live of [
+    { requestID: "prq_test", attempt: 1, sample },
+    { requestID: "prq_test", attempt: 1 },
+  ]) {
+    const input = { ...snapshot, generationSpeed: { ...history, live } }
+    expect(encode(decode(input))).toEqual(input)
+  }
+  expect(encode(decode({ ...snapshot, generationSpeed: history }))).toEqual({ ...snapshot, generationSpeed: history })
+  for (const live of [
+    { requestID: "bad", attempt: 1, sample },
+    { requestID: "prq_test", attempt: 0, sample },
+    { requestID: "prq_test", attempt: 1.5, sample },
+    { requestID: "prq_test", attempt: 1, sample: { ...sample, tokens: 0 } },
+    { requestID: "prq_test", attempt: 1, sample: { ...sample, durationNs: 0 } },
+    { requestID: "prq_test", attempt: 1, sample: { ...sample, tokensPerSecond: 0 } },
+  ]) expect(() => decode({ ...snapshot, generationSpeed: { ...history, live } })).toThrow()
+  expect(() => decode({ ...snapshot, generationSpeed: { ...history, recent: Array(9).fill(sample) } })).toThrow()
+})
+
 test("Session-scoped managed attachment reads publish a bounded base64 result", () => {
   const group = makeSessionGroup(SessionLocationMiddleware)
   const endpoint = group.endpoints["session.attachment.read"]

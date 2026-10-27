@@ -17,6 +17,7 @@ import { Session } from "../src/session"
 import { SessionExecution } from "../src/session/execution"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
+import { SessionProviderRequest } from "../src/session/provider-request"
 import { UsageAnalytics } from "../src/usage-analytics"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
@@ -76,7 +77,7 @@ function fixture() {
               observedGenerationDurationNs: 1_500_000_000 + index * 2_000_000,
             }
           : index % 4 === 2
-            ? { totalMs: 500 + ((index * 7) % 800) }
+            ? { totalMs: 500 + ((index * 7) % 800), receivedOutput: { estimatedTokens: 999, durationNs: 1_000_000_000 } }
             : undefined
     return {
       id: ProviderRequest.ID.make(`prq_equality_${index.toString().padStart(4, "0")}`),
@@ -431,6 +432,16 @@ const runtime = AppNodeBuilder.build(LayerNode.group([Database.node, Session.nod
 
 const zones = [undefined, "America/New_York", "Asia/Kolkata", "Australia/Sydney", "Pacific/Auckland"] as const
 const groups = ["model", "session", "project", "agent", "hour", "day", "month"] as const
+
+test("SQL and in-memory report speed ignore received-output estimates", () =>
+  Effect.runPromise(Effect.gen(function* () {
+    const session = yield* Session.Service
+    const db = (yield* Database.Service).db
+    const records = (yield* db.select().from(SessionProviderRequestTable).all()).map(SessionProviderRequest.rowRecord)
+    const report = yield* session.usageReportAll({ group: "session", limit: 200 })
+    for (const row of report.rows)
+      expect(row.speed).toEqual(SessionProviderRequest.reportSpeed(records.filter((record) => record.sessionID === row.key)))
+  }).pipe(Effect.provide(runtime), Effect.scoped)), 60_000)
 
 test(
   "global usage reports equal independently computed aggregates for every group, time zone, and range",

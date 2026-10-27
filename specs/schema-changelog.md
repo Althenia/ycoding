@@ -2,6 +2,10 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-10-27: Add received-output speed samples
+
+- Add optional `GenerationSpeedHistory.live` with `requestID`, positive `attempt`, and optional `sample`; add optional `ProviderRequest.Timing.receivedOutput` with positive `estimatedTokens` and `durationNs`. These fields are additive; the final eligible window uses existing timing JSON without a migration.
+
 ## 2026-10-25: Persist Project member ownership
 
 - Add optional `owner: { sessionID, title }` to `Coordination.Participant` and the public durable event `coordination.member.owner.changed.1` with Project revision, member identity, optional owner identity, and optional release reason `completed` or `released`.

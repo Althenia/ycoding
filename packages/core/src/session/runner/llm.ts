@@ -9,6 +9,7 @@ import {
   type ProviderErrorEvent,
 } from "@ycoding-ai/ai"
 import { Money } from "@ycoding-ai/schema/money"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Cause, Clock, Effect, Exit, Fiber, FiberSet, Layer, Option, Schedule, Semaphore, Stream } from "effect"
@@ -55,6 +56,7 @@ import { SessionRunnerRetry } from "./retry"
 import { SessionModelFallback } from "./fallback"
 import type { Model } from "@ycoding-ai/schema/model"
 import { SessionUsage } from "../usage"
+import { Token } from "../../util/token"
 import { SessionLiveState } from "../live-state"
 import { renderTeamObservation } from "../orchestration-view"
 import { SessionHistory } from "../history"
@@ -611,6 +613,40 @@ const layer = Layer.effect(
       let firstToolInputNs: bigint | undefined
       let streamedOutput = ""
       const streamedToolInputs = new Set<string>()
+      const completedToolInputs = new Set<string>()
+      const receivedOutput = SessionUsage.receivedOutput()
+      const recentGeneration = yield* providerRequests.recentSteps(session.id, effective.ref)
+      const previousDiagnostics = yield* store.diagnostics(session.id)
+      const previousSpeed = SessionCacheDiagnostics.generationSpeed(recentGeneration, { model: effective.ref })!
+      const previous = previousDiagnostics ?? SessionCacheDiagnostics.calculate({
+        model: effective.ref, tokens: SessionUsage.tokens(undefined), estimatedCost: Money.USD.zero,
+      })
+      const attempt = requestTrackerState.attempts + 1
+      let lastPublishedNs: bigint | undefined
+      let generationFrozen = false
+      const liveGeneration = () => {
+        const timing = receivedOutput.sample()
+        const sample = SessionCacheDiagnostics.generationSample(timing ? { receivedOutput: timing } : undefined)
+        return { attempt, ...(sample ? { sample: { model: effective.ref, ...sample } } : {}) }
+      }
+      const publishLiveGeneration = Effect.fnUntraced(function* () {
+        const live = liveGeneration()
+        yield* requestTracker.updateGeneration(live)
+        const settlement = publisher.stepSettlement()
+        const base = settlement ? SessionCacheDiagnostics.calculate({
+          model: effective.ref,
+          tokens: settlement.tokens,
+          estimatedCost: stepUsage(settlement).cost,
+          contextLimit: effectiveModel.route.defaults.limits?.context,
+          contextBreakdown,
+          routeID: effectiveModel.route.id,
+          providerCache: providerCache(settlement),
+        }) : previous
+        yield* serialized(events.publish(SessionEvent.DiagnosticsUpdated, {
+          sessionID: session.id,
+          diagnostics: { ...base, generationSpeed: { ...previousSpeed, live: { requestID: ProviderRequest.ID.make(requestTracker.requestID), ...live } } },
+        }))
+      })
       let generationTiming: ReturnType<typeof SessionUsage.generationTiming>
       let generationUsage: Extract<LLMEvent, { type: "step-finish" }>["usage"]
       let generationEndedNs: bigint | undefined
@@ -625,32 +661,16 @@ const layer = Layer.effect(
           ended: generationEndedNs ?? (yield* Clock.currentTimeNanos),
           streamedOutput,
         })
-        const settlement = publisher.stepSettlement()
-        yield* serialized(events.publish(SessionEvent.DiagnosticsUpdated, {
-          sessionID: session.id,
-          diagnostics: SessionCacheDiagnostics.calculate({
-            model: effective.ref,
-            tokens: settlement?.tokens ?? SessionUsage.tokens(undefined),
-            estimatedCost: settlement ? stepUsage(settlement).cost : Money.USD.zero,
-            contextLimit: effectiveModel.route.defaults.limits?.context,
-            contextBreakdown,
-            routeID: effectiveModel.route.id,
-            providerCache: settlement ? providerCache(settlement) : undefined,
-            generationSpeed: SessionCacheDiagnostics.generationSpeed(
-              yield* providerRequests.recentSteps(session.id, effective.ref),
-              { model: effective.ref, timing: { ...settlement?.timing, ...generationTiming } },
-            ),
-          }),
-        }))
         generationDiagnosticsPublished = true
       })
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
       requestTrackerState.attempts += 1
       const generationStartedNs = yield* Clock.currentTimeNanos
-      const providerStream = llm.stream(prepared.request).pipe(
-        Stream.runForEach((event) =>
+      const providerStream = publishLiveGeneration().pipe(
+        Effect.andThen(llm.stream(prepared.request).pipe(Stream.runForEach((event) =>
           Effect.gen(function* () {
+            const receivedNs = yield* Clock.currentTimeNanos
             if (inputConsumptionPending && consumedInputID) {
               inputConsumptionPending = false
               yield* serialized(
@@ -691,22 +711,37 @@ const layer = Layer.effect(
             if (event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-input-delta")
               streamedOutput += event.text
             if (event.type === "tool-input-delta" && event.text.length > 0) streamedToolInputs.add(event.id)
-            if (event.type === "tool-call" && !streamedToolInputs.has(event.id))
-              streamedOutput += JSON.stringify(event.input) ?? ""
+            const output = event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-input-delta"
+              ? event.text
+              : event.type === "tool-call" && !streamedToolInputs.has(event.id) && !completedToolInputs.has(event.id)
+                ? JSON.stringify(event.input) ?? ""
+                : ""
+            if (event.type === "tool-call") completedToolInputs.add(event.id)
+            if (event.type === "tool-call") streamedOutput += output
+            if (!generationFrozen && output.length > 0) {
+              receivedOutput.observe(receivedNs, Token.estimate(streamedOutput))
+              yield* requestTracker.updateGeneration(liveGeneration())
+              if (lastPublishedNs === undefined || receivedNs - lastPublishedNs >= 250_000_000n) {
+                lastPublishedNs = receivedNs
+                yield* publishLiveGeneration()
+              }
+            }
             if (event.type === "text-delta" && event.text.length > 0 && firstTextNs === undefined)
-              firstTextNs = yield* Clock.currentTimeNanos
+              firstTextNs = receivedNs
             if (event.type === "reasoning-delta" && event.text.length > 0 && firstReasoningNs === undefined)
-              firstReasoningNs = yield* Clock.currentTimeNanos
+              firstReasoningNs = receivedNs
             if (event.type === "tool-input-delta" && event.text.length > 0 && firstToolInputNs === undefined)
-              firstToolInputNs = yield* Clock.currentTimeNanos
-            const receivedNs = yield* Clock.currentTimeNanos
+              firstToolInputNs = receivedNs
             if (LLMEvent.is.stepFinish(event)) {
               generationUsage = event.usage
               generationEndedNs = receivedNs
             }
             if (LLMEvent.is.providerError(event)) generationEndedNs ??= receivedNs
             yield* publish(event)
-            if (LLMEvent.is.stepFinish(event)) yield* publishGenerationDiagnostics()
+            if (LLMEvent.is.stepFinish(event)) {
+              generationFrozen = true
+              yield* publishLiveGeneration()
+            }
             if (LLMEvent.is.toolInputError(event)) {
               if (prepared.resolveToolCall(event.name).type === "settle") needsContinuation = true
               return
@@ -755,14 +790,19 @@ const layer = Layer.effect(
               ).pipe(FiberSet.run(toolFibers)),
             )
           }),
-        ),
+        ))),
         Effect.onExit(() => Effect.gen(function* () {
           generationEndedNs ??= yield* Clock.currentTimeNanos
+          if (!generationFrozen) {
+            generationFrozen = true
+            yield* publishLiveGeneration()
+          }
         })),
         Effect.ensuring(serialized(publisher.flush())),
         Effect.onExit(() => requestTracker.settle()),
       )
 
+      let requestCompleted = false
       const completeProviderRequest = (
         settlement?: NonNullable<ReturnType<typeof publisher.stepSettlement>>,
         override?: "provider-not-reported" | "retry-fallback",
@@ -791,7 +831,10 @@ const layer = Layer.effect(
                     ? "provider-not-reported"
                     : undefined)
         return Effect.gen(function* () {
+          if (requestCompleted) return
+          requestCompleted = true
           yield* publishGenerationDiagnostics()
+          const received = receivedOutput.sample()
           yield* requestTracker.complete({
             assistantMessageID: publisher.currentMessageID(),
             connectionIdentityDigest: requestTrackerState.mixedAccountProvenance
@@ -807,10 +850,28 @@ const layer = Layer.effect(
                   : "full",
             ...(invalidation === undefined ? {} : { invalidation }),
             ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
-            ...(settlement?.timing === undefined && generationTiming === undefined
+            ...(settlement?.timing === undefined && generationTiming === undefined && received === undefined
               ? {}
-              : { timing: { ...settlement?.timing, ...generationTiming } }),
+              : { timing: { ...settlement?.timing, ...generationTiming, ...(received ? { receivedOutput: received } : {}) } }),
           })
+          yield* serialized(events.publish(SessionEvent.DiagnosticsUpdated, {
+            sessionID: session.id,
+            diagnostics: settlement ? SessionCacheDiagnostics.calculate({
+              model: effective.ref,
+              tokens: settlement.tokens,
+              estimatedCost: stepUsage(settlement).cost,
+              contextLimit: effectiveModel.route.defaults.limits?.context,
+              contextBreakdown,
+              routeID: effectiveModel.route.id,
+              providerCache: providerCache(settlement),
+              generationSpeed: SessionCacheDiagnostics.generationSpeed(recentGeneration,
+                { model: effective.ref, timing: received ? { receivedOutput: received } : undefined }),
+            }) : {
+              ...previous,
+              generationSpeed: SessionCacheDiagnostics.generationSpeed(recentGeneration,
+                { model: effective.ref, timing: received ? { receivedOutput: received } : undefined }),
+            },
+          }))
         })
       }
       requestTrackerState.completeFallback = () => completeProviderRequest(publisher.stepSettlement(), "retry-fallback")

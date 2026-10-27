@@ -171,20 +171,13 @@ export function generationSpeed(
 }
 
 export function generationSample(timing: ProviderRequest.Timing | undefined) {
-  const candidates = [
-    { tokens: timing?.generatedTokens, durationNs: timing?.observedGenerationDurationNs ?? timing?.generationDurationNs },
-    { tokens: timing?.estimatedTokens, durationNs: timing?.estimatedGenerationDurationNs, estimated: true },
-  ]
-  for (const sample of candidates) {
-    const tokens = sample.tokens
-    const durationNs = sample.durationNs
-    if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
-      !Number.isSafeInteger(durationNs) || !durationNs || durationNs <= 0) continue
-    const tokensPerSecond = tokens * 1_000_000_000 / durationNs
-    if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) continue
-    return { tokens, durationNs, tokensPerSecond, ...(sample.estimated ? { estimated: true } : {}) }
-  }
-  return undefined
+  const tokens = timing?.receivedOutput?.estimatedTokens
+  const durationNs = timing?.receivedOutput?.durationNs
+  if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
+    !Number.isSafeInteger(durationNs) || !durationNs || durationNs < 1_000_000_000) return undefined
+  const tokensPerSecond = tokens * 1_000_000_000 / durationNs
+  if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
+  return { tokens, durationNs, tokensPerSecond, estimated: true as const }
 }
 
 export const recentGenerationRecords = Effect.fn("SessionCacheDiagnostics.recentGenerationRecords")(function* (

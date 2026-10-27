@@ -41,6 +41,17 @@ test("subagent speed renders from its own samples at phone and desktop widths", 
       await page.evaluate(`window.generationSet('measured')`)
       expect(await page.evaluate<string>(`document.querySelector('.subagent-bar__header').textContent`)).toContain("100 tok/s")
       expect(await page.evaluate<string>(`document.querySelector('.subagent-bar__header').textContent`)).not.toContain("≈")
+      await page.evaluate(`window.generationSet('insufficient')`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.subagent-bar__header').textContent.includes('tok/s')`)).toBe(false)
+      await page.evaluate(`window.generationSet('live')`)
+      expect(await page.evaluate<string>(`document.querySelector('.subagent-bar__header').textContent`)).toContain("≈ 150 tok/s")
+      await page.evaluate(`document.querySelector('[aria-label="Subagent details"]').click()`)
+      expect(await page.evaluate<string>(`document.querySelector('[data-metric="speed"]').textContent`)).toContain("≈ 150 tok/s")
+      await page.evaluate(`window.generationSet('insufficient')`)
+      expect(await page.evaluate<boolean>(`document.querySelector('[data-metric="speed"]') === null`)).toBe(true)
+      await page.evaluate(`window.generationSet('measured')`)
+      expect(await page.evaluate<string>(`document.querySelector('[data-metric="speed"]').textContent`)).toContain("100 tok/s")
+      expect(await page.evaluate<string>(`document.querySelector('.subagent-bar__header').textContent`)).toContain("100 tok/s")
     } finally { await page.close() }
   }
 }, 30_000)

@@ -74,27 +74,26 @@ test("keeps cache effectiveness separate from context occupancy", () => {
   expect(result.estimatedCost).toBe(Money.USD.make(0.0123))
 })
 
-test("weights at most eight output samples and prefers local timing", () => {
+test("weights at most eight received output samples", () => {
   const records = Array.from({ length: 10 }, (_, index) => ({
     model: model("openai"),
-    timing: index === 9 ? { generatedTokens: 10, generationDurationNs: 0, observedGenerationDurationNs: 2_000_000 }
-      : { generatedTokens: 10 + index, generationDurationNs: 2_000_000, observedGenerationDurationNs: 8_000_000 },
+    timing: { receivedOutput: { estimatedTokens: index === 9 ? 10 : 10 + index, durationNs: 1_000_000_000 } },
   }))
   const withZero = SessionCacheDiagnostics.generationSpeed(records)
   expect(withZero?.latest?.tokens).toBe(115)
   expect(withZero?.recent.map((sample) => sample.tokens)).toEqual([12, 13, 14, 15, 16, 17, 18, 10])
-  expect(withZero?.recent.at(-1)?.tokensPerSecond).toBe(5_000)
+  expect(withZero?.recent.at(-1)?.tokensPerSecond).toBe(10)
   const current = { model: model("anthropic"),
-    timing: { generatedTokens: 12, generationDurationNs: 2_000_000 } }
+    timing: { receivedOutput: { estimatedTokens: 12, durationNs: 1_000_000_000 } } }
   expect(SessionCacheDiagnostics.generationSpeed(records, current)?.latest).toMatchObject({
-    model: current.model, tokensPerSecond: 6_000,
+    model: current.model, tokensPerSecond: 12,
   })
   expect(SessionCacheDiagnostics.generationSpeed([], current)?.recent).toHaveLength(1)
   expect(SessionCacheDiagnostics.generationSpeed([])).toBeUndefined()
 })
 
 test("keeps samples provider/model-specific while retaining variant changes", () => {
-  const timing = (generatedTokens: number) => ({ generatedTokens, observedGenerationDurationNs: 1_000_000_000 })
+  const timing = (estimatedTokens: number) => ({ receivedOutput: { estimatedTokens, durationNs: 1_000_000_000 } })
   const other = { model: model("anthropic"), timing: timing(100) }
   const first = { model: model("openai"), timing: timing(40) }
   const second = { model: model("openai"), timing: timing(60) }
@@ -105,10 +104,10 @@ test("keeps samples provider/model-specific while retaining variant changes", ()
   const variant = { model: { ...model("openai"), variant: CatalogModel.VariantID.make("high") }, timing: timing(80) }
   expect(SessionCacheDiagnostics.generationSpeed([first, variant])?.recent.map((sample) => sample.tokens)).toEqual([40, 80])
   expect(SessionCacheDiagnostics.generationSpeed([first, { model: model("openai"), timing: { generatedTokens: 5 } }]))
-    .toMatchObject({ recent: [{ model: first.model, tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40 }], latest: { tokensPerSecond: 40 } })
+    .toMatchObject({ recent: [{ model: first.model, tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40, estimated: true }], latest: { tokensPerSecond: 40 } })
 })
 
-test("keeps historical short samples and provider-timed records", () => {
+test("excludes historical short samples and provider-timed records", () => {
   const measured = { model: model("anthropic"), timing: {
     generatedTokens: 12, observedGenerationDurationNs: 2_000_000_000,
   } }
@@ -118,20 +117,17 @@ test("keeps historical short samples and provider-timed records", () => {
   const reported = { model: model("anthropic"), timing: {
     generatedTokens: 12, generationDurationNs: 71_223_792,
   } }
-  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.latest?.tokens).toBe(2_367)
-  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.recent).toEqual([
-    { model: measured.model, tokens: 12, durationNs: 2_000_000_000, tokensPerSecond: 6 },
-    { model: burst.model, tokens: 2_355, durationNs: 71_223_792, tokensPerSecond: 2_355 * 1_000_000_000 / 71_223_792 },
-  ])
-  expect(SessionCacheDiagnostics.generationSpeed([measured, burst], reported)?.latest?.durationNs).toBe(2_142_447_584)
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.latest).toBeUndefined()
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst])?.recent).toEqual([])
+  expect(SessionCacheDiagnostics.generationSpeed([measured, burst], reported)?.latest).toBeUndefined()
 })
 
 test("includes estimates and profile changes in the weighted rate", () => {
-  const measured = { model: model("openai"), timing: { generatedTokens: 40, observedGenerationDurationNs: 1_000_000_000 } }
-  const estimated = { model: measured.model, timing: { estimatedTokens: 80, estimatedGenerationDurationNs: 2_000_000_000 } }
+  const measured = { model: model("openai"), timing: { receivedOutput: { estimatedTokens: 40, durationNs: 1_000_000_000 } } }
+  const estimated = { model: measured.model, timing: { receivedOutput: { estimatedTokens: 80, durationNs: 2_000_000_000 } } }
   expect(SessionCacheDiagnostics.generationSample(estimated.timing)).toEqual({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
-  expect(SessionCacheDiagnostics.generationSample({ ...estimated.timing, ...measured.timing })).toEqual({ tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40 })
-  expect(SessionCacheDiagnostics.generationSample({ ...estimated.timing, estimatedGenerationDurationNs: 999_999_999 })?.durationNs).toBe(999_999_999)
+  expect(SessionCacheDiagnostics.generationSample({ ...estimated.timing, generatedTokens: 10, generationDurationNs: 1 })).toEqual({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
+  expect(SessionCacheDiagnostics.generationSample({ receivedOutput: { estimatedTokens: 80, durationNs: 999_999_999 } })).toBeUndefined()
   const history = SessionCacheDiagnostics.generationSpeed([measured, estimated])
   expect(history?.latest?.estimated).toBe(true)
   expect(history?.recent).toHaveLength(2)

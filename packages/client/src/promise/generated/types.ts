@@ -277,6 +277,8 @@ export type SessionCompactionMetrics = {
 
 export type EventLogSynced = { type: "log.synced"; aggregateID: string; seq?: number }
 
+export type ProviderRequestID = string
+
 export type PromptBase64 = string
 
 export type ProviderRequestTiming = {
@@ -289,6 +291,7 @@ export type ProviderRequestTiming = {
   generatedTokens?: number
   estimatedTokens?: number
   estimatedGenerationDurationNs?: number
+  receivedOutput?: { estimatedTokens: number; durationNs: number }
   loadDurationNs?: number
 }
 
@@ -3527,6 +3530,7 @@ export type SessionGenerationSpeedHistory = {
   unreportedReason?: string
   latest?: SessionGenerationSpeed
   recent: Array<SessionGenerationSpeed>
+  live?: { requestID: ProviderRequestID; attempt: number; sample?: SessionGenerationSpeed }
 }
 
 export type SessionOrchestrationPage = {
