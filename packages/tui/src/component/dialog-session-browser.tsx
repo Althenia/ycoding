@@ -1,6 +1,6 @@
 import type { IsolatedBrowserStatus, SessionInfo } from "@ycoding-ai/client"
 import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
-import { ScrollBoxRenderable, TextAttributes } from "@opentui/core"
+import { BoxRenderable, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Option, Schema } from "effect"
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js"
@@ -46,6 +46,9 @@ export function DialogChromeConnection(props: { sessionID: string }) {
   const { theme } = useTheme().contextual("elevated")
   const dimensions = useTerminalDimensions()
   let scroll: ScrollBoxRenderable | undefined
+  let body: BoxRenderable | undefined
+  const [bodyHeight, setBodyHeight] = createSignal(0)
+  const maxBodyHeight = () => Math.max(3, dimensions().height - Math.floor(dimensions().height / 4) - 5)
   const baseUrl = client.baseUrl()
   const address = baseUrl && URL.canParse(baseUrl) ? new URL(baseUrl) : undefined
   const localAddress =
@@ -191,10 +194,20 @@ export function DialogChromeConnection(props: { sessionID: string }) {
         ref={(value: ScrollBoxRenderable) => {
           scroll = value
         }}
-        maxHeight={Math.max(3, dimensions().height - Math.floor(dimensions().height / 4) - 5)}
+        height={Math.min(maxBodyHeight(), bodyHeight() || maxBodyHeight())}
         scrollbarOptions={{ visible: false }}
       >
-        <box paddingLeft={4} paddingRight={4} paddingTop={1} flexDirection="column">
+        <box
+          ref={(value: BoxRenderable) => {
+            body = value
+          }}
+          onSizeChange={() => setBodyHeight(body?.height ?? 0)}
+          paddingLeft={4}
+          paddingRight={4}
+          paddingTop={1}
+          flexDirection="column"
+          flexShrink={0}
+        >
           <box paddingBottom={1} flexDirection="column">
             <text>
               {failure()
@@ -228,7 +241,9 @@ export function DialogChromeConnection(props: { sessionID: string }) {
           <box flexDirection="column">
             <text wrapMode="word">In chrome://extensions, choose Load unpacked and select:</text>
             <text>{BrowserExtension.location()}</text>
-            <text wrapMode="word">Then enter this one-time code in the YCoding extension popup.</text>
+            <Show when={secret()}>
+              <text wrapMode="word">Then enter this one-time code in the YCoding extension popup.</text>
+            </Show>
           </box>
           <Show
             when={localAddress}

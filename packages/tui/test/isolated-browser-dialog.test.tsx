@@ -116,10 +116,11 @@ test("Session command creates a one-time Chrome pairing code only on explicit re
     expect(result.app.captureCharFrame().replace(/\s+/g, " ")).toContain(
       "Pairing lets YCoding use eligible Chrome tabs, including the active tab.",
     )
-    expect(result.app.captureCharFrame()).toContain("one-time")
+    expect(result.app.captureCharFrame()).not.toContain("one-time")
     expect(requests).toHaveLength(0)
     result.app.mockInput.pressKey("p")
     await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
+    expect(result.app.captureCharFrame()).toContain("Then enter this one-time code")
     expect(requests.map((request) => request.method)).toEqual(["POST"])
   } finally {
     result.app.renderer.destroy()
@@ -271,6 +272,78 @@ test("Chrome connection body scrolls so every instruction is reachable in a shor
     }
     expect(frame.replace(/\s+/g, " ")).toContain("site permission.")
     expect(frame).toContain("Page Up/Page Down")
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
+function hintFollowsNote(frame: string) {
+  const rows = frame.split("\n")
+  const hint = rows.findIndex((line) => line.includes("Page Up/Page Down scroll"))
+  return hint > 0 && rows[hint - 1].includes("permission.")
+}
+
+async function openChromeConnection(input: { paired: boolean; viewport: { width: number; height: number } }) {
+  let commands!: Accessor<readonly KeymapCommand[]>
+  const result = await renderBrowser({
+    command: true,
+    baseUrl: "http://127.0.0.1:43210",
+    viewport: input.viewport,
+    fetch: (url, request) => {
+      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
+        return json({ data: { state: "unavailable", paired: input.paired } })
+      if (url.pathname === `/api/session/${first.sessionID}/browser/start`)
+        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
+      return undefined
+    },
+    fixture: () => {
+      commands = Keymap.useCommands()
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
+  void commands()
+    .find((command) => command.id === "session.browser.chrome")!
+    .run()
+  return result
+}
+
+test("paired Chrome dialog in a tall terminal fits its content and omits the pairing-code instruction", async () => {
+  const result = await openChromeConnection({ paired: true, viewport: { width: 120, height: 46 } })
+  try {
+    await result.app.waitForFrame((frame) => frame.includes("Paired; waiting for Chrome to reconnect") && hintFollowsNote(frame))
+    const frame = result.app.captureCharFrame()
+    const rows = frame.split("\n")
+    const note = rows.findLastIndex((line) => line.includes("permission."))
+    const hint = rows.findIndex((line) => line.includes("Page Up/Page Down scroll"))
+    expect(note).toBeGreaterThan(0)
+    expect(hint).toBe(note + 1)
+    expect(hint).toBeLessThan(rows.length - 8)
+    expect(frame).not.toContain("one-time code")
+    expect(frame).toContain("In chrome://extensions, choose Load unpacked and select:")
+    expect(frame).toContain("Local service address (enter once in the extension):")
+    expect(frame).toContain("f forget pairing")
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
+test("unpaired Chrome dialog in a tall terminal shows the code instruction and fits its content", async () => {
+  const result = await openChromeConnection({ paired: false, viewport: { width: 120, height: 46 } })
+  try {
+    await result.app.waitForFrame((frame) => frame.includes("Not connected"))
+    result.app.mockInput.pressKey("p")
+    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)) && hintFollowsNote(frame))
+    const frame = result.app.captureCharFrame()
+    const rows = frame.split("\n")
+    const note = rows.findLastIndex((line) => line.includes("permission."))
+    const hint = rows.findIndex((line) => line.includes("Page Up/Page Down scroll"))
+    expect(frame).toContain("Then enter this one-time code in the YCoding extension popup.")
+    expect(rows.findIndex((line) => line.includes("p".repeat(43)))).toBeLessThan(
+      rows.findIndex((line) => line.includes("Then enter this one-time code")),
+    )
+    expect(hint).toBe(note + 1)
+    expect(hint).toBeLessThan(rows.length - 8)
   } finally {
     result.app.renderer.destroy()
   }
