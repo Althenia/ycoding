@@ -391,6 +391,7 @@ const sessionPageSize = 25
 const carouselLimit = 10
 const sessionsFrameWindowMs = 750
 const retainedSessionPages = 3
+const maxStatusReadRetries = 5
 const historyPageSize = 100
 const noticeTitleReads = 8
 const noticeUnavailableMessage = "Some notifications could not be saved. Stored unread notifications remain available."
@@ -520,6 +521,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let loadingPageToken: number | undefined
   let statusReadOwner: RemoteTransport | undefined
   let statusReadPending = false
+  let statusReadAttempts = 0
   let catalogGeneration = 0
   let recoveries = 0
   const recoveryWaiters = new Set<{ readonly scope: QueryScope; readonly settle: (recovered: boolean) => void }>()
@@ -1439,6 +1441,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       lastCarouselReload = -Infinity
       statusReadOwner = undefined
       statusReadPending = false
+      statusReadAttempts = 0
       statusFrameRevision += 1
       statusBaseline = false
       setState({ sessionStatus: undefined, carouselSessions: [], carouselStatus: "loading" })
@@ -2159,8 +2162,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
     const status = outcome?.status === "ok" ? parseSessionStatus(outcome.value) : undefined
     if (status !== undefined) {
+      statusReadAttempts = 0
       statusBaseline = true
       publishSessionStatus(status)
+    } else {
+      statusReadOwner = undefined
+      if (statusReadAttempts < maxStatusReadRetries) {
+        const delay = 500 * 2 ** statusReadAttempts
+        statusReadAttempts += 1
+        schedule(() => {
+          if (isCurrentConnection(owner) && container.state.sessionStatus === undefined) void readSessionStatus(owner)
+        }, delay)
+      }
     }
     carouselRevision += 1
     carouselRefreshPending = true
@@ -2627,7 +2640,29 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     })
     const applied = container.state.view?.watermark
     if (seqs.length === data.length && applied !== undefined && Math.max(...seqs) <= applied) return
+    reconcileLoggedExecution(sessionID, token, data)
     void resyncSelected()
+  }
+
+  const reconcileLoggedExecution = (sessionID: string, token: number, events: readonly unknown[]) => {
+    const view = container.state.view
+    if (token !== selectionToken || view?.id !== sessionID) return
+    const executionType = (event: unknown) => {
+      const type = typeof event === "object" && event !== null ? Reflect.get(event, "type") : undefined
+      return typeof type === "string" && type.startsWith("session.execution.") ? type : undefined
+    }
+    const newest = events.findLast((event) => executionType(event) !== undefined)
+    if (newest === undefined || executionType(newest) === "session.execution.started") return
+    const seqs = events.flatMap((event) => readEventSequence(event).seq ?? [])
+    if (seqs.length === 0 || view.watermark !== undefined && Math.max(...seqs) < view.watermark) return
+    setState({ view: applyEvent(view, newest, true) })
+  }
+
+  const reconcileLogAfter = async (owner: RemoteTransport, sessionID: string, token: number, after: number) => {
+    const outcome = await owner.request("session.log", { sessionID, input: { after } })
+    if (outcome.status !== "ok" || !isCurrentConnection(owner) || container.state.activeSessionID !== sessionID) return
+    const data = typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
+    if (Array.isArray(data)) reconcileLoggedExecution(sessionID, token, data)
   }
 
   const resyncSelected = (): Promise<void> => {
@@ -4169,9 +4204,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     // while the same selection still owns the view.
     subscribedSessionID = resubscribed.status === "ok" ? sessionID : undefined
     compactionAttemptedToken = undefined
+    const missedAfter = container.state.view?.id === sessionID ? container.state.view.watermark : undefined
     const reloaded = await reloadSnapshot(sessionID, token)
     if (!isCurrentConnection(owner)) return
-    await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token)])
+    await Promise.all([loadSessionReads(sessionID, token), loadPendingInputs(owner, sessionID, token),
+      ...(missedAfter === undefined ? [] : [reconcileLogAfter(owner, sessionID, token, missedAfter)])])
     if (isCurrentConnection(owner)) {
       void loadCapturedChanges(owner, sessionID, token)
       void loadReview(owner, sessionID, token)

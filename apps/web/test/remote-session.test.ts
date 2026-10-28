@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { isRemoteLatencySample, type RemoteNoticeFrame } from "@ycoding-ai/remote"
 import { canReplyToRequest, hasCompactionCheckpoint, sessionExecutionLabel, visibleTranscriptMessages } from "../src/remote/projection"
 import { createRemoteHttp } from "../src/remote/http"
+import { latestPromptProcessing, promptReceipt } from "../src/remote/view-model"
 import { createRemoteStore, readSessionInfo, type RemoteStore } from "../src/remote/store"
 import { createRemoteTransport, type RemoteRequestTiming, type RemoteTransport, type RemoteTransportStatus } from "../src/remote/transport"
 import { startRelayDouble, waitFor, type RelayDouble, type RelayHandlerOutcome, type RelayHandlerResult } from "./relay-double"
@@ -3759,5 +3760,134 @@ describe("remote store integration", () => {
     } finally {
       await test.stop()
     }
+  })
+})
+
+describe("prompt receipt after missed execution events", () => {
+  const child = { id: "ses_child", parentID: "ses_a", title: "Child task", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+  const user = { id: "msg_user", type: "user", text: "do it", time: { created: 1, consumed: 2 } }
+  const executionEvent = (type: string, sessionID: string, seq: number) => ({ type, durable: { aggregateID: sessionID, seq, version: 1 }, data: { sessionID, ...(type === "session.execution.failed" ? { error: { code: "interrupted_by_restart", message: "Execution interrupted by restart" } } : {}) } })
+  const receiptOf = (store: RemoteStore) => {
+    const view = store.state().view!
+    const message = view.messages.findLast((item) => item.kind === "user")!
+    if (message.kind !== "user") throw new Error("no user message")
+    return promptReceipt(message.state, message.delivery, undefined, latestPromptProcessing(view.status, view.messages, message.id)).text
+  }
+  const sessionHandler = (options: { sessionID: string; parentFamilyRunning: boolean; log: () => readonly unknown[]; snapshotWatermark: () => number; failStatus?: () => boolean }) => (request: { operation: string; input?: Readonly<Record<string, unknown>>; sessionID?: string }): RelayHandlerResult => {
+    const info = options.sessionID === child.id ? child : { id: "ses_a", title: "Session A", projectID: "prj_default", location: { directory: "/work" }, time: { created: 1, updated: 2 } }
+    if (request.operation === "session.status") {
+      if (options.failStatus?.() === true) return { ok: false, code: "internal_error", message: "restarting" }
+      return { ok: true, value: { running: options.parentFamilyRunning ? ["ses_a"] : [], attention: [] } }
+    }
+    if (request.operation === "session.get" && request.sessionID === options.sessionID) return { ok: true, value: { data: info } }
+    if (request.operation === "session.snapshot" && request.sessionID === options.sessionID) return { ok: true, value: {
+      sourceEpoch: "epoch_1", session: info, messages: [user], watermark: { type: "log.synced", aggregateID: options.sessionID, seq: options.snapshotWatermark() },
+    } }
+    if (request.operation === "session.log" && request.sessionID === options.sessionID) return { ok: true, value: { data: options.log() } }
+    return "default"
+  }
+
+  test("retries a failed status read after reconnect so a stale Processing receipt settles to Read", async () => {
+    let failStatus = false
+    const test = await harness({ handler: sessionHandler({ sessionID: "ses_a", parentFamilyRunning: false, log: () => [], snapshotWatermark: () => 1,
+      failStatus: () => { const failing = failStatus; failStatus = false; return failing } }) })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", executionEvent("session.execution.started", "ses_a", 2))
+      await test.flush()
+      expect(receiptOf(test.store)).toBe("Processing")
+      failStatus = true
+      test.relay.dropConnections(1006, "")
+      await test.runUntil(() => test.relay.requests.filter((request) => request.operation === "session.status").length >= 3 && test.store.state().sessionStatus !== undefined)
+      expect(test.store.state().view?.status).toBe("idle")
+      expect(receiptOf(test.store)).toBe("Read")
+    } finally { await test.stop() }
+  })
+
+  for (const [type, status] of [["session.execution.failed", "failed"], ["session.execution.interrupted", "interrupted"], ["session.execution.succeeded", "idle"]] as const) {
+    test(`applies a ${status} outcome logged while disconnected to a child whose family is still running`, async () => {
+      let logged: readonly unknown[] = []
+      let watermark = 1
+      const test = await harness({ handler: sessionHandler({ sessionID: child.id, parentFamilyRunning: true, log: () => logged, snapshotWatermark: () => watermark }) })
+      try {
+        await test.store.load()
+        await waitFor(() => test.store.state().sessionStatus !== undefined)
+        await test.store.selectSession(child.id)
+        test.relay.pushEvent(child.id, executionEvent("session.execution.started", child.id, 2))
+        await test.flush()
+        expect(test.store.state().view?.status).toBe("running")
+        expect(receiptOf(test.store)).toBe("Processing")
+        logged = [executionEvent(type, child.id, 3)]
+        watermark = 3
+        test.relay.dropConnections(1006, "")
+        await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.watermark === 3 && test.store.state().sessionStatus !== undefined)
+        await test.runUntil(() => test.store.state().view?.status !== "running")
+        expect(test.store.state().view?.status).toBe(status)
+        expect(receiptOf(test.store)).toBe("Read")
+        expect(test.relay.requests.some((request) => request.operation === "session.log" && request.input?.after === 2)).toBe(true)
+      } finally { await test.stop() }
+    })
+  }
+
+  test("keeps a root interrupted by a restart interrupted instead of folding it into idle", async () => {
+    let logged: readonly unknown[] = []
+    let watermark = 1
+    const test = await harness({ handler: sessionHandler({ sessionID: "ses_a", parentFamilyRunning: false, log: () => logged, snapshotWatermark: () => watermark }) })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession("ses_a")
+      test.relay.pushEvent("ses_a", executionEvent("session.execution.started", "ses_a", 2))
+      await test.flush()
+      logged = [executionEvent("session.execution.interrupted", "ses_a", 3)]
+      watermark = 3
+      test.relay.dropConnections(1006, "")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.watermark === 3 && test.store.state().sessionStatus?.running.size === 0)
+      await test.runUntil(() => test.store.state().view?.status !== "running")
+      expect(test.store.state().view?.status).toBe("interrupted")
+      expect(receiptOf(test.store)).toBe("Read")
+    } finally { await test.stop() }
+  })
+
+  test("leaves a child running when the log ends with a newer execution start", async () => {
+    let logged: readonly unknown[] = []
+    let watermark = 1
+    const test = await harness({ handler: sessionHandler({ sessionID: child.id, parentFamilyRunning: true, log: () => logged, snapshotWatermark: () => watermark }) })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession(child.id)
+      test.relay.pushEvent(child.id, executionEvent("session.execution.started", child.id, 2))
+      await test.flush()
+      logged = [executionEvent("session.execution.failed", child.id, 3), executionEvent("session.execution.started", child.id, 4)]
+      watermark = 4
+      test.relay.dropConnections(1006, "")
+      await test.runUntil(() => test.store.state().transport.kind === "open" && test.store.state().view?.watermark === 4 && test.store.state().sessionStatus !== undefined)
+      await test.flush()
+      await test.flush()
+      expect(test.relay.requests.some((request) => request.operation === "session.log")).toBe(true)
+      expect(test.store.state().view?.status).toBe("running")
+      expect(receiptOf(test.store)).toBe("Processing")
+    } finally { await test.stop() }
+  })
+
+  test("applies an outcome the connector logged past the applied watermark when the Session list is re-advertised", async () => {
+    let logged: readonly unknown[] = []
+    const test = await harness({ handler: sessionHandler({ sessionID: child.id, parentFamilyRunning: true, log: () => logged, snapshotWatermark: () => 1 }) })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessionStatus !== undefined)
+      await test.store.selectSession(child.id)
+      test.relay.pushEvent(child.id, executionEvent("session.execution.started", child.id, 2))
+      await test.flush()
+      expect(test.store.state().view?.status).toBe("running")
+      logged = [executionEvent("session.execution.interrupted", child.id, 3)]
+      test.relay.pushSessions([child.id])
+      await test.runUntil(() => test.store.state().view?.status !== "running")
+      expect(test.store.state().view?.status).toBe("interrupted")
+      expect(receiptOf(test.store)).toBe("Read")
+    } finally { await test.stop() }
   })
 })
