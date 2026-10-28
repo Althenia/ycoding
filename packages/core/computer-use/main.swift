@@ -95,6 +95,9 @@ private struct AppInfo: Encodable {
     let is_active: Bool
     let is_hidden: Bool
     let windows: [WindowInfo]
+    let is_running: Bool
+    let last_used: String?
+    let uses: Int?
 }
 
 private struct Request: Decodable {
@@ -128,6 +131,13 @@ private struct Request: Decodable {
     let deltaX: Int?
     let deltaY: Int?
     let modifiers: [String]?
+    let role: String?
+    let limit: Int?
+    let maxNodes: Int?
+    let prefix: String?
+    let suffix: String?
+    let selection: String?
+    let name: String?
 
     enum Target: Decodable {
         case iterm(ItermTarget)
@@ -250,7 +260,7 @@ private enum HelperError: Error {
         case .stageNotVisible:
             return failure("background_unavailable", "The window did not appear on the agent display after it was moved; its original frame was restored")
         case .focusRestoreFailed:
-            return failure("focus_restore_failed", "Original foreground focus could not be restored after background input; inspect before any further mutation", outcome: "unknown")
+            return failure("focus_restore_failed", "Target-only synthetic focus could not be released after background input; inspect before any further mutation", outcome: "unknown")
         case .quitPending:
             return failure("quit_pending", "Application did not exit after a graceful quit request; resolve its prompt before relaunch", outcome: "not_started")
         }
@@ -339,15 +349,114 @@ private struct SpaceMap {
     }
 }
 
+// Chromium-derived engines build their web Accessibility tree lazily and drop it when occluded;
+// detect the engine from shipped frameworks instead of a bundle-identifier list.
+private func isChromiumClassApp(_ target: DesktopTarget) -> Bool {
+    guard let url = NSRunningApplication(processIdentifier: target.pid)?.bundleURL else { return false }
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: url.appendingPathComponent("Contents/Frameworks").path)) ?? []
+    return names.contains { let name = $0.lowercased(); return name.contains("chrom") || name.contains("electron") || name.contains("cef") }
+}
+
+// While a driven window is visible, disabling its WindowServer occlusion notifications pins the
+// app's own visibility notion at "visible", so covering it or switching Spaces later does not make
+// Chromium/Electron/WebKit drop its Accessibility subtree. Prior state is restored when the window
+// disappears and when this service stops. Missing private symbols leave behaviour unchanged.
+private enum OcclusionKeepAlive {
+    typealias Connection = @convention(c) () -> UInt32
+    typealias Enable = @convention(c) (UInt32, CGWindowID, UInt8, UnsafeMutablePointer<UInt8>?) -> Int32
+    static let connection: Connection? = BackgroundPost.library.flatMap { dlsym($0, "SLSMainConnectionID") }.map { unsafeBitCast($0, to: Connection.self) }
+    static let enable: Enable? = BackgroundPost.library.flatMap { dlsym($0, "SLSPackagesEnableWindowOcclusionNotifications") }.map { unsafeBitCast($0, to: Enable.self) }
+    static var previous: [CGWindowID: Bool] = [:]
+
+    static func set(_ enabled: Bool, window: CGWindowID) -> Bool? {
+        guard let connection, let enable else { return nil }
+        var prior: UInt8 = 0
+        guard enable(connection(), window, enabled ? 1 : 0, &prior) == 0 else { return nil }
+        return prior != 0
+    }
+
+    static func keepVisible(window: CGWindowID, bounds: CGRect) {
+        guard previous[window] == nil, bounds.width > 0, bounds.height > 0 else { return }
+        let infos = CGWindowListCopyWindowInfo([.optionOnScreenAboveWindow, .excludeDesktopElements], window) as? [[String: Any]] ?? []
+        let own = ProcessInfo.processInfo.processIdentifier
+        let covering = infos.compactMap { info -> CGRect? in
+            guard (info[kCGWindowOwnerPID as String] as? Int32) != own,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let dictionary = info[kCGWindowBounds as String] as? [String: Any] else { return nil }
+            return CGRect(dictionaryRepresentation: dictionary as CFDictionary)
+        }
+        var unoccluded = false
+        for row in 0..<16 where !unoccluded {
+            for column in 0..<16 {
+                let point = CGPoint(x: bounds.minX + bounds.width * (CGFloat(column) + 0.5) / 16,
+                                    y: bounds.minY + bounds.height * (CGFloat(row) + 0.5) / 16)
+                if !covering.contains(where: { $0.contains(point) }) { unoccluded = true; break }
+            }
+        }
+        guard unoccluded, let prior = set(false, window: window) else { return }
+        previous[window] = prior
+    }
+
+    static func release(window: CGWindowID) {
+        guard let prior = previous[window] else { return }
+        if set(prior, window: window) != nil { previous.removeValue(forKey: window) }
+    }
+
+    static func releaseAll() { for window in [CGWindowID](previous.keys) { release(window: window) } }
+}
+
+private func appUsage(_ url: URL?) -> (lastUsed: Date?, uses: Int?) {
+    guard let url, let item = MDItemCreate(nil, url.path as CFString) else { return (nil, nil) }
+    let names = ["kMDItemLastUsedDate_Ranking", "kMDItemUseCount"] as CFArray
+    guard let attributes = MDItemCopyAttributes(item, names) as? [String: Any] else { return (nil, nil) }
+    return (attributes["kMDItemLastUsedDate_Ranking"] as? Date, (attributes["kMDItemUseCount"] as? NSNumber)?.intValue)
+}
+
+private let usageDayFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter
+}()
+
 private func runningApps() -> [AppInfo] {
     let windows = windowInfos()
-    return NSWorkspace.shared.runningApplications
-        .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && !$0.isTerminated }
-        .prefix(64).map { app in
-            AppInfo(bundle_id: app.bundleIdentifier ?? "", pid: app.processIdentifier,
-                    name: String((app.localizedName ?? "").prefix(200)), is_active: app.isActive,
-                    is_hidden: app.isHidden, windows: windows[app.processIdentifier] ?? [])
+    var seen = Set<String>()
+    var apps: [AppInfo] = []
+    for app in NSWorkspace.shared.runningApplications
+        .filter({ $0.activationPolicy == .regular && $0.bundleIdentifier != nil && !$0.isTerminated }).prefix(64) {
+        let bundleID = app.bundleIdentifier ?? ""
+        seen.insert(bundleID.lowercased())
+        let usage = appUsage(app.bundleURL)
+        apps.append(AppInfo(bundle_id: bundleID, pid: app.processIdentifier,
+                name: String((app.localizedName ?? "").prefix(200)), is_active: app.isActive,
+                is_hidden: app.isHidden, windows: windows[app.processIdentifier] ?? [],
+                is_running: true, last_used: usage.lastUsed.map { usageDayFormatter.string(from: $0) }, uses: usage.uses))
+    }
+    // Up to 10 apps used within the last 14 days that are not currently running, so a caller can
+    // resolve a launch target without a separate discovery call. Their pid is 0 and windows empty.
+    let cutoff = Date().addingTimeInterval(-14 * 24 * 60 * 60)
+    let query = MDQueryCreate(nil, "kMDItemContentType == \"com.apple.application-bundle\" && kMDItemFSName == \"*.app\"" as CFString, nil, nil)
+    if let query {
+        if MDQueryExecute(query, CFOptionFlags(kMDQuerySynchronous.rawValue)) {
+            var recent: [(Date, AppInfo)] = []
+            for index in 0..<min(MDQueryGetResultCount(query), 512) {
+                guard let raw = MDQueryGetResultAtIndex(query, index) else { continue }
+                let item = Unmanaged<MDItem>.fromOpaque(raw).takeUnretainedValue()
+                guard let attributes = MDItemCopyAttributes(item, ["kMDItemCFBundleIdentifier", "kMDItemDisplayName", "kMDItemLastUsedDate_Ranking", "kMDItemUseCount"] as CFArray) as? [String: Any],
+                      let bundleID = attributes["kMDItemCFBundleIdentifier"] as? String, !seen.contains(bundleID.lowercased()),
+                      let lastUsed = attributes["kMDItemLastUsedDate_Ranking"] as? Date, lastUsed >= cutoff else { continue }
+                recent.append((lastUsed, AppInfo(bundle_id: bundleID, pid: 0,
+                    name: String(((attributes["kMDItemDisplayName"] as? String) ?? "").prefix(200)),
+                    is_active: false, is_hidden: false, windows: [], is_running: false,
+                    last_used: usageDayFormatter.string(from: lastUsed),
+                    uses: (attributes["kMDItemUseCount"] as? NSNumber)?.intValue)))
+            }
+            apps.append(contentsOf: recent.sorted { $0.0 > $1.0 }.prefix(10).map(\.1))
         }
+    }
+    return apps
 }
 
 private func fourCC(_ value: String) -> UInt32 {
@@ -769,6 +878,7 @@ private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
           (info[kCGWindowLayer as String] as? Int) == 0,
           let dictionary = info[kCGWindowBounds as String] as? [String: Any],
           let bounds = CGRect(dictionaryRepresentation: dictionary as CFDictionary), bounds.width > 0, bounds.height > 0 else {
+        OcclusionKeepAlive.release(window: CGWindowID(target.windowID))
         throw HelperError.targetNotFound
     }
     // Requesting trust lets macOS list this app under Accessibility and show its own allow prompt.
@@ -798,6 +908,7 @@ private func enableElectronAccessibility(_ application: AXUIElement) {
 
 private func desktopSnapshot(_ target: DesktopTarget) throws -> (DesktopWindow, String, [Element]) {
     let window = try desktopWindow(target)
+    if window.onScreen { OcclusionKeepAlive.keepVisible(window: CGWindowID(target.windowID), bounds: window.bounds) }
     var entries: [Element] = []
     var revisionParts = [target.bundleID, String(target.pid), String(target.windowID), NSStringFromRect(window.bounds), window.title]
     guard let root = window.element else { return (window, sha256(revisionParts), []) }
@@ -1013,120 +1124,87 @@ private enum BackgroundPost {
     }
 }
 
-// Cua Driver (MIT), libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs:
-private struct BackgroundFocus {
+// Target-only synthetic activation follows trycua/cua (MIT), libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs.
+// Records go only to the target process: the user's frontmost app is never sent a defocus record,
+// never made non-frontmost, and its key window is never read or restored.
+private struct SkyFocus {
     typealias PostRecord = @convention(c) (UnsafeRawPointer?, UnsafePointer<UInt8>?) -> Int32
-    typealias GetFront = @convention(c) (UnsafeMutableRawPointer?) -> Int32
     typealias GetPSN = @convention(c) (Int32, UnsafeMutableRawPointer?) -> Int32
-    typealias SetFront = @convention(c) (UnsafeRawPointer?, UInt32) -> Int32
 
     static let postRecord: PostRecord? = BackgroundPost.library.flatMap { dlsym($0, "SLPSPostEventRecordTo") }.map { unsafeBitCast($0, to: PostRecord.self) }
-    static let getFront: GetFront? = BackgroundPost.library.flatMap { dlsym($0, "_SLPSGetFrontProcess") }.map { unsafeBitCast($0, to: GetFront.self) }
     static let applicationServices = dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY | RTLD_GLOBAL)
     static let getPSN: GetPSN? = applicationServices.flatMap { dlsym($0, "GetProcessForPID") }.map { unsafeBitCast($0, to: GetPSN.self) }
-    static let setFront: SetFront? = applicationServices.flatMap { dlsym($0, "SetFrontProcessWithOptions") }.map { unsafeBitCast($0, to: SetFront.self) }
 
-    let previousPSN: [UInt8]
-    let previousWindow: UInt32
     let targetPSN: [UInt8]
     let targetWindow: UInt32
     let shifted: Bool
 
-    static func begin(_ target: DesktopTarget) throws -> BackgroundFocus {
-        guard let previous = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let previousWindow = keyWindow(previous), let getFront, let getPSN, postRecord != nil, setFront != nil else {
+    static func begin(_ target: DesktopTarget, keyWindow: Bool) throws -> SkyFocus {
+        guard let getPSN, postRecord != nil else { throw HelperError.backgroundUnavailable }
+        var targetPSN = [UInt8](repeating: 0, count: 8)
+        guard targetPSN.withUnsafeMutableBytes({ getPSN(target.pid, $0.baseAddress) }) == 0 else {
             throw HelperError.backgroundUnavailable
         }
-        var frontPSN = [UInt8](repeating: 0, count: 8)
-        var previousPSN = frontPSN
-        var targetPSN = frontPSN
-        guard frontPSN.withUnsafeMutableBytes({ getFront($0.baseAddress) }) == 0,
-              previousPSN.withUnsafeMutableBytes({ getPSN(previous, $0.baseAddress) }) == 0,
-              targetPSN.withUnsafeMutableBytes({ getPSN(target.pid, $0.baseAddress) }) == 0,
-              frontPSN == previousPSN else { throw HelperError.backgroundUnavailable }
-        let focus = BackgroundFocus(previousPSN: previousPSN, previousWindow: previousWindow,
-                                    targetPSN: targetPSN, targetWindow: target.windowID,
-                                    shifted: previous != target.pid || previousWindow != target.windowID)
+        let focus = SkyFocus(targetPSN: targetPSN, targetWindow: target.windowID,
+                             shifted: NSWorkspace.shared.frontmostApplication?.processIdentifier != target.pid)
         if !focus.shifted { return focus }
-        guard focus.post(previousPSN, window: previousWindow, focused: false) else {
-            if !focus.restore() { throw HelperError.focusRestoreFailed }
-            throw HelperError.backgroundUnavailable
+        guard focus.postActivation(focused: true) else { throw HelperError.backgroundUnavailable }
+        if keyWindow {
+            // yabai's make-key-window record pair (MIT): the target treats this window as key
+            // internally, which is what Chromium page focus keys off.
+            guard focus.postKeyWindowRecords() else {
+                _ = focus.postActivation(focused: false)
+                throw HelperError.backgroundUnavailable
+            }
+            Thread.sleep(forTimeInterval: 0.01)
         }
-        guard focus.post(targetPSN, window: target.windowID, focused: true) else {
-            if !focus.restore() { throw HelperError.focusRestoreFailed }
-            throw HelperError.backgroundUnavailable
-        }
-        Thread.sleep(forTimeInterval: 0.04)
         return focus
     }
 
-    func restore() -> Bool {
-        if shifted {
-            let defocused = post(targetPSN, window: targetWindow, focused: false)
-            let focused = post(previousPSN, window: previousWindow, focused: true)
-            if !defocused || !focused { return false }
-        }
-        return isRestored()
+    func end() -> Bool {
+        !shifted || postActivation(focused: false)
     }
 
-    func restoreIfStolen() {
-        guard shifted, let getFront = Self.getFront, let setFront = Self.setFront else { return }
-        var frontPSN = [UInt8](repeating: 0, count: 8)
-        guard frontPSN.withUnsafeMutableBytes({ getFront($0.baseAddress) }) == 0,
-              frontPSN == targetPSN, targetPSN != previousPSN else { return }
-        let restored = previousPSN.withUnsafeBytes { bytes in
-            setFront(bytes.baseAddress, UInt32(kSetFrontProcessFrontWindowOnly))
-        }
-        if restored == 0 { _ = post(previousPSN, window: previousWindow, focused: true) }
-    }
-
-    func isRestored() -> Bool {
-        guard let getFront = Self.getFront else { return false }
-        var frontPSN = [UInt8](repeating: 0, count: 8)
-        return frontPSN.withUnsafeMutableBytes { getFront($0.baseAddress) } == 0 && frontPSN == previousPSN
-    }
-
-    private func post(_ psn: [UInt8], window: UInt32, focused: Bool) -> Bool {
+    private func post(_ record: [UInt8]) -> Bool {
         guard let postRecord = Self.postRecord else { return false }
-        var record = [UInt8](repeating: 0, count: 0xF8)
-        record[0x04] = 0xF8
-        record[0x08] = 0x0D
-        for index in 0..<4 { record[0x3C + index] = UInt8(truncatingIfNeeded: window >> (index * 8)) }
-        record[0x8A] = focused ? 0x01 : 0x02
-        return psn.withUnsafeBytes { bytes in
+        return targetPSN.withUnsafeBytes { bytes in
             record.withUnsafeBufferPointer { postRecord(bytes.baseAddress, $0.baseAddress) }
         } == 0
     }
 
-    private static func keyWindow(_ pid: Int32) -> UInt32? {
-        let app = AXUIElementCreateApplication(pid)
-        if let focused = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID(),
-           let id = windowID(unsafeBitCast(focused, to: AXUIElement.self)) { return id }
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        return windows.first(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 })?[kCGWindowNumber as String] as? UInt32
+    private func postActivation(focused: Bool) -> Bool {
+        var record = [UInt8](repeating: 0, count: 0xF8)
+        record[0x04] = 0xF8
+        record[0x08] = 0x0D
+        for index in 0..<4 { record[0x3C + index] = UInt8(truncatingIfNeeded: targetWindow >> (index * 8)) }
+        record[0x8A] = focused ? 0x01 : 0x02
+        return post(record)
+    }
+
+    private func postKeyWindowRecords() -> Bool {
+        var base = [UInt8](repeating: 0, count: 0xF8)
+        base[0x04] = 0xF8
+        base[0x3A] = 0x10
+        for index in 0..<4 { base[0x3C + index] = UInt8(truncatingIfNeeded: targetWindow >> (index * 8)) }
+        for index in 0x20..<0x30 { base[index] = 0xFF }
+        for kind: UInt8 in [0x01, 0x02] {
+            var record = base
+            record[0x08] = kind
+            if !post(record) { return false }
+        }
+        return true
     }
 }
 
-private func withBackgroundFocus(_ target: DesktopTarget, _ body: () throws -> Void) throws {
-    let focus = try BackgroundFocus.begin(target)
-    let queue = DispatchQueue(label: "app.ycoding.computer-use.focus")
-    let monitor = DispatchSource.makeTimerSource(queue: queue)
-    monitor.schedule(deadline: .now(), repeating: .milliseconds(5))
-    monitor.setEventHandler { focus.restoreIfStolen() }
-    monitor.resume()
-    defer { monitor.cancel(); queue.sync {} }
-    var restored = false
+private enum InputRoute { case pidOnly, sky }
+
+private func withSkyFocus(_ target: DesktopTarget, keyWindow: Bool, settle: TimeInterval = 0, _ body: () throws -> Void) throws {
+    let focus = try SkyFocus.begin(target, keyWindow: keyWindow)
     var actionError: Error?
-    do {
-        defer { restored = focus.restore() }
-        do { try body() }
-        catch { actionError = error }
-        if focus.shifted { Thread.sleep(forTimeInterval: 0.05) }
-    }
-    let deadline = Date().addingTimeInterval(0.5)
-    while focus.shifted && Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
-    restored = restored || focus.isRestored()
-    guard restored && focus.isRestored() else { throw HelperError.focusRestoreFailed }
+    do { try body() } catch { actionError = error }
+    // SkyLight delivery is asynchronous; hold the synthetic state while the target consumes it.
+    if focus.shifted, settle > 0 { Thread.sleep(forTimeInterval: settle) }
+    guard focus.end() else { throw HelperError.focusRestoreFailed }
     if let actionError { throw actionError }
 }
 
@@ -1141,7 +1219,7 @@ private func windowPoint(_ x: Int, _ y: Int, bounds: CGRect) throws -> CGPoint {
 // f0 gesture phase, f1 click state, f3 button number, f7 touch subtype, f40 pid filter, f51/f91/f92 window routing,
 // f58 click group, and a screen-space window location, created from the HID system event source.
 private func pointerEvent(_ type: CGEventType, _ button: CGMouseButton, _ point: CGPoint,
-                          _ target: DesktopTarget, click: Int = 1, phase: Int64? = nil) throws {
+                          _ target: DesktopTarget, click: Int = 1, phase: Int64? = nil, dualPost: Bool = false) throws {
     guard let post = BackgroundPost.post, let setLocation = BackgroundPost.setLocation, let setField = BackgroundPost.setField,
           let source = CGEventSource(stateID: .hidSystemState),
           let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button) else {
@@ -1154,18 +1232,27 @@ private func pointerEvent(_ type: CGEventType, _ button: CGMouseButton, _ point:
     for (field, value) in fields { setField(event, field, value) }
     setLocation(event, point)
     post(target.pid, event)
+    // The sky_click recipe also posts through the public pid channel: SkyLight reaches Chromium
+    // while the public path preserves AppKit delivery. One dispatch policy, not a retry.
+    if dualPost { event.postToPid(target.pid) }
 }
 
 // An off-screen press satisfies Chromium's user-activation gate without hitting page content.
-private func primeUserActivation(_ target: DesktopTarget) throws {
+private func primeUserActivation(_ target: DesktopTarget, dualPost: Bool = false) throws {
     let offscreen = CGPoint(x: -1, y: -1)
-    try pointerEvent(.leftMouseDown, .left, offscreen, target, click: 1, phase: 1)
+    try pointerEvent(.leftMouseDown, .left, offscreen, target, click: 1, phase: 1, dualPost: dualPost)
     Thread.sleep(forTimeInterval: 0.001)
-    try pointerEvent(.leftMouseUp, .left, offscreen, target, click: 1, phase: 2)
+    try pointerEvent(.leftMouseUp, .left, offscreen, target, click: 1, phase: 2, dualPost: dualPost)
     Thread.sleep(forTimeInterval: 0.1)
 }
 
-private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow) throws {
+private func routePointer(_ target: DesktopTarget, _ route: InputRoute, settle: TimeInterval = 0.1, _ body: () throws -> Void) throws {
+    // Escalation also makes the window key inside the target app: AppKit views that do not accept
+    // first mouse swallow a background window's first click when it is not key.
+    if route == .pidOnly { try body() } else { try withSkyFocus(target, keyWindow: true, settle: settle, body) }
+}
+
+private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow, route: InputRoute) throws {
     guard let x = request.x, let y = request.y,
           request.button == nil || request.button == "left" || request.button == "right",
           request.count == nil || request.count == 1 || request.count == 2 else { throw HelperError.invalidRequest }
@@ -1173,28 +1260,31 @@ private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ wind
     guard BackgroundPost.post != nil, BackgroundPost.setLocation != nil, BackgroundPost.setField != nil else { throw HelperError.backgroundUnavailable }
     let right = request.button == "right"
     let button: CGMouseButton = right ? .right : .left
-    try withBackgroundFocus(target) {
-        try pointerEvent(.mouseMoved, button, point, target, click: 0, phase: 2)
+    // Dual posting is the Chromium recipe; plain AppKit apps process both channels and would
+    // receive the click twice, so non-Chromium targets keep the single SkyLight post.
+    let dual = route == .sky && !right && isChromiumClassApp(target)
+    try routePointer(target, route) {
+        try pointerEvent(.mouseMoved, button, point, target, click: 0, phase: 2, dualPost: dual)
         Thread.sleep(forTimeInterval: 0.015)
         do {
-            if !right { try primeUserActivation(target) }
+            if !right { try primeUserActivation(target, dualPost: dual) }
             let clicks = request.count ?? 1
             for count in 1...clicks {
-                try pointerEvent(right ? .rightMouseDown : .leftMouseDown, button, point, target, click: count)
+                try pointerEvent(right ? .rightMouseDown : .leftMouseDown, button, point, target, click: count, dualPost: dual)
                 Thread.sleep(forTimeInterval: right ? 0.028 : 0.001)
-                try pointerEvent(right ? .rightMouseUp : .leftMouseUp, button, point, target, click: count)
+                try pointerEvent(right ? .rightMouseUp : .leftMouseUp, button, point, target, click: count, dualPost: dual)
                 if count < clicks { Thread.sleep(forTimeInterval: 0.08) }
             }
         } catch { throw HelperError.unknownOutcome }
     }
 }
 
-private func coordinateDrag(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow) throws {
+private func coordinateDrag(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow, route: InputRoute) throws {
     guard let fromX = request.fromX, let fromY = request.fromY, let toX = request.toX, let toY = request.toY else { throw HelperError.invalidRequest }
     let start = try windowPoint(fromX, fromY, bounds: window.bounds)
     let end = try windowPoint(toX, toY, bounds: window.bounds)
     guard BackgroundPost.post != nil, BackgroundPost.setLocation != nil, BackgroundPost.setField != nil else { throw HelperError.backgroundUnavailable }
-    try withBackgroundFocus(target) {
+    try routePointer(target, route) {
         try pointerEvent(.mouseMoved, .left, start, target, click: 0, phase: 2)
         Thread.sleep(forTimeInterval: 0.015)
         do { try primeUserActivation(target) } catch { throw HelperError.unknownOutcome }
@@ -1211,7 +1301,7 @@ private func coordinateDrag(_ request: Request, _ target: DesktopTarget, _ windo
     }
 }
 
-private func coordinateScroll(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow) throws {
+private func coordinateScroll(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow, route: InputRoute) throws {
     guard let x = request.x, let y = request.y, let deltaX = request.deltaX, let deltaY = request.deltaY,
           let vertical = Int32(exactly: deltaY), let horizontal = Int32(exactly: deltaX) else { throw HelperError.invalidRequest }
     let point = try windowPoint(x, y, bounds: window.bounds)
@@ -1220,16 +1310,44 @@ private func coordinateScroll(_ request: Request, _ target: DesktopTarget, _ win
           let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                               wheel1: vertical, wheel2: horizontal, wheel3: 0) else { throw HelperError.backgroundUnavailable }
     event.location = point
-    try withBackgroundFocus(target) { try BackgroundPost.send(event, target: target, at: point) }
+    try routePointer(target, route, settle: 0) { try BackgroundPost.send(event, target: target, at: point) }
+}
+
+// AXMenuItemCmdModifiers bits: 1 shift, 2 option, 4 control; command chords only fire through
+// NSMenu for the active app, so a background target needs its matching menu item pressed directly.
+private func menuItemForCommandChord(_ request: Request, key: String, target: DesktopTarget) -> AXUIElement? {
+    let modifiers = request.modifiers ?? []
+    guard modifiers.contains("command"), key.unicodeScalars.count == 1 else { return nil }
+    var bits = 0
+    if modifiers.contains("shift") { bits |= 1 }
+    if modifiers.contains("option") { bits |= 2 }
+    if modifiers.contains("control") { bits |= 4 }
+    let wanted = key.uppercased()
+    guard let bar = attribute(AXUIElementCreateApplication(target.pid), kAXMenuBarAttribute),
+          CFGetTypeID(bar) == AXUIElementGetTypeID() else { return nil }
+    var stack: [(AXUIElement, Int)] = [(unsafeBitCast(bar, to: AXUIElement.self), 0)]
+    var visited = 0
+    while let (node, depth) = stack.popLast(), visited < 600 {
+        visited += 1
+        for child in children(node) {
+            if stringAttribute(child, kAXRoleAttribute) == kAXMenuItemRole,
+               (attribute(child, "AXMenuItemCmdChar") as? String)?.uppercased() == wanted,
+               ((attribute(child, "AXMenuItemCmdModifiers") as? NSNumber)?.intValue ?? 0) == bits,
+               boolAttribute(child, kAXEnabledAttribute) { return child }
+            if depth < 6 { stack.append((child, depth + 1)) }
+        }
+    }
+    return nil
 }
 
 private func keyboard(_ request: Request, _ target: DesktopTarget) throws {
     guard let source = CGEventSource(stateID: .combinedSessionState) else { throw HelperError.backgroundUnavailable }
     if request.action == "desktop.type" {
         guard let text = request.text, text.utf8.count <= 4096 else { throw HelperError.invalidRequest }
-        try withBackgroundFocus(target) {
+        try withSkyFocus(target, keyWindow: true, settle: 0.01) {
             var dispatched = false
-            // One key event per character: many apps read only the first character of a multi-character event.
+            // One key event per extended grapheme cluster: many apps read only the first character
+            // of a multi-character event, and splitting UTF-16 code units corrupts surrogate pairs.
             for character in text {
                 let chunk = Array(String(character).utf16)
                 guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
@@ -1280,9 +1398,91 @@ private func keyboard(_ request: Request, _ target: DesktopTarget) throws {
         down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
         up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
     }
-    try withBackgroundFocus(target) {
+    try withSkyFocus(target, keyWindow: true, settle: 0.01) {
+        if let item = menuItemForCommandChord(request, key: key, target: target) {
+            guard AXUIElementPerformAction(item, kAXPressAction as CFString) == .success else { throw HelperError.unknownOutcome }
+            Thread.sleep(forTimeInterval: 0.1)
+            return
+        }
         down.postToPid(target.pid)
         up.postToPid(target.pid)
+    }
+}
+
+private func queryElements(_ request: Request, target: DesktopTarget) throws -> Response {
+    guard let expected = request.expectedRevision else { throw HelperError.invalidRequest }
+    let text = request.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let role = request.role?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard (text?.isEmpty == false) || (role?.isEmpty == false),
+          text == nil || text!.utf16.count <= 1000 else { throw HelperError.invalidRequest }
+    let limit = request.limit ?? 20
+    let maxNodes = request.maxNodes ?? 500
+    guard (1...100).contains(limit), (1...5000).contains(maxNodes) else { throw HelperError.invalidRequest }
+    let (window, revision, _) = try desktopSnapshot(target)
+    guard revision == expected else { throw HelperError.staleRevision }
+    guard let root = window.element else { throw unreachableWindowError(window) ?? HelperError.targetNotFound }
+    let wantedRole = role.map { $0.hasPrefix("AX") ? $0 : "AX" + $0 }
+    var matches: [Element] = []
+    var queue: [(AXUIElement, [Int])] = [(root, [])]
+    var visited = 0
+    var truncatedNodes = false
+    while !queue.isEmpty {
+        if visited >= maxNodes { truncatedNodes = true; break }
+        let (node, path) = queue.removeFirst()
+        visited += 1
+        let nodeRole = stringAttribute(node, kAXRoleAttribute)
+        let label = stringAttribute(node, kAXTitleAttribute).isEmpty ? stringAttribute(node, kAXDescriptionAttribute) : stringAttribute(node, kAXTitleAttribute)
+        let secure = nodeRole == "AXSecureTextField" || nodeRole.localizedCaseInsensitiveContains("secure")
+        let rawValue = secure ? nil : attribute(node, kAXValueAttribute)
+        let value = (rawValue as? String ?? (rawValue as? NSNumber)?.stringValue).map { String($0.prefix(200)) }
+        let roleOK = wantedRole == nil || nodeRole.caseInsensitiveCompare(wantedRole!) == .orderedSame
+        let textOK = text == nil || text!.isEmpty || label.localizedCaseInsensitiveContains(text!) || (value?.localizedCaseInsensitiveContains(text!) ?? false)
+        if roleOK && textOK {
+            let actions = actionNames(node)
+            matches.append(Element(path: path, role: nodeRole, label: label, frame: elementFrame(node, in: window.bounds) ?? [0, 0, 0, 0],
+                actions: advertisedActions.compactMap { actions.contains($0.0) ? $0.1 : nil },
+                enabled: boolAttribute(node, kAXEnabledAttribute), focused: boolAttribute(node, kAXFocusedAttribute), value: value))
+        }
+        if path.count < 12 { queue.append(contentsOf: children(node).enumerated().map { ($0.element, path + [$0.offset]) }) }
+    }
+    return success(request.action, revision, elements: Array(matches.prefix(limit)), truncated: truncatedNodes || matches.count > limit, accessible: true)
+}
+
+private func selectedRange(_ element: AXUIElement) -> CFRange? {
+    guard let raw = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    var range = CFRange(location: 0, length: 0)
+    return AXValueGetValue(unsafeBitCast(raw, to: AXValue.self), .cfRange, &range) ? range : nil
+}
+
+private func selectText(_ request: Request, element: AXUIElement) throws {
+    guard let text = request.text, !text.isEmpty else { throw HelperError.invalidRequest }
+    let selection = request.selection ?? "text"
+    guard ["text", "cursor_before", "cursor_after"].contains(selection) else { throw HelperError.invalidRequest }
+    guard let full = attribute(element, kAXValueAttribute) as? String else { throw HelperError.invalidRequest }
+    var ranges: [Range<String.Index>] = []
+    var searchRange = full.startIndex..<full.endIndex
+    while let found = full.range(of: text, range: searchRange) {
+        ranges.append(found)
+        if found.upperBound == full.endIndex { break }
+        searchRange = full.index(after: found.lowerBound)..<full.endIndex
+    }
+    let candidates = ranges.filter { range in
+        if let prefix = request.prefix, !full[..<range.lowerBound].hasSuffix(prefix) { return false }
+        if let suffix = request.suffix, !full[range.upperBound...].hasPrefix(suffix) { return false }
+        return true
+    }
+    guard candidates.count == 1, let found = candidates.first else { throw HelperError.invalidRequest }
+    let start = full[..<found.lowerBound].utf16.count
+    let length = full[found].utf16.count
+    let applied = selection == "text" ? CFRange(location: start, length: length)
+        : CFRange(location: selection == "cursor_before" ? start : start + length, length: 0)
+    var settable = DarwinBoolean(false)
+    var rangeValue = applied
+    guard AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &settable) == .success, settable.boolValue,
+          let value = AXValueCreate(.cfRange, &rangeValue),
+          AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success else { throw HelperError.invalidRequest }
+    guard let readBack = selectedRange(element), readBack.location == applied.location, readBack.length == applied.length else {
+        throw HelperError.unknownOutcome
     }
 }
 
@@ -1352,19 +1552,54 @@ private func handle(_ request: Request) async throws -> Response {
         _ = try desktopSnapshot(target)
         let (image, width, height, scale) = try await captureWindow(target)
         return success(request.action, try desktopSnapshot(target).1, image: image, width: width, height: height, scale: scale)
+    case ("desktop.query", .desktop(let target)):
+        return try queryElements(request, target: target)
     case ("desktop.click", .desktop(let target)),
          ("desktop.drag", .desktop(let target)),
          ("desktop.type", .desktop(let target)),
          ("desktop.scroll", .desktop(let target)),
+         ("desktop.select_text", .desktop(let target)),
+         ("desktop.perform_action", .desktop(let target)),
          ("desktop.key", .desktop(let target)):
         guard let expected = request.expectedRevision else { throw HelperError.invalidRequest }
         let (window, revision, _) = try desktopSnapshot(target)
         guard revision == expected else { throw HelperError.staleRevision }
         let imageBefore = await windowFingerprint(target)
+        let isCoordinate = request.element == nil && ["desktop.click", "desktop.drag", "desktop.scroll"].contains(request.action)
+        if isCoordinate, window.placement == "other_space", !window.onScreen, isChromiumClassApp(target) {
+            throw HelperError.windowOffSpace
+        }
+        func measureEffect() async throws -> (settled: String, effect: String) {
+            let settled: String
+            do { settled = try settledRevision { try desktopSnapshot(target).1 } }
+            catch { throw HelperError.unknownOutcome }
+            if window.element != nil && settled != revision { return (settled, "changed") }
+            // The bounded AX snapshot can miss changes (for example deep web content), so an unchanged tree is
+            // confirmed against a small window image before reporting no effect.
+            let imageAfter = await windowFingerprint(target)
+            let effect = imageBefore == nil || imageAfter == nil
+                ? (window.element == nil ? "unverified" : "unchanged")
+                : imageBefore == imageAfter ? "unchanged" : "changed"
+            return (settled, effect)
+        }
+        func dispatchCoordinate(_ route: InputRoute) throws {
+            switch request.action {
+            case "desktop.click": try coordinateClick(request, target, window, route: route)
+            case "desktop.drag": try coordinateDrag(request, target, window, route: route)
+            case "desktop.scroll": try coordinateScroll(request, target, window, route: route)
+            default: throw HelperError.invalidRequest
+            }
+        }
         if let path = request.element, request.action != "desktop.drag" {
             guard let root = window.element else { throw unreachableWindowError(window) ?? HelperError.targetNotFound }
             let element = try desktopElement(root, path: path)
             switch request.action {
+            case "desktop.select_text":
+                try selectText(request, element: element)
+            case "desktop.perform_action":
+                guard let pretty = request.name, let raw = advertisedActions.first(where: { $0.1 == pretty })?.0,
+                      actionNames(element).contains(raw) else { throw HelperError.invalidRequest }
+                guard AXUIElementPerformAction(element, raw as CFString) == .success else { throw HelperError.unknownOutcome }
             case "desktop.click", "desktop.key":
                 let axAction = request.action == "desktop.click" ? kAXPressAction : kAXConfirmAction
                 guard request.action != "desktop.key" || (request.key == "enter" && (request.modifiers ?? []).isEmpty) else {
@@ -1391,26 +1626,31 @@ private func handle(_ request: Request) async throws -> Response {
                 guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef) == .success else { throw HelperError.unknownOutcome }
             default: throw HelperError.invalidRequest
             }
-        } else {
-            switch request.action {
-            case "desktop.click": try coordinateClick(request, target, window)
-            case "desktop.drag": try coordinateDrag(request, target, window)
-            case "desktop.scroll": try coordinateScroll(request, target, window)
-            case "desktop.type", "desktop.key": try keyboard(request, target)
-            default: throw HelperError.invalidRequest
-            }
+            let measured = try await measureEffect()
+            return success(request.action, measured.settled, effect: measured.effect)
         }
-        let settled: String
-        do { settled = try settledRevision { try desktopSnapshot(target).1 } }
-        catch { throw HelperError.unknownOutcome }
-        if window.element != nil && settled != revision { return success(request.action, settled, effect: "changed") }
-        // The bounded AX snapshot can miss changes (for example deep web content), so an unchanged tree is
-        // confirmed against a small window image before reporting no effect.
-        let imageAfter = await windowFingerprint(target)
-        let effect = imageBefore == nil || imageAfter == nil
-            ? (window.element == nil ? "unverified" : "unchanged")
-            : imageBefore == imageAfter ? "unchanged" : "changed"
-        return success(request.action, settled, effect: effect)
+        switch request.action {
+        case "desktop.click", "desktop.drag", "desktop.scroll":
+            // A frontmost target already holds key focus, so pid-posted input needs no focus handling.
+            // A background target goes straight to the target-only sky route: an effect-based retry
+            // cannot distinguish real delivery from the AX focus churn of a swallowed first click.
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid {
+                try dispatchCoordinate(.pidOnly)
+            } else {
+                do { try dispatchCoordinate(.sky) }
+                catch let error as HelperError {
+                    // SkyFocus.begin fails before any event is posted; only then is a pid-only attempt safe.
+                    if case .backgroundUnavailable = error { try dispatchCoordinate(.pidOnly) } else { throw error }
+                }
+            }
+            let measured = try await measureEffect()
+            return success(request.action, measured.settled, effect: measured.effect)
+        case "desktop.type", "desktop.key":
+            try keyboard(request, target)
+        default: throw HelperError.invalidRequest
+        }
+        let measured = try await measureEffect()
+        return success(request.action, measured.settled, effect: measured.effect)
     case ("iterm.inspect", .iterm(let target)):
         return success(request.action, try inspectIterm(target).1)
     case ("iterm.send_text", .iterm(let target)):
@@ -1668,7 +1908,7 @@ private func serve(_ launch: ServiceLaunch) async -> Bool {
     guard socketPath.utf8.count < 104 else { return false }
     let listener = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
     guard listener >= 0 else { return false }
-    defer { Darwin.close(listener); unlink(socketPath) }
+    defer { OcclusionKeepAlive.releaseAll(); Darwin.close(listener); unlink(socketPath) }
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
     address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
@@ -1680,7 +1920,7 @@ private func serve(_ launch: ServiceLaunch) async -> Bool {
     }
     guard bound == 0, listen(listener, 8) == 0 else { return false }
     let ownerExit = DispatchSource.makeProcessSource(identifier: pid_t(launch.ownerPID), eventMask: .exit, queue: .main)
-    ownerExit.setEventHandler { exit(0) }
+    ownerExit.setEventHandler { OcclusionKeepAlive.releaseAll(); exit(0) }
     ownerExit.resume()
     defer { ownerExit.cancel() }
     guard FileManager.default.createFile(atPath: (launch.controlDirectory as NSString).appendingPathComponent("pid"),

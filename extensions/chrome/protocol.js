@@ -1,6 +1,15 @@
-export const VERSION = 4
+export const VERSION = 5
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 export const MAX_ELEMENTS = 200
+export const MAX_TEXTS = 100
+export const MAX_FRAMES = 32
+export const MAX_AX_DEPTH = 32
+export const MAX_WAIT_MS = 30_000
+export const MAX_CLIPBOARD_BYTES = 64 * 1024
+export const MAX_HISTORY_RESULTS = 100
+export const MAX_LOG_ENTRIES = 100
+export const MAX_EXPORT_BYTES = 8 * 1024 * 1024
+export const MAX_UPLOAD_FILES = 8
 export const MAX_SHARED_TABS = 8
 
 export function validateServerURL(input) {

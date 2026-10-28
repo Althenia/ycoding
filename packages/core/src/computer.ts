@@ -39,6 +39,15 @@ export interface Interface {
     readonly callID: string
     readonly target: Target
   }) => Effect.Effect<NativeSuccess, Error>
+  readonly query: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly callID: string
+    readonly target: MacOSComputer.DesktopTarget
+    readonly text?: string
+    readonly role?: string
+    readonly limit?: number
+    readonly maxNodes?: number
+  }) => Effect.Effect<NativeSuccess, Error>
   readonly act: (input: {
     readonly sessionID: SessionSchema.ID
     readonly callID: string
@@ -185,8 +194,8 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
           if (onFailure) yield* onFailure(error)
         })),
       )
-      // Raw desktop input briefly moves the user's key focus and restores it; overlapping calls on different
-      // windows would each save the other's target as the user's focus, so desktop mutations run one at a time.
+      // The helper's synthetic-focus records and effect measurement are process-serial; overlapping raw-input
+      // calls on different windows would interleave records and measurements, so desktop mutations run one at a time.
       return yield* (typeof request === "function" || desktopMutation(request) ? desktopInput.withPermit(perform) : perform).pipe(
         Effect.ensuring(finish(active)),
       )
@@ -437,6 +446,24 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
           locationToken,
           input,
           MacOSComputer.inspectRequest({ sessionID: input.sessionID, callID: input.callID }, input.target),
+        )
+      }),
+      query: Effect.fn("Computer.query")((input) => {
+        if (platform !== "darwin")
+          return Effect.fail(
+            new NativeError({
+              code: "unsupported_platform",
+              message: `Native computer use has no provider for ${platform}`,
+              outcome: "not_started",
+            }),
+          )
+        const claim = claims.get(MacOSComputer.targetKey(input.target))
+        if (!claim || claim.sessionID !== input.sessionID || claim.locationToken !== locationToken)
+          return Effect.fail(new OwnershipError({ message: "Target must be inspected by this Session before query" }))
+        return run(
+          locationToken,
+          input,
+          MacOSComputer.queryRequest({ sessionID: input.sessionID, callID: input.callID }, input.target, claim.revision, input),
         )
       }),
       act: Effect.fn("Computer.act")((input) => {

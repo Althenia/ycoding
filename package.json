@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run --cwd packages/cli --conditions=browser src/index.ts",
     "build:tui": "bun run --cwd packages/cli build:tui --single --outdir=../../dist/tui",
+    "build:extension": "bun packages/cli/script/chrome-extension.ts dist",
     "build:web": "bun run --cwd apps/web build && bun script/build-web-assets.ts",
     "test:web": "bun run --cwd apps/web test",
     "test:integration:web": "bun run --cwd apps/web test:integration",

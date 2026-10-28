@@ -71,6 +71,8 @@ export type Action =
   | { readonly type: "desktop.scroll"; readonly element: ReadonlyArray<number>; readonly direction: "up" | "down" }
   | { readonly type: "desktop.scroll"; readonly x: number; readonly y: number; readonly deltaX: number; readonly deltaY: number }
   | { readonly type: "desktop.key"; readonly element?: ReadonlyArray<number>; readonly key: string; readonly modifiers?: ReadonlyArray<"command" | "shift" | "option" | "control" | "fn"> }
+  | { readonly type: "desktop.select_text"; readonly element: ReadonlyArray<number>; readonly text: string; readonly prefix?: string; readonly suffix?: string; readonly selection?: "text" | "cursor_before" | "cursor_after" }
+  | { readonly type: "desktop.perform_action"; readonly element: ReadonlyArray<number>; readonly name: "press" | "confirm" | "increment" | "decrement" | "show_menu" }
 
 interface Owner {
   readonly sessionID: string
@@ -101,7 +103,7 @@ export type Request =
   | { readonly action: "desktop.stage"; readonly owner: Owner; readonly target: DesktopTarget; readonly expectedRevision: string; readonly displayID: number }
   | { readonly action: "desktop.unstage"; readonly owner: Owner; readonly target: DesktopTarget; readonly originalFrame: ComputerFrame }
   | {
-      readonly action: "desktop.click" | "desktop.drag" | "desktop.type" | "desktop.scroll" | "desktop.key"
+      readonly action: "desktop.click" | "desktop.drag" | "desktop.type" | "desktop.scroll" | "desktop.key" | "desktop.select_text" | "desktop.perform_action" | "desktop.query"
       readonly owner: Owner
       readonly target: DesktopTarget
       readonly expectedRevision: string
@@ -120,6 +122,13 @@ export type Request =
       readonly toY?: number
       readonly deltaX?: number
       readonly deltaY?: number
+      readonly role?: string
+      readonly limit?: number
+      readonly maxNodes?: number
+      readonly prefix?: string
+      readonly suffix?: string
+      readonly selection?: "text" | "cursor_before" | "cursor_after"
+      readonly name?: "press" | "confirm" | "increment" | "decrement" | "show_menu"
     }
   | {
       readonly action: "finder.move"
@@ -149,7 +158,7 @@ export const capabilities = [
     platform: "macos",
     application: "desktop",
     identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-    operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key", "stage", "unstage"],
+    operations: ["list", "launch", "inspect", "capture", "query", "click", "drag", "type", "scroll", "key", "select_text", "perform_action", "stage", "unstage"],
   },
   {
     platform: "macos",
@@ -212,6 +221,13 @@ export const captureRequest = (owner: Owner, target: DesktopTarget): Request => 
   target,
 })
 
+export const queryRequest = (
+  owner: Owner,
+  target: DesktopTarget,
+  expectedRevision: string,
+  query: { readonly text?: string; readonly role?: string; readonly limit?: number; readonly maxNodes?: number },
+): Request => ({ action: "desktop.query", owner, target, expectedRevision, text: query.text, role: query.role, limit: query.limit, maxNodes: query.maxNodes })
+
 export const listRequest = (owner: Owner): Request => ({ action: "desktop.list", owner })
 export const launchRequest = (owner: Owner, bundleID: string, remoteDebugging?: boolean): Request => ({ action: "desktop.launch", owner, bundleID, remoteDebugging })
 export const quitRequest = (owner: Owner, bundleID: string, pid: number): Request => ({ action: "desktop.quit", owner, bundleID, pid })
@@ -248,7 +264,9 @@ export function actionRequest(
       action.type === "desktop.type" ||
       action.type === "desktop.scroll" ||
       action.type === "desktop.drag" ||
-      action.type === "desktop.key")
+      action.type === "desktop.key" ||
+      action.type === "desktop.select_text" ||
+      action.type === "desktop.perform_action")
   )
     return { action: action.type, owner, target, expectedRevision, ...action }
   return undefined
@@ -297,7 +315,7 @@ const Response = Schema.Union([
       "desktop.type",
       "desktop.scroll",
       "desktop.key",
-      "desktop.stage", "desktop.unstage", "display.hold",
+      "desktop.stage", "desktop.unstage", "desktop.query", "desktop.select_text", "desktop.perform_action", "display.hold",
       "webbrowser.tabs", "webbrowser.navigate", "webbrowser.back", "webbrowser.forward", "webbrowser.reload", "webbrowser.new_tab", "webbrowser.close_tab", "webbrowser.eval",
     ]),
     revision: Schema.String,
@@ -312,6 +330,7 @@ const Response = Schema.Union([
     width: Schema.Number.pipe(Schema.optional), height: Schema.Number.pipe(Schema.optional), scale: Schema.Number.pipe(Schema.optional),
     apps: Schema.Array(Schema.Struct({ bundle_id: Schema.String, pid: Schema.Int, name: Schema.String,
       is_active: Schema.Boolean, is_hidden: Schema.Boolean,
+      is_running: Schema.Boolean.pipe(Schema.optional), last_used: Schema.String.pipe(Schema.optional), uses: Schema.Number.pipe(Schema.optional),
       windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
         bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean, placement: WindowPlacement })),
     })).pipe(Schema.optional),
@@ -495,7 +514,7 @@ export function invokeWith(
         : { code: "invalid_response", message: "Agent display helper returned a mismatched action", outcome: "unknown" }))))
     const mutating = request.action === "iterm.send_text" || request.action === "finder.move" || request.action === "desktop.launch" || request.action === "desktop.quit" ||
       request.action.startsWith("webbrowser.") && request.action !== "webbrowser.tabs" ||
-      request.action.startsWith("desktop.") && !["desktop.inspect", "desktop.capture", "desktop.list"].includes(request.action)
+      request.action.startsWith("desktop.") && !["desktop.inspect", "desktop.capture", "desktop.list", "desktop.query"].includes(request.action)
     return Effect.uninterruptible(Effect.suspend(() => {
       const work = chain.then(async () => {
         if (signal.aborted) throw new Error("Native helper call cancelled")
@@ -554,13 +573,6 @@ export function invokeWithBridge(processes: AppProcess.Interface, platform: Node
         const target = request.target
         const window = listed.apps?.find((app) => app.pid === target.pid && app.bundle_id === target.bundleID)?.windows.find((item) => item.window_id === target.windowID)
         if (!window) return yield* new NativeError({ code: "target_not_found", message: "Exact Core Graphics window is unavailable", outcome: "not_started" })
-        if (window.on_screen && request.action !== "desktop.capture") return yield* native(request, signal)
-        const nativeCapture = window.on_screen && request.action === "desktop.capture"
-          ? yield* native(request, signal).pipe(
-              Effect.map((value) => ({ value })),
-              Effect.catch((error) => Effect.succeed({ error })),
-            ) : undefined
-        if (nativeCapture && "value" in nativeCapture) return nativeCapture.value
         if ("expectedRevision" in request) {
           const before = yield* native({ action: "desktop.inspect", owner: request.owner, target }, signal)
           if (before.revision !== request.expectedRevision)
@@ -588,8 +600,7 @@ export function invokeWithBridge(processes: AppProcess.Interface, platform: Node
           if (request.action === "desktop.capture") return yield* new NativeError({ code: "invalid_response", message: "Electron bridge returned an action for capture", outcome: "unknown" })
           return { status: "ok" as const, action: request.action, revision: inspected.revision, effect: performed.effect }
         }
-        if (nativeCapture && "error" in nativeCapture) return yield* nativeCapture.error
-        return yield* native(request, signal)
+        return yield* new NativeError({ code: "background_unavailable", message: "Electron bridge route is unavailable for this window; use an Accessibility element route or stage it on the agent display", outcome: "not_started" })
       }
       return yield* native(request, signal)
     })

@@ -65,6 +65,8 @@ async function request(message) {
   actionPending = true
   actionRevision++
   try {
+    if (message.type === "pair" || message.type === "connect")
+      await chrome.permissions?.request({ permissions: ["history", "downloads"] })?.catch(() => {})
     const result = await chrome.runtime.sendMessage(message)
     show(result)
     feedback.textContent = result.message

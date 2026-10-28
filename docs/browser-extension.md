@@ -1,6 +1,6 @@
 # Chrome extension browser bridge
 
-YCoding connects eligible existing and future Chrome tabs through one explicit pairing in the YCoding Manifest V3 extension. Release installs place it in `ycoding-chrome-extension` beside the `ycoding` executable, for example `~/.local/bin/ycoding-chrome-extension`; a source checkout uses `extensions/chrome`. The **Connect Chrome** dialog shows the folder for the running YCoding. Paired tabs retain their existing login state; agent-owned mode creates new background tabs. Neither mode copies cookies, profile files, passwords, or browser storage into YCoding.
+YCoding connects eligible existing and future Chrome tabs through one explicit pairing in the YCoding Manifest V3 extension. Release installs place it in `ycoding-chrome-extension` beside the `ycoding` executable, for example `~/.local/bin/ycoding-chrome-extension`; that folder is a bundled, minified build of the extension sources, not the sources themselves, and `bun run build:extension` reproduces it at `dist/ycoding-chrome-extension`. A source checkout running under Bun uses `extensions/chrome` directly. The **Connect Chrome** dialog shows the folder for the running YCoding. Paired tabs retain their existing login state; agent-owned mode creates new background tabs. Neither mode copies cookies, profile files, passwords, or browser storage into YCoding.
 
 ## Security and non-interruption boundary
 
@@ -40,7 +40,7 @@ The compact popup is 320 CSS pixels wide and keeps pairing scope visible before 
 
 The extension requires no package installation or build step. A source checkout loads its modules unbundled. Release packaging bundles `indicator.js` into the shipped `service-worker.js` with Bun and leaves `protocol.js` as its own file, so the release folder contains exactly the files `icons/ycoding-{16,32,48,128}.png`, `manifest.json`, `popup.css`, `popup.html`, `popup.js`, `protocol.js`, and `service-worker.js`; installed updaters reject any other entry in it.
 
-After `ycoding update`, the installer, or a checkout change replaces the extension folder, run the matching YCoding and select **Reload** for the unpacked YCoding extension in `chrome://extensions`. Chrome does not guarantee that changing files on disk replaces an already loaded service worker. The extension and backend use bridge protocol version 4; a worker on another version cannot authenticate and will not appear as a connected bridge with an empty profile grant. If the popup becomes unpaired after a version mismatch, create a new pairing code and connect again.
+After `ycoding update`, the installer, or a checkout change replaces the extension folder, run the matching YCoding and select **Reload** for the unpacked YCoding extension in `chrome://extensions`. Chrome does not guarantee that changing files on disk replaces an already loaded service worker. The extension and backend use bridge protocol version 5; a worker on another version cannot authenticate and will not appear as a connected bridge with an empty profile grant. If the popup becomes unpaired after a version mismatch, create a new pairing code and connect again.
 
 ## Public operations
 

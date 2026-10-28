@@ -59,6 +59,7 @@ const computer = Layer.mock(Computer.Service, {
       width: 320, height: 240, scale: 1,
     })
   },
+  query: () => { calls.push("native:desktop.query"); return Effect.succeed({ status: "ok" as const, action: "desktop.query" as const, revision: "rev-1", elements: [] }) },
   cancel: () => Effect.succeed(false),
   releaseSession: () => Effect.void,
   browserTabs: (input) => {
@@ -488,6 +489,20 @@ describe("computer tool input", () => {
       expect(decode({ action: "desktop.scroll", platform: "macos", bundle_id: "x", pid: "1", window_id: "2", expected_revision: "rev", x: "3", y: "4", delta_x: "-5", delta_y: "6" })).toMatchObject({ delta_x: -5, delta_y: 6 })
       for (const value of ["-1", "1.2", "invalid"]) expect(() => decode({ action: "desktop.inspect", platform: "macos", bundle_id: "com.example.fixture", pid: value, window_id: 73 })).toThrow()
       expect(() => decode({ action: "desktop.drag", platform: "macos", bundle_id: "x", pid: 1, window_id: 2, expected_revision: "rev", from_x: "-1", from_y: 0, to_x: 1, to_y: 1 })).toThrow()
+    }),
+  )
+  it.effect("bounds query, select_text, and perform_action inputs", () =>
+    Effect.sync(() => {
+      const base = { platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73 }
+      expect(decode({ action: "desktop.query", ...base, text: "Save" })).toMatchObject({ action: "desktop.query", text: "Save" })
+      expect(decode({ action: "desktop.query", ...base, role: "AXButton", limit: "5", max_nodes: 250 })).toMatchObject({ limit: 5, max_nodes: 250 })
+      expect(() => decode({ action: "desktop.query", ...base })).toThrow()
+      expect(() => decode({ action: "desktop.query", ...base, text: "x", limit: 101 })).toThrow()
+      expect(() => decode({ action: "desktop.query", ...base, text: "x", max_nodes: 5001 })).toThrow()
+      expect(decode({ action: "desktop.select_text", ...base, element: [1], expected_revision: "rev", text: "target", selection: "cursor_after" })).toMatchObject({ selection: "cursor_after" })
+      expect(() => decode({ action: "desktop.select_text", ...base, element: [1], expected_revision: "rev", text: "target", selection: "around" })).toThrow()
+      expect(decode({ action: "desktop.perform_action", ...base, element: [1], expected_revision: "rev", name: "show_menu" })).toMatchObject({ name: "show_menu" })
+      expect(() => decode({ action: "desktop.perform_action", ...base, element: [1], expected_revision: "rev", name: "AXRaise" })).toThrow()
     }),
   )
 })

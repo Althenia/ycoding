@@ -29,6 +29,35 @@ const ActionObject = Schema.Union([
   Browser.Schema.Capture,
   Browser.Schema.Group,
   Schema.Struct({ ...Browser.Schema.Ungroup.fields, groupID: integer(Browser.Schema.Ungroup.fields.groupID) }),
+  Browser.Schema.Back,
+  Browser.Schema.Forward,
+  Browser.Schema.Reload,
+  Browser.Schema.Key,
+  Schema.Struct({
+    type: Schema.Literal("wait"),
+    ref: Browser.Schema.Wait.fields.ref,
+    timeoutMs: integer(
+      Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(Browser.Schema.MAX_WAIT_MS)),
+    ).pipe(Schema.optional),
+  }),
+  Browser.Schema.ClipboardRead,
+  Browser.Schema.ClipboardWrite,
+  Browser.Schema.Upload,
+  Schema.Struct({
+    type: Schema.Literal("download"),
+    timeoutMs: integer(
+      Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(Browser.Schema.MAX_WAIT_MS)),
+    ).pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("logs"),
+    limit: integer(
+      Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(Browser.Schema.MAX_LOG_ENTRIES)),
+    ).pipe(Schema.optional),
+  }),
+  Browser.Schema.Export,
+  Browser.Schema.WebMcpList,
+  Browser.Schema.WebMcpInvoke,
 ])
 const ActionPayload = Schema.Union([
   ActionObject,
@@ -88,6 +117,31 @@ const CloseOperation = Schema.Struct({ operation: Schema.Literal("close"), mode:
 const ReleaseOperation = Schema.Struct({ operation: Schema.Literal("release"), mode: Schema.Literal("profile"), tabID: Browser.TabID,
   generation: integer(Browser.Schema.Generation) })
 
+const { sessionID: _historySessionID, callID: _historyCallID, ...HistoryFields } = Browser.Schema.HistoryInput.fields
+const historyLimit = integer(
+  Schema.Int.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(Browser.Schema.MAX_HISTORY_RESULTS)),
+).pipe(Schema.optional)
+const historyTime = integer(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))).pipe(Schema.optional)
+const HistoryOperation = Schema.Struct({
+  operation: Schema.Literal("history"),
+  mode: Schema.Literals(["owned", "profile"]).pipe(Schema.optional),
+  ...HistoryFields,
+  generation: integer(Browser.Schema.Generation),
+  limit: historyLimit,
+  startTime: historyTime,
+  endTime: historyTime,
+})
+const IsolatedHistoryOperation = Schema.Struct({
+  operation: Schema.Literal("history"),
+  mode: Schema.Literal("isolated"),
+  instanceID: IsolatedBrowser.Schema.InstanceID,
+  ...HistoryFields,
+  generation: integer(Browser.Schema.Generation),
+  limit: historyLimit,
+  startTime: historyTime,
+  endTime: historyTime,
+})
+
 export const Input = Schema.Union([
   StatusOperation,
   TabsOperation,
@@ -100,6 +154,8 @@ export const Input = Schema.Union([
   OpenOperation,
   CloseOperation,
   ReleaseOperation,
+  HistoryOperation,
+  IsolatedHistoryOperation,
 ])
 
 const Output = Schema.Union([
@@ -120,6 +176,7 @@ const Output = Schema.Union([
   Schema.Struct({ type: Schema.Literal("observation"), observation: Browser.Schema.Observation }),
   Schema.Struct({ type: Schema.Literal("action"), result: IsolatedBrowser.Schema.ActionResult }),
   Schema.Struct({ type: Schema.Literal("action"), result: Browser.Schema.ActionResult }),
+  Schema.Struct({ type: Schema.Literal("history"), result: Browser.Schema.HistoryResult }),
   Schema.Struct({ type: Schema.Literal("stopped"), mode: Schema.Literal("isolated") }),
   Schema.Struct({ type: Schema.Literal("stopped") }),
 ])
@@ -138,7 +195,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. The first observe or action claims a profile tab for this Session; lease:'other' means another Session controls it, so choose another tab or wait. Call operation:'release' with mode:'profile' when finished with a tab; control also ends when the Session goes idle. Owned mode only creates and closes its own tabs. Focus emulation keeps controlled pages visible and unthrottled while attached; it ends when the debugger detaches.",
+              "Work inside web pages in the paired Chrome profile with the user's existing logins: read page text and controls (including content inside cross-origin iframes, such as embedded third-party widgets), click, type, navigate, go back/forward, reload, press keys, scroll, wait, capture screenshots, search history, use the clipboard, upload files, wait for downloads, read console logs, export pages as MHTML, and list or invoke native page WebMCP tools when present. Prefer this tool over computer for anything inside a web page; observations return readable text plus semantic elements, and an element's optional frame field names the iframe page it came from (frames lists child frames and whether each was observed). Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. The first observe or action claims a profile tab for this Session; lease:'other' means another Session controls it, so choose another tab or wait. Call operation:'release' with mode:'profile' when finished with a tab; control also ends when the Session goes idle. Owned mode only creates and closes its own tabs. Focus emulation keeps controlled pages visible and unthrottled while attached; it ends when the debugger detaches.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => {
@@ -258,6 +315,29 @@ export const Plugin = {
                     : input.mode === "profile" ? { type: "tabs" as const, mode: "profile" as const, tabs }
                     : { type: "tabs" as const, tabs }
                 }
+                if (input.operation === "history") {
+                  if (isolatedMode)
+                    return yield* new ToolFailure({ message: "History search is unavailable in isolated mode because it has no user profile" })
+                  yield* permission.assert({
+                    action: "browser_read",
+                    resources: ["history"],
+                    save: ["*"],
+                    metadata: { operationDigest: requestDigest(input), operation: "history" },
+                    sessionID: context.sessionID,
+                    agent: context.agent,
+                    source,
+                  })
+                  const result = yield* browser.history({
+                    sessionID: context.sessionID,
+                    generation: input.generation,
+                    callID: context.callID,
+                    query: input.query,
+                    limit: input.limit,
+                    startTime: input.startTime,
+                    endTime: input.endTime,
+                  })
+                  return { type: "history" as const, result }
+                }
                 if (input.operation === "control") {
                   yield* permission.assert({
                     action: "browser_control",
@@ -308,20 +388,41 @@ export const Plugin = {
                     agent: context.agent,
                     source,
                   })
-                  const observation = yield* isolatedMode
-                    ? isolated.observe({
+                  const runObserve = (callID: string) =>
+                    isolatedMode
+                      ? isolated.observe({
+                          sessionID: context.sessionID,
+                          instanceID: input.instanceID,
+                          tabID: input.tabID,
+                          generation: input.generation,
+                          callID,
+                        })
+                      : browser.observe({
+                          sessionID: context.sessionID,
+                          tabID: input.tabID,
+                          generation: input.generation,
+                          callID,
+                        })
+                  const assertFrameReads = (current: Browser.Schema.Observation) =>
+                    Effect.gen(function* () {
+                      const framePages = [
+                        ...(current.frames ?? []).map((frame) => frame.page),
+                        ...current.elements.flatMap((element) => element.frame ?? []),
+                        ...(current.texts ?? []).flatMap((text) => text.frame ?? []),
+                      ].filter((framePage) => framePage.origin !== current.page.origin)
+                      const resources = [...new Set(framePages.map((framePage) => `${framePage.origin}${framePage.path}`))]
+                      if (resources.length === 0) return
+                      yield* permission.assert({
+                        action: "browser_read",
+                        resources,
+                        save: [...new Set(framePages.map((framePage) => framePage.origin))],
+                        metadata: { operationDigest: requestDigest(input), operation: "observe" },
                         sessionID: context.sessionID,
-                        instanceID: input.instanceID,
-                        tabID: input.tabID,
-                        generation: input.generation,
-                        callID: context.callID,
+                        agent: context.agent,
+                        source,
                       })
-                    : browser.observe({
-                        sessionID: context.sessionID,
-                        tabID: input.tabID,
-                        generation: input.generation,
-                        callID: context.callID,
-                      })
+                    })
+                  let observation = yield* runObserve(context.callID)
                   if (!isolatedMode && observation.page.origin !== tab.page.origin)
                     return yield* new ToolFailure({ message: "The shared tab changed to an unapproved site" })
                   if (!isolatedMode && `${observation.page.origin}${observation.page.path}` !== page)
@@ -334,6 +435,13 @@ export const Plugin = {
                       agent: context.agent,
                       source,
                     })
+                  yield* assertFrameReads(observation)
+                  if (observation.frames?.some((frame) => !frame.observed && frame.page.origin !== observation.page.origin)) {
+                    observation = yield* runObserve(`${context.callID}:frames`)
+                    if (!isolatedMode && observation.page.origin !== tab.page.origin)
+                      return yield* new ToolFailure({ message: "The shared tab changed to an unapproved site" })
+                    yield* assertFrameReads(observation)
+                  }
                   return { type: "observation" as const, observation }
                 }
                 const identityInput = { sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
@@ -389,6 +497,21 @@ export const Plugin = {
                         ref: input.action.ref,
                       })
                     : undefined
+                const elementFrame =
+                  extensionMode && (input.action.type === "click" || input.action.type === "type" || input.action.type === "upload")
+                    ? yield* browser.elementFrame({
+                        sessionID: context.sessionID,
+                        tabID: input.tabID,
+                        generation: input.generation,
+                        documentGeneration: input.documentGeneration,
+                        observationRevision: input.observationRevision,
+                        ref: input.action.ref,
+                      })
+                    : undefined
+                const frameResource =
+                  elementFrame && elementFrame.origin !== tab.page.origin
+                    ? `${elementFrame.origin}${elementFrame.path}`
+                    : undefined
                 const resource =
                   navigationURL !== undefined
                     ? yield* Effect.try({
@@ -397,7 +520,7 @@ export const Plugin = {
                       })
                     : page
                 const permissionAction =
-                  input.action.type === "capture" || input.action.type === "scroll"
+                  ["capture", "scroll", "wait", "clipboard_read", "logs", "download", "export", "webmcp_list"].includes(input.action.type)
                     ? "browser_read"
                     : input.action.type === "navigate"
                       ? "browser_navigate"
@@ -410,7 +533,7 @@ export const Plugin = {
                   metadata: {
                     operationDigest: actionDigest,
                     operation: input.action.type,
-                    ...(extensionMode && ["navigate", "click", "type"].includes(input.action.type)
+                    ...(extensionMode && ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type)
                       ? { mode: ownedMode ? "owned" : "profile", incidentalDownloads: true, site: new URL(resource).origin }
                       : {}),
                   },
@@ -440,6 +563,25 @@ export const Plugin = {
                     source,
                   })
                 }
+                if (frameResource) {
+                  for (const frameAction of ["browser_read", "browser_interact"] as const)
+                    yield* permission.assert({
+                      action: frameAction,
+                      resources: [frameResource],
+                      consumeReview: identity.reusable,
+                      save: [new URL(frameResource).origin],
+                      metadata: {
+                        operationDigest: actionDigest,
+                        operation: input.action.type,
+                        mode: ownedMode ? "owned" : "profile",
+                        incidentalDownloads: true,
+                        site: new URL(frameResource).origin,
+                      },
+                      sessionID: context.sessionID,
+                      agent: context.agent,
+                      source,
+                    })
+                }
                 if (extensionMode && (navigationURL || destination))
                   yield* permission.assert({
                     action: "browser_read",
@@ -451,12 +593,12 @@ export const Plugin = {
                     agent: context.agent,
                     source,
                   })
-                const mutating = ["navigate", "click", "type"].includes(input.action.type)
+                const mutating = ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type)
                 const reservation = mutating
                   ? yield* guardrail.assert({ source: { messageID: context.messageID, callID: context.callID },
                       sessionID: context.sessionID,
                       action: profileMode ? "browser_profile_mutation" : "browser_mutation",
-                      resources: destination ? [resource, destination] : [resource],
+                      resources: [resource, ...(destination ? [destination] : []), ...(frameResource ? [frameResource] : [])],
                       metadata: { operationDigest: actionDigest, operation: input.action.type },
                       skipReview: true,
                     })

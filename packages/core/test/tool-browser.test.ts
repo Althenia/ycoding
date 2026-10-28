@@ -52,6 +52,12 @@ const browser = Layer.mock(Browser.Service, {
     elements: [], truncated: false,
   }),
   clickDestination: () => Effect.succeed({ origin: "https://other.test", path: "/arrive" }),
+  elementFrame: (input) =>
+    Effect.succeed(input.ref === "b7" ? { origin: "https://child.example.test", path: "/tempo" } : undefined),
+  history: (input) => Effect.sync(() => {
+    sequence.push(`history:${input.callID}`)
+    return { entries: [{ url: "https://example.test/visited", title: "Visited", lastVisitTime: 10, visitCount: 2 }] }
+  }),
   open: (input) => Effect.sync(() => {
     sequence.push(`open:${input.callID}`)
     return { ...ownedTab, page: { origin: "https://example.test", path: "/new" } }
@@ -215,6 +221,119 @@ describe("BrowserTool", () => {
           tab: profileTab, status: "completed", capture: { mediaType: "image/png", bytes: 5 } } }) },
         { type: "file", uri: "data:image/png;base64,aW1hZ2U=", mime: "image/png", name: "shared-tab.png" },
       ])
+    }),
+  )
+  it.effect("treats history and key actions as interact mutations and wait as a read", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      for (const [id, action] of [
+        ["act-back", { type: "back" }],
+        ["act-forward", { type: "forward" }],
+        ["act-reload", { type: "reload" }],
+        ["act-key", { type: "key", key: "Enter" }],
+      ] as const) {
+        sequence.length = 0
+        yield* executeTool(registry, { sessionID, ...toolIdentity,
+          call: { type: "tool-call", id, name: "browser",
+            input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+              documentGeneration: 1, observationRevision: 1, action } } })
+        expect(sequence, id).toContain("permission:browser_interact:https://example.test/form")
+        expect(sequence, id).toContain("guardrail:browser_profile_mutation:https://example.test/form")
+        expect(sequence, id).toContain(`action:${id}`)
+      }
+      sequence.length = 0
+      yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "act-wait", name: "browser",
+          input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1, action: { type: "wait", timeoutMs: 1000 } } } })
+      expect(sequence).toContain("permission:browser_read:https://example.test/form")
+      expect(sequence.some((entry) => entry.startsWith("guardrail:"))).toBe(false)
+      expect(sequence).toContain("action:act-wait")
+    }),
+  )
+  it.effect("asserts interact permission for the frame site before acting on a framed element", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "act-frame-click", name: "browser",
+          input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1, action: { type: "click", ref: "b7" } } } })
+      expect(sequence).toContain("permission:browser_read:https://child.example.test/tempo")
+      expect(sequence).toContain("permission:browser_interact:https://child.example.test/tempo")
+      expect(sequence.indexOf("permission:browser_interact:https://child.example.test/tempo"))
+        .toBeLessThan(sequence.indexOf("action:act-frame-click"))
+    }),
+  )
+  const frameObserve = browserTests(permission, guardrail, Layer.mock(Browser.Service, {
+    list: () => Effect.succeed([profileTab]),
+    observe: (input) => Effect.succeed({
+      tabID: profileTab.id, generation: 1, documentGeneration: 1, revision: input.callID.endsWith(":frames") ? 3 : 2,
+      title: "Fixture", page: profileTab.page,
+      elements: input.callID.endsWith(":frames")
+        ? [{ ref: "b1" as const, role: "button", name: "Child button", frame: { origin: "https://child.example.test", path: "/tempo" } }]
+        : [],
+      frames: [{ page: { origin: "https://child.example.test", path: "/tempo" }, observed: input.callID.endsWith(":frames") }],
+      truncated: false,
+    }),
+  }))
+  frameObserve.effect("approves an unobserved child frame site and re-observes once to read its content", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "frame-observe", name: "browser",
+          input: { operation: "observe", mode: "profile", tabID: profileTab.id, generation: 1 } } })
+      expect(JSON.stringify(result)).toContain("Child button")
+      expect(JSON.stringify(result)).toContain('\\"revision\\":3')
+      expect(requests.filter((entry) => entry.action === "browser_read" &&
+        entry.resources[0] === "https://child.example.test/tempo").length).toBe(2)
+    }),
+  )
+  it.effect("searches history after read permission and rejects history in isolated mode", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "history-search", name: "browser",
+          input: { operation: "history", mode: "profile", generation: 1, query: "visited", limit: 5 } } })
+      expect(JSON.stringify(result)).toContain("https://example.test/visited")
+      expect(sequence).toEqual(["permission:browser_read:history", "history:history-search"])
+      const isolated = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "history-isolated", name: "browser",
+          input: { operation: "history", mode: "isolated", instanceID: isolatedInstanceID, generation: 1, query: "x" } } })
+      expect(isolated).toMatchObject({ type: "error" })
+      expect(sequence).not.toContain("history:history-isolated")
+    }),
+  )
+  it.effect("treats clipboard write and upload as interact mutations and clipboard read and logs as reads", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      for (const [id, action, mutating] of [
+        ["clip-write", { type: "clipboard_write", text: "synthetic" }, true],
+        ["upload-file", { type: "upload", ref: "b1", paths: ["/tmp/fixture.txt"] }, true],
+        ["webmcp-call", { type: "webmcp_invoke", name: "lookup" }, true],
+        ["clip-read", { type: "clipboard_read" }, false],
+        ["read-logs", { type: "logs" }, false],
+        ["wait-download", { type: "download", timeoutMs: 100 }, false],
+        ["export-page", { type: "export" }, false],
+        ["webmcp-list", { type: "webmcp_list" }, false],
+      ] as const) {
+        sequence.length = 0
+        yield* executeTool(registry, { sessionID, ...toolIdentity,
+          call: { type: "tool-call", id, name: "browser",
+            input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+              documentGeneration: 1, observationRevision: 1, action } } })
+        expect(sequence, id).toContain(
+          mutating
+            ? "permission:browser_interact:https://example.test/form"
+            : "permission:browser_read:https://example.test/form",
+        )
+        expect(sequence.some((entry) => entry.startsWith("guardrail:")), id).toBe(mutating)
+        expect(sequence, id).toContain(`action:${id}`)
+      }
     }),
   )
   it.effect("requires group control, both sites, and hard mutation review before profile grouping", () =>

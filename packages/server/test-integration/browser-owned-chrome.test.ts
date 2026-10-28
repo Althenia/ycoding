@@ -907,6 +907,293 @@ test("recovers a stopped Chrome worker without reopening its popup or repeating 
   }
 }, 180_000)
 
+test("observes and acts inside a cross-origin out-of-process iframe and captures only without password fields", async () => {
+  if (!chrome) throw new Error("Set YCODING_TEST_ISOLATED_BROWSER_CHROME to an installed Chrome for Testing executable")
+  if (!(await Bun.file(chrome).exists())) throw new Error("Chrome for Testing executable is unavailable")
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-oopif-chrome-"))
+  const scope = await Effect.runPromise(Scope.make())
+  const childClicks: string[] = []
+  const uploads: string[] = []
+  const child = Bun.serve({
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/clicked") {
+        childClicks.push(url.searchParams.get("value") ?? "")
+        return new Response("recorded")
+      }
+      if (url.pathname === "/password")
+        return new Response("<!doctype html><title>Child login</title><input type='password' aria-label='Secret'>", {
+          headers: { "content-type": "text/html" },
+        })
+      return new Response(
+        "<!doctype html><title>Child frame</title><p>Tempo rows</p><input aria-label='Child input'><button aria-label='Child button' onclick=\"fetch('/clicked?value='+encodeURIComponent(document.querySelector('input').value))\">Log</button>",
+        { headers: { "content-type": "text/html" } },
+      )
+    },
+  })
+  const shell = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/uploaded") {
+        uploads.push(`${url.searchParams.get("name")}:${url.searchParams.get("size")}`)
+        return new Response("recorded")
+      }
+      if (url.pathname === "/peripheral")
+        return new Response(
+          "<!doctype html><title>Peripheral fixture</title><script>console.log('peripheral-log-marker')</script><input type='file' aria-label='Upload' onchange=\"fetch('/uploaded?name='+encodeURIComponent(this.files[0].name)+'&size='+this.files[0].size)\">",
+          { headers: { "content-type": "text/html" } },
+        )
+      const frame = url.pathname === "/password" ? `http://localhost:${child.port}/password` : `http://localhost:${child.port}/child`
+      return new Response(
+        `<!doctype html><title>Shell page</title><h1>Shell heading</h1><iframe src="${frame}" width="480" height="320"></iframe>`,
+        { headers: { "content-type": "text/html" } },
+      )
+    },
+  })
+  const shellOrigin = `http://127.0.0.1:${shell.port}`
+  const childOrigin = `http://localhost:${child.port}`
+  const port = await availablePort()
+  const base = `http://127.0.0.1:${port}`
+  const sessionID = "ses_browser_oopif_live"
+  const request = (path: string, options: RequestInit = {}) => {
+    const headers = new Headers(options.headers)
+    headers.set("authorization", auth)
+    return fetch(`${base}${path}`, { ...options, headers })
+  }
+  const observe = async (tabID: string, generation: number, callID: string) => {
+    const response = await request(`/api/session/${sessionID}/browser/observe`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tabID, generation, callID }),
+    })
+    expect(response.status, await response.clone().text()).toBe(200)
+    return Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Observation }))(await response.json()).data
+  }
+  const act = async (observation: Browser.Observation, callID: string, action: Browser.Schema.Action) =>
+    request(`/api/session/${sessionID}/browser/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tabID: observation.tabID,
+        generation: observation.generation,
+        documentGeneration: observation.documentGeneration,
+        observationRevision: observation.revision,
+        callID,
+        action,
+      }),
+    })
+  let process: ReturnType<typeof spawn> | undefined
+  let cdp: Client | undefined
+  try {
+    const startingRaw = ServerProcess.start<never, never>({
+      hostname: "127.0.0.1",
+      port,
+      password: "test-password",
+      database: { path: ":memory:" },
+      config: { directory, project: false, content: "{}" },
+      fs: { filewatcher: false, fff: false },
+    }).pipe(Effect.provideService(Scope.Scope, scope))
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
+    await Effect.runPromise(starting)
+    const created = await request("/api/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: sessionID, location: { directory } }),
+    })
+    expect(created.status, await created.text()).toBe(200)
+    const pairingHTTP = await request(`/api/session/${sessionID}/browser/start`, { method: "POST" })
+    expect(pairingHTTP.status).toBe(200)
+    const pairing = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Pairing }))(await pairingHTTP.json()).data
+    process = spawn(
+      chrome,
+      [
+        "--headless=new",
+        `--user-data-dir=${join(directory, "profile")}`,
+        "--remote-debugging-pipe",
+        "--use-mock-keychain",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-sync",
+        "--disable-breakpad",
+        "--site-per-process",
+        `--disable-extensions-except=${extension}`,
+        `--load-extension=${extension}`,
+        "about:blank",
+      ],
+      { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
+    )
+    const readable = process.stdio[4]
+    const writable = process.stdio[3]
+    if (!(readable instanceof Readable) || !(writable instanceof Writable))
+      throw new Error("Private Chrome did not expose its control pipe")
+    cdp = connect(readable, writable)
+    await cdp.send("Target.setDiscoverTargets", { discover: true })
+    const worker = await eventually(async () => {
+      const infos = record(await cdp!.send("Target.getTargets")).targetInfos
+      return Array.isArray(infos)
+        ? infos
+            .map(record)
+            .find(
+              (info) =>
+                info.type === "service_worker" &&
+                /^chrome-extension:\/\//.test(String(info.url)) &&
+                /service-worker\.js$/.test(String(info.url)),
+            )
+        : undefined
+    }, "private extension service worker")
+    const extensionID = /^chrome-extension:\/\/([a-p]{32})\//.exec(string(worker.url))?.[1]
+    if (!extensionID) throw new Error("Private extension identity unavailable")
+    const popup = record(await cdp.send("Target.createTarget", { url: `chrome-extension://${extensionID}/popup.html` }))
+    const popupSession = string(
+      record(await cdp.send("Target.attachToTarget", { targetId: string(popup.targetId), flatten: true })).sessionId,
+    )
+    await cdp.send("Runtime.enable", {}, popupSession)
+    await eventually(
+      async () =>
+        (await evaluate(cdp!, popupSession, "typeof chrome === 'object' && !!chrome.runtime?.sendMessage")) === true
+          ? true
+          : undefined,
+      "private extension popup",
+    )
+    const paired = record(
+      await evaluate(
+        cdp,
+        popupSession,
+        `chrome.runtime.sendMessage({type:'pair',serverURL:${JSON.stringify(base)},secret:${JSON.stringify(pairing.secret)}})`,
+      ),
+    )
+    expect(paired).toMatchObject({ paired: true, connected: true, profileGranted: true })
+    const status = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Status }))(
+      await (await request(`/api/session/${sessionID}/browser`)).json(),
+    ).data
+    if (!status.generation) throw new Error("Private Chrome bridge had no generation")
+    const openedHTTP = await request(`/api/session/${sessionID}/browser/open`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ generation: status.generation, url: `${shellOrigin}/`, callID: "oopif-open" }),
+    })
+    expect(openedHTTP.status, await openedHTTP.clone().text()).toBe(200)
+    const tab = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Tab }))(await openedHTTP.json()).data
+
+    const first = await observe(tab.id, tab.generation, "oopif-observe-1")
+    expect(first.frames).toContainEqual(
+      expect.objectContaining({ page: expect.objectContaining({ origin: childOrigin }), observed: false }),
+    )
+    const merged = await eventually(async () => {
+      const observation = await observe(tab.id, tab.generation, `oopif-observe-${Math.random()}`)
+      return observation.elements.some((element) => element.name === "Child button") ? observation : undefined
+    }, "merged cross-origin frame observation")
+    expect(merged.elements).toContainEqual(
+      expect.objectContaining({
+        role: "button",
+        name: "Child button",
+        frame: expect.objectContaining({ origin: childOrigin }),
+      }),
+    )
+    expect(merged.texts).toContainEqual(expect.objectContaining({ name: "Tempo rows" }))
+    expect(merged.texts).toContainEqual(expect.objectContaining({ name: "Shell heading" }))
+    const childInput = merged.elements.find((element) => element.name === "Child input")
+    if (!childInput) throw new Error("Child frame input was not observed")
+    const typed = await act(merged, "oopif-type", { type: "type", ref: childInput.ref, text: "2h" })
+    expect(typed.status, await typed.clone().text()).toBe(200)
+
+    const beforeClick = await observe(tab.id, tab.generation, "oopif-observe-click")
+    const childButton = beforeClick.elements.find((element) => element.name === "Child button")
+    if (!childButton) throw new Error("Child frame button was not observed")
+    const clicked = await act(beforeClick, "oopif-click", { type: "click", ref: childButton.ref })
+    expect(clicked.status, await clicked.clone().text()).toBe(200)
+    await eventually(async () => (childClicks.length > 0 ? true : undefined), "child frame click fetch")
+    expect(childClicks).toEqual(["2h"])
+
+    const beforeCapture = await observe(tab.id, tab.generation, "oopif-observe-capture")
+    const captured = await act(beforeCapture, "oopif-capture", { type: "capture" })
+    expect(captured.status, await captured.clone().text()).toBe(200)
+    const captureResult = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(
+      await captured.json(),
+    ).data
+    expect(captureResult.status).toBe("completed")
+    expect(captureResult.capture?.mediaType).toBe("image/png")
+
+    const beforePeripheral = await observe(tab.id, tab.generation, "oopif-observe-peripheral-nav")
+    const peripheralNav = await act(beforePeripheral, "oopif-navigate-peripheral", {
+      type: "navigate",
+      url: `${shellOrigin}/peripheral`,
+    })
+    expect(peripheralNav.status, await peripheralNav.clone().text()).toBe(200)
+    expect(await peripheralNav.clone().text()).toContain('"status":"completed"')
+    const peripheralObservation = await observe(tab.id, tab.generation, "oopif-observe-peripheral")
+    const uploadInput = peripheralObservation.elements.find((element) => element.name.includes("Upload"))
+    if (!uploadInput) throw new Error("File input was not observed")
+    const uploadPath = join(directory, "fixture-upload.txt")
+    await Bun.write(uploadPath, "synthetic upload")
+    const uploaded = await act(peripheralObservation, "oopif-upload", { type: "upload", ref: uploadInput.ref, paths: [uploadPath] })
+    expect(uploaded.status, await uploaded.clone().text()).toBe(200)
+    expect(await uploaded.clone().text()).toContain('"status":"completed"')
+    await eventually(async () => (uploads.length > 0 ? true : undefined), "file input change fetch")
+    expect(uploads).toEqual(["fixture-upload.txt:16"])
+    const logResult = await eventually(async () => {
+      const observation = await observe(tab.id, tab.generation, `oopif-observe-logs-${Math.random()}`)
+      const response = await act(observation, `oopif-logs-${Math.random()}`, { type: "logs" })
+      if (response.status !== 200) return undefined
+      const result = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await response.json()).data
+      return result.logs?.some((entry) => entry.text.includes("peripheral-log-marker")) ? result : undefined
+    }, "peripheral console log")
+    expect(logResult.status).toBe("completed")
+    const beforeExport = await observe(tab.id, tab.generation, "oopif-observe-export")
+    const exported = await act(beforeExport, "oopif-export", { type: "export" })
+    expect(exported.status, await exported.clone().text()).toBe(200)
+    const exportResult = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await exported.json()).data
+    expect(exportResult.status).toBe("completed")
+    if (!exportResult.savedFile) throw new Error("Export did not return a saved file")
+    expect(exportResult.savedFile.bytes).toBeGreaterThan(0)
+    const mhtml = await Bun.file(exportResult.savedFile.path).text()
+    expect(mhtml).toContain("MIME-Version: 1.0")
+    expect(mhtml).toContain("Peripheral fixture")
+    await rm(exportResult.savedFile.path, { force: true })
+
+    const beforeNavigate = await observe(tab.id, tab.generation, "oopif-observe-nav")
+    const navigated = await act(beforeNavigate, "oopif-navigate-password", {
+      type: "navigate",
+      url: `${shellOrigin}/password`,
+    })
+    expect(navigated.status, await navigated.clone().text()).toBe(200)
+    expect(await navigated.clone().text()).toContain('"status":"completed"')
+    const passwordObservation = await observe(tab.id, tab.generation, "oopif-observe-password")
+    const blocked = await act(passwordObservation, "oopif-capture-password", { type: "capture" })
+    if (blocked.status === 200) {
+      const blockedResult = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(
+        await blocked.json(),
+      ).data
+      expect(blockedResult.status).not.toBe("completed")
+      expect(blockedResult.capture).toBeUndefined()
+    } else {
+      expect(blocked.status).toBeGreaterThanOrEqual(400)
+    }
+  } finally {
+    try {
+      if (cdp) {
+        await cdp.send("Browser.close").catch(() => {})
+        cdp.close()
+      }
+      if (process) await terminate(process)
+    } finally {
+      try {
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+      } finally {
+        await shell.stop(true)
+        await child.stop(true)
+        await rm(directory, { recursive: true, force: true })
+      }
+    }
+  }
+}, 120_000)
+
 const markerOwner = "ses_marker_live_owner"
 const markerOther = "ses_marker_live_other"
 

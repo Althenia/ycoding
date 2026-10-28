@@ -34,6 +34,9 @@ export interface AppInfo {
   readonly is_active: boolean
   readonly is_hidden: boolean
   readonly windows: ReadonlyArray<WindowInfo>
+  readonly is_running?: boolean
+  readonly last_used?: string
+  readonly uses?: number
 }
 
 export interface BrowserWindowInfo {

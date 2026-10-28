@@ -54,7 +54,7 @@ it.live(`a browser approval survives execution end and fresh refs only for the $
   const pairing = yield* browser.start(root.id)
   const extensionID = "a".repeat(32)
   const attachment = yield* browser.attach({ origin: `chrome-extension://${extensionID}`,
-    handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret }, transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} } })
+    handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret }, transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} } })
   const paired = yield* Queue.take(outbox)
   if (paired.type !== "paired") return yield* Effect.die(new Error("Missing paired frame"))
   yield* attachment.receive({ type: "profile_access", enabled: true })

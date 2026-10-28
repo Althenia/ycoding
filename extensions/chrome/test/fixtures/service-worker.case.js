@@ -38,7 +38,7 @@ describe("Chrome bridge service worker", () => {
     const restored = harness.FakeWebSocket.instances[0]
     expect(restored.outgoing).toContainEqual({
       type: "authenticate",
-      version: 4,
+      version: 5,
       extensionID: "extension-test",
       serverID: "server-restored-1",
       credential: "r".repeat(43),
@@ -850,7 +850,7 @@ describe("Chrome bridge service worker", () => {
       expect(world).toBeGreaterThan(-1)
       expect(animation).toBeGreaterThan(world)
       expect(mouse).toBeGreaterThan(animation)
-      expect(harness.commands.some((item) => item.method === "Runtime.enable")).toBe(false)
+      expect(harness.commands.some((item) => item.method === "Runtime.enable")).toBe(true)
       expect(harness.cursorDOM.chipText()).toEqual(["YCoding · Click"])
       expect(harness.commands[animation].params.contextId).toBe(1)
       expect(harness.commands[animation].params.expression).toContain('"x":5,"y":5')
@@ -1125,6 +1125,358 @@ describe("Chrome bridge service worker", () => {
     } finally {
       if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
         await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  })
+})
+
+describe("Chrome bridge cross-origin frames", () => {
+  const childURL = "https://child.example.test/tempo"
+  async function stopBridge() {
+    if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+      await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+  }
+  async function connectWithChild() {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Shell" }]
+    harness.page.child = { url: childURL }
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "o".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    const shared = socket.outgoing.find((message) => message.type === "shared")
+    await socket.receive({ type: "observe", callID: "observe-attach", tabID: shared.tabID, generation: "bridge-1" })
+    await harness.debuggerEvents.emit({ tabId: 17 }, "Target.attachedToTarget", {
+      sessionId: "child-1",
+      targetInfo: { targetId: "child-target", type: "iframe", url: childURL },
+      waitingForDebugger: false,
+    })
+    return { socket, shared }
+  }
+  async function observeFrames(socket, tabID, frameOrigins, callID) {
+    await socket.receive({ type: "observe", callID, tabID, generation: "bridge-1", frameOrigins })
+    return socket.outgoing.find((message) => message.callID === callID)
+  }
+  function frameAction(callID, tabID, observation, input) {
+    return { ...action(callID, tabID, observation, input), frameOrigins: ["https://child.example.test"] }
+  }
+
+  test("merges a permitted child session tree and readable text into one observation", async () => {
+    const { socket, shared } = await connectWithChild()
+    try {
+      expect(harness.commands.some((item) => item.method === "Target.setAutoAttach")).toBe(true)
+      const observation = await observeFrames(socket, shared.tabID, ["https://child.example.test"], "observe-merged")
+      expect(observation.type).toBe("observation")
+      expect(observation.elements).toContainEqual(
+        expect.objectContaining({ role: "button", name: "Child button", frame: childURL }),
+      )
+      expect(observation.elements).toContainEqual(
+        expect.objectContaining({ role: "textbox", name: "Child input", frame: childURL }),
+      )
+      expect(observation.elements).toContainEqual(expect.objectContaining({ role: "textbox", name: "Name" }))
+      expect(observation.texts).toContainEqual(expect.objectContaining({ role: "heading", name: "Shell heading" }))
+      expect(observation.texts).toContainEqual(
+        expect.objectContaining({ role: "StaticText", name: "Tempo rows", frame: childURL }),
+      )
+      expect(observation.frames).toContainEqual({ url: childURL, observed: true })
+      expect(
+        harness.commands.some(
+          (item) => item.method === "Accessibility.getFullAXTree" && item.source.sessionId === "child-1",
+        ),
+      ).toBe(true)
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("excludes child content for an unpermitted frame origin but reports the frame", async () => {
+    const { socket, shared } = await connectWithChild()
+    try {
+      const observation = await observeFrames(socket, shared.tabID, [], "observe-gated")
+      expect(observation.type).toBe("observation")
+      expect(observation.elements.some((element) => element.name === "Child button")).toBe(false)
+      expect((observation.texts ?? []).some((text) => text.name === "Tempo rows")).toBe(false)
+      expect(observation.frames).toContainEqual({ url: childURL, observed: false })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("routes click and type to the child session with main-viewport mouse coordinates", async () => {
+    const { socket, shared } = await connectWithChild()
+    try {
+      const observation = await observeFrames(socket, shared.tabID, ["https://child.example.test"], "observe-act")
+      const button = observation.elements.find((element) => element.name === "Child button")
+      const input = observation.elements.find((element) => element.name === "Child input")
+      const start = harness.commands.length
+      await socket.receive(frameAction("click-child", shared.tabID, observation, { type: "click", ref: button.ref }))
+      expect(socket.outgoing.find((message) => message.callID === "click-child")).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      const clicks = harness.commands.slice(start)
+      expect(clicks).toContainEqual({
+        source: { tabId: 17, sessionId: "child-1" },
+        method: "DOM.describeNode",
+        params: { backendNodeId: 201, depth: 0 },
+      })
+      expect(clicks.some((item) => item.method === "DOM.getFrameOwner" && item.source.sessionId === undefined)).toBe(true)
+      expect(clicks).toContainEqual(
+        expect.objectContaining({
+          source: { tabId: 17 },
+          method: "Input.dispatchMouseEvent",
+          params: expect.objectContaining({ type: "mousePressed", x: 105, y: 55 }),
+        }),
+      )
+      await socket.receive(
+        frameAction("type-child", shared.tabID, observation, { type: "type", ref: input.ref, text: "2h" }),
+      )
+      expect(socket.outgoing.find((message) => message.callID === "type-child")).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      expect(harness.commands).toContainEqual({
+        source: { tabId: 17, sessionId: "child-1" },
+        method: "DOM.focus",
+        params: { backendNodeId: 202 },
+      })
+      expect(harness.commands).toContainEqual({
+        source: { tabId: 17, sessionId: "child-1" },
+        method: "Input.insertText",
+        params: { text: "2h" },
+      })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("a subframe navigation invalidates only that frame's refs", async () => {
+    const { socket, shared } = await connectWithChild()
+    try {
+      const observation = await observeFrames(socket, shared.tabID, ["https://child.example.test"], "observe-subnav")
+      const button = observation.elements.find((element) => element.name === "Child button")
+      const main = observation.elements.find((element) => element.name === "Name")
+      await harness.debuggerEvents.emit({ tabId: 17, sessionId: "child-1" }, "Page.frameNavigated", {
+        frame: { id: "child-frame", url: "https://child.example.test/other" },
+      })
+      await socket.receive(frameAction("click-stale-child", shared.tabID, observation, { type: "click", ref: button.ref }))
+      expect(socket.outgoing.find((message) => message.callID === "click-stale-child")).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      await socket.receive(frameAction("click-main-still", shared.tabID, observation, { type: "click", ref: main.ref }))
+      expect(socket.outgoing.find((message) => message.callID === "click-main-still")).toMatchObject({
+        type: "result",
+        status: "completed",
+        documentGeneration: observation.documentGeneration,
+      })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("capture inspects the child session document instead of failing on its iframe", async () => {
+    const { socket, shared } = await connectWithChild()
+    try {
+      const observation = await observeFrames(socket, shared.tabID, ["https://child.example.test"], "observe-capture-frame")
+      harness.page.documentRoot = node("#document", { children: [node("IFRAME")] })
+      harness.page.childDocumentRoot = node("#document", { children: [node("DIV")] })
+      await socket.receive(frameAction("capture-oopif", shared.tabID, observation, { type: "capture" }))
+      expect(socket.outgoing.find((message) => message.callID === "capture-oopif")).toMatchObject({
+        type: "result",
+        status: "completed",
+        capture: { mediaType: "image/png" },
+      })
+      harness.page.childDocumentRoot = node("#document", { children: [password()] })
+      await socket.receive(frameAction("capture-oopif-password", shared.tabID, observation, { type: "capture" }))
+      expect(socket.outgoing.find((message) => message.callID === "capture-oopif-password")).toMatchObject({
+        type: "error",
+        dispatched: false,
+        message: "Capture is disabled while password fields are present",
+      })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("dispatches history, reload, key, and wait actions and rejects unknown actions", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Shell" }]
+    harness.page.historyEntries = [
+      { id: 11, url: "https://example.test/one", title: "One" },
+      { id: 12, url: "https://example.test/form", title: "Shell" },
+    ]
+    harness.page.historyIndex = 1
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "n".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", callID: "observe-actions", tabID: shared.tabID, generation: "bridge-1" })
+      const observation = socket.outgoing.find((message) => message.callID === "observe-actions")
+      const run = async (callID, input) => {
+        await socket.receive(action(callID, shared.tabID, observation, input))
+        return socket.outgoing.find((message) => message.callID === callID)
+      }
+      expect(await run("act-back", { type: "back" })).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands).toContainEqual(
+        expect.objectContaining({ method: "Page.navigateToHistoryEntry", params: { entryId: 11 } }),
+      )
+      harness.page.historyIndex = 0
+      expect(await run("act-forward", { type: "forward" })).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands).toContainEqual(
+        expect.objectContaining({ method: "Page.navigateToHistoryEntry", params: { entryId: 12 } }),
+      )
+      expect(await run("act-reload", { type: "reload" })).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands.some((item) => item.method === "Page.reload")).toBe(true)
+      expect(await run("act-key", { type: "key", key: "Enter" })).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Input.dispatchKeyEvent",
+          params: expect.objectContaining({ type: "keyDown", key: "Enter" }),
+        }),
+      )
+      expect(await run("act-key-shift", { type: "key", key: "Tab", modifiers: ["Shift"] })).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      expect(harness.commands).toContainEqual(
+        expect.objectContaining({
+          method: "Input.dispatchKeyEvent",
+          params: expect.objectContaining({ type: "keyDown", key: "Tab", modifiers: 8 }),
+        }),
+      )
+      expect(await run("act-wait-ref", { type: "wait", ref: "b1", timeoutMs: 1000 })).toMatchObject({
+        type: "result",
+        status: "completed",
+      })
+      expect(await run("act-wait-missing", { type: "wait", ref: "b99", timeoutMs: 250 })).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+      expect(await run("act-unknown", { type: "hover", ref: "b1" })).toMatchObject({ type: "error", dispatched: false })
+    } finally {
+      await stopBridge()
+    }
+  })
+})
+
+describe("Chrome bridge peripherals", () => {
+  async function stopBridge() {
+    if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+      await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+  }
+  async function connect() {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Shell" }]
+    await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "p".repeat(32) })
+    const socket = harness.FakeWebSocket.instance
+    const shared = socket.outgoing.find((message) => message.type === "shared")
+    await socket.receive({ type: "observe", callID: "peripheral-observe", tabID: shared.tabID, generation: "bridge-1" })
+    const observation = socket.outgoing.find((message) => message.callID === "peripheral-observe")
+    return { socket, shared, observation }
+  }
+
+  test("searches history with the optional permission and filters credential URLs", async () => {
+    const { socket } = await connect()
+    try {
+      await socket.receive({ type: "history", callID: "h1", generation: "bridge-1", query: "visited", limit: 5 })
+      const result = socket.outgoing.find((message) => message.callID === "h1")
+      expect(result).toMatchObject({ type: "history_result" })
+      expect(result.entries).toEqual([{ url: "https://example.test/visited", title: "Visited", lastVisitTime: 10, visitCount: 2 }])
+      harness.page.historyGranted = false
+      await socket.receive({ type: "history", callID: "h2", generation: "bridge-1", query: "visited" })
+      expect(socket.outgoing.find((message) => message.callID === "h2")).toMatchObject({ type: "history_error" })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("reads and writes the clipboard only on capture-safe pages", async () => {
+    const { socket, shared, observation } = await connect()
+    try {
+      await socket.receive(action("clip-read", shared.tabID, observation, { type: "clipboard_read" }))
+      expect(socket.outgoing.find((message) => message.callID === "clip-read")).toMatchObject({
+        type: "result",
+        status: "completed",
+        text: "clipboard-fixture",
+      })
+      await socket.receive(action("clip-write", shared.tabID, observation, { type: "clipboard_write", text: "synthetic-write" }))
+      expect(socket.outgoing.find((message) => message.callID === "clip-write")).toMatchObject({ type: "result", status: "completed" })
+      expect(
+        harness.commands.some((item) => item.method === "Runtime.evaluate" && item.params.expression.includes("synthetic-write")),
+      ).toBe(true)
+      harness.page.documentRoot = node("#document", { children: [password()] })
+      await socket.receive(action("clip-read-password", shared.tabID, observation, { type: "clipboard_read" }))
+      expect(socket.outgoing.find((message) => message.callID === "clip-read-password")).toMatchObject({
+        type: "error",
+        dispatched: false,
+      })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("sets files on a file input and rejects other inputs", async () => {
+    const { socket, shared, observation } = await connect()
+    try {
+      harness.page.fileInput = true
+      await socket.receive(action("upload-1", shared.tabID, observation, { type: "upload", ref: "b1", paths: ["/tmp/fixture.txt"] }))
+      expect(socket.outgoing.find((message) => message.callID === "upload-1")).toMatchObject({ type: "result", status: "completed" })
+      expect(harness.commands).toContainEqual(
+        expect.objectContaining({ method: "DOM.setFileInputFiles", params: { backendNodeId: 91, files: ["/tmp/fixture.txt"] } }),
+      )
+      harness.page.fileInput = false
+      await socket.receive(action("upload-2", shared.tabID, observation, { type: "upload", ref: "b1", paths: ["/tmp/fixture.txt"] }))
+      expect(socket.outgoing.find((message) => message.callID === "upload-2")).toMatchObject({ type: "error", dispatched: false })
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("waits for a completed download and returns bounded dev logs", async () => {
+    const { socket, shared, observation } = await connect()
+    try {
+      harness.page.downloadItems = [{ id: 5, filename: "report.csv", state: "complete", bytesReceived: 3, totalBytes: 3 }]
+      await socket.receive(action("download-1", shared.tabID, observation, { type: "download", timeoutMs: 1000 }))
+      expect(socket.outgoing.find((message) => message.callID === "download-1")).toMatchObject({
+        type: "result",
+        status: "completed",
+        download: { filename: "report.csv", state: "complete" },
+      })
+      harness.page.downloadItems = []
+      await socket.receive(action("download-2", shared.tabID, observation, { type: "download", timeoutMs: 250 }))
+      expect(socket.outgoing.find((message) => message.callID === "download-2")).toMatchObject({ type: "error", dispatched: false })
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "hello-log" }],
+      })
+      await harness.debuggerEvents.emit({ tabId: 17 }, "Runtime.exceptionThrown", {
+        exceptionDetails: { text: "Uncaught", exception: { description: "Error: boom" } },
+      })
+      await socket.receive(action("logs-1", shared.tabID, observation, { type: "logs" }))
+      const logs = socket.outgoing.find((message) => message.callID === "logs-1")
+      expect(logs).toMatchObject({ type: "result", status: "completed" })
+      expect(logs.logs).toContainEqual(expect.objectContaining({ level: "log", text: "hello-log" }))
+      expect(logs.logs).toContainEqual(expect.objectContaining({ level: "error", text: expect.stringContaining("boom") }))
+    } finally {
+      await stopBridge()
+    }
+  })
+
+  test("exports MHTML data and reports WebMCP unsupported when the page has no model context", async () => {
+    const { socket, shared, observation } = await connect()
+    try {
+      await socket.receive(action("export-1", shared.tabID, observation, { type: "export" }))
+      expect(socket.outgoing.find((message) => message.callID === "export-1")).toMatchObject({
+        type: "result",
+        status: "completed",
+        data: "MHTML-FIXTURE",
+      })
+      await socket.receive(action("webmcp-1", shared.tabID, observation, { type: "webmcp_list" }))
+      expect(socket.outgoing.find((message) => message.callID === "webmcp-1")).toMatchObject({
+        type: "error",
+        dispatched: false,
+        message: expect.stringContaining("WebMCP"),
+      })
+    } finally {
+      await stopBridge()
     }
   })
 })
@@ -1800,6 +2152,16 @@ function createHarness() {
     evaluationFailsFor: undefined,
     staleContext: 0,
     documentRoot: node("#document"),
+    child: undefined,
+    childDocumentRoot: node("#document"),
+    historyEntries: undefined,
+    historyIndex: 0,
+    historyGranted: true,
+    downloadsGranted: true,
+    historyResults: undefined,
+    downloadItems: undefined,
+    clipboardText: "clipboard-fixture",
+    fileInput: false,
   }
 
   class FakeWebSocket {
@@ -1862,7 +2224,7 @@ function createHarness() {
           () =>
             void this.receive({
               type: "paired",
-              version: 4,
+              version: 5,
               generation: "bridge-1",
               serverID: "server-paired",
               credential: "p".repeat(43),
@@ -1873,7 +2235,7 @@ function createHarness() {
           () =>
             void this.receive({
               type: "paired",
-              version: 4,
+              version: 5,
               generation: "bridge-1",
               serverID: message.serverID,
             }),
@@ -1977,6 +2339,23 @@ function createHarness() {
           groupUpdates.push({ groupId, updateProperties })
         },
       },
+      permissions: {
+        contains: async ({ permissions }) =>
+          permissions.every((name) => (name === "history" ? page.historyGranted : name === "downloads" ? page.downloadsGranted : true)),
+        request: async () => false,
+      },
+      history: {
+        search: async () =>
+          page.historyResults ?? [
+            { url: "https://example.test/visited", title: "Visited", lastVisitTime: 10, visitCount: 2 },
+            { url: "https://user:secret@example.test/private", title: "Credential", lastVisitTime: 9, visitCount: 1 },
+          ],
+      },
+      downloads: {
+        onCreated: listeners(),
+        onChanged: listeners(),
+        search: async () => page.downloadItems ?? [],
+      },
       debugger: {
         onDetach: debuggerDetach,
         onEvent: debuggerEvents,
@@ -1999,13 +2378,20 @@ function createHarness() {
           if (method === "Page.getNavigationHistory") {
             if (source.tabId === 24 && page.historyUnavailable-- > 0)
               throw new Error('{"code":-32000,"message":"Not attached to an active page"}')
+            if (page.historyEntries) return { currentIndex: page.historyIndex, entries: page.historyEntries }
             return {
               currentIndex: 0,
-              entries: [{ title: "Example", url: source.tabId === 24 ? createdURL : "https://example.test/form" }],
+              entries: [{ id: 1, title: "Example", url: source.tabId === 24 ? createdURL : "https://example.test/form" }],
             }
           }
-          if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main-frame" } } }
+          if (method === "Page.getFrameTree" && source.sessionId)
+            return { frameTree: { frame: { id: "child-frame", url: page.child?.url ?? "https://child.example.test/tempo" } } }
+          if (method === "Page.getFrameTree")
+            return { frameTree: { frame: { id: "main-frame", url: "https://example.test/form" } } }
+          if (method === "DOM.getFrameOwner") return { backendNodeId: 999 }
           if (method === "Page.createIsolatedWorld") return { executionContextId: 1 }
+          if (method === "Page.getLayoutMetrics" && source.sessionId)
+            return { layoutViewport: { clientWidth: 400, clientHeight: 300 } }
           if (method === "Page.getLayoutMetrics")
             return { layoutViewport: { clientWidth: 100, clientHeight: 80 } }
           if (method === "Runtime.evaluate" && page.cursorEvaluationFails)
@@ -2026,6 +2412,10 @@ function createHarness() {
           if (method === "Runtime.callFunctionOn") {
             return { result: { type: "undefined" } }
           }
+          if (method === "Runtime.evaluate" && params.expression.includes("navigator.clipboard.readText"))
+            return { result: { value: page.clipboardText } }
+          if (method === "Runtime.evaluate" && params.expression.includes("navigator.clipboard.writeText"))
+            return { result: {} }
           if (method === "Runtime.evaluate") {
             if (page.holdMark && params.expression.includes('"op":"mark"') && !params.expression.includes('"cursor":{')) {
               const gate = page.holdMark
@@ -2038,6 +2428,14 @@ function createHarness() {
           if (method === "Accessibility.getFullAXTree" && page.axFails) throw new Error("Accessibility tree unavailable")
           if (method === "Accessibility.getFullAXTree" && page.axNavigates)
             await debuggerEvents.emit(source, "Page.frameNavigated", { frame: { url: page.axNavigates } })
+          if (method === "Accessibility.getFullAXTree" && source.sessionId)
+            return {
+              nodes: [
+                { ignored: false, role: { value: "button" }, name: { value: "Child button" }, backendDOMNodeId: 201 },
+                { ignored: false, role: { value: "textbox" }, name: { value: "Child input" }, backendDOMNodeId: 202 },
+                { ignored: false, role: { value: "StaticText" }, name: { value: "Tempo rows" }, backendDOMNodeId: 203 },
+              ],
+            }
           if (method === "Accessibility.getFullAXTree")
             return {
               nodes: [
@@ -2047,17 +2445,34 @@ function createHarness() {
                   name: { value: "Name" },
                   backendDOMNodeId: 91,
                 },
+                ...(page.child
+                  ? [
+                      { ignored: false, role: { value: "heading" }, name: { value: "Shell heading" }, backendDOMNodeId: 92 },
+                      { ignored: false, role: { value: "StaticText" }, name: { value: "Shell static" }, backendDOMNodeId: 93 },
+                    ]
+                  : []),
               ],
+            }
+          if (method === "DOM.describeNode" && source.sessionId)
+            return {
+              node:
+                params.backendNodeId === 201
+                  ? { nodeName: "BUTTON", attributes: [] }
+                  : { nodeName: "INPUT", attributes: ["type", "text"] },
             }
           if (method === "DOM.describeNode")
             return {
               node: page.href
                 ? { nodeName: "A", attributes: ["href", page.href] }
-                : { nodeName: "INPUT", attributes: ["type", "text"] },
+                : { nodeName: "INPUT", attributes: ["type", page.fileInput ? "file" : "text"] },
             }
+          if (method === "DOM.getContentQuads" && params.backendNodeId === 999)
+            return { quads: [[100, 50, 500, 50, 500, 350, 100, 350]] }
           if (method === "DOM.getContentQuads") return { quads: [[0, 0, 10, 0, 10, 10, 0, 10]] }
           if (method === "Input.insertText" && page.typeRedirect)
             await debuggerEvents.emit({ tabId: 17 }, "Page.frameNavigated", { frame: { url: page.typeRedirect } })
+          if (method === "Page.captureSnapshot") return { data: "MHTML-FIXTURE" }
+          if (method === "DOM.getDocument" && source.sessionId) return { root: page.childDocumentRoot }
           if (method === "DOM.getDocument") return { root: page.documentRoot }
           if (method === "Page.captureScreenshot") return { data: "AAAA" }
           return {}
@@ -2094,6 +2509,16 @@ function createHarness() {
       page.staleContext = 0
       page.inputHangs = false
       page.documentRoot = node("#document")
+      page.child = undefined
+      page.childDocumentRoot = node("#document")
+      page.historyEntries = undefined
+      page.historyIndex = 0
+      page.historyGranted = true
+      page.downloadsGranted = true
+      page.historyResults = undefined
+      page.downloadItems = undefined
+      page.clipboardText = "clipboard-fixture"
+      page.fileInput = false
       cursorDOM.reset()
       timeline.length = 0
       FakeWebSocket.failConnections = false

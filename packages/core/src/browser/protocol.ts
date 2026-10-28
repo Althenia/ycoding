@@ -3,8 +3,8 @@ export * as BrowserProtocol from "./protocol"
 import { Browser } from "@ycoding-ai/schema/browser"
 import { Option, Schema } from "effect"
 
-export const VERSION = 4
-export const MAX_FRAME_BYTES = 2 * 1024 * 1024
+export const VERSION = 5
+export const MAX_FRAME_BYTES = 12 * 1024 * 1024
 export const MAX_SHARED_TABS = 8
 
 const ExtensionID = Schema.String.check(Schema.isPattern(/^[a-p]{32}$/))
@@ -62,8 +62,22 @@ const Observation = Schema.Struct({
       description: Schema.String.pipe(Schema.optional),
       disabled: Schema.Boolean.pipe(Schema.optional),
       destination: Schema.String.pipe(Schema.optional),
+      frame: Schema.String.pipe(Schema.optional),
     }),
   ),
+  texts: Schema.Array(
+    Schema.Struct({
+      role: Schema.String,
+      name: Schema.String,
+      frame: Schema.String.pipe(Schema.optional),
+    }),
+  ).pipe(Schema.optional),
+  frames: Schema.Array(
+    Schema.Struct({
+      url: Schema.String,
+      observed: Schema.Boolean,
+    }),
+  ).pipe(Schema.optional),
   truncated: Schema.Boolean,
 })
 const Result = Schema.Struct({
@@ -79,6 +93,47 @@ const Result = Schema.Struct({
   message: Schema.String.pipe(Schema.optional),
   capture: Browser.CaptureOutput.pipe(Schema.optional),
   groupID: Browser.ActionResult.fields.groupID.pipe(Schema.optional),
+  text: Schema.String.pipe(Schema.optional),
+  download: Schema.Struct({
+    filename: Schema.String,
+    state: Schema.String,
+    bytesReceived: Schema.Number.pipe(Schema.optional),
+    totalBytes: Schema.Number.pipe(Schema.optional),
+    mime: Schema.String.pipe(Schema.optional),
+  }).pipe(Schema.optional),
+  logs: Schema.Array(
+    Schema.Struct({
+      level: Schema.String,
+      text: Schema.String,
+      frame: Schema.String.pipe(Schema.optional),
+    }),
+  ).pipe(Schema.optional),
+  data: Schema.String.pipe(Schema.optional),
+  webmcpTools: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      description: Schema.String.pipe(Schema.optional),
+    }),
+  ).pipe(Schema.optional),
+})
+const HistoryResult = Schema.Struct({
+  type: Schema.Literal("history_result"),
+  callID: Browser.CallID,
+  generation: Browser.Generation,
+  entries: Schema.Array(
+    Schema.Struct({
+      url: Schema.String,
+      title: Schema.String,
+      lastVisitTime: Schema.Number,
+      visitCount: Schema.Number.pipe(Schema.optional),
+    }),
+  ),
+})
+const HistoryError = Schema.Struct({
+  type: Schema.Literal("history_error"),
+  callID: Browser.CallID,
+  generation: Browser.Generation,
+  message: Schema.String.check(Schema.isMaxLength(1024)),
 })
 const Failed = Schema.Struct({
   type: Schema.Literal("error"),
@@ -112,6 +167,8 @@ export const ClientMessage = Schema.Union([
   Updated,
   Observation,
   Result,
+  HistoryResult,
+  HistoryError,
   Failed,
   Pong,
   Forget,
@@ -125,12 +182,18 @@ export type Handshake = typeof Pair.Type | typeof Authenticate.Type
 export type ServerMessage =
   | {
       readonly type: "paired"
-      readonly version: 4
+      readonly version: 5
       readonly generation: number
       readonly serverID: string
       readonly credential?: string
     }
-  | { readonly type: "observe"; readonly callID: string; readonly tabID: Browser.TabID; readonly generation: number }
+  | {
+      readonly type: "observe"
+      readonly callID: string
+      readonly tabID: Browser.TabID
+      readonly generation: number
+      readonly frameOrigins: ReadonlyArray<string>
+    }
   | {
       readonly type: "action"
       readonly callID: string
@@ -139,7 +202,17 @@ export type ServerMessage =
       readonly documentGeneration: number
       readonly observationRevision: number
       readonly allowedOrigins: ReadonlyArray<string>
+      readonly frameOrigins: ReadonlyArray<string>
       readonly action: Browser.Action
+    }
+  | {
+      readonly type: "history"
+      readonly callID: string
+      readonly generation: number
+      readonly query?: string
+      readonly limit?: number
+      readonly startTime?: number
+      readonly endTime?: number
     }
   | { readonly type: "control"; readonly action: "pause" | "resume" | "stop" | "forget" }
   | { readonly type: "ping" }

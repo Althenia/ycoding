@@ -125,7 +125,7 @@ async function attached(
   const attachment = await Effect.runPromise(
     browser.attach({
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close,
@@ -144,7 +144,7 @@ async function pairedTrust(browser: Browser.Interface, session = sessionID) {
   const attachment = await Effect.runPromise(
     browser.attach({
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close: () => {},
@@ -546,7 +546,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 4,
+                version: 5,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -579,7 +579,7 @@ describe("paired Chrome browser service", () => {
           origin: `chrome-extension://${extensionID}`,
           handshake: {
             type: "authenticate",
-            version: 4,
+            version: 5,
             extensionID,
             serverID: trust.response.serverID,
             credential: trust.response.credential,
@@ -588,7 +588,7 @@ describe("paired Chrome browser service", () => {
         })
         expect(yield* Queue.take(outbox)).toMatchObject({
           type: "paired",
-          version: 4,
+          version: 5,
           serverID: trust.response.serverID,
           credential: undefined,
         })
@@ -598,7 +598,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 4,
+              version: 5,
               extensionID,
               serverID: "different-server-identity",
               credential: trust.response.credential,
@@ -639,7 +639,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 4,
+                version: 5,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -673,7 +673,7 @@ describe("paired Chrome browser service", () => {
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 4,
+                version: 5,
                 extensionID,
                 serverID: trust.serverID,
                 credential,
@@ -702,7 +702,7 @@ describe("paired Chrome browser service", () => {
         const pairing = yield* browser.start(sessionID)
         yield* browser.attach({
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
           transport: {
             send: (message) => Queue.offerUnsafe(outbox, message),
             close: (code, reason) => closed.push({ code, reason }),
@@ -723,7 +723,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 4,
+              version: 5,
               extensionID,
               serverID: first.serverID,
               credential: first.credential,
@@ -744,7 +744,7 @@ describe("paired Chrome browser service", () => {
         const rejected = yield* browser
           .attach({
             origin: "https://website.example",
-            handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
@@ -755,7 +755,7 @@ describe("paired Chrome browser service", () => {
         const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
         const connected = yield* browser.attach({
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
           transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} },
         })
         const paired = yield* Queue.take(outbox)
@@ -763,7 +763,7 @@ describe("paired Chrome browser service", () => {
         const reused = yield* browser
           .attach({
             origin: `chrome-extension://${extensionID}`,
-            handshake: { type: "pair", version: 4, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 5, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
@@ -822,7 +822,7 @@ describe("paired Chrome browser service", () => {
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 4,
+              version: 5,
               extensionID,
               serverID: paired.response.serverID,
               credential: paired.response.credential,
@@ -1074,6 +1074,49 @@ const executionEvent = (
           ? { sessionID: target, error: { type: "unknown", message: "failed" } }
           : { sessionID: target },
   })
+
+describe("paired Chrome peripherals", () => {
+  test("dispatches history search and sanitizes credential URLs from results", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox))
+      const searching = yield* browser.history({ sessionID, generation: connected.generation, callID: "history-1", query: "visited", limit: 5 }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "history", callID: "history-1", query: "visited", limit: 5 })
+      yield* connected.attachment.receive({ type: "history_result", callID: "history-1", generation: connected.generation,
+        entries: [
+          { url: "https://example.test/visited", title: "Visited", lastVisitTime: 10.8, visitCount: 2 },
+          { url: "https://user:secret@example.test/private", title: "Credential", lastVisitTime: 9, visitCount: 1 },
+        ] })
+      expect(yield* Fiber.join(searching)).toEqual({
+        entries: [{ url: "https://example.test/visited", title: "Visited", lastVisitTime: 10, visitCount: 2 }],
+      })
+    }))
+  })
+
+  test("rejects upload paths that are missing or directories before dispatch", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox))
+      const profileID = Browser.TabID.make("btab_upload_profile")
+      yield* connected.attachment.receive({ type: "shared", mode: "profile", tabID: profileID,
+        title: "Upload", url: "https://example.test/form", documentGeneration: 1, active: true })
+      const observing = yield* browser.observe({ sessionID, tabID: profileID, generation: connected.generation, callID: "upload-observe" }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", tabID: profileID })
+      yield* connected.attachment.receive({ type: "observation", tabID: profileID, callID: "upload-observe",
+        generation: connected.generation, documentGeneration: 1, revision: 1, title: "Upload",
+        url: "https://example.test/form", elements: [{ ref: "b1", role: "button", name: "Choose File" }], truncated: false })
+      yield* Fiber.join(observing)
+      for (const [callID, path] of [["upload-missing", "/tmp/ycoding-upload-missing-fixture.txt"], ["upload-directory", "/tmp"]] as const) {
+        const exit = yield* browser.action({ sessionID, tabID: profileID, generation: connected.generation,
+          documentGeneration: 1, observationRevision: 1, callID, action: { type: "upload", ref: "b1", paths: [path] } }).pipe(Effect.exit)
+        expect(Exit.isFailure(exit), callID).toBe(true)
+        expect(yield* Queue.size(outbox), callID).toBe(0)
+      }
+    }))
+  })
+})
 
 describe("paired profile tab leases", () => {
   const sharedTab = (connected: Connected, tabID: typeof Browser.TabID.Type) =>

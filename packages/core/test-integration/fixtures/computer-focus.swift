@@ -29,6 +29,22 @@ final class FixtureView: NSView {
         if activate { NSApp.activate(ignoringOtherApps: true) }
     }
 
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        append(event.characters ?? "", to: URL(fileURLWithPath: state.path + ".keys"))
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        append("s", to: URL(fileURLWithPath: state.path + ".scrolls"))
+    }
+
+    func append(_ text: String, to url: URL) {
+        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (existing + text).write(to: url, atomically: true, encoding: .utf8)
+        needsDisplay = true
+    }
+
 }
 
 final class Delegate: NSObject, NSApplicationDelegate {
@@ -41,6 +57,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         window.orderFrontRegardless()
+        if let view = window.contentView { window.makeFirstResponder(view) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
             guard let id = windows.first(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() &&

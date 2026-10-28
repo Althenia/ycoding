@@ -13,7 +13,7 @@ afterEach(() => {
 })
 
 test("pairs once, then replaces the form with connection information", async () => {
-  const { nodes, calls, dispatch } = await popup(
+  const { nodes, calls, dispatch, permissionRequests } = await popup(
     { paired: false, connected: false, profileGranted: false, message: "Not paired" },
     { paired: true, connected: true, profileGranted: true, message: "Paired" },
   )
@@ -25,6 +25,7 @@ test("pairs once, then replaces the form with connection information", async () 
   expect(calls.filter((call) => call.type === "pair")).toEqual([
     { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "test-pairing-code" },
   ])
+  expect(permissionRequests).toEqual([{ permissions: ["history", "downloads"] }])
   expect(nodes.get("#secret").value).toBe("")
   expect(nodes.get("#pairing-view").hidden).toBe(true)
   expect(nodes.get("#connected-view").hidden).toBe(false)
@@ -187,6 +188,7 @@ async function popup(initial, next) {
   nodes.get("#server").value = "http://127.0.0.1:4096"
   globalThis.document = { querySelector: (selector) => nodes.get(selector) }
   globalThis.setInterval = (callback) => intervals.push(callback)
+  const permissionRequests = []
   globalThis.chrome = {
     runtime: {
       sendMessage: async (message) => {
@@ -195,12 +197,19 @@ async function popup(initial, next) {
         return next ?? statuses[0]
       },
     },
+    permissions: {
+      request: async (request) => {
+        permissionRequests.push(request)
+        return true
+      },
+    },
   }
   await import(`../popup.js?popup-test=${crypto.randomUUID()}`)
   await Promise.resolve()
   return {
     nodes,
     calls,
+    permissionRequests,
     dispatch: async (selector, type) => {
       await nodes.get(selector).listeners.get(type)({ preventDefault() {} })
     },
@@ -242,4 +251,5 @@ test("popup typography uses the embedded Geist faces, offline, with Geist Mono f
   expect(code).not.toMatch(/https?:\/\//)
   expect(manifest.content_security_policy.extension_pages).toBe("script-src 'self'; object-src 'none'; base-uri 'none'")
   expect(manifest.host_permissions).toEqual(["http://127.0.0.1/*", "http://localhost/*"])
+  expect(manifest.optional_permissions).toEqual(["history", "downloads"])
 })

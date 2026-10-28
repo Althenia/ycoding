@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer"
 import type { Readable, Writable } from "node:stream"
 
-export const MAX_MESSAGE_BYTES = 2 * 1024 * 1024
+export const MAX_MESSAGE_BYTES = 12 * 1024 * 1024
 
 export interface Event {
   readonly method: string

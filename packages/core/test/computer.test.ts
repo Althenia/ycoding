@@ -56,7 +56,7 @@ describe("scoped desktop control", () => {
       yield* locations.close
     })))
   })
-  test("routes only off-Space Electron capture and pixels through the bridge, preserving native revisions", async () => {
+  test("routes on-screen non-frontmost Electron capture and pixels through the bridge, preserving native revisions", async () => {
     const routed: string[] = []
     const bridge = ElectronComputer.make({ appPath: async () => undefined, fuseBytes: async () => Buffer.alloc(0),
       ownedPorts: async () => [], signal: async () => {}, sleep: async () => {} })
@@ -69,7 +69,7 @@ describe("scoped desktop control", () => {
       await startFakeService(command, (request) => request.action === "desktop.list"
         ? { status: "ok", action: request.action, revision: "", apps: [{ bundle_id: desktop.bundleID, pid: desktop.pid,
           name: "Fixture", is_active: false, is_hidden: false, windows: [{ window_id: desktop.windowID, title: "Fixture",
-            bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false, placement: "other_space" }] }] }
+            bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: true, placement: "current_space" }] }] }
         : { status: "ok", action: request.action, revision: "native-revision" })
       return fixtureRunResult()
     }) })
@@ -83,6 +83,34 @@ describe("scoped desktop control", () => {
         expectedRevision: "native-revision", x: 20, y: 30 }, new AbortController().signal)
       expect(clicked).toMatchObject({ revision: "native-revision", effect: "changed" })
       expect(routed).toEqual(["capture", "action"])
+      yield* invoke.shutdown()
+    })))
+  })
+  test("fails background_unavailable instead of native fallthrough when an Electron bridge route is unavailable", async () => {
+    const nativeActions: string[] = []
+    const bridge = ElectronComputer.make({ appPath: async () => undefined, fuseBytes: async () => Buffer.alloc(0),
+      ownedPorts: async () => [], signal: async () => {}, sleep: async () => {} })
+    const injected = { ...bridge, isElectron: async () => true, perform: async () => undefined }
+    const processLayer = Layer.mock(AppProcess.Service, { run: (command) => Effect.promise(async () => {
+      await startFakeService(command, (request) => {
+        nativeActions.push(request.action)
+        return request.action === "desktop.list"
+        ? { status: "ok", action: request.action, revision: "", apps: [{ bundle_id: desktop.bundleID, pid: desktop.pid,
+          name: "Fixture", is_active: false, is_hidden: false, windows: [{ window_id: desktop.windowID, title: "Fixture",
+            bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false, placement: "other_space" }] }] }
+        : { status: "ok", action: request.action, revision: "native-revision" }
+      })
+      return fixtureRunResult()
+    }) })
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const context = yield* Layer.build(processLayer)
+      const processes = Context.get(context, AppProcess.Service)
+      const invoke = MacOSComputer.invokeWithBridge(processes, "darwin", MacOSComputer.applicationPath(), injected)
+      const result = yield* invoke({ action: "desktop.click", owner: { sessionID: "s", callID: "a" }, target: desktop,
+        expectedRevision: "native-revision", x: 20, y: 30 }, new AbortController().signal).pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ code: "background_unavailable", outcome: "not_started" })
+      expect(nativeActions).not.toContain("desktop.click")
       yield* invoke.shutdown()
     })))
   })
@@ -250,6 +278,31 @@ describe("scoped desktop control", () => {
       expectedRevision: capture.revision, action: { type: "desktop.drag", fromX: 1, fromY: 2, toX: 30, toY: 40 } }))
     expect(response.revision).toBe("rev-3")
     expect(requests.at(-1)).toMatchObject({ action: "desktop.drag", fromX: 1, fromY: 2, toX: 30, toY: 40, expectedRevision: "rev-2" })
+  })
+  test("maps query, select_text, and secondary-action requests under the window claim", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const elements = [{ path: [1], role: "AXButton", label: "Save", frame: [0, 0, 80, 24] as const, actions: ["press" as const, "show_menu" as const], enabled: true, focused: false }]
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: `rev-${requests.length}`,
+        ...(request.action === "desktop.query" ? { elements, truncated: true } : {}),
+        ...(request.action === "desktop.list" ? { apps: [{ bundle_id: "com.example.old", pid: 99, name: "Old", is_active: false, is_hidden: false, windows: [], is_running: false, last_used: "2026-10-20", uses: 3 }] } : {}),
+      })
+    }, "darwin")
+    const listed = await Effect.runPromise(computer.list({ sessionID: owner, callID: "list-recent" }))
+    expect(listed.apps?.[0]).toMatchObject({ is_running: false, last_used: "2026-10-20", uses: 3 })
+    const unclaimed = await Effect.runPromiseExit(computer.query({ sessionID: owner, callID: "query-unclaimed", target: desktop, text: "Save" }))
+    expect(Exit.isFailure(unclaimed)).toBe(true)
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "inspect-query", target: desktop }))
+    const queried = await Effect.runPromise(computer.query({ sessionID: owner, callID: "query", target: desktop, text: "Save", role: "AXButton", limit: 5, maxNodes: 250 }))
+    expect(queried).toMatchObject({ elements, truncated: true })
+    expect(requests.at(-1)).toMatchObject({ action: "desktop.query", text: "Save", role: "AXButton", limit: 5, maxNodes: 250, expectedRevision: "rev-2" })
+    const selected = await Effect.runPromise(computer.act({ sessionID: owner, callID: "select", target: desktop,
+      expectedRevision: queried.revision, action: { type: "desktop.select_text", element: [1], text: "target", prefix: "a ", selection: "cursor_after" } }))
+    expect(requests.at(-1)).toMatchObject({ action: "desktop.select_text", element: [1], text: "target", prefix: "a ", selection: "cursor_after" })
+    await Effect.runPromise(computer.act({ sessionID: owner, callID: "secondary", target: desktop,
+      expectedRevision: selected.revision, action: { type: "desktop.perform_action", element: [1], name: "show_menu" } }))
+    expect(requests.at(-1)).toMatchObject({ action: "desktop.perform_action", element: [1], name: "show_menu" })
   })
   test("waits for a split service frame after LaunchServices returns", async () => {
     await Effect.runPromise(
@@ -952,7 +1005,7 @@ describe("native computer target ownership", () => {
         platform: "macos",
         application: "desktop",
         identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-        operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key", "stage", "unstage"],
+        operations: ["list", "launch", "inspect", "capture", "query", "click", "drag", "type", "scroll", "key", "select_text", "perform_action", "stage", "unstage"],
       },
       {
         platform: "macos",
@@ -1140,6 +1193,9 @@ const fixtureRequest = Schema.Struct({
     "desktop.type",
     "desktop.scroll",
     "desktop.key",
+    "desktop.query",
+    "desktop.select_text",
+    "desktop.perform_action",
     "webbrowser.tabs",
     "webbrowser.navigate",
     "webbrowser.back",

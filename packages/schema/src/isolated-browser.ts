@@ -90,6 +90,10 @@ export const ActionResult = Schema.Struct({
   status: Schema.Literals(["completed", "rejected", "uncertain"]),
   message: Schema.String.check(Schema.isMaxLength(1024)).pipe(optional),
   capture: Browser.CaptureOutput.pipe(optional),
+  text: Browser.ActionResult.fields.text,
+  logs: Browser.ActionResult.fields.logs,
+  savedFile: Browser.ActionResult.fields.savedFile,
+  webmcpTools: Browser.ActionResult.fields.webmcpTools,
 }).annotate({ identifier: "IsolatedBrowser.ActionResult" })
 export interface ActionResult extends Schema.Schema.Type<typeof ActionResult> {}
 

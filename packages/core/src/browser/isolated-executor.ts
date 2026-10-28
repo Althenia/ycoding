@@ -42,6 +42,41 @@ const interactiveRoles = new Set([
   "textbox",
 ])
 
+const editableRoles = new Set(["textbox", "searchbox", "combobox", "spinbutton"])
+
+const textRoles = new Set([
+  "StaticText",
+  "caption",
+  "cell",
+  "columnheader",
+  "definition",
+  "heading",
+  "listitem",
+  "paragraph",
+  "rowheader",
+  "term",
+])
+
+const namedKeys: Readonly<Record<string, { key: string; code: string; windowsVirtualKeyCode: number }>> = {
+  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
+  Tab: { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 },
+  Escape: { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
+  Backspace: { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8 },
+  Delete: { key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 },
+  ArrowUp: { key: "ArrowUp", code: "ArrowUp", windowsVirtualKeyCode: 38 },
+  ArrowDown: { key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 },
+  ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", windowsVirtualKeyCode: 37 },
+  ArrowRight: { key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 },
+  Home: { key: "Home", code: "Home", windowsVirtualKeyCode: 36 },
+  End: { key: "End", code: "End", windowsVirtualKeyCode: 35 },
+  PageUp: { key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 },
+  PageDown: { key: "PageDown", code: "PageDown", windowsVirtualKeyCode: 34 },
+  " ": { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
+  Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
+}
+
+type RefTarget = { sessionId: string; backendNodeId: number; frameId?: string; url?: string }
+
 export class Error extends Schema.TaggedErrorClass<Error>()("IsolatedBrowser.ExecutorError", {
   message: Schema.String,
   phase: Schema.Literals(["predispatch", "postdispatch"]),
@@ -53,6 +88,8 @@ export interface Snapshot {
   readonly documentGeneration: number
   readonly revision: number
   readonly elements: ReadonlyArray<BrowserOperation.Element>
+  readonly texts?: ReadonlyArray<Browser.Text>
+  readonly frames?: ReadonlyArray<Browser.Frame>
   readonly truncated: boolean
 }
 
@@ -60,6 +97,10 @@ export interface ActionOutput {
   readonly snapshot: Omit<Snapshot, "elements" | "truncated">
   readonly capture?: Browser.CaptureOutput
   readonly rejected?: string
+  readonly text?: string
+  readonly logs?: ReadonlyArray<Browser.LogEntry>
+  readonly data?: string
+  readonly webmcpTools?: ReadonlyArray<Browser.WebMcpTool>
 }
 
 export interface Runtime {
@@ -201,7 +242,27 @@ async function configureRuntime(
   const heldPopupRequests = new Map<string, () => void>()
   const destroyedTargets = new Map<string, () => void>()
   const popupTasks = new Set<Promise<void>>()
-  const refs = new Map<string, number>()
+  const refs = new Map<string, RefTarget>()
+  const frameSessions = new Map<string, { targetId: string; url: string; ready?: Promise<void>; failed?: boolean }>()
+  const observedFrameOrigins = new Set<string>()
+  const logs: Browser.LogEntry[] = []
+  const pushLog = (entry: Browser.LogEntry) => {
+    logs.push(entry)
+    if (logs.length > Browser.MAX_LOG_ENTRIES) logs.splice(0, logs.length - Browser.MAX_LOG_ENTRIES)
+  }
+  const consoleValue = (arg: unknown): string => {
+    const value = recordMaybe(arg)
+    if (!value) {
+      if (arg === null || arg === undefined) return ""
+      if (typeof arg === "string") return arg
+      if (typeof arg === "number" || typeof arg === "boolean" || typeof arg === "bigint") return arg.toString()
+      return typeof arg === "object" ? (JSON.stringify(arg) ?? "") : ""
+    }
+    if (value.value !== undefined) return typeof value.value === "string" ? value.value : (JSON.stringify(value.value) ?? "")
+    return typeof value.description === "string" ? value.description : typeof value.type === "string" ? value.type : ""
+  }
+  const framePage = (eventSessionId?: string) =>
+    eventSessionId && eventSessionId !== sessionId ? safePageMaybe(frameSessions.get(eventSessionId)?.url ?? "") : undefined
   let allowedOrigins = new Set([initialURL.origin])
   let mainFrameId = ""
   let documentGeneration = 1
@@ -270,9 +331,51 @@ async function configureRuntime(
       resolveFatal()
       return
     }
+    if (event.method === "Target.detachedFromTarget") {
+      const detached = typeof event.params?.sessionId === "string" ? event.params.sessionId : undefined
+      if (detached) {
+        frameSessions.delete(detached)
+        for (const [ref, target] of refs) if (target.sessionId === detached) refs.delete(ref)
+      }
+      return
+    }
+    if (event.method === "Target.targetInfoChanged") {
+      const info = record(event.params?.targetInfo)
+      for (const entry of frameSessions.values())
+        if (entry.targetId === info.targetId && typeof info.url === "string") entry.url = info.url
+      return
+    }
     if (event.method === "Target.attachedToTarget") {
       const target = record(event.params?.targetInfo)
       if (target.targetId === targetId) return
+      if (target.type === "iframe") {
+        const childSessionId = string(event.params?.sessionId)
+        const entry = {
+          targetId: string(target.targetId),
+          url: typeof target.url === "string" ? target.url : "",
+          ready: undefined as Promise<void> | undefined,
+          failed: false,
+        }
+        frameSessions.set(childSessionId, entry)
+        entry.ready = (async () => {
+          await Promise.all([
+            cdp.send("Page.enable", {}, childSessionId),
+            cdp.send("DOM.enable", {}, childSessionId),
+            cdp.send("Accessibility.enable", {}, childSessionId),
+            cdp.send("Runtime.enable", {}, childSessionId),
+          ])
+          await cdp.send(
+            "Target.setAutoAttach",
+            { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "iframe", exclude: false }, { exclude: true }] },
+            childSessionId,
+          ).catch(() => {})
+          if (event.params?.waitingForDebugger === true) await cdp.send("Runtime.runIfWaitingForDebugger", {}, childSessionId)
+        })().catch(() => {
+          entry.failed = true
+        })
+        await entry.ready
+        return
+      }
       if (
         target.browserContextId === browserContextId &&
         target.type === "page" &&
@@ -291,6 +394,26 @@ async function configureRuntime(
       await closeTargetExactly(unexpectedTargetId)
       return
     }
+    if (event.method === "Runtime.consoleAPICalled") {
+      const frame = framePage(event.sessionId)
+      pushLog({
+        level: bounded(typeof event.params?.type === "string" ? event.params.type : "log", 16),
+        text: bounded((Array.isArray(event.params?.args) ? event.params.args : []).map(consoleValue).join(" "), Browser.MAX_NAME_LENGTH),
+        ...(frame ? { frame } : {}),
+      })
+      return
+    }
+    if (event.method === "Runtime.exceptionThrown") {
+      const details = record(event.params?.exceptionDetails)
+      const exception = recordMaybe(details.exception)
+      const frame = framePage(event.sessionId)
+      pushLog({
+        level: "error",
+        text: bounded([details.text, exception?.description].filter(Boolean).join(" ") || "Uncaught exception", Browser.MAX_NAME_LENGTH),
+        ...(frame ? { frame } : {}),
+      })
+      return
+    }
     if (event.method === "Fetch.requestPaused") {
       const requestId = string(event.params?.requestId)
       if (event.sessionId && heldPopupSessions.has(event.sessionId)) {
@@ -303,9 +426,9 @@ async function configureRuntime(
       const resourceType = event.params?.resourceType
       const frameId = event.params?.frameId
       if (resourceType === "Document" && frameId !== mainFrameId) {
-        await cdp.send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" }, sessionId)
-        markFailure("Child frames are unsupported")
-        resolveFatal()
+        if (requestAllowed(url, false, allowedOrigins))
+          await cdp.send("Fetch.continueRequest", { requestId }, sessionId)
+        else await cdp.send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" }, sessionId)
         return
       }
       const allowed = requestAllowed(url, resourceType === "Document" && frameId === mainFrameId, allowedOrigins)
@@ -317,18 +440,24 @@ async function configureRuntime(
       await cdp.send("Fetch.continueRequest", { requestId }, sessionId)
       return
     }
-    if (event.method === "Page.frameAttached" && event.sessionId === sessionId) {
-      markFailure("Child frames are unsupported")
-      resolveFatal()
-      await cdp.send("Page.stopLoading", {}, sessionId).catch(() => {})
-      return
-    }
-    if (event.method === "Page.frameNavigated" && event.sessionId === sessionId) {
+    if (event.method === "Page.frameNavigated") {
       const frame = record(event.params?.frame)
-      if (frame.id !== mainFrameId) return
+      if (event.sessionId !== sessionId) {
+        const entry = event.sessionId ? frameSessions.get(event.sessionId) : undefined
+        if (entry && typeof frame.url === "string" && !frame.parentId) entry.url = frame.url
+        for (const [ref, target] of refs)
+          if (target.sessionId === event.sessionId && (!frame.id || target.frameId === frame.id)) refs.delete(ref)
+        return
+      }
+      if (frame.id !== mainFrameId) {
+        for (const [ref, target] of refs) if (target.frameId === frame.id) refs.delete(ref)
+        return
+      }
       if (initialized) documentGeneration++
       revision = 0
       refs.clear()
+      frameSessions.clear()
+      logs.length = 0
       return
     }
     if (event.method === "Page.frameRequestedNavigation" && event.sessionId === sessionId) {
@@ -359,6 +488,7 @@ async function configureRuntime(
     cdp.send("Page.enable", {}, sessionId, signal),
     cdp.send("DOM.enable", {}, sessionId, signal),
     cdp.send("Accessibility.enable", {}, sessionId, signal),
+    cdp.send("Runtime.enable", {}, sessionId, signal),
     cdp.send("Inspector.enable", {}, sessionId, signal),
     cdp.send("Page.setInterceptFileChooserDialog", { enabled: true }, sessionId, signal),
     cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] }, sessionId, signal),
@@ -372,7 +502,7 @@ async function configureRuntime(
       autoAttach: true,
       waitForDebuggerOnStart: true,
       flatten: true,
-      filter: [{ type: "page", exclude: false }, { exclude: true }],
+      filter: [{ type: "page", exclude: false }, { type: "iframe", exclude: false }, { exclude: true }],
     },
     undefined,
     signal,
@@ -403,31 +533,115 @@ async function configureRuntime(
         truncated: false,
       }
     }
-    const ax = record(await cdp.send("Accessibility.getFullAXTree", { depth: 12 }, sessionId, actionSignal))
-    const nodes = Array.isArray(ax.nodes) ? ax.nodes.filter(isRecord) : []
-    const candidates = nodes.filter(
-      (node) =>
-        node.ignored !== true &&
-        interactiveRoles.has(stringMaybe(recordMaybe(node.role)?.value) ?? "") &&
-        typeof node.backendDOMNodeId === "number",
-    )
-    const selected = candidates.slice(0, Browser.MAX_OBSERVATION_ELEMENTS)
+    const allowed = new Set([...allowedOrigins, ...observedFrameOrigins])
+    const sessions = [
+      { id: sessionId, url: url.toString(), failed: false, ready: undefined as Promise<void> | undefined },
+      ...[...frameSessions.entries()].map(([id, entry]) => ({ id, url: entry.url, failed: entry.failed === true, ready: entry.ready })),
+    ]
+    await Promise.all(sessions.map((session) => session.ready).filter(Boolean))
     refs.clear()
-    const elements = (
-      await Promise.all(
-        selected.map(async (node, index) => {
-          const backendNodeId = number(node.backendDOMNodeId)
-          const described = record(
-            await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, sessionId, actionSignal),
+    const elements: BrowserOperation.Element[] = []
+    const texts: Browser.Text[] = []
+    const frames: Browser.Frame[] = []
+    const seen = new Set<string>()
+    let candidateCount = 0
+    let textCount = 0
+    const collect = (node: Readonly<Record<string, unknown>>, output: { id?: string; url?: string }[]) => {
+      const frame = recordMaybe(node.frame)
+      if (!frame) return
+      output.push({ id: stringMaybe(frame.id), url: stringMaybe(frame.url) })
+      if (Array.isArray(node.childFrames)) for (const child of node.childFrames.filter(isRecord)) collect(child, output)
+    }
+    for (const session of sessions) {
+      const main = session.id === sessionId
+      let frameList: { id?: string; url?: string }[] = []
+      try {
+        const tree = record(await cdp.send("Page.getFrameTree", {}, session.id, actionSignal))
+        collect(record(tree.frameTree), frameList)
+      } catch (cause) {
+        if (main) throw cause
+        const page = safePageMaybe(session.url)
+        if (page) frames.push({ page, observed: false })
+        continue
+      }
+      for (const [index, frame] of frameList.entries()) {
+        const top = main && index === 0
+        const frameURL = frame.url || (top ? url.toString() : session.url)
+        const page = safePageMaybe(frameURL)
+        if (page) observedFrameOrigins.add(page.origin)
+        if (!top && (!page || !allowed.has(page.origin) || session.failed)) {
+          if (page) frames.push({ page, observed: false })
+          continue
+        }
+        let ax: Readonly<Record<string, unknown>>
+        try {
+          ax = record(
+            await cdp.send(
+              "Accessibility.getFullAXTree",
+              { depth: Browser.MAX_AX_DEPTH, ...(frame.id ? { frameId: frame.id } : {}) },
+              session.id,
+              actionSignal,
+            ),
           )
-          const dom = record(described.node)
-          if (protectedInput(dom)) return undefined
+        } catch (cause) {
+          if (top) throw cause
+          if (page) frames.push({ page, observed: false })
+          continue
+        }
+        if (!top && page) frames.push({ page, observed: true })
+        const nodes = Array.isArray(ax.nodes) ? ax.nodes.filter(isRecord) : []
+        const byId = new Map(nodes.flatMap((item) => {
+          const id = stringMaybe(item.nodeId)
+          return id ? [[id, item] as const] : []
+        }))
+        const editableAncestor = (start: Readonly<Record<string, unknown>>) => {
+          const seen = new Set<string>()
+          let parentId = stringMaybe(start.parentId)
+          while (parentId && !seen.has(parentId)) {
+            seen.add(parentId)
+            const parent = byId.get(parentId)
+            if (!parent) return false
+            if (editableRoles.has(stringMaybe(recordMaybe(parent.role)?.value) ?? "")) return true
+            parentId = stringMaybe(parent.parentId)
+          }
+          return false
+        }
+        for (const node of nodes) {
+          if (node.ignored === true) continue
+          const role = stringMaybe(recordMaybe(node.role)?.value) ?? ""
+          if (textRoles.has(role) && !editableAncestor(node)) {
+            const name = (stringMaybe(recordMaybe(node.name)?.value) ?? "").trim()
+            if (name) {
+              textCount++
+              if (texts.length < Browser.MAX_OBSERVATION_TEXTS)
+                texts.push({
+                  role: bounded(role, 64),
+                  name: bounded(name, Browser.MAX_NAME_LENGTH),
+                  ...(top || !page ? {} : { frame: page }),
+                })
+            }
+          }
+          if (!interactiveRoles.has(role) || typeof node.backendDOMNodeId !== "number") continue
+          const backendNodeId = number(node.backendDOMNodeId)
+          const key = `${session.id}\0${backendNodeId}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          candidateCount++
+          if (elements.length >= Browser.MAX_OBSERVATION_ELEMENTS) continue
+          let dom: Readonly<Record<string, unknown>>
+          try {
+            dom = record(record(await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, session.id, actionSignal)).node)
+          } catch {
+            continue
+          }
+          if (protectedInput(dom)) continue
           const attributes = attributesOf(dom.attributes)
           const destination = attributes.get("href")
-          refs.set(`b${index + 1}`, backendNodeId)
+          const ref = `b${elements.length + 1}`
+          refs.set(ref, { sessionId: session.id, backendNodeId, frameId: frame.id, url: frameURL })
           const element = {
-            ref: Browser.Element.fields.ref.make(`b${index + 1}`),
-            role: bounded(stringMaybe(recordMaybe(node.role)?.value) ?? "", 64),
+            ref: Browser.Element.fields.ref.make(ref),
+            role: bounded(role, 64),
             name: bounded(stringMaybe(recordMaybe(node.name)?.value) ?? "", Browser.MAX_NAME_LENGTH),
             ...(boundedMaybe(stringMaybe(recordMaybe(node.description)?.value), Browser.MAX_NAME_LENGTH)
               ? {
@@ -440,14 +654,18 @@ async function configureRuntime(
               .some((property) => property.name === "disabled" && recordMaybe(property.value)?.value === true)
               ? { disabled: true }
               : {}),
-            ...(destination && safePageMaybe(new URL(destination, url).toString())
-              ? { destination: safePageMaybe(new URL(destination, url).toString()) }
+            ...(destination && safePageMaybe(new URL(destination, frameURL).toString())
+              ? { destination: safePageMaybe(new URL(destination, frameURL).toString()) }
               : {}),
+            ...(top || !page ? {} : { frame: page }),
           } satisfies Browser.Element
-          return { ...element, identity: BrowserOperation.elementIdentity(url.toString(), element, destination ? new URL(destination, url).toString() : undefined) }
-        }),
-      )
-    ).filter((element) => element !== undefined)
+          elements.push({
+            ...element,
+            identity: BrowserOperation.elementIdentity(frameURL, element, destination ? new URL(destination, frameURL).toString() : undefined),
+          })
+        }
+      }
+    }
     revision++
     return {
       title: bounded(typeof info.title === "string" ? info.title : "", Browser.MAX_TITLE_LENGTH),
@@ -455,8 +673,76 @@ async function configureRuntime(
       documentGeneration,
       revision,
       elements,
-      truncated: candidates.length > Browser.MAX_OBSERVATION_ELEMENTS,
+      texts,
+      frames: frames.slice(0, Browser.MAX_OBSERVATION_FRAMES),
+      truncated:
+        candidateCount > Browser.MAX_OBSERVATION_ELEMENTS ||
+        textCount > Browser.MAX_OBSERVATION_TEXTS ||
+        frames.length > Browser.MAX_OBSERVATION_FRAMES,
     }
+  }
+
+  const mainPoint = async (target: RefTarget, quad: number[], signal: AbortSignal) => {
+    const cx = (quad[0] + quad[2] + quad[4] + quad[6]) / 4
+    const cy = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
+    if (target.sessionId === sessionId) return { x: cx, y: cy }
+    const owner = record(await cdp.send("DOM.getFrameOwner", { frameId: target.frameId }, sessionId, signal))
+    const ownerQuads = record(
+      await cdp.send("DOM.getContentQuads", { backendNodeId: number(owner.backendNodeId) }, sessionId, signal),
+    )
+    const frameQuad = Array.isArray(ownerQuads.quads) && Array.isArray(ownerQuads.quads[0]) ? ownerQuads.quads[0] : undefined
+    if (!frameQuad || frameQuad.length < 8 || !frameQuad.every((value) => typeof value === "number"))
+      throw new globalThis.Error("Element is not visible")
+    const metrics = record(await cdp.send("Page.getLayoutMetrics", {}, target.sessionId, signal))
+    const viewport = record(metrics.layoutViewport)
+    const width = Math.max(frameQuad[2], frameQuad[4]) - Math.min(frameQuad[0], frameQuad[6])
+    const height = Math.max(frameQuad[5], frameQuad[7]) - Math.min(frameQuad[1], frameQuad[3])
+    const scaleX = typeof viewport.clientWidth === "number" && viewport.clientWidth > 0 ? width / viewport.clientWidth : 1
+    const scaleY = typeof viewport.clientHeight === "number" && viewport.clientHeight > 0 ? height / viewport.clientHeight : 1
+    return { x: Math.min(frameQuad[0], frameQuad[6]) + cx * scaleX, y: Math.min(frameQuad[1], frameQuad[3]) + cy * scaleY }
+  }
+
+  const mainWorldEvaluate = async (expression: string, signal: AbortSignal) => {
+    const response = record(
+      await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId, signal),
+    )
+    if (response.exceptionDetails) {
+      const details = record(response.exceptionDetails)
+      const exception = recordMaybe(details.exception)
+      throw new globalThis.Error(
+        bounded(
+          typeof exception?.description === "string"
+            ? exception.description
+            : typeof details.text === "string"
+              ? details.text
+              : "Page evaluation failed",
+          1024,
+        ),
+      )
+    }
+    return record(response.result).value
+  }
+  const modelContextExpression = (body: string) =>
+    `(async () => { const mc = (typeof document !== "undefined" && document.modelContext) || (typeof navigator !== "undefined" && navigator.modelContext) || undefined; if (!mc) return { supported: false }; ${body} })()`
+  const webmcpList = async (signal: AbortSignal): Promise<Browser.WebMcpTool[]> => {
+    const value = recordMaybe(
+      await mainWorldEvaluate(
+        modelContextExpression(
+          "const tools = typeof mc.getTools === 'function' ? await mc.getTools() : (mc.tools ?? []); return { supported: true, tools: [...tools].map((tool) => ({ name: String(tool?.name ?? ''), description: String(tool?.description ?? '') })) };",
+        ),
+        signal,
+      ),
+    )
+    if (!value || value.supported !== true) throw new globalThis.Error("WebMCP is not available on this page")
+    return (Array.isArray(value.tools) ? value.tools.filter(isRecord) : [])
+      .filter((tool) => typeof tool.name === "string" && tool.name.length > 0)
+      .slice(0, Browser.MAX_LOG_ENTRIES)
+      .map((tool) => ({
+        name: bounded(String(tool.name), 128),
+        ...(typeof tool.description === "string" && tool.description
+          ? { description: bounded(tool.description, Browser.MAX_NAME_LENGTH) }
+          : {}),
+      }))
   }
 
   const action = (action: Browser.Action, origins: ReadonlyArray<string>) =>
@@ -469,9 +755,12 @@ async function configureRuntime(
           [...allowedOrigins].map((origin) => denyClipboard(cdp, browserContextId, origin, actionSignal)),
         )
         let dispatched = false
+        let peripheral: Pick<ActionOutput, "text" | "logs" | "data" | "webmcpTools"> = {}
         const popupStart = popupRejections
         const downloadStart = downloadAttempts
         try {
+          if (["clipboard_read", "clipboard_write", "upload", "download", "group", "ungroup"].includes(action.type))
+            throw new globalThis.Error(`${action.type} is unavailable in isolated mode`)
           if (action.type === "navigate") {
             const destination = safeURL(action.url)
             if (!allowedOrigins.has(destination.origin)) throw new globalThis.Error("Navigation origin is not approved")
@@ -479,9 +768,10 @@ async function configureRuntime(
             await cdp.send("Page.navigate", { url: destination.toString() }, sessionId, actionSignal)
           }
           if (action.type === "click") {
-            const backendNodeId = requireRef(refs, action.ref)
+            const target = requireRef(refs, action.ref)
+            const backendNodeId = target.backendNodeId
             const described = record(
-              await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, sessionId, actionSignal),
+              await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId, actionSignal),
             )
             const dom = record(described.node)
             const attributes = attributesOf(dom.attributes)
@@ -489,16 +779,15 @@ async function configureRuntime(
             if (attributes.get("target") && attributes.get("target") !== "_self")
               throw new globalThis.Error("New tabs and popups are unsupported")
             const href = attributes.get("href")
-            if (href && !requestAllowed(new URL(href, initialURL).toString(), true, allowedOrigins))
+            if (href && !requestAllowed(new URL(href, target.url ?? initialURL).toString(), true, allowedOrigins))
               throw new globalThis.Error("Link destination is not approved")
             if (protectedInput(dom)) throw new globalThis.Error("Protected inputs are unsupported")
-            await cdp.send("DOM.scrollIntoViewIfNeeded", { backendNodeId }, sessionId, actionSignal)
-            const quads = record(await cdp.send("DOM.getContentQuads", { backendNodeId }, sessionId, actionSignal))
+            await cdp.send("DOM.scrollIntoViewIfNeeded", { backendNodeId }, target.sessionId, actionSignal)
+            const quads = record(await cdp.send("DOM.getContentQuads", { backendNodeId }, target.sessionId, actionSignal))
             const quad = Array.isArray(quads.quads) && Array.isArray(quads.quads[0]) ? quads.quads[0] : undefined
             if (!quad || quad.length < 8 || !quad.every((value) => typeof value === "number"))
               throw new globalThis.Error("Element is not visible")
-            const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4
-            const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
+            const { x, y } = await mainPoint(target, quad, actionSignal)
             dispatched = true
             await cdp.send(
               "Input.dispatchMouseEvent",
@@ -514,14 +803,15 @@ async function configureRuntime(
             )
           }
           if (action.type === "type") {
-            const backendNodeId = requireRef(refs, action.ref)
+            const target = requireRef(refs, action.ref)
+            const backendNodeId = target.backendNodeId
             const described = record(
-              await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, sessionId, actionSignal),
+              await cdp.send("DOM.describeNode", { backendNodeId, depth: 0 }, target.sessionId, actionSignal),
             )
             if (protectedInput(record(described.node))) throw new globalThis.Error("Protected inputs are unsupported")
             dispatched = true
-            await cdp.send("DOM.focus", { backendNodeId }, sessionId, actionSignal)
-            await cdp.send("Input.insertText", { text: action.text }, sessionId, actionSignal)
+            await cdp.send("DOM.focus", { backendNodeId }, target.sessionId, actionSignal)
+            await cdp.send("Input.insertText", { text: action.text }, target.sessionId, actionSignal)
           }
           if (action.type === "scroll")
             await cdp.send(
@@ -530,7 +820,90 @@ async function configureRuntime(
               sessionId,
               actionSignal,
             )
-          const capture = action.type === "capture" ? await capturePage(cdp, sessionId, actionSignal) : undefined
+          if (action.type === "back" || action.type === "forward") {
+            const nav = record(await cdp.send("Page.getNavigationHistory", {}, sessionId, actionSignal))
+            const entries = Array.isArray(nav.entries) ? nav.entries.filter(isRecord) : []
+            const entry = entries[number(nav.currentIndex) + (action.type === "back" ? -1 : 1)]
+            if (!entry) throw new globalThis.Error(action.type === "back" ? "No earlier page in history" : "No later page in history")
+            const entryURL = safeURL(string(entry.url))
+            if (!allowedOrigins.has(entryURL.origin)) throw new globalThis.Error("History target is not approved")
+            dispatched = true
+            await cdp.send("Page.navigateToHistoryEntry", { entryId: number(entry.id) }, sessionId, actionSignal)
+          }
+          if (action.type === "reload") {
+            dispatched = true
+            await cdp.send("Page.reload", {}, sessionId, actionSignal)
+          }
+          if (action.type === "key") {
+            const modifiers =
+              (action.modifiers?.includes("Alt") ? 1 : 0) |
+              (action.modifiers?.includes("Control") ? 2 : 0) |
+              (action.modifiers?.includes("Meta") ? 4 : 0) |
+              (action.modifiers?.includes("Shift") ? 8 : 0)
+            const named = namedKeys[action.key]
+            const single = action.key.length === 1
+            if (!named && !single) throw new globalThis.Error(`Unsupported key: ${action.key.slice(0, 32)}`)
+            const base = named ?? { key: action.key, code: "", windowsVirtualKeyCode: 0 }
+            dispatched = true
+            await cdp.send(
+              "Input.dispatchKeyEvent",
+              { type: "keyDown", ...base, modifiers, ...(single && !named && !modifiers ? { text: action.key } : {}) },
+              sessionId,
+              actionSignal,
+            )
+            await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base, modifiers }, sessionId, actionSignal)
+          }
+          if (action.type === "wait") {
+            const deadline = Date.now() + Math.min(Math.max(action.timeoutMs ?? 5000, 0), Browser.MAX_WAIT_MS)
+            for (;;) {
+              let ready = false
+              if (action.ref) {
+                const target = refs.get(action.ref)
+                if (target)
+                  ready = await cdp
+                    .send("DOM.describeNode", { backendNodeId: target.backendNodeId, depth: 0 }, target.sessionId, actionSignal)
+                    .then(() => true, () => false)
+              } else {
+                const tree = record(await cdp.send("Page.getFrameTree", {}, sessionId, actionSignal))
+                const frame = record(record(tree.frameTree).frame)
+                ready = typeof frame.url === "string" && frame.url !== "about:blank"
+              }
+              if (ready) break
+              if (Date.now() >= deadline) throw new globalThis.Error("Timed out waiting for the page")
+              await delay(100, actionSignal)
+            }
+          }
+          if (action.type === "logs") {
+            const limit = Math.min(Math.max(action.limit ?? Browser.MAX_LOG_ENTRIES, 1), Browser.MAX_LOG_ENTRIES)
+            peripheral = { logs: logs.slice(-limit) }
+          }
+          if (action.type === "export") {
+            const snapshotResult = record(await cdp.send("Page.captureSnapshot", { format: "mhtml" }, sessionId, actionSignal))
+            const data = string(snapshotResult.data)
+            if (Buffer.byteLength(data, "utf8") > Browser.MAX_EXPORT_BYTES) throw new globalThis.Error("Export exceeds the 8 MiB limit")
+            peripheral = { data }
+          }
+          if (action.type === "webmcp_list") peripheral = { webmcpTools: await webmcpList(actionSignal) }
+          if (action.type === "webmcp_invoke") {
+            const tools = await webmcpList(actionSignal)
+            if (!tools.some((tool) => tool.name === action.name)) throw new globalThis.Error("WebMCP tool is no longer available on this page")
+            dispatched = true
+            const value = recordMaybe(
+              await mainWorldEvaluate(
+                modelContextExpression(
+                  `if (typeof mc.executeTool === 'function') return { supported: true, result: await mc.executeTool(${JSON.stringify(action.name)}, ${JSON.stringify(action.arguments ?? {})}) }; if (typeof mc.callTool === 'function') return { supported: true, result: await mc.callTool(${JSON.stringify(action.name)}, ${JSON.stringify(action.arguments ?? {})}) }; return { supported: true, unsupportedInvoke: true };`,
+                ),
+                actionSignal,
+              ),
+            )
+            if (!value || value.supported !== true) throw new globalThis.Error("WebMCP is not available on this page")
+            if (value.unsupportedInvoke) throw new globalThis.Error("WebMCP invocation is not supported on this page")
+            const text = typeof value.result === "string" ? value.result : (JSON.stringify(value.result) ?? "")
+            if (Buffer.byteLength(text, "utf8") > Browser.MAX_CLIPBOARD_BYTES) throw new globalThis.Error("WebMCP result exceeds the 64 KiB limit")
+            peripheral = { text }
+          }
+          const capture =
+            action.type === "capture" ? await capturePage(cdp, sessionId, actionSignal, [...frameSessions.keys()]) : undefined
           await delay(ACTION_SETTLE_MS, actionSignal)
           while (popupTasks.size > 0) await Promise.all(popupTasks)
           if (safetyFailure) throw new globalThis.Error(safetyFailure)
@@ -539,6 +912,7 @@ async function configureRuntime(
           return {
             snapshot: current,
             capture,
+            ...peripheral,
             rejected: popupRejections !== popupStart ? "A popup was safely blocked" : undefined,
           }
         } catch (cause) {
@@ -673,7 +1047,7 @@ function attributesOf(input: unknown) {
   return new Map(entries.filter(([name]) => name.length > 0))
 }
 
-function requireRef(refs: ReadonlyMap<string, number>, ref: string) {
+function requireRef(refs: ReadonlyMap<string, RefTarget>, ref: string) {
   const value = refs.get(ref)
   if (value === undefined) throw new globalThis.Error("Semantic element reference is stale")
   return value

@@ -73,6 +73,12 @@ export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("desktop.launch"), ...MacOS, bundle_id: DesktopTarget.bundle_id, remote_debugging: Schema.Boolean.pipe(Schema.optional) }),
   Schema.Struct({ action: Schema.Literal("desktop.quit"), ...MacOS, bundle_id: DesktopTarget.bundle_id, pid: DesktopTarget.pid }),
   Schema.Struct({ action: Schema.Literal("desktop.inspect"), ...DesktopTarget }),
+  Schema.Struct({ action: Schema.Literal("desktop.query"), ...DesktopTarget,
+    text: Schema.String.check(Schema.isMaxLength(256)).pipe(Schema.optional),
+    role: Schema.String.check(Schema.isMaxLength(64)).pipe(Schema.optional),
+    limit: Integer.check(Schema.isBetween({ minimum: 1, maximum: 100 })).pipe(Schema.optional),
+    max_nodes: Integer.check(Schema.isBetween({ minimum: 1, maximum: 5000 })).pipe(Schema.optional),
+  }).pipe(Schema.check(Schema.makeFilter((value) => Boolean(value.text || value.role), { expected: "text and/or role" }))),
   Schema.Struct({ action: Schema.Literal("desktop.capture"), ...DesktopTarget }),
   Schema.Struct({ action: Schema.Literal("desktop.stage"), ...DesktopTarget, ...Revision }),
   Schema.Struct({ action: Schema.Literal("desktop.unstage"), ...DesktopTarget }),
@@ -105,6 +111,23 @@ export const Input = Schema.Union([
     x: Nonnegative, y: Nonnegative, delta_x: Integer, delta_y: Integer }),
   Schema.Struct({ action: Schema.Literal("desktop.drag"), ...DesktopTarget, ...Revision,
     from_x: Nonnegative, from_y: Nonnegative, to_x: Nonnegative, to_y: Nonnegative }),
+  Schema.Struct({
+    action: Schema.Literal("desktop.select_text"),
+    ...DesktopTarget,
+    element: Element,
+    ...Revision,
+    text: Schema.String.check(Schema.isMaxLength(256)),
+    prefix: Schema.String.check(Schema.isMaxLength(256)).pipe(Schema.optional),
+    suffix: Schema.String.check(Schema.isMaxLength(256)).pipe(Schema.optional),
+    selection: Schema.Literals(["text", "cursor_before", "cursor_after"]).pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("desktop.perform_action"),
+    ...DesktopTarget,
+    element: Element,
+    ...Revision,
+    name: Schema.Literals(["press", "confirm", "increment", "decrement", "show_menu"]),
+  }),
   Schema.Struct({
     action: Schema.Literal("desktop.key"),
     ...DesktopTarget,
@@ -159,6 +182,9 @@ export const Output = Schema.Union([
       "desktop.key",
       "desktop.stage",
       "desktop.unstage",
+      "desktop.query",
+      "desktop.select_text",
+      "desktop.perform_action",
       "webbrowser.tabs", "webbrowser.navigate", "webbrowser.back", "webbrowser.forward", "webbrowser.reload", "webbrowser.new_tab", "webbrowser.close_tab", "webbrowser.eval",
     ]),
     revision: Schema.String,
@@ -175,6 +201,7 @@ export const Output = Schema.Union([
     width: Schema.Number.pipe(Schema.optional), height: Schema.Number.pipe(Schema.optional), scale: Schema.Number.pipe(Schema.optional),
     apps: Schema.Array(Schema.Struct({ bundle_id: Schema.String, pid: Schema.Int, name: Schema.String,
       is_active: Schema.Boolean, is_hidden: Schema.Boolean,
+      is_running: Schema.Boolean.pipe(Schema.optional), last_used: Schema.String.pipe(Schema.optional), uses: Schema.Number.pipe(Schema.optional),
       windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
         bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean, placement: WindowPlacement })),
     })).pipe(Schema.optional),
@@ -235,7 +262,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "macOS desktop: list once for exact bundle_id/pid/window_id and Space placement; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting. Stage a window on a private agent display for off-Space Chromium/Electron/WebKit pixel input and capture; unstage it when done.",
+              "macOS desktop: list once for exact bundle_id/pid/window_id and Space placement; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. For anything inside a web page itself (reading text or controls, clicking, typing, submitting forms, including content in cross-origin iframes) use the browser tool instead; use desktop.* on Chrome/Safari only for browser chrome and UI outside the page content, and webbrowser.* for tab management. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting, and webbrowser.eval sees only the main frame, never cross-origin iframe content. Stage a window on a private agent display for off-Space Chromium/Electron/WebKit pixel input and capture; unstage it when done.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) =>
@@ -318,11 +345,14 @@ export const Plugin = {
                 }
                 if (
                   input.action === "desktop.inspect" ||
+                  input.action === "desktop.query" ||
                   input.action === "desktop.capture" ||
                   input.action === "desktop.click" ||
                   input.action === "desktop.drag" ||
                   input.action === "desktop.type" ||
                   input.action === "desktop.scroll" ||
+                  input.action === "desktop.select_text" ||
+                  input.action === "desktop.perform_action" ||
                   input.action === "desktop.key"
                 ) {
                   const target = {
@@ -343,7 +373,7 @@ export const Plugin = {
                     source,
                   })
                   const reviewResources =
-                    input.action === "desktop.inspect" || input.action === "desktop.capture"
+                    input.action === "desktop.inspect" || input.action === "desktop.query" || input.action === "desktop.capture"
                       ? [resource]
                       : [
                           resource,
@@ -365,6 +395,12 @@ export const Plugin = {
                         .inspect({ sessionID: context.sessionID, callID: context.callID, target })
                         .pipe(Effect.ensuring(reservation.release)),
                     )
+                  if (input.action === "desktop.query")
+                    return result(
+                      yield* computer
+                        .query({ sessionID: context.sessionID, callID: context.callID, target, text: input.text, role: input.role, limit: input.limit, maxNodes: input.max_nodes })
+                        .pipe(Effect.ensuring(reservation.release)),
+                    )
                   if (input.action === "desktop.capture")
                     return result(
                       yield* computer
@@ -372,7 +408,11 @@ export const Plugin = {
                         .pipe(Effect.ensuring(reservation.release)),
                     )
                   const action: Computer.Action =
-                    input.action === "desktop.click"
+                    input.action === "desktop.select_text"
+                      ? { type: input.action, element: input.element, text: input.text, prefix: input.prefix, suffix: input.suffix, selection: input.selection }
+                      : input.action === "desktop.perform_action"
+                        ? { type: input.action, element: input.element, name: input.name }
+                      : input.action === "desktop.click"
                       ? "element" in input ? { type: input.action, element: input.element } : { type: input.action, x: input.x, y: input.y, button: input.button, count: input.count === 2 ? 2 as const : input.count === 1 ? 1 as const : undefined }
                       : input.action === "desktop.drag"
                         ? { type: input.action, fromX: input.from_x, fromY: input.from_y, toX: input.to_x, toY: input.to_y }

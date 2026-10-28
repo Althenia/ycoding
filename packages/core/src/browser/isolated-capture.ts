@@ -6,11 +6,20 @@ const MAX_INSPECTION_NODES = 10_000
 const incomplete = "Capture is disabled because the page could not be completely inspected"
 const protectedField = "Capture is disabled while password fields are present"
 
-export async function capturePage(cdp: Pick<Client, "send">, sessionId: string, signal: AbortSignal) {
-  const document = record(
-    await cdp.send("DOM.getDocument", { depth: MAX_INSPECTION_DEPTH, pierce: true }, sessionId, signal),
-  )
-  assertCaptureSafe(record(document.root))
+export async function capturePage(
+  cdp: Pick<Client, "send">,
+  sessionId: string,
+  signal: AbortSignal,
+  childSessions: ReadonlyArray<string> = [],
+) {
+  let missing = 0
+  for (const session of [sessionId, ...childSessions]) {
+    const document = record(
+      await cdp.send("DOM.getDocument", { depth: MAX_INSPECTION_DEPTH, pierce: true }, session, signal),
+    )
+    missing += inspectCaptureSafe(record(document.root))
+  }
+  if (missing !== childSessions.length) throw new globalThis.Error(incomplete)
   const capture = record(
     await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, sessionId, signal),
   )
@@ -20,9 +29,10 @@ export async function capturePage(cdp: Pick<Client, "send">, sessionId: string, 
   return Browser.CaptureOutput.make({ mediaType: "image/png", data, bytes })
 }
 
-function assertCaptureSafe(root: Readonly<Record<string, unknown>>) {
+function inspectCaptureSafe(root: Readonly<Record<string, unknown>>) {
   const pending = [{ node: root, depth: 0 }]
   let inspected = 0
+  let missing = 0
   while (pending.length > 0) {
     const current = pending.pop()
     if (!current) break
@@ -35,13 +45,13 @@ function assertCaptureSafe(root: Readonly<Record<string, unknown>>) {
     const contentDocument = current.node.contentDocument === undefined ? [] : [record(current.node.contentDocument)]
     const childNodeCount = current.node.childNodeCount
     if (typeof childNodeCount === "number" && childNodeCount > children.length) throw new globalThis.Error(incomplete)
-    if (String(current.node.nodeName).toLowerCase() === "iframe" && contentDocument.length === 0)
-      throw new globalThis.Error(incomplete)
+    if (String(current.node.nodeName).toLowerCase() === "iframe" && contentDocument.length === 0) missing++
 
     const nested = [...children, ...shadowRoots, ...contentDocument]
     if (current.depth >= MAX_INSPECTION_DEPTH && nested.length > 0) throw new globalThis.Error(incomplete)
     pending.push(...nested.map((node) => ({ node, depth: current.depth + 1 })))
   }
+  return missing
 }
 
 function isPasswordInput(node: Readonly<Record<string, unknown>>) {

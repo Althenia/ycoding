@@ -805,6 +805,18 @@ export type BrowserPairing = { secret: string; expiresAt: number }
 
 export type BrowserCaptureOutput = { mediaType: "image/png"; data: string; bytes: number }
 
+export type BrowserDownloadInfo = {
+  filename: string
+  state: string
+  bytesReceived?: number
+  totalBytes?: number
+  mime?: string
+}
+
+export type BrowserSavedFile = { path: string; bytes: number }
+
+export type BrowserWebMcpTool = { name: string; description?: string }
+
 export type UsageDashboardPreparing = { status: "preparing" }
 
 export type UsageDashboardError = { status: "error"; message: string }
@@ -2710,7 +2722,14 @@ export type BrowserElement = {
   description?: string
   disabled?: boolean
   destination?: BrowserPage
+  frame?: BrowserPage
 }
+
+export type BrowserText = { role: string; name: string; frame?: BrowserPage }
+
+export type BrowserFrame = { page: BrowserPage; observed: boolean }
+
+export type BrowserLogEntry = { level: string; text: string; frame?: BrowserPage }
 
 export type ModelIncidentReport = { rows: Array<ModelIncidentReportRow>; groups: number }
 
@@ -3425,31 +3444,12 @@ export type ProjectArtifactVersion = {
   timeStateChanged: ProjectArtifactTimestampMillis
 }
 
-export type BrowserActionResult = {
-  callID: string
-  tab: BrowserTab
-  status: "completed" | "paused" | "rejected" | "uncertain"
-  message?: string
-  capture?: BrowserCaptureOutput
-  groupID?: number
-}
-
 export type IsolatedBrowserStatus = {
   mode: "isolated"
   state: "unavailable" | "starting" | "ready" | "paused" | "stopped"
   reason?: string
   instanceID?: string
   tab?: BrowserTab
-}
-
-export type IsolatedBrowserActionResult = {
-  mode: "isolated"
-  instanceID: string
-  callID: string
-  tab: BrowserTab
-  status: "completed" | "rejected" | "uncertain"
-  message?: string
-  capture?: BrowserCaptureOutput
 }
 
 export type BrowserObservation = {
@@ -3460,6 +3460,8 @@ export type BrowserObservation = {
   title: string
   page: BrowserPage
   elements: Array<BrowserElement>
+  texts?: Array<BrowserText>
+  frames?: Array<BrowserFrame>
   truncated: boolean
 }
 
@@ -3471,9 +3473,39 @@ export type IsolatedBrowserObservation = {
   title: string
   page: BrowserPage
   elements: Array<BrowserElement>
+  texts?: Array<BrowserText>
+  frames?: Array<BrowserFrame>
   truncated: boolean
   mode: "isolated"
   instanceID: string
+}
+
+export type BrowserActionResult = {
+  callID: string
+  tab: BrowserTab
+  status: "completed" | "paused" | "rejected" | "uncertain"
+  message?: string
+  capture?: BrowserCaptureOutput
+  groupID?: number
+  text?: string
+  download?: BrowserDownloadInfo
+  logs?: Array<BrowserLogEntry>
+  savedFile?: BrowserSavedFile
+  webmcpTools?: Array<BrowserWebMcpTool>
+}
+
+export type IsolatedBrowserActionResult = {
+  mode: "isolated"
+  instanceID: string
+  callID: string
+  tab: BrowserTab
+  status: "completed" | "rejected" | "uncertain"
+  message?: string
+  capture?: BrowserCaptureOutput
+  text?: string
+  logs?: Array<BrowserLogEntry>
+  savedFile?: BrowserSavedFile
+  webmcpTools?: Array<BrowserWebMcpTool>
 }
 
 export type SessionGenerationSpeedHistory = {
@@ -10580,6 +10612,23 @@ export type BrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
   }["tabID"]
   readonly generation: {
     readonly tabID: string
@@ -10595,6 +10644,23 @@ export type BrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
   }["generation"]
   readonly documentGeneration: {
     readonly tabID: string
@@ -10610,6 +10676,23 @@ export type BrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
   }["documentGeneration"]
   readonly observationRevision: {
     readonly tabID: string
@@ -10625,6 +10708,23 @@ export type BrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
   }["observationRevision"]
   readonly callID: {
     readonly tabID: string
@@ -10640,6 +10740,23 @@ export type BrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
   }["callID"]
   readonly action: {
     readonly tabID: string
@@ -10655,6 +10772,23 @@ export type BrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
   }["action"]
 }
 
@@ -10736,6 +10870,23 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
     readonly instanceID: string
   }["tabID"]
   readonly generation: {
@@ -10752,6 +10903,23 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
     readonly instanceID: string
   }["generation"]
   readonly documentGeneration: {
@@ -10768,6 +10936,23 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
     readonly instanceID: string
   }["documentGeneration"]
   readonly observationRevision: {
@@ -10784,6 +10969,23 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
     readonly instanceID: string
   }["observationRevision"]
   readonly callID: {
@@ -10800,6 +11002,23 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
     readonly instanceID: string
   }["callID"]
   readonly action: {
@@ -10816,6 +11035,23 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
     readonly instanceID: string
   }["action"]
   readonly instanceID: {
@@ -10832,6 +11068,23 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "capture" }
       | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
       | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
+      | { readonly type: "back" }
+      | { readonly type: "forward" }
+      | { readonly type: "reload" }
+      | {
+          readonly type: "key"
+          readonly key: string
+          readonly modifiers?: ReadonlyArray<"Alt" | "Control" | "Meta" | "Shift">
+        }
+      | { readonly type: "wait"; readonly ref?: string; readonly timeoutMs?: number }
+      | { readonly type: "clipboard_read" }
+      | { readonly type: "clipboard_write"; readonly text: string }
+      | { readonly type: "upload"; readonly ref: string; readonly paths: ReadonlyArray<string> }
+      | { readonly type: "download"; readonly timeoutMs?: number }
+      | { readonly type: "logs"; readonly limit?: number }
+      | { readonly type: "export" }
+      | { readonly type: "webmcp_list" }
+      | { readonly type: "webmcp_invoke"; readonly name: string; readonly arguments?: JsonValue }
     readonly instanceID: string
   }["instanceID"]
 }

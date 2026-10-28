@@ -6,6 +6,9 @@ import { Browser } from "@ycoding-ai/schema/browser"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Context, Deferred, Duration, Effect, Layer, Schema, Stream, Types } from "effect"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
+import { mkdir, stat, writeFile } from "node:fs/promises"
+import { isAbsolute, join } from "node:path"
+import { Global } from "./global"
 import { BrowserProtocol } from "./browser/protocol"
 import { BrowserAdmission } from "./browser/admission"
 import { Credential } from "./credential"
@@ -27,6 +30,8 @@ export const OpenInput = Browser.OpenInput
 export const CloseInput = Browser.CloseInput
 export const ReleaseInput = Browser.ReleaseInput
 export const ActionResult = Browser.ActionResult
+export const HistoryInput = Browser.HistoryInput
+export const HistoryResult = Browser.HistoryResult
 export const ControlInput = Browser.ControlInput
 export const MAX_CAPTURE_BYTES = Browser.MAX_CAPTURE_BYTES
 
@@ -40,6 +45,8 @@ export type OpenInput = Browser.OpenInput
 export type CloseInput = Browser.CloseInput
 export type ReleaseInput = Browser.ReleaseInput
 export type ActionResult = Browser.ActionResult
+export type HistoryInput = Browser.HistoryInput
+export type HistoryResult = Browser.HistoryResult
 
 export class UnavailableError extends Schema.TaggedErrorClass<UnavailableError>()("Browser.UnavailableError", {
   message: Schema.String,
@@ -93,10 +100,21 @@ export interface Interface {
       readonly ref: string
     },
   ) => Effect.Effect<Browser.Page | undefined, SessionErrors.NotFoundError | OwnershipError | FenceError | UnavailableError>
+  readonly elementFrame: (
+    input: Pick<ActionInput, "sessionID" | "tabID" | "generation" | "documentGeneration" | "observationRevision"> & {
+      readonly ref: string
+    },
+  ) => Effect.Effect<Browser.Page | undefined, SessionErrors.NotFoundError | OwnershipError | FenceError | UnavailableError>
   readonly action: (
     input: ActionInput,
   ) => Effect.Effect<
     ActionResult,
+    SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError
+  >
+  readonly history: (
+    input: HistoryInput,
+  ) => Effect.Effect<
+    HistoryResult,
     SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError
   >
   readonly control: (
@@ -133,6 +151,7 @@ type MutableTab = Types.DeepMutable<Tab> & {
   pageIdentity: string
   elements: Map<string, BrowserOperation.Element>
   allowedOrigins?: Set<string>
+  frameOrigins?: Set<string>
   leaseSessionID?: Browser.Tab["sessionID"]
 }
 type PairingState = {
@@ -168,6 +187,8 @@ type Pending = PendingBase &
         readonly mutation: boolean
         readonly fingerprint: string
         readonly documentGeneration: number
+        readonly actionType?: Browser.Action["type"]
+        exportData?: string
       }
     | { readonly kind: "open" | "close"; readonly mutation: true; readonly fingerprint: string }
   )
@@ -189,6 +210,11 @@ type Connection = {
   paused: boolean
   profileGranted: boolean
   pending?: Pending
+  historyPending?: {
+    readonly callID: string
+    readonly sessionID: Browser.Tab["sessionID"]
+    readonly deferred: Deferred.Deferred<HistoryResult, BridgeError>
+  }
 }
 
 export const layer = (options: Options = {}) =>
@@ -241,7 +267,7 @@ export const layer = (options: Options = {}) =>
       })
 
       function publicTab(tab: MutableTab, sessionID: Browser.Tab["sessionID"]): Tab {
-        const { elements: _elements, pageIdentity: _pageIdentity, allowedOrigins: _allowedOrigins, leaseSessionID, ...info } = tab
+        const { elements: _elements, pageIdentity: _pageIdentity, allowedOrigins: _allowedOrigins, frameOrigins: _frameOrigins, leaseSessionID, ...info } = tab
         return {
           ...info,
           sessionID: tab.mode === "owned" ? tab.sessionID : sessionID,
@@ -312,6 +338,10 @@ export const layer = (options: Options = {}) =>
       }
 
       function failPending(current: Connection, message: string) {
+        if (current.historyPending) {
+          Deferred.doneUnsafe(current.historyPending.deferred, Effect.fail(new BridgeError({ message })))
+          current.historyPending = undefined
+        }
         const pending = current.pending
         if (!pending) return
         const tab = current.tabs.get(pending.tabID)
@@ -415,6 +445,8 @@ export const layer = (options: Options = {}) =>
           return yield* new OwnershipError({ message: LEASE_HELD })
         if (current.pending)
           return yield* new BusyError({ message: `Browser command ${current.pending.callID} is still unsettled` })
+        if (current.historyPending)
+          return yield* new BusyError({ message: `Browser command ${current.historyPending.callID} is still unsettled` })
         const claimed = claim.filter((tab) => tab.mode === "profile" && tab.leaseSessionID === undefined)
         for (const tab of claimed) tab.leaseSessionID = pending.sessionID
         const unclaim = () => {
@@ -478,12 +510,73 @@ export const layer = (options: Options = {}) =>
             deferred,
             timedOut: false,
           },
-          { type: "observe", callID: input.callID, tabID: input.tabID, generation: input.generation },
+          {
+            type: "observe",
+            callID: input.callID,
+            tabID: input.tabID,
+            generation: input.generation,
+            frameOrigins: [...(tab.frameOrigins ?? [])],
+          },
           [tab],
         )
         if (!("elements" in result))
           return yield* new BridgeError({ message: "Extension returned an action result for observe" })
         return result
+      })
+
+      const history = Effect.fn("Browser.history")(function* (input: HistoryInput) {
+        const current = yield* requireConnection(input.sessionID)
+        if (current.paused)
+          return yield* new FenceError({ message: "Chrome tab control is paused" })
+        if (input.generation !== current.generation)
+          return yield* new FenceError({ message: "Chrome bridge generation is stale" })
+        if (current.pending)
+          return yield* new BusyError({ message: `Browser command ${current.pending.callID} is still unsettled` })
+        if (current.historyPending)
+          return yield* new BusyError({ message: `Browser command ${current.historyPending.callID} is still unsettled` })
+        const deferred = yield* Deferred.make<HistoryResult, BridgeError>()
+        const pending = { callID: input.callID, sessionID: input.sessionID, deferred }
+        current.historyPending = pending
+        if (
+          !current.transport.send({
+            type: "history",
+            callID: input.callID,
+            generation: current.generation,
+            query: input.query,
+            limit: input.limit,
+            startTime: input.startTime,
+            endTime: input.endTime,
+          })
+        ) {
+          if (current.historyPending === pending) current.historyPending = undefined
+          return yield* new UnavailableError({ message: "Chrome extension bridge output queue is full" })
+        }
+        const result = yield* Deferred.await(deferred).pipe(
+          Effect.timeoutOrElse({ duration: commandTimeout, orElse: () => Effect.succeed(undefined) }),
+        )
+        if (current.historyPending === pending) current.historyPending = undefined
+        if (result === undefined)
+          return yield* new UnavailableError({ message: "Chrome extension did not answer before the command deadline" })
+        return result
+      })
+
+      const writeExport = Effect.fn("Browser.writeExport")(function* (tab: MutableTab, data: string) {
+        return yield* Effect.tryPromise({
+          try: async () => {
+            const bytes = Buffer.byteLength(data, "utf8")
+            if (bytes > Browser.MAX_EXPORT_BYTES) throw new Error("Export exceeds the 8 MiB limit")
+            const directory = join(Global.Path.data, "browser-exports")
+            await mkdir(directory, { recursive: true, mode: 0o700 })
+            const name = `${(tab.title || "page").replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 64) || "page"}-${Date.now()}-${randomBytes(3).toString("hex")}.mhtml`
+            const path = join(directory, name)
+            await writeFile(path, data, { encoding: "utf8", mode: 0o600 })
+            return { path, bytes }
+          },
+          catch: (cause) =>
+            new BridgeError({
+              message: bounded(cause instanceof Error ? cause.message : "Browser export could not be saved", 1024),
+            }),
+        })
       })
 
       const open = Effect.fn("Browser.open")(function* (input: OpenInput) {
@@ -621,6 +714,24 @@ export const layer = (options: Options = {}) =>
         return element.destination
       })
 
+      const elementFrame = Effect.fn("Browser.elementFrame")(function* (
+        input: Parameters<Interface["elementFrame"]>[0],
+      ) {
+        const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
+        if (current.paused || tab.status !== "shared")
+          return yield* new FenceError({ message: "Chrome tab control is paused" })
+        if (
+          tab.generation !== input.generation ||
+          tab.documentGeneration !== input.documentGeneration ||
+          tab.observationRevision !== input.observationRevision
+        )
+          return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
+        const element = tab.elements.get(input.ref)
+        if (!element || element.disabled)
+          return yield* new FenceError({ message: "Semantic element reference is stale or disabled" })
+        return element.frame
+      })
+
       const actionIdentity: Interface["actionIdentity"] = Effect.fn("Browser.actionIdentity")(function* (input) {
         const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
         if (current.paused || tab.status !== "shared" || tab.generation !== input.generation ||
@@ -657,10 +768,23 @@ export const layer = (options: Options = {}) =>
           tab.observationRevision !== input.observationRevision
         )
           return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
-        if (input.action.type === "click" || input.action.type === "type") {
+        if (input.action.type === "click" || input.action.type === "type" || input.action.type === "upload") {
           const element = tab.elements.get(input.action.ref)
           if (!element) return yield* new FenceError({ message: "Semantic element reference is stale" })
           if (element.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
+        }
+        if (input.action.type === "upload") {
+          const uploadPaths = input.action.paths
+          yield* Effect.tryPromise({
+            try: async () => {
+              for (const path of uploadPaths) {
+                if (!isAbsolute(path)) throw new Error("Upload paths must be absolute")
+                const info = await stat(path)
+                if (!info.isFile()) throw new Error("Upload path is not a regular file")
+              }
+            },
+            catch: () => new FenceError({ message: "Upload file does not exist or is not a regular file" }),
+          })
         }
         const destination = yield* Effect.try({
           try: () =>
@@ -675,21 +799,30 @@ export const layer = (options: Options = {}) =>
           ...((input.action.type === "group" || input.action.type === "ungroup")
             ? input.action.tabIDs.map((id) => current.tabs.get(id)!.page.origin) : [])])]
         if (tab.mode === "owned") tab.allowedOrigins = new Set(allowedOrigins)
+        const actionRef =
+          input.action.type === "click" || input.action.type === "type" || input.action.type === "wait" || input.action.type === "upload"
+            ? input.action.ref
+            : undefined
+        const targetElement = actionRef ? tab.elements.get(actionRef) : undefined
+        const frameOrigins = [...new Set([...(tab.frameOrigins ?? []),
+          ...(targetElement?.frame ? [targetElement.frame.origin] : [])])]
         const deferred = yield* Deferred.make<Observation | ActionResult, BridgeError>()
+        const pendingAction: Pending = {
+          kind: "action",
+          callID: input.callID,
+          tabID: input.tabID,
+          sessionID: input.sessionID,
+          generation: input.generation,
+          documentGeneration: input.documentGeneration,
+          mutation: ["navigate", "click", "type", "group", "ungroup", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type),
+          fingerprint,
+          actionType: input.action.type,
+          deferred,
+          timedOut: false,
+        }
         const result = yield* dispatch(
           current,
-          {
-            kind: "action",
-            callID: input.callID,
-            tabID: input.tabID,
-            sessionID: input.sessionID,
-            generation: input.generation,
-            documentGeneration: input.documentGeneration,
-            mutation: ["navigate", "click", "type", "group", "ungroup"].includes(input.action.type),
-            fingerprint,
-            deferred,
-            timedOut: false,
-          },
+          pendingAction,
           {
             type: "action",
             callID: input.callID,
@@ -698,6 +831,7 @@ export const layer = (options: Options = {}) =>
             documentGeneration: input.documentGeneration,
             observationRevision: input.observationRevision,
             allowedOrigins,
+            frameOrigins,
             action: input.action,
           },
           input.action.type === "group" || input.action.type === "ungroup"
@@ -706,8 +840,14 @@ export const layer = (options: Options = {}) =>
         )
         if (!("status" in result))
           return yield* new BridgeError({ message: "Extension returned an observation for action" })
-        remember(current, fingerprint, result, settlementKey)
-        return { ...result, tab: { ...result.tab, sessionID: input.sessionID } }
+        let finalResult = result
+        if (input.action.type === "export" && result.status === "completed") {
+          const exportData = pendingAction.kind === "action" ? pendingAction.exportData : undefined
+          if (!exportData) return yield* new BridgeError({ message: "Extension returned no MHTML data for export" })
+          finalResult = { ...result, savedFile: yield* writeExport(tab, exportData) }
+        }
+        remember(current, fingerprint, finalResult, settlementKey)
+        return { ...finalResult, tab: { ...finalResult.tab, sessionID: input.sessionID } }
       })
 
       const control = Effect.fn("Browser.control")(function* (
@@ -827,6 +967,18 @@ export const layer = (options: Options = {}) =>
         ) {
           if (connection !== current || !current.connected) return
           if (message.type === "pong") return
+          if (message.type === "history_result" || message.type === "history_error") {
+            const historyPending = current.historyPending
+            if (!historyPending || historyPending.callID !== message.callID || message.generation !== current.generation) return
+            current.historyPending = undefined
+            Deferred.doneUnsafe(
+              historyPending.deferred,
+              message.type === "history_error"
+                ? Effect.fail(new BridgeError({ message: bounded(message.message, 1024) }))
+                : Effect.succeed(sanitizeHistory(message)),
+            )
+            return
+          }
           if (message.type === "profile_access") {
             current.profileGranted = message.enabled
             if (!message.enabled)
@@ -1010,13 +1162,28 @@ export const layer = (options: Options = {}) =>
             tab.pageIdentity = Hash.sha256(message.url)
             tab.documentGeneration = observation.documentGeneration
             tab.observationRevision = observation.revision
-            tab.elements = new Map(observation.elements.map((element) => [element.ref, { ...element,
-              identity: BrowserOperation.elementIdentity(message.url, element, message.elements.find((raw) => raw.ref === element.ref)?.destination) }]))
+            tab.elements = new Map(observation.elements.map((element) => {
+              const raw = message.elements.find((candidate) => candidate.ref === element.ref)
+              return [element.ref, { ...element,
+                identity: BrowserOperation.elementIdentity(raw?.frame ?? message.url, element, raw?.destination) }]
+            }))
+            tab.frameOrigins = new Set([...(tab.frameOrigins ?? []),
+              ...(observation.frames ?? []).map((frame) => frame.page.origin),
+              ...observation.elements.flatMap((element) => element.frame ? [element.frame.origin] : [])])
             Deferred.doneUnsafe(pending.deferred, Effect.succeed(observation))
             current.pending = undefined
             return
           }
           if (message.type !== "result" || pending.kind !== "action") return
+          if (message.data !== undefined && Buffer.byteLength(message.data, "utf8") > Browser.MAX_EXPORT_BYTES) {
+            Deferred.doneUnsafe(
+              pending.deferred,
+              Effect.fail(new BridgeError({ message: "Extension returned an export larger than the 8 MiB limit" })),
+            )
+            current.pending = undefined
+            return
+          }
+          if (message.data !== undefined) pending.exportData = message.data
           const page = safePageMaybe(message.url)
           if (!page) {
             Deferred.doneUnsafe(
@@ -1045,8 +1212,12 @@ export const layer = (options: Options = {}) =>
             message: message.message,
             capture: message.capture,
             groupID: message.groupID,
+            text: message.text === undefined ? undefined : boundedUtf8Text(message.text, Browser.MAX_CLIPBOARD_BYTES),
+            download: sanitizeDownload(message.download),
+            logs: sanitizeLogs(message.logs),
+            webmcpTools: sanitizeWebMcpTools(message.webmcpTools),
           }
-          remember(current, pending.fingerprint, result, `${pending.sessionID}\0${pending.callID}`)
+          if (pending.actionType !== "export") remember(current, pending.fingerprint, result, `${pending.sessionID}\0${pending.callID}`)
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))
           current.pending = undefined
         })
@@ -1147,7 +1318,7 @@ export const layer = (options: Options = {}) =>
         return { sessionID: trust.sessionID, serverID: trust.serverID, secret: undefined }
       })
 
-      return Service.of({ status, list, start, open, close, release, observe, clickDestination, actionIdentity, action, control, stop, forget, attach })
+      return Service.of({ status, list, start, open, close, release, observe, clickDestination, elementFrame, actionIdentity, action, history, control, stop, forget, attach })
     }),
   )
 
@@ -1209,7 +1380,77 @@ function actionFingerprint(input: ActionInput) {
   if (input.action.type === "click") return JSON.stringify([...fence, "click", input.action.ref])
   if (input.action.type === "type") return JSON.stringify([...fence, "type", input.action.ref, input.action.text])
   if (input.action.type === "scroll") return JSON.stringify([...fence, "scroll", input.action.deltaY])
-  return JSON.stringify([...fence, "capture"])
+  return JSON.stringify([...fence, input.action])
+}
+
+const utf8Encoder = new TextEncoder()
+
+function boundedUtf8Text(input: string, bytes: number) {
+  if (utf8Encoder.encode(input).byteLength <= bytes) return input
+  let used = 0
+  let output = ""
+  for (const char of input) {
+    const size = utf8Encoder.encode(char).byteLength
+    if (used + size > bytes) break
+    used += size
+    output += char
+  }
+  return output
+}
+
+function sanitizeDownload(
+  download: Extract<BrowserProtocol.ClientMessage, { readonly type: "result" }>["download"],
+): Browser.DownloadInfo | undefined {
+  if (!download) return undefined
+  const count = (value: number | undefined) =>
+    value !== undefined && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined
+  return {
+    filename: bounded(download.filename, 1024),
+    state: bounded(download.state, 32),
+    bytesReceived: count(download.bytesReceived),
+    totalBytes: count(download.totalBytes),
+    mime: download.mime ? bounded(download.mime, 128) : undefined,
+  }
+}
+
+function sanitizeLogs(logs: Extract<BrowserProtocol.ClientMessage, { readonly type: "result" }>["logs"]) {
+  if (!logs) return undefined
+  return logs.slice(0, Browser.MAX_LOG_ENTRIES).map((entry) => ({
+    level: bounded(entry.level, 16),
+    text: bounded(entry.text, Browser.MAX_NAME_LENGTH),
+    frame: entry.frame ? safePageMaybe(entry.frame) : undefined,
+  }))
+}
+
+function sanitizeWebMcpTools(tools: Extract<BrowserProtocol.ClientMessage, { readonly type: "result" }>["webmcpTools"]) {
+  if (!tools) return undefined
+  return tools.slice(0, Browser.MAX_LOG_ENTRIES).map((tool) => ({
+    name: bounded(tool.name, 128),
+    description: tool.description ? bounded(tool.description, Browser.MAX_NAME_LENGTH) : undefined,
+  }))
+}
+
+function sanitizeHistory(
+  message: Extract<BrowserProtocol.ClientMessage, { readonly type: "history_result" }>,
+): HistoryResult {
+  const entries: Browser.HistoryEntry[] = []
+  for (const entry of message.entries) {
+    try {
+      const url = new URL(entry.url)
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) continue
+      entries.push({
+        url: boundedUtf8Text(url.toString(), 2048),
+        title: bounded(entry.title, Browser.MAX_TITLE_LENGTH),
+        lastVisitTime: Number.isFinite(entry.lastVisitTime) && entry.lastVisitTime >= 0 ? Math.floor(entry.lastVisitTime) : 0,
+        visitCount:
+          entry.visitCount !== undefined && Number.isFinite(entry.visitCount) && entry.visitCount >= 0
+            ? Math.floor(entry.visitCount)
+            : undefined,
+      })
+    } catch {}
+    if (entries.length >= Browser.MAX_HISTORY_RESULTS) break
+  }
+  return { entries }
 }
 
 function sanitizeObservation(
@@ -1224,7 +1465,19 @@ function sanitizeObservation(
     description: element.description ? bounded(element.description, Browser.MAX_NAME_LENGTH) : undefined,
     disabled: element.disabled,
     destination: element.destination ? safePageMaybe(element.destination) : undefined,
+    frame: element.frame ? safePageMaybe(element.frame) : undefined,
   }))
+  const texts = (message.texts ?? []).slice(0, Browser.MAX_OBSERVATION_TEXTS).map((text) => ({
+    role: bounded(text.role, 64),
+    name: bounded(text.name, Browser.MAX_NAME_LENGTH),
+    frame: text.frame ? safePageMaybe(text.frame) : undefined,
+  }))
+  const frames = (message.frames ?? [])
+    .slice(0, Browser.MAX_OBSERVATION_FRAMES)
+    .flatMap((frame) => {
+      const framePage = safePageMaybe(frame.url)
+      return framePage ? [{ page: framePage, observed: frame.observed }] : []
+    })
   return {
     tabID: message.tabID,
     generation: message.generation,
@@ -1233,6 +1486,12 @@ function sanitizeObservation(
     title: bounded(message.title, Browser.MAX_TITLE_LENGTH),
     page,
     elements,
-    truncated: message.truncated || message.elements.length > Browser.MAX_OBSERVATION_ELEMENTS,
+    ...(texts.length ? { texts } : {}),
+    ...(frames.length ? { frames } : {}),
+    truncated:
+      message.truncated ||
+      message.elements.length > Browser.MAX_OBSERVATION_ELEMENTS ||
+      (message.texts?.length ?? 0) > Browser.MAX_OBSERVATION_TEXTS ||
+      (message.frames?.length ?? 0) > Browser.MAX_OBSERVATION_FRAMES,
   }
 }

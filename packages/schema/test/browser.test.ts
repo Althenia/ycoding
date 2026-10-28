@@ -97,6 +97,125 @@ describe("Browser selected-tab contract", () => {
     ).toBe(false)
   })
 
+  test("accepts bounded history, key, and wait actions and rejects unbounded forms", () => {
+    const base = {
+      sessionID: "ses_contract",
+      tabID: "btab_contract",
+      generation: 1,
+      documentGeneration: 2,
+      observationRevision: 3,
+      callID: "call_contract",
+    }
+    for (const action of [
+      { type: "back" },
+      { type: "forward" },
+      { type: "reload" },
+      { type: "key", key: "Enter" },
+      { type: "key", key: "Tab", modifiers: ["Shift"] },
+      { type: "wait" },
+      { type: "wait", ref: "b1", timeoutMs: Browser.MAX_WAIT_MS },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...base, action }), JSON.stringify(action)).toBe(true)
+    for (const action of [
+      { type: "hover", ref: "b1" },
+      { type: "key", key: "" },
+      { type: "key", key: "Enter", modifiers: ["Hyper"] },
+      { type: "wait", timeoutMs: Browser.MAX_WAIT_MS + 1 },
+      { type: "wait", timeoutMs: -1 },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...base, action }), JSON.stringify(action)).toBe(false)
+  })
+
+  test("bounds the readable text projection and frame completeness list", () => {
+    const observation = {
+      tabID: tab.id,
+      generation: 1,
+      documentGeneration: 2,
+      revision: 3,
+      title: "Fixture",
+      page: tab.page,
+      elements: [
+        { ref: "b1", role: "button", name: "Child", frame: { origin: "https://child.example.test", path: "/tempo" } },
+      ],
+      texts: [{ role: "heading", name: "Shell heading" }],
+      frames: [{ page: { origin: "https://child.example.test", path: "/tempo" }, observed: true }],
+      truncated: false,
+    }
+    expect(Schema.decodeUnknownSync(Browser.Observation)(observation) as unknown).toEqual(observation)
+    expect(
+      Schema.is(Browser.Observation)({
+        ...observation,
+        texts: Array.from({ length: Browser.MAX_OBSERVATION_TEXTS + 1 }, () => ({ role: "StaticText", name: "x" })),
+      }),
+    ).toBe(false)
+    expect(
+      Schema.is(Browser.Observation)({
+        ...observation,
+        frames: Array.from({ length: Browser.MAX_OBSERVATION_FRAMES + 1 }, () => ({
+          page: { origin: "https://child.example.test", path: "/tempo" },
+          observed: false,
+        })),
+      }),
+    ).toBe(false)
+  })
+
+  test("accepts bounded peripheral actions and rejects unbounded forms", () => {
+    const base = {
+      sessionID: "ses_contract",
+      tabID: "btab_contract",
+      generation: 1,
+      documentGeneration: 2,
+      observationRevision: 3,
+      callID: "call_contract",
+    }
+    for (const action of [
+      { type: "clipboard_read" },
+      { type: "clipboard_write", text: "synthetic" },
+      { type: "upload", ref: "b1", paths: ["/tmp/fixture.txt"] },
+      { type: "download", timeoutMs: 1000 },
+      { type: "logs", limit: 10 },
+      { type: "export" },
+      { type: "webmcp_list" },
+      { type: "webmcp_invoke", name: "lookup", arguments: { q: 1 } },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...base, action }), JSON.stringify(action)).toBe(true)
+    for (const action of [
+      { type: "clipboard_write", text: "x".repeat(Browser.MAX_CLIPBOARD_BYTES + 1) },
+      { type: "upload", ref: "b1", paths: [] },
+      { type: "upload", ref: "b1", paths: Array(Browser.MAX_UPLOAD_FILES + 1).fill("/tmp/a") },
+      { type: "download", timeoutMs: Browser.MAX_WAIT_MS + 1 },
+      { type: "logs", limit: Browser.MAX_LOG_ENTRIES + 1 },
+      { type: "webmcp_invoke", name: "" },
+    ])
+      expect(Schema.is(Browser.ActionInput)({ ...base, action }), JSON.stringify(action)).toBe(false)
+  })
+
+  test("bounds history search input and results and action payloads", () => {
+    expect(
+      Schema.is(Browser.HistoryInput)({
+        sessionID: "ses_contract", generation: 1, callID: "h1", query: "tempo", limit: 5, startTime: 1, endTime: 2,
+      }),
+    ).toBe(true)
+    expect(Schema.is(Browser.HistoryInput)({ sessionID: "ses_contract", generation: 1, callID: "h1", limit: 101 })).toBe(false)
+    const result = {
+      callID: "c1",
+      tab,
+      status: "completed",
+      text: "clipboard",
+      logs: [{ level: "log", text: "hello" }],
+      download: { filename: "report.csv", state: "complete", bytesReceived: 3 },
+      savedFile: { path: "/tmp/page.mhtml", bytes: 10 },
+      webmcpTools: [{ name: "lookup", description: "Look up" }],
+    }
+    expect(Schema.decodeUnknownSync(Browser.ActionResult)(result) as unknown).toEqual(result)
+    expect(
+      Schema.is(Browser.ActionResult)({
+        ...result,
+        logs: Array.from({ length: Browser.MAX_LOG_ENTRIES + 1 }, () => ({ level: "log", text: "x" })),
+      }),
+    ).toBe(false)
+  })
+
   test("keeps durable trust credentials out of the public pairing response", () => {
     expect(
       Schema.is(Browser.Pairing)({

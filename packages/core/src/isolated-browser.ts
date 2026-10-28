@@ -5,6 +5,9 @@ import { Hash } from "./util/hash"
 import { Browser } from "@ycoding-ai/schema/browser"
 import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
 import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream, Types } from "effect"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { Global } from "./global"
 import { BrowserAdmission } from "./browser/admission"
 import { IsolatedBrowserExecutor } from "./browser/isolated-executor"
 import { makeLocationNode } from "./effect/app-node"
@@ -310,6 +313,8 @@ export const layer = (options: Options = {}) =>
           title: instance.tab.title,
           page: instance.tab.page,
           elements: [...instance.tab.elements.values()].map((element) => Schema.decodeUnknownSync(Browser.Element)(element)),
+          ...(observed.texts?.length ? { texts: [...observed.texts] } : {}),
+          ...(observed.frames?.length ? { frames: [...observed.frames] } : {}),
           truncated: observed.truncated,
         }
       })
@@ -323,6 +328,26 @@ export const layer = (options: Options = {}) =>
         const identity = BrowserOperation.actionIdentity({ ...instance.tab, mode: "isolated" }, input.action, instance.tab.elements)
         if (identity === undefined) return yield* new FenceError({ message: "Semantic target is stale or disabled; observe again" })
         return identity
+      })
+
+      const writeExport = Effect.fn("IsolatedBrowser.writeExport")(function* (instance: Instance, data: string | undefined) {
+        return yield* Effect.tryPromise({
+          try: async () => {
+            if (!data) throw new Error("Isolated Chrome returned no MHTML data for export")
+            const bytes = Buffer.byteLength(data, "utf8")
+            if (bytes > Browser.MAX_EXPORT_BYTES) throw new Error("Export exceeds the 8 MiB limit")
+            const directory = join(Global.Path.data, "browser-exports")
+            await mkdir(directory, { recursive: true, mode: 0o700 })
+            const name = `${(instance.tab.title || "page").replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 64) || "page"}-${Date.now()}.mhtml`
+            const path = join(directory, name)
+            await writeFile(path, data, { encoding: "utf8", mode: 0o600 })
+            return { path, bytes }
+          },
+          catch: (cause) =>
+            new UnavailableError({
+              message: bounded(cause instanceof Error ? cause.message : "Browser export could not be saved", 1024),
+            }),
+        })
       })
 
       const action = Effect.fn("IsolatedBrowser.action")(function* (input: ActionInput) {
@@ -355,8 +380,9 @@ export const layer = (options: Options = {}) =>
           return yield* new FenceError({ message: "Semantic element reference is stale" })
         if (element?.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
         const destination = yield* destinationPage(input.action, element)
-        const allowedOrigins = [...new Set([instance.tab.page.origin, ...(destination ? [destination.origin] : [])])]
-        const mutation = ["navigate", "click", "type"].includes(input.action.type)
+        const allowedOrigins = [...new Set([instance.tab.page.origin, ...(destination ? [destination.origin] : []),
+          ...(element?.frame ? [element.frame.origin] : [])])]
+        const mutation = ["navigate", "click", "type", "back", "forward", "reload", "key", "clipboard_write", "upload", "webmcp_invoke"].includes(input.action.type)
         const deferred = yield* Deferred.make<ActionResult>()
         const pending: PendingAction = { callID: input.callID, fingerprint, mutation, deferred }
         instance.pending = pending
@@ -381,20 +407,30 @@ export const layer = (options: Options = {}) =>
                 ),
             }),
             Effect.matchEffect({
-              onSuccess: (output) => {
-                if (instance.pending !== pending || instance.settlements.has(input.callID)) return Effect.void
-                applySnapshot(instance, output.snapshot)
-                const result: ActionResult = {
-                  mode: "isolated",
-                  instanceID: instance.instanceID,
-                  callID: input.callID,
-                  tab: publicTab(instance.tab),
-                  status: output.rejected ? "rejected" : "completed",
-                  message: output.rejected,
-                  capture: output.capture,
-                }
-                return settle(result)
-              },
+              onSuccess: (output) =>
+                Effect.gen(function* () {
+                  if (instance.pending !== pending || instance.settlements.has(input.callID)) return
+                  applySnapshot(instance, output.snapshot)
+                  const savedFile =
+                    input.action.type === "export" && !output.rejected
+                      ? yield* writeExport(instance, output.data).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                      : undefined
+                  const exportFailed = input.action.type === "export" && !output.rejected && savedFile === undefined
+                  const result: ActionResult = {
+                    mode: "isolated",
+                    instanceID: instance.instanceID,
+                    callID: input.callID,
+                    tab: publicTab(instance.tab),
+                    status: output.rejected || exportFailed ? "rejected" : "completed",
+                    message: exportFailed ? "Browser export could not be saved" : output.rejected,
+                    capture: output.capture,
+                    text: output.text,
+                    logs: output.logs ? [...output.logs] : undefined,
+                    savedFile,
+                    webmcpTools: output.webmcpTools ? [...output.webmcpTools] : undefined,
+                  }
+                  yield* settle(result)
+                }),
               onFailure: (error) => {
                 const uncertain = error.phase === "postdispatch" && mutation
                 if (uncertain) {
@@ -590,7 +626,7 @@ function actionFingerprint(input: ActionInput) {
   if (input.action.type === "click") return JSON.stringify([...fence, "click", input.action.ref])
   if (input.action.type === "type") return JSON.stringify([...fence, "type", input.action.ref, input.action.text])
   if (input.action.type === "scroll") return JSON.stringify([...fence, "scroll", input.action.deltaY])
-  return JSON.stringify([...fence, "capture"])
+  return JSON.stringify([...fence, input.action])
 }
 
 function bounded(input: string, length: number) {

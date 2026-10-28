@@ -301,9 +301,8 @@ describe("real isolated Chrome executor", () => {
     }
   }, 30_000)
 
-  test("rejects child frames before their document or script effects run", async () => {
+  test("observes an approved same-origin child frame merged with the top document", async () => {
     let frameDocument = 0
-    let frameScript = 0
     const fixture = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -311,27 +310,35 @@ describe("real isolated Chrome executor", () => {
         const path = new URL(request.url).pathname
         if (path === "/frame") {
           frameDocument++
-          return new Response("<script>fetch('/frame-script-marker')</script>", {
+          return new Response("<!doctype html><title>Frame</title><p>Frame text</p><button>Frame button</button>", {
             headers: { "content-type": "text/html" },
           })
         }
-        if (path === "/frame-script-marker") {
-          frameScript++
-          return new Response("marked")
-        }
-        return new Response("<!doctype html><title>Frame fixture</title><iframe src='/frame'></iframe>", {
+        return new Response("<!doctype html><title>Frame fixture</title><h1>Shell heading</h1><iframe src='/frame'></iframe>", {
           headers: { "content-type": "text/html" },
         })
       },
     })
-    const rootsBefore = await isolatedRoots()
-    const exit = await launchExit(`http://127.0.0.1:${fixture.port}/fixture`)
-    if (Exit.isSuccess(exit)) await Effect.runPromise(exit.value.close)
-    expect(Exit.isFailure(exit)).toBe(true)
-    expect(frameDocument).toBe(0)
-    expect(frameScript).toBe(0)
-    await waitForAsync(async () => (await isolatedRoots()).length === rootsBefore.length, "frame startup cleanup")
-    await fixture.stop(true)
+    const origin = `http://127.0.0.1:${fixture.port}`
+    const runtime = await launch(`${origin}/fixture`)
+    try {
+      const observed = await Effect.runPromise(runtime.observe)
+      expect(frameDocument).toBeGreaterThan(0)
+      expect(observed.frames).toContainEqual(
+        expect.objectContaining({ page: { origin, path: "/frame" }, observed: true }),
+      )
+      expect(observed.elements).toContainEqual(
+        expect.objectContaining({ name: "Frame button", frame: { origin, path: "/frame" } }),
+      )
+      expect(observed.texts).toContainEqual(expect.objectContaining({ name: "Frame text" }))
+      expect(observed.texts).toContainEqual(expect.objectContaining({ name: "Shell heading" }))
+      const button = requireElement(observed, "Frame button")
+      const clicked = await Effect.runPromise(runtime.action({ type: "click", ref: button.ref }, [origin]))
+      expect(clicked.rejected).toBeUndefined()
+    } finally {
+      await Effect.runPromise(runtime.close)
+      await fixture.stop(true)
+    }
   }, 30_000)
 
   test("bounds owned process count and removes its profile and download resources on close", async () => {
@@ -534,10 +541,6 @@ describe("real isolated Chrome executor", () => {
 
 async function launch(url: string) {
   return Effect.runPromise(launchEffect(url))
-}
-
-function launchExit(url: string) {
-  return Effect.runPromiseExit(launchEffect(url))
 }
 
 function launchEffect(url: string) {
