@@ -3143,7 +3143,10 @@ const materializeAttachment = Effect.fn("Session.materializeAttachment")(functio
       message: `Attachment exceeds the ${MAX_ATTACHMENT_BYTES} byte limit: ${input.uri}`,
     })
 
-  const mime = resolved.mime ?? Mime.detect(resolved.bytes)
+  const sniffed = Mime.detect(resolved.bytes)
+  const mime =
+    resolved.mime ??
+    (sniffed === "text/plain" && declaresDirectoryListing(input.uri) ? "application/x-directory" : sniffed)
   const content =
     mime === "text/plain" && resolved.start !== undefined
       ? Buffer.from(
@@ -3238,6 +3241,11 @@ const readFileAttachment = Effect.fn("Session.readFileAttachment")(function* (fs
     .pipe(Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })))
   return { bytes, source: { type: "uri" as const, uri }, start, end, name: path.basename(target), mime: undefined }
 })
+
+function declaresDirectoryListing(uri: string) {
+  const comma = uri.indexOf(",")
+  return uri.startsWith("data:") && comma !== -1 && uri.slice(5, comma).split(";")[0]?.toLowerCase() === "application/x-directory"
+}
 
 function decodeDataURL(uri: string) {
   return Effect.try({

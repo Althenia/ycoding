@@ -2307,6 +2307,7 @@ export function Prompt(props: PromptProps) {
       const part: NonNullable<PromptInfo["files"]>[number] = {
         uri: file.uri,
         name: file.filename,
+        local: true,
         mention: {
           start: extmarkStart,
           end: extmarkEnd,

@@ -624,6 +624,46 @@ test("keeps the managed receipt and stable prompt ID when wake fails, then retri
   }
 }, 30_000)
 
+test("sends a pasted spreadsheet path with spaces and dots as its bytes and shows the server's rejection reason", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-workbook-"))
+  const name = "GISX_Renewal_Report Specification List_V.3.0_Draft.xlsx"
+  const file = path.join(root, name)
+  await Bun.write(file, Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(4096, 0xa7)]))
+  promptRequests.length = 0
+  admissionFailure = () =>
+    json(
+      { _tag: "InvalidRequestError", field: "files", message: "Attachment exceeds the 20971520 byte limit: workbook" },
+      { status: 400 },
+    )
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.pasteBracketedText(file.replaceAll(" ", "\\ "))
+    await waitForFrameText(screen, "[Excel 1]")
+    await screen.input.typeText("read the workbook")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Attachment rejected · Retry send")
+    await waitForFrameText(screen, "Attachment exceeds the 20971520 byte limit")
+    expect(promptRequests).toHaveLength(1)
+    expect(promptRequests[0]?.files).toHaveLength(1)
+    expect(promptRequests[0]?.files?.[0]?.name).toBe(name)
+    const sent = promptRequests[0]!.files![0]!.uri
+    expect(sent).toStartWith("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,")
+    expect(Buffer.from(sent.slice(sent.indexOf(",") + 1), "base64").equals(await Bun.file(file).bytes())).toBe(true)
+  } finally {
+    admissionFailure = undefined
+    await screen.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)
+
 test("distinguishes attachment rejection and discards only its recovery before a new prompt", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-attachment-rejected-"))
   const image = await materializeClipboardImage(root, async (file) => {
@@ -714,7 +754,7 @@ test("keeps an uncertain attachment admission intact for an exact retry instead 
     await until(async () => !(await Bun.file(image.temporary.path).exists()))
     expect(promptRequests).toHaveLength(3)
     expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
-    expect(promptRequests[1]?.files?.[0]?.uri).toStartWith("file:")
+    expect(promptRequests[1]?.files?.[0]?.uri).toStartWith("data:image/png;base64,")
     expect(promptRequests[2]?.files?.[0]?.uri).toStartWith("ycoding-attachment://sha256/")
     expect(await Bun.file(image.temporary.path).exists()).toBe(false)
   } finally {

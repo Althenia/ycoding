@@ -17,7 +17,10 @@ type PastedText = {
   }
 }
 
-export type PromptInfo = Types.DeepMutable<Pick<SessionPromptInput, "text" | "files" | "agents">> & {
+type PromptFile = Types.DeepMutable<NonNullable<SessionPromptInput["files"]>[number]> & { local?: true }
+
+export type PromptInfo = Omit<Types.DeepMutable<Pick<SessionPromptInput, "text" | "files" | "agents">>, "files"> & {
+  files?: PromptFile[]
   pasted: PastedText[]
   skills?: PromptSkill[]
   mode?: "normal" | "shell"

@@ -3301,11 +3301,19 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
     const current = send()
     const pending = data.session.pending.list(ctx.sessionID).find((item) => item.id === props.message.id)
     const pendingUser = pending?.type === "user" ? pending : undefined
-    if (current?.state === "attention") return { glyph: current.phase, read: false, retry: true, sending: false, label: undefined }
-    if (current && !current.admitted && !current.consumed) return { glyph: "", read: false, retry: false, sending: true, label: undefined }
-    if (current?.consumed || props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true, retry: false, sending: false, label: undefined }
-    if (pendingUser?.delivery === "queue") return { glyph: "✓", read: false, retry: false, sending: false, label: "Queued" }
-    return { glyph: "✓", read: false, retry: false, sending: false, label: undefined }
+    if (current?.state === "attention")
+      return {
+        glyph: current.phase,
+        read: false,
+        retry: true,
+        sending: false,
+        label: undefined,
+        reason: current.phase.startsWith("Attachment rejected") ? current.error : undefined,
+      }
+    if (current && !current.admitted && !current.consumed) return { glyph: "", read: false, retry: false, sending: true, label: undefined, reason: undefined }
+    if (current?.consumed || props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true, retry: false, sending: false, label: undefined, reason: undefined }
+    if (pendingUser?.delivery === "queue") return { glyph: "✓", read: false, retry: false, sending: false, label: "Queued", reason: undefined }
+    return { glyph: "✓", read: false, retry: false, sending: false, label: undefined, reason: undefined }
   })
 
   return (
@@ -3406,6 +3414,18 @@ function UserMessage(props: { message: SessionMessageUser; findActive?: boolean 
           }
         >
           <Spinner color={theme.text.subdued} frames={DOT_TRAIL_FRAMES} interval={160} />
+        </Show>
+        <Show when={receipt().reason}>
+          {(reason) => (
+            <text
+              id={`session.user-message.receipt-reason.${props.message.id}`}
+              wrapMode="word"
+              width={Math.max(20, ctx.width - 4)}
+              fg={theme.text.feedback.error.default}
+            >
+              {escapeTerminalText(reason())}
+            </text>
+          )}
         </Show>
       </box>
     </Show>

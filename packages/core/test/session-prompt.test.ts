@@ -506,6 +506,83 @@ describe("Session.prompt", () => {
       }),
     )
 
+  const spreadsheetNames = [
+    "GISX_Renewal_Report Specification List_V.3.0_Draft.xlsx",
+    "รายงาน สรุป_v1.2.xlsx",
+    "Q3 #1 (final)?.xlsx",
+  ]
+  const spreadsheetBytes = (size: number) =>
+    Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00]), Buffer.alloc(size - 8, 0xa7)])
+  for (const name of spreadsheetNames)
+    for (const size of [4096, 8 * 1024 * 1024])
+      it.effect(`admits a ${size} byte spreadsheet file URI named ${name}`, () =>
+        Effect.gen(function* () {
+          yield* setup
+          const session = yield* Session.Service
+          const directory = yield* Effect.acquireRelease(
+            Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-session-prompt-"))),
+            (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+          )
+          const source = path.join(directory, name)
+          const bytes = spreadsheetBytes(size)
+          yield* Effect.promise(() => writeFile(source, bytes))
+
+          const message = yield* session.prompt({
+            sessionID,
+            text: "Read this workbook",
+            files: [{ uri: pathToFileURL(source).href, name }],
+            resume: false,
+          })
+
+          expect(message.data.files?.[0]).toMatchObject({ content: { type: "managed", bytes: size }, name })
+          const content = message.data.files?.[0]?.content
+          const store = yield* AttachmentStore.Service
+          expect(content && Buffer.from(yield* store.read(content))).toEqual(bytes)
+        }),
+      )
+
+  it.effect("rejects a file URI above the attachment size limit with the limit in the message", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const directory = yield* Effect.acquireRelease(
+        Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-session-prompt-"))),
+        (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+      )
+      const source = path.join(directory, "Big Report V.1.xlsx")
+      yield* Effect.promise(() => writeFile(source, spreadsheetBytes(20 * 1024 * 1024 + 1)))
+      const uri = pathToFileURL(source).href
+
+      const error = yield* session
+        .prompt({ sessionID, text: "Read", files: [{ uri, name: "Big Report V.1.xlsx" }], resume: false })
+        .pipe(Effect.flip)
+
+      expect(error).toMatchObject({
+        _tag: "Session.AttachmentError",
+        uri,
+        message: `Attachment exceeds the ${20 * 1024 * 1024} byte limit: ${uri}`,
+      })
+    }),
+  )
+
+  it.effect("rejects a missing file URI as unreadable", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const uri = pathToFileURL(path.join(tmpdir(), "ycoding-missing-dir", "Missing File V.1.xlsx")).href
+
+      const error = yield* session
+        .prompt({ sessionID, text: "Read", files: [{ uri, name: "Missing File V.1.xlsx" }], resume: false })
+        .pipe(Effect.flip)
+
+      expect(error).toMatchObject({
+        _tag: "Session.AttachmentError",
+        uri,
+        message: `Unable to read attachment: ${uri}`,
+      })
+    }),
+  )
+
   it.effect("sniffs data URL content instead of trusting its declared MIME", () =>
     Effect.gen(function* () {
       yield* setup
@@ -525,6 +602,31 @@ describe("Session.prompt", () => {
         mime: "text/plain",
         name: "main.ts",
       })
+    }),
+  )
+
+  it.effect("keeps the directory MIME of a client-produced listing and sniffs every other declared MIME", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const listing = Buffer.from(`src${path.sep}\nREADME.md`).toString("base64")
+
+      const message = yield* session.prompt({
+        sessionID,
+        text: "Inspect these",
+        files: [
+          { uri: `data:application/x-directory;base64,${listing}`, name: "project" },
+          { uri: `data:application/x-directory;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64")}`, name: "forged.png" },
+          { uri: `data:image/png;base64,${listing}`, name: "listing.png" },
+        ],
+        resume: false,
+      })
+
+      expect(message.data.files?.map((file) => file.mime)).toEqual([
+        "application/x-directory",
+        "image/png",
+        "text/plain",
+      ])
     }),
   )
 

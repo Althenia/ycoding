@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test"
+import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import type { SessionPendingUser, YCodingEvent } from "@ycoding-ai/client"
 import { createPromptSubmissions, type PromptSubmissionPayload } from "../../src/prompt/submission"
 import { retainSessionSubmission } from "../../src/util/session-autonomy"
@@ -14,7 +18,7 @@ function deferred<T>() {
 async function until(predicate: () => boolean) {
   for (let count = 0; count < 1000; count++) {
     if (predicate()) return
-    await new Promise<void>((resolve) => setImmediate(resolve))
+    await new Promise<void>((resolve) => setTimeout(resolve, 1))
   }
   throw new Error("Expected submission transition did not occur")
 }
@@ -383,7 +387,10 @@ test("agent reselection on retry preserves prompt identity without client skill 
 
 test("managed attachments survive a failed wake without replaying admission or repeating cleanup", async () => {
   const item = submission("ses_attachments", "attached", false)
-  item.payload.files = [{ uri: "file:///tmp/ycoding/clipboard.png", name: "clipboard.png" }]
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-submission-managed-"))
+  const clipboard = path.join(root, "clipboard.png")
+  await writeFile(clipboard, "png")
+  item.payload.files = [{ uri: pathToFileURL(clipboard).href, name: "clipboard.png", local: true }]
   const digest = "a".repeat(64)
   const receipt: SessionPendingUser = {
     ...pending(item),
@@ -417,7 +424,7 @@ test("managed attachments survive a failed wake without replaying admission or r
     })
     await until(() => flow.manager.list()[0]?.state === "attention")
     expect(cleanups).toBe(1)
-    expect(requests[0].files[0].uri).toBe("file:///tmp/ycoding/clipboard.png")
+    expect(requests[0].files[0].uri).toBe(`data:image/png;base64,${Buffer.from("png").toString("base64")}`)
     expect(requests[1].files[0].uri).toBe(`ycoding-attachment://sha256/${digest}`)
     failed = false
     flow.manager.retry(item.sessionID, item.promptID)
@@ -428,6 +435,7 @@ test("managed attachments survive a failed wake without replaying admission or r
     expect(new Set(requests.map((request) => request.id)).size).toBe(1)
   } finally {
     flow.manager.dispose()
+    await rm(root, { recursive: true, force: true })
   }
 })
 
@@ -614,6 +622,114 @@ test("command failure retries the same admission ID and wake retry uses its cano
     expect(wakes.map((request) => request.text)).toEqual([canonical.data.text, canonical.data.text])
     expect(wakes.map((request) => request.metadata)).toEqual([canonical.data.metadata, canonical.data.metadata])
     expect(wakes.map((request) => request.resume)).toEqual([true, true])
+  } finally {
+    flow.manager.dispose()
+  }
+})
+
+test("sends a local file's bytes as a data URL and never its path, so the service needs no access to it", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-submission-file-"))
+  const name = "GISX_Renewal_Report Specification List_V.3.0_Draft.xlsx"
+  const file = path.join(root, name)
+  const bytes = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(4096, 0xa7)])
+  await writeFile(file, bytes)
+  const item = submission("ses_local_file", "read the workbook", false)
+  item.payload.files = [{ uri: pathToFileURL(file).href, name, local: true, mention: { start: 0, end: 9, text: "[Excel 1]" } }]
+  const bodies: Array<{ resume?: boolean; files?: Array<{ uri: string; name?: string }> }> = []
+  const flow = fixture(async (url, request) => {
+    if (!url.pathname.endsWith("/prompt")) return
+    bodies.push((await request.clone().json()) as (typeof bodies)[number])
+    await rm(root, { recursive: true, force: true })
+    return json({ data: pending(item) })
+  })
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list().length === 0 || flow.manager.list()[0]?.state === "attention")
+    expect(flow.manager.list()).toEqual([])
+    const sent = bodies.find((body) => body.resume === false)!.files!
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.name).toBe(name)
+    expect(sent[0]!.uri.startsWith("data:")).toBe(true)
+    expect(sent[0]!.uri).not.toContain("file:")
+    expect(Buffer.from(sent[0]!.uri.slice(sent[0]!.uri.indexOf(",") + 1), "base64").equals(bytes)).toBe(true)
+  } finally {
+    flow.manager.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("reuses the bytes read for the first attempt when a rejected submission is retried", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-submission-retry-"))
+  const file = path.join(root, "retry me.txt")
+  await writeFile(file, "first read\n")
+  const item = submission("ses_local_retry", "read it", false)
+  item.payload.files = [{ uri: pathToFileURL(file).href, name: "retry me.txt", local: true }]
+  const uris: string[] = []
+  let fail = true
+  const flow = fixture(async (url, request) => {
+    if (!url.pathname.endsWith("/prompt")) return
+    const body = (await request.clone().json()) as { resume?: boolean; files?: Array<{ uri: string }> }
+    if (body.resume === false) uris.push(body.files![0]!.uri)
+    if (fail && body.resume === false) {
+      fail = false
+      await rm(root, { recursive: true, force: true })
+      return json({ _tag: "InvalidRequestError", field: "files", message: "Attachment is not a file" }, { status: 400 })
+    }
+    return json({ data: pending(item) })
+  })
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list()[0]?.state === "attention")
+    expect(flow.manager.list()[0]?.phase).toBe("Attachment rejected · Retry send")
+    expect(flow.manager.list()[0]?.error).toBe("Attachment is not a file")
+    flow.manager.retry(item.sessionID, item.promptID)
+    await until(() => flow.manager.list().length === 0)
+    expect(uris).toHaveLength(2)
+    expect(uris[1]).toBe(uris[0])
+  } finally {
+    flow.manager.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test.each([
+  ["larger than the limit", async (file: string) => truncate(file, 20 * 1024 * 1024 + 1), "is larger than the 20 MiB attachment limit"],
+  ["missing", async (file: string) => rm(file), "Unable to read"],
+] as const)("a %s local file is rejected before any request is sent", async (_label, prepare, reason) => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-submission-reject-"))
+  const file = path.join(root, "Report V.1.xlsx")
+  await writeFile(file, "")
+  await prepare(file)
+  const item = submission("ses_local_reject", "read it", false)
+  item.payload.files = [{ uri: pathToFileURL(file).href, name: "Report V.1.xlsx", local: true }]
+  const flow = fixture(async () => undefined)
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list()[0]?.state === "attention")
+    expect(flow.manager.list()[0]?.phase).toBe("Attachment rejected · Retry send")
+    expect(flow.manager.list()[0]?.error).toContain(reason)
+    expect(flow.requests).toEqual([])
+  } finally {
+    flow.manager.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("sends a service-side file mention as its path", async () => {
+  const item = submission("ses_mention_file", "read main", false)
+  item.payload.files = [{ uri: "file:///srv/project/src/main.ts?start=1&end=2", name: "src/main.ts#1-2" }]
+  const bodies: Array<{ resume?: boolean; files?: Array<{ uri: string; name?: string }> }> = []
+  const flow = fixture(async (url, request) => {
+    if (!url.pathname.endsWith("/prompt")) return
+    bodies.push((await request.clone().json()) as (typeof bodies)[number])
+    return json({ data: pending(item) })
+  })
+  try {
+    flow.dispatch(item)
+    await until(() => flow.manager.list().length === 0)
+    expect(bodies.find((body) => body.resume === false)!.files).toEqual([
+      { uri: "file:///srv/project/src/main.ts?start=1&end=2", name: "src/main.ts#1-2" },
+    ])
   } finally {
     flow.manager.dispose()
   }

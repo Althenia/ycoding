@@ -14,6 +14,7 @@ import { createSignal } from "solid-js"
 import type { PromptInfo } from "./history"
 import type { promptSkillMetadata } from "./skill"
 import { projectedPromptInput } from "./codec"
+import { AttachmentReadError, resolveLocalAttachments } from "./attachment"
 import type { SessionSubmissionRetry } from "../util/session-autonomy"
 import { createLandingSession, landingAutonomyPayloads, persistLandingAutonomy, persistLandingDaybreak, type LandingAutonomy } from "../util/landing-session"
 import { submitPrompt } from "../component/prompt/prompt-admission"
@@ -49,6 +50,7 @@ type Submission = {
   error?: string
   completed: Set<string>
   admitted?: SessionPendingUser
+  resolved?: { files: PromptInfo["files"] }
   consumed: boolean
   consumedMessage?: SessionMessageUser
   discarded?: boolean
@@ -136,6 +138,10 @@ export function createPromptSubmissions(input: {
       await entry.cleanup()
       entry.completed.add("cleanup")
       return
+    }
+    if (!entry.admitted && entry.resolved === undefined) {
+      update(entry, { phase: "Reading attachments" })
+      entry.resolved = { files: await resolveLocalAttachments(payload.files) }
     }
     if (!submission.creationConfirmed) {
       update(entry, { phase: "Creating session" })
@@ -237,7 +243,7 @@ export function createPromptSubmissions(input: {
                   command: entry.command!.name,
                   arguments: entry.command!.arguments,
                   agent: payload.agentID,
-                  files: payload.files,
+                  files: (entry.resolved ?? payload).files,
                   agents: payload.agents,
                   resume: false,
                   ...(payload.modelSelectionPending ? { model: payload.model } : {}),
@@ -257,7 +263,7 @@ export function createPromptSubmissions(input: {
                 id: submission.promptID,
                 sessionID,
                 text: resume && entry.command ? entry.admitted!.data.text : payload.inputText,
-                files: payload.files,
+                files: (entry.resolved ?? payload).files,
                 agents: payload.agents,
                 metadata: resume && entry.command ? entry.admitted!.data.metadata : payload.metadata,
                 resume,
@@ -276,6 +282,7 @@ export function createPromptSubmissions(input: {
         }),
       onAdmitted: async (admitted) => {
         entry.admitted = admitted
+        entry.resolved = undefined
         payload.files = projectedPromptInput(admitted.data).files?.map((file, index) => ({
           ...file,
           mention: payload.files?.[index]?.mention ?? file.mention,
@@ -315,11 +322,13 @@ export function createPromptSubmissions(input: {
             phase: `${
               entry.admitted
                 ? "Prompt admitted · wake unresolved"
-                : entry.phase === "Sending prompt" && isConflictError(error)
-                  ? "Prompt ID conflict"
-                  : entry.phase === "Sending prompt" && isInvalidRequestError(error) && error.field === "files"
-                    ? "Attachment rejected"
-                    : entry.phase + " unresolved"
+                : error instanceof AttachmentReadError
+                  ? "Attachment rejected"
+                  : entry.phase === "Sending prompt" && isConflictError(error)
+                    ? "Prompt ID conflict"
+                    : entry.phase === "Sending prompt" && isInvalidRequestError(error) && error.field === "files"
+                      ? "Attachment rejected"
+                      : entry.phase + " unresolved"
             } · Retry send`,
           })
         }

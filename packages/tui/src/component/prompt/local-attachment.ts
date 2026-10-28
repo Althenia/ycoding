@@ -26,7 +26,7 @@ export async function readLocalAttachment(file: string) {
   )
 }
 
-const mimeTypes: Record<string, string> = {
+export const mimeTypes: Record<string, string> = {
   ".avif": "image/avif",
   ".gif": "image/gif",
   ".xls": "application/vnd.ms-excel",
