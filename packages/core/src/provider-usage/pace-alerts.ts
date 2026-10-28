@@ -7,6 +7,7 @@ import { EventRuntime } from "../event"
 import { ProviderUsageForecast } from "./forecast"
 
 const resetTolerance = 1000
+const rearmAfter = 15 * 60_000
 const maxStates = 256
 const queueCapacity = 256
 
@@ -45,6 +46,7 @@ interface State {
   fired: Set<ProviderUsage.PaceMilestone>
   bucket: number
   underTen: boolean
+  aheadSince: number | undefined
   primed: boolean
 }
 
@@ -99,6 +101,7 @@ export function make(input: {
       fired: new Set(),
       bucket: -1,
       underTen: false,
+      aheadSince: undefined,
       primed: false,
     }
     states.delete(key)
@@ -109,6 +112,7 @@ export function make(input: {
     if (state.resetAt === undefined || Math.abs(resetAt - state.resetAt) > resetTolerance) {
       state.fired.clear()
       state.underTen = false
+      state.aheadSince = undefined
       state.bucket = -1
     }
     state.resetAt = resetAt
@@ -120,7 +124,10 @@ export function make(input: {
       state.pending = false
       state.bucket = bucket
       state.underTen = underNow
+      state.aheadSince = bucket === 0 ? request.now : undefined
       state.fired.clear()
+      if (bucket >= 1) state.fired.add("cutting-it-close")
+      if (bucket >= 2) state.fired.add("will-run-out")
       return
     }
     const pace: ProviderUsage.PaceMilestone | undefined =
@@ -129,16 +136,20 @@ export function make(input: {
         : bucket >= 2 && state.bucket < 2 && !state.fired.has("will-run-out")
           ? "will-run-out"
           : undefined
-    if (bucket >= 0 && bucket < state.bucket) {
-      if (bucket <= 0) state.fired.delete("cutting-it-close")
-      if (bucket <= 1) state.fired.delete("will-run-out")
-    }
+    if (bucket === 0) {
+      state.aheadSince ??= request.now
+      if (request.now - state.aheadSince >= rearmAfter) {
+        state.fired.delete("cutting-it-close")
+        state.fired.delete("will-run-out")
+      }
+    } else if (bucket > 0) state.aheadSince = undefined
     const crossed = underNow && !state.underTen
     const under = crossed && !state.fired.has("almost-out") ? ("almost-out" as const) : undefined
     if (!underNow) state.fired.delete("almost-out")
     const paceDelivered = pace === undefined ? false : yield* deliver(window, resetAt, snapshot.providerID, pace)
     const underDelivered = under === undefined ? false : yield* deliver(window, resetAt, snapshot.providerID, under)
     if (pace !== undefined && paceDelivered) state.fired.add(pace)
+    if (pace === "will-run-out" && paceDelivered) state.fired.add("cutting-it-close")
     if (under !== undefined && underDelivered) state.fired.add(under)
     state.pending = (pace !== undefined && !paceDelivered) || (under !== undefined && !underDelivered)
     if (bucket >= 0 && (bucket <= state.bucket || paceDelivered)) state.bucket = bucket

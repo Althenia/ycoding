@@ -105,3 +105,41 @@ test("cache reads and forecasts re-submit the same observation without duplicati
   }
   expect(delivered).toEqual(["five-hour:cutting-it-close"])
 })
+
+test("two Locations observing one account share alert state and deliver a flapping milestone once", async () => {
+  const delivered: string[] = []
+  const alerts = ProviderUsagePaceAlerts.make({
+    deliver: (alert) => Effect.sync(() => void delivered.push(`${alert.windowID}:${alert.milestone}`)).pipe(Effect.as(true)),
+  })
+  let clock = now
+  const location = (used: () => number) =>
+    ProviderUsageRuntime.make({
+      ...base,
+      now: () => clock,
+      adapters: { anthropic: (input) => Effect.succeed(snapshot(used(), input.updatedAt)) },
+      alerts,
+    })
+  let first = 40
+  let second = 40
+  const a = location(() => first)
+  const b = location(() => second)
+  const read = (service: ReturnType<typeof location>) => {
+    clock += 1_000
+    return Effect.runPromise(service.get({ providerID, refresh: true }))
+  }
+  await read(a)
+  await read(b)
+  second = 60
+  await read(b)
+  for (let index = 0; index < 4; index++) {
+    first = 46
+    await read(a)
+    second = 60
+    await read(b)
+    first = 60
+    await read(a)
+    second = 46
+    await read(b)
+  }
+  expect(delivered).toEqual(["five-hour:will-run-out"])
+})
