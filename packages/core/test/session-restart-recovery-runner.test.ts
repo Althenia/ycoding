@@ -1,5 +1,14 @@
 import { expect } from "bun:test"
-import { LLMClient, LLMEvent, Model, type LLMClientShape, type LLMRequest } from "@ycoding-ai/ai"
+import {
+  InvalidRequestReason,
+  LLMClient,
+  LLMError,
+  LLMEvent,
+  Model,
+  type LLMClientShape,
+  type LLMRequest,
+} from "@ycoding-ai/ai"
+import { Money } from "@ycoding-ai/schema/money"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols/openai-chat"
 import { Agent } from "@ycoding-ai/core/agent"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
@@ -72,6 +81,9 @@ import { fixedLocations } from "./fixture/location-map"
 const requests: LLMRequest[] = []
 const responses: LLMEvent[][] = []
 const executions: string[] = []
+const provider = { rejectsAssistantPrefill: false }
+const prefillRejected =
+  "This model does not support assistant message prefill. The conversation must end with a user message."
 const runnerDirectory = AbsolutePath.make(import.meta.dir)
 const model = Model.make({
   id: "fake-model",
@@ -86,6 +98,10 @@ const client = Layer.succeed(
     prepare: () => Effect.die("unused"),
     stream: ((request: LLMRequest) => {
       requests.push(request)
+      if (provider.rejectsAssistantPrefill && request.messages.at(-1)?.role === "assistant")
+        return Stream.fail(
+          new LLMError({ module: "test", method: "stream", reason: new InvalidRequestReason({ message: prefillRejected }) }),
+        )
       return Stream.fromIterable(responses.shift() ?? [])
     }) as unknown as LLMClientShape["stream"],
     generate: () => Effect.die("unused"),
@@ -274,50 +290,68 @@ const text = (value: string, id: string) => [
   LLMEvent.finish({ reason: "stop" }),
 ]
 
-const crashedChild = (tools: ReadonlyArray<{ readonly callID: string; readonly called: boolean }>) =>
+const managedChild = Effect.gen(function* () {
+  const agents = yield* Agent.Service
+  yield* agents.transform((draft) =>
+    draft.update(Agent.ID.make("build"), (agent) => {
+      agent.mode = "primary"
+    }),
+  )
+  const session = yield* Session.Service
+  const events = yield* EventRuntime.Service
+  const db = (yield* Database.Service).db
+  const root = yield* session.create({ location: { directory: runnerDirectory }, agent: Agent.ID.make("build") })
+  const child = yield* session.create({ parentID: root.id, agent: Agent.ID.make("build"), model: modelRef })
+  yield* db
+    .insert(SessionTaskTable)
+    .values({
+      session_id: child.id,
+      parent_id: root.id,
+      parent_assistant_message_id: SessionMessage.ID.make(`msg_launch_${child.id}`),
+      tool_call_id: `call_launch_${child.id}`,
+      input_id: SessionMessage.ID.make(`msg_input_${child.id}`),
+      description: "recover through the runner",
+      agent: Agent.ID.make("build"),
+      model: modelRef,
+      prompt_digest: "digest",
+      background: true,
+      delivery: "steer",
+      state: "running",
+      revision: 1,
+      owner_pid: 2_000_000_000,
+      owner_started: "Thu Jan  1 00:00:00 1970",
+      time_created: 1,
+      time_updated: 1,
+    })
+    .run()
+    .pipe(Effect.orDie)
+  yield* events.publish(SessionEvent.Execution.Started, { sessionID: child.id })
+  return { root, child }
+})
+
+const startStep = (sessionID: Session.ID) =>
   Effect.gen(function* () {
-    const agents = yield* Agent.Service
-    yield* agents.transform((draft) =>
-      draft.update(Agent.ID.make("build"), (agent) => {
-        agent.mode = "primary"
-      }),
-    )
-    const session = yield* Session.Service
-    const events = yield* EventRuntime.Service
-    const db = (yield* Database.Service).db
-    const root = yield* session.create({ location: { directory: runnerDirectory }, agent: Agent.ID.make("build") })
-    const child = yield* session.create({ parentID: root.id, agent: Agent.ID.make("build") })
-    yield* db
-      .insert(SessionTaskTable)
-      .values({
-        session_id: child.id,
-        parent_id: root.id,
-        parent_assistant_message_id: SessionMessage.ID.make(`msg_launch_${child.id}`),
-        tool_call_id: `call_launch_${child.id}`,
-        input_id: SessionMessage.ID.make(`msg_input_${child.id}`),
-        description: "recover through the runner",
-        agent: Agent.ID.make("build"),
-        model: modelRef,
-        prompt_digest: "digest",
-        background: true,
-        delivery: "steer",
-        state: "running",
-        revision: 1,
-        owner_pid: 2_000_000_000,
-        owner_started: "Thu Jan  1 00:00:00 1970",
-        time_created: 1,
-        time_updated: 1,
-      })
-      .run()
-      .pipe(Effect.orDie)
     const assistantMessageID = SessionMessage.ID.create()
-    yield* events.publish(SessionEvent.Execution.Started, { sessionID: child.id })
-    yield* events.publish(SessionEvent.Step.Started, {
-      sessionID: child.id,
+    yield* (yield* EventRuntime.Service).publish(SessionEvent.Step.Started, {
+      sessionID,
       assistantMessageID,
       agent: Agent.ID.make("build"),
       model: modelRef,
     })
+    return assistantMessageID
+  })
+
+const restartService = Effect.gen(function* () {
+  const restart = yield* SessionRestart.Service
+  yield* restart.reconcileInterruptedExecutions
+  yield* restart.recoverTasks
+})
+
+const crashedChild = (tools: ReadonlyArray<{ readonly callID: string; readonly called: boolean }>) =>
+  Effect.gen(function* () {
+    const events = yield* EventRuntime.Service
+    const { root, child } = yield* managedChild
+    const assistantMessageID = yield* startStep(child.id)
     yield* events.publish(SessionEvent.Text.Started, { sessionID: child.id, assistantMessageID, ordinal: 0 })
     yield* events.publish(SessionEvent.Text.Ended, { sessionID: child.id, assistantMessageID, ordinal: 0, text: "Calling echo" })
     for (const tool of tools) {
@@ -331,10 +365,63 @@ const crashedChild = (tools: ReadonlyArray<{ readonly callID: string; readonly c
           executed: false,
         })
     }
-    const restart = yield* SessionRestart.Service
-    yield* restart.reconcileInterruptedExecutions
-    yield* restart.recoverTasks
+    yield* restartService
     return { root, child }
+  })
+
+type Interruption = "mid-text" | "mid-reasoning after settled tools" | "after settled tools before output"
+
+const interruptedChild = (interruption: Interruption) =>
+  Effect.gen(function* () {
+    const events = yield* EventRuntime.Service
+    const family = yield* managedChild
+    const sessionID = family.child.id
+    const inputID = SessionMessage.ID.create()
+    yield* events.publish(SessionEvent.InputAdmitted, {
+      sessionID,
+      inputID,
+      input: { type: "synthetic", delivery: "steer", data: { text: "Parent message: summarize the workspace" } },
+    })
+    yield* events.publish(SessionEvent.InputPromoted, { sessionID, inputID })
+    const state = yield* (yield* SessionLiveState.Service).load(sessionID).pipe(Effect.orDie)
+    yield* events.publish(SessionEvent.ContextObserved, { sessionID, source: "session-state", text: state.text })
+    if (interruption !== "mid-text") {
+      const toolStep = yield* startStep(sessionID)
+      yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID: toolStep, callID: "call_settled", name: "echo" })
+      yield* events.publish(SessionEvent.Tool.Called, {
+        sessionID,
+        assistantMessageID: toolStep,
+        callID: "call_settled",
+        input: { text: "settled" },
+        executed: false,
+      })
+      yield* events.publish(SessionEvent.Tool.Success, {
+        sessionID,
+        assistantMessageID: toolStep,
+        callID: "call_settled",
+        structured: { text: "settled" },
+        content: [{ type: "text", text: "settled" }],
+        executed: false,
+      })
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        assistantMessageID: toolStep,
+        finish: "tool-calls",
+        cost: Money.USD.zero,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    }
+    const interrupted = yield* startStep(sessionID)
+    if (interruption === "mid-text") {
+      yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID: interrupted, ordinal: 0 })
+      yield* events.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID: interrupted, ordinal: 0, text: "Unfinished answ" })
+    }
+    if (interruption === "mid-reasoning after settled tools") {
+      yield* events.publish(SessionEvent.Reasoning.Started, { sessionID, assistantMessageID: interrupted, ordinal: 0 })
+      yield* events.publish(SessionEvent.Reasoning.Ended, { sessionID, assistantMessageID: interrupted, ordinal: 0, text: "Unfinished thou" })
+    }
+    yield* restartService
+    return family
   })
 
 const reset = (...queued: ReadonlyArray<ReadonlyArray<LLMEvent>>) =>
@@ -398,3 +485,40 @@ it.live("a human Continue after uncertain and streaming calls sends settled pair
     expect(executions).toEqual([])
   }),
 )
+
+const interruptions: ReadonlyArray<Interruption> = [
+  "mid-text",
+  "mid-reasoning after settled tools",
+  "after settled tools before output",
+]
+
+for (const rejectsAssistantPrefill of [true, false])
+  for (const interruption of interruptions)
+    it.live(
+      `a child interrupted ${interruption} recovers with a request ending on a non-assistant turn (${rejectsAssistantPrefill ? "provider rejects" : "provider accepts"} assistant prefill)`,
+      () =>
+        Effect.gen(function* () {
+          yield* reset(text("Recovered.", "text-recovered"))
+          provider.rejectsAssistantPrefill = rejectsAssistantPrefill
+          const family = yield* Effect.gen(function* () {
+            const family = yield* interruptedChild(interruption)
+            yield* (yield* SessionExecution.Service).awaitIdle(family.child.id)
+            return family
+          }).pipe(Effect.ensuring(Effect.sync(() => (provider.rejectsAssistantPrefill = false))))
+          const db = (yield* Database.Service).db
+          const task = yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, family.child.id)).get().pipe(Effect.orDie)
+          expect(task?.state).toBe("completed")
+          expect(requests).toHaveLength(1)
+          const messages = requests[0].messages
+          expect(messages.findLast((message) => message.role !== "system")?.role).toBe(
+            interruption === "mid-text" ? "user" : "tool",
+          )
+          expect(messages.filter((message) => message.role === "user")).toHaveLength(1)
+          expect(JSON.stringify(messages)).not.toContain("Unfinished")
+          expect(toolPairs(requests[0])).toEqual({
+            unpaired: [],
+            results: interruption === "mid-text" ? [] : [["call_settled", "text"]],
+          })
+          expect(executions).toEqual([])
+        }),
+    )

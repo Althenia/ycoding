@@ -96,6 +96,28 @@ type RecoveryMode = "normal" | "terminal-response" | "provider"
 const isContextSource = (value: unknown): value is SessionHistory.ObservationSource =>
   value === "session-state" || value === "team-view" || value === "step-limit" || value === "dots"
 
+const unfinishedAssistant = (message: SessionMessage.Info | undefined) =>
+  message?.type === "assistant" &&
+  !message.content.some((part) => part.type === "tool") &&
+  (message.error !== undefined ||
+    !message.content.some((part) => part.type === "text" && part.text.trim().length > 0))
+
+const withoutUnfinishedAssistantTail = <Prepared extends { readonly request: LLMRequest }>(
+  prepared: Prepared,
+  history: ReadonlyArray<SessionMessage.Info>,
+): Prepared => {
+  const messages = prepared.request.messages
+  const tail =
+    messages.findLastIndex(
+      (message) =>
+        message.role !== "system" &&
+        !(message.role === "assistant" && unfinishedAssistant(history.find((entry) => entry.id === message.id))),
+    ) + 1
+  const kept = [...messages.slice(0, tail), ...messages.slice(tail).filter((message) => message.role === "system")]
+  if (kept.length === messages.length) return prepared
+  return { ...prepared, request: LLMRequest.update(prepared.request, { messages: kept }) }
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -402,18 +424,25 @@ const layer = Layer.effect(
       const attempting = initialContext.model.ref
       const primary = (route.primary ??= selectedModel ?? attempting)
       route.attempting = attempting
+      const fromProjectedHistory = promotion === undefined && recoveryMode === "normal"
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
-        modelRequests.prepare({
-          context: loaded,
-          step: currentStep,
-          execution,
-          disableContinuation:
-            fullRebase ||
-            requestTrackerState.continuationFallback === true ||
-            recoveryMode !== "normal" ||
-            route.model !== undefined,
-          terminalResponseRecovery: recoveryMode === "terminal-response",
-        })
+        modelRequests
+          .prepare({
+            context: loaded,
+            step: currentStep,
+            execution,
+            disableContinuation:
+              fullRebase ||
+              requestTrackerState.continuationFallback === true ||
+              recoveryMode !== "normal" ||
+              route.model !== undefined,
+            terminalResponseRecovery: recoveryMode === "terminal-response",
+          })
+          .pipe(
+            Effect.map((prepared) =>
+              fromProjectedHistory ? withoutUnfinishedAssistantTail(prepared, loaded.messages) : prepared,
+            ),
+          )
       const initialPrepared = yield* prepare(initialContext)
       const limits = initialContext.model.model.route.defaults.limits
       const compactionPolicy = SessionContextPressure.policy(configEntries)

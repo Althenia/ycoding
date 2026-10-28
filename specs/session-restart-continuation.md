@@ -116,6 +116,8 @@ A child was interrupted by a restart when its latest execution lifecycle event i
 | Interrupted, or with admitted input, otherwise                           | `resumed`: claimed by this server, the parent is notified and woken, and one forced drain runs a new step from projected history with no synthetic prompt                                                                                            |
 | Anything else, including a user interruption                             | `lost`                                                                                                                                                                                                                                               |
 
+A step that runs from projected history without newly promoted input, including the recovered step, omits from its provider request each trailing assistant message that has no tool part and either failed or holds no non-whitespace text. Projected history keeps these messages. The request therefore ends on the preceding user or tool turn, plus any chronological system update, and no provider receives the interrupted output as an assistant prefill.
+
 Every recovery transition commits in one transaction guarded by the task revision and owner claim, so repeated or concurrent startup passes record it once. Restart-loss events keep the fixed ID `evt_task_restart_lost_<child>_<revision>`, and automatic recoveries use `evt_task_restart_resumed_<child>_<revision>`.
 
 A drain runs a managed child only while this process holds its claim. A claim left by another process, live or dead, skips the drain until recovery or a parent or human transition claims the task.
