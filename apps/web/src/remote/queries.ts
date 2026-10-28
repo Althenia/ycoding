@@ -74,6 +74,17 @@ export type IncidentGuidanceQueryInput = RemoteIncidentGuidanceInput & { readonl
 type DashboardInput = RemoteUsageDashboardInput
 const dashboardSlots = ["daily", "monthly", "breakdown"] as const
 const dashboardPollMs = 1_000
+const liveDashboardPollMs = 2_000
+
+export function dashboardPollInterval(data: RemoteUsageDashboard): number | false {
+  if (data.status === "preparing" || data.status === "ready" && data.quota.status === "preparing") return dashboardPollMs
+  return data.status === "ready" && data.live.active > 0 ? liveDashboardPollMs : false
+}
+
+export const dashboardSettled = (data: RemoteUsageDashboard) => data.status === "ready" && data.quota.status !== "preparing" && data.live.active === 0
+
+export const dashboardSuperseded = (previous: RemoteUsageDashboard, next: RemoteUsageDashboard) =>
+  previous.status === "ready" && next.status === "ready" && next.asOf < previous.asOf
 
 export type UsageResult<T> = { readonly status: "ready"; readonly data: T } | { readonly status: "unsupported" }
 
@@ -117,6 +128,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     readonly unreadable: string
     readonly settled?: (data: T) => boolean
     readonly poll?: (data: T) => number | false
+    readonly superseded?: (previous: T, next: T) => boolean
   }) => {
     const scope = input.scope ?? idleScope
     const queryKey = input.key(scope)
@@ -146,7 +158,11 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
         if (input.unsupported(outcome)) return { status: "unsupported" }
         const raw = outcome.status === "ok" && typeof outcome.value === "object" && outcome.value !== null ? Reflect.get(outcome.value, "data") : undefined
         const data = input.read(raw)
-        if (data !== undefined) return { status: "ready", data }
+        if (data !== undefined) {
+          const previous = client.getQueryData<UsageResult<T>>(queryKey)
+          if (!refresh && previous?.status === "ready" && input.superseded?.(previous.data, data) === true) return previous
+          return { status: "ready", data }
+        }
         const error = new Error(outcome.status === "ok" ? input.unreadable : describeOutcome(outcome, input.label))
         const failed = client.getQueryCache().find({ queryKey, exact: true })
         if (retried && failed !== undefined) exhausted.set(failed, error)
@@ -188,8 +204,8 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     }),
     key: (current) => remoteKeys.usageDashboard(current, dashboard), operation: "usage.dashboard",
     request: (refresh) => ({ input: { ...Object.fromEntries(dashboardSlots.flatMap((slot) => dashboard[slot] === undefined ? [] : [[slot, dashboard[slot]]])), ...(refresh ? { refresh: true } : {}) } }),
-    read: (raw) => readUsageDashboard(raw, dashboard), settled: (data) => data.status === "ready" && data.quota.status !== "preparing",
-    poll: (data) => data.status === "preparing" || data.status === "ready" && data.quota.status === "preparing" ? dashboardPollMs : false,
+    read: (raw) => readUsageDashboard(raw, dashboard), settled: dashboardSettled,
+    poll: dashboardPollInterval, superseded: dashboardSuperseded,
     unsupported: unknownOperation, label: "Usage", unreadable: "The device returned unreadable usage data.",
   })
 
@@ -562,6 +578,18 @@ function readUsageProviders(value: unknown): readonly UsageProvider[] | undefine
   return value as UsageProvider[]
 }
 
+function validOutcomes(value: unknown) {
+  return value === undefined || typeof value === "object" && value !== null && ["completed", "failed", "cancelled"].every((key) => count(Reflect.get(value, key)))
+}
+
+const speedAmounts = ["generationP95TokensPerSecond", "meanTokensPerSecond", "firstOutputP99Ms", "totalP99Ms"]
+
+function validSpeed(speed: unknown) {
+  return speed === undefined || typeof speed === "object" && speed !== null &&
+    ["generationSamples", "providerTimedSamples", "observedSamples", "samples"].every((key) => Number.isSafeInteger(Reflect.get(speed, key)) && Reflect.get(speed, key) >= 0) &&
+    speedAmounts.every((key) => Reflect.get(speed, key) === undefined || Number.isFinite(Reflect.get(speed, key)) && Reflect.get(speed, key) >= 0)
+}
+
 function readUsageMetrics(value: unknown): UsageSummary | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const fields = ["logical", "physical", "helpers", "continued", "fallback"]
@@ -572,7 +600,8 @@ function readUsageMetrics(value: unknown): UsageSummary | undefined {
     typeof Reflect.get(tokens, "cache") !== "object" || Reflect.get(tokens, "cache") === null ||
     ["read", "write"].some((field) => !Number.isFinite(Reflect.get(Reflect.get(tokens, "cache"), field))) ||
     (Reflect.get(value, "cost") !== undefined && (!Number.isFinite(Reflect.get(value, "cost")) || Reflect.get(value, "cost") < 0)) ||
-    (Reflect.get(value, "costProvenance") !== undefined && !["recorded", "current_catalog"].includes(Reflect.get(value, "costProvenance")))) return undefined
+    (Reflect.get(value, "costProvenance") !== undefined && !["recorded", "current_catalog"].includes(Reflect.get(value, "costProvenance"))) ||
+    !validOutcomes(Reflect.get(value, "outcomes"))) return undefined
   return value as UsageSummary
 }
 
@@ -589,7 +618,8 @@ function readUsageDashboard(value: unknown, input: DashboardInput): RemoteUsageD
   if (status !== "ready" || !count(asOf) || typeof revision !== "string") return undefined
   const summary = readUsageMetrics(Reflect.get(value, "summary"))
   const quota = readDashboardQuota(Reflect.get(value, "quota"))
-  if (summary === undefined || quota === undefined) return undefined
+  const live = readDashboardLive(Reflect.get(value, "live"))
+  if (summary === undefined || quota === undefined || live === undefined) return undefined
   const reports: Partial<Record<(typeof dashboardSlots)[number], UsageReport>> = {}
   for (const slot of dashboardSlots) {
     const raw = Reflect.get(value, slot)
@@ -602,7 +632,39 @@ function readUsageDashboard(value: unknown, input: DashboardInput): RemoteUsageD
     if (report === undefined) return undefined
     reports[slot] = report
   }
-  return { status, asOf, revision, summary, quota, ...reports }
+  return { status, asOf, revision, summary, quota, live, ...reports }
+}
+
+const liveRate = (value: unknown) => value === undefined || typeof value === "number" && Number.isFinite(value) && value >= 0
+
+function readDashboardLive(value: unknown): Extract<RemoteUsageDashboard, { readonly status: "ready" }>["live"] | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const asOf = Reflect.get(value, "asOf")
+  const active = Reflect.get(value, "active")
+  const streaming = Reflect.get(value, "streaming")
+  const rate = Reflect.get(value, "outputTokensPerSecond")
+  const models = Reflect.get(value, "models")
+  const history = Reflect.get(value, "history")
+  if (!count(asOf) || !count(active) || !count(streaming) || !liveRate(rate) || !Array.isArray(models) || models.length > 50 || !Array.isArray(history) || history.length > 120) return undefined
+  const readModels = models.flatMap((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) return []
+    const model = readModelRef(Reflect.get(entry, "model"))
+    const modelActive = Reflect.get(entry, "active")
+    const modelStreaming = Reflect.get(entry, "streaming")
+    const modelRate = Reflect.get(entry, "outputTokensPerSecond")
+    if (model === undefined || !count(modelActive) || !count(modelStreaming) || !liveRate(modelRate)) return []
+    return [{ model, active: modelActive, streaming: modelStreaming, ...(modelRate === undefined ? {} : { outputTokensPerSecond: modelRate }) }]
+  })
+  const readHistory = history.flatMap((entry: unknown) => {
+    if (typeof entry !== "object" || entry === null) return []
+    const at = Reflect.get(entry, "at")
+    const pointActive = Reflect.get(entry, "active")
+    const pointRate = Reflect.get(entry, "outputTokensPerSecond")
+    if (!count(at) || !count(pointActive) || !liveRate(pointRate)) return []
+    return [{ at, active: pointActive, ...(pointRate === undefined ? {} : { outputTokensPerSecond: pointRate }) }]
+  })
+  if (readModels.length !== models.length || readHistory.length !== history.length) return undefined
+  return { asOf, active, streaming, ...(rate === undefined ? {} : { outputTokensPerSecond: rate }), models: readModels, history: readHistory }
 }
 
 function readDashboardQuota(value: unknown): Extract<RemoteUsageDashboard, { readonly status: "ready" }>["quota"] | undefined {
@@ -623,7 +685,7 @@ export function readUsageReport(value: unknown, group: UsageReportInput["group"]
   if (typeof value !== "object" || value === null || Reflect.get(value, "group") !== group || !Array.isArray(Reflect.get(value, "rows")) ||
     !Number.isInteger(Reflect.get(value, "rowCount")) || Reflect.get(value, "rowCount") < 0 ||
     (Reflect.get(value, "nextOffset") !== undefined && (!Number.isInteger(Reflect.get(value, "nextOffset")) || Reflect.get(value, "nextOffset") < 0)) ||
-    readUsageMetrics(Reflect.get(value, "total")) === undefined) return undefined
+    readUsageMetrics(Reflect.get(value, "total")) === undefined || !validSpeed(Reflect.get(value, "speed"))) return undefined
   const rows: unknown[] = Reflect.get(value, "rows")
   if (!rows.every((row) => typeof row === "object" && row !== null && typeof Reflect.get(row, "key") === "string" &&
     typeof Reflect.get(row, "label") === "string" && readUsageMetrics(row) !== undefined &&
@@ -632,8 +694,9 @@ export function readUsageReport(value: unknown, group: UsageReportInput["group"]
     if (typeof row !== "object" || row === null) return true
     const coverage = Reflect.get(row, "costCoverage")
     if (coverage !== undefined && (typeof coverage !== "object" || coverage === null || ["pricedRequests", "unpricedRequests"].some((key) => !Number.isSafeInteger(Reflect.get(coverage, key)) || Reflect.get(coverage, key) < 0))) return true
-    const speed = Reflect.get(row, "speed")
-    if (speed !== undefined && (typeof speed !== "object" || speed === null || ["generationSamples", "providerTimedSamples", "observedSamples", "samples"].some((key) => !Number.isSafeInteger(Reflect.get(speed, key)) || Reflect.get(speed, key) < 0))) return true
+    if (!validSpeed(Reflect.get(row, "speed"))) return true
+    const concurrency = Reflect.get(row, "concurrency")
+    if (concurrency !== undefined && !(Number.isFinite(concurrency) && concurrency >= 0)) return true
     if (!["provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(group)) return false
     const dimension = Reflect.get(row, "dimensions")
     if (Reflect.get(row, "model") !== undefined || typeof dimension !== "object" || dimension === null || Reflect.get(dimension, "group") !== group) return true

@@ -29,6 +29,7 @@ export const UsageAnalyticsRequestTable = sqliteTable(
     tokens: text({ mode: "json" }).$type<TokenUsage.Info>().notNull(),
     cost: real(),
     timing: text({ mode: "json" }).$type<ProviderRequest.Timing>(),
+    outcome: text().$type<ProviderRequest.Outcome>(),
     time_created: integer().notNull(),
   },
   (table) => [

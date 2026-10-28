@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { costText, forecastLines, forecastSummary, measuredSpeedLines, recordedRateLines, recordedRateRow, unitCostLines, type ForecastPresentation, type UnitCostPresentation } from "../src/util/usage-accounting"
+import { costText, errorRateText, forecastLines, forecastSummary, measuredSpeedLines, outcomeLine, recordedRateLines, recordedRateRow, unitCostLines, type ForecastPresentation, type UnitCostPresentation } from "../src/util/usage-accounting"
 
 const zero = { total: 0, known: 0, pricedRequests: 1, unpricedRequests: 0 }
 const unit: UnitCostPresentation = { inputID: "first", cost: { known: 0, pricedRequests: 1, unpricedRequests: 2 }, main: zero, children: { pricedRequests: 0, unpricedRequests: 2 }, helpers: [{ label: "Decision", cost: zero }], settled: false, complete: false }
@@ -14,7 +14,8 @@ test("unknown and partially priced costs never become complete zero", () => {
 })
 
 test("measured speed populations and insufficient quota evidence remain distinct", () => {
-  expect(measuredSpeedLines({ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, providerTimedSamples: 1, observedSamples: 3, outputTokensPerSecond: 32, samples: 2 })).toEqual(["Measured generation median 20.0 tok/s · p90 50.0 tok/s", "4 measured requests · 1 provider-timed · 3 observed", "Weighted throughput 32.0 tok/s · 2 first-output latency samples"])
+  expect(measuredSpeedLines({ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, providerTimedSamples: 1, observedSamples: 3, outputTokensPerSecond: 32, samples: 2 })).toEqual(["Measured generation median 20.0 tok/s · p90 50.0 tok/s", "4 measured requests · 1 provider-timed · 3 observed", "Aggregate throughput 32.0 tok/s · mean per request unreported · 2 first-output latency samples"])
+  expect(measuredSpeedLines({ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, generationP95TokensPerSecond: 60, meanTokensPerSecond: 28.5, providerTimedSamples: 1, observedSamples: 3, outputTokensPerSecond: 32, samples: 2 })).toEqual(["Measured generation median 20.0 tok/s · p90 50.0 tok/s · p95 60.0 tok/s", "4 measured requests · 1 provider-timed · 3 observed", "Aggregate throughput 32.0 tok/s · mean per request 28.5 tok/s · 2 first-output latency samples"])
   expect(measuredSpeedLines(undefined)[0]).toContain("median unreported · p90 unreported")
   expect(measuredSpeedLines(undefined)[1]).toBe("Generation sample coverage unreported")
   expect(forecastLines({ state: "insufficient", unit: "percent", evidence: "insufficient", updatedAt: 0, reason: "No increase observed" }, 120_000)).toEqual(["Forecast unavailable", "No supported method · insufficient evidence", "Updated 2m ago", "No increase observed"])
@@ -59,4 +60,13 @@ test("recorded consumption rows stay compact while details keep every exact metr
   expect(recordedRateLines({ ...rate, tokensPerMinute: 0.04 })[1]).toContain("0.04 tokens/min")
   expect(recordedRateRow({ ...rate, profile: undefined }).identity).toBe("openai · provider default · gpt-5")
   expect(recordedRateLines({ ...rate, profile: undefined, modelID: undefined })[0]).toBe("openai · provider default at request time")
+})
+
+test("outcome counts and the failed share stay unreported until outcome data exists", () => {
+  expect(errorRateText(undefined)).toBe("unreported")
+  expect(errorRateText({ completed: 0, failed: 0, cancelled: 0 })).toBe("unreported")
+  expect(errorRateText({ completed: 8, failed: 1, cancelled: 1 })).toBe("10.0%")
+  expect(errorRateText({ completed: 5, failed: 0, cancelled: 2 })).toBe("0.0%")
+  expect(outcomeLine(undefined)).toBe("Outcomes unreported")
+  expect(outcomeLine({ completed: 1_200, failed: 3, cancelled: 0 })).toBe("Outcomes 1,200 completed · 3 failed · 0 cancelled · error rate 0.2%")
 })

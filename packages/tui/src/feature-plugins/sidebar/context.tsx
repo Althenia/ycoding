@@ -9,6 +9,7 @@ import {
   contextModelLabel,
   formatDiagnosticsModel,
 } from "../../util/cache-diagnostics"
+import { generationSpeedDisplay } from "../../util/generation-speed"
 import { Locale } from "../../util/locale"
 import { railMetrics, railWidth } from "../../routes/session/rail"
 import { RailRow, RailSection, RailSubheading, useRail } from "../../routes/session/rail-section"
@@ -93,21 +94,11 @@ export function SidebarCacheContent(props: {
     return percent === undefined ? "unreported" : `${percent}%`
   })
   const speed = createMemo(() => {
-    const value = diagnostics()?.generationSpeed
-    const latest = value?.live ? value.live.sample : value?.latest
-    const model = latest?.model ?? value?.model
-    if (!model) return undefined
-    const selected = props.selectedModel?.()
-    if (selected && (selected.providerID !== model.providerID || selected.id !== model.id)) return undefined
-    if (!latest) return undefined
-    const rate = latest.tokensPerSecond >= 1
-      ? Math.round(latest.tokensPerSecond).toLocaleString("en-US") : latest.tokensPerSecond.toPrecision(2)
-    const label = Locale.truncateWidth(`${latest.estimated ? "≈ " : ""}${rate} tok/s`, Math.max(1, rowWidth() - "Speed".length - 1))
-    if (!value || latest.estimated || value.recent.length < 2) return { label }
-    const peak = Math.max(...value.recent.map((sample) => sample.tokensPerSecond))
-    const levels = "▁▂▃▄▅▆▇█"
-    const trend = value.recent.map((sample) => levels[Math.floor(sample.tokensPerSecond / peak * 7)]).join("")
-    return { label: rowWidth() >= "Speed".length + 1 + label.length + 1 + trend.length ? `${label} ${trend}` : label }
+    const display = generationSpeedDisplay(diagnostics()?.generationSpeed, props.selectedModel?.())
+    if (!display) return undefined
+    const label = Locale.truncateWidth(display.label, Math.max(1, rowWidth() - "Speed".length - 1))
+    if (!display.trend) return { label }
+    return { label: rowWidth() >= "Speed".length + 1 + label.length + 1 + display.trend.length ? `${label} ${display.trend}` : label }
   })
   const modelSpend = createMemo(() =>
     (usage()?.models ?? []).map((entry) => {

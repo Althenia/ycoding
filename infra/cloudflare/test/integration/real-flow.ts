@@ -688,7 +688,7 @@ try {
       const data = await dashboardRead(input)
       return data.status === "ready" ? data : undefined
     }, 10_000, `usage dashboard did not become ready for ${JSON.stringify(input)}`)
-  const dashboardHeaderKeys = ["asOf", "quota", "revision", "status", "summary"]
+  const dashboardHeaderKeys = ["asOf", "live", "quota", "revision", "status", "summary"]
   const dashboardKeys = (data: Record<string, unknown>) => Object.keys(data).sort()
   const standaloneUsage = async () => {
     const [summaryRead, reportRead] = [await probeRequest("usage.summary"), await probeRequest("usage.report", { input: { group: "model", limit: 2 } })]
@@ -719,6 +719,12 @@ try {
       : dashboardNone.quota.status === "ready" && Array.isArray(dashboardNone.quota.providers) &&
         isRecord(dashboardNone.quota.forecast) && dashboardNone.quota.forecast.localScope === "backend"),
     `dashboard header fields were invalid: ${JSON.stringify(dashboardNone)}`)
+  const liveOf = (data: Record<string, unknown>) => isRecord(data.live) ? data.live : undefined
+  const dashboardLive = liveOf(dashboardNone)
+  expect(dashboardLive !== undefined && [dashboardLive.asOf, dashboardLive.active, dashboardLive.streaming].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0) &&
+    Array.isArray(dashboardLive.models) && dashboardLive.models.length <= 50 && Array.isArray(dashboardLive.history) && dashboardLive.history.length <= 120 &&
+    (dashboardLive.outputTokensPerSecond === undefined || (typeof dashboardLive.outputTokensPerSecond === "number" && dashboardLive.outputTokensPerSecond >= 0)),
+    `dashboard live activity was invalid: ${JSON.stringify(dashboardLive)}`)
   expect(JSON.stringify(dashboardNone.summary) === standalone.summary && JSON.stringify(dashboardBreakdown.summary) === standalone.summary,
     `dashboard summary differs from the standalone summary: ${JSON.stringify(dashboardNone.summary)}`)
   expect(JSON.stringify(dashboardKeys(dashboardBreakdown)) === JSON.stringify([...dashboardHeaderKeys, "breakdown"].sort()),

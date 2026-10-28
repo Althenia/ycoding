@@ -7,6 +7,7 @@ import { SplitBorder } from "../../ui/border"
 import { Locale } from "../../util/locale"
 import { useTerminalDimensions } from "@opentui/solid"
 import { formatCacheDiagnostics, formatDiagnosticsModel } from "../../util/cache-diagnostics"
+import { generationSpeedDisplay } from "../../util/generation-speed"
 import { Keymap } from "../../context/keymap"
 import { stringWidth } from "../../util/string-width"
 import type { ProjectContext } from "../../util/coordination"
@@ -114,11 +115,7 @@ export function subagentEconomics(
   const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
   const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
   const spent = money.format(session.cost)
-  const history = diagnostics?.generationSpeed
-  const sample = history?.live ? history.live.sample : history?.latest
-  const speed = sample && (!session.model || (session.model.providerID === sample.model.providerID && session.model.id === sample.model.id))
-    ? `${sample.estimated ? "≈ " : ""}${sample.tokensPerSecond >= 1 ? Math.round(sample.tokensPerSecond).toLocaleString("en-US") : sample.tokensPerSecond.toPrecision(2)} tok/s`
-    : undefined
+  const speed = generationSpeedDisplay(diagnostics?.generationSpeed, session.model)?.label
   const summary = [
     tokens > 0 ? `${Locale.number(tokens)}${diagnostics?.context.percent === undefined ? "" : ` (${diagnostics.context.percent}%)`}` : undefined,
     hit,

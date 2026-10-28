@@ -126,7 +126,7 @@ const begin = (sessionID: Session.ID, source: ProviderRequest.Source = "step", i
     })
   })
 const complete = (tracker: SessionProviderRequest.Tracker, cost: number) =>
-  tracker.complete({ cost: Money.USD.make(cost), tokens, continuation: "full" })
+  tracker.complete({ outcome: "completed", cost: Money.USD.make(cost), tokens, continuation: "full" })
 
 const user = (sessionID: Session.ID, text: string, delivery: "steer" | "queue" = "steer") =>
   Effect.gen(function* () {

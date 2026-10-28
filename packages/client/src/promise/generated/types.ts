@@ -304,16 +304,22 @@ export type UsageAnchorRef = { sessionID: string; inputID: string }
 
 export type ProviderRequestCostCoverage = { pricedRequests: number; unpricedRequests: number }
 
+export type ProviderRequestOutcomes = { completed: number; failed: number; cancelled: number }
+
 export type ProviderRequestSpeed = {
   generationSamples: number
   generationP50TokensPerSecond?: number
   generationP90TokensPerSecond?: number
+  generationP95TokensPerSecond?: number
+  meanTokensPerSecond?: number
   providerTimedSamples: number
   observedSamples: number
   firstOutputP50Ms?: number
   firstOutputP95Ms?: number
+  firstOutputP99Ms?: number
   totalP50Ms?: number
   totalP95Ms?: number
+  totalP99Ms?: number
   outputTokensPerSecond?: number
   samples: number
 }
@@ -824,6 +830,8 @@ export type UsageDashboardError = { status: "error"; message: string }
 export type UsageDashboardQuotaPreparing = { status: "preparing" }
 
 export type UsageDashboardQuotaFailed = { status: "error"; message: string }
+
+export type UsageDashboardLivePoint = { at: number; active: number; outputTokensPerSecond?: number }
 
 export type ModelIncidentReportRow = {
   providerID: string
@@ -2908,6 +2916,13 @@ export type SessionStepRerouted = {
   data: { sessionID: string; assistantMessageID: string; model: ModelRef; error: SessionStructuredError }
 }
 
+export type UsageDashboardLiveModel = {
+  model: ModelRef
+  active: number
+  streaming: number
+  outputTokensPerSecond?: number
+}
+
 export type ModelIncidentItem = {
   id: ModelIncidentID
   time: number
@@ -3513,13 +3528,29 @@ export type SessionGenerationSpeedHistory = {
   unreportedReason?: string
   latest?: SessionGenerationSpeed
   recent: Array<SessionGenerationSpeed>
-  live?: { requestID: ProviderRequestID; attempt: number; sample?: SessionGenerationSpeed }
+  live?: {
+    requestID: ProviderRequestID
+    attempt: number
+    phase: "preparing" | "waiting" | "reasoning" | "streaming" | "tool" | "completed" | "failed" | "cancelled"
+    firstOutputMs?: number
+    sample?: SessionGenerationSpeed
+    final?: SessionGenerationSpeed
+  }
 }
 
 export type SessionOrchestrationPage = {
   data: Array<SessionOrchestrationTask>
   summary: SessionOrchestrationSummary
   cursor: { previous?: string; next?: string }
+}
+
+export type UsageDashboardLive = {
+  asOf: number
+  active: number
+  streaming: number
+  outputTokensPerSecond?: number
+  models: Array<UsageDashboardLiveModel>
+  history: Array<UsageDashboardLivePoint>
 }
 
 export type ModelIncidentRecent = { items: Array<ModelIncidentItem> }
@@ -4266,6 +4297,7 @@ export type UsageDashboardReady = {
   revision: string
   summary: ProviderRequestSummary
   quota: UsageDashboardQuota
+  live: UsageDashboardLive
   daily?: {
     group:
       | "model"
@@ -4297,7 +4329,9 @@ export type UsageDashboardReady = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
       speed?: ProviderRequestSpeed
+      concurrency?: number
     }>
     total: {
       logical: number
@@ -4310,9 +4344,11 @@ export type UsageDashboardReady = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
     }
     rowCount: number
     nextOffset?: number
+    speed?: ProviderRequestSpeed
   }
   monthly?: {
     group:
@@ -4345,7 +4381,9 @@ export type UsageDashboardReady = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
       speed?: ProviderRequestSpeed
+      concurrency?: number
     }>
     total: {
       logical: number
@@ -4358,9 +4396,11 @@ export type UsageDashboardReady = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
     }
     rowCount: number
     nextOffset?: number
+    speed?: ProviderRequestSpeed
   }
   breakdown?: {
     group:
@@ -4393,7 +4433,9 @@ export type UsageDashboardReady = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
       speed?: ProviderRequestSpeed
+      concurrency?: number
     }>
     total: {
       logical: number
@@ -4406,9 +4448,11 @@ export type UsageDashboardReady = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
     }
     rowCount: number
     nextOffset?: number
+    speed?: ProviderRequestSpeed
   }
 }
 
@@ -7498,7 +7542,9 @@ export type SessionUsageReportOutput = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
       speed?: ProviderRequestSpeed
+      concurrency?: number
     }>
     total: {
       logical: number
@@ -7511,9 +7557,11 @@ export type SessionUsageReportOutput = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
     }
     rowCount: number
     nextOffset?: number
+    speed?: ProviderRequestSpeed
   }
 }["data"]
 
@@ -11595,7 +11643,9 @@ export type UsageReportOutput = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
       speed?: ProviderRequestSpeed
+      concurrency?: number
     }>
     total: {
       logical: number
@@ -11608,9 +11658,11 @@ export type UsageReportOutput = {
       cost?: MoneyUSD
       costProvenance?: "recorded" | "current_catalog"
       cacheReadReported?: boolean
+      outcomes?: ProviderRequestOutcomes
     }
     rowCount: number
     nextOffset?: number
+    speed?: ProviderRequestSpeed
   }
 }["data"]
 

@@ -63,12 +63,12 @@ test("global stage and sample reads seek prepared cells by span and bucket with 
           limit: 100,
           corrections: {},
         })
-      expect(shapes.map((shape) => shape.kind)).toEqual(["partial", "sample", "partial", "sample"])
+      expect(shapes.map((shape) => shape.kind)).toEqual(["partial", "sample", "sample", "partial", "sample", "sample"])
       for (const shape of shapes)
         expect(shape.plan.some((row) => /SEARCH r USING (?:COVERING )?INDEX usage_analytics_cell_span_bucket_key_idx \(span=\?/.test(row))).toBe(true)
       for (const shape of shapes.filter((shape) => shape.kind === "sample"))
         expect(shape.plan.some((row) => /TEMP B-TREE/.test(row))).toBe(false)
-      for (const shape of shapes.slice(0, 2)) expect(shape.functions).toEqual([])
-      for (const shape of shapes.slice(2)) expect(shape.functions).toEqual(["strftime(-1)"])
+      for (const shape of [...shapes.slice(0, 3), shapes[5]!]) expect(shape.functions).toEqual([])
+      for (const shape of shapes.slice(3, 5)) expect(shape.functions).toEqual(["strftime(-1)"])
     }).pipe(Effect.provide(sqliteLayer({ filename: ":memory:" })), Effect.scoped),
   ))

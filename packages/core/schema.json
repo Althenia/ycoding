@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "44b8fa06-8dd3-4c90-b465-9795c963641d",
+  "id": "ab4e32f6-9348-419d-8b4c-06d5980547b6",
   "prevIds": [
-    "fbcfe45e-751f-418f-bbd1-e9c9969878b2"
+    "44b8fa06-8dd3-4c90-b465-9795c963641d"
   ],
   "ddl": [
     {
@@ -587,6 +587,16 @@
       "table": "usage_analytics_request"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "outcome",
+      "entityType": "columns",
+      "table": "usage_analytics_request"
+    },
+    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -1003,6 +1013,56 @@
       "default": null,
       "generated": null,
       "name": "generation_duration",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "generation_rate",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "busy_ms",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "failed",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "cancelled",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "outcomes",
       "entityType": "columns",
       "table": "session_usage_cell"
     },
@@ -1583,6 +1643,56 @@
       "default": null,
       "generated": null,
       "name": "generation_duration",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "generation_rate",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "busy_ms",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "failed",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "cancelled",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "outcomes",
       "entityType": "columns",
       "table": "usage_analytics_cell"
     },
@@ -2343,6 +2453,56 @@
       "default": null,
       "generated": null,
       "name": "generation_duration",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "generation_rate",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "busy_ms",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "failed",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "cancelled",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "outcomes",
       "entityType": "columns",
       "table": "usage_view_row"
     },
@@ -6449,6 +6609,16 @@
       "default": null,
       "generated": null,
       "name": "timing",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "outcome",
       "entityType": "columns",
       "table": "session_provider_request"
     },

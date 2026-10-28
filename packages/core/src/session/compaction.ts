@@ -35,6 +35,7 @@ import { SessionHistory } from "./history"
 import { SessionLiveState } from "./live-state"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionRunnerModel } from "./runner/model"
@@ -187,7 +188,7 @@ const make = (dependencies: Dependencies): Interface => {
     let usage: SessionUsage.Recorded | undefined
     let timing: ReturnType<typeof SessionUsage.timing>
     let failure: FailureCode | undefined
-    const completeRequest = Effect.suspend(() => {
+    const completeRequest = (outcome: ProviderRequest.Outcome) => Effect.suspend(() => {
       const recorded = usage ?? {
         cost: Money.USD.zero,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -200,6 +201,7 @@ const make = (dependencies: Dependencies): Interface => {
         continuation: "full",
         ...(timing === undefined ? {} : { timing }),
         ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+        outcome,
       })
     })
     const streamed = startStreamed(dependencies, request, {
@@ -215,9 +217,9 @@ const make = (dependencies: Dependencies): Interface => {
       observeEvent: tracker.observeEvent,
       settle: tracker.settle,
     }).pipe(
-      Effect.ensuring(
+      Effect.onExit((exit) =>
         Effect.suspend(() =>
-          completeRequest.pipe(
+          completeRequest(SessionProviderRequest.outcome(exit, failure !== undefined)).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("failed to record compaction helper request", { cause: Cause.pretty(cause) }),
             ),
@@ -558,6 +560,7 @@ const remoteCompaction = Effect.fn("SessionCompaction.remote")(function* (
       continuation: retry === 0 ? "full" : "fallback",
       ...(timing ? { timing } : {}),
       ...(!valid ? { invalidation: "retry-fallback" as const } : {}),
+      outcome: failed ? "failed" : "completed",
     }
     if (!valid) {
       yield* tracker.complete(completion)

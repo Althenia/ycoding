@@ -71,7 +71,24 @@ let museRefreshed = false
 const tokens = longDistribution
   ? { input: 1_000_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
   : { input: 12_400, output: 3_200, reasoning: 1_440, cache: { read: 5_600, write: 320 } }
+const speedFor = (index: number) => index % 5 === 4 ? {} : { speed: {
+  samples: 4, generationSamples: 4 + index, generationP50TokensPerSecond: 30 + index, generationP90TokensPerSecond: 50 + index, generationP95TokensPerSecond: 55 + index, meanTokensPerSecond: 35 + index,
+  providerTimedSamples: 2, observedSamples: 2 + index, firstOutputP50Ms: 300 + index * 10, firstOutputP95Ms: 900 + index * 20, firstOutputP99Ms: 1500, totalP50Ms: 4000, totalP95Ms: 9000, totalP99Ms: 12000, outputTokensPerSecond: 33 + index,
+} }
+const outcomesFor = (index: number, requests: number) => ({ outcomes: { completed: Math.max(0, requests - 1), failed: index % 3 === 0 ? 1 : 0, cancelled: index % 7 === 0 ? 1 : 0 } })
+const liveMode = new URLSearchParams(location.search).has("live")
+let liveActive = liveMode ? 2 : 0
+const liveSnapshot = () => {
+  const asOf = Date.now()
+  const rate = liveActive > 0 ? 42.5 + revision : undefined
+  return {
+    asOf, active: liveActive, streaming: liveActive > 0 ? 1 : 0, ...(rate === undefined ? {} : { outputTokensPerSecond: rate }),
+    models: liveActive > 0 ? [{ model: { providerID: "openai", id: "gpt-6-sol" }, active: liveActive, streaming: 1, outputTokensPerSecond: rate }] : [],
+    history: liveMode ? Array.from({ length: 24 }, (_, index) => ({ at: asOf - (23 - index) * 5000, active: index % 5 === 0 ? 1 : 2, ...(index % 7 === 3 ? {} : { outputTokensPerSecond: 20 + index * 2 }) })) : [],
+  }
+}
 const rows: UsageReportRow[] = Array.from({ length: 30 }, (_, index) => ({
+  ...speedFor(index), ...outcomesFor(index, index + 2), concurrency: 0.4 + index * 0.01,
   key: new Date(today - (29 - index) * 86_400_000).toISOString().slice(0, 10),
   label: new Date(today - (29 - index) * 86_400_000).toISOString().slice(0, 10),
   logical: index + 1, physical: index + 2, helpers: 0, continued: 0, fallback: 0,
@@ -79,12 +96,12 @@ const rows: UsageReportRow[] = Array.from({ length: 30 }, (_, index) => ({
   costProvenance: index % 6 === 0 ? undefined : index % 3 === 0 ? "current_catalog" : "recorded", tokens,
   costCoverage: { pricedRequests: index % 6 === 0 ? 0 : index + 1, unpricedRequests: index % 6 === 0 ? index + 1 : 0 },
 }))
-const monthlyRows: UsageReportRow[] = [
+const monthlyRows: UsageReportRow[] = ([
   { ...rows[1]!, key: "openai/gpt-6-sol", label: "openai/gpt-6-sol", cost: longDistribution ? 12_000_000 : 6, costProvenance: "recorded" },
   { ...rows[2]!, key: "openai/gpt-5", label: "openai/gpt-5", cost: longDistribution ? 3_000_000 : 4, costProvenance: "current_catalog" },
   { ...rows[3]!, key: "openrouter/deepseek-v4", label: "openrouter/deepseek-v4", cost: longDistribution ? 5_000_000 : 5, costProvenance: "recorded" },
   { ...rows[0]!, key: "github-copilot/gpt-4o", label: "github-copilot/gpt-4o", cost: undefined, costProvenance: undefined },
-]
+] as UsageReportRow[]).map(({ speed: _speed, ...row }, index) => ({ ...row, ...speedFor(index === 3 ? 4 : index) }))
 const sample = ["GPT-6 Sol", "Claude Opus", "Gemini Pro", "DeepSeek V3", "Llama 4", "Qwen 3"]
 const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "day" ? input.timeZone === undefined ? rows : rows.map((row, index) => {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: input.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(Date.now())
@@ -94,6 +111,7 @@ const entries = (input: UsageReportInput): UsageReportRow[] => input.group === "
 }) : Array.from({ length: 41 }, (_, index) => ({
   ...rows[index % 30]!, key: input.group === "model" ? `${["openai", "anthropic", "openrouter", "github-copilot"][index % 4]}/${encodeURIComponent(sample[index % sample.length]!.toLowerCase().replaceAll(" ", "-"))}-${index + 1}` : `${input.group}-${index}`,
   label: input.group === "model" ? `${sample[index % sample.length]} ${index + 1}` : `${input.group === "session" ? "Session" : input.group === "project" ? "Project" : "Agent"} ${index + 1}`,
+  ...speedFor(index), ...outcomesFor(index, 41 - index),
   logical: 41 - index, physical: 41 - index, cost: (41 - index) * 0.45, costProvenance: index % 3 === 0 ? "current_catalog" : "recorded", costCoverage: { pricedRequests: 41 - index, unpricedRequests: 0 },
 }))
 const insufficient = (reason: string) => ({ state: "insufficient" as const, evidence: "insufficient" as const, reason })
@@ -147,8 +165,10 @@ const dimensionsFor = (group: UsageReportInput["group"], index: number) => {
 const report = (input: UsageReportInput) => {
   if (input.group === "model" && input.limit === 200) return { group: "model", rows: refreshCycle ? monthlyRows.map((row) => ({ ...row, cost: row.cost === undefined ? undefined : row.cost + revision })) : monthlyRows,
     total: { logical: 10, physical: 14, helpers: 0, continued: 0, fallback: 0, costCoverage: { pricedRequests: 9, unpricedRequests: 1 },
+      outcomes: { completed: 13, failed: 1, cancelled: 0 },
       cost: (longDistribution ? 20_000_000 : 15) + (refreshCycle ? 3 * revision : 0), costProvenance: "current_catalog", tokens: { input: tokens.input * 4, output: tokens.output * 4, reasoning: tokens.reasoning * 4, cache: { read: tokens.cache.read * 4, write: tokens.cache.write * 4 } } },
-    rowCount: monthlyRows.length }
+    rowCount: monthlyRows.length,
+    speed: { samples: 15, generationSamples: 15, providerTimedSamples: 6, observedSamples: 9, meanTokensPerSecond: 36.1, outputTokensPerSecond: 34, firstOutputP50Ms: 330, firstOutputP95Ms: 940 } }
   const all = entries(input).map((row, index) => ({ ...row, ...dimensionsFor(input.group, index),
     ...(refreshCycle && revision > 0 && input.group === "day" ? { cost: (row.cost ?? 0) + revision, costProvenance: "current_catalog" as const, costCoverage: { pricedRequests: row.logical, unpricedRequests: 0 } } : {}),
     ...(largeValues && input.group === "day" && index === 29 ? { physical: 7_720, tokens: { input: 2_267_963_225, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } : {}),
@@ -164,6 +184,7 @@ const report = (input: UsageReportInput) => {
     logical: all.reduce((sum, row) => sum + row.logical, 0), physical: all.reduce((sum, row) => sum + row.physical, 0), helpers: 0, continued: 0, fallback: 0,
     cost: all.some((row) => row.cost !== undefined) ? all.reduce((sum, row) => sum + (row.cost ?? 0), 0) : undefined, costProvenance: "current_catalog" as const,
     costCoverage: { pricedRequests: all.reduce((sum, row) => sum + (row.costCoverage?.pricedRequests ?? 0), 0), unpricedRequests: all.reduce((sum, row) => sum + (row.costCoverage?.unpricedRequests ?? 0), 0) },
+    outcomes: { completed: all.reduce((sum, row) => sum + (row.outcomes?.completed ?? 0), 0), failed: all.reduce((sum, row) => sum + (row.outcomes?.failed ?? 0), 0), cancelled: all.reduce((sum, row) => sum + (row.outcomes?.cancelled ?? 0), 0) },
     tokens: { input: all.reduce((sum, row) => sum + row.tokens.input, 0), output: all.reduce((sum, row) => sum + row.tokens.output, 0), reasoning: all.reduce((sum, row) => sum + row.tokens.reasoning, 0), cache: { read: all.reduce((sum, row) => sum + row.tokens.cache.read, 0), write: all.reduce((sum, row) => sum + row.tokens.cache.write, 0) } },
   }, rowCount: all.length, ...((offset + (input.limit ?? 25)) < all.length ? { nextOffset: offset + (input.limit ?? 25) } : {}) }
 }
@@ -213,6 +234,7 @@ const answer = async (operation: string, request?: RemoteTransportRequest): Prom
   return ok({
     status: "ready", asOf: Date.now(), revision: `fixture-${revision}`,
     summary: { logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 },
+    live: liveSnapshot(),
     quota: quotaError ? { status: "error", message: "Provider quotas are unavailable right now." } : quotaReleased ? { status: "ready", providers: snapshots, forecast: forecastSnapshot() } : { status: "preparing" },
     ...(input?.daily ? { daily: report(input.daily) } : {}), ...(input?.monthly ? { monthly: report(input.monthly) } : {}), ...(breakdown ? { breakdown: report(breakdown) } : {}),
   })
@@ -250,7 +272,7 @@ const refetchAll = () => {
   const scope = { deviceID: store.state().activeDeviceID ?? "", generation: store.state().generation }
   void store.queryClient.refetchQueries({ queryKey: remoteKeys.usage(scope), type: "all" })
 }
-Object.assign(window, { usageRequests: () => requests, usageReleaseQuota: () => { quotaReleased = true }, usageReleaseInitial: () => { releaseInitial?.(); releaseInitial = undefined }, usageReleasePage: () => releasePage?.(), usageReleaseReload: () => {
+Object.assign(window, { usageRequests: () => requests, usageSetLive: (active: number) => { liveActive = active }, usageReleaseQuota: () => { quotaReleased = true }, usageReleaseInitial: () => { releaseInitial?.(); releaseInitial = undefined }, usageReleasePage: () => releasePage?.(), usageReleaseReload: () => {
   const release = releaseReload
   pendingReload = undefined
   releaseReload = undefined

@@ -18,6 +18,7 @@ import { SessionHistory } from "./history"
 import { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionSchema } from "./schema"
@@ -190,7 +191,7 @@ const make = (dependencies: Dependencies) => {
             })
           : Effect.void,
       )
-      const completeRequest = Effect.suspend(() => {
+      const completeRequest = (outcome: ProviderRequest.Outcome) => Effect.suspend(() => {
         const recorded = usage ?? {
           cost: Money.USD.zero,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -201,6 +202,7 @@ const make = (dependencies: Dependencies) => {
           continuation: "full",
           ...(timing === undefined ? {} : { timing }),
           ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+          outcome,
         })
       })
       const streamed = yield* dependencies.llm.stream(request).pipe(
@@ -219,10 +221,10 @@ const make = (dependencies: Dependencies) => {
         }),
         Effect.as(true),
         Effect.catchTag("LLM.Error", () => Effect.succeed(false)),
-        Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(completeRequest), Effect.asVoid)),
+        Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(completeRequest("cancelled")), Effect.asVoid)),
       )
       yield* recordUsage
-      yield* completeRequest
+      yield* completeRequest(!streamed || failed || !settled ? "failed" : "completed")
       if (!streamed || failed || !settled) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
       const synthesized = chunks.join("").trim().replace(/\s+/g, " ")
       if (!synthesized) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))

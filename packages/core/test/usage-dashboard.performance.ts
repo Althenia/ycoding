@@ -24,6 +24,7 @@ import { UsageAnalytics } from "../src/usage-analytics"
 import { UsageStage } from "../src/usage-stage"
 import { UsageDashboardRuntime } from "../src/usage-dashboard"
 import { UsageDashboardRead } from "../src/usage-dashboard-read"
+import { GenerationActivity } from "../src/generation-activity"
 import { UsageViewRecipe } from "../src/usage-view-recipe"
 import { UsageViews } from "../src/usage-view"
 import { UsageViewStart } from "../src/usage-view-start"
@@ -228,6 +229,7 @@ const dashboard = Effect.map(
           fixedLocations(() => facade),
         ),
       ),
+      Layer.provide(GenerationActivity.layer),
     ),
   ),
   (context) => {

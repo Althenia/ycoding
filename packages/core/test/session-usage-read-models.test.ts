@@ -129,10 +129,14 @@ test("global usage pages high-cardinality Session groups in SQL with exact total
         observedSamples: 0,
         generationP50TokensPerSecond: 1,
         generationP90TokensPerSecond: 1,
+        generationP95TokensPerSecond: 1,
+        meanTokensPerSecond: 1,
         firstOutputP50Ms: 300,
         firstOutputP95Ms: 300,
+        firstOutputP99Ms: 300,
         totalP50Ms: 600,
         totalP95Ms: 600,
+        totalP99Ms: 600,
         outputTokensPerSecond: 1,
       })
       expect(
@@ -420,10 +424,14 @@ for (const fixture of [
             observedSamples: 0,
             generationP50TokensPerSecond: 3,
             generationP90TokensPerSecond: 3,
+            generationP95TokensPerSecond: 3,
+            meanTokensPerSecond: 3,
             firstOutputP50Ms: fixture.ties ? 7 : 499,
             firstOutputP95Ms: fixture.ties ? 7 : 949,
+            firstOutputP99Ms: fixture.ties ? 7 : 989,
             totalP50Ms: fixture.ties ? 13 : 1999,
             totalP95Ms: fixture.ties ? 13 : 2899,
+            totalP99Ms: fixture.ties ? 13 : 2979,
             outputTokensPerSecond: 3,
           })
           if (fixture.ties) {

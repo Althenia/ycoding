@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
+import { Model } from "@ycoding-ai/schema/model"
+import { Provider } from "@ycoding-ai/schema/provider"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionCacheDiagnostics } from "@ycoding-ai/schema/session-cache-diagnostics"
 import { SessionEvent } from "@ycoding-ai/schema/session-event"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
@@ -106,4 +109,19 @@ test("decodes optional context breakdown in diagnostics, assistant messages, and
     expect(Schema.decodeUnknownSync(schema.data)({ ...value, contextBreakdown }).contextBreakdown).toEqual(contextBreakdown)
   }
   expect(() => decode({ ...diagnostics, contextBreakdown: { ...contextBreakdown, other: -1 } })).toThrow()
+})
+
+test("decodes per-attempt live generation phases with optional time to first output and final speed", () => {
+  const decodeHistory = Schema.decodeUnknownSync(SessionCacheDiagnostics.GenerationSpeedHistory)
+  const requestID = ProviderRequest.ID.make("prq_live")
+  const model = Model.Ref.make({ providerID: Provider.ID.make("openai"), id: Model.ID.make("gpt") })
+  const speed = { model, tokens: 12, durationNs: 2_000_000, tokensPerSecond: 6_000, estimated: true }
+  const live = { requestID, attempt: 2, phase: "streaming" as const, firstOutputMs: 140, sample: speed, final: speed }
+  expect(decodeHistory({ recent: [], live })).toEqual({ recent: [], live })
+  expect(decodeHistory({ recent: [], live: { requestID, attempt: 1, phase: "waiting" } }).live)
+    .toEqual({ requestID, attempt: 1, phase: "waiting" })
+  for (const phase of ["preparing", "waiting", "reasoning", "streaming", "tool", "completed", "failed", "cancelled"] as const)
+    expect(decodeHistory({ recent: [], live: { requestID: "prq_live", attempt: 1, phase } }).live?.phase).toBe(phase)
+  for (const bad of [{ phase: "idle" }, { phase: undefined }, { firstOutputMs: -1 }, { firstOutputMs: 1.5 }, { final: { ...speed, tokens: 0 } }])
+    expect(() => decodeHistory({ recent: [], live: { requestID: "prq_live", attempt: 1, phase: "waiting", ...bad } })).toThrow()
 })

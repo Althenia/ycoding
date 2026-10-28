@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { Duration, Effect, Layer } from "effect"
+import { sql } from "drizzle-orm"
 import { Agent } from "../src/agent"
 import { Catalog } from "../src/catalog"
 import { Database } from "../src/database/database"
@@ -58,6 +59,7 @@ const models = [
 const agents = [Agent.ID.make("build"), Agent.ID.make("plan"), Agent.ID.make("ünï-agent")]
 const sources = ["step", "step", "title", "step", "goal", "step", "decision"] as const
 const continuations = ["full", "continued", "fallback", "full"] as const
+const outcomes = ["completed", "failed", "cancelled"] as const
 
 type Fixture = ReturnType<typeof fixture>[number]
 
@@ -97,6 +99,7 @@ function fixture() {
       continuation: continuations[index % continuations.length]!,
       cache_read_reported: index % 6 === 0 ? false : index % 6 === 1 ? null : true,
       timing,
+      outcome: models[index % models.length]!.providerID === "openai" && index % 5 !== 0 ? outcomes[index % 3]! : null,
       cost: index % 4 === 0 ? null : ((index % 9) + 1) / 1000,
       tokens: {
         input: 100 + ((index * 37) % 900),
@@ -167,6 +170,44 @@ function keyOf(row: Fixture, group: ProviderRequest.ReportGroup, timeZone?: stri
   return `${iso.slice(0, 13)}:00:00.000Z`
 }
 
+const hourMs = 3_600_000
+const bucketLengths = new Map<string, number>()
+const dateFormats = new Map<string, Intl.DateTimeFormat>()
+
+function bucketMs(group: "hour" | "day" | "month", key: string, timeZone?: string) {
+  if (group === "hour") return hourMs
+  const [year = 0, month = 1, date = 1] = key.split("-").map(Number)
+  const first = group === "day" ? Date.UTC(year, month - 1, date) : Date.UTC(year, month - 1, 1)
+  const next = group === "day" ? Date.UTC(year, month - 1, date + 1) : Date.UTC(year, month, 1)
+  if (!timeZone) return next - first
+  const cached = bucketLengths.get(`${group} ${key} ${timeZone}`)
+  if (cached !== undefined) return cached
+  const format =
+    dateFormats.get(timeZone) ??
+    new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+  dateFormats.set(timeZone, format)
+  let hours = 0
+  for (let time = first - 2 * day; time < next + 2 * day; time += hourMs)
+    if (format.format(time).slice(0, group === "day" ? 10 : 7) === key) hours += 1
+  bucketLengths.set(`${group} ${key} ${timeZone}`, hours * hourMs)
+  return hours * hourMs
+}
+
+function expectConcurrency(
+  row: ProviderRequest.ReportRow,
+  expected: { readonly key: string; readonly group: readonly Fixture[] },
+  group: ProviderRequest.ReportGroup,
+  timeZone?: string,
+) {
+  const totals = expected.group.flatMap((item) => item.timing?.totalMs ?? [])
+  if (group !== "hour" && group !== "day" && group !== "month") return expect(row.concurrency).toBeUndefined()
+  if (totals.length === 0) return expect(row.concurrency).toBeUndefined()
+  expect(row.concurrency).toBeCloseTo(
+    totals.reduce((sum, value) => sum + value, 0) / bucketMs(group, expected.key, timeZone),
+    12,
+  )
+}
+
 function nearestRank(values: number[], percentile: number) {
   const sorted = values.toSorted((left, right) => left - right)
   return sorted[Math.ceil((percentile * sorted.length) / 100) - 1]!
@@ -211,6 +252,13 @@ function expectedMetrics(group: readonly Fixture[]) {
         ? undefined
         : [...recorded, ...corrections].reduce((sum, cost) => sum + cost, 0),
     costProvenance: corrections.length > 0 ? "current_catalog" : "recorded",
+    outcomes: group.some((row) => row.outcome !== null)
+      ? {
+          completed: group.filter((row) => row.outcome === null || row.outcome === "completed").length,
+          failed: group.filter((row) => row.outcome === "failed").length,
+          cancelled: group.filter((row) => row.outcome === "cancelled").length,
+        }
+      : undefined,
     speed:
       first.length + total.length + generation.length === 0
         ? undefined
@@ -230,11 +278,24 @@ function expectedMetrics(group: readonly Fixture[]) {
                     generation.map((sample) => (sample.tokens * 1_000_000_000) / sample.duration),
                     90,
                   ),
+                  generationP95TokensPerSecond: nearestRank(
+                    generation.map((sample) => (sample.tokens * 1_000_000_000) / sample.duration),
+                    95,
+                  ),
+                  meanTokensPerSecond:
+                    generation.reduce((sum, sample) => sum + (sample.tokens * 1_000_000_000) / sample.duration, 0) /
+                    generation.length,
                 }),
             ...(first.length === 0
               ? {}
-              : { firstOutputP50Ms: nearestRank(first, 50), firstOutputP95Ms: nearestRank(first, 95) }),
-            ...(total.length === 0 ? {} : { totalP50Ms: nearestRank(total, 50), totalP95Ms: nearestRank(total, 95) }),
+              : {
+                  firstOutputP50Ms: nearestRank(first, 50),
+                  firstOutputP95Ms: nearestRank(first, 95),
+                  firstOutputP99Ms: nearestRank(first, 99),
+                }),
+            ...(total.length === 0
+              ? {}
+              : { totalP50Ms: nearestRank(total, 50), totalP95Ms: nearestRank(total, 95), totalP99Ms: nearestRank(total, 99) }),
             ...(generation.length === 0
               ? {}
               : {
@@ -321,7 +382,10 @@ function expectMetrics(
   },
   expected: ReturnType<typeof expectedMetrics>,
   label: string,
-  compare: { readonly speed: boolean; readonly provenance: boolean } = { speed: false, provenance: true },
+  compare: { readonly speed: boolean; readonly provenance: boolean; readonly outcomes?: false } = {
+    speed: false,
+    provenance: true,
+  },
 ) {
   expect({ label, logical: actual.logical, physical: actual.physical, helpers: actual.helpers }).toEqual({
     label,
@@ -336,6 +400,8 @@ function expectMetrics(
     tokens: expected.tokens,
   })
   expect(actual.cacheReadReported).toBe(expected.cacheReadReported)
+  if (compare.outcomes !== false)
+    expect({ label, outcomes: actual.outcomes }).toEqual({ label, outcomes: expected.outcomes })
   if (expected.cost === undefined) expect(actual.cost).toBeUndefined()
   else {
     expect(actual.cost).toBeCloseTo(expected.cost, 9)
@@ -344,14 +410,17 @@ function expectMetrics(
   if (!compare.speed) return
   if (expected.speed === undefined) expect(actual.speed).toBeUndefined()
   else {
-    const { outputTokensPerSecond, ...latency } = expected.speed
-    expect({ label, ...actual.speed, outputTokensPerSecond: undefined }).toEqual({
+    const { outputTokensPerSecond, meanTokensPerSecond, ...latency } = expected.speed
+    expect({ label, ...actual.speed, outputTokensPerSecond: undefined, meanTokensPerSecond: undefined }).toEqual({
       label,
       ...latency,
       outputTokensPerSecond: undefined,
+      meanTokensPerSecond: undefined,
     })
     if (outputTokensPerSecond === undefined) expect(actual.speed?.outputTokensPerSecond).toBeUndefined()
     else expect(actual.speed?.outputTokensPerSecond).toBeCloseTo(outputTokensPerSecond, 6)
+    if (meanTokensPerSecond === undefined) expect(actual.speed?.meanTokensPerSecond).toBeUndefined()
+    else expect(actual.speed?.meanTokensPerSecond).toBeCloseTo(meanTokensPerSecond, 6)
   }
 }
 
@@ -420,7 +489,16 @@ const seeded = Layer.effect(
       )
       .run()
     yield* database.db.insert(SessionProviderRequestTable).values(rows).run()
-    yield* database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))
+    yield* database.db.transaction(() =>
+      UsageAnalytics.backfill(database.db).pipe(
+        Effect.andThen(
+          database.db.run(
+            sql`UPDATE usage_analytics_request SET outcome = (SELECT r.outcome FROM session_provider_request AS r WHERE r.id = usage_analytics_request.id)`,
+          ),
+        ),
+        Effect.andThen(UsageStage.backfill(database.db)),
+      ),
+    )
     return database
   }),
 ).pipe(Layer.provide(Database.layer({ path: ":memory:" })))
@@ -441,8 +519,11 @@ test("SQL and in-memory report speed ignore received-output estimates", () =>
     const db = (yield* Database.Service).db
     const records = (yield* db.select().from(SessionProviderRequestTable).all()).map(SessionProviderRequest.rowRecord)
     const report = yield* session.usageReportAll({ group: "session", limit: 200 })
-    for (const row of report.rows)
-      expect(row.speed).toEqual(SessionProviderRequest.reportSpeed(records.filter((record) => record.sessionID === row.key)))
+    for (const row of report.rows) {
+      const expected = SessionProviderRequest.reportSpeed(records.filter((record) => record.sessionID === row.key))
+      expect({ ...row.speed, meanTokensPerSecond: undefined }).toEqual({ ...expected, meanTokensPerSecond: undefined })
+      expect(row.speed?.meanTokensPerSecond).toBeCloseTo(expected!.meanTokensPerSecond!, 9)
+    }
   }).pipe(Effect.provide(runtime), Effect.scoped)), 60_000)
 
 test(
@@ -466,10 +547,14 @@ test(
               const label = JSON.stringify(input)
               expect({ label, rowCount: actual.rowCount }).toEqual({ label, rowCount: expected.rowCount })
               expect(actual.rows.map((row) => row.key)).toEqual(expected.rows.map((row) => row.key))
-              expectMetrics(actual.total, expected.total, `${label} total`)
+              expectMetrics({ ...actual.total, speed: actual.speed }, expected.total, `${label} total`, {
+                speed: true,
+                provenance: true,
+              })
               actual.rows.forEach((row, index) => {
                 if (group === "model") expect(row.label).toBe(expected.rows[index]!.label!)
                 expectMetrics(row, expected.rows[index]!, `${label} ${row.key}`, { speed: true, provenance: true })
+                expectConcurrency(row, expected.rows[index]!, group, timeZone)
               })
             }
       }).pipe(Effect.provide(runtime), Effect.scoped),
@@ -524,10 +609,14 @@ test(
           })
           const expected = expectedReport({ group, timeZone: "America/New_York", scope: family, limit: 200 })
           expect(actual.rows.map((row) => row.key)).toEqual(expected.rows.map((row) => row.key))
-          expectMetrics(actual.total, expected.total, `${group} family total`)
+          expectMetrics({ ...actual.total, speed: actual.speed }, expected.total, `${group} family total`, {
+            speed: true,
+            provenance: true,
+          })
           actual.rows.forEach((row, index) => {
             if (group === "model") expect(row.label).toBe(expected.rows[index]!.label!)
             expectMetrics(row, expected.rows[index]!, `${group} family ${row.key}`, { speed: true, provenance: true })
+            expectConcurrency(row, expected.rows[index]!, group, "America/New_York")
           })
         }
         const child = yield* session.usageReport({ sessionID: sessionIDs[1]!, group: "model", limit: 200 })
@@ -552,7 +641,7 @@ test(
           [yield* session.usage(rootID), family],
         ] as const) {
           const scoped = rows.filter((row) => scope === undefined || scope.has(row.session_id))
-          expectMetrics(summary, expectedMetrics(scoped), "summary", { speed: false, provenance: false })
+          expectMetrics(summary, expectedMetrics(scoped), "summary", { speed: false, provenance: false, outcomes: false })
           const newest = scoped.reduce((latest, row) => (row.time_created > latest.time_created ? row : latest))
           expect(summary.latestInvalidation).toBe(newest.invalidation)
           expect(summary.latestNamespace).toBe(newest.prompt_cache_key.slice(0, 8))

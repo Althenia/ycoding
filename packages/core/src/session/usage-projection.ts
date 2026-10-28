@@ -165,9 +165,51 @@ export function reportFormatter(input: Pick<ProviderRequest.ReportInput, "group"
     : undefined
 }
 
+const hourMs = 3_600_000
+
+export function localDate(time: number, formatter: Intl.DateTimeFormat) {
+  const parts = formatter.formatToParts(time)
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value)
+  return { year: part("year"), month: part("month"), day: part("day") }
+}
+
+export function localMidnight(year: number, month: number, date: number, formatter: Intl.DateTimeFormat) {
+  const target = Date.UTC(year, month - 1, date)
+  const start = target - 48 * hourMs
+  const ordinal = (time: number) => {
+    const value = localDate(time, formatter)
+    return Date.UTC(value.year, value.month - 1, value.day)
+  }
+  for (let end = start + hourMs; end <= target + 48 * hourMs; end += hourMs) {
+    if (ordinal(end - hourMs) >= target || ordinal(end) < target) continue
+    let low = end - hourMs
+    let high = end
+    while (high - low > 1) {
+      const middle = low + Math.floor((high - low) / 2)
+      if (ordinal(middle) >= target) high = middle
+      else low = middle
+    }
+    return high
+  }
+  return target
+}
+
+function bucketLength(group: "day" | "month", key: string, formatter: Intl.DateTimeFormat | undefined) {
+  const [year = 0, month = 1, date = 1] = key.split("-").map(Number)
+  const midnight = (day: number, offset: number) =>
+    formatter ? localMidnight(year, month + offset, day, formatter) : Date.UTC(year, month - 1 + offset, day)
+  return group === "day" ? midnight(date + 1, 0) - midnight(date, 0) : midnight(1, 1) - midnight(1, 0)
+}
+
+function concurrency(group: ProviderRequest.ReportGroup, key: string, busy: number, formatter: Intl.DateTimeFormat | undefined) {
+  if (group === "hour") return busy / hourMs
+  if (group === "day" || group === "month") return busy / bucketLength(group, key, formatter)
+  return undefined
+}
+
 export function reportRow(
   group: ProviderRequest.ReportGroup,
-  item: Aggregate & { readonly speed?: ProviderRequest.Speed },
+  item: Aggregate & { readonly speed?: ProviderRequest.Speed; readonly busy?: number },
   projectInfos: ReadonlyArray<Project.Info>,
   formatter: Intl.DateTimeFormat | undefined,
 ) {
@@ -182,6 +224,7 @@ export function reportRow(
     formatter,
   )
   const dimensions = reportDimensions(group, item.key)
+  const concurrent = item.busy === undefined ? undefined : concurrency(group, item.key, item.busy, formatter)
   return {
     key: item.key,
     label: dimensions ? dimensionLabel(dimensions) : shape.label,
@@ -189,6 +232,7 @@ export function reportRow(
     ...(dimensions ? { dimensions } : {}),
     ...usageMetrics(item),
     ...(item.speed === undefined ? {} : { speed: item.speed }),
+    ...(concurrent === undefined ? {} : { concurrency: concurrent }),
   }
 }
 
@@ -227,6 +271,15 @@ export function combineUsage(
             (left.logical === 0 || left.cacheReadReported === true) &&
             (right.logical === 0 || right.cacheReadReported === true),
         }),
+    ...(left.outcomes === undefined && right.outcomes === undefined
+      ? {}
+      : {
+          outcomes: {
+            completed: (left.outcomes?.completed ?? left.logical) + (right.outcomes?.completed ?? right.logical),
+            failed: (left.outcomes?.failed ?? 0) + (right.outcomes?.failed ?? 0),
+            cancelled: (left.outcomes?.cancelled ?? 0) + (right.outcomes?.cancelled ?? 0),
+          },
+        }),
   }
 }
 
@@ -248,6 +301,9 @@ export function usageMetrics(item: Aggregate): ProviderRequest.ReportMetrics {
     ...(item.priced === 0
       ? {}
       : { cost: Money.USD.make(item.cost), costProvenance: item.currentCatalog ? "current_catalog" : "recorded" }),
+    ...(item.outcomes > 0
+      ? { outcomes: { completed: item.logical - item.failed - item.cancelled, failed: item.failed, cancelled: item.cancelled } }
+      : {}),
   }
 }
 

@@ -11,6 +11,8 @@ import { createUsagePhone } from "./usage-phone"
 import { ModelIncidents } from "./model-incidents"
 import { ProviderLogo } from "./provider-logo"
 import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
+import { GenerationOverview, ModelSpeedComparison, UsageTrends } from "./usage-speed"
+import { dailyScopeLabel, dashboardBusy, speedCells } from "./usage-speed-model"
 import { consumptionNeedsProfile, consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
 import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, usageDashboardView, usageQuotaView, type UsageDashboardInput, type UsageDashboardReady, type UsageDashboardSlots, type UsageProvider, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
@@ -19,7 +21,7 @@ const groups = usageGroups.map((group) => group.value)
 type BreakdownInput = UsageReportInput & UsageBreakdown
 const names = { model: "Model", session: "Session", project: "Project", agent: "Agent", provider: "Provider", "provider-profile-model": "Provider / profile / model", "provider-model": "Provider / model", "model-id": "Model ID", profile: "Profile", prompt: "Prompt", task: "Task" }
 const columns = [
-  { key: "steps", label: "Steps" }, { key: "tokens", label: "Tokens" }, { key: "input", label: "Input" },
+  { key: "steps", label: "Requests" }, { key: "tokens", label: "Tokens" }, { key: "input", label: "Input" },
   { key: "output", label: "Output" }, { key: "reasoning", label: "Reasoning" }, { key: "cacheRead", label: "Cache read" }, { key: "cacheWrite", label: "Cache write" }, { key: "cost", label: "Cost" },
 ] as const
 const count = (value: number) => new Intl.NumberFormat().format(value)
@@ -40,6 +42,7 @@ export function UsagePage() {
   const [sort, setSort] = createSignal<UsageReportInput["sort"]>("cost")
   const [order, setOrder] = createSignal<UsageReportInput["order"]>("desc")
   const [offset, setOffset] = createSignal(0)
+  const [manualRefresh, setManualRefresh] = createSignal(false)
   const [tableOpen, setTableOpen] = createSignal(false)
   const [breakdownTableOpen, setBreakdownTableOpen] = createSignal(false)
   const [distributionMetric, setDistributionMetric] = createSignal<"spend" | "tokens">("spend")
@@ -89,14 +92,13 @@ export function UsagePage() {
     const current = view()
     return current.kind === "ready" ? current.stale : current.kind === "loading" || current.kind === "error"
   }
-  const busy = () => {
-    const current = view()
-    return current.kind === "loading" || current.kind === "preparing" || current.kind === "ready" && current.refreshing
-  }
+  const busy = () => dashboardBusy(view(), manualRefresh())
   const waiting = () => view().kind === "loading" || view().kind === "preparing"
   const retry = () => {
     const scope = remote.scope()
-    if (scope !== undefined) void remote.queries.refreshUsageDashboard(scope, dashboardInput())
+    if (scope === undefined) return
+    setManualRefresh(true)
+    void remote.queries.refreshUsageDashboard(scope, dashboardInput())
   }
   const quota = createMemo(() => usageQuotaView(info()))
   const quotaPreparing = () => quota().kind === "preparing"
@@ -117,6 +119,7 @@ export function UsagePage() {
     return current.kind === "ready" ? current.providers : undefined
   }
   const dailyData = () => slots()?.daily
+  const dailyScope = () => dailyScopeLabel(filters().provider, filters().model, filterProviders().find((provider) => provider.id === filters().provider)?.label)
   const monthlyData = () => slots()?.monthly
   const shownInput = (): BreakdownInput => (stale() ? heldValue()?.input ?? breakdownInput() : breakdownInput())
   const displayed = () => slots()?.breakdown
@@ -227,6 +230,9 @@ export function UsagePage() {
     const next = Math.max(0, (shownInput().offset ?? 0) - 25)
     setOffset(next)
   }
+  createEffect(() => {
+    if (usageRead(dashboardQuery()).status !== "loading") setManualRefresh(false)
+  })
   createEffect(() => localStorage.setItem(usageZoneKey, zoneMode()))
   createEffect(() => {
     distribution().total
@@ -271,6 +277,7 @@ export function UsagePage() {
 
     <section class="usage-spend" aria-labelledby="usage-spend-title">
       <h2 class="visually-hidden" id="usage-spend-title">Estimated spend overview</h2>
+      <Show when={dailyScope()}>{(scope) => <p class="usage-spend__scope">Spend, daily charts and trends filtered to {scope()}</p>}</Show>
       <Show when={dailyData()}>
         <div class="usage-tiles"><For each={tileIDs}>{(id) => <article class="usage-tile">
           <h3>{tileLabels[id]}</h3><strong>{spendCostText(tileValue(id))}</strong>
@@ -279,6 +286,8 @@ export function UsagePage() {
         </article>}</For></div>
       </Show>
     </section>
+
+    <Show when={info()}>{(ready) => <GenerationOverview live={ready().live} monthly={monthlyData()} />}</Show>
 
     <section class="usage-quotas" aria-labelledby="usage-allowances">
       <div class="usage-section-head"><h2 id="usage-allowances"><Icon name="usage" />Provider quotas</h2><p>Account-reported limits · separate from this backend's consumption</p></div>
@@ -295,7 +304,7 @@ export function UsagePage() {
 
     <section class="usage-visuals" aria-label="Usage charts">
         <div class="usage-chart" ref={dayCard}>
-          <div class="usage-chart__head"><div><h3><Icon name="usage" />Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted</p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}><Icon name="sessions" />{tableOpen() ? "Hide table" : "View table"}</button></div>
+          <div class="usage-chart__head"><div><h3><Icon name="usage" />Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted<Show when={dailyScope()}> · {dailyScope()}</Show></p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}><Icon name="sessions" />{tableOpen() ? "Hide table" : "View table"}</button></div>
           <Show when={dailyData()} fallback={<Show when={view().kind === "unsupported"} fallback={<Show when={connected() && waiting()}><LoadingPlaceholder kind="chart" label={view().kind === "preparing" ? "Preparing daily spend…" : "Loading daily spend…"} /></Show>}>
             <p class="usage-message" role="status">Update YCoding on this machine to see usage.</p>
           </Show>}>
@@ -365,6 +374,8 @@ export function UsagePage() {
         </div>
     </section>
 
+    <Show when={info()}><UsageTrends daily={dailyData()} now={now()} timeZone={selectedZone()} zoneLabel={zoneLabel()} scope={dailyScope()} /><ModelSpeedComparison monthly={monthlyData()} providers={providerData() ?? []} /></Show>
+
     <section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption"><div class="usage-section-head"><h2><Icon name="zap" />Recorded consumption · Backend</h2></div>
       <Show when={forecastData()} fallback={<>
         <Show when={waiting() || quotaPreparing() || view().kind === "idle" && connected()}><LoadingPlaceholder kind="usage" label={view().kind === "preparing" || quotaPreparing() ? "Preparing recorded consumption…" : "Loading recorded consumption…"} /></Show>
@@ -397,13 +408,14 @@ export function UsagePage() {
             const identity = () => shownInput().group === "model" || row.dimensions ? reportIdentity(row, providerData() ?? []) : undefined
             return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? reportLabel(row, shownInput().group)}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{reportCostText(row)}</b></div>
               <p>{count(row.physical)} requests · {count(row.tokens.input)} in / {count(row.tokens.output)} out<Show when={row.tokens.cache.read > 0}> · {count(row.tokens.cache.read)} cache read</Show></p>
+              <p class="usage-mobile-row__speed">{speedCells(row.speed).average} avg · P95 TTFT {speedCells(row.speed).ttft}</p>
               <UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} />
             </article>
           }}</For></div>
           <button class="usage-breakdown__table-toggle" type="button" aria-expanded={breakdownTableOpen()} aria-controls="usage-breakdown-table" onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}><Icon name="sessions" />{breakdownTableOpen() ? "Hide table" : "View table"}</button>
-          <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownInput().group]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
+          <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownInput().group]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For><th scope="col" title="Mean of per-request output rates">Avg tok/s</th><th scope="col" title="Output tokens over generation time, all requests">Agg tok/s</th><th scope="col" title="95th percentile of time to first output">P95 TTFT</th></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
             const identity = () => shownInput().group === "model" || row.dimensions ? reportIdentity(row, providerData() ?? []) : undefined
-            return <tr><th scope="row"><span>{identity()?.model ?? reportLabel(row, shownInput().group)}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show><UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} /></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td>{count(row.tokens.cache.write)}</td><td class="usage-table__cost">{reportCostText(row)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
+            return <tr><th scope="row"><span>{identity()?.model ?? reportLabel(row, shownInput().group)}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show><Show when={row.dimensions?.group === "provider"}><button type="button" class="usage-drill" aria-label={`Show ${identity()?.provider} models`} onClick={() => applyFilters("provider-model", { ...filters(), provider: row.dimensions?.group === "provider" ? row.dimensions.providerID : "" })}>Models</button></Show><UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} /></th><td>{count(row.physical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td>{count(row.tokens.cache.write)}</td><td class="usage-table__cost">{reportCostText(row)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td><td>{speedCells(row.speed).average}</td><td>{speedCells(row.speed).aggregate}</td><td>{speedCells(row.speed).ttft}</td></tr>
           }}</For></tbody></table></div>
           <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">{view().kind === "preparing" ? "Preparing" : "Loading"} {names[group()].toLowerCase()} report…</span></Show><Show when={view().kind === "error"}>{(() => { const current = view(); return <span role="alert">{current.kind === "error" ? current.message : ""} <button type="button" onClick={retry}>Retry</button></span> })()}</Show></div>
           <div class="usage-pagination"><span>Showing {(shownInput().offset ?? 0) + 1}–{(shownInput().offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" aria-label="Previous breakdown page" title="Previous page" disabled={updating() || (shownInput().offset ?? 0) === 0} onClick={previousPage}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button><button type="button" aria-label="Next breakdown page" title="Next page" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>

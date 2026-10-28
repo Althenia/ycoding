@@ -852,8 +852,14 @@ browser-selected Location. The input is any subset of `daily`, `monthly`, and
 `breakdown`, each validated as a `usage.report` input when present, plus an
 optional boolean `refresh`; `{}` is valid and any other field is rejected. It
 returns `{ data: UsageDashboard.Info }`, a `status` union: `preparing`; `error`
-with a `message`; or `ready` with `asOf`, `revision`, `summary`, `quota`, and
-exactly the requested report slots. `asOf` and `revision` cover accounting only.
+with a `message`; or `ready` with `asOf`, `revision`, `summary`, `quota`, `live`,
+and exactly the requested report slots. `asOf` and `revision` cover accounting
+only. `live` is `UsageDashboard.Live`: process-memory generation activity
+(`asOf`, `active`, `streaming`, optional aggregate `outputTokensPerSecond`,
+at most 50 per-model entries, at most 120 five-second history points) that never
+changes `revision`. Each report carries an overall `speed` across all grouped
+rows (absent when no samples exist); report rows may carry `speed` p95/p99/mean
+fields, request `outcomes`, and time-group `concurrency`.
 `quota` is `{ status: "preparing" }`, `{ status: "ready", providers, forecast }`,
 or `{ status: "error", message }` when the whole provider list failed: provider
 quota snapshots and the forecast are a separate live overlay that can arrive

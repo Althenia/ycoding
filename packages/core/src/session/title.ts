@@ -15,6 +15,7 @@ import { SessionHelperPolicy } from "./helper-policy"
 import { SessionHistory } from "./history"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionSchema } from "./schema"
@@ -148,6 +149,7 @@ const make = (dependencies: Dependencies) => {
         })
         const blocks = new Map<string, { readonly chunks: string[]; commentary: boolean }>()
         let failed = false
+        let providerFailed = false
         let usage: SessionUsage.Recorded | undefined
         let recordedCost: Money.USD | undefined
         let timing: ReturnType<typeof SessionUsage.timing>
@@ -160,7 +162,7 @@ const make = (dependencies: Dependencies) => {
               })
             : Effect.void,
         )
-        const completeRequest = Effect.suspend(() => {
+        const completeRequest = (outcome: ProviderRequest.Outcome) => Effect.suspend(() => {
           const recorded = usage ?? {
             cost: Money.USD.zero,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -171,6 +173,7 @@ const make = (dependencies: Dependencies) => {
             continuation: "full",
             ...(timing === undefined ? {} : { timing }),
             ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+            outcome,
           })
         })
         const streamed = yield* dependencies.llm.stream(request).pipe(
@@ -179,6 +182,7 @@ const make = (dependencies: Dependencies) => {
           Stream.runForEach((event) => {
             if (LLMEvent.is.providerError(event)) {
               failed = true
+              providerFailed = true
               return Effect.logWarning("Session title provider request failed", {
                 sessionID: session.id,
                 message: event.message,
@@ -212,10 +216,10 @@ const make = (dependencies: Dependencies) => {
               message: error.reason.message,
             }).pipe(Effect.as(false)),
           ),
-          Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(completeRequest), Effect.asVoid)),
+          Effect.onInterrupt(() => recordUsage.pipe(Effect.andThen(completeRequest("cancelled")), Effect.asVoid)),
         )
         yield* recordUsage
-        yield* completeRequest
+        yield* completeRequest(!streamed || providerFailed ? "failed" : "completed")
         if (!streamed || failed) {
           yield* dependencies.events.publish(SessionEvent.Renamed, {
             sessionID: session.id,

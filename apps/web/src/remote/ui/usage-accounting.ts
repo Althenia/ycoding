@@ -34,6 +34,14 @@ export type SpeedPresentation = {
   readonly generationSamples: number
   readonly generationP50TokensPerSecond?: number
   readonly generationP90TokensPerSecond?: number
+  readonly generationP95TokensPerSecond?: number
+  readonly meanTokensPerSecond?: number
+  readonly firstOutputP50Ms?: number
+  readonly firstOutputP95Ms?: number
+  readonly firstOutputP99Ms?: number
+  readonly totalP50Ms?: number
+  readonly totalP95Ms?: number
+  readonly totalP99Ms?: number
   readonly providerTimedSamples: number
   readonly observedSamples: number
   readonly outputTokensPerSecond?: number
@@ -91,10 +99,14 @@ export function residentUnitCosts(units: readonly UnitCostPresentation[], messag
 
 export function measuredSpeedLines(speed: SpeedPresentation | undefined) {
   const rate = (value: number | undefined) => value === undefined ? "unreported" : `${count(value)} tok/s`
+  const duration = (value: number | undefined) => value === undefined ? "unreported" : value < 1000 ? `${count(value)} ms` : `${count(value / 1000)} s`
   return [
     `Measured generation median ${rate(speed?.generationP50TokensPerSecond)} · p90 ${rate(speed?.generationP90TokensPerSecond)}`,
     speed === undefined ? "Generation sample coverage unreported" : `${count(speed.generationSamples)} measured requests · ${count(speed.providerTimedSamples)} provider-timed · ${count(speed.observedSamples)} observed`,
     `Weighted throughput ${rate(speed?.outputTokensPerSecond)} · ${speed === undefined ? "unreported" : count(speed.samples)} first-output latency samples`,
+    ...(speed === undefined || speed.meanTokensPerSecond === undefined && speed.generationP95TokensPerSecond === undefined ? [] : [`Mean of per-request rates ${rate(speed.meanTokensPerSecond)} · p95 ${rate(speed.generationP95TokensPerSecond)}`]),
+    ...(speed === undefined || speed.firstOutputP50Ms === undefined && speed.firstOutputP95Ms === undefined && speed.firstOutputP99Ms === undefined ? [] : [`First output p50 ${duration(speed.firstOutputP50Ms)} · p95 ${duration(speed.firstOutputP95Ms)} · p99 ${duration(speed.firstOutputP99Ms)}`]),
+    ...(speed === undefined || speed.totalP50Ms === undefined && speed.totalP95Ms === undefined && speed.totalP99Ms === undefined ? [] : [`Total request p50 ${duration(speed.totalP50Ms)} · p95 ${duration(speed.totalP95Ms)} · p99 ${duration(speed.totalP99Ms)}`]),
   ]
 }
 

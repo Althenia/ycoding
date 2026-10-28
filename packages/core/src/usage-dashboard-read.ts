@@ -3,6 +3,7 @@ export * as UsageDashboardRead from "./usage-dashboard-read"
 import { Cause, Context, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import type { UsageDashboard } from "@ycoding-ai/schema/usage-dashboard"
 import { makeGlobalNode } from "./effect/app-node"
+import { GenerationActivity } from "./generation-activity"
 import type { Location } from "./location"
 import { LocationServiceMap } from "./location-service-map"
 import { UsageDashboardRuntime } from "./usage-dashboard"
@@ -24,10 +25,15 @@ const failureName = (cause: Cause.Cause<unknown>) => {
 
 type Held = { readonly quota: UsageDashboardRuntime.Interface["quota"]; readonly scope: Scope.Closeable; used: number }
 
-export const layer: Layer.Layer<Service, never, UsageViews.Service | LocationServiceMap.Service> = Layer.effect(
+export const layer: Layer.Layer<
+  Service,
+  never,
+  UsageViews.Service | LocationServiceMap.Service | GenerationActivity.Service
+> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const views = yield* UsageViews.Service
+    const activity = yield* GenerationActivity.Service
     const locations = yield* LocationServiceMap.Service
     const scope = yield* Scope.Scope
     const held = new Map<string, Held>()
@@ -96,6 +102,7 @@ export const layer: Layer.Layer<Service, never, UsageViews.Service | LocationSer
           revision: accounting.revision,
           summary: accounting.summary,
           quota: overlay,
+          live: yield* activity.snapshot(),
           ...Object.fromEntries(present.map((slot, index) => [slot, accounting.reports[index]])),
         }
       }),
@@ -106,5 +113,5 @@ export const layer: Layer.Layer<Service, never, UsageViews.Service | LocationSer
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [UsageViews.node, LocationServiceMap.node],
+  deps: [UsageViews.node, LocationServiceMap.node, GenerationActivity.node],
 })

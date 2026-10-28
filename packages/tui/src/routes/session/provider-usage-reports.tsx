@@ -10,7 +10,7 @@ import { DialogSelect } from "../../ui/dialog-select"
 import { Locale } from "../../util/locale"
 import { UsageGroupDialog, UsageFilterDialog, usageGroupOptions } from "./usage-filters"
 import { UsageSpeedDetails } from "./usage-cost"
-import { costText, reportLabel } from "../../util/usage-accounting"
+import { costText, errorRateText, outcomeLine, reportLabel } from "../../util/usage-accounting"
 
 export const PROVIDER_USAGE_VIEWS = [
   "overview",
@@ -72,6 +72,7 @@ export const PAGE_SIZE = 100
 const REPORT_LEGEND = "Configured request-date analytics retention · STEPS model calls · OUTPUT visible text · REASON reasoning · CACHE prompt-cache tokens · ≥ lower bound where cache reads were unreported"
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+const TIMING_COLUMNS = 7
 const STATS_PAGE_SIZE = 200
 const DAY = 24 * 60 * 60 * 1_000
 
@@ -459,7 +460,8 @@ function UsageDetails(props: { row: UsageReportOutput["rows"][number]; group: Us
         <text>Cache read {cacheRead(props.row, formatNumber)} · write {formatNumber(props.row.tokens.cache.write)}</text>
         <text>Total tokens {tokenTotalLabel(props.row, formatNumber)} · {props.group === "task" ? "Cost (inclusive)" : "Cost"} {costLabel(props.row)}</text>
         <text>First output p50 {latency(props.row.speed?.firstOutputP50Ms)} · p95 {latency(props.row.speed?.firstOutputP95Ms)}</text>
-        <text>Total p50 {latency(props.row.speed?.totalP50Ms)} · p95 {latency(props.row.speed?.totalP95Ms)} · Output {throughput(props.row.speed?.outputTokensPerSecond)}</text>
+        <text>Total p50 {latency(props.row.speed?.totalP50Ms)} · p95 {latency(props.row.speed?.totalP95Ms)} · Aggregate {throughput(props.row.speed?.outputTokensPerSecond)}</text>
+        <text>{outcomeLine(props.row.outcomes)}</text>
         <UsageSpeedDetails speed={props.row.speed} />
         <text>{props.row.costCoverage ? `${props.row.costCoverage.pricedRequests} priced · ${props.row.costCoverage.unpricedRequests} unpriced` : "Cost coverage unreported"}</text>
         <Show when={props.row.model?.variant}><text>Selected effort {props.row.model?.variant}</text></Show>
@@ -703,8 +705,8 @@ function reportGeometry(width: number) {
   const available = Math.max(1, width - 6)
   const columns = { steps: 7, input: 8, output: 8, reasoning: 8, read: 11, write: 11, total: 9, cost: 14, speed: 11 }
   const primary = Object.entries(columns).reduce((total, [key, value]) => total + (key === "speed" ? 0 : value), 0) + 8
-  const timing = available >= 60 + primary + 5 * (columns.speed + 1)
-  const reserved = primary + (timing ? 5 * (columns.speed + 1) : 0)
+  const timing = available >= 60 + primary + TIMING_COLUMNS * (columns.speed + 1)
+  const reserved = primary + (timing ? TIMING_COLUMNS * (columns.speed + 1) : 0)
   return { ...columns, timing, name: Math.max(22, available - reserved), fits: available >= 60 + primary }
 }
 
@@ -731,7 +733,9 @@ function ReportHeader(props: {
     { key: undefined, label: "FIRST P95", width: geometry.speed },
     { key: undefined, label: "TOTAL P50", width: geometry.speed },
     { key: undefined, label: "TOTAL P95", width: geometry.speed },
-    { key: undefined, label: "TOK/S", width: geometry.speed },
+    { key: undefined, label: "MEAN TOK/S", width: geometry.speed },
+    { key: undefined, label: "AGG TOK/S", width: geometry.speed },
+    { key: undefined, label: "ERR RATE", width: geometry.speed },
     ] : []),
   ]
   return (
@@ -782,7 +786,9 @@ function WideReportRow(props: {
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.firstOutputP95Ms).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.totalP50Ms).padStart(geometry.speed)}</span>{" "}
       <span style={{ fg: theme.text.subdued }}>{latency(props.row.speed?.totalP95Ms).padStart(geometry.speed)}</span>{" "}
-      <span style={{ fg: theme.text.subdued }}>{(props.row.speed?.outputTokensPerSecond === undefined ? "unreported" : props.row.speed.outputTokensPerSecond.toFixed(1)).padStart(geometry.speed)}</span>
+      <span style={{ fg: theme.text.subdued }}>{rate(props.row.speed?.meanTokensPerSecond).padStart(geometry.speed)}</span>{" "}
+      <span style={{ fg: theme.text.subdued }}>{rate(props.row.speed?.outputTokensPerSecond).padStart(geometry.speed)}</span>{" "}
+      <span style={{ fg: theme.text.subdued }}>{errorRateText(props.row.outcomes).padStart(geometry.speed)}</span>
       </Show>
     </text>
   )
@@ -848,6 +854,10 @@ function tableCost(value: ReportMetrics) {
   if (value.cost === undefined) return "unreported"
   const price = value.cost >= 100_000 ? `$${compactNumber(value.cost)}` : `$${value.cost.toFixed(2)}`
   return value.costCoverage?.unpricedRequests ? `${price} + ?` : value.costCoverage === undefined ? `Known ${price}` : price
+}
+
+function rate(value: number | undefined) {
+  return value === undefined ? "unreported" : value.toFixed(1)
 }
 
 function latency(value: number | undefined) {

@@ -5,20 +5,22 @@ import { SessionCacheDiagnostics } from "../src/session/cache-diagnostics"
 import { CatalogModel } from "../src/model"
 import { Provider } from "../src/provider"
 import { Token } from "../src/util/token"
+import { GenerationMeter } from "../src/session/generation-meter"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 
 const model = CatalogModel.Ref.make({ providerID: Provider.ID.make("openai"), id: CatalogModel.ID.make("speed") })
 
-test("accepts only eligible received-output intervals", () => {
-  expect(SessionCacheDiagnostics.generationSample({ receivedOutput: { estimatedTokens: 80, durationNs: 2_000_000_000 } }))
-    .toEqual({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
-  expect(SessionCacheDiagnostics.generationSample({ receivedOutput: { estimatedTokens: 80, durationNs: 999_999_999 } })).toBeUndefined()
-  expect(SessionCacheDiagnostics.generationSample({ generatedTokens: 80, observedGenerationDurationNs: 1 })).toBeUndefined()
-  expect(SessionCacheDiagnostics.generationSample({ generatedTokens: 80, observedGenerationDurationNs: 2_000_000_000 })).toBeUndefined()
-  expect(SessionCacheDiagnostics.generationSample({ estimatedTokens: 80, estimatedGenerationDurationNs: 2_000_000_000 })).toBeUndefined()
+test("builds settled history only from received-output intervals", () => {
+  const record = (timing: ProviderRequest.Timing) => SessionCacheDiagnostics.generationSpeed([{ model, timing }], { model })?.latest
+  expect(record({ receivedOutput: { estimatedTokens: 80, durationNs: 2_000_000_000 } }))
+    .toEqual({ model, tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
+  expect(record({ receivedOutput: { estimatedTokens: 80, durationNs: 999_999_999 } })).toBeUndefined()
+  expect(record({ generatedTokens: 80, observedGenerationDurationNs: 2_000_000_000 })).toBeUndefined()
+  expect(record({ estimatedTokens: 80, estimatedGenerationDurationNs: 2_000_000_000 })).toBeUndefined()
 })
 
 test("subtracts the entire first received chunk and uses the last arrival", () => {
-  const window = SessionUsage.receivedOutput()
+  const window = GenerationMeter.window()
   window.observe(10_000_000_000n, 1000)
   window.observe(11_000_000_000n, 1040)
   window.observe(12_000_000_000n, 1080)
@@ -27,7 +29,7 @@ test("subtracts the entire first received chunk and uses the last arrival", () =
 })
 
 test("requires distinct endpoints spanning one second with a positive token delta", () => {
-  const window = SessionUsage.receivedOutput()
+  const window = GenerationMeter.window()
   window.observe(0n, 1)
   expect(window.sample()).toBeUndefined()
   window.observe(0n, 2)
@@ -40,7 +42,7 @@ test("requires distinct endpoints spanning one second with a positive token delt
 })
 
 test("evicts endpoints outside the trailing window and excludes their baseline", () => {
-  const window = SessionUsage.receivedOutput()
+  const window = GenerationMeter.window()
   window.observe(0n, 1000)
   window.observe(2_000_000_000n, 1040)
   window.observe(4_000_000_000n, 1080)
@@ -49,8 +51,8 @@ test("evicts endpoints outside the trailing window and excludes their baseline",
 })
 
 test("estimates cumulative characters independently of chunk boundaries", () => {
-  const whole = SessionUsage.receivedOutput()
-  const split = SessionUsage.receivedOutput()
+  const whole = GenerationMeter.window()
+  const split = GenerationMeter.window()
   whole.observe(0n, Token.estimate("xxxx"))
   split.observe(0n, Token.estimate("xxxx"))
   whole.observe(1_000_000_000n, Token.estimate("xxxxxxxxxxxx"))
@@ -67,7 +69,7 @@ test("keeps short output windows and counts reasoning with provider output", () 
 test("estimates every nonempty tool-only stream, including one character", () => {
   for (const [streamedOutput, estimatedTokens] of [["x", 1], ['{"name":"hello"}', 4]] as const)
     expect(SessionUsage.generationTiming(undefined, {
-      toolInput: 1_000_000_000n, ended: 1_010_000_000n, streamedOutput,
+      toolInput: 1_000_000_000n, ended: 1_010_000_000n, streamedCharacters: streamedOutput.length,
     })).toEqual({ estimatedTokens, estimatedGenerationDurationNs: 10_000_000 })
 })
 
@@ -76,7 +78,7 @@ test("uses the request window without first-output timestamps and ignores provid
     started: 1_000_000_000n, ended: 1_500_000_000n,
   })).toEqual({ generatedTokens: 12, observedGenerationDurationNs: 500_000_000 })
   expect(SessionUsage.generationTiming(undefined, {
-    started: 1_000_000_000n, ended: 1_500_000_000n, streamedOutput: "hello world",
+    started: 1_000_000_000n, ended: 1_500_000_000n, streamedCharacters: "hello world".length,
   })).toEqual({ estimatedTokens: 3, estimatedGenerationDurationNs: 500_000_000 })
 })
 
@@ -99,5 +101,13 @@ test("retains earlier model samples across another model and output-free steps",
   expect(SessionCacheDiagnostics.generationSpeed([first, other], { model: other.model })?.latest?.tokensPerSecond).toBe(20)
   expect(SessionCacheDiagnostics.generationSpeed([first, { model }])?.latest?.tokensPerSecond).toBe(40)
   expect(SessionCacheDiagnostics.generationSpeed([], { model })?.latest).toBeUndefined()
-  expect(SessionUsage.generationTiming(undefined, { started: 0n, ended: 1_000_000n, streamedOutput: "" })).toBeUndefined()
+  expect(SessionUsage.generationTiming(undefined, { started: 0n, ended: 1_000_000n, streamedCharacters: 0 })).toBeUndefined()
+})
+
+test("estimates a cumulative character count exactly like the equivalent string", () => {
+  expect(["", "a", "ab", "abc", "abcd", "x".repeat(4_002), "😀😀", "日本語テキスト"].map(Token.estimate)).toEqual([0, 0, 1, 1, 1, 1_001, 1, 2])
+  for (const value of ["", "a", "ab", "abc", "abcdef", "x".repeat(4_002), "😀😀", "日本語テキスト"])
+    expect(Token.estimateLength(value.length)).toBe(Token.estimate(value))
+  const chunks = ["ab", "c", "😀", "def", "x".repeat(9)]
+  expect(Token.estimateLength(chunks.reduce((sum, chunk) => sum + chunk.length, 0))).toBe(Token.estimate(chunks.join("")))
 })

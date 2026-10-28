@@ -38,6 +38,9 @@ export type Aggregate = {
   priced: number
   cacheReadReported: number
   currentCatalog?: number
+  failed: number
+  cancelled: number
+  outcomes: number
 }
 
 export type PricingRef = {
@@ -334,7 +337,7 @@ const cellSums = sql`sum(r.logical) AS logical, sum(r.physical) AS physical, sum
 const rollup = sql`sum(logical) AS logical, sum(physical) AS physical, sum(helpers) AS helpers, sum(continued) AS continued,
   sum(fallback) AS fallback, sum(input) AS input, sum(output) AS output, sum(reasoning) AS reasoning,
   sum(cacheRead) AS cacheRead, sum(cacheWrite) AS cacheWrite, sum(cost) AS cost, sum(priced) AS priced,
-  min(cacheReadReported) AS cacheReadReported`
+  min(cacheReadReported) AS cacheReadReported, sum(failed) AS failed, sum(cancelled) AS cancelled, sum(outcomes) AS outcomes`
 
 export type ReportGroup = ProviderRequest.ReportGroup
 
@@ -529,7 +532,7 @@ const localCells = Effect.fnUntraced(function* <A>(
   }
 })
 
-export type ReportRow = Aggregate & { speed?: ProviderRequest.Speed }
+export type ReportRow = Aggregate & { speed?: ProviderRequest.Speed; busy?: number }
 
 export type Cell = {
   readonly record: {
@@ -681,7 +684,7 @@ const stage = Effect.fnUntraced(function* (
       sql`CREATE TEMP TABLE usage_partial (raw TEXT, sessionID TEXT, title TEXT, projectID TEXT,
         model TEXT, agent TEXT, time INTEGER, logical INTEGER, physical INTEGER, helpers INTEGER, continued INTEGER,
         fallback INTEGER, input INTEGER, output INTEGER, reasoning INTEGER, cacheRead INTEGER, cacheWrite INTEGER,
-        cacheReadReported INTEGER, cost REAL, priced INTEGER)`,
+        cacheReadReported INTEGER, cost REAL, priced INTEGER, failed INTEGER, cancelled INTEGER, outcomes INTEGER)`,
     )
     .pipe(Effect.orDie)
   const ranges = yield* slices(db, sessions, plan.pieces)
@@ -693,7 +696,7 @@ const stage = Effect.fnUntraced(function* (
         sql`
       INSERT INTO temp.usage_partial
       SELECT ${raw}, ${selected.sessionID}, ${selected.title}, ${selected.projectID}, ${group === "model" ? sql`NULL` : sql`r.model`}, r.agent, r.bucket,
-        ${cellSums}, total(r.cost), sum(r.priced)
+        ${cellSums}, total(r.cost), sum(r.priced), sum(r.failed), sum(r.cancelled), sum(r.outcomes)
       FROM ${selected.name} AS r INDEXED BY ${selected.index} ${selected.join}
       ${attribution ? hintJoin : sql``}
       WHERE ${where} AND ${sliceWhere(slice)} GROUP BY 1
@@ -930,7 +933,8 @@ export const materialize = Effect.fnUntraced(function* (
     .run(
       sql`CREATE TEMP TABLE usage_build_row (key TEXT PRIMARY KEY, session_id TEXT, title TEXT, project_id TEXT, model TEXT,
         agent TEXT, time INTEGER, logical INTEGER, physical INTEGER, helpers INTEGER, continued INTEGER, fallback INTEGER,
-        input INTEGER, output INTEGER, reasoning INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL, priced INTEGER)`,
+        input INTEGER, output INTEGER, reasoning INTEGER, cache_read INTEGER, cache_write INTEGER, cost REAL, priced INTEGER,
+        failed INTEGER, cancelled INTEGER, outcomes INTEGER)`,
     )
     .pipe(Effect.orDie)
   const partial = sql`FROM temp.usage_partial ${input.group === "task" ? sql`LEFT JOIN json_each(raw) AS task` : sql``}`
@@ -939,7 +943,7 @@ export const materialize = Effect.fnUntraced(function* (
       sql`INSERT INTO temp.usage_build_row
     SELECT CAST(${key.key} AS TEXT), sessionID, title, projectID, ${input.group === "model" ? sql`raw` : sql`model`}, agent, time,
       sum(logical), sum(physical), sum(helpers), sum(continued), sum(fallback), sum(input), sum(output), sum(reasoning),
-      sum(cacheRead), sum(cacheWrite), sum(cost), sum(priced)
+      sum(cacheRead), sum(cacheWrite), sum(cost), sum(priced), sum(failed), sum(cancelled), sum(outcomes)
     ${partial} GROUP BY 1`,
     )
     .pipe(Effect.orDie)
@@ -949,7 +953,7 @@ export const materialize = Effect.fnUntraced(function* (
     SELECT '', '', '', '', '', '', 0, coalesce(sum(logical), 0), coalesce(sum(physical), 0), coalesce(sum(helpers), 0),
       coalesce(sum(continued), 0), coalesce(sum(fallback), 0), coalesce(sum(input), 0), coalesce(sum(output), 0),
       coalesce(sum(reasoning), 0), coalesce(sum(cacheRead), 0), coalesce(sum(cacheWrite), 0), coalesce(sum(cost), 0),
-      coalesce(sum(priced), 0)
+      coalesce(sum(priced), 0), coalesce(sum(failed), 0), coalesce(sum(cancelled), 0), coalesce(sum(outcomes), 0)
     FROM temp.usage_partial`,
     )
     .pipe(Effect.orDie)
@@ -959,11 +963,16 @@ export const materialize = Effect.fnUntraced(function* (
   yield* db
     .run(sql`INSERT OR IGNORE INTO temp.usage_build_slot SELECT raw, CAST(${key.key} AS TEXT) ${partial}`)
     .pipe(Effect.orDie)
+  if (input.group === "task")
+    yield* db
+      .run(sql`INSERT OR IGNORE INTO temp.usage_build_slot SELECT DISTINCT raw, '' FROM temp.usage_partial`)
+      .pipe(Effect.orDie)
   yield* release(db, "usage_partial")
   yield* db
     .run(
       sql`CREATE TEMP TABLE usage_build_stat (key TEXT PRIMARY KEY, reported INTEGER, first_output INTEGER, total_output INTEGER,
-        generation_samples INTEGER, provider_timed INTEGER, observed INTEGER, generation_tokens REAL, generation_duration REAL)`,
+        generation_samples INTEGER, provider_timed INTEGER, observed INTEGER, generation_tokens REAL, generation_duration REAL,
+        generation_rate REAL, busy_ms INTEGER)`,
     )
     .pipe(Effect.orDie)
   yield* db
@@ -1012,22 +1021,15 @@ export const materialize = Effect.fnUntraced(function* (
       .run(
         sql`INSERT INTO temp.usage_build_stat
       SELECT s.key, sum(r.cache_read_reported), sum(r.first_output), sum(r.total_output), sum(r.generation_samples),
-        sum(r.provider_timed), sum(r.observed), total(r.generation_tokens), total(r.generation_duration)
+        sum(r.provider_timed), sum(r.observed), total(r.generation_tokens), total(r.generation_duration),
+        total(r.generation_rate), sum(r.busy_ms)
       ${cells} WHERE ${input.where} AND ${sliceWhere(slice)} GROUP BY s.key
       ON CONFLICT (key) DO UPDATE SET reported = reported + excluded.reported, first_output = first_output + excluded.first_output,
         total_output = total_output + excluded.total_output, generation_samples = generation_samples + excluded.generation_samples,
         provider_timed = provider_timed + excluded.provider_timed, observed = observed + excluded.observed,
         generation_tokens = generation_tokens + excluded.generation_tokens,
-        generation_duration = generation_duration + excluded.generation_duration`,
-      )
-      .pipe(Effect.orDie)
-    yield* db
-      .run(
-        sql`INSERT INTO temp.usage_build_stat
-      SELECT '', coalesce(sum(r.cache_read_reported), 0), 0, 0, 0, 0, 0, 0, 0
-      FROM usage_analytics_cell AS r INDEXED BY usage_analytics_cell_span_bucket_key_idx
-      WHERE ${input.where} AND ${sliceWhere(slice)}
-      ON CONFLICT (key) DO UPDATE SET reported = reported + excluded.reported`,
+        generation_duration = generation_duration + excluded.generation_duration,
+        generation_rate = generation_rate + excluded.generation_rate, busy_ms = busy_ms + excluded.busy_ms`,
       )
       .pipe(Effect.orDie)
     const members = yield* db
@@ -1081,6 +1083,36 @@ export const materialize = Effect.fnUntraced(function* (
         .pipe(Effect.orDie)
     yield* Effect.yieldNow
   }
+  if (input.group === "task") return
+  yield* db
+    .run(
+      sql`INSERT INTO temp.usage_build_stat
+    SELECT '', coalesce(sum(reported), 0), coalesce(sum(first_output), 0), coalesce(sum(total_output), 0),
+      coalesce(sum(generation_samples), 0), coalesce(sum(provider_timed), 0), coalesce(sum(observed), 0),
+      total(generation_tokens), total(generation_duration), total(generation_rate), coalesce(sum(busy_ms), 0)
+    FROM temp.usage_build_stat`,
+    )
+    .pipe(Effect.orDie)
+  let after: { readonly key: string; readonly metric: number; readonly value: number } | undefined
+  while (true) {
+    const from = after === undefined ? sql`key > ''` : sql`(key, metric, value) > (${after.key}, ${after.metric}, ${after.value})`
+    const boundary = yield* db
+      .get<{ key: string; metric: number; value: number }>(
+        sql`SELECT key, metric, value FROM temp.usage_build_sample WHERE ${from}
+        ORDER BY key, metric, value LIMIT 1 OFFSET ${sql.raw(String(buildSamples - 1))}`,
+      )
+      .pipe(Effect.orDie)
+    yield* db
+      .run(
+        sql`INSERT INTO temp.usage_build_sample SELECT '', metric, value, count FROM temp.usage_build_sample
+        WHERE ${from} ${boundary === undefined ? sql`` : sql`AND (key, metric, value) <= (${boundary.key}, ${boundary.metric}, ${boundary.value})`}
+        ON CONFLICT (key, metric, value) DO UPDATE SET count = count + excluded.count`,
+      )
+      .pipe(Effect.orDie)
+    yield* Effect.yieldNow
+    if (!boundary) return
+    after = boundary
+  }
 })
 
 type ReportSqlRow = Aggregate & { kind: number; raws: string | null; rowCount: number | null }
@@ -1101,7 +1133,7 @@ export const report = Effect.fn("SessionUsageRead.report")(
     SELECT k.key, k.sessionID, k.title, k.projectID, k.model, k.agent, k.time,
       k.logical, k.physical, k.helpers, k.continued, k.fallback, k.input, k.output, k.reasoning, k.cacheRead, k.cacheWrite,
       k.cost + coalesce(json_extract(c.correction, '$.cost'), 0) AS cost, k.priced + coalesce(json_extract(c.correction, '$.requests'), 0) AS priced, k.cacheReadReported,
-      (c.correction IS NOT NULL) AS currentCatalog, k.raws, NULL AS rowCount
+      (c.correction IS NOT NULL) AS currentCatalog, k.failed, k.cancelled, k.outcomes, k.raws, NULL AS rowCount
     FROM keyed AS k
     LEFT JOIN (SELECT key AS correctionKey, value AS correction FROM json_each(${JSON.stringify(input.corrections)})) AS c
       ON c.correctionKey = k.key
@@ -1112,7 +1144,8 @@ export const report = Effect.fn("SessionUsageRead.report")(
     coalesce(sum(logical), 0), coalesce(sum(physical), 0), coalesce(sum(helpers), 0), coalesce(sum(continued), 0),
     coalesce(sum(fallback), 0), coalesce(sum(input), 0), coalesce(sum(output), 0), coalesce(sum(reasoning), 0),
     coalesce(sum(cacheRead), 0), coalesce(sum(cacheWrite), 0), coalesce(sum(cost), 0), coalesce(sum(priced), 0),
-    min(cacheReadReported), 0, NULL, (SELECT count(*) FROM keyed)
+    min(cacheReadReported), 0, coalesce(sum(failed), 0), coalesce(sum(cancelled), 0), coalesce(sum(outcomes), 0), NULL,
+    (SELECT count(*) FROM keyed)
   FROM temp.usage_partial
 `,
       )
@@ -1120,7 +1153,7 @@ export const report = Effect.fn("SessionUsageRead.report")(
     yield* release(db, "usage_partial")
     const total = result.find((row) => row.kind === 1)!
     const page = result.filter((row) => row.kind === 0)
-    const observations = yield* speed(db, input.where, input.group, key, page, ranges, input.sessions)
+    const measured = yield* speed(db, input.where, input.group, key, page, ranges, input.sessions)
     const models =
       input.group === "model"
         ? yield* ambiguousModels(db, input.where, page, ranges, input.sessions)
@@ -1129,10 +1162,11 @@ export const report = Effect.fn("SessionUsageRead.report")(
       rows: page.map((row): ReportRow => ({
         ...row,
         ...(models.has(row.key) ? { model: models.get(row.key)! } : {}),
-        ...observations.get(row.key),
+        ...measured.observations.get(row.key),
       })),
       total,
       rowCount: total.rowCount!,
+      ...(measured.overall === undefined ? {} : { speed: measured.overall }),
     }
   },
   (effect, db) =>
@@ -1157,6 +1191,8 @@ type SampleCursor = Cursor & {
   readonly value: number
 }
 
+const overallSlot = -1
+
 const speed = Effect.fnUntraced(function* (
   db: Db,
   where: SQL,
@@ -1166,8 +1202,7 @@ const speed = Effect.fnUntraced(function* (
   ranges: ReadonlyArray<Slice>,
   sessions?: ReadonlyArray<SessionSchema.ID>,
 ) {
-  const observations = new Map<string, { speed: ProviderRequest.Speed }>()
-  if (page.length === 0) return observations
+  const observations = new Map<string, { speed: ProviderRequest.Speed; busy?: number }>()
   const pairs = JSON.stringify(
     page.flatMap((item, slot) =>
       group === "model" || group === "task" ? decodeRaws(item.raws!).map((raw) => [raw, slot]) : [[item.key, slot]],
@@ -1200,40 +1235,58 @@ const speed = Effect.fnUntraced(function* (
     generationSamples: number
     providerTimedSamples: number
     observedSamples: number
+    rate: number
+    busy: number
   }
   const attribution = group === "prompt" && sessions !== undefined
   const sampled = new Map<number, Stats>()
-  for (const slice of ranges) {
-    const selected = family(slice.sessionID !== undefined)
-    const cells = sql`FROM ${selected.name} AS r INDEXED BY ${selected.index} ${selected.join}
+  const targets = [
+    ...(page.length === 0
+      ? []
+      : [
+          {
+            join: sql`JOIN temp.usage_slot ON usage_slot.raw = ${group === "model" ? sql`r.model` : key.raw}`,
+            slot: sql`usage_slot.slot`,
+            order: sql`, usage_slot.slot`,
+            resume: (cursor: SampleCursor) =>
+              sql`AND usage_slot.slot >= CASE WHEN r.id = ${cursor.cell} THEN ${cursor.slot} ELSE -1 END`,
+          },
+        ]),
+    { join: sql``, slot: sql.raw(`${overallSlot}`), order: sql``, resume: () => sql`` },
+  ]
+  for (const slice of ranges)
+    for (const target of targets) {
+      const selected = family(slice.sessionID !== undefined)
+      const cells = sql`FROM ${selected.name} AS r INDEXED BY ${selected.index} ${selected.join}
       ${attribution ? hintJoin : sql``}
-      JOIN temp.usage_slot ON usage_slot.raw = ${group === "model" ? sql`r.model` : key.raw}`
-    const rows = yield* db
-      .all<Stats>(
-        sql`
-      SELECT usage_slot.slot AS slot, sum(r.first_output) AS first, sum(r.total_output) AS total,
-        sum(r.generation_samples) AS generationSamples, sum(r.provider_timed) AS providerTimedSamples,
-        sum(r.observed) AS observedSamples, total(r.generation_tokens) AS tokens, total(r.generation_duration) AS duration
-      ${cells}
-      WHERE ${where} AND ${sliceWhere(slice)} GROUP BY usage_slot.slot
-    `,
-      )
-      .pipe(Effect.orDie)
-    yield* Effect.yieldNow
-    let at: SampleCursor | undefined
-    while (true) {
-      const cursor = at
-      const current =
-        cursor === undefined ? sql`` : sql`r.id = ${cursor.cell} AND usage_slot.slot = ${cursor.slot}`
-      yield* db
-        .run(
+      ${target.join}`
+      const rows = yield* db
+        .all<Stats>(
           sql`
+      SELECT ${target.slot} AS slot, sum(r.first_output) AS first, sum(r.total_output) AS total,
+        sum(r.generation_samples) AS generationSamples, sum(r.provider_timed) AS providerTimedSamples,
+        sum(r.observed) AS observedSamples, total(r.generation_tokens) AS tokens, total(r.generation_duration) AS duration,
+        total(r.generation_rate) AS rate, total(r.busy_ms) AS busy
+      ${cells}
+      WHERE ${where} AND ${sliceWhere(slice)} GROUP BY slot
+    `,
+        )
+        .pipe(Effect.orDie)
+      yield* Effect.yieldNow
+      let at: SampleCursor | undefined
+      while (true) {
+        const cursor = at
+        const current =
+          cursor === undefined ? sql`` : sql`r.id = ${cursor.cell} AND ${target.slot} = ${cursor.slot}`
+        yield* db
+          .run(
+            sql`
       INSERT INTO temp.usage_sample
-      SELECT r.bucket, r.key, r.id, usage_slot.slot, m.metric, m.value, m.count
+      SELECT r.bucket, r.key, r.id, ${target.slot}, m.metric, m.value, m.count
       FROM ${selected.name} AS r INDEXED BY ${selected.index} ${selected.cross}
       ${attribution ? hintJoin : sql``}
-      JOIN temp.usage_slot ON usage_slot.raw = ${group === "model" ? sql`r.model` : key.raw}
-        ${cursor === undefined ? sql`` : sql`AND usage_slot.slot >= CASE WHEN r.id = ${cursor.cell} THEN ${cursor.slot} ELSE -1 END`}
+      ${target.join}
+        ${cursor === undefined ? sql`` : target.resume(cursor)}
       CROSS JOIN ${selected.sample} AS m
       WHERE ${where} AND ${sliceWhere(cursor === undefined ? slice : { ...slice, after: undefined, from: cursor })} AND m.cell = r.id
         ${
@@ -1242,64 +1295,74 @@ const speed = Effect.fnUntraced(function* (
             : sql`AND (m.metric, m.value) > (CASE WHEN ${current} THEN ${cursor.metric} ELSE -1 END,
           CASE WHEN ${current} THEN ${cursor.value} ELSE -1 END)`
         }
-      ORDER BY r.bucket, r.key, r.id, usage_slot.slot, m.metric, m.value LIMIT ${sql.raw(String(sampleRows))}
+      ORDER BY r.bucket, r.key, r.id${target.order}, m.metric, m.value LIMIT ${sql.raw(String(sampleRows))}
     `,
-        )
-        .pipe(Effect.orDie)
-      const last = yield* db
-        .get<SampleCursor & { rows: number }>(
-          sql`
+          )
+          .pipe(Effect.orDie)
+        const last = yield* db
+          .get<SampleCursor & { rows: number }>(
+            sql`
       SELECT (SELECT count(*) FROM temp.usage_sample) AS rows, bucket, key, cell, slot, metric, value FROM temp.usage_sample
       ORDER BY bucket DESC, key DESC, cell DESC, slot DESC, metric DESC, value DESC LIMIT 1
     `,
-        )
-        .pipe(Effect.orDie)
-      yield* db
-        .run(
-          sql`
+          )
+          .pipe(Effect.orDie)
+        yield* db
+          .run(
+            sql`
       INSERT INTO temp.usage_metric SELECT slot, metric, value, sum(count) FROM temp.usage_sample WHERE 1 GROUP BY 1, 2, 3
       ON CONFLICT (slot, metric, value) DO UPDATE SET count = count + excluded.count
     `,
-        )
-        .pipe(Effect.orDie)
-      yield* db.run(sql`DELETE FROM temp.usage_sample`).pipe(Effect.orDie)
-      yield* Effect.yieldNow
-      if (!last || last.rows < sampleRows) break
-      at = last
+          )
+          .pipe(Effect.orDie)
+        yield* db.run(sql`DELETE FROM temp.usage_sample`).pipe(Effect.orDie)
+        yield* Effect.yieldNow
+        if (!last || last.rows < sampleRows) break
+        at = last
+      }
+      for (const row of rows) {
+        const current = sampled.get(row.slot)
+        sampled.set(row.slot, {
+          slot: row.slot,
+          first: (current?.first ?? 0) + row.first,
+          total: (current?.total ?? 0) + row.total,
+          tokens: (current?.tokens ?? 0) + row.tokens,
+          duration: (current?.duration ?? 0) + row.duration,
+          generationSamples: (current?.generationSamples ?? 0) + row.generationSamples,
+          providerTimedSamples: (current?.providerTimedSamples ?? 0) + row.providerTimedSamples,
+          observedSamples: (current?.observedSamples ?? 0) + row.observedSamples,
+          rate: (current?.rate ?? 0) + row.rate,
+          busy: (current?.busy ?? 0) + row.busy,
+        })
+      }
     }
-    for (const row of rows) {
-      const current = sampled.get(row.slot)
-      sampled.set(row.slot, {
-        slot: row.slot,
-        first: (current?.first ?? 0) + row.first,
-        total: (current?.total ?? 0) + row.total,
-        tokens: (current?.tokens ?? 0) + row.tokens,
-        duration: (current?.duration ?? 0) + row.duration,
-        generationSamples: (current?.generationSamples ?? 0) + row.generationSamples,
-        providerTimedSamples: (current?.providerTimedSamples ?? 0) + row.providerTimedSamples,
-        observedSamples: (current?.observedSamples ?? 0) + row.observedSamples,
-      })
-    }
-  }
+  let overall: ProviderRequest.Speed | undefined
   for (const row of sampled.values()) {
     if (row.first === 0 && row.total === 0 && row.duration === 0) continue
     const first = yield* percentiles(db, row.slot, 0, row.first)
     const total = yield* percentiles(db, row.slot, 1, row.total)
     const generation = yield* percentiles(db, row.slot, 2, row.generationSamples)
-    observations.set(page[row.slot].key, {
-      speed: {
-        samples: row.first,
-        generationSamples: row.generationSamples,
-        providerTimedSamples: row.providerTimedSamples,
-        observedSamples: row.observedSamples,
-        ...(generation ? { generationP50TokensPerSecond: generation[0], generationP90TokensPerSecond: generation[1] } : {}),
-        ...(first ? { firstOutputP50Ms: first[0], firstOutputP95Ms: first[1] } : {}),
-        ...(total ? { totalP50Ms: total[0], totalP95Ms: total[1] } : {}),
-        ...(row.duration === 0 ? {} : { outputTokensPerSecond: row.tokens / (row.duration / 1_000_000_000) }),
-      },
-    })
+    const measured: ProviderRequest.Speed = {
+      samples: row.first,
+      generationSamples: row.generationSamples,
+      providerTimedSamples: row.providerTimedSamples,
+      observedSamples: row.observedSamples,
+      ...(generation
+        ? {
+            generationP50TokensPerSecond: generation[0],
+            generationP90TokensPerSecond: generation[1],
+            generationP95TokensPerSecond: generation[2],
+            meanTokensPerSecond: row.rate / row.generationSamples,
+          }
+        : {}),
+      ...(first ? { firstOutputP50Ms: first[0], firstOutputP95Ms: first[1], firstOutputP99Ms: first[2] } : {}),
+      ...(total ? { totalP50Ms: total[0], totalP95Ms: total[1], totalP99Ms: total[2] } : {}),
+      ...(row.duration === 0 ? {} : { outputTokensPerSecond: row.tokens / (row.duration / 1_000_000_000) }),
+    }
+    if (row.slot === overallSlot) overall = measured
+    else observations.set(page[row.slot].key, { speed: measured, ...(row.total === 0 ? {} : { busy: row.busy }) })
   }
-  return observations
+  return { observations, overall }
 })
 
 const ambiguousModels = Effect.fnUntraced(function* (
@@ -1346,7 +1409,7 @@ const ambiguousModels = Effect.fnUntraced(function* (
 
 const percentiles = Effect.fnUntraced(function* (db: Db, slot: number, metric: 0 | 1 | 2, size: number) {
   if (size === 0) return undefined
-  const targets = [Math.ceil(size / 2), Math.ceil((size * (metric === 2 ? 90 : 95)) / 100)]
+  const targets = (metric === 2 ? [50, 90, 95] : [50, 95, 99]).map((percent) => Math.ceil((size * percent) / 100))
   const values: number[] = []
   let cursor: number | undefined
   let seen = 0

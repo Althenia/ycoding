@@ -536,7 +536,7 @@ describe("Session.switchModel context validation", () => {
       for (const model of [haiku, sonnet]) {
         const tracker = yield* ledger.next({ sessionID, source: "step", agent: Agent.defaultID, model,
           routeID: "anthropic-messages", promptCacheKey: "speed", systemDigest: "system", toolDigest: "tools" })
-        yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+        yield* tracker.complete({ outcome: "completed", continuation: "full", tokens: { input: 0, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
           timing: { generatedTokens: 20, observedGenerationDurationNs: model === haiku ? 100_000_000 : 200_000_000 } })
       }
       const published: SessionEvent.DiagnosticsUpdated["data"][] = []

@@ -366,3 +366,38 @@ test.each([
 ])("filters helper output %j", (value, accepted) => {
   expect(SessionPrediction.accept(value, "Fix the failing build") !== undefined).toBe(accepted)
 })
+
+const providerOutcomes = <A, E, R>(events: EventRuntime.Interface, effect: Effect.Effect<A, E, R>) => Effect.gen(function* () {
+  const outcomes: Array<string | undefined> = []
+  const stop = yield* events.listen((event) => Effect.sync(() => {
+    if (event.type === "session.provider.request.recorded") outcomes.push((event.data as { readonly outcome?: string }).outcome)
+  }))
+  yield* effect
+  yield* stop
+  return outcomes
+})
+
+it.effect("records completed, failed, and timed-out prediction request outcomes", () => Effect.gen(function* () {
+  const completed = yield* setup()
+  expect(yield* providerOutcomes(completed.events, completed.prediction.request(completed.sessionID, { memory: [] }))).toEqual(["completed"])
+  const failed = yield* setup(); providerFailure = true
+  expect(yield* providerOutcomes(failed.events, failed.prediction.request(failed.sessionID, { memory: [] }))).toEqual(["failed"])
+  const timedOut = yield* setup(); transportTimeout = true
+  expect(yield* providerOutcomes(timedOut.events, timedOut.prediction.request(timedOut.sessionID, { memory: [] }))).toEqual(["failed"])
+}))
+
+it.effect("records a superseded prediction request as cancelled", () => Effect.gen(function* () {
+  const f = yield* setup()
+  gate = yield* Deferred.make<void>()
+  started = yield* Deferred.make<void>()
+  const blocked = started
+  const outcomes = yield* providerOutcomes(f.events, Effect.gen(function* () {
+    const first = yield* f.prediction.request(f.sessionID, { memory: [] }).pipe(Effect.forkChild)
+    yield* Deferred.await(blocked)
+    gate = undefined
+    started = undefined
+    yield* f.prediction.request(f.sessionID, { memory: [] })
+    yield* Fiber.await(first)
+  }))
+  expect(outcomes).toEqual(["cancelled", "completed"])
+}))

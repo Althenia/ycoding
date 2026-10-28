@@ -64,14 +64,14 @@ test("child economics and footer update and hide unavailable speed", async () =>
   try {
     await app.waitForFrame((frame) => (frame.match(/≈ 100 tok\/s/g)?.length ?? 0) >= 2)
     update({ ...diagnostics, generationSpeed: { ...diagnostics.generationSpeed!, live: {
-      requestID: ProviderRequest.ID.make("prq_live"), attempt: 1,
+      requestID: ProviderRequest.ID.make("prq_live"), attempt: 1, phase: "streaming",
       sample: { ...diagnostics.generationSpeed!.latest!, tokensPerSecond: 42 } } } })
     await app.waitForFrame((frame) => (frame.match(/≈ 42 tok\/s/g)?.length ?? 0) >= 2)
     expect(app.captureCharFrame()).not.toContain("100 tok/s")
     update({ ...diagnostics, generationSpeed: { ...diagnostics.generationSpeed!, live: {
-      requestID: ProviderRequest.ID.make("prq_live"), attempt: 1 } } })
-    await app.waitForFrame((frame) => !frame.includes("tok/s"))
-    expect(app.captureCharFrame()).not.toContain("Speed")
+      requestID: ProviderRequest.ID.make("prq_live"), attempt: 1, phase: "streaming" } } })
+    await app.waitForFrame((frame) => (frame.match(/measuring/g)?.length ?? 0) >= 2)
+    expect(app.captureCharFrame()).not.toContain("tok/s")
     update(diagnostics)
     await app.waitForFrame((frame) => (frame.match(/≈ 100 tok\/s/g)?.length ?? 0) >= 2)
   } finally { app.renderer.destroy() }

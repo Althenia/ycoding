@@ -20,6 +20,7 @@ import { SessionHelperPolicy } from "./session/helper-policy"
 import { SessionMessage } from "./session/message"
 import { SessionModelHeaders } from "./session/model-headers"
 import { SessionProviderRequest } from "./session/provider-request"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionUsageAttribution } from "./session/usage-attribution"
 import { Database } from "./database/database"
 import { Hash } from "./util/hash"
@@ -306,11 +307,12 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
           let priced: Money.USD | undefined
           let timing: ReturnType<typeof SessionUsage.timing>
           let cacheReadReported = false
-          const complete = Effect.suspend(() => {
+          let timedOut = false
+          const complete = (outcome: ProviderRequest.Outcome) => Effect.suspend(() => {
             const tokens = usage?.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
             return (usage ? events.publish(SessionEvent.UsageRecorded, { sessionID: session.id, source: "decision", ...usage }) : Effect.void).pipe(
               Effect.andThen(tracker.complete({ tokens, ...(priced === undefined ? {} : { cost: priced }),
-                continuation: "full", cacheReadReported, ...(timing === undefined ? {} : { timing }),
+                continuation: "full", cacheReadReported, ...(timing === undefined ? {} : { timing }), outcome,
               })),
             )
           })
@@ -342,12 +344,17 @@ const layer = Layer.effect(Service, Effect.gen(function* () {
               return Effect.void
             }),
           )
-          const fiber = yield* collect.pipe(Effect.ensuring(complete), Effect.forkChild)
+          const fiber = yield* collect.pipe(
+            Effect.onExit((exit) =>
+              complete(timedOut ? "failed" : SessionProviderRequest.outcome(exit, sawProviderError || !finished))),
+            Effect.forkChild,
+          )
           const waited = yield* Fiber.await(fiber).pipe(
             Effect.timeoutOption(Duration.millis(timeoutMs)),
             Effect.onInterrupt(() => Effect.uninterruptible(Fiber.interrupt(fiber).pipe(Effect.andThen(Effect.void)))),
           )
           if (Option.isNone(waited)) {
+            timedOut = true
             yield* Effect.uninterruptible(Fiber.interrupt(fiber))
             return { type: "failure", failure: failure("timeout", true), usage }
           }

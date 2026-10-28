@@ -8,7 +8,7 @@ import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { TransportAttempt } from "@ycoding-ai/ai/route"
 import type { LLMEvent } from "@ycoding-ai/ai"
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm"
-import { Cause, Clock, Context, Data, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
+import { Cause, Clock, Context, Data, DateTime, Effect, Exit, Layer, Option, Schema, Semaphore } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventRuntime } from "../event"
@@ -19,7 +19,7 @@ import { SessionCacheDiagnostics } from "./cache-diagnostics"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { UsageAnalytics } from "../usage-analytics"
 import type { UsageAnchor } from "@ycoding-ai/schema/usage-anchor"
-import type { GenerationSpeed, GenerationSpeedHistory } from "@ycoding-ai/schema/session-cache-diagnostics"
+import type { GenerationMeter } from "./generation-meter"
 import {
   SessionCompactionJobTable,
   SessionContextStateTable,
@@ -55,6 +55,7 @@ export interface CompleteInput {
   readonly continuation: ProviderRequest.Continuation
   readonly cacheReadReported?: boolean
   readonly timing?: ProviderRequest.Timing
+  readonly outcome: ProviderRequest.Outcome
   readonly cost?: Money.USD
   readonly tokens: TokenUsage.Info
 }
@@ -68,7 +69,7 @@ export interface Tracker {
   readonly retryWait: () => Effect.Effect<void>
   readonly retryResume: () => Effect.Effect<void>
   readonly settle: () => Effect.Effect<void>
-  readonly updateGeneration: (live: { readonly attempt: number; readonly sample?: GenerationSpeed }) => Effect.Effect<void>
+  readonly attachMeter: (meter: GenerationMeter.Meter) => Effect.Effect<void>
   readonly complete: (input: CompleteInput) => Effect.Effect<void>
 }
 
@@ -77,7 +78,7 @@ export interface Interface {
     ReadonlyArray<{ readonly sessionID: ProviderRequest.Record["sessionID"]; readonly usageAnchor?: UsageAnchor.Ref }>
   >
   readonly generation: (sessionID: ProviderRequest.Record["sessionID"]) => Effect.Effect<
-    { readonly model: ProviderRequest.Record["model"]; readonly live: NonNullable<GenerationSpeedHistory["live"]> } | undefined
+    { readonly model: ProviderRequest.Record["model"]; readonly live: GenerationMeter.Live } | undefined
   >
   readonly next: {
     (input: BeginInput & { readonly expectedContextRevision: number }): Effect.Effect<Tracker, StaleContextRevision>
@@ -112,7 +113,7 @@ type Pending = {
   ended?: bigint
   waiting?: bigint
   retryWaitNs: bigint
-  live?: NonNullable<GenerationSpeedHistory["live"]>
+  meter?: GenerationMeter.Meter
 }
 
 type PreviousRequest = {
@@ -134,6 +135,13 @@ const addTokens = (left: TokenUsage.Info, right: TokenUsage.Info): TokenUsage.In
   reasoning: left.reasoning + right.reasoning,
   cache: { read: left.cache.read + right.cache.read, write: left.cache.write + right.cache.write },
 })
+
+export const outcome = (exit: Exit.Exit<unknown, unknown>, failed: boolean): ProviderRequest.Outcome =>
+  exit._tag === "Failure" && Cause.hasInterrupts(exit.cause)
+    ? "cancelled"
+    : exit._tag === "Failure" || failed
+      ? "failed"
+      : "completed"
 
 export type CostedRecord = ProviderRequest.Record & { readonly costProvenance?: ProviderRequest.CostProvenance }
 
@@ -167,18 +175,22 @@ export function reportSpeed(records: readonly CostedRecord[]): ProviderRequest.S
       : {
           generationP50TokensPerSecond: rates[Math.ceil(rates.length * 0.5) - 1],
           generationP90TokensPerSecond: rates[Math.ceil(rates.length * 0.9) - 1],
+          generationP95TokensPerSecond: rates[Math.ceil((rates.length * 95) / 100) - 1],
+          meanTokensPerSecond: generation.reduce((sum, sample) => sum + sample.tokensPerSecond, 0) / generation.length,
         }),
     ...(first.length === 0
       ? {}
       : {
           firstOutputP50Ms: first[Math.ceil(first.length * 0.5) - 1]!,
           firstOutputP95Ms: first[Math.ceil(first.length * 0.95) - 1]!,
+          firstOutputP99Ms: first[Math.ceil((first.length * 99) / 100) - 1]!,
         }),
     ...(total.length === 0
       ? {}
       : {
           totalP50Ms: total[Math.ceil(total.length * 0.5) - 1]!,
           totalP95Ms: total[Math.ceil(total.length * 0.95) - 1]!,
+          totalP99Ms: total[Math.ceil((total.length * 99) / 100) - 1]!,
         }),
     ...(duration === 0
       ? {}
@@ -209,6 +221,15 @@ export function reportMetrics(records: readonly CostedRecord[]): ProviderRequest
     ...(records.length === 0
       ? {}
       : { cacheReadReported: records.every((record) => record.cacheReadReported === true) }),
+    ...(records.some((record) => record.outcome !== undefined)
+      ? {
+          outcomes: {
+            completed: records.filter((record) => (record.outcome ?? "completed") === "completed").length,
+            failed: records.filter((record) => record.outcome === "failed").length,
+            cancelled: records.filter((record) => record.outcome === "cancelled").length,
+          },
+        }
+      : {}),
   }
 }
 
@@ -351,6 +372,7 @@ export const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect):
   continuation: row.continuation,
   ...(row.cache_read_reported === null ? {} : { cacheReadReported: row.cache_read_reported }),
   ...(row.timing === null ? {} : { timing: row.timing }),
+  ...(row.outcome === null ? {} : { outcome: row.outcome }),
   ...(row.cost === null ? {} : { cost: Money.USD.make(row.cost) }),
   tokens: row.tokens,
   time: DateTime.makeUnsafe(row.time_created),
@@ -365,14 +387,14 @@ const layer = Layer.effect(
     const lock = Semaphore.makeUnsafe(1)
     const pending = new Map<string, Pending>()
 
-    const observeAttempt: TransportAttempt.Observer = (info) =>
-      Effect.sync(() => {
-        if (info.phase !== "started") return
-        const current = pending.get(info.requestID)
-        if (!current || current.completed) return
-        current.attempts += 1
-        current.ended = undefined
-      })
+    const observeAttempt: TransportAttempt.Observer = Effect.fnUntraced(function* (info: TransportAttempt.Info) {
+      if (info.phase !== "started") return
+      const current = pending.get(info.requestID)
+      if (!current || current.completed) return
+      current.attempts += 1
+      current.ended = undefined
+      current.meter?.waiting(yield* Clock.currentTimeNanos)
+    })
 
     yield* ProviderRequestObserver.register(observeAttempt)
 
@@ -675,6 +697,7 @@ const layer = Layer.effect(
                           ? {}
                           : { cacheReadReported: completion.cacheReadReported }),
                         ...(Object.keys(timing).length === 0 ? {} : { timing }),
+                        outcome: completion.outcome,
                         ...(completion.cost === undefined ? {} : { cost: completion.cost }),
                         tokens: completion.tokens,
                         time,
@@ -696,10 +719,9 @@ const layer = Layer.effect(
               ...(usageAnchor === undefined ? {} : { usageAnchor }),
               defaultInvalidation: pending.get(requestID)?.defaultInvalidation ?? "first-request",
               observeAttempt,
-              updateGeneration: (live: Parameters<Tracker["updateGeneration"]>[0]) => Effect.sync(() => {
+              attachMeter: (meter: GenerationMeter.Meter) => Effect.sync(() => {
                 const current = pending.get(requestID)
-                if (current && !current.completed && current.input.source === "step")
-                  current.live = { requestID, ...live }
+                if (current && !current.completed) current.meter = meter
               }),
               observeEvent: Effect.fnUntraced(function* (event) {
                 const current = pending.get(requestID)
@@ -751,8 +773,8 @@ const layer = Layer.effect(
       ),
       generation: (sessionID) => Effect.sync(() => {
         const current = [...pending.values()].findLast((request) =>
-          request.input.sessionID === sessionID && !request.completed && request.live !== undefined)
-        return current?.live ? { model: current.input.model, live: current.live } : undefined
+          request.input.sessionID === sessionID && !request.completed && request.meter !== undefined)
+        return current?.meter ? { model: current.input.model, live: current.meter.live() } : undefined
       }),
     })
   }),

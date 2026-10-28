@@ -49,7 +49,7 @@ export const limits = { states: 32, presentations: 96, batch: 200, page: 2_000, 
 
 const failure = "Usage dashboard preparation failed"
 
-const definition = 2
+const definition = 3
 
 type State = {
   readonly id: string
@@ -469,6 +469,8 @@ const layer: Layer.Layer<Service, never, Database.Service | EventRuntime.Service
               coalesce(t.total_output, 0) AS total_output, coalesce(t.generation_samples, 0) AS generation_samples,
               coalesce(t.provider_timed, 0) AS provider_timed, coalesce(t.observed, 0) AS observed,
               coalesce(t.generation_tokens, 0) AS generation_tokens, coalesce(t.generation_duration, 0) AS generation_duration,
+              coalesce(t.generation_rate, 0) AS generation_rate, coalesce(t.busy_ms, 0) AS busy_ms,
+              r.failed, r.cancelled, r.outcomes,
               p.updated AS rep_updated, p.session AS rep_session, p.request AS rep_request
             FROM temp.usage_build_row AS r LEFT JOIN temp.usage_build_stat AS t ON t.key = r.key
             LEFT JOIN temp.usage_build_rep AS p ON p.key = r.key
@@ -874,7 +876,6 @@ const layer: Layer.Layer<Service, never, Database.Service | EventRuntime.Service
         current.rep_request === row.request
       )
         return true
-      if (total) return false
       for (const [metric, value] of contribution.samples) {
         yield* db
           .run(
@@ -980,14 +981,12 @@ const layer: Layer.Layer<Service, never, Database.Service | EventRuntime.Service
         .offset(recipe.offset ?? 0)
         .all()
         .pipe(Effect.orDie)
-      const ranks = page.length === 0
-        ? []
-        : yield* db
-            .all<{ key: string; quantile: number; value: number }>(
-              sql`SELECT key, quantile, value FROM usage_view_rank WHERE state = ${state.id} AND generation = ${state.generation}
-              AND key IN (SELECT value FROM json_each(${JSON.stringify(page.map((row) => row.key))}))`,
-            )
-            .pipe(Effect.orDie)
+      const ranks = yield* db
+        .all<{ key: string; quantile: number; value: number }>(
+          sql`SELECT key, quantile, value FROM usage_view_rank WHERE state = ${state.id} AND generation = ${state.generation}
+          AND key IN (SELECT value FROM json_each(${JSON.stringify(["", ...page.map((row) => row.key)])}))`,
+        )
+        .pipe(Effect.orDie)
       const byKey = Map.groupBy(ranks, (item) => item.key)
       const totals = yield* db
         .select()
@@ -1002,13 +1001,20 @@ const layer: Layer.Layer<Service, never, Database.Service | EventRuntime.Service
         .pipe(Effect.orDie))?.count ?? 0
       const formatter = SessionUsageProjection.reportFormatter(recipe)
       const offset = recipe.offset ?? 0
+      const overall = totals
+        ? UsageViewRecipe.speed(totals, new Map((byKey.get("") ?? []).map((item) => [item.quantile, item.value])))
+        : undefined
       const report: ProviderRequest.Report = {
         group: recipe.group,
         rows: page.map((row) => {
           const speed = UsageViewRecipe.speed(row, new Map((byKey.get(row.key) ?? []).map((item) => [item.quantile, item.value])))
           return SessionUsageProjection.reportRow(
             recipe.group,
-            { ...UsageViewRecipe.aggregate(row), ...(speed === undefined ? {} : { speed }) },
+            {
+              ...UsageViewRecipe.aggregate(row),
+              ...(speed === undefined ? {} : { speed }),
+              ...(row.total_output > 0 ? { busy: row.busy_ms } : {}),
+            },
             projectInfos,
             formatter,
           )
@@ -1036,6 +1042,7 @@ const layer: Layer.Layer<Service, never, Database.Service | EventRuntime.Service
         ),
         rowCount: count,
         ...(offset + page.length < count ? { nextOffset: offset + page.length } : {}),
+        ...(overall === undefined ? {} : { speed: overall }),
       }
       return { payload: UsageViewRecipe.encodeReport(report), labels: recipe.group === "project" ? projectLabels : null }
     })

@@ -144,7 +144,7 @@ test("dated usage pages seek prepared cells by span, bucket and cell cursor inst
       yield* readAll(db, range)
 
       const dated = queries.filter(
-        (query) => query.sql.includes("FROM usage_analytics_cell AS r") && !query.sql.includes("temp.usage_slot"),
+        (query) => query.sql.includes("FROM usage_analytics_cell AS r") && !/\btemp\.usage_(?:slot|sample)\b/.test(query.sql),
       )
       expect(dated.length).toBeGreaterThan(5)
       expect(queries.some((query) => /\b(?:from|join)\s+usage_analytics_request\b/i.test(query.sql))).toBe(false)

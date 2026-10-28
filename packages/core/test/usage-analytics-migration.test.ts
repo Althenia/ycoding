@@ -84,6 +84,7 @@ test(
         expect(Math.max(...population)).toBe(10_000)
         yield* db.transaction(unpricedIndex.up)
         yield* db.transaction(metricsIndex.up)
+        yield* db.run("ALTER TABLE usage_analytics_request ADD outcome text")
         yield* UsageStage.backfill(db)
         queries.length = 0
         const report = yield* SessionUsageRead.report(db, {

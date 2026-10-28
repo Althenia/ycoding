@@ -29,6 +29,12 @@ test("pruned and synthetic anchors never mount or transfer to a newer resident p
 
 test("measured request percentiles, timing coverage, throughput and latency populations stay distinct", () => {
   expect(measuredSpeedLines({ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, providerTimedSamples: 1, observedSamples: 3, outputTokensPerSecond: 32, samples: 2 })).toEqual(["Measured generation median 20 tok/s · p90 50 tok/s", "4 measured requests · 1 provider-timed · 3 observed", "Weighted throughput 32 tok/s · 2 first-output latency samples"])
+  expect(measuredSpeedLines({ generationSamples: 4, providerTimedSamples: 1, observedSamples: 3, samples: 2, meanTokensPerSecond: 27.5, generationP95TokensPerSecond: 61, firstOutputP50Ms: 300, firstOutputP95Ms: 1200, firstOutputP99Ms: 2500, totalP95Ms: 9000 }).slice(3)).toEqual([
+    "Mean of per-request rates 27.5 tok/s · p95 61 tok/s",
+    "First output p50 300 ms · p95 1.2 s · p99 2.5 s",
+    "Total request p50 unreported · p95 9 s · p99 unreported",
+  ])
+  expect(measuredSpeedLines(undefined)).toHaveLength(3)
   expect(measuredSpeedLines(undefined)[0]).toContain("median unreported · p90 unreported")
   expect(measuredSpeedLines(undefined)[1]).toBe("Generation sample coverage unreported")
 })

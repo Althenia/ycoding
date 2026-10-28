@@ -632,3 +632,45 @@ it.effect("audit hashes short names, URLs, and credentials without changing retu
     }])
   }
 }))
+
+const providerOutcomes = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.gen(function* () {
+  const events = yield* EventRuntime.Service
+  const outcomes: Array<string | undefined> = []
+  const stop = yield* events.listen((event) => Effect.sync(() => {
+    if (event.type === "session.provider.request.recorded") outcomes.push((event.data as { readonly outcome?: string }).outcome)
+  }))
+  yield* effect
+  yield* stop
+  return outcomes
+})
+
+it.effect("records each decision provider request outcome from its attempt exit", () => Effect.gen(function* () {
+  const decisions = yield* Decision.Service
+  const completed = yield* seed("ses_agent_outcome_completed")
+  expect(yield* providerOutcomes(evaluateChoice(decisions, choice(completed)))).toEqual(["completed"])
+  const recovered = yield* seed("ses_agent_outcome_recovered")
+  plan = ["transport"]
+  expect(yield* providerOutcomes(evaluateChoice(decisions, choice(recovered)))).toEqual(["failed", "completed"])
+  const unsettled = yield* seed("ses_agent_outcome_unsettled")
+  state.unsettled = true
+  expect(yield* providerOutcomes(evaluateChoice(decisions, choice(unsettled)).pipe(Effect.exit))).toEqual(["failed", "failed"])
+}))
+
+it.effect("records timed-out decision attempts as failed and interrupted ones as cancelled", () => Effect.gen(function* () {
+  const decisions = yield* Decision.Service
+  const timedOut = yield* seed("ses_agent_outcome_timeout")
+  hold = true
+  expect(yield* providerOutcomes(Effect.gen(function* () {
+    const fiber = yield* evaluateChoice(decisions, choice(timedOut)).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    yield* adjustUntilDone(fiber)
+    yield* Fiber.await(fiber)
+  }))).toEqual(["failed", "failed"])
+  const cancelled = yield* seed("ses_agent_outcome_cancelled")
+  hold = true
+  expect(yield* providerOutcomes(Effect.gen(function* () {
+    const fiber = yield* evaluateChoice(decisions, choice(cancelled)).pipe(Effect.forkChild)
+    yield* Deferred.await(entered)
+    yield* Fiber.interrupt(fiber)
+  }))).toEqual(["cancelled"])
+}))

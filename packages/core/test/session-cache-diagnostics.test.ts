@@ -3,6 +3,7 @@ import { DateTime } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionCacheDiagnostics } from "@ycoding-ai/core/session/cache-diagnostics"
+import { GenerationMeter } from "@ycoding-ai/core/session/generation-meter"
 import { SessionContextPressure } from "@ycoding-ai/core/session/context-pressure"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { CatalogModel } from "@ycoding-ai/core/model"
@@ -125,9 +126,10 @@ test("excludes historical short samples and provider-timed records", () => {
 test("includes estimates and profile changes in the weighted rate", () => {
   const measured = { model: model("openai"), timing: { receivedOutput: { estimatedTokens: 40, durationNs: 1_000_000_000 } } }
   const estimated = { model: measured.model, timing: { receivedOutput: { estimatedTokens: 80, durationNs: 2_000_000_000 } } }
-  expect(SessionCacheDiagnostics.generationSample(estimated.timing)).toEqual({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
-  expect(SessionCacheDiagnostics.generationSample({ ...estimated.timing, generatedTokens: 10, generationDurationNs: 1 })).toEqual({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
-  expect(SessionCacheDiagnostics.generationSample({ receivedOutput: { estimatedTokens: 80, durationNs: 999_999_999 } })).toBeUndefined()
+  expect(GenerationMeter.sample(estimated.timing.receivedOutput)).toEqual({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
+  expect(SessionCacheDiagnostics.generationSpeed([{ ...estimated, timing: { ...estimated.timing, generatedTokens: 10, generationDurationNs: 1 } }])?.latest)
+    .toMatchObject({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40, estimated: true })
+  expect(GenerationMeter.sample({ estimatedTokens: 80, durationNs: 999_999_999 })).toBeUndefined()
   const history = SessionCacheDiagnostics.generationSpeed([measured, estimated])
   expect(history?.latest?.estimated).toBe(true)
   expect(history?.recent).toHaveLength(2)

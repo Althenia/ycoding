@@ -16,6 +16,8 @@ import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
 import { SessionCacheDiagnostics } from "@ycoding-ai/core/session/cache-diagnostics"
+import { GenerationMeter } from "@ycoding-ai/core/session/generation-meter"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { TelemetryConsent } from "@ycoding-ai/core/telemetry-consent"
 import { LLMEvent } from "@ycoding-ai/ai"
 import { Session } from "@ycoding-ai/core/session"
@@ -93,7 +95,7 @@ it.effect("gates helper timing at record time and preserves always-on timing", (
       yield* tracker.observeEvent(LLMEvent.finish({ reason: "stop" }))
       yield* TestClock.adjust("100 millis")
       yield* consent.set({ enabled, noticeVersion: 1 })
-      yield* tracker.complete({
+      yield* tracker.complete({ outcome: "completed",
         continuation: "full",
         tokens: { input: 10, output: 5, reasoning: 2, cache: { read: 0, write: 0 } },
         timing: { generationDurationNs: 30_000_000, receivedOutput: { estimatedTokens: 20, durationNs: 1_000_000_000 }, firstOutputMs: 999, totalMs: 999, retryWaitMs: 999 },
@@ -136,7 +138,7 @@ it.effect("records failed no-output latency at provider settlement rather than l
     yield* TestClock.adjust("30 millis")
     yield* tracker.settle()
     yield* TestClock.adjust("60 millis")
-    yield* tracker.complete({
+    yield* tracker.complete({ outcome: "completed",
       continuation: "full",
       tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     })
@@ -144,7 +146,7 @@ it.effect("records failed no-output latency at provider settlement rather than l
   }),
 )
 
-it.effect("exposes only active step generation and clears it at completion", () =>
+it.effect("exposes the attached attempt meter's current state and clears it at completion", () =>
   Effect.gen(function* () {
     const sessionID = Session.ID.make("ses_provider_live_generation")
     yield* insertSession(sessionID)
@@ -152,15 +154,48 @@ it.effect("exposes only active step generation and clears it at completion", () 
     const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("speed"), providerID: Provider.ID.make("openai") })
     const tracker = yield* service.next({ sessionID, source: "step", agent: Agent.defaultID, model,
       routeID: "test", promptCacheKey: "cache", systemDigest: "system", toolDigest: "tools" })
-    yield* tracker.updateGeneration({ attempt: 1 })
-    expect(yield* service.generation(sessionID)).toEqual({ model, live: { requestID: ProviderRequest.ID.make(tracker.requestID), attempt: 1 } })
-    const sample = { model, tokens: 40, durationNs: 1_000_000_000, tokensPerSecond: 40, estimated: true }
-    yield* tracker.updateGeneration({ attempt: 1, sample })
-    expect((yield* service.generation(sessionID))?.live.sample).toEqual(sample)
-    yield* tracker.updateGeneration({ attempt: 2 })
-    expect((yield* service.generation(sessionID))?.live).toEqual({ requestID: ProviderRequest.ID.make(tracker.requestID), attempt: 2 })
-    yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+    const requestID = ProviderRequest.ID.make(tracker.requestID)
+    const first = GenerationMeter.make({ requestID, attempt: 1, model, startedNs: 0n })
+    yield* tracker.attachMeter(first)
+    expect(yield* service.generation(sessionID)).toEqual({ model, live: { requestID, attempt: 1, phase: "preparing" } })
+    yield* service.observeAttempt({ requestID, routeID: "test", transport: "http", attempt: 1, phase: "started", time: 0 })
+    expect((yield* service.generation(sessionID))?.live.phase).toBe("waiting")
+    first.observe(LLMEvent.textDelta({ id: "text", text: "x".repeat(400) }), 1_000_000_000n)
+    first.observe(LLMEvent.textDelta({ id: "text", text: "x".repeat(400) }), 2_000_000_000n)
+    expect((yield* service.generation(sessionID))?.live).toMatchObject({
+      phase: "streaming", firstOutputMs: 1_000, sample: { model, tokens: 100, durationNs: 1_000_000_000, tokensPerSecond: 100 },
+    })
+    first.settle("failed", 3_000_000_000n)
+    yield* tracker.attachMeter(GenerationMeter.make({ requestID, attempt: 2, model, startedNs: 4_000_000_000n }))
+    expect((yield* service.generation(sessionID))?.live).toEqual({ requestID, attempt: 2, phase: "preparing" })
+    yield* tracker.complete({ outcome: "completed", continuation: "full", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
     expect(yield* service.generation(sessionID)).toBeUndefined()
+  }),
+)
+
+it.effect("records every logical request outcome explicitly", () =>
+  Effect.gen(function* () {
+    const sessionID = Session.ID.make("ses_provider_request_outcome")
+    yield* insertSession(sessionID)
+    const events = yield* EventRuntime.Service
+    const outcomes: Array<string | undefined> = []
+    const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+      if (event.type === SessionEvent.ProviderRequestRecorded.type)
+        outcomes.push((event as EventRuntime.Payload<typeof SessionEvent.ProviderRequestRecorded>).data.outcome)
+    }))
+    const service = yield* SessionProviderRequest.Service
+    const model = CatalogModel.Ref.make({ id: CatalogModel.ID.make("outcome"), providerID: Provider.ID.make("openai") })
+    for (const outcome of ["completed", "failed", "cancelled"] as const) {
+      const tracker = yield* service.next({ sessionID, source: "step", agent: Agent.defaultID, model,
+        routeID: "test", promptCacheKey: "cache", systemDigest: "system", toolDigest: "tools" })
+      yield* tracker.complete({
+        continuation: "full",
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        outcome,
+      })
+    }
+    yield* unsubscribe
+    expect(outcomes).toEqual(["completed", "failed", "cancelled"])
   }),
 )
 
@@ -216,7 +251,7 @@ it.effect("reads only the latest eight Step requests for the exact Session in as
         systemDigest: "system-digest",
         toolDigest: "tool-digest",
       })
-      yield* tracker.complete({
+      yield* tracker.complete({ outcome: "completed",
         continuation: "full",
         tokens: { input: 0, output: index, reasoning: 0, cache: { read: 0, write: 0 } },
         timing: { generatedTokens: index + 1, observedGenerationDurationNs: 2_000_000 },
@@ -243,7 +278,7 @@ it.effect("restores selected-model samples beyond newer requests with indexed bo
       const tracker = yield* service.next({ sessionID, source: "step", agent: Agent.defaultID,
         model: index < 2 ? { ...model, ...(index === 1 ? { profile: "work" } : {}) } : { ...model, id: CatalogModel.ID.make("newer") },
         routeID: "openai-responses", promptCacheKey: "cache", systemDigest: "system", toolDigest: "tools" })
-      yield* tracker.complete({ continuation: "full", tokens: { input: 0, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      yield* tracker.complete({ outcome: "completed", continuation: "full", tokens: { input: 0, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
         timing: index === 1 ? { receivedOutput: { estimatedTokens: 60, durationNs: 2_000_000_000 } }
           : { receivedOutput: { estimatedTokens: 40, durationNs: 1_000_000_000 } } })
     }
@@ -277,7 +312,7 @@ itWithFailingLedger.effect("contains provider-request persistence defects", () =
     })
 
     const exit = yield* Effect.exit(
-      tracker.complete({
+      tracker.complete({ outcome: "completed",
         continuation: "full",
         cost: Money.USD.zero,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -306,7 +341,7 @@ it.effect("keeps unavailable pricing distinct and summarizes the latest bounded 
       systemDigest: "system-one",
       toolDigest: "tools-one",
     })
-    yield* first.complete({
+    yield* first.complete({ outcome: "completed",
       continuation: "full",
       cost: Money.USD.make(0.01),
       tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -321,7 +356,7 @@ it.effect("keeps unavailable pricing distinct and summarizes the latest bounded 
       systemDigest: "system-one",
       toolDigest: "tools-two",
     })
-    yield* second.complete({
+    yield* second.complete({ outcome: "completed",
       continuation: "continued",
       tokens: { input: 20, output: 3, reasoning: 1, cache: { read: 100, write: 5 } },
     })
@@ -394,7 +429,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       phase: "started",
       time: 3,
     })
-    yield* tracker.complete({
+    yield* tracker.complete({ outcome: "completed",
       invalidation: "first-request",
       continuation: "full",
       cacheReadReported: true,
@@ -402,7 +437,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       cost: Money.USD.make(0.0123),
       tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
     })
-    yield* tracker.complete({
+    yield* tracker.complete({ outcome: "completed",
       invalidation: "first-request",
       continuation: "full",
       cost: Money.USD.make(0.0123),
@@ -434,6 +469,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       "inputID",
       "invalidation",
       "model",
+      "outcome",
       "promptCacheKey",
       "request",
       "routeID",
@@ -488,7 +524,7 @@ it.effect("persists true, false, and absent cache-read telemetry", () =>
         systemDigest: "system",
         toolDigest: "tools",
       })
-      yield* tracker.complete({
+      yield* tracker.complete({ outcome: "completed",
         continuation: "full",
         ...(cacheReadReported === undefined ? {} : { cacheReadReported }),
         tokens: { input: 2_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -516,7 +552,7 @@ it.effect("maintains a token and priced-cost aggregate separate from raw provide
         systemDigest: "system",
         toolDigest: "tools",
       })
-      yield* tracker.complete({
+      yield* tracker.complete({ outcome: "completed",
         continuation: "full",
         ...(cost === undefined ? {} : { cost: Money.USD.make(cost) }),
         tokens: { ...tokens, reasoning: 3, cache: { read: 40, write: 5 } },
@@ -564,7 +600,7 @@ it.effect("retains durable request usage when transcript projections are compact
       systemDigest: "system",
       toolDigest: "tools",
     })
-    yield* tracker.complete({
+    yield* tracker.complete({ outcome: "completed",
       continuation: "full",
       cost: Money.USD.make(0.25),
       tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 4 } },
@@ -605,7 +641,7 @@ it.effect("groups summary spend by model with deterministic ordering and priced 
         systemDigest: "system",
         toolDigest: "tools",
       })
-      yield* tracker.complete({
+      yield* tracker.complete({ outcome: "completed",
         continuation: "full",
         ...(cost === undefined ? {} : { cost: Money.USD.make(cost) }),
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -814,7 +850,7 @@ it.effect(
           systemDigest: "system",
           toolDigest: "tools",
         })
-        yield* tracker.complete({
+        yield* tracker.complete({ outcome: "completed",
           continuation: "full",
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         })
@@ -868,7 +904,7 @@ it.effect("records a parent cache reset after provider-isolated hidden compactio
         systemDigest: "stable-system",
         toolDigest: "stable-tools",
       })
-      yield* tracker.complete({
+      yield* tracker.complete({ outcome: "completed",
         continuation: "full",
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       })

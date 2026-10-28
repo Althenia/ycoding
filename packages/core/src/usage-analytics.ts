@@ -135,6 +135,7 @@ export const layer = Layer.effect(
             tokens: event.data.tokens,
             cost: event.data.cost,
             timing: event.data.timing,
+            outcome: event.data.outcome,
             time_created: DateTime.toEpochMillis(event.data.time),
           })
           .onConflictDoNothing()

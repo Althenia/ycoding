@@ -4,7 +4,7 @@ import { createLocalServer } from "../src/remote-local"
 test("local dashboard adapter posts the composed input once and returns every status unchanged", async () => {
   const requests: { path: string; method: string; body: unknown; directory: string | null }[] = []
   const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-  const readyWithQuota = { status: "ready" as const, asOf: 5, revision: "r1", summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens }, quota: { status: "preparing" as const } }
+  const readyWithQuota = { status: "ready" as const, asOf: 5, revision: "r1", summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens }, quota: { status: "preparing" as const }, live: { asOf: 5, active: 0, streaming: 0, models: [], history: [] } }
   const answers: unknown[] = [{ status: "preparing" }, { status: "error", message: "failed" }, readyWithQuota]
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     requests.push({ path: new URL(request.url).pathname, method: request.method, body: await request.json(), directory: request.headers.get("x-ycoding-directory") })

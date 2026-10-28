@@ -3,6 +3,7 @@ export * as UsageDashboard from "./usage-dashboard.js"
 import { Schema } from "effect"
 import { ProviderRequest } from "./provider-request.js"
 import { ProviderUsage } from "./provider-usage.js"
+import { Model } from "./model.js"
 import { NonNegativeInt, optional } from "./schema.js"
 import { UsageForecast } from "./usage-forecast.js"
 
@@ -44,12 +45,40 @@ export interface QuotaFailed extends Schema.Schema.Type<typeof QuotaFailed> {}
 export const Quota = Schema.Union([QuotaPreparing, QuotaReady, QuotaFailed]).annotate({ identifier: "UsageDashboard.Quota" })
 export type Quota = typeof Quota.Type
 
+const LiveRate = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
+export const LiveModel = Schema.Struct({
+  model: Model.Ref,
+  active: NonNegativeInt,
+  streaming: NonNegativeInt,
+  outputTokensPerSecond: LiveRate.pipe(optional),
+}).annotate({ identifier: "UsageDashboard.LiveModel" })
+export interface LiveModel extends Schema.Schema.Type<typeof LiveModel> {}
+
+export const LivePoint = Schema.Struct({
+  at: NonNegativeInt,
+  active: NonNegativeInt,
+  outputTokensPerSecond: LiveRate.pipe(optional),
+}).annotate({ identifier: "UsageDashboard.LivePoint" })
+export interface LivePoint extends Schema.Schema.Type<typeof LivePoint> {}
+
+export const Live = Schema.Struct({
+  asOf: NonNegativeInt,
+  active: NonNegativeInt,
+  streaming: NonNegativeInt,
+  outputTokensPerSecond: LiveRate.pipe(optional),
+  models: Schema.Array(LiveModel).check(Schema.isMaxLength(50)),
+  history: Schema.Array(LivePoint).check(Schema.isMaxLength(120)),
+}).annotate({ identifier: "UsageDashboard.Live" })
+export interface Live extends Schema.Schema.Type<typeof Live> {}
+
 export const Ready = Schema.Struct({
   status: Schema.Literal("ready"),
   asOf: NonNegativeInt,
   revision: Schema.String,
   summary: ProviderRequest.Summary,
   quota: Quota,
+  live: Live,
   daily: ProviderRequest.Report.pipe(optional),
   monthly: ProviderRequest.Report.pipe(optional),
   breakdown: ProviderRequest.Report.pipe(optional),

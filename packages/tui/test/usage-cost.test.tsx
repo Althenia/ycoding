@@ -20,7 +20,7 @@ test("task costs render unknown pricing, child tails and helper breakdown in nar
         children: { known: 2, pricedRequests: 1, unpricedRequests: 1 }, helpers: [{ label: "Decision", cost: { pricedRequests: 0, unpricedRequests: 1 } }] }} />
       <UsageSpeedDetails speed={{ generationSamples: 4, generationP50TokensPerSecond: 20, generationP90TokensPerSecond: 50, providerTimedSamples: 1, observedSamples: 3, samples: 2 }} />
       <QuotaForecastBlock now={600_000} forecast={{ state: "insufficient", unit: "percent", evidence: "insufficient", updatedAt: 600_000, reason: "Warming up after restart" }} /></box>
-    </ThemeProvider></ConfigProvider></TestTuiContexts>, { width, height: 20 })
+    </ThemeProvider></ConfigProvider></TestTuiContexts>, { width, height: 26 })
     try {
       app.renderer.start()
       await app.waitForFrame((frame) => frame.includes("Task cost (inclusive)"))

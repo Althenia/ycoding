@@ -5,6 +5,7 @@ import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { UsageDashboardRuntime } from "@ycoding-ai/core/usage-dashboard"
 import { UsageDashboardRead } from "@ycoding-ai/core/usage-dashboard-read"
 import { UsageViews } from "@ycoding-ai/core/usage-view"
+import { GenerationActivity } from "@ycoding-ai/core/generation-activity"
 import { Deferred, Effect, Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
@@ -121,6 +122,7 @@ const dashboardReady = {
   revision: "r1",
   summary: metrics,
   quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } },
+  live: { asOf: 6, active: 0, streaming: 0, models: [], history: [] },
   daily: { group: "day", rows: [], total: metrics, rowCount: 0 },
   monthly: { group: "month", rows: [], total: metrics, rowCount: 0 },
   breakdown: { group: "provider-model", rows: [], total: metrics, rowCount: 0 },
@@ -247,18 +249,30 @@ test("answers prepared accounting without waiting for the request's Location to 
     LocationServiceMap.Service,
     fixedLocations(boot),
   )
-  await using f = fixture(unusedSession, UsageDashboardRead.layer.pipe(Layer.provide(Layer.merge(views, locations))))
+  const live = {
+    asOf: 6,
+    active: 1,
+    streaming: 1,
+    outputTokensPerSecond: 12.5,
+    models: [],
+    history: [{ at: 6, active: 1, outputTokensPerSecond: 12.5 }],
+  }
+  const activity = Layer.mock(GenerationActivity.Service, { snapshot: () => Effect.succeed(live) })
+  await using f = fixture(
+    unusedSession,
+    UsageDashboardRead.layer.pipe(Layer.provide(Layer.mergeAll(views, locations, activity))),
+  )
   const post = () =>
     f.postWith("/api/usage/dashboard", { breakdown: dashboardInput.breakdown }, { "x-ycoding-directory": encodeURIComponent("/work/cold") })
 
   const first = await Promise.race([post(), Bun.sleep(2_000).then(() => undefined)])
   expect(first?.status).toBe(200)
   expect(await first!.json()).toEqual({
-    data: { status: "ready", asOf: 5, revision: "r1", summary: metrics, quota: { status: "preparing" }, breakdown: dashboardReady.breakdown },
+    data: { status: "ready", asOf: 5, revision: "r1", summary: metrics, quota: { status: "preparing" }, live, breakdown: dashboardReady.breakdown },
   })
   expect(booted).toEqual([])
   Effect.runSync(Deferred.succeed(gate, undefined))
-  const served = { data: { status: "ready", asOf: 5, revision: "r1", summary: metrics, quota, breakdown: dashboardReady.breakdown } }
+  const served = { data: { status: "ready", asOf: 5, revision: "r1", summary: metrics, quota, live, breakdown: dashboardReady.breakdown } }
   let later: unknown
   for (let attempt = 0; attempt < 100 && !Bun.deepEquals(later, served); attempt++) {
     if (attempt > 0) await Bun.sleep(10)

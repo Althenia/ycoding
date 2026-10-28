@@ -96,6 +96,11 @@ export const UsageViewRowTable = sqliteTable(
     observed: integer().notNull(),
     generation_tokens: real().notNull(),
     generation_duration: real().notNull(),
+    generation_rate: real().notNull().default(0),
+    busy_ms: integer().notNull().default(0),
+    failed: integer().notNull().default(0),
+    cancelled: integer().notNull().default(0),
+    outcomes: integer().notNull().default(0),
   },
   (table) => [
     primaryKey({ columns: [table.state, table.generation, table.key] }),

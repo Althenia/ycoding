@@ -31,7 +31,7 @@ const record = {
 }
 
 test("encodes live received-output diagnostics without undefined fields", () => {
-  const live = { requestID: ProviderRequest.ID.make("prq_live"), attempt: 1 }
+  const live = { requestID: ProviderRequest.ID.make("prq_live"), attempt: 1, phase: "waiting" as const }
   expect(Schema.encodeSync(SessionCacheDiagnostics.GenerationSpeedHistory)({ recent: [], live: { ...live, sample: undefined } }))
     .toEqual({ recent: [], live })
   expect(() => Schema.decodeUnknownSync(SessionCacheDiagnostics.GenerationSpeedHistory)({ recent: [], live: { ...live, attempt: 0 } })).toThrow()
@@ -211,4 +211,46 @@ test("keeps report metrics aggregate-only and requires cost provenance", () => {
   ])
   expect(() => decodeReport({ ...report, total: { ...metrics, costProvenance: undefined } })).toThrow()
   expect(() => decodeReport({ ...report, total: { ...metrics, cost: undefined } })).toThrow()
+})
+
+test("record outcome is optional and bounded to completed, failed, cancelled", () => {
+  expect(decode(record).outcome).toBeUndefined()
+  for (const outcome of ["completed", "failed", "cancelled"] as const) expect(decode({ ...record, outcome }).outcome).toBe(outcome)
+  expect(() => decode({ ...record, outcome: "timeout" })).toThrow()
+  expect(Object.keys(Schema.encodeSync(ProviderRequest.Record)(decode(record)))).not.toContain("outcome")
+})
+
+test("report speed gains tail percentiles and mean rate; rows gain outcomes and concurrency", () => {
+  const speed = {
+    samples: 3, generationSamples: 3, providerTimedSamples: 1, observedSamples: 2,
+    generationP95TokensPerSecond: 90.5, meanTokensPerSecond: 40, firstOutputP99Ms: 900, totalP99Ms: 9_000,
+  }
+  expect(Schema.decodeUnknownSync(ProviderRequest.Speed)(speed)).toEqual(speed)
+  for (const bad of [{ generationP95TokensPerSecond: -1 }, { meanTokensPerSecond: Number.POSITIVE_INFINITY }, { firstOutputP99Ms: -1 }, { totalP99Ms: 1.5 }])
+    expect(() => Schema.decodeUnknownSync(ProviderRequest.Speed)({ ...speed, ...bad })).toThrow()
+  const metrics = {
+    logical: 1, physical: 2, helpers: 0, continued: 0, fallback: 0,
+    tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+    outcomes: { completed: 1, failed: 1, cancelled: 0 },
+  }
+  const report = decodeReport({ group: "hour", rows: [{ key: "k", label: "k", ...metrics, concurrency: 1.5, speed }], total: metrics, rowCount: 1 })
+  expect(report.rows[0]?.concurrency).toBe(1.5)
+  expect(report.rows[0]?.outcomes).toEqual(metrics.outcomes)
+  expect(report.total.outcomes).toEqual(metrics.outcomes)
+  const { outcomes: _, ...bare } = metrics
+  expect(decodeReport({ group: "hour", rows: [], total: bare, rowCount: 0 }).total.outcomes).toBeUndefined()
+  expect(() => decodeReport({ group: "hour", rows: [{ key: "k", label: "k", ...metrics, concurrency: -1 }], total: metrics, rowCount: 1 })).toThrow()
+  expect(() => decodeReport({ group: "hour", rows: [], total: { ...metrics, outcomes: { completed: 1, failed: 1 } }, rowCount: 0 })).toThrow()
+  expect(() => decodeReport({ group: "hour", rows: [], total: { ...metrics, outcomes: { completed: -1, failed: 0, cancelled: 0 } }, rowCount: 0 })).toThrow()
+})
+
+test("report speed is optional overall and round-trips", () => {
+  const total = { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+  const speed = { samples: 2, generationSamples: 2, providerTimedSamples: 0, observedSamples: 2, generationP50TokensPerSecond: 30, totalP99Ms: 800 }
+  const report = { group: "model" as const, rows: [], total, rowCount: 0 }
+  expect(decodeReport(report).speed).toBeUndefined()
+  expect(decodeReport({ ...report, speed }).speed).toEqual(speed)
+  expect(Schema.encodeSync(ProviderRequest.Report)(decodeReport(report))).toEqual(report)
+  expect(Schema.encodeSync(ProviderRequest.Report)(decodeReport({ ...report, speed }))).toEqual({ ...report, speed })
+  expect(() => decodeReport({ ...report, speed: { ...speed, samples: -1 } })).toThrow()
 })

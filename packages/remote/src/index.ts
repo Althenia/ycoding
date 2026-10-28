@@ -1615,7 +1615,8 @@ export type RemoteUsageProvidersValue = { readonly data: readonly RemoteUsagePro
 export type RemoteUsageMetrics = { readonly logical: number; readonly physical: number; readonly helpers: number;
   readonly continued: number; readonly fallback: number; readonly tokens: RemoteUsageTokens;
   readonly cost?: number; readonly costProvenance?: "recorded" | "current_catalog"; readonly cacheReadReported?: boolean;
-  readonly costCoverage?: RemoteUsageCostCoverage }
+  readonly costCoverage?: RemoteUsageCostCoverage;
+  readonly outcomes?: { readonly completed: number; readonly failed: number; readonly cancelled: number } }
 export type RemoteUsageCostCoverage = { readonly pricedRequests: number; readonly unpricedRequests: number }
 export type RemoteUsageSummaryValue = { readonly data: RemoteUsageMetrics & {
   readonly models?: readonly { readonly model: { readonly providerID: string; readonly id: string; readonly variant?: string };
@@ -1639,15 +1640,18 @@ export type RemoteUsageDimensions =
   | { readonly group: "profile"; readonly providerID: string; readonly profile?: string; readonly profileState: "recorded" | "provider-default" }
   | { readonly group: "prompt"; readonly anchor?: RemoteUsageAnchor; readonly attribution: "complete" | "partial" | "unattributed" }
   | { readonly group: "task"; readonly sessionID?: string; readonly attribution: "complete" | "partial" | "unattributed" }
+export type RemoteUsageSpeed = { readonly firstOutputP50Ms?: number; readonly firstOutputP95Ms?: number; readonly firstOutputP99Ms?: number;
+      readonly totalP50Ms?: number; readonly totalP95Ms?: number; readonly totalP99Ms?: number; readonly outputTokensPerSecond?: number; readonly samples: number;
+      readonly generationSamples: number; readonly generationP50TokensPerSecond?: number; readonly generationP90TokensPerSecond?: number;
+      readonly generationP95TokensPerSecond?: number; readonly meanTokensPerSecond?: number;
+      readonly providerTimedSamples: number; readonly observedSamples: number }
 export type RemoteUsageReportValue = { readonly data: { readonly group: RemoteUsageGroup;
   readonly rows: readonly (RemoteUsageMetrics & { readonly key: string; readonly label: string;
     readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string };
     readonly dimensions?: RemoteUsageDimensions;
-    readonly speed?: { readonly firstOutputP50Ms?: number; readonly firstOutputP95Ms?: number;
-      readonly totalP50Ms?: number; readonly totalP95Ms?: number; readonly outputTokensPerSecond?: number; readonly samples: number;
-      readonly generationSamples: number; readonly generationP50TokensPerSecond?: number; readonly generationP90TokensPerSecond?: number;
-      readonly providerTimedSamples: number; readonly observedSamples: number } })[];
-  readonly total: RemoteUsageMetrics; readonly rowCount: number; readonly nextOffset?: number } }
+    readonly concurrency?: number;
+    readonly speed?: RemoteUsageSpeed })[];
+  readonly total: RemoteUsageMetrics; readonly rowCount: number; readonly nextOffset?: number; readonly speed?: RemoteUsageSpeed } }
 
 export type RemoteUsageCost = RemoteUsageCostCoverage & { readonly total?: number; readonly known?: number; readonly provenance?: "recorded" | "current_catalog" }
 export type RemoteUsageBreakdown = { readonly requests: number; readonly tokens: RemoteUsageTokens; readonly cost: RemoteUsageCost }
@@ -1676,6 +1680,10 @@ export type RemoteUsageForecast = { readonly asOf: number; readonly localScope: 
     readonly exhaustionAt?: number; readonly projectedUsedAtReset?: number; readonly pace?: RemoteQuotaPace }[] }
 export type RemoteUsageForecastValue = { readonly data: RemoteUsageForecast }
 export type RemoteUsageDashboardInput = { readonly daily?: RemoteUsageReportInput; readonly monthly?: RemoteUsageReportInput; readonly breakdown?: RemoteUsageReportInput; readonly refresh?: boolean }
+export type RemoteUsageLiveModel = { readonly model: { readonly providerID: string; readonly id: string; readonly variant?: string; readonly profile?: string };
+  readonly active: number; readonly streaming: number; readonly outputTokensPerSecond?: number }
+export type RemoteUsageLive = { readonly asOf: number; readonly active: number; readonly streaming: number; readonly outputTokensPerSecond?: number;
+  readonly models: readonly RemoteUsageLiveModel[]; readonly history: readonly { readonly at: number; readonly active: number; readonly outputTokensPerSecond?: number }[] }
 export type RemoteUsageDashboardQuota =
   | { readonly status: "preparing" }
   | { readonly status: "ready"; readonly providers: readonly RemoteUsageProvider[]; readonly forecast: RemoteUsageForecast }
@@ -1683,7 +1691,7 @@ export type RemoteUsageDashboardQuota =
 export type RemoteUsageDashboard =
   | { readonly status: "preparing" }
   | { readonly status: "error"; readonly message: string }
-  | { readonly status: "ready"; readonly asOf: number; readonly revision: string; readonly summary: RemoteUsageSummaryValue["data"]; readonly quota: RemoteUsageDashboardQuota;
+  | { readonly status: "ready"; readonly asOf: number; readonly revision: string; readonly summary: RemoteUsageSummaryValue["data"]; readonly quota: RemoteUsageDashboardQuota; readonly live: RemoteUsageLive;
     readonly daily?: RemoteUsageReportValue["data"]; readonly monthly?: RemoteUsageReportValue["data"]; readonly breakdown?: RemoteUsageReportValue["data"] }
 export type RemoteUsageDashboardValue = { readonly data: RemoteUsageDashboard }
 

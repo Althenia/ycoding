@@ -342,7 +342,7 @@ describe("per-session profiles", () => {
           systemDigest: "fixture",
           toolDigest: "fixture",
         })
-        yield* tracker.complete({ assistantMessageID: messageID, continuation: "full", tokens })
+        yield* tracker.complete({ outcome: "completed", assistantMessageID: messageID, continuation: "full", tokens })
         const second = yield* fixture.models.resolve(yield* sessions.get(root.id))
         expect(second.accountIdentityDigest).toBe(first.accountIdentityDigest)
         expect(namespace(second)).toBe(namespace(first))

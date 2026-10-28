@@ -33,6 +33,7 @@ import { SessionTable } from "../src/session/sql"
 import { UsageAnalytics } from "../src/usage-analytics"
 import { UsageDashboardRuntime } from "../src/usage-dashboard"
 import { UsageDashboardRead } from "../src/usage-dashboard-read"
+import { GenerationActivity } from "../src/generation-activity"
 import { UsageViews } from "../src/usage-view"
 import { UsageViewStart } from "../src/usage-view-start"
 import { UsageViewRecipe } from "../src/usage-view-recipe"
@@ -201,6 +202,7 @@ type Spec = {
   readonly input: number
   readonly total?: number
   readonly first?: number
+  readonly outcome?: ProviderRequest.Outcome
 }
 
 const seedSessions = Effect.gen(function* () {
@@ -233,6 +235,7 @@ const record = (spec: Spec) =>
       attempts: 1,
       invalidation: "first-request" as const,
       continuation: "full" as const,
+      ...(spec.outcome === undefined ? {} : { outcome: spec.outcome }),
       ...(spec.cost === undefined ? {} : { cost: Money.USD.make(spec.cost) }),
       ...(spec.total === undefined
         ? {}
@@ -263,6 +266,7 @@ const specs = (count: number, offset = 0): Spec[] =>
       input: value % 7 === 0 ? 1_500 : 100 + value,
       total: 50 + ((value * 37) % 400),
       first: (value * 13) % 50,
+      ...(value % 4 === 0 ? {} : { outcome: (["completed", "failed", "cancelled"] as const)[(value % 4) - 1] }),
     }
   })
 
@@ -277,6 +281,17 @@ const recipes: ReadonlyArray<ProviderRequest.ReportInput> = [
   { group: "hour", timeZone: "Asia/Kathmandu", from: base, to: base + day, sort: "key", order: "desc", limit: 5 },
   { group: "provider", providerID: Provider.ID.make("openai"), from: base, to: base + 2 * day, sort: "cost", order: "desc" },
 ]
+
+const filteredDaily: ProviderRequest.ReportInput = {
+  group: "day",
+  providerID: Provider.ID.make("openai"),
+  modelID: Model.ID.make("m1"),
+  timeZone: "America/New_York",
+  from: base - day,
+  to: base + 4 * day,
+  sort: "key",
+  order: "asc",
+}
 
 const readViewsCapability = Effect.map(
   LocationServiceMap.Service,
@@ -346,11 +361,32 @@ test("registered views prepare exact summary and report recipes and serve ready 
       const expected = yield* oracle(recipes)
       expect(normalize(prepared.summary)).toEqual(normalize(expected.summary))
       expect(normalize(prepared.reports)).toEqual(normalize(expected.reports))
+      expect(prepared.reports.every((report) => report.speed !== undefined)).toBe(true)
+      const filtered = (yield* ready([filteredDaily])).reports[0]!
+      expect(normalize(filtered)).toEqual(normalize((yield* oracle([filteredDaily])).reports[0]))
+      expect(filtered.total.logical).toBeGreaterThan(0)
+      expect(filtered.total.logical).toBeLessThan(prepared.reports[0]!.total.logical)
+      expect(filtered.speed!.samples).toBe(filtered.total.logical)
+      expect(filtered.rows.every((row) => row.concurrency !== undefined && row.outcomes !== undefined)).toBe(true)
+      const tasks: ReadonlyArray<ProviderRequest.ReportInput> = [{ group: "task", sort: "cost", order: "desc" }]
+      const task = yield* ready(tasks)
+      expect(task.reports[0]!.speed).toBeDefined()
+      expect(normalize(task.reports)).toEqual(normalize((yield* oracle(tasks)).reports))
       const empty = yield* fixture.watch(readViews([]))
       expect(empty.result).toMatchObject({ status: "ready", reports: [] })
       expect(empty.analytics).toEqual([])
       const other = yield* ready([recipes[1]!, { ...recipes[1]!, offset: 1, limit: 1 }])
       expect(other.revision).toBe(prepared.revision)
+      const generation = yield* generationOf(filteredDaily)
+      for (const spec of specs(24, 60)) yield* record(spec)
+      const appended = yield* until(
+        readViews([filteredDaily]),
+        (value) => value.status === "ready" && value.revision !== prepared.revision,
+        "filtered daily append",
+      )
+      expect(appended.status === "ready" && normalize(appended.reports)).toEqual(normalize((yield* oracle([filteredDaily])).reports))
+      expect(appended.status === "ready" && appended.reports[0]!.total.logical).toBeGreaterThan(filtered.total.logical)
+      expect(yield* generationOf(filteredDaily)).toBe(generation)
     }).pipe(Effect.provide(fixture.runtime), Effect.scoped),
   )
 }, 120_000)
@@ -816,9 +852,20 @@ test("preparation of one high-volume cell with more than ten thousand distinct v
       yield* UsageAnalytics.backfill(db)
       yield* UsageStage.backfill(db)
       fixture.statements.length = 0
-      const pages: Array<{ readonly kind: "heavy" | "batch"; readonly rows: number; readonly seek: boolean }> = []
+      const pages: Array<{ readonly kind: "heavy" | "batch" | "total"; readonly rows: number; readonly seek: boolean }> = []
       fixture.hooks.inspect = (query, params) => {
         if (!query.trimStart().startsWith("INSERT INTO temp.usage_build_sample")) return
+        if (query.includes("FROM temp.usage_build_sample")) {
+          const body = `SELECT 1 ${query.slice(query.indexOf("FROM temp.usage_build_sample"), query.indexOf("ON CONFLICT"))}`
+          pages.push({
+            kind: "total",
+            rows: fixture.count(body, params),
+            seek: fixture
+              .explain(body, params)
+              .some((row) => /SEARCH (?:temp\.)?usage_build_sample USING PRIMARY KEY \((?:key>\?|\(key,metric,value\)>)/.test(row.detail)),
+          })
+          return
+        }
         const heavy = query.indexOf("FROM (SELECT") >= 0 || /FROM \(\s*SELECT/.test(query)
         const body = heavy
           ? query.slice(query.search(/FROM \(\s*SELECT/) + 6, query.lastIndexOf(") WHERE 1"))
@@ -834,6 +881,7 @@ test("preparation of one high-volume cell with more than ten thousand distinct v
       fixture.hooks.inspect = undefined
       expect(normalize(prepared.reports)).toEqual(normalize((yield* oracle([wide])).reports))
       expect(pages.filter((page) => page.kind === "heavy" && page.rows > 0).length).toBeGreaterThanOrEqual(2)
+      expect(pages.filter((page) => page.kind === "total" && page.rows > 0).length).toBeGreaterThanOrEqual(2)
       expect(Math.max(...pages.map((page) => page.rows))).toBeLessThanOrEqual(10_000)
       expect(pages.every((page) => page.seek)).toBe(true)
       expect(fixture.statements.some((statement) => /OVER\s*\(PARTITION BY key,\s*metric/i.test(statement.sql))).toBe(false)
@@ -894,7 +942,12 @@ const facadeOf = (state: Overlay, clock?: Clock.Clock) =>
     Layer.provide(clock ? Layer.succeed(Clock.Clock, clock) : Layer.empty),
   )
 
-const composed = (state: Overlay, clock?: Clock.Clock) =>
+const idle: UsageDashboard.Live = { asOf: 0, active: 0, streaming: 0, models: [], history: [] }
+
+const activityOf = (live: { current: UsageDashboard.Live }) =>
+  Layer.succeed(GenerationActivity.Service, { snapshot: () => Effect.sync(() => live.current) } as never)
+
+const composed = (state: Overlay, clock?: Clock.Clock, live: { current: UsageDashboard.Live } = { current: idle }) =>
   UsageDashboardRead.layer.pipe(
     Layer.provide(
       Layer.effect(
@@ -902,6 +955,7 @@ const composed = (state: Overlay, clock?: Clock.Clock) =>
         fixedLocations(() => facadeOf(state, clock)),
       ),
     ),
+    Layer.provide(activityOf(live)),
   )
 
 test("the dashboard answers ready accounting while the passive quota overlay prepares, and fences account changes", () => {
@@ -929,7 +983,7 @@ test("the dashboard answers ready accounting while the passive quota overlay pre
       expect(state.calls).toEqual(before)
       expect(served.analytics).toEqual([])
       const summaryOnly = yield* until(dashboard.read(here, {}), quotaReady, "summary only")
-      expect(Object.keys(summaryOnly).toSorted()).toEqual(["asOf", "quota", "revision", "status", "summary"])
+      expect(Object.keys(summaryOnly).toSorted()).toEqual(["asOf", "live", "quota", "revision", "status", "summary"])
       state.label = "second"
       yield* db.run(
         sql`INSERT INTO credential (id, integration_id, label, value, generation, account_generation, active, time_created, time_updated)
@@ -1039,6 +1093,42 @@ test("the dashboard graph keeps one global view owner that never depends on the 
   expect(visit(UsageDashboardRuntime.node).has(UsageViews.node)).toBe(false)
   expect(UsageDashboardRead.node.dependencies).toContain(UsageViews.node)
   expect(UsageDashboardRead.node.dependencies).toContain(LocationServiceMap.node)
+  expect(UsageDashboardRead.node.dependencies).toContain(GenerationActivity.node)
+  expect(visit(GenerationActivity.node).has(LocationServiceMap.node)).toBe(false)
   expect(UsageViewStart.node.dependencies).toContain(UsageViews.node)
   expect(UsageViewStart.node.dependencies).toContain(LocationServiceMap.node)
 })
+
+test("ready dashboards compose the in-memory live activity snapshot without changing the accounting revision or lookup", () => {
+  const fixture = harness()
+  const state: Overlay = { calls: { list: 0, refresh: 0, forecast: 0 }, label: "first", failing: false }
+  const model = Model.Ref.make({ providerID: Provider.ID.make("openai"), id: Model.ID.make("m1") })
+  const live = { current: idle }
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      yield* seedSessions
+      for (const spec of specs(12)) yield* record(spec)
+      const accounting = yield* ready([recipes[1]!])
+      const dashboard = Context.get(yield* Layer.build(composed(state, undefined, live)), UsageDashboardRead.Service)
+      const input = { breakdown: recipes[1]! }
+      const first = yield* until(dashboard.read(here, input), (value) => value.status === "ready", "ready dashboard")
+      expect(first).toMatchObject({ status: "ready", revision: accounting.revision, live: idle })
+      live.current = {
+        asOf: Date.now(),
+        active: 2,
+        streaming: 1,
+        outputTokensPerSecond: 42.5,
+        models: [{ model, active: 2, streaming: 1, outputTokensPerSecond: 42.5 }],
+        history: [{ at: Date.now() - 5_000, active: 1 }, { at: Date.now(), active: 2, outputTokensPerSecond: 42.5 }],
+      }
+      const served = yield* fixture.watch(dashboard.read(here, input))
+      const statements = [...fixture.queries]
+      expect(served.result).toMatchObject({ status: "ready", revision: accounting.revision, live: live.current })
+      expect(served.analytics).toEqual([])
+      expect(statements.filter((query) => /\busage_view_/i.test(query))).toHaveLength(2)
+      live.current = { ...live.current, active: 0, streaming: 0, models: [] }
+      const quiet = yield* dashboard.read(here, input)
+      expect(quiet).toMatchObject({ status: "ready", revision: accounting.revision, live: { active: 0, streaming: 0, models: [] } })
+    }).pipe(Effect.provide(fixture.runtime), Effect.scoped),
+  )
+}, 120_000)

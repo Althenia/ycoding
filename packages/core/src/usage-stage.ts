@@ -65,6 +65,11 @@ const sums = [
   ["observed", "count(CASE WHEN valid AND NOT provider_timed THEN 1 END)"],
   ["generation_tokens", "total(CASE WHEN valid THEN gen_tokens END)"],
   ["generation_duration", "total(CASE WHEN valid THEN gen_duration END)"],
+  ["generation_rate", "total(CASE WHEN valid THEN gen_tokens * 1000000000.0 / gen_duration END)"],
+  ["busy_ms", "sum(total_ms)"],
+  ["failed", "sum(outcome = 'failed')"],
+  ["cancelled", "sum(outcome = 'cancelled')"],
+  ["outcomes", "count(outcome)"],
 ] as const
 
 const representative = [
@@ -84,7 +89,7 @@ const grains = (family: Family, predicate: SQL) => {
     SELECT ${sql.raw(config.select)}, ${sql.raw(config.key)} AS key, r.time_created AS time, ${sql.raw(config.updated)} AS updated,
       r.id AS source_id, r.request AS request, r.attempts AS attempts, r.source AS kind, r.continuation AS continuation, r.cost AS cost,
       coalesce(r.cache_read_reported, 0) AS reported, r.invalidation AS invalidation,
-      substr(r.prompt_cache_key, 1, 8) AS namespace, r.timing AS timing,
+      substr(r.prompt_cache_key, 1, 8) AS namespace, r.timing AS timing, r.outcome AS outcome,
       json_extract(r.tokens, '$.input') AS input, json_extract(r.tokens, '$.output') AS output,
       json_extract(r.tokens, '$.reasoning') AS reasoning, json_extract(r.tokens, '$.cache.read') AS cache_read,
       json_extract(r.tokens, '$.cache.write') AS cache_write,

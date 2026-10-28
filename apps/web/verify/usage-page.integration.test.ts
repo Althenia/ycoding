@@ -177,7 +177,7 @@ test("provider allowances, spend, chart and breakdown reflow without overflow ac
           await wait(page, `document.querySelector('#usage-breakdown-panel tbody tr')?.textContent?.includes('Session') === true`)
           await page.evaluate(`document.querySelector('.usage-breakdown__table-toggle')?.click()`)
           expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('.usage-breakdown__table')).display`)).not.toBe("none")
-          await page.evaluate(`document.querySelector('.usage-breakdown th:last-child button')?.click()`)
+          await page.evaluate(`document.querySelector('.usage-breakdown button[aria-label="Sort by Cost"]')?.click()`)
           await page.evaluate(`document.querySelector('.usage-pagination button:last-child')?.click()`)
           expect(await page.evaluate<unknown>(`window.usageRequests().filter(item => item.input?.breakdown?.group === 'session').at(-1)?.input?.breakdown`)).toMatchObject({ group: "session", sort: "cost", order: "asc", offset: 25 })
           await page.evaluate(`document.querySelector('.usage-refresh')?.click()`)
@@ -461,7 +461,7 @@ test("accounting renders while quota is preparing, and quota arrival fills provi
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?quota-preparing`)
     await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25 && document.querySelectorAll('.usage-tile').length === 3 && document.querySelectorAll('.usage-donut__arc').length === 2`)
     expect(await page.evaluate<{ providers: number; labels: string[] }>(`({ providers: document.querySelectorAll('.usage-provider').length, labels: [...document.querySelectorAll('.usage-page .loading-placeholder')].map((item) => item.textContent.trim()) })`)).toEqual({ providers: 0, labels: ["Preparing provider quotas…", "Preparing recorded consumption…"] })
-    await page.evaluate(`window.usageNodes = { header: document.querySelector('.usage-head'), tiles: document.querySelector('.usage-tiles'), charts: document.querySelector('.usage-visuals'), table: document.querySelector('.usage-breakdown table') }; document.querySelector('.usage-breakdown th:last-child button')?.click()`)
+    await page.evaluate(`window.usageNodes = { header: document.querySelector('.usage-head'), tiles: document.querySelector('.usage-tiles'), charts: document.querySelector('.usage-visuals'), table: document.querySelector('.usage-breakdown table') }; document.querySelector('.usage-breakdown button[aria-label="Sort by Cost"]')?.click()`)
     await wait(page, `window.usageRequests().some(item => item.input?.breakdown?.order === 'asc')`)
     await wait(page, `document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'false' && document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
     await page.evaluate(`window.usageNodes = { header: document.querySelector('.usage-head'), tiles: document.querySelector('.usage-tiles'), charts: document.querySelector('.usage-visuals'), table: document.querySelector('.usage-breakdown table') }; window.usageReleaseQuota()`)
@@ -509,7 +509,7 @@ test("sort and group changes retain the same table while only its report changes
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?paged`)
     await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
     await page.evaluate(`window.usageTable = document.querySelector('.usage-breakdown table')`)
-    await page.evaluate(`document.querySelector('.usage-breakdown th:last-child button')?.click()`)
+    await page.evaluate(`document.querySelector('.usage-breakdown button[aria-label="Sort by Cost"]')?.click()`)
     await wait(page, `window.usageRequests().some(item => item.input?.breakdown?.order === 'asc')`)
     expect(await page.evaluate<boolean>(`window.usageTable === document.querySelector('.usage-breakdown table') && document.querySelectorAll('.usage-breakdown tbody tr').length === 25 && document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'true'`)).toBe(true)
     await page.evaluate(`window.usageReleasePage()`)
@@ -802,6 +802,115 @@ test("first Usage reads reserve visible placeholders without replacing settled c
     } finally { await page.close() }
   }
 }, 180_000)
+
+test("the generation overview states live, monthly, estimated, and unreported figures and reflows without overflow", async () => {
+  for (const [width, height] of [[390, 844], [1440, 900]]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width!, height!)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?live`)
+      await wait(page, `document.querySelectorAll('.usage-figure').length === 9 && document.querySelectorAll('[data-chart="live-rate"] polyline').length > 0`)
+      const figures = await page.evaluate<Record<string, string>>(`Object.fromEntries([...document.querySelectorAll('.usage-figure')].map(item => [item.dataset.figure, item.innerText.replace(/\\s+/g, ' ')]))`)
+      expect(figures.active).toContain("Active generations 2")
+      expect(figures.live).toContain("≈ 42.5 tok/s")
+      expect(figures.average).toContain("36.1 tok/s")
+      expect(figures.average).toContain("Mean of 15 per-request rates")
+      expect(figures.ttft).toContain("p50 330 ms · p95 940 ms")
+      expect(figures.requests).toContain("14")
+      expect(figures.outcomes).toContain("13 completed · 1 failed · 0 cancelled")
+      expect(figures.cost).toContain("Estimate")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
+      expect(await page.evaluate<string>(`document.querySelector('.usage-live-models')?.innerText ?? ''`)).toContain("gpt-6-sol")
+    } finally { await page.close() }
+  }
+  const idle = await browser!.openPage()
+  try {
+    await idle.setViewport(1440, 900)
+    await idle.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+    await wait(idle, `document.querySelectorAll('.usage-figure').length === 9`)
+    expect(await idle.evaluate<string>(`document.querySelector('[data-figure="live"]').innerText`)).toContain("Idle")
+    expect(await idle.evaluate<string>(`document.querySelector('[data-chart="live-rate"]').innerText`)).toContain("No live output")
+  } finally { await idle.close() }
+}, 60_000)
+
+test("performance trends render each daily series with exact values in a table and no overflow", async () => {
+  for (const width of [390, 820, 1440]) {
+    const page = await browser!.openPage()
+    try {
+      await page.setViewport(width, 900)
+      await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+      await wait(page, `document.querySelectorAll('.usage-trends [data-chart]').length === 7`)
+      expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-trends [data-chart]')].map(item => item.dataset.chart)`)).toEqual(["requests", "tokens", "ttft", "latency", "errors", "throughput", "concurrency"])
+      expect(await page.evaluate<number>(`document.querySelectorAll('[data-chart="tokens"] .usage-series__legend li').length`)).toBe(5)
+      expect(await page.evaluate<number>(`document.querySelectorAll('[data-chart="errors"] rect[data-series="errorRate"]').length`)).toBe(30)
+      expect(await page.evaluate<number>(`document.querySelectorAll('[data-chart="ttft"] polyline[data-series="p95"]').length`)).toBeGreaterThan(1)
+      await page.evaluate(`document.querySelector('[data-chart="ttft"] .usage-series__head button').click()`)
+      expect(await page.evaluate<number>(`document.querySelectorAll('[data-chart="ttft"] tbody tr').length`)).toBe(30)
+      expect(await page.evaluate<string>(`document.querySelector('[data-chart="ttft"] tbody tr:nth-child(5) td')?.textContent ?? ''`)).toBe("N/A")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.usage-trends .usage-series')].every(item => item.getBoundingClientRect().right <= document.querySelector('.usage-trends').getBoundingClientRect().right + 1)`)).toBe(true)
+    } finally { await page.close() }
+  }
+}, 60_000)
+
+test("model speed comparison ranks measurable models, and the breakdown adds speed columns with N/A and provider drill-down", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1440, 900)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html`)
+    await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25 && document.querySelectorAll('[data-model-speed]').length === 3`)
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('[data-model-speed]')].map(item => item.dataset.modelSpeed)`)).toEqual(["openrouter/deepseek-v4", "openai/gpt-5", "openai/gpt-6-sol"])
+    expect(await page.evaluate<string>(`document.querySelector('[data-model-speed] strong').textContent`)).toBe("37 tok/s")
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-breakdown thead th')].map(item => item.textContent.replace(/[↑↓↕]/g, '').trim()).slice(-4)`)).toEqual(["Cost", "Avg tok/s", "Agg tok/s", "P95 TTFT"])
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-breakdown tbody tr:nth-child(5) td')].slice(-3).map(item => item.textContent)`)).toEqual(["N/A", "N/A", "N/A"])
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.usage-breakdown tbody tr:nth-child(1) td')].slice(-3).map(item => item.textContent)`)).toEqual(["35 tok/s", "33 tok/s", "900 ms"])
+    await selectSessionGroup(page, "Provider")
+    await wait(page, `document.querySelectorAll('.usage-drill').length > 0`)
+    await page.evaluate(`document.querySelector('.usage-drill').click()`)
+    await wait(page, `window.usageRequests().some(item => item.input?.breakdown?.group === 'provider-model' && item.input.breakdown.providerID === 'openai')`)
+    await wait(page, `document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'false' && document.querySelectorAll('.usage-drill').length === 0`)
+    await wait(page, `window.usageRequests().some(item => item.input?.daily?.providerID === 'openai' && !item.input.monthly?.providerID)`)
+    expect(await page.evaluate<string>(`document.querySelector('.usage-spend__scope')?.textContent ?? ''`)).toContain("Provider Codex")
+    expect(await page.evaluate<string>(`document.querySelector('.usage-visuals .usage-chart__head p')?.textContent ?? ''`)).toContain("Provider Codex")
+    expect(await page.evaluate<string>(`document.querySelector('[data-chart="requests"] .usage-series__head p')?.textContent ?? ''`)).toContain("Provider Codex")
+    expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= document.documentElement.clientWidth`)).toBe(true)
+  } finally { await page.close() }
+}, 60_000)
+
+test("live polling runs only while generations are active, keeps mounted tables, sort and scroll, and stops when idle", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.setViewport(1024, 768)
+    await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?live`)
+    await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25 && document.querySelectorAll('.usage-figure').length === 9`)
+    await page.evaluate(`document.querySelector('button[aria-label="Sort by Output"]').click()`)
+    await wait(page, `window.usageRequests().some(item => item.input?.breakdown?.sort === 'output') && document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') === 'false'`)
+    await page.evaluate(`(() => { document.querySelector('.usage-pagination').scrollIntoView({ block: 'center' }); window.usageNodes = { table: document.querySelector('.usage-breakdown table'), row: document.querySelector('.usage-breakdown tbody tr'), figures: document.querySelector('.usage-figures') }; window.usageScroll = document.scrollingElement.scrollTop })()`)
+    const before = await page.evaluate<number>(`window.usageRequests().length`)
+    const busy: (string | null)[] = []
+    const polled = await page.evaluate<number>(`window.usageRequests().length`)
+    for (let index = 0; index < 60 && (await page.evaluate<number>(`window.usageRequests().length`)) < polled + 2; index++) {
+      busy.push(await page.evaluate<string | null>(`document.querySelector('.usage-breakdown')?.getAttribute('aria-busy') ?? null`))
+      busy.push(await page.evaluate<string | null>(`document.querySelector('.usage-refresh')?.getAttribute('aria-busy') ?? null`))
+      await Bun.sleep(100)
+    }
+    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBeGreaterThanOrEqual(polled + 2)
+    expect(busy.every((value) => value === "false")).toBe(true)
+    expect(await page.evaluate<boolean>(`window.usageNodes.table === document.querySelector('.usage-breakdown table') && window.usageNodes.row === document.querySelector('.usage-breakdown tbody tr') && window.usageNodes.figures === document.querySelector('.usage-figures')`)).toBe(true)
+    expect(await page.evaluate<boolean>(`Math.abs(document.scrollingElement.scrollTop - window.usageScroll) < 2`)).toBe(true)
+    expect(await page.evaluate<boolean>(`!document.querySelector('.usage-pagination button:last-child').disabled`)).toBe(true)
+    expect(await page.evaluate<unknown>(`window.usageRequests().at(-1).input.breakdown.sort`)).toBe("output")
+    expect(await page.evaluate<boolean>(`window.usageRequests().slice(${before}).every(item => item.operation === 'usage.dashboard')`)).toBe(true)
+    await page.evaluate(`window.usageSetLive(0)`)
+    await wait(page, `document.querySelector('[data-figure="live"]').innerText.includes('Idle')`)
+    expect(await page.evaluate<string>(`document.querySelector('[data-figure="active"]').innerText`)).toContain("0")
+    await Bun.sleep(500)
+    const settled = await page.evaluate<number>(`window.usageRequests().length`)
+    await Bun.sleep(4_500)
+    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(settled)
+    expect(await page.evaluate<boolean>(`window.usageNodes.table === document.querySelector('.usage-breakdown table')`)).toBe(true)
+  } finally { await page.close() }
+}, 90_000)
 
 async function selectSessionGroup(page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["openPage"]>>, label = "Sessions") {
   const phone = await page.evaluate<boolean>(`!!document.querySelector('.usage-filter-bar__trigger')`)

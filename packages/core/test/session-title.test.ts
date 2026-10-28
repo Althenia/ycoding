@@ -24,7 +24,7 @@ import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Money } from "@ycoding-ai/schema/money"
-import { Effect, Layer, Logger, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Logger, Stream } from "effect"
 import { HttpClientResponse } from "effect/unstable/http"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -607,6 +607,52 @@ for (const scenario of [
       expect(requests).toHaveLength(1)
     }),
   )
+
+const recordedOutcomes = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const events = yield* EventRuntime.Service
+    const outcomes: Array<string | undefined> = []
+    const stop = yield* events.listen((event) => Effect.sync(() => {
+      if (event.type === SessionEvent.ProviderRequestRecorded.type)
+        outcomes.push((event as EventRuntime.Payload<typeof SessionEvent.ProviderRequestRecorded>).data.outcome)
+    }))
+    yield* effect
+    yield* stop
+    return outcomes
+  })
+
+for (const scenario of [
+  { name: "a completed response", stream: undefined, outcome: "completed" },
+  {
+    name: "a provider error event",
+    stream: Stream.make(LLMEvent.providerError({ message: "Synthetic title provider unavailable" })),
+    outcome: "failed",
+  },
+  {
+    name: "a thrown provider error",
+    stream: Stream.fail(new LLMError({ module: "test", method: "stream", reason: new TransportReason({ message: "down" }) })),
+    outcome: "failed",
+  },
+] as const)
+  it.effect(`records the ${scenario.outcome} outcome for ${scenario.name}`, () =>
+    Effect.gen(function* () {
+      response = scenario.stream === undefined ? undefined : () => scenario.stream
+      expect(yield* recordedOutcomes(generateModelTitle)).toEqual([scenario.outcome])
+    }),
+  )
+
+it.effect("records a cancelled outcome when title generation is interrupted", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>()
+    response = () => Stream.fromEffect(Deferred.succeed(started, undefined)).pipe(Stream.flatMap(() => Stream.never))
+    const outcomes = yield* recordedOutcomes(Effect.gen(function* () {
+      const fiber = yield* generateModelTitle.pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(fiber)
+    }))
+    expect(outcomes).toEqual(["cancelled"])
+  }),
+)
 
 const responsesStream = (body: ReadonlyArray<unknown>) => (request: LLMRequest) =>
   LLMClient.stream(LLMRequest.update(request, { model: OpenAIResponses.route.model({ id: "gpt-title" }) })).pipe(

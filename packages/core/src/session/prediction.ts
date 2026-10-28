@@ -21,6 +21,7 @@ import { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionPending } from "./pending"
 import { SessionProviderRequest } from "./provider-request"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionUsageAttribution } from "./usage-attribution"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionSchema } from "./schema"
@@ -209,7 +210,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         })
         const chunks: string[] = []
         let failed = false
+        let providerFailed = false
         let finished = false
+        let outcome: ProviderRequest.Outcome = "cancelled"
         let usage: SessionUsage.Recorded | undefined
         let recordedCost: Money.USD | undefined
         let timing: ReturnType<typeof SessionUsage.timing>
@@ -222,12 +225,16 @@ export const layer = (options?: SessionModelHeaders.Options) =>
               continuation: "full",
               ...(timing === undefined ? {} : { timing }),
               ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+              outcome,
             })
           }),
         )
         const streamed = yield* llm.stream(request).pipe(
           Stream.runForEach((event) => {
-            if (LLMEvent.is.providerError(event)) failed = true
+            if (LLMEvent.is.providerError(event)) {
+              failed = true
+              providerFailed = true
+            }
             if (LLMEvent.is.finish(event)) {
               finished = true
               if (event.reason !== "stop") failed = true
@@ -245,6 +252,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             }
             return Effect.void
           }),
+          Effect.onExit((exit) => Effect.sync(() => {
+            outcome = SessionProviderRequest.outcome(exit, providerFailed || !finished)
+          })),
           Effect.as(true),
           Effect.catchCause(() => Effect.succeed(false)),
           Effect.ensuring(settle),

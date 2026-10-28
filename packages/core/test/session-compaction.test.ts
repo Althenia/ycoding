@@ -1243,6 +1243,54 @@ it.effect("stops later helper batches and falls back to a local canonical checkp
   }),
 )
 
+const helperOutcomes = (name: string, run: (job: SessionCompactionJob.Job) => Effect.Effect<unknown, unknown, SessionCompaction.Service>) =>
+  Effect.gen(function* () {
+    const events = yield* EventRuntime.Service
+    const outcomes: Array<string | undefined> = []
+    const stop = yield* events.listen((event) => Effect.sync(() => {
+      if (event.type === SessionEvent.ProviderRequestRecorded.type)
+        outcomes.push((event as EventRuntime.Payload<typeof SessionEvent.ProviderRequestRecorded>).data.outcome)
+    }))
+    const sessionID = SessionSchema.ID.make(`ses_manifest_outcome_${name}`)
+    const messageIDs = Array.from({ length: 6 }, (_, index) => SessionMessage.ID.make(`msg_manifest_outcome_${name}_${index}`))
+    yield* seedSession(sessionID, messageIDs.length)
+    yield* Effect.forEach(
+      messageIDs,
+      (id, index) => insertAssistant(sessionID, id, index + 1, `outcome source ${index} `.repeat(120)),
+      { discard: true },
+    )
+    yield* run(manifestJob(sessionID, { messageID: messageIDs.at(-1)!, seq: messageIDs.length }, 4_096))
+    yield* stop
+    return outcomes
+  })
+
+it.effect("records completed and failed helper request outcomes", () =>
+  Effect.gen(function* () {
+    reset()
+    responseForRequest = (request) => checkpoint(Number(promptText(request).match(/up to and including (\d+)/)?.[1]))
+    const completed = yield* helperOutcomes("completed", generateManifest)
+    expect(completed.length).toBeGreaterThan(0)
+    expect(completed.every((outcome) => outcome === "completed")).toBe(true)
+    reset()
+    expect(yield* helperOutcomes("failed", generateManifest)).toEqual(["failed"])
+  }),
+)
+
+it.effect("records a cancelled helper request outcome when compaction is interrupted", () =>
+  Effect.gen(function* () {
+    reset()
+    responseForRequest = () => checkpoint(1)
+    beforeResponse = Effect.never
+    const outcomes = yield* helperOutcomes("cancelled", (job) =>
+      Effect.gen(function* () {
+        const fiber = yield* generateManifest(job).pipe(Effect.forkChild({ startImmediately: true }))
+        while (requests.length < 1) yield* Effect.yieldNow
+        yield* Fiber.interrupt(fiber)
+      }))
+    expect(outcomes).toEqual(["cancelled"])
+  }),
+)
+
 itWithTotalTimeout.effect("bounds all helper batches with one timeout and completes from the local checkpoint", () =>
   Effect.gen(function* () {
     reset()

@@ -57,10 +57,29 @@ export function unitCostLines(unit: Omit<UnitCostPresentation, "inputID">, label
   ]
 }
 
+export type OutcomesPresentation = {
+  readonly completed: number
+  readonly failed: number
+  readonly cancelled: number
+}
+
+export function errorRateText(outcomes: OutcomesPresentation | undefined) {
+  const total = outcomes === undefined ? 0 : outcomes.completed + outcomes.failed + outcomes.cancelled
+  return outcomes === undefined || total === 0 ? "unreported" : `${((outcomes.failed / total) * 100).toFixed(1)}%`
+}
+
+export function outcomeLine(outcomes: OutcomesPresentation | undefined) {
+  return outcomes === undefined
+    ? "Outcomes unreported"
+    : `Outcomes ${outcomes.completed.toLocaleString("en-US")} completed · ${outcomes.failed.toLocaleString("en-US")} failed · ${outcomes.cancelled.toLocaleString("en-US")} cancelled · error rate ${errorRateText(outcomes)}`
+}
+
 export type SpeedPresentation = {
   readonly generationSamples: number
   readonly generationP50TokensPerSecond?: number
   readonly generationP90TokensPerSecond?: number
+  readonly generationP95TokensPerSecond?: number
+  readonly meanTokensPerSecond?: number
   readonly providerTimedSamples: number
   readonly observedSamples: number
   readonly outputTokensPerSecond?: number
@@ -70,9 +89,9 @@ export type SpeedPresentation = {
 export function measuredSpeedLines(speed: SpeedPresentation | undefined) {
   const rate = (value: number | undefined) => value === undefined ? "unreported" : `${value.toFixed(1)} tok/s`
   return [
-    `Measured generation median ${rate(speed?.generationP50TokensPerSecond)} · p90 ${rate(speed?.generationP90TokensPerSecond)}`,
+    `Measured generation median ${rate(speed?.generationP50TokensPerSecond)} · p90 ${rate(speed?.generationP90TokensPerSecond)}${speed?.generationP95TokensPerSecond === undefined ? "" : ` · p95 ${rate(speed.generationP95TokensPerSecond)}`}`,
     speed === undefined ? "Generation sample coverage unreported" : `${speed.generationSamples} measured requests · ${speed.providerTimedSamples} provider-timed · ${speed.observedSamples} observed`,
-    `Weighted throughput ${rate(speed?.outputTokensPerSecond)} · ${speed === undefined ? "unreported" : speed.samples} first-output latency samples`,
+    `Aggregate throughput ${rate(speed?.outputTokensPerSecond)} · mean per request ${rate(speed?.meanTokensPerSecond)} · ${speed === undefined ? "unreported" : speed.samples} first-output latency samples`,
   ]
 }
 

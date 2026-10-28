@@ -1113,6 +1113,7 @@ const layer = Layer.effect(
         total,
         rowCount: page.rowCount,
         ...(offset + rows.length < page.rowCount ? { nextOffset: offset + rows.length } : {}),
+        ...(page.speed === undefined ? {} : { speed: page.speed }),
       }
     })
     const readUsageSummary: (

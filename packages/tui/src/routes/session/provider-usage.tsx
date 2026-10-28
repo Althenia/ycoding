@@ -34,7 +34,8 @@ import {
   type UsageReportRead,
   type UsageStatsRead,
 } from "./provider-usage-reports"
-import { readBreakdown, readStats, type DashboardLoader } from "./usage-dashboard"
+import { createUsageLivePoll, readBreakdown, readStats, type DashboardLoader, type UsageLive } from "./usage-dashboard"
+import { formatTokensPerSecond, speedTrend } from "../../util/generation-speed"
 
 export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 const NAV_CELL_WIDTH = 12
@@ -84,8 +85,19 @@ export function ProviderUsageScreen() {
   const [failed, setFailed] = createSignal(false)
   const [forecast, setForecast] = createSignal<ProviderUsageForecastOutput["data"]>()
   const [backendUsage, setBackendUsage] = createSignal<ProviderRequestSummary>()
+  const [live, setLive] = createSignal<UsageLive>()
+  const [liveFailed, setLiveFailed] = createSignal(false)
   let timer: ReturnType<typeof setTimeout> | undefined
   const loadDashboard: DashboardLoader = (input) => client.api.usage.dashboard(input)
+  const livePoll = createUsageLivePoll({
+    load: loadDashboard,
+    onLive: (next) => {
+      setLive(next)
+      setLiveFailed(false)
+    },
+    onFailed: () => setLiveFailed(true),
+    onPreparing: () => refresh(false),
+  })
   const refresh = (force: boolean, attempt = 0) => {
     if (timer !== undefined) clearTimeout(timer)
     timer = undefined
@@ -127,6 +139,7 @@ export function ProviderUsageScreen() {
         }
         setBackendUsage(info.summary)
         setQuotaError(undefined)
+        livePoll.accept(info.live)
         if (info.quota.status === "error") {
           setSnapshots([])
           setForecast(undefined)
@@ -162,6 +175,7 @@ export function ProviderUsageScreen() {
   onMount(() => refresh(false))
   onCleanup(() => {
     guard.invalidate()
+    livePoll.stop()
     if (timer !== undefined) clearTimeout(timer)
   })
 
@@ -172,6 +186,8 @@ export function ProviderUsageScreen() {
       backendUsage={backendUsage}
       backendUsageRefreshing={summaryLoading}
       backendUsageFailed={failed}
+      live={live}
+      liveFailed={liveFailed}
       refreshing={refreshing}
       preparing={preparing}
       quotaPreparing={quotaPreparing}
@@ -198,6 +214,8 @@ export function ProviderUsageScreenContent(props: {
   backendUsage?: Accessor<ProviderRequestSummary | undefined>
   backendUsageRefreshing?: Accessor<boolean>
   backendUsageFailed?: Accessor<boolean>
+  live?: Accessor<UsageLive | undefined>
+  liveFailed?: Accessor<boolean>
   now?: Accessor<number>
   refreshing?: Accessor<boolean>
   preparing?: Accessor<boolean>
@@ -349,6 +367,9 @@ export function ProviderUsageScreenContent(props: {
         <Show when={view() === "usage" && props.failed?.()}>
           <text fg={theme.text.feedback.warning.default}>Some provider usage could not be refreshed.</text>
         </Show>
+        <Show when={view() === "overview" && props.live?.()}>
+          {(current) => <LiveOverview live={current()} failed={props.liveFailed?.() ?? false} width={dimensions().width} />}
+        </Show>
         <Show when={view() === "overview" && aggregateUsage()}>
           {(items) => <OverviewTable items={items()} width={dimensions().width} sorting={overviewSorting} onSort={changeOverviewSort} />}
         </Show>
@@ -443,6 +464,36 @@ function OverviewTable(props: {
       if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? theme.text.feedback.info.default : theme.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={theme.text.subdued}>  steps {item.steps} · reasoning {item.reasoning} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
       return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
     }}</For>
+  </box>
+}
+
+function LiveOverview(props: { live: UsageLive; failed: boolean; width: number }) {
+  const { theme } = useTheme()
+  const rule = () => "─".repeat(Math.max(1, Math.min(props.width - 6, 96)))
+  const rate = (value: number | undefined) => value === undefined ? "N/A" : formatTokensPerSecond(value, true)
+  const trend = createMemo(() => {
+    const points = props.live.history.slice(-Math.max(1, Math.min(60, props.width - 20)))
+    return points.some((point) => point.outputTokensPerSecond !== undefined)
+      ? speedTrend(points.map((point) => point.outputTokensPerSecond ?? 0))
+      : undefined
+  })
+  return <box flexDirection="column" paddingTop={1} flexShrink={0}>
+    <text fg={theme.text.subdued}>LIVE · YCODING BACKEND</text>
+    <text fg={theme.border.default}>{rule()}</text>
+    <Show when={props.failed}>
+      <text fg={theme.text.feedback.warning.default}>Live updates paused · refresh to resume</text>
+    </Show>
+    <text>
+      <span style={{ fg: props.live.active > 0 ? theme.text.feedback.success.default : theme.text.subdued }}>{props.live.active.toLocaleString("en-US")} active</span>
+      <span style={{ fg: theme.text.subdued }}> · </span>
+      <span>{props.live.streaming.toLocaleString("en-US")} streaming</span>
+      <span style={{ fg: theme.text.subdued }}> · </span>
+      <span style={{ fg: theme.text.feedback.info.default }}>{rate(props.live.outputTokensPerSecond)} aggregate</span>
+      <Show when={trend()}>{(value) => <span style={{ fg: theme.text.subdued }}> {value()}</span>}</Show>
+    </text>
+    <For each={props.live.models}>{(entry) =>
+      <text fg={theme.text.subdued}>{Locale.truncate(`  ${modelIdentity(entry.model)} · ${entry.active} active · ${entry.streaming} streaming · ${rate(entry.outputTokensPerSecond)}`, Math.max(1, props.width - 6))}</text>
+    }</For>
   </box>
 }
 
@@ -656,11 +707,15 @@ function money(value: number | undefined) {
   return value === undefined ? "unreported" : `Known $${value.toFixed(2)}`
 }
 
+function modelIdentity(model: { providerID: string; id: string; variant?: string; profile?: string }) {
+  return `${model.providerID}/${model.id}${model.variant ? ` · selected effort ${model.variant}` : ""}${model.profile === undefined ? "" : ` · profile ${model.profile}`}`
+}
+
 function spendPresentation(
   spend: NonNullable<ProviderRequestSummary["models"]>[number],
 ): OverviewItem {
   return {
-    model: `${spend.model.providerID}/${spend.model.id}${spend.model.variant ? ` · selected effort ${spend.model.variant}` : ""}${spend.model.profile === undefined ? "" : ` · profile ${spend.model.profile}`}`,
+    model: modelIdentity(spend.model),
     steps: spend.requests.toLocaleString("en-US"),
     input: spend.tokens.input.toLocaleString("en-US"),
     output: spend.tokens.output.toLocaleString("en-US"),

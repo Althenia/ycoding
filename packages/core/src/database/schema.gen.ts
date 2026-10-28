@@ -45,6 +45,7 @@ export default {
           \`tokens\` text NOT NULL,
           \`cost\` real,
           \`timing\` text,
+          \`outcome\` text,
           \`time_created\` integer NOT NULL
         );
       `)
@@ -103,6 +104,11 @@ export default {
           \`observed\` integer NOT NULL,
           \`generation_tokens\` real NOT NULL,
           \`generation_duration\` real NOT NULL,
+          \`generation_rate\` real DEFAULT 0 NOT NULL,
+          \`busy_ms\` integer DEFAULT 0 NOT NULL,
+          \`failed\` integer DEFAULT 0 NOT NULL,
+          \`cancelled\` integer DEFAULT 0 NOT NULL,
+          \`outcomes\` integer DEFAULT 0 NOT NULL,
           \`first_updated\` integer,
           \`first_request\` integer,
           \`last_updated\` integer,
@@ -184,6 +190,11 @@ export default {
           \`observed\` integer NOT NULL,
           \`generation_tokens\` real NOT NULL,
           \`generation_duration\` real NOT NULL,
+          \`generation_rate\` real DEFAULT 0 NOT NULL,
+          \`busy_ms\` integer DEFAULT 0 NOT NULL,
+          \`failed\` integer DEFAULT 0 NOT NULL,
+          \`cancelled\` integer DEFAULT 0 NOT NULL,
+          \`outcomes\` integer DEFAULT 0 NOT NULL,
           \`first_updated\` integer,
           \`first_request\` integer,
           \`last_updated\` integer,
@@ -293,6 +304,11 @@ export default {
           \`observed\` integer NOT NULL,
           \`generation_tokens\` real NOT NULL,
           \`generation_duration\` real NOT NULL,
+          \`generation_rate\` real DEFAULT 0 NOT NULL,
+          \`busy_ms\` integer DEFAULT 0 NOT NULL,
+          \`failed\` integer DEFAULT 0 NOT NULL,
+          \`cancelled\` integer DEFAULT 0 NOT NULL,
+          \`outcomes\` integer DEFAULT 0 NOT NULL,
           CONSTRAINT \`usage_view_row_pk\` PRIMARY KEY(\`state\`, \`generation\`, \`key\`)
         );
       `)
@@ -1056,6 +1072,7 @@ export default {
           \`continuation\` text NOT NULL,
           \`cache_read_reported\` integer,
           \`timing\` text,
+          \`outcome\` text,
           \`cost\` real,
           \`tokens\` text NOT NULL,
           \`time_created\` integer NOT NULL,

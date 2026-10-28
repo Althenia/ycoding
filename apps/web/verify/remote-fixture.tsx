@@ -980,7 +980,7 @@ function createFixtureStore(): Fixture {
     })) }
         : mode === "error" ? { asOf: Date.now(), localScope: "backend" } : { asOf: Date.now(), localScope: "backend", localRates: [], quotas: [] }
       const slots = input as Partial<Readonly<Record<"daily" | "monthly" | "breakdown", Readonly<Record<string, unknown>>>>> | undefined
-      return { status: "ok", value: { data: { status: "ready", asOf: Date.now(), revision: "fixture", summary: usageMetrics(10, 26.3), quota: { status: "ready", providers: fixtureUsageProviders(Date.now()), forecast },
+      return { status: "ok", value: { data: { status: "ready", asOf: Date.now(), revision: "fixture", summary: usageMetrics(10, 26.3), live: { asOf: Date.now(), active: 0, streaming: 0, models: [], history: [] }, quota: { status: "ready", providers: fixtureUsageProviders(Date.now()), forecast },
         ...(slots?.daily ? { daily: fixtureUsageReport(slots.daily).data } : {}), ...(slots?.monthly ? { monthly: fixtureUsageReport(slots.monthly).data } : {}),
         ...(slots?.breakdown ? { breakdown: fixtureUsageReport(slots.breakdown).data } : {}) } } }
     }

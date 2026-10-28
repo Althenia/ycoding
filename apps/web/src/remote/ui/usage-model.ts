@@ -266,7 +266,7 @@ export function usageReportInputs(now: number, timeZone: string | undefined, bre
   const zone = timeZone === undefined ? {} : { timeZone }
   const range = { from: bounds.from, to: bounds.to, ...zone }
   return {
-    daily: { group: "day", ...range, limit: 30, sort: "key", order: "asc" } satisfies UsageReportInput,
+    daily: { group: "day", ...range, ...(breakdown.providerID ? { providerID: breakdown.providerID } : {}), ...(breakdown.modelID ? { modelID: breakdown.modelID } : {}), limit: 30, sort: "key", order: "asc" } satisfies UsageReportInput,
     monthly: { group: "model", from: bounds.monthFrom, to: bounds.to, ...zone, limit: 200, sort: "cost", order: "desc" } satisfies UsageReportInput,
     breakdown: { group: breakdown.group, ...(breakdown.range === "all" ? zone : breakdown.range === "custom" ? { ...zone, from: breakdown.from, to: breakdown.to } : { ...range, ...(breakdown.range === "last7" ? { from: usageBounds(now, timeZone, 7).from } : {}) }),
       ...(breakdown.providerID ? { providerID: breakdown.providerID } : {}), ...(breakdown.profile ? { profile: breakdown.profile } : {}), ...(breakdown.modelID ? { modelID: breakdown.modelID } : {}), ...(breakdown.selectedEffort ? { selectedEffort: breakdown.selectedEffort } : {}),

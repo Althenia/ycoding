@@ -13,6 +13,7 @@ import type { CatalogModel } from "../model"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { SessionMessage } from "./message"
 import { SessionUsage } from "./usage"
+import { GenerationMeter } from "./generation-meter"
 import type { Database } from "../database/database"
 import { EventRuntime } from "../event"
 import { EventTable } from "../event/sql"
@@ -159,7 +160,7 @@ export function generationSpeed(
   if (!newest) return undefined
   const recent = recentRecords.flatMap((record) => {
     if (record.model.providerID !== newest.providerID || record.model.id !== newest.id) return []
-    const sample = generationSample(record.timing)
+    const sample = GenerationMeter.sample(record.timing?.receivedOutput)
     return sample === undefined ? [] : [{ model: record.model, ...sample }]
   }).slice(-8)
   const tokens = recent.reduce((sum, sample) => sum + sample.tokens, 0)
@@ -168,16 +169,6 @@ export function generationSpeed(
     model: newest, tokens, durationNs, tokensPerSecond: tokens * 1_000_000_000 / durationNs,
     ...(recent.some((sample) => sample.estimated) ? { estimated: true } : {}),
   } }) }
-}
-
-export function generationSample(timing: ProviderRequest.Timing | undefined) {
-  const tokens = timing?.receivedOutput?.estimatedTokens
-  const durationNs = timing?.receivedOutput?.durationNs
-  if (!Number.isSafeInteger(tokens) || !tokens || tokens <= 0 ||
-    !Number.isSafeInteger(durationNs) || !durationNs || durationNs < 1_000_000_000) return undefined
-  const tokensPerSecond = tokens * 1_000_000_000 / durationNs
-  if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return undefined
-  return { tokens, durationNs, tokensPerSecond, estimated: true as const }
 }
 
 export const recentGenerationRecords = Effect.fn("SessionCacheDiagnostics.recentGenerationRecords")(function* (
@@ -194,7 +185,7 @@ export const recentGenerationRecords = Effect.fn("SessionCacheDiagnostics.recent
     )).orderBy(desc(SessionProviderRequestTable.request)).limit(10_000).all().pipe(Effect.orDie)
     for (const row of rows) {
       if (row.source !== "step" || row.model.providerID !== model.providerID || row.model.id !== model.id ||
-        !generationSample(row.timing ?? undefined)) continue
+        !GenerationMeter.sample(row.timing?.receivedOutput)) continue
       samples.push(row)
       if (samples.length === 8) break
     }

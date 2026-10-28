@@ -363,8 +363,10 @@ describe("Session.log", () => {
       expect(local.rows[0]?.speed).toEqual({
         firstOutputP50Ms: 20,
         firstOutputP95Ms: 100,
+        firstOutputP99Ms: 100,
         totalP50Ms: 200,
         totalP95Ms: 300,
+        totalP99Ms: 300,
         outputTokensPerSecond: 5,
         samples: 3,
         generationSamples: 2,
@@ -372,6 +374,8 @@ describe("Session.log", () => {
         observedSamples: 0,
         generationP50TokensPerSecond: 10 / 3,
         generationP90TokensPerSecond: 20,
+        generationP95TokensPerSecond: 20,
+        meanTokensPerSecond: (10 / 3 + 20) / 2,
       })
       expect(global.rows).toEqual(local.rows)
       expect(local.rows[0]?.model).toMatchObject({ providerID: "custom", id: "speed" })
@@ -381,6 +385,7 @@ describe("Session.log", () => {
       expect(SessionProviderRequest.reportSpeed(absent)).toEqual({
         totalP50Ms: 200,
         totalP95Ms: 200,
+        totalP99Ms: 200,
         samples: 0,
         generationSamples: 0,
         providerTimedSamples: 0,

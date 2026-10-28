@@ -122,6 +122,7 @@ import { ModelGuidanceInstructions } from "@ycoding-ai/core/model-incident/instr
 import { ModelIncidentTable } from "@ycoding-ai/core/model-incident/sql"
 import { Location } from "@ycoding-ai/core/location"
 import { Provider } from "@ycoding-ai/core/provider"
+import { GenerationActivity } from "@ycoding-ai/core/generation-activity"
 import {
   Cause,
   Clock,
@@ -292,6 +293,10 @@ const reply = {
   ],
 }
 const testLimits = { context: 262_144, output: 8_192 } as const
+const defined = <Value>(value: Value | undefined): Value => {
+  if (value === undefined) throw new Error("expected a defined value")
+  return value
+}
 const model = Model.make({
   id: "fake-model",
   provider: "fake",
@@ -947,6 +952,7 @@ const it = testEffect(
       SessionProjector.node,
       SessionStore.node,
       SessionProviderRequest.node,
+      GenerationActivity.node,
       Agent.node,
       Catalog.node,
       ToolRegistry.node,
@@ -1491,6 +1497,73 @@ describe("SessionRunnerLLM", () => {
       expect((yield* session.diagnostics(sessionID))?.generationSpeed?.latest).toBeUndefined()
       const tracker = yield* SessionProviderRequest.Service
       expect((yield* tracker.list(sessionID)).at(-1)?.timing?.receivedOutput).toBeUndefined()
+    }),
+  )
+
+  it.effect("publishes attempt phases and first-output latency before a usable sample", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      const activity = yield* GenerationActivity.Service
+      const streaming = yield* Deferred.make<void>()
+      const resume = yield* Deferred.make<void>()
+      const updates: NonNullable<NonNullable<SessionCacheDiagnostics.Info["generationSpeed"]>["live"]>[] = []
+      const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+        if (event.type !== SessionEvent.DiagnosticsUpdated.type) return
+        const live = (event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics.generationSpeed?.live
+        if (live) updates.push(live)
+      }))
+      currentModel = Model.make({ id: "phase-speed", provider: "openai", route: OpenAIChat.route })
+      const after = (duration: Duration.Input, events: LLMEvent[]) =>
+        Stream.fromEffect(TestClock.adjust(duration)).pipe(Stream.flatMap(() => Stream.fromIterable(events)))
+      responseStream = after("3 seconds", [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "phase-reasoning" }),
+        LLMEvent.reasoningDelta({ id: "phase-reasoning", text: "r".repeat(400) }),
+      ]).pipe(
+        Stream.concat(after("1 second", [
+          LLMEvent.reasoningDelta({ id: "phase-reasoning", text: "r".repeat(400) }),
+          LLMEvent.reasoningEnd({ id: "phase-reasoning" }),
+          LLMEvent.textStart({ id: "phase-text" }),
+          LLMEvent.textDelta({ id: "phase-text", text: "t".repeat(400) }),
+        ])),
+        Stream.concat(Stream.fromEffect(Deferred.succeed(streaming, undefined).pipe(Effect.andThen(Deferred.await(resume))))
+          .pipe(Stream.flatMap(() => Stream.empty))),
+        Stream.concat(after("1 second", [
+          LLMEvent.textDelta({ id: "phase-text", text: "t".repeat(400) }),
+          LLMEvent.textEnd({ id: "phase-text" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { outputTokens: 400 } }),
+          LLMEvent.finish({ reason: "stop" }),
+        ])),
+      )
+      yield* admit(session, "Measure phases")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streaming)
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.live).toMatchObject({
+        attempt: 1, phase: "streaming", firstOutputMs: 3_000, sample: { tokens: 200, durationNs: 1_000_000_000 },
+      })
+      expect(yield* activity.snapshot()).toMatchObject({
+        active: 1, streaming: 1, models: [{ model: { id: "phase-speed" }, active: 1, streaming: 1 }],
+      })
+      yield* Deferred.succeed(resume, undefined)
+      yield* Fiber.join(run)
+      yield* unsubscribe
+      expect(updates[0]).toEqual({ requestID: expect.stringMatching(/^prq_/), attempt: 1, phase: "preparing" })
+      expect(updates.map((live) => live.phase).filter((phase, index, all) => phase !== all[index - 1]))
+        .toEqual(["preparing", "reasoning", "streaming", "completed"])
+      expect(updates.find((live) => live.phase === "reasoning")).toMatchObject({ firstOutputMs: 3_000 })
+      expect(updates.find((live) => live.phase === "reasoning" && live.sample)?.sample)
+        .toMatchObject({ tokens: 100, durationNs: 1_000_000_000, estimated: true })
+      expect(updates.at(-1)).toMatchObject({
+        phase: "completed",
+        firstOutputMs: 3_000,
+        final: { tokens: 300, durationNs: 2_000_000_000, tokensPerSecond: 150, estimated: true },
+      })
+      const ledger = yield* SessionProviderRequest.Service
+      expect((yield* ledger.recentSteps(sessionID)).at(-1)?.timing)
+        .toMatchObject({ receivedOutput: { estimatedTokens: 300, durationNs: 2_000_000_000 } })
+      expect((yield* session.snapshot(sessionID)).generationSpeed?.live).toBeUndefined()
+      expect((yield* activity.snapshot()).active).toBe(0)
     }),
   )
 
@@ -3702,7 +3775,12 @@ describe("SessionRunnerLLM", () => {
       expect(settled?.live).toBeUndefined()
       expect(settled?.recent).toHaveLength(1)
       expect(settled?.latest).toMatchObject({ estimated: true, tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40 })
-      expect(live.at(-1)?.generationSpeed).toEqual(settled)
+      expect(live.at(-1)?.generationSpeed).toEqual({
+        ...defined(settled),
+        live: expect.objectContaining({
+          phase: "completed", final: expect.objectContaining({ tokens: 80, durationNs: 2_000_000_000, tokensPerSecond: 40 }),
+        }),
+      })
       yield* replaySessionProjection(sessionID)
       expect((yield* session.snapshot(sessionID)).generationSpeed).toEqual(settled)
       expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(settled)
@@ -3757,17 +3835,24 @@ describe("SessionRunnerLLM", () => {
         tokens: 200, durationNs: 5_000_000_000, tokensPerSecond: 40,
       })
       expect((yield* session.snapshot(sessionID)).generationSpeed?.live?.sample).toMatchObject({
-        estimated: true, tokens: 168, durationNs: 4_200_000_000, tokensPerSecond: 40,
+        estimated: true, tokens: 208, durationNs: 5_200_000_000, tokensPerSecond: 40,
       })
       yield* Deferred.succeed(finish, undefined)
       yield* Fiber.join(run)
       const ledger = yield* SessionProviderRequest.Service
       expect((yield* ledger.recentSteps(sessionID)).at(-1)?.timing?.receivedOutput)
-        .toEqual({ estimatedTokens: 168, durationNs: 4_200_000_000 })
+        .toEqual({ estimatedTokens: 248, durationNs: 6_200_000_000 })
       const settled = (yield* session.snapshot(sessionID)).generationSpeed
       expect(settled?.recent).toHaveLength(1)
-      expect(settled?.latest).toMatchObject({ estimated: true, tokens: 168, durationNs: 4_200_000_000, tokensPerSecond: 40 })
-      expect(updates.at(-1)?.diagnostics.generationSpeed).toEqual(settled)
+      expect(settled?.latest).toMatchObject({ estimated: true, tokens: 248, durationNs: 6_200_000_000, tokensPerSecond: 40 })
+      expect(updates.at(-1)?.diagnostics.generationSpeed).toEqual({
+        ...defined(settled),
+        live: expect.objectContaining({
+          phase: "completed",
+          sample: expect.objectContaining({ tokens: 208, durationNs: 5_200_000_000 }),
+          final: expect.objectContaining({ tokens: 248, durationNs: 6_200_000_000, tokensPerSecond: 40 }),
+        }),
+      })
       yield* unsubscribe
     }),
   )
@@ -4211,9 +4296,14 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       const events = yield* EventRuntime.Service
       const scheduled = yield* Deferred.make<void>()
-      const unsubscribe = yield* events.listen((event) =>
-        event.type === SessionEvent.RetryScheduled.type ? Deferred.succeed(scheduled, undefined) : Effect.void,
-      )
+      const updates: NonNullable<NonNullable<SessionCacheDiagnostics.Info["generationSpeed"]>["live"]>[] = []
+      const unsubscribe = yield* events.listen((event) => {
+        if (event.type === SessionEvent.DiagnosticsUpdated.type) {
+          const live = (event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics.generationSpeed?.live
+          if (live) updates.push(live)
+        }
+        return event.type === SessionEvent.RetryScheduled.type ? Deferred.succeed(scheduled, undefined) : Effect.void
+      })
       responseStreams = [
         Stream.concat(
           Stream.fromIterable([
@@ -4251,6 +4341,13 @@ describe("SessionRunnerLLM", () => {
       yield* Fiber.join(run)
       yield* unsubscribe
       expect(requests).toHaveLength(2)
+      expect(updates.map((live) => `${live.attempt}:${live.phase}`).filter((value, index, all) => value !== all[index - 1]))
+        .toEqual(["1:preparing", "1:streaming", "1:failed", "2:preparing", "2:streaming", "2:completed"])
+      expect(updates.find((live) => live.attempt === 1 && live.phase === "failed")).toEqual({
+        requestID: updates[0]!.requestID, attempt: 1, phase: "failed", firstOutputMs: 0,
+      })
+      expect(updates.find((live) => live.attempt === 2)).toEqual({ requestID: updates[0]!.requestID, attempt: 2, phase: "preparing" })
+      expect(updates.at(-1)).toMatchObject({ attempt: 2, phase: "completed", final: { tokens: 2, durationNs: 2_000_000_000 } })
       const ledger = yield* SessionProviderRequest.Service
       expect((yield* ledger.recentSteps(sessionID)).at(-1)).toMatchObject({
         attempts: 2,
@@ -4368,7 +4465,10 @@ describe("SessionRunnerLLM", () => {
         tokensPerSecond: 1,
       })
       expect(live.at(-1)?.generationSpeed?.latest).toEqual(snapshot.generationSpeed?.latest)
-      expect(live.at(-1)?.generationSpeed).toEqual(snapshot.generationSpeed)
+      expect(live.at(-1)?.generationSpeed).toEqual({
+        ...defined(snapshot.generationSpeed),
+        live: { requestID: expect.stringMatching(/^prq_/), attempt: 1, phase: "failed" },
+      })
       yield* unsubscribe
     }),
   )
@@ -4379,10 +4479,13 @@ describe("SessionRunnerLLM", () => {
         const session = yield* setup
         const events = yield* EventRuntime.Service
         const live: SessionCacheDiagnostics.Info[] = []
+        const recorded: Array<{ readonly outcome?: string }> = []
         const unsubscribe = yield* events.listen((event) =>
           Effect.sync(() => {
             if (event.type === SessionEvent.DiagnosticsUpdated.type)
               live.push((event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics)
+            if (event.type === SessionEvent.ProviderRequestRecorded.type)
+              recorded.push((event as EventRuntime.Payload<typeof SessionEvent.ProviderRequestRecorded>).data)
           }),
         )
         currentModel = Model.make({ id: "speed-model", provider: "openai", route: OpenAIChat.route })
@@ -4432,7 +4535,16 @@ describe("SessionRunnerLLM", () => {
           durationNs: 2_000_000_000,
           tokensPerSecond: 1,
         })
-        expect(live.at(-1)?.generationSpeed).toEqual(snapshot.generationSpeed)
+        const outcome = terminal === "interruption" ? "cancelled" : "failed"
+        expect(recorded.map((record) => record.outcome)).toEqual([outcome])
+        expect(live.at(-1)?.generationSpeed).toEqual({
+          ...defined(snapshot.generationSpeed),
+          live: expect.objectContaining({
+            attempt: 1,
+            phase: outcome,
+            final: expect.objectContaining({ tokens: 2, durationNs: 2_000_000_000, tokensPerSecond: 1 }),
+          }),
+        })
         expect((yield* session.diagnostics(sessionID))?.generationSpeed).toEqual(snapshot.generationSpeed)
         yield* unsubscribe
       }),
@@ -8805,6 +8917,7 @@ describe("SessionRunnerLLM", () => {
       })
       const blockingCompletion = yield* blocker
         .complete({
+          outcome: "completed",
           continuation: "full",
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         })
@@ -9119,7 +9232,10 @@ describe("SessionRunnerLLM", () => {
       expect((yield* session.snapshot(sessionID)).generationSpeed?.recent).toEqual([])
       expect(diagnostics.length).toBeGreaterThan(0)
       expect(diagnostics.every((value) => value.generationSpeed?.live?.sample === undefined)).toBe(true)
-      expect(diagnostics.at(-1)?.generationSpeed).toEqual((yield* session.snapshot(sessionID)).generationSpeed)
+      expect(diagnostics.at(-1)?.generationSpeed).toEqual({
+        ...defined((yield* session.snapshot(sessionID)).generationSpeed),
+        live: { requestID: expect.stringMatching(/^prq_/), attempt: 1, phase: "failed" },
+      })
       yield* unsubscribe
       const events = yield* recordedStepSettlementEvents(sessionID, assistant.id)
       expect(events.filter((event) => event.type === "session.step.started.1")).toHaveLength(1)
@@ -11784,6 +11900,47 @@ describe("SessionRunnerLLM model fallback", () => {
         expect(yield* recordedEventTypes(sessionID)).not.toContain("session.step.rerouted.1")
       }),
     )
+
+  it.effect("publishes live speed under the rerouted attempt's model while the Session keeps its selection", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventRuntime.Service
+      configureFallbacks(["fake/backup"])
+      const updates: NonNullable<SessionCacheDiagnostics.Info["generationSpeed"]>[] = []
+      const unsubscribe = yield* events.listen((event) => Effect.sync(() => {
+        if (event.type !== SessionEvent.DiagnosticsUpdated.type) return
+        const speed = (event as EventRuntime.Payload<typeof SessionEvent.DiagnosticsUpdated>).data.diagnostics.generationSpeed
+        if (speed?.live) updates.push(speed)
+      }))
+      responseStreams = [
+        Stream.fail(quotaExceeded()),
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "rerouted-speed" }),
+          LLMEvent.textDelta({ id: "rerouted-speed", text: "a".repeat(400) }),
+        ]).pipe(
+          Stream.concat(Stream.fromEffect(TestClock.adjust("2 seconds")).pipe(Stream.flatMap(() => Stream.fromIterable([
+            LLMEvent.textDelta({ id: "rerouted-speed", text: "b".repeat(400) }),
+            LLMEvent.textEnd({ id: "rerouted-speed" }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+            LLMEvent.finish({ reason: "stop" }),
+          ])))),
+        ),
+      ]
+      yield* admit(session, "Measure the rerouted model")
+      yield* session.resume(sessionID)
+      yield* unsubscribe
+      const primary = updates.filter((speed) => speed.model?.id === "fake-model")
+      const backup = updates.filter((speed) => speed.model?.id === "backup")
+      expect(primary.map((speed) => speed.live?.phase).at(-1)).toBe("failed")
+      expect(backup.map((speed) => speed.live?.phase).filter((phase, index, all) => phase !== all[index - 1]))
+        .toEqual(["preparing", "streaming", "completed"])
+      expect(backup.at(-1)?.live?.final).toMatchObject({ model: { id: "backup" }, tokens: 100, durationNs: 2_000_000_000 })
+      expect(backup.every((speed) => speed.live?.sample === undefined || speed.live.sample.model.id === "backup")).toBe(true)
+      expect(primary[0]?.live?.requestID).not.toBe(backup[0]?.live?.requestID)
+      expect((yield* session.get(sessionID)).model?.id).not.toBe("backup")
+    }),
+  )
 
   it.effect("reruns the Step on the next configured model after the retry schedule is exhausted", () =>
     Effect.gen(function* () {

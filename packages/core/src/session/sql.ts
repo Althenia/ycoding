@@ -122,6 +122,7 @@ export const SessionProviderRequestTable = sqliteTable(
     continuation: text().$type<ProviderRequest.Continuation>().notNull(),
     cache_read_reported: integer({ mode: "boolean" }),
     timing: text({ mode: "json" }).$type<ProviderRequest.Timing>(),
+    outcome: text().$type<ProviderRequest.Outcome>(),
     cost: real(),
     tokens: text({ mode: "json" }).$type<TokenUsage.Info>().notNull(),
     time_created: integer().notNull(),

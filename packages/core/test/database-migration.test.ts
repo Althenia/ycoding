@@ -85,6 +85,7 @@ const currentMigrations = [
   { id: "20261025113826_mcp-event-attention" },
   { id: "20261026223924_client-decision-provenance" },
   { id: "20261028041559_prepared-usage" },
+  { id: "20261028131454_usage-telemetry" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

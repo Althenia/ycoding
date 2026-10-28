@@ -56,8 +56,11 @@ function report(
     totalP50Ms: 1_200,
     totalP95Ms: 2_500,
     outputTokensPerSecond: 42.5,
+    meanTokensPerSecond: 37.4,
+    generationP95TokensPerSecond: 55,
     samples: 4,
   }
+  if (values[0]) values[0].outcomes = { completed: 8, failed: 1, cancelled: 1 }
   return {
     group,
     rows: values,
@@ -147,9 +150,10 @@ test("defaults tables to all retained history and exposes normalized metrics plu
   try {
     let frame = await waitFor(app, (value) => value.includes("All retained history") && value.includes("Alpha"), "the initial table")
     expect(calls[0]).toEqual({ group: "model", offset: 0, limit: 100, sort: "tokens", order: "desc" })
-    for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST", "FIRST P50", "FIRST P95", "TOTAL P50", "TOTAL P95", "TOK/S"]) expect(frame).toContain(column)
+    for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST", "FIRST P50", "FIRST P95", "TOTAL P50", "TOTAL P95", "MEAN TOK/S", "AGG TOK/S", "ERR RATE"]) expect(frame).toContain(column)
     expect(frame).toContain("125ms")
-    expect(frame).toContain("42.5")
+    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\s37\.4\s+42\.5\s+10\.0%/)
+    expect(frame.split("\n").find((line) => line.includes("Beta"))).toMatch(/unreported\s+unreported\s+unreported\s*$/)
     expect(frame).toContain("unreported")
     expect(frame).toContain("STEPS model calls")
     expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\sUnknown\s.*\s≥5,540\s/)
@@ -166,7 +170,10 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(frame).not.toContain("Cost $0.00")
     expect(frame).toContain("≥ marks a lower bound")
     expect(frame).toContain("First output p50 125ms · p95 250ms")
-    expect(frame).toContain("Total p50 1,200ms · p95 2,500ms · Output 42.5 tok/s")
+    expect(frame).toContain("Total p50 1,200ms · p95 2,500ms · Aggregate 42.5 tok/s")
+    expect(frame).toContain("Outcomes 8 completed · 1 failed · 1 cancelled · error rate 10.0%")
+    expect(frame).toContain("Aggregate throughput 42.5 tok/s · mean per request 37.4 tok/s")
+    expect(frame).toContain("p95 55.0 tok/s")
     app.mockInput.pressKey("ESCAPE")
     await waitFor(app, (value) => !value.includes("Usage details"), "details dismissal")
 

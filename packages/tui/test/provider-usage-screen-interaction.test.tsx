@@ -37,7 +37,7 @@ const reportCalls: URLSearchParams[] = []
 type Slot = Record<string, unknown>
 type DashboardRequest = { daily?: Slot; monthly?: Slot; breakdown?: Slot; refresh?: boolean }
 const dashboardInputs: DashboardRequest[] = []
-const dashboardMode = { preparing: 0, quotaPreparing: 0, quotaError: undefined as string | undefined, forecast: undefined as unknown }
+const dashboardMode = { preparing: 0, quotaPreparing: 0, quotaError: undefined as string | undefined, forecast: undefined as unknown, live: undefined as (() => unknown) | undefined }
 
 async function route(url: URL, request: Request): Promise<Response | undefined> {
   if (url.pathname.endsWith("/prompt") && request.method === "POST") prompts.push(await request.text())
@@ -64,6 +64,7 @@ async function route(url: URL, request: Request): Promise<Response | undefined> 
         status: "ready",
         asOf: Date.now(),
         revision: "interaction",
+        live: dashboardMode.live?.() ?? { asOf: Date.now(), active: 0, streaming: 0, models: [], history: [] },
         summary: await part("/api/usage"),
         quota:
           dashboardMode.quotaError !== undefined
@@ -302,6 +303,32 @@ test("opens Usage with a normal composed read, labels Preparing, and polls witho
   } finally {
     dashboardMode.preparing = 0
     dashboardMode.forecast = undefined
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("Overview polls live attempts while any are active and stops once the backend is idle", async () => {
+  dashboardInputs.length = 0
+  let clock = 0
+  dashboardMode.live = () => {
+    clock += 1
+    return clock === 1
+      ? { asOf: clock, active: 2, streaming: 1, outputTokensPerSecond: 55, models: [], history: [] }
+      : { asOf: clock, active: 0, streaming: 0, models: [], history: [] }
+  }
+  const screen = await renderScreen({ width: 189, height: 69, args: { sessionID }, settle: "Message YCoding…", route })
+  try {
+    await screen.input.pressKey("x", { ctrl: true })
+    await screen.input.pressKey("u", { shift: true })
+    await waitFor(screen, "2 active · 1 streaming · ≈ 55 tok/s aggregate")
+    expect(dashboardInputs).toEqual([{}])
+    await waitFor(screen, "0 active · 0 streaming · N/A aggregate")
+    expect(screen.frame()).not.toContain("≈ 55 tok/s")
+    expect(dashboardInputs).toEqual([{}, {}])
+    await Bun.sleep(2_600)
+    expect(dashboardInputs).toHaveLength(2)
+  } finally {
+    dashboardMode.live = undefined
     await screen.dispose()
   }
 }, 30_000)

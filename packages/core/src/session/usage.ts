@@ -9,34 +9,6 @@ import { Token } from "../util/token"
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
 
-export function receivedOutput() {
-  const points: { time: bigint; tokens: number }[] = []
-  return {
-    observe(time: bigint, tokens: number) {
-      if (!Number.isSafeInteger(tokens) || tokens < 0) return
-      const point = { time, tokens }
-      while (points.length && points[0]!.time < time - 5_000_000_000n) points.shift()
-      const last = points.at(-1)
-      if (last?.time === time) {
-        points[points.length - 1] = point
-        return
-      }
-      if (points.length > 1 && time - points[points.length - 2]!.time < 250_000_000n) points.pop()
-      points.push(point)
-    },
-    sample() {
-      const first = points[0]
-      const last = points.at(-1)
-      if (!first || !last) return undefined
-      const duration = last.time - first.time
-      const estimatedTokens = last.tokens - first.tokens
-      if (duration < 1_000_000_000n || duration > BigInt(Number.MAX_SAFE_INTEGER) ||
-        !Number.isSafeInteger(estimatedTokens) || estimatedTokens <= 0) return undefined
-      return { estimatedTokens, durationNs: Number(duration) }
-    },
-  }
-}
-
 export const tokens = (usage: Usage | undefined): TokenUsage.Info => ({
   input: safe(usage?.nonCachedInputTokens),
   output: safe(usage?.visibleOutputTokens),
@@ -85,7 +57,7 @@ export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undef
 
 export const generationTiming = (
   usage: Usage | undefined,
-  times: { readonly started?: bigint; readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint; readonly streamedOutput?: string },
+  times: { readonly started?: bigint; readonly text?: bigint; readonly reasoning?: bigint; readonly toolInput?: bigint; readonly ended: bigint; readonly streamedCharacters?: number },
 ): Pick<ProviderRequest.Timing, "generatedTokens" | "observedGenerationDurationNs" | "estimatedTokens" | "estimatedGenerationDurationNs"> | undefined => {
   const normalized = tokens(usage)
   const generatedTokens = normalized.output + normalized.reasoning
@@ -96,8 +68,8 @@ export const generationTiming = (
   if (duration < 0n || duration > BigInt(Number.MAX_SAFE_INTEGER)) return measured
   const durationNs = Number(duration === 0n ? 1n : duration)
   if (measured) return { ...measured, observedGenerationDurationNs: durationNs }
-  if (!times.streamedOutput?.length) return undefined
-  return { estimatedTokens: Math.max(1, Token.estimate(times.streamedOutput)), estimatedGenerationDurationNs: durationNs }
+  if (!times.streamedCharacters) return undefined
+  return { estimatedTokens: Math.max(1, Token.estimateLength(times.streamedCharacters)), estimatedGenerationDurationNs: durationNs }
 }
 
 function earliest(values: ReadonlyArray<bigint | undefined>) {

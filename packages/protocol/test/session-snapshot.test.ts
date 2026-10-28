@@ -49,20 +49,21 @@ test("snapshot roundtrips active generation speed and rejects invalid windows", 
   const decode = Schema.decodeUnknownSync(SessionProjection)
   const encode = Schema.encodeSync(SessionProjection)
   for (const live of [
-    { requestID: "prq_test", attempt: 1, sample },
-    { requestID: "prq_test", attempt: 1 },
+    { requestID: "prq_test", attempt: 1, phase: "streaming" as const, sample },
+    { requestID: "prq_test", attempt: 1, phase: "waiting" as const },
   ]) {
     const input = { ...snapshot, generationSpeed: { ...history, live } }
     expect(encode(decode(input))).toEqual(input)
   }
   expect(encode(decode({ ...snapshot, generationSpeed: history }))).toEqual({ ...snapshot, generationSpeed: history })
   for (const live of [
-    { requestID: "bad", attempt: 1, sample },
-    { requestID: "prq_test", attempt: 0, sample },
-    { requestID: "prq_test", attempt: 1.5, sample },
-    { requestID: "prq_test", attempt: 1, sample: { ...sample, tokens: 0 } },
-    { requestID: "prq_test", attempt: 1, sample: { ...sample, durationNs: 0 } },
-    { requestID: "prq_test", attempt: 1, sample: { ...sample, tokensPerSecond: 0 } },
+    { requestID: "bad", attempt: 1, phase: "streaming", sample },
+    { requestID: "prq_test", attempt: 0, phase: "streaming", sample },
+    { requestID: "prq_test", attempt: 1.5, phase: "streaming", sample },
+    { requestID: "prq_test", attempt: 1, phase: "streaming", sample: { ...sample, tokens: 0 } },
+    { requestID: "prq_test", attempt: 1, phase: "streaming", sample: { ...sample, durationNs: 0 } },
+    { requestID: "prq_test", attempt: 1, phase: "streaming", sample: { ...sample, tokensPerSecond: 0 } },
+    { requestID: "prq_test", attempt: 1, sample },
   ]) expect(() => decode({ ...snapshot, generationSpeed: { ...history, live } })).toThrow()
   expect(() => decode({ ...snapshot, generationSpeed: { ...history, recent: Array(9).fill(sample) } })).toThrow()
 })

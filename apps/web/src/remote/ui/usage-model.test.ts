@@ -330,3 +330,14 @@ test("a quota error is its own quota state with the server message while account
   expect(usageQuotaView(failed)).toEqual({ kind: "error", message: "Provider quotas are unavailable right now." })
   expect(usageDashboardView({ status: "ready", data: failed })).toEqual({ kind: "ready", info: failed, refreshing: false, stale: false })
 })
+
+test("the daily report follows the provider and model selection and no other breakdown filter", () => {
+  const now = Date.UTC(2026, 9, 28, 12)
+  expect(usageReportInputs(now, undefined).daily).not.toHaveProperty("providerID")
+  const filtered = usageReportInputs(now, undefined, { group: "model", offset: 0, sort: "cost", order: "desc", providerID: "openai", modelID: "gpt-6-sol", profile: "Work", selectedEffort: "high" })
+  expect(filtered.daily).toMatchObject({ group: "day", providerID: "openai", modelID: "gpt-6-sol", limit: 30 })
+  expect(filtered.daily).not.toHaveProperty("profile")
+  expect(filtered.daily).not.toHaveProperty("selectedEffort")
+  expect(reportKey(filtered.daily)).not.toBe(reportKey(usageReportInputs(now, undefined).daily))
+  expect(filtered.monthly).not.toHaveProperty("providerID")
+})

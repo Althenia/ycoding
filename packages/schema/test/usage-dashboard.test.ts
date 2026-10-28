@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
+import { Model } from "../src/model.js"
+import { Provider } from "../src/provider.js"
 import { ProviderRequest } from "../src/provider-request.js"
 import { Telemetry } from "../src/telemetry.js"
 import { UsageDashboard } from "../src/usage-dashboard.js"
@@ -18,6 +20,7 @@ const ready = {
   revision: "r1",
   summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens },
   quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } },
+  live: { asOf: 5, active: 0, streaming: 0, models: [], history: [] },
   daily: report("day"),
   monthly: report("month"),
   breakdown: report("provider-model"),
@@ -66,7 +69,7 @@ test("dashboard info requires summary and quota and rejects unknown status", () 
   const { quota: _removed, ...accounting } = ready
   expect(() => decode({ ...accounting, providers: [], forecast: { asOf: 4, localScope: "backend" } })).toThrow()
   const bare = Schema.encodeSync(UsageDashboard.Info)({ ...decode(ready), daily: undefined, monthly: undefined, breakdown: undefined } as UsageDashboard.Info)
-  expect(Object.keys(bare)).toEqual(["status", "asOf", "revision", "summary", "quota"])
+  expect(Object.keys(bare)).toEqual(["status", "asOf", "revision", "summary", "quota", "live"])
   expect(() => decode({ ...ready, asOf: -1 })).toThrow()
   expect(() => decode({ status: "stale" })).toThrow()
   expect(() => decode({ status: "error" })).toThrow()
@@ -95,4 +98,26 @@ test("dashboard encoding omits an absent refresh and keeps stable public identif
 
 test("dashboard latency samples are accepted for the composed operation", () => {
   expect(Schema.decodeUnknownSync(Telemetry.Operation)("usage.dashboard")).toBe("usage.dashboard")
+})
+
+test("dashboard live activity is required, bounded and finite", () => {
+  const decode = Schema.decodeUnknownSync(UsageDashboard.Info)
+  const model = Model.Ref.make({ providerID: Provider.ID.make("openai"), id: Model.ID.make("gpt-5.6") })
+  const live = {
+    asOf: 9, active: 2, streaming: 1, outputTokensPerSecond: 42.5,
+    models: [{ model, active: 2, streaming: 1, outputTokensPerSecond: 42.5 }, { model: { ...model, id: Model.ID.make("other") }, active: 0, streaming: 0 }],
+    history: [{ at: 5, active: 1, outputTokensPerSecond: 0 }, { at: 10, active: 2 }],
+  } satisfies UsageDashboard.Live
+  expect(decode({ ...ready, live })).toEqual({ ...ready, live })
+  expect(decode(ready)).toEqual(ready)
+  const { live: _, ...withoutLive } = ready
+  expect(() => decode(withoutLive)).toThrow()
+  const point = { at: 0, active: 0 }
+  const entry = { model, active: 0, streaming: 0 }
+  expect(decode({ ...ready, live: { ...ready.live, models: Array(50).fill(entry), history: Array(120).fill(point) } })).toBeDefined()
+  expect(() => decode({ ...ready, live: { ...ready.live, models: Array(51).fill(entry) } })).toThrow()
+  expect(() => decode({ ...ready, live: { ...ready.live, history: Array(121).fill(point) } })).toThrow()
+  for (const bad of [{ outputTokensPerSecond: -1 }, { outputTokensPerSecond: Number.POSITIVE_INFINITY }, { active: -1 }, { streaming: 1.5 }, { asOf: -1 }])
+    expect(() => decode({ ...ready, live: { ...ready.live, ...bad } })).toThrow()
+  expect(() => decode({ ...ready, live: { ...ready.live, history: [{ at: 0, active: 0, outputTokensPerSecond: -1 }] } })).toThrow()
 })

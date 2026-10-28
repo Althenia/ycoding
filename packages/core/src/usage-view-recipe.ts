@@ -11,7 +11,7 @@ import { SessionUsage } from "./session/usage"
 import type { SessionUsagePricing } from "./session/usage-pricing"
 import type { Aggregate, PricingRef } from "./session/usage-read"
 import type { UsageViewRowTable } from "./usage-view.sql"
-import { usageReportGroup } from "./session/usage-projection"
+import { localDate, localMidnight, usageReportGroup } from "./session/usage-projection"
 import type { UsageAnalyticsRequestTable } from "./usage-analytics.sql"
 
 export type Source = typeof UsageAnalyticsRequestTable.$inferSelect
@@ -70,6 +70,11 @@ export const measures = [
   "observed",
   "generation_tokens",
   "generation_duration",
+  "generation_rate",
+  "busy_ms",
+  "failed",
+  "cancelled",
+  "outcomes",
 ] as const
 
 export type Measures = Record<(typeof measures)[number], number>
@@ -81,6 +86,9 @@ export const quantiles = [
   { metric: 1, percent: 95 },
   { metric: 2, percent: 50 },
   { metric: 2, percent: 90 },
+  { metric: 0, percent: 99 },
+  { metric: 1, percent: 99 },
+  { metric: 2, percent: 95 },
 ] as const
 
 export const sizes = ["first_output", "total_output", "generation_samples"] as const
@@ -171,6 +179,11 @@ export const zero = (): Measures => ({
   observed: 0,
   generation_tokens: 0,
   generation_duration: 0,
+  generation_rate: 0,
+  busy_ms: 0,
+  failed: 0,
+  cancelled: 0,
+  outcomes: 0,
 })
 
 const exact = (value: number | undefined): value is number =>
@@ -198,6 +211,9 @@ export function contribution(
     reported: row.cache_read_reported ? 1 : 0,
     cost: row.cost ?? 0,
     priced: row.cost === null ? 0 : 1,
+    failed: row.outcome === "failed" ? 1 : 0,
+    cancelled: row.outcome === "cancelled" ? 1 : 0,
+    outcomes: row.outcome === null ? 0 : 1,
   })
   const location = { directory: row.directory, workspaceID: row.workspace_id }
   const ref =
@@ -230,6 +246,7 @@ export function contribution(
   }
   if (total !== undefined) {
     value.total_output = 1
+    value.busy_ms = total
     samples.push([1, total])
   }
   const providerTimed = timing !== undefined && Object.hasOwn(timing, "generationDurationNs")
@@ -246,7 +263,8 @@ export function contribution(
     value.observed = providerTimed ? 0 : 1
     value.generation_tokens = generated
     value.generation_duration = duration
-    samples.push([2, (generated * 1_000_000_000) / duration])
+    value.generation_rate = (generated * 1_000_000_000) / duration
+    samples.push([2, value.generation_rate])
   }
   return { measures: value, samples, ...(ref ? { ref } : {}) }
 }
@@ -309,6 +327,9 @@ export function aggregate(row: ViewRow): Aggregate {
     priced: row.priced + row.catalog_requests,
     cacheReadReported: row.reported === row.logical ? 1 : 0,
     currentCatalog: row.catalog_requests > 0 ? 1 : 0,
+    failed: row.failed,
+    cancelled: row.cancelled,
+    outcomes: row.outcomes,
   }
 }
 
@@ -323,41 +344,21 @@ export function speed(row: ViewRow, ranks: ReadonlyMap<number, number>): Provide
     generationSamples: generation,
     providerTimedSamples: row.provider_timed,
     observedSamples: row.observed,
-    ...(generation > 0 ? { generationP50TokensPerSecond: ranks.get(4)!, generationP90TokensPerSecond: ranks.get(5)! } : {}),
-    ...(first > 0 ? { firstOutputP50Ms: ranks.get(0)!, firstOutputP95Ms: ranks.get(1)! } : {}),
-    ...(total > 0 ? { totalP50Ms: ranks.get(2)!, totalP95Ms: ranks.get(3)! } : {}),
+    ...(generation > 0
+      ? {
+          generationP50TokensPerSecond: ranks.get(4)!,
+          generationP90TokensPerSecond: ranks.get(5)!,
+          generationP95TokensPerSecond: ranks.get(8)!,
+          meanTokensPerSecond: row.generation_rate / generation,
+        }
+      : {}),
+    ...(first > 0 ? { firstOutputP50Ms: ranks.get(0)!, firstOutputP95Ms: ranks.get(1)!, firstOutputP99Ms: ranks.get(6)! } : {}),
+    ...(total > 0 ? { totalP50Ms: ranks.get(2)!, totalP95Ms: ranks.get(3)!, totalP99Ms: ranks.get(7)! } : {}),
     ...(duration === 0 ? {} : { outputTokensPerSecond: row.generation_tokens / (duration / 1_000_000_000) }),
   }
 }
 
 const day = 86_400_000
-
-function localDate(time: number, formatter: Intl.DateTimeFormat) {
-  const parts = formatter.formatToParts(time)
-  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((entry) => entry.type === type)?.value)
-  return { year: part("year"), month: part("month"), day: part("day") }
-}
-
-function localMidnight(year: number, month: number, date: number, formatter: Intl.DateTimeFormat) {
-  const target = Date.UTC(year, month - 1, date)
-  const start = target - 48 * 3_600_000
-  const ordinal = (time: number) => {
-    const value = localDate(time, formatter)
-    return Date.UTC(value.year, value.month - 1, value.day)
-  }
-  for (let end = start + 3_600_000; end <= target + 48 * 3_600_000; end += 3_600_000) {
-    if (ordinal(end - 3_600_000) >= target || ordinal(end) < target) continue
-    let low = end - 3_600_000
-    let high = end
-    while (high - low > 1) {
-      const middle = low + Math.floor((high - low) / 2)
-      if (ordinal(middle) >= target) high = middle
-      else low = middle
-    }
-    return high
-  }
-  return target
-}
 
 export function bounds(now: number, timeZone: string | undefined, days = 30) {
   const formatter =

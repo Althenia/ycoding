@@ -105,17 +105,17 @@ test("counts every generated token against local timing independently of provide
 test("uses reported inclusive output counts with received reasoning timing", () => {
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 500, outputMayIncludeUnreportedReasoning: true }), {
     reasoning: 1_000_000_000n, text: 2_000_000_000n, ended: 3_000_000_000n,
-    streamedOutput: "thinking" + "reply   ",
+    streamedCharacters: ("thinking" + "reply   ").length,
   })).toEqual({ generatedTokens: 500, observedGenerationDurationNs: 2_000_000_000 })
 })
 
 test("estimates short tool-only output without provider counts and rejects empty output", () => {
-  const times = { toolInput: 1_000_000_000n, ended: 2_000_000_000n, streamedOutput: '{"name":"hello"}' }
+  const times = { toolInput: 1_000_000_000n, ended: 2_000_000_000n, streamedCharacters: '{"name":"hello"}'.length }
   expect(SessionUsage.generationTiming(undefined, times))
     .toEqual({ estimatedTokens: 4, estimatedGenerationDurationNs: 1_000_000_000 })
   expect(SessionUsage.generationTiming(undefined, { ...times, ended: 1_999_999_999n }))
     .toEqual({ estimatedTokens: 4, estimatedGenerationDurationNs: 999_999_999 })
-  expect(SessionUsage.generationTiming(undefined, { ...times, streamedOutput: "" })).toBeUndefined()
+  expect(SessionUsage.generationTiming(undefined, { ...times, streamedCharacters: 0 })).toBeUndefined()
   for (const generationDurationNs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
     expect(SessionUsage.generationTiming(new Usage({ outputTokens: 12, generationDurationNs }), times))
       .toEqual({ generatedTokens: 12, observedGenerationDurationNs: 1_000_000_000 })
@@ -123,7 +123,7 @@ test("estimates short tool-only output without provider counts and rejects empty
 
 test("keeps usable provider timing ahead of a received-output estimate", () => {
   expect(SessionUsage.generationTiming(new Usage({ outputTokens: 120, generationDurationNs: 2_000_000_000 }), {
-    text: 1_000_000_000n, ended: 3_000_000_000n, streamedOutput: "small reply",
+    text: 1_000_000_000n, ended: 3_000_000_000n, streamedCharacters: "small reply".length,
   })).toEqual({ generatedTokens: 120, observedGenerationDurationNs: 2_000_000_000 })
 })
 

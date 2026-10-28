@@ -2,6 +2,64 @@ import type { UsageDashboardInput, UsageDashboardOutput, UsageReportOutput } fro
 import type { ProviderUsageReportInput, UsagePreparing, UsageReportRead, UsageStatsRead } from "./provider-usage-reports"
 
 export type DashboardLoader = (input: UsageDashboardInput) => Promise<UsageDashboardOutput>
+export type UsageLive = Extract<UsageDashboardOutput, { status: "ready" }>["live"]
+
+export const USAGE_LIVE_POLL_MS = 2_000
+
+export function createUsageLivePoll(options: {
+  load: DashboardLoader
+  onLive: (live: UsageLive) => void
+  onFailed: () => void
+  onPreparing: () => void
+  delayMs?: number
+  schedule?: (run: () => void, delayMs: number) => () => void
+}) {
+  const schedule = options.schedule ?? ((run, delayMs) => {
+    const timer = setTimeout(run, delayMs)
+    return () => clearTimeout(timer)
+  })
+  let generation = 0
+  let cancel: (() => void) | undefined
+  let asOf = -1
+  let active = 0
+  const stop = () => {
+    generation += 1
+    cancel?.()
+    cancel = undefined
+  }
+  const next = () => {
+    const token = generation
+    cancel = schedule(() => {
+      cancel = undefined
+      void poll(token)
+    }, options.delayMs ?? USAGE_LIVE_POLL_MS)
+  }
+  const accept = (live: UsageLive) => {
+    if (live.asOf < asOf) return false
+    asOf = live.asOf
+    active = live.active
+    stop()
+    options.onLive(live)
+    if (live.active > 0) next()
+    return true
+  }
+  const poll = async (token: number) => {
+    const info = await options.load({}).catch(() => undefined)
+    if (token !== generation) return
+    if (info === undefined || info.status === "error") {
+      stop()
+      options.onFailed()
+      return
+    }
+    if (info.status === "preparing") {
+      stop()
+      options.onPreparing()
+      return
+    }
+    if (!accept(info.live) && active > 0) next()
+  }
+  return { accept, stop }
+}
 
 const preparing: UsagePreparing = { status: "preparing" }
 

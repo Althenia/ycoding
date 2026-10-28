@@ -327,8 +327,6 @@ export default {
       )
       yield* tx.run(`CREATE INDEX \`usage_view_state_status_idx\` ON \`usage_view_state\` (\`status\`);`)
       yield* tx.run(`CREATE INDEX \`usage_view_state_time_used_idx\` ON \`usage_view_state\` (\`time_used\`);`)
-      const { UsageStage } = yield* Effect.promise(() => import("../../usage-stage"))
-      yield* UsageStage.backfill(tx)
     })
   },
 } satisfies DatabaseMigration.Migration

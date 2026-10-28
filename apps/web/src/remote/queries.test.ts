@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { RemoteUsageDashboard, RemoteUsageGroup } from "@ycoding-ai/remote"
-import { createRemoteQueries, createRemoteQueryClient, keepAwakeState, remoteKeys, usageRead, type QueryScope, type RemoteLink } from "./queries"
+import { createRemoteQueries, createRemoteQueryClient, keepAwakeState, remoteKeys, usageRead, type QueryScope, type RemoteLink, type UsageResult } from "./queries"
 import type { RemoteRequestOutcome, RemoteTransportRequest } from "./transport"
 
 type View<T> = { status: "pending" | "error" | "success"; fetchStatus: "fetching" | "paused" | "idle"; data: T | undefined; error: Error | null }
@@ -392,8 +392,9 @@ describe("usage dashboard query", () => {
     monthly: { group: "model", from: 0, to: 10, timeZone: "UTC", limit: 200, sort: "cost", order: "desc" },
     breakdown: { group: "provider-model", from: 0, to: 10, timeZone: "UTC", limit: 25 },
   } as const
+  const idle = { asOf: 6, active: 0, streaming: 0, models: [], history: [] }
   const ready = {
-    status: "ready", asOf: 5, revision: "r1", summary: metrics, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } },
+    status: "ready", asOf: 5, revision: "r1", summary: metrics, live: idle, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } },
     daily: reportOf("day"), monthly: reportOf("model"), breakdown: reportOf("provider-model"),
   } satisfies Extract<RemoteUsageDashboard, { readonly status: "ready" }>
   const dashboard = (answers: (call: number) => RemoteRequestOutcome) => {
@@ -481,9 +482,85 @@ describe("usage dashboard query", () => {
   })
 })
 
+describe("usage dashboard live generation", () => {
+  const tokens = { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } }
+  const metrics = { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens }
+  const input = { daily: { group: "day", from: 0, to: 10, timeZone: "UTC", limit: 30, sort: "key", order: "asc" } } as const
+  const live = {
+    asOf: 7, active: 2, streaming: 1, outputTokensPerSecond: 41.5,
+    models: [{ model: { providerID: "openai", id: "gpt-6-sol", variant: "high" }, active: 2, streaming: 1, outputTokensPerSecond: 41.5 }],
+    history: [{ at: 1, active: 1 }, { at: 6, active: 2, outputTokensPerSecond: 40 }],
+  }
+  const bare = { status: "ready", asOf: 5, revision: "r1", summary: metrics, live, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } },
+    daily: { group: "day", rows: [], total: metrics, rowCount: 0 } } satisfies RemoteUsageDashboard
+  const data = (value: unknown): RemoteRequestOutcome => ({ status: "ok", value: { data: value } })
+  const queriesFor = (answers: (call: number) => unknown) => {
+    let calls = 0
+    const client = createRemoteQueryClient()
+    return { client, queries: createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => data(answers(++calls)) }, client) }
+  }
+  const row = (extra: Record<string, unknown>) => ({ ...bare, daily: { ...bare.daily, rows: [{ key: "2026-10-28", label: "2026-10-28", ...metrics, ...extra }], rowCount: 1 } })
+  const speed = { samples: 0, generationSamples: 0, providerTimedSamples: 0, observedSamples: 0 }
+
+  test("live figures are read as sent and bounded", async () => {
+    const accepted = queriesFor(() => bare)
+    expect(await accepted.client.fetchQuery(accepted.queries.usageDashboard(scope, true, input))).toEqual({ status: "ready", data: bare })
+    const overall = queriesFor(() => ({ ...bare, daily: { ...bare.daily, speed: { ...speed, samples: 3, generationSamples: 3, meanTokensPerSecond: 31, firstOutputP95Ms: 900 } } }))
+    expect(await overall.client.fetchQuery(overall.queries.usageDashboard(scope, true, input))).toMatchObject({ status: "ready", data: { daily: { speed: { meanTokensPerSecond: 31 } } } })
+    const detailed = queriesFor(() => row({ outcomes: { completed: 1, failed: 0, cancelled: 2 }, concurrency: 1.5, speed: { ...speed, meanTokensPerSecond: 30, generationP95TokensPerSecond: 50, firstOutputP99Ms: 1500, totalP99Ms: 9000 } }))
+    expect((await detailed.client.fetchQuery(detailed.queries.usageDashboard(scope, true, input)))).toMatchObject({ status: "ready" })
+  })
+
+  test("a ready answer without readable live figures, outcomes, or speed amounts is unreadable", async () => {
+    const { live: _live, ...without } = bare
+    const point = live.history[0]!
+    const unreadable = [
+      without, { ...bare, live: { ...live, active: -1 } }, { ...bare, live: { ...live, streaming: 1.5 } }, { ...bare, live: { ...live, outputTokensPerSecond: -1 } },
+      { ...bare, live: { ...live, models: Array.from({ length: 51 }, () => live.models[0]) } }, { ...bare, live: { ...live, history: Array.from({ length: 121 }, () => point) } },
+      { ...bare, live: { ...live, history: [{ at: 1, active: 1, outputTokensPerSecond: Number.NaN }] } },
+      { ...bare, live: { ...live, models: [{ ...live.models[0], model: { providerID: "", id: "x" } }] } },
+      { ...bare, live: { ...live, models: [{ ...live.models[0], active: -1 }] } },
+      row({ outcomes: { completed: 1, failed: -1, cancelled: 0 } }), row({ outcomes: { completed: 1, failed: 0 } }),
+      { ...bare, daily: { ...bare.daily, speed: { ...speed, meanTokensPerSecond: -1 } } }, { ...bare, daily: { ...bare.daily, speed: { samples: -1 } } },
+      row({ concurrency: -1 }), row({ speed: { ...speed, meanTokensPerSecond: -1 } }), row({ speed: { ...speed, firstOutputP99Ms: Number.NaN } }),
+    ]
+    for (const value of unreadable) {
+      const { client, queries } = queriesFor(() => value)
+      await expect(client.fetchQuery(queries.usageDashboard(scope, true, input))).rejects.toThrow()
+    }
+  })
+
+  test("polls every two seconds while generations are active, yields to preparing, and stops when idle", () => {
+    const { queries } = queriesFor(() => bare)
+    const options = queries.usageDashboard(scope, true, input) as unknown as {
+      refetchInterval: (query: { state: { status: string; data: unknown } }) => number | false
+      staleTime: (query: { state: { data: unknown } }) => number
+    }
+    const received = (value: unknown) => ({ state: { status: "success", data: { status: "ready", data: value } } })
+    expect(options.refetchInterval(received(bare))).toBe(2_000)
+    expect(options.refetchInterval(received({ ...bare, live: { ...live, active: 0, streaming: 0 } }))).toBe(false)
+    expect(options.refetchInterval(received({ ...bare, quota: { status: "preparing" } }))).toBe(1_000)
+    expect(options.refetchInterval({ state: { status: "error", data: { status: "ready", data: bare } } })).toBe(false)
+    expect(options.staleTime({ state: { data: { status: "ready", data: bare } } })).toBe(0)
+    expect(options.staleTime({ state: { data: { status: "ready", data: { ...bare, live: { ...live, active: 0, streaming: 0 } } } } })).toBe(60_000)
+  })
+
+  test("an older answer never replaces a newer one, but an explicit refresh always does", async () => {
+    const newer = { ...bare, asOf: 20 }
+    const older = { ...bare, asOf: 10 }
+    const { client, queries } = queriesFor((call) => call === 1 ? newer : older)
+    await client.fetchQuery(queries.usageDashboard(scope, true, input))
+    expect(await client.fetchQuery({ ...queries.usageDashboard(scope, true, input), staleTime: 0 })).toEqual({ status: "ready", data: newer })
+    expect(client.getQueryData<UsageResult<RemoteUsageDashboard>>(queries.usageDashboard(scope, true, input).queryKey)).toEqual({ status: "ready", data: newer })
+    await queries.refreshUsageDashboard(scope, input)
+    expect(client.getQueryData<UsageResult<RemoteUsageDashboard>>(queries.usageDashboard(scope, true, input).queryKey)).toEqual({ status: "ready", data: older })
+    client.clear()
+  })
+})
+
 describe("usage dashboard preparing progression", () => {
   const input = { breakdown: { group: "model", from: 0, to: 10, limit: 25 } } as const
-  const bare = { status: "ready", asOf: 5, revision: "r1", summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } } } satisfies Extract<RemoteUsageDashboard, { readonly status: "ready" }>
+  const bare = { status: "ready", asOf: 5, revision: "r1", live: { asOf: 6, active: 0, streaming: 0, models: [], history: [] }, summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } } } satisfies Extract<RemoteUsageDashboard, { readonly status: "ready" }>
   const interval = (state: { status: string; data: unknown }) => {
     const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => ({ status: "ok", value: { data: bare } }) }, createRemoteQueryClient())
     const options = queries.usageDashboard(scope, true, input) as unknown as { refetchInterval: (query: { state: typeof state }) => number | false }

@@ -52,7 +52,10 @@ export const GenerationSpeedHistory = Schema.Struct({
   live: Schema.Struct({
     requestID: ProviderRequest.ID,
     attempt: PositiveInt,
+    phase: Schema.Literals(["preparing", "waiting", "reasoning", "streaming", "tool", "completed", "failed", "cancelled"]),
+    firstOutputMs: NonNegativeInt.pipe(optional),
     sample: GenerationSpeed.pipe(optional),
+    final: GenerationSpeed.pipe(optional),
   }).pipe(optional),
 }).annotate({ identifier: "Session.GenerationSpeedHistory" })
 export interface GenerationSpeedHistory extends Schema.Schema.Type<typeof GenerationSpeedHistory> {}

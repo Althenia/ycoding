@@ -274,9 +274,16 @@ const speedOracle = (specs: ReadonlyArray<Spec>) => {
     observedSamples: valid.filter((value) => !value.provider).length,
     ...(rates.length === 0
       ? {}
-      : { generationP50TokensPerSecond: rank(rates, 50), generationP90TokensPerSecond: rank(rates, 90) }),
-    ...(first.length === 0 ? {} : { firstOutputP50Ms: rank(first, 50), firstOutputP95Ms: rank(first, 95) }),
-    ...(total.length === 0 ? {} : { totalP50Ms: rank(total, 50), totalP95Ms: rank(total, 95) }),
+      : {
+          generationP50TokensPerSecond: rank(rates, 50),
+          generationP90TokensPerSecond: rank(rates, 90),
+          generationP95TokensPerSecond: rank(rates, 95),
+          meanTokensPerSecond: expect.closeTo(rates.reduce((sum, rate) => sum + rate, 0) / rates.length, 9),
+        }),
+    ...(first.length === 0
+      ? {}
+      : { firstOutputP50Ms: rank(first, 50), firstOutputP95Ms: rank(first, 95), firstOutputP99Ms: rank(first, 99) }),
+    ...(total.length === 0 ? {} : { totalP50Ms: rank(total, 50), totalP95Ms: rank(total, 95), totalP99Ms: rank(total, 99) }),
     ...(valid.length === 0
       ? {}
       : {
@@ -889,7 +896,11 @@ const seededRow = (index: number) => ({
   continuation: "full" as const,
   cost: index % 5 === 0 ? null : 0.01,
   tokens: { input: 1 + (index % 7), output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
-  timing: { totalMs: index % 97, firstOutputMs: index % 13 },
+  timing: {
+    totalMs: index % 97,
+    firstOutputMs: index % 13,
+    ...(index % 3 === 0 ? {} : { generatedTokens: 10 + (index % 11), generationDurationNs: 1_000_000_000 + (index % 5) * 125_000_000 }),
+  },
   time_created: base + index * 7_919,
 })
 
@@ -899,7 +910,8 @@ test("explicit backfill and the migration rebuild raw-seeded history idempotentl
   const path = join(directory, "usage.db")
   const { UsageStage } = await import("../src/usage-stage")
   const { migrations } = await import("../src/database/migration.gen")
-  const migration = migrations.find((item) => item.id.endsWith("_prepared-usage"))!
+  const replay = migrations.slice(migrations.findIndex((item) => item.id.endsWith("_prepared-usage")))
+  expect(replay.map((item) => item.id.replace(/^\d+_/, ""))).toEqual(["prepared-usage", "usage-telemetry"])
   const rows = Array.from({ length: 12_345 }, (_, index) => seededRow(index))
   const expected = (selected: ReadonlyArray<ReturnType<typeof seededRow>>) => ({
     logical: selected.length,
@@ -933,6 +945,10 @@ test("explicit backfill and the migration rebuild raw-seeded history idempotentl
       expect((yield* sessions.usageReportAll({ group: "hour", ...range })).total.logical).toBe(ranged.length)
       const scoped = yield* sessions.usage(SessionSchema.ID.make("ses_seed_b"))
       expect(scoped.logical).toBe(expected(rows.filter((row) => row.session_id === "ses_seed_b")).logical)
+      const views = [{ group: "model" }, { group: "day", timeZone: "Asia/Kathmandu" }, { group: "hour", limit: 200 }] as const
+      const prepared = yield* Effect.forEach(views, (input) => sessions.usageReportAll(input))
+      expect(prepared[0]!.rows.every((row) => row.speed?.meanTokensPerSecond !== undefined)).toBe(true)
+      expect(prepared[1]!.rows.every((row) => row.concurrency !== undefined)).toBe(true)
 
       for (const table of ["usage_view_presentation", "usage_view_ref", "usage_view_rank", "usage_view_sample", "usage_view_row", "usage_view_state", "usage_view_change", "usage_view_journal"])
         yield* db.run(sql.raw(`DROP TABLE ${table}`))
@@ -944,10 +960,17 @@ test("explicit backfill and the migration rebuild raw-seeded history idempotentl
       yield* db.run(sql`DROP TABLE session_usage_cell_sample`)
       yield* db.run(sql`DROP TABLE session_usage_cell_unpriced`)
       yield* db.run(sql`DROP TABLE session_usage_cell`)
-      yield* db.transaction((tx) => migration.up(tx))
+      yield* db.run(sql`ALTER TABLE usage_analytics_request DROP COLUMN outcome`)
+      yield* db.run(sql`ALTER TABLE session_provider_request DROP COLUMN outcome`)
+      for (const migration of replay) yield* db.transaction((tx) => migration.up(tx))
       const migrated = yield* sessions.usageReportAll({ group: "model" })
       expect(migrated.total.logical).toBe(rows.length)
       expect(migrated.total.cost).toBeCloseTo(expected(rows).cost, 9)
+      const normalize = (value: unknown): unknown =>
+        JSON.parse(JSON.stringify(value, (_, item) => (typeof item === "number" && !Number.isInteger(item) ? Number(item.toPrecision(12)) : item)))
+      expect(normalize(yield* Effect.forEach(views, (input) => sessions.usageReportAll(input)))).toEqual(normalize(prepared))
+      yield* UsageStage.backfill(db)
+      expect(normalize(yield* Effect.forEach(views, (input) => sessions.usageReportAll(input)))).toEqual(normalize(prepared))
     }).pipe(Effect.provide(first.runtime), Effect.scoped),
   )
   const reopened = harness({ path })
