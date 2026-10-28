@@ -2,15 +2,20 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { afterAll, describe, expect } from "bun:test"
-import { Deferred, Effect, Logger } from "effect"
+import { Deferred, Effect, Layer, Logger } from "effect"
+import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "../src/catalog"
+import { Command } from "../src/command"
 import { Config } from "../src/config"
 import { Database } from "../src/database/database"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
 import { LayerNode } from "../src/effect/layer-node"
+import { httpClient } from "../src/effect/app-node-platform"
 import { EventRuntime } from "../src/event"
+import { LocationAnnouncements } from "../src/location-announcements"
 import { Location } from "../src/location"
 import { LocationServiceMap } from "../src/location-service-map"
+import { MCP } from "../src/mcp/index"
 import { CatalogModel } from "../src/model"
 import { ModelsDev } from "../src/models-dev"
 import { CatalogContributions } from "../src/plugin/catalog-contributions"
@@ -28,6 +33,79 @@ const it = testEffect(
     pricedModels,
   ]),
 )
+
+const museRow = {
+  id: "muse-wonder-1.0",
+  object: "model",
+  created: 1_788_307_200,
+  owned_by: "meta",
+  metadata: {
+    "muse-code": {
+      name: "Muse Wonder",
+      is_hidden: false,
+      tool_call: true,
+      modalities: { input: ["text"], output: ["text"] },
+      limit: { context: 1_000_000, output: 128_000 },
+    },
+  },
+}
+let museArrival: Promise<void> = Promise.resolve()
+const accountHttp = HttpClient.make((request) =>
+  Effect.promise(async () => {
+    if (!new URL(request.url).pathname.endsWith("/muse-code/models"))
+      return HttpClientResponse.fromWeb(request, new Response("not found", { status: 404 }))
+    await museArrival
+    return HttpClientResponse.fromWeb(request, Response.json({ data: [museRow] }))
+  }),
+)
+const withAccounts = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, ModelsDev.node, LocationServiceMap.node]), [
+    pricedModels,
+    [httpClient, Layer.succeed(HttpClient.HttpClient, accountHttp)],
+  ]),
+)
+const museModel = (catalog: Catalog.Interface) =>
+  catalog.model.get(Provider.ID.make("muse"), CatalogModel.ID.make(museRow.id))
+const awaitMuseModel = (catalog: Catalog.Interface) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (yield* museModel(catalog)) return
+      yield* Effect.sleep("100 millis")
+    }
+    yield* Effect.die(new Error("Muse account models never arrived"))
+  })
+const withMuseKey = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => {
+      process.env.META_API_KEY = "synthetic-meta-key"
+    }),
+    () => effect,
+    () =>
+      Effect.sync(() => {
+        delete process.env.META_API_KEY
+        museArrival = Promise.resolve()
+      }),
+  )
+
+const promptServer = (gate: string) => ({
+  mcp: {
+    servers: {
+      prompter: {
+        type: "local",
+        command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-prompts.ts")],
+        environment: { MCP_PROMPTS_GATE: gate },
+      },
+    },
+  },
+})
+const awaitPrompts = (mcp: MCP.Interface) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((yield* mcp.prompts()).length > 0) return
+      yield* Effect.sleep("50 millis")
+    }
+    yield* Effect.die(new Error("MCP prompts never arrived"))
+  })
 
 const created: string[] = []
 afterAll(() => created.forEach((directory) => fs.rmSync(directory, { recursive: true, force: true })))
@@ -203,5 +281,93 @@ describe("Location announcements", () => {
       },
       ({ server }) => Effect.sync(() => server.stop(true)),
     ),
+  )
+
+  withAccounts.live("publishes nothing when account models arrive after the first build of an unread Location", () =>
+    withMuseKey(
+      Effect.gen(function* () {
+        const directory = fresh()
+        const seen = yield* announcements(directory)
+        const locations = yield* LocationServiceMap.Service
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* locations.contextEffect(refOf(directory), CatalogContributions.nodes)
+            const catalog = yield* Catalog.Service.pipe(Effect.provide(context))
+            yield* awaitMuseModel(catalog)
+          }),
+        )
+        yield* settle
+        expect(seen).toEqual([])
+        yield* locations.invalidate(refOf(directory))
+      }),
+    ),
+  )
+
+  withAccounts.live("publishes one catalog update when account models arrive after a client read the catalog", () =>
+    withMuseKey(
+      Effect.gen(function* () {
+        let arrive!: () => void
+        museArrival = new Promise((resolve) => (arrive = resolve))
+        const directory = fresh()
+        const seen = yield* announcements(directory)
+        const locations = yield* LocationServiceMap.Service
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* locations.contextEffect(refOf(directory), CatalogContributions.nodes)
+            const catalog = yield* Catalog.Service.pipe(Effect.provide(context))
+            yield* LocationAnnouncements.read("catalog").pipe(Effect.provide(context))
+            expect(yield* museModel(catalog)).toBeUndefined()
+            arrive()
+            yield* awaitMuseModel(catalog)
+          }),
+        )
+        yield* settle
+        expect(seen).toEqual([Catalog.Event.Updated.type])
+        yield* locations.invalidate(refOf(directory))
+      }),
+    ),
+  )
+
+  it.live("publishes nothing when MCP prompts arrive after the first build of an unread Location", () =>
+    Effect.gen(function* () {
+      const gate = path.join(fresh(), "open")
+      fs.writeFileSync(gate, "")
+      const directory = fresh(promptServer(gate))
+      yield* settle
+      const seen = yield* announcements(directory)
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* locations.contextEffect(refOf(directory), [MCP.node, Command.node])
+          yield* awaitPrompts(yield* MCP.Service.pipe(Effect.provide(context)))
+        }),
+      )
+      yield* settle
+      expect(seen).toEqual([])
+      yield* locations.invalidate(refOf(directory))
+    }),
+  )
+
+  it.live("publishes one command update when MCP prompts arrive after a client read the commands", () =>
+    Effect.gen(function* () {
+      const gate = path.join(fresh(), "open")
+      const directory = fresh(promptServer(gate))
+      yield* settle
+      const seen = yield* announcements(directory)
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* locations.contextEffect(refOf(directory), [MCP.node, Command.node])
+          const mcp = yield* MCP.Service.pipe(Effect.provide(context))
+          yield* LocationAnnouncements.read("command").pipe(Effect.provide(context))
+          expect(yield* mcp.prompts()).toEqual([])
+          fs.writeFileSync(gate, "")
+          yield* awaitPrompts(mcp)
+        }),
+      )
+      yield* settle
+      expect(seen).toEqual([Command.Event.Updated.type])
+      yield* locations.invalidate(refOf(directory))
+    }),
   )
 })

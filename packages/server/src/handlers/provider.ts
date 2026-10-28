@@ -1,5 +1,6 @@
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
+import { LocationAnnouncements } from "@ycoding-ai/core/location-announcements"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -18,6 +19,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
         Effect.fn(function* () {
           const plugins = yield* PluginSupervisor.Service
           yield* plugins.flush.pipe(Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.fail(new ServiceUnavailableError({ message: "Provider integrations initialization timed out", service: "provider.integrations" })) }))
+          yield* LocationAnnouncements.read("catalog")
           const catalog = yield* Catalog.Service
           const policy = yield* Policy.Service
           const definitions = yield* catalog.provider.all()
@@ -29,6 +31,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
       .handle(
         "provider.list",
         Effect.fn(function* () {
+          yield* LocationAnnouncements.read("catalog")
           const catalog = yield* Catalog.Service
           return yield* response(catalog.provider.available())
         }),
@@ -44,6 +47,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
       .handle(
         "provider.get",
         Effect.fn(function* (ctx) {
+          yield* LocationAnnouncements.read("catalog")
           const catalog = yield* Catalog.Service
           const provider = yield* catalog.provider.get(ctx.params.providerID)
           if (!provider)

@@ -33,7 +33,7 @@ export function configured(options?: Config.Options) {
       ).pipe(Effect.map((built) => Context.get(built, Config.Service)), Effect.orDie))
       return Service.of({ read: Effect.fn("CoordinationSettings.read")(function* () {
         const config = yield* settings
-        yield* config.reload()
+        yield* config.reload({ notify: false })
         const diagnostics = yield* config.diagnostics()
         if (diagnostics.some((diagnostic) => diagnostic.reason === "invalid-json"))
           return ConfigCoordination.resolve({ delegated_decisions: { enabled: false } })

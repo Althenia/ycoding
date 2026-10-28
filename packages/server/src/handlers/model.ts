@@ -1,5 +1,6 @@
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { CatalogModel } from "@ycoding-ai/core/model"
+import { LocationAnnouncements } from "@ycoding-ai/core/location-announcements"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { ServiceUnavailableError } from "@ycoding-ai/protocol/errors"
 import { Effect } from "effect"
@@ -13,6 +14,7 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
       .handle(
         "model.list",
         Effect.fn(function* () {
+          yield* LocationAnnouncements.read("catalog")
           const catalog = yield* Catalog.Service
           return yield* response(catalog.model.available())
         }),
@@ -33,6 +35,7 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
                 ),
             }),
           )
+          yield* LocationAnnouncements.read("catalog")
           const catalog = yield* Catalog.Service
           return yield* response(
             Effect.gen(function* () {

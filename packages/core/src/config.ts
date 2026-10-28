@@ -233,7 +233,7 @@ export interface Interface {
   /** Returns location config documents and discovery sources from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
   readonly diagnostics: () => Effect.Effect<Diagnostic[]>
-  readonly reload: () => Effect.Effect<void>
+  readonly reload: (options?: { readonly notify?: boolean }) => Effect.Effect<void>
 }
 
 export const Options = Schema.Struct({
@@ -610,7 +610,7 @@ export const layer = (options?: Options) =>
         diagnostics: Effect.fn("Config.diagnostics")(function* () {
           return diagnostics
         }),
-        reload: () => reload({ notify: true }).pipe(Effect.provideContext(context)),
+        reload: (options) => reload({ notify: options?.notify ?? true }).pipe(Effect.provideContext(context)),
       })
     }),
   )

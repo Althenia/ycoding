@@ -1,6 +1,6 @@
 import { define } from "../catalog-host"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { Clock, Effect, Option, Schedule, Schema, Semaphore, Stream } from "effect"
+import { Clock, Effect, Option, Schema, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { AISDK } from "../../aisdk"
 import { Catalog } from "../../catalog"
@@ -9,6 +9,7 @@ import { EventRuntime } from "../../event"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { settingsForEffort } from "../../models-dev"
+import { LocationAnnouncements } from "../../location-announcements"
 import { Provider } from "../../provider"
 import { ProviderUsage, ProviderUsageRuntime } from "../../provider-usage"
 import { MuseUsage } from "../../provider-usage/muse"
@@ -388,12 +389,11 @@ export const MusePlugin = define({
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* ctx.integration
-      .reload()
-      .pipe(
-        Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced("60 seconds")), Effect.ignore)),
-        Effect.forkScoped({ startImmediately: true }),
-      )
+    yield* LocationAnnouncements.initial(ctx.integration.reload().pipe(Effect.andThen(reconcile()))).pipe(
+      Effect.andThen(Effect.sleep("60 seconds").pipe(Effect.andThen(reconcile()), Effect.forever)),
+      Effect.ignore,
+      Effect.forkScoped({ startImmediately: true }),
+    )
     yield* aisdk.hook.sdk(
       Effect.fn(function* (evt) {
         if (evt.model.providerID !== providerID || evt.package !== "@ai-sdk/openai") return

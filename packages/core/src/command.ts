@@ -78,7 +78,7 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
           draft.commands.delete(name)
         },
       }),
-      announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
+      announce: { gate: announcements, kind: "command", publish: events.publish(Event.Updated, {}) },
     })
     const staticCommand = (name: string) => state.get().commands.get(name) as Info | undefined
     const mcpCommands = Effect.fnUntraced(function* () {

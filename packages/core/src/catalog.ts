@@ -199,6 +199,7 @@ const layer = Layer.effect(
       },
       announce: {
         gate: announcements,
+        kind: "catalog",
         publish: events.publish(Event.Updated, {}),
         changed: (previous, next) => !isDeepStrictEqual(previous, next),
       },

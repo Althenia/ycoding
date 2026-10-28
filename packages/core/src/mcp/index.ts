@@ -518,7 +518,7 @@ export const layer = Layer.effect(
         }),
       )
 
-    const commandsChanged = announcements.when(events.publish(Command.Event.Updated, {}))
+    const commandsChanged = announcements.when(events.publish(Command.Event.Updated, {}), "command")
 
     const refreshPrompts = (name: ServerName, entry: ServerEntry, connection: MCPClient.Connection) =>
       connection.prompts().pipe(
@@ -621,7 +621,12 @@ export const layer = Layer.effect(
           yield* events.publish(McpEvent.ToolsChanged, { server: name }).pipe(Effect.ignore)
           yield* events.publish(McpEvent.ResourcesChanged, { server: name }).pipe(Effect.ignore)
           yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
-          whenLive(name, entry, result.value.connection)(refreshPrompts(name, entry, result.value.connection))
+          const initial = yield* LocationAnnouncements.Initial
+          whenLive(name, entry, result.value.connection)(
+            refreshPrompts(name, entry, result.value.connection).pipe(
+              Effect.provideService(LocationAnnouncements.Initial, initial),
+            ),
+          )
           return
         }
         yield* Scope.close(scope, Exit.void)
@@ -662,7 +667,7 @@ export const layer = Layer.effect(
         Deferred.doneUnsafe(entry.startup, Exit.void)
         continue
       }
-      fork(startServer(name, entry).pipe(locks.withLock(name)))
+      fork(LocationAnnouncements.initial(startServer(name, entry)).pipe(locks.withLock(name)))
     }
 
     // Bring a server online (or back to needs_auth) when its integration's credential changes, so an

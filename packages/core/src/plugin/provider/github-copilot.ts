@@ -9,6 +9,7 @@ import { InstallationVersion } from "../../installation/version"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { define } from "../catalog-host"
+import { LocationAnnouncements } from "../../location-announcements"
 import { Provider } from "../../provider"
 import type { PluginCatalogHost } from "../catalog-host"
 
@@ -192,7 +193,7 @@ export const GithubCopilotPlugin = define({
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* refresh().pipe(Effect.forkScoped)
+    yield* LocationAnnouncements.initial(refresh()).pipe(Effect.forkScoped)
     yield* ctx.aisdk.hook(
       "sdk",
       Effect.fn(function* (evt) {

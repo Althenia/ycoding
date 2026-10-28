@@ -4,7 +4,7 @@ import { ToolSchemaProjection } from "@ycoding-ai/ai"
 import { createServer } from "node:http"
 import { define } from "../catalog-host"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { Clock, Deferred, Effect, Option, Redacted, Schedule, Schema, Semaphore, Stream } from "effect"
+import { Clock, Deferred, Effect, Option, Redacted, Schema, Semaphore, Stream } from "effect"
 import { Sse } from "effect/unstable/encoding"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { AISDK } from "../../aisdk"
@@ -14,6 +14,7 @@ import { EventRuntime } from "../../event"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
+import { LocationAnnouncements } from "../../location-announcements"
 import { Provider } from "../../provider"
 import type { PluginCatalogHost } from "../catalog-host"
 
@@ -804,12 +805,11 @@ export const AntigravityPlugin = define({
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
     )
-    yield* ctx.integration
-      .reload()
-      .pipe(
-        Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced("60 seconds")), Effect.ignore)),
-        Effect.forkScoped({ startImmediately: true }),
-      )
+    yield* LocationAnnouncements.initial(ctx.integration.reload().pipe(Effect.andThen(reconcile()))).pipe(
+      Effect.andThen(Effect.sleep("60 seconds").pipe(Effect.andThen(reconcile()), Effect.forever)),
+      Effect.ignore,
+      Effect.forkScoped({ startImmediately: true }),
+    )
     yield* aisdk.hook.language((evt) => {
       if (evt.model.providerID === providerID && evt.model.package === Provider.aisdk("@ai-sdk/google"))
         evt.language = captureToolSchemas(evt.sdk.languageModel(evt.model.modelID ?? evt.model.id))

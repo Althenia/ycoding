@@ -11,7 +11,7 @@ import {
   resolveBearerToken,
   type TokenPair,
 } from "../../cursor/provider/auth"
-import { Effect, Schedule, Semaphore, Stream } from "effect"
+import { Effect, Semaphore, Stream } from "effect"
 import { Credential } from "../../credential"
 import { AISDK } from "../../aisdk"
 import { Catalog } from "../../catalog"
@@ -23,6 +23,7 @@ import { Global } from "../../global"
 import { Integration } from "../../integration"
 import { Location } from "../../location"
 import type { CatalogModel } from "../../model"
+import { LocationAnnouncements } from "../../location-announcements"
 import { Provider } from "../../provider"
 import type { PluginCatalogHost } from "../catalog-host"
 
@@ -175,13 +176,11 @@ export const CursorPlugin = define({
       Stream.runForEach(refresh),
       Effect.forkScoped({ startImmediately: true }),
     )
-    // Schedule.spaced runs the effect once, then waits between completions.
-    yield* ctx.integration
-      .reload()
-      .pipe(
-        Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced(reconcileInterval)), Effect.ignore)),
-        Effect.forkScoped({ startImmediately: true }),
-      )
+    yield* LocationAnnouncements.initial(ctx.integration.reload().pipe(Effect.andThen(reconcile()))).pipe(
+      Effect.andThen(Effect.sleep(reconcileInterval).pipe(Effect.andThen(reconcile()), Effect.forever)),
+      Effect.ignore,
+      Effect.forkScoped({ startImmediately: true }),
+    )
     yield* aisdk.hook.sdk(
       Effect.fn(function* (evt) {
         if (evt.package !== CursorModels.packageName) return

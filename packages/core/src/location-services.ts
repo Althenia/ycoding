@@ -189,6 +189,7 @@ export function buildLocationServiceMap(
         const globals = new Set<LayerNode.AnyNode>()
         const built = new Set<string>()
         const gates: LocationAnnouncements.Gate[] = []
+        const reads = new LocationAnnouncements.Reads()
         const semaphore = Semaphore.makeUnsafe(1)
         let stages: Record<string, number> = {}
         let context = Context.empty() as Context.Context<unknown>
@@ -229,7 +230,7 @@ export function buildLocationServiceMap(
                 yield* Layer.buildWithMemoMap(shareable.layer(unshared), shared, scope),
               )
             unshared.forEach((node) => globals.add(node))
-            const gate = new LocationAnnouncements.Gate(false)
+            const gate = new LocationAnnouncements.Gate(false, reads)
             const output = yield* Layer.buildWithMemoMap(
               nodes.layer(missing).pipe(Layer.provide(Layer.succeedContext(globalContext))),
               memoMap,
@@ -245,7 +246,7 @@ export function buildLocationServiceMap(
             closure
               .filter((node) => node.tag === Node.tags.values.location)
               .forEach((node) => built.add(node.name))
-            context = Context.merge(context, output)
+            context = Context.merge(context, output).pipe(Context.add(LocationAnnouncements.CurrentReads, reads))
             yield* Effect.logInfo("location services booted", {
               directory: ref.directory,
               workspaceID: ref.workspaceID,

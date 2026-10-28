@@ -15,6 +15,7 @@ import { EventRuntime } from "../../event"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
+import { LocationAnnouncements } from "../../location-announcements"
 import { Provider } from "../../provider"
 import type { PluginCatalogHost } from "../catalog-host"
 import { OpenAICodex } from "./openai-codex"
@@ -298,7 +299,7 @@ export const OpenAIPlugin = define({
       }
     })
 
-    yield* discover(initial).pipe(Effect.forkScoped({ startImmediately: true }))
+    yield* LocationAnnouncements.initial(discover(initial)).pipe(Effect.forkScoped({ startImmediately: true }))
     const refresh = () =>
       loading.withPermit(
         Effect.gen(function* () {
