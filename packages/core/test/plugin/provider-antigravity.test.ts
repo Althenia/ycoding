@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { fileURLToPath } from "node:url"
-import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
+import type { LanguageModelV3CallOptions, LanguageModelV3ToolResultOutput } from "@ai-sdk/provider"
 import { LLM, LLMEvent, Message, ToolDefinition } from "@ycoding-ai/ai"
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
 import { AISDK } from "@ycoding-ai/core/aisdk"
@@ -1196,5 +1196,124 @@ describe("Antigravity Claude tool schemas", () => {
       type: "object",
       properties: { limit: { nullable: true, type: "integer" } },
     })
+  })
+})
+
+type WirePart = Record<string, unknown>
+
+async function sendHistory(model: string, prompt: LanguageModelV3CallOptions["prompt"]) {
+  const { createGoogleGenerativeAI } = await import("@ai-sdk/google")
+  const sent: { request: { contents: { role: string; parts: WirePart[] }[] } }[] = []
+  const sdk = createGoogleGenerativeAI({
+    apiKey: "placeholder",
+    fetch: Object.assign(
+      createAntigravityFetch(
+        async (_input, init) => {
+          sent.push(JSON.parse(String(init?.body)))
+          return new Response(
+            `data: ${JSON.stringify({ response: { candidates: [{ content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" }] } })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        },
+        { access: "google-access", project: "project-1" },
+      ),
+      { preconnect: fetch.preconnect },
+    ),
+  })
+  const language = captureToolSchemas(sdk.languageModel(model))
+  await Array.fromAsync((await language.doStream({ prompt })).stream)
+  expect(sent).toHaveLength(1)
+  return sent[0]!.request.contents
+}
+
+const call = (toolCallId: string, toolName: string, input: unknown, thoughtSignature?: string) => ({
+  type: "tool-call" as const,
+  toolCallId,
+  toolName,
+  input,
+  ...(thoughtSignature ? { providerOptions: { google: { thoughtSignature } } } : {}),
+})
+
+const result = (toolCallId: string, toolName: string, output: LanguageModelV3ToolResultOutput) => ({
+  type: "tool-result" as const,
+  toolCallId,
+  toolName,
+  output,
+})
+
+const toolHistory = (): LanguageModelV3CallOptions["prompt"] => [
+  { role: "user", content: [{ type: "text", text: "Run them" }] },
+  {
+    role: "assistant",
+    content: [
+      call("toolu_01", "read", { path: "a" }, "sig-a"),
+      call("toolu_02", "read", { path: "b" }),
+      call("toolu_03", "bash", { command: "ls" }),
+    ],
+  },
+  {
+    role: "tool",
+    content: [
+      result("toolu_02", "read", { type: "text", value: "B" }),
+      result("toolu_01", "read", {
+        type: "content",
+        value: [
+          { type: "text", text: "first" },
+          { type: "text", text: "second" },
+        ],
+      }),
+      result("toolu_03", "bash", { type: "execution-denied", reason: "Denied by user" }),
+    ],
+  },
+  { role: "assistant", content: [{ type: "text", text: "Done" }] },
+  { role: "user", content: [{ type: "text", text: "Next" }] },
+]
+
+describe("Antigravity Claude tool call ids", () => {
+  test("Claude history carries each prompt tool call id on its function call and function response", async () => {
+    const contents = await sendHistory("claude-opus-4-6", toolHistory())
+    expect(contents[1]?.parts).toEqual([
+      { functionCall: { name: "read", args: { path: "a" }, id: "toolu_01" }, thoughtSignature: "sig-a" },
+      { functionCall: { name: "read", args: { path: "b" }, id: "toolu_02" } },
+      { functionCall: { name: "bash", args: { command: "ls" }, id: "toolu_03" } },
+    ])
+    expect(contents[2]?.parts).toEqual([
+      { functionResponse: { name: "read", id: "toolu_02", response: { name: "read", content: "B" } } },
+      { functionResponse: { name: "read", id: "toolu_01", response: { name: "read", content: "first\nsecond" } } },
+      {
+        functionResponse: {
+          name: "bash",
+          id: "toolu_03",
+          response: { name: "bash", content: "Denied by user" },
+        },
+      },
+    ])
+  })
+
+  test("Claude tool call ids are identical across requests that share a history prefix", async () => {
+    const first = await sendHistory("claude-opus-4-6", toolHistory())
+    const second = await sendHistory("claude-opus-4-6", toolHistory())
+    expect(second).toEqual(first)
+  })
+
+  test("Gemini history keeps function calls and responses without ids", async () => {
+    const contents = await sendHistory("gemini-3.8-flash", toolHistory())
+    expect(contents[1]?.parts).toEqual([
+      { functionCall: { name: "read", args: { path: "a" } }, thoughtSignature: "sig-a" },
+      { functionCall: { name: "read", args: { path: "b" } } },
+      { functionCall: { name: "bash", args: { command: "ls" } } },
+    ])
+    expect(contents[2]?.parts.map((part) => (part.functionResponse as WirePart).id)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ])
+    expect(JSON.stringify(contents)).not.toContain("toolu_")
+  })
+
+  test("Claude requests fail before sending when a tool call has no prompt id", async () => {
+    const prompt = toolHistory()
+    ;(prompt[1] as { content: { toolCallId: string }[] }).content[1]!.toolCallId = ""
+    await expect(sendHistory("claude-opus-4-6", prompt)).rejects.toThrow(/tool call without an id: read/)
   })
 })

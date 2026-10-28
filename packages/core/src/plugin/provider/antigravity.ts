@@ -355,18 +355,46 @@ export const discoverAntigravityModels = Effect.fn("Antigravity.discoverModels")
     })
 })
 
-const callToolSchemas = new AsyncLocalStorage<ReadonlyMap<string, unknown>>()
+type ToolHistory = {
+  calls: { id: unknown; name: unknown }[]
+  responses: { id: unknown; name: unknown }[]
+}
+type CallCapture = { schemas: ReadonlyMap<string, unknown>; history: ToolHistory }
+
+const callCapture = new AsyncLocalStorage<CallCapture>()
+
+function toolHistory(prompt: ReadonlyArray<unknown>): ToolHistory {
+  const history: ToolHistory = { calls: [], responses: [] }
+  for (const message of prompt) {
+    if (!isRecord(message) || !Array.isArray(message.content)) continue
+    for (const part of message.content) {
+      if (!isRecord(part)) continue
+      if (message.role === "assistant" && part.type === "tool-call")
+        history.calls.push({ id: part.toolCallId, name: part.toolName })
+      if (message.role !== "tool" || part.type !== "tool-result") continue
+      const output = isRecord(part.output) ? part.output : undefined
+      const count =
+        output?.type === "content" && Array.isArray(output.value)
+          ? output.value.filter((item) => isRecord(item) && item.type === "text").length
+          : 1
+      for (let index = 0; index < count; index++) history.responses.push({ id: part.toolCallId, name: part.toolName })
+    }
+  }
+  return history
+}
 
 export function captureToolSchemas(language: LanguageModelV3): LanguageModelV3 {
   const capture =
-    <Options extends { tools?: ReadonlyArray<unknown> }, Result>(call: (options: Options) => PromiseLike<Result>) =>
+    <Options extends { tools?: ReadonlyArray<unknown>; prompt?: ReadonlyArray<unknown> }, Result>(
+      call: (options: Options) => PromiseLike<Result>,
+    ) =>
     (options: Options) => {
       const schemas = new Map<string, unknown>()
       for (const item of options.tools ?? []) {
         if (!isRecord(item) || item.type !== "function" || typeof item.name !== "string") continue
         schemas.set(item.name, item.inputSchema)
       }
-      return callToolSchemas.run(schemas, () => call(options))
+      return callCapture.run({ schemas, history: toolHistory(options.prompt ?? []) }, () => call(options))
     }
   const doGenerate = capture((options: Parameters<LanguageModelV3["doGenerate"]>[0]) => language.doGenerate(options))
   const doStream = capture((options: Parameters<LanguageModelV3["doStream"]>[0]) => language.doStream(options))
@@ -404,6 +432,47 @@ function claudeToolDeclarations(body: unknown, schemas: ReadonlyMap<string, unkn
   }
 }
 
+function claudeToolIDs(body: unknown, history: ToolHistory | undefined) {
+  if (!history || !isRecord(body) || !Array.isArray(body.contents)) return body
+  const calls = [...history.calls]
+  const responses = [...history.responses]
+  const take = (queue: ToolHistory["calls"], kind: string, name: unknown) => {
+    const next = queue.shift()
+    if (!next || next.name !== name || typeof next.id !== "string" || next.id === "")
+      throw new Error(`Antigravity Claude request has a ${kind} without an id: ${String(name)}`)
+    return next.id
+  }
+  const contents = body.contents.map((content) => {
+    if (!isRecord(content) || !Array.isArray(content.parts)) return content
+    const parts: unknown[] = []
+    const answered = new Map<string, Record<string, unknown>>()
+    for (const part of content.parts) {
+      if (isRecord(part) && isRecord(part.functionCall))
+        parts.push({
+          ...part,
+          functionCall: { ...part.functionCall, id: take(calls, "tool call", part.functionCall.name) },
+        })
+      else if (isRecord(part) && isRecord(part.functionResponse)) {
+        const id = take(responses, "tool result", part.functionResponse.name)
+        const earlier = answered.get(id)
+        const earlierText = isRecord(earlier?.response) ? earlier.response.content : undefined
+        const text = isRecord(part.functionResponse.response) ? part.functionResponse.response.content : undefined
+        if (earlier && typeof earlierText === "string" && typeof text === "string") {
+          earlier.response = { ...(earlier.response as Record<string, unknown>), content: `${earlierText}\n${text}` }
+          continue
+        }
+        const response = { ...part.functionResponse, id }
+        answered.set(id, response)
+        parts.push({ ...part, functionResponse: response })
+      } else parts.push(part)
+    }
+    return { ...content, parts }
+  })
+  if (calls.length > 0 || responses.length > 0)
+    throw new Error("Antigravity Claude request has a tool call or result missing from the request contents")
+  return { ...body, contents }
+}
+
 export function createAntigravityFetch(
   send: Fetch,
   session: { access: string; project?: string; model?: string },
@@ -418,9 +487,12 @@ export function createAntigravityFetch(
     // Gemini selects the prefix breakpoint on the server. Drop any client cache
     // resource or breakpoint the SDK may have attached, then keep the remaining
     // prefix stable by not ending the request on a model turn.
+    const captured = model.startsWith("claude-") ? callCapture.getStore() : undefined
     const request = stripTrailingModelContents(
       omitClientCacheControls(
-        model.startsWith("claude-") ? claudeToolDeclarations(body, callToolSchemas.getStore()) : body,
+        model.startsWith("claude-")
+          ? claudeToolIDs(claudeToolDeclarations(body, captured?.schemas), captured?.history)
+          : body,
       ),
     )
     const headers = new Headers(init?.headers)
