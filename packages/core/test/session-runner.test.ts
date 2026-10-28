@@ -929,6 +929,7 @@ const execution = makeGlobalNode({
       wake: coordinator.wake,
       interrupt: coordinator.interrupt,
       awaitIdle: coordinator.awaitIdle,
+      shutdown: coordinator.shutdown(),
       withTransition: coordinator.withTransition,
     })
   }),

@@ -3,6 +3,7 @@ export * as ServerProcess from "./process"
 import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
+import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { hasPtyConnectTicketURL } from "@ycoding-ai/protocol/groups/pty"
@@ -109,6 +110,8 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
       const stop = yield* Effect.promise(() => nativeFactory(host))
       if (stop) yield* Effect.addFinalizer(() => Effect.promise(stop)).pipe(Effect.provideService(Scope.Scope, applicationScope))
     }
+    const execution = Context.get(context, SessionExecution.Service)
+    yield* Effect.addFinalizer(() => execution.shutdown).pipe(Effect.provideService(Scope.Scope, applicationScope))
     const restart = Context.get(context, SessionRestart.Service)
     if (lifecycle) yield* installRestartContinuity(restart).pipe(Effect.provideService(Scope.Scope, applicationScope))
     if (!lifecycle) yield* restart.loseStaleTasks

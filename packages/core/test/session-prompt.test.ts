@@ -52,6 +52,7 @@ const execution = Layer.succeed(
         wakeCalls.push(sessionID)
       }),
     awaitIdle: () => Effect.void,
+    shutdown: Effect.void,
     withTransition: (_sessionID, effect) => effect,
   }),
 )

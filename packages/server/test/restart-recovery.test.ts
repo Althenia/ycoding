@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { Database as Sqlite } from "bun:sqlite"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -13,9 +14,11 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
-import { SessionTaskTable } from "@ycoding-ai/core/session/sql"
+import { SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { EventTable } from "@ycoding-ai/core/event/sql"
+import { SdkPlugins } from "@ycoding-ai/core/plugin/sdk"
 import { ServerProcess } from "@ycoding-ai/server/process"
+import { eq } from "drizzle-orm"
 import { Effect, Exit, Schema, Scope } from "effect"
 import { mkdtemp, rm } from "node:fs/promises"
 import { createServer } from "node:net"
@@ -75,6 +78,179 @@ for (const mode of ["managed", "standalone"] as const)
       await rm(directory, { recursive: true, force: true })
     }
   })
+
+test("managed shutdown suspends and interrupts a plugin-agent child before its Location is released", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-restart-suspend-"))
+  const file = join(directory, "ycoding.db")
+  const scope = await Effect.runPromise(Scope.make())
+  const childID = SessionSchema.ID.make("ses_restart_suspend_child")
+  const requested = Promise.withResolvers<void>()
+  const provider = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(request) {
+      if (new URL(request.url).pathname !== "/v1/chat/completions") return new Response("not found", { status: 404 })
+      requested.resolve()
+      return new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "text/event-stream" } })
+    },
+  })
+  const atPluginTeardown: Array<string | undefined> = []
+  const teardownProbe: Parameters<SdkPlugins.Interface["register"]>[0] = {
+    id: "restart-teardown-probe",
+    effect: () =>
+      Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          const sqlite = new Sqlite(file, { readonly: true })
+          const row = sqlite
+            .query<{ type: string }, [string]>(
+              "select type from event where aggregate_id = ? and type like 'session.execution.%' order by seq desc limit 1",
+            )
+            .get(childID)
+          sqlite.close()
+          atPluginTeardown.push(row?.type)
+        }),
+      ),
+  }
+  const childModel = CatalogModel.Ref.make({ providerID: Provider.ID.make("fake"), id: CatalogModel.ID.make("child") })
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const events = yield* EventRuntime.Service
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: AbsolutePath.make(directory), sandboxes: [] })
+          .run()
+          .pipe(Effect.orDie)
+        for (const [sessionID, parentID] of [[rootID, undefined], [childID, rootID]] as const)
+          yield* events.publish(SessionEvent.Created, {
+            sessionID,
+            parentID,
+            projectID: Project.ID.global,
+            location: { directory: AbsolutePath.make(directory) },
+            agent: parentID === undefined ? undefined : Agent.ID.make("zeus"),
+            model: childModel,
+            title: sessionID,
+            created: Date.now(),
+          })
+        yield* db
+          .insert(SessionTaskTable)
+          .values({
+            session_id: childID,
+            parent_id: rootID,
+            parent_assistant_message_id: SessionMessage.ID.make(`msg_launch_${childID}`),
+            tool_call_id: `call_launch_${childID}`,
+            input_id: SessionMessage.ID.make(`msg_input_${childID}`),
+            description: "suspend on shutdown",
+            agent: Agent.ID.make("zeus"),
+            model: childModel,
+            prompt_digest: "digest",
+            background: true,
+            delivery: "steer",
+            state: "running",
+            revision: 1,
+            owner_pid: 2_000_000_000,
+            owner_started: "Thu Jan  1 00:00:00 1970",
+            time_created: 1,
+            time_updated: 1,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* events.publish(SessionEvent.Execution.Started, { sessionID: childID })
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID: childID,
+          assistantMessageID,
+          agent: Agent.ID.make("zeus"),
+          model: childModel,
+        })
+        yield* events.publish(SessionEvent.Text.Started, { sessionID: childID, assistantMessageID, ordinal: 0 })
+        yield* events.publish(SessionEvent.Text.Ended, { sessionID: childID, assistantMessageID, ordinal: 0, text: "Halfway" })
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Database.node, EventRuntime.node, SessionProjector.node]), [
+            [Database.node, Database.layer({ path: file })],
+          ]),
+        ),
+        Effect.scoped,
+      ),
+    )
+    const startingRaw = ServerProcess.start<never, never>(
+      {
+        hostname: "127.0.0.1",
+        port: await availablePort(),
+        password: "test-password",
+        database: { path: file },
+        config: {
+          directory,
+          project: false,
+          content: JSON.stringify({
+            providers: {
+              fake: {
+                package: "aisdk:@ai-sdk/openai-compatible",
+                settings: { baseURL: `http://127.0.0.1:${provider.port}/v1`, apiKey: "fixture-key" },
+                models: {
+                  child: {
+                    name: "Child",
+                    capabilities: { tools: true, input: ["text"], output: ["text"] },
+                    limit: { context: 32768, output: 4096 },
+                  },
+                },
+              },
+            },
+          }),
+        },
+        fs: { filewatcher: false, fff: false },
+      },
+      { instanceID: "restart-suspend", onListen: () => Effect.succeed(Effect.void) },
+      undefined,
+      [teardownProbe],
+    ).pipe(Effect.provideService(Scope.Scope, scope))
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- runtime-owned router requirement markers are not services callers can provide
+    const starting = startingRaw as Effect.Effect<Effect.Success<typeof startingRaw>, Effect.Error<typeof startingRaw>>
+    await Effect.runPromise(starting)
+    await requested.promise
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+    const settled = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const task = yield* db
+          .select({ state: SessionTaskTable.state })
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.session_id, childID))
+          .get()
+          .pipe(Effect.orDie)
+        const session = yield* db
+          .select({ suspended: SessionTable.time_suspended })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, childID))
+          .get()
+          .pipe(Effect.orDie)
+        const lifecycle = yield* db
+          .select({ type: EventTable.type })
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, childID))
+          .orderBy(EventTable.seq)
+          .all()
+          .pipe(Effect.orDie)
+        return {
+          task: task?.state,
+          suspended: session?.suspended !== null && session?.suspended !== undefined,
+          terminal: lifecycle
+            .map((row) => row.type)
+            .filter((type) => /^session\.execution\.(succeeded|failed|interrupted)\./.test(type))
+            .at(-1),
+        }
+      }).pipe(Effect.provide(Database.layer({ path: file })), Effect.scoped),
+    )
+    expect(atPluginTeardown.at(-1)).toBe("session.execution.interrupted.1")
+    expect(settled).toEqual({ task: "running", suspended: true, terminal: "session.execution.interrupted.1" })
+  } finally {
+    await Effect.runPromise(Scope.close(scope, Exit.void))
+    await provider.stop(true)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 function seed(file: string, directory: string) {
   return Effect.runPromise(

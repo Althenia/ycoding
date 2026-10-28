@@ -67,7 +67,10 @@ Teardown ordering makes suspension observe exactly the work a restart interrupts
 
 1. The HTTP server closes all connections; no new work can arrive.
 2. `suspendActiveSessions` snapshots `SessionExecution.active` and sets `time_suspended` for each.
-3. Session execution teardown interrupts the still-running drains.
+3. `SessionExecution.shutdown` interrupts the still-running drains with reason `shutdown`, waits for each to settle, and starts no drain afterwards.
+4. Layer teardown releases Locations and their plugins, agents, tools, and shells.
+
+Every server mode runs step 3 before layer teardown. Layer teardown does not order Location release after the execution layer, so a drain still running then could start a step after its Location's plugin agents were removed and fail with `Agent not found` instead of being interrupted.
 
 A SIGKILL runs none of this: nothing is suspended. The next managed startup closes the open step and execution as interrupted and recovers managed child tasks by the same rules as after a graceful shutdown.
 

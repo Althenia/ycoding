@@ -331,6 +331,44 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 
+  it.effect("shutdown settles every active execution and starts none afterwards", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        let runs = 0
+        const reasons: Array<[string, string | undefined]> = []
+        let wakeDuringCleanup: (key: string) => Effect.Effect<void> = () => Effect.void
+        const coordinator = yield* SessionRunCoordinator.make<string, never, string>({
+          drain: (key) =>
+            Effect.sync(() => ++runs).pipe(
+              Effect.andThen((count) => (count === 2 ? Deferred.succeed(started, undefined) : Effect.void)),
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => wakeDuringCleanup(key)),
+            ),
+          settled: (key, _exit, reason) => Effect.sync(() => void reasons.push([key, reason])),
+        })
+        wakeDuringCleanup = coordinator.wake
+
+        yield* coordinator.wake("first")
+        yield* coordinator.wake("second")
+        yield* Deferred.await(started)
+        yield* coordinator.shutdown("shutdown")
+
+        expect(Array.from(yield* coordinator.active)).toEqual([])
+        expect(reasons.toSorted(([left], [right]) => left.localeCompare(right))).toEqual([
+          ["first", "shutdown"],
+          ["second", "shutdown"],
+        ])
+        yield* coordinator.wake("third")
+        const resumed = yield* coordinator.run("fourth").pipe(Effect.exit)
+        expect(Exit.isFailure(resumed) && Cause.hasInterruptsOnly(resumed.cause)).toBeTrue()
+        yield* Effect.yieldNow
+        expect(Array.from(yield* coordinator.active)).toEqual([])
+        expect(runs).toBe(2)
+      }),
+    ),
+  )
+
   it.effect("runs a wake registered during interruption cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

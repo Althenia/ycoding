@@ -15,6 +15,7 @@ export interface Coordinator<Key, E, Reason = never> {
   readonly interrupt: (key: Key, reason?: Reason) => Effect.Effect<void>
   /** Resolves once no execution is active for the key. Returns immediately when already idle and never starts work. */
   readonly awaitIdle: (key: Key) => Effect.Effect<void>
+  readonly shutdown: (reason?: Reason) => Effect.Effect<void>
   /**
    * Runs one exclusive process-local transition for the key. Transitions for the same key
    * serialize; a doorbell raised while any transition is reserved is coalesced and forwarded
@@ -69,6 +70,7 @@ export const make = <Key, E, Reason = never>(options: {
     // transitions; only the last release may forward the coalesced doorbell.
     const transitions = new Map<Key, { users: number; doorbell: boolean; done: Deferred.Deferred<void, never> }>()
     const transitionLocks = KeyedMutex.makeUnsafe<Key>()
+    let closed = false
 
     const loop = (key: Key, execution: Execution<E, Reason>, force: boolean): Effect.Effect<void, E> =>
       Effect.suspend(() => options.drain(key, force)).pipe(
@@ -121,7 +123,7 @@ export const make = <Key, E, Reason = never>(options: {
       if (transition !== undefined) {
         if (execution.pendingWake) transition.doorbell = true
         executions.delete(key)
-      } else if (execution.pendingWake) start(key, false)
+      } else if (execution.pendingWake && !closed) start(key, false)
       else executions.delete(key)
       Deferred.doneUnsafe(execution.done, exit)
     }
@@ -137,6 +139,7 @@ export const make = <Key, E, Reason = never>(options: {
           if (execution.stopping) return Deferred.await(execution.done).pipe(Effect.andThen(run(key)))
           return Deferred.await(execution.done)
         }
+        if (closed) return Effect.interrupt
         return Deferred.await(start(key, true).done)
       })
 
@@ -152,7 +155,7 @@ export const make = <Key, E, Reason = never>(options: {
           execution.pendingWake = true
           return
         }
-        start(key, false)
+        if (!closed) start(key, false)
       })
 
     const withTransition = <A, E2, R>(key: Key, effect: Effect.Effect<A, E2, R>): Effect.Effect<A, E2, R> =>
@@ -208,5 +211,22 @@ export const make = <Key, E, Reason = never>(options: {
         return Deferred.await(execution.done).pipe(Effect.exit, Effect.andThen(awaitIdle(key)))
       })
 
-    return { active: Effect.sync(() => new Set(executions.keys())), run, wake, interrupt, awaitIdle, withTransition }
+    const shutdown = (reason?: Reason): Effect.Effect<void> =>
+      Effect.suspend(() => {
+        closed = true
+        return Effect.forEach([...executions.keys()], (key) => interrupt(key, reason).pipe(Effect.andThen(awaitIdle(key))), {
+          concurrency: "unbounded",
+          discard: true,
+        })
+      })
+
+    return {
+      active: Effect.sync(() => new Set(executions.keys())),
+      run,
+      wake,
+      interrupt,
+      awaitIdle,
+      shutdown,
+      withTransition,
+    }
   })

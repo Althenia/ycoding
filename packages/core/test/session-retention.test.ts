@@ -39,6 +39,7 @@ const execution = Layer.succeed(
     wake: () => Effect.void,
     interrupt: () => Effect.void,
     awaitIdle: () => Effect.void,
+    shutdown: Effect.void,
     withTransition: (_sessionID, effect) => effect,
   }),
 )

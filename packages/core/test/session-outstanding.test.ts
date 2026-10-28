@@ -47,6 +47,7 @@ const execution = Layer.succeed(SessionExecution.Service, SessionExecution.Servi
   wake: () => Effect.void,
   interrupt: () => Effect.void,
   awaitIdle: () => Effect.void,
+  shutdown: Effect.void,
   withTransition: (_sessionID, effect) => effect,
 }))
 const queries: { sql: string; params: unknown[] }[] = []

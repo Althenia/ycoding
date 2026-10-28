@@ -380,6 +380,7 @@ const executionNode = makeGlobalNode({
         wake: (id) => Effect.sync(() => wakes.push(id)).pipe(Effect.andThen(Effect.suspend(() => onWake(id)))),
         interrupt: () => Effect.void,
         awaitIdle: (id) => complete(id).pipe(Effect.exit, Effect.asVoid),
+        shutdown: Effect.void,
         withTransition: (_sessionID, effect) => effect,
       })
     }),

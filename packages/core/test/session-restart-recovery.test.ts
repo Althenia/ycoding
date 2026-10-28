@@ -74,6 +74,7 @@ const graph = (database?: ReturnType<typeof Database.layer>) =>
             wake: (sessionID) => Effect.sync(() => void woken.push(sessionID)),
             interrupt: () => Effect.void,
             awaitIdle: () => Effect.void,
+            shutdown: Effect.void,
             withTransition: (_sessionID, effect) => effect,
           }),
         ),
