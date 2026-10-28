@@ -55,7 +55,7 @@ test("overview leads with spend, separates account quotas and Backend rates, and
       })()`)
       expect(result.order).toEqual(["usage-head", "usage-spend", "usage-quotas", "usage-visuals", "usage-breakdown-section", "usage-breakdown-section", "incidents", "usage-cost-note"])
       expect(result.tops.every((top, index) => index === 0 || top > result.tops[index - 1]!)).toBe(true)
-      expect(result).toMatchObject({ quotaHeading: true, flat: true, dividers: true, surface: true, equalCharts: true, overflow: false, namedControls: true, icons: true, requests: 6 })
+      expect(result).toMatchObject({ quotaHeading: true, flat: true, dividers: true, surface: true, equalCharts: true, overflow: false, namedControls: true, icons: true, requests: 1 })
       expect(result.columns).toBe(result.content >= 1024 ? 2 : 1)
       expect(result.values[0]).toContain("Today$5.40")
       expect(result.values[0]).toContain("31 requests")
@@ -86,7 +86,7 @@ test("provider marks follow reported identities and retain labels without invent
       ["muse", "Muse (Meta)", 1], ["openai", "Codex", 1], ["anthropic", "Claude", 1], ["github-copilot", "Copilot", 1], ["openrouter", "OpenRouter", 1], ["disconnected", "Disconnected provider", 0], ["failed", "Provider with an error", 0],
     ])
     expect(providers.every(provider => provider.transparent && provider.size && provider.sources)).toBe(true)
-    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(6)
+    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(1)
   } finally { await page.close() }
 })
 
@@ -95,7 +95,7 @@ test("overview controls keep report scopes, exact table values, distribution met
   try {
     await page.navigate(`http://127.0.0.1:${port}/verify/usage-fixture.html?forecast=states`)
     await wait(page, `document.querySelectorAll('.usage-breakdown tbody tr').length === 25`)
-    expect(await page.evaluate<unknown[]>(`window.usageRequests().filter(item => item.operation === 'usage.report').map(item => ({ group: item.input.group, limit: item.input.limit, sort: item.input.sort, order: item.input.order }))`)).toEqual([
+    expect(await page.evaluate<unknown[]>(`window.usageRequests().flatMap(item => [item.input.daily, item.input.monthly, item.input.breakdown]).map(slot => ({ group: slot.group, limit: slot.limit, sort: slot.sort, order: slot.order }))`)).toEqual([
       { group: "day", limit: 30, sort: "key", order: "asc" }, { group: "model", limit: 200, sort: "cost", order: "desc" }, { group: "model", limit: 25, sort: "cost", order: "desc" },
     ])
     await page.evaluate(`document.querySelector('.usage-chart__head button').focus()`)
@@ -104,13 +104,13 @@ test("overview controls keep report scopes, exact table values, distribution met
     expect(await page.evaluate<string>(`document.querySelector('#usage-daily-table tbody tr').textContent`)).toContain("$5.40")
     await page.evaluate(`document.querySelector('[aria-label="Distribution metric"] button:last-child').click()`)
     expect(await page.evaluate<string>(`document.querySelector('.usage-donut__total').getAttribute('aria-label')`)).toBe("Exact token total: 91,840")
-    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(6)
+    expect(await page.evaluate<number>(`window.usageRequests().length`)).toBe(1)
     await choose(page, "Usage group", "Provider / profile / model")
     await choose(page, "Usage provider", "Codex")
     await page.evaluate(`(() => { for (const [label, value] of [['Recorded profile', 'Personal'], ['Model ID', 'gpt-6-sol'], ['Selected effort', 'high']]) { const input = [...document.querySelectorAll('.usage-filter-controls label')].find(node => node.textContent.trim() === label).querySelector('input'); input.value = value; input.dispatchEvent(new Event('change', { bubbles: true })); } })()`)
-    await wait(page, `window.usageRequests().some(item => item.input?.selectedEffort === 'high')`)
-    expect(await page.evaluate<unknown>(`window.usageRequests().filter(item => item.operation === 'usage.report').at(-1).input`)).toMatchObject({ group: "provider-profile-model", providerID: "openai", profile: "Personal", modelID: "gpt-6-sol", selectedEffort: "high", offset: 0, limit: 25, sort: "cost", order: "desc" })
-    expect(await page.evaluate<string>(`document.querySelector('.usage-tile:first-child strong').textContent`)).toBe("$5.40")
+    await wait(page, `window.usageRequests().some(item => item.input?.breakdown?.selectedEffort === 'high')`)
+    expect(await page.evaluate<unknown>(`window.usageRequests().at(-1).input.breakdown`)).toMatchObject({ group: "provider-profile-model", providerID: "openai", profile: "Personal", modelID: "gpt-6-sol", selectedEffort: "high", offset: 0, limit: 25, sort: "cost", order: "desc" })
+    await wait(page, `document.querySelector('.usage-tile:first-child strong')?.textContent === '$5.40'`)
   } finally { await page.close() }
 })
 

@@ -54,7 +54,7 @@ const setInput = (page: Page, label: string, value: string) => page.evaluate(`((
   input.dispatchEvent(new Event('input', { bubbles: true }))
 })()`)
 const sheetButton = (page: Page, text: string) => page.evaluate(`[...document.querySelectorAll('dialog.overlay--usage-filters button')].find((item) => item.textContent.trim() === ${JSON.stringify(text)}).click()`)
-const lastBreakdown = (page: Page) => page.evaluate<Record<string, unknown>>(`window.usageRequests().filter((item) => item.operation === 'usage.report' && item.input.limit === 25).at(-1).input`)
+const lastBreakdown = (page: Page) => page.evaluate<Record<string, unknown>>(`window.usageRequests().filter((item) => item.input?.breakdown?.limit === 25).at(-1).input.breakdown`)
 const text = (page: Page, selector: string) => page.evaluate<string>(`document.querySelector(${JSON.stringify(selector)})?.textContent?.replace(/\\s+/g, ' ').trim() ?? ''`)
 
 async function chooseInSheet(page: Page, label: string, option: string) {
@@ -176,10 +176,10 @@ test("the Filters sheet holds every control, applies once, preserves selections 
       await setInput(page, "Model ID", "gpt-6-sol")
       await setInput(page, "Selected effort", "high")
       await click(page, `dialog.overlay--usage-filters .usage-filter-sheet__range:nth-child(1)`)
-      expect(await page.evaluate<boolean>(`window.usageRequests().some((item) => item.input?.selectedEffort === 'high')`)).toBe(false)
+      expect(await page.evaluate<boolean>(`window.usageRequests().some((item) => item.input?.breakdown?.selectedEffort === 'high')`)).toBe(false)
       await sheetButton(page, "Apply filters")
       await wait(page, `!document.querySelector('dialog.overlay--usage-filters')`)
-      await wait(page, `window.usageRequests().some((item) => item.input?.selectedEffort === 'high')`)
+      await wait(page, `window.usageRequests().some((item) => item.input?.breakdown?.selectedEffort === 'high')`)
       expect(await lastBreakdown(page)).toMatchObject({ group: "provider-model", profile: "Personal", modelID: "gpt-6-sol", selectedEffort: "high", offset: 0, limit: 25 })
       expect(await text(page, ".usage-filter-bar__summary")).toBe("Provider / model · Last 7 days · Profile Personal · Model gpt-6-sol · Effort high")
       expect(await page.evaluate<string>(`document.querySelector('.usage-filter-bar__trigger').getAttribute('aria-label')`)).toBe("Filters, 5 active")
@@ -200,7 +200,7 @@ test("the Filters sheet holds every control, applies once, preserves selections 
       await setInput(page, "Usage to UTC", "2026-10-08")
       await sheetButton(page, "Apply filters")
       await wait(page, `!document.querySelector('dialog.overlay--usage-filters')`)
-      await wait(page, `window.usageRequests().some((item) => item.input?.from === ${Date.UTC(2026, 9, 1)})`)
+      await wait(page, `window.usageRequests().some((item) => item.input?.breakdown?.from === ${Date.UTC(2026, 9, 1)})`)
       expect(await lastBreakdown(page)).toMatchObject({ from: Date.UTC(2026, 9, 1), to: Date.UTC(2026, 9, 8) })
       expect(await text(page, ".usage-filter-bar__summary")).toContain("UTC 2026-10-01 to 2026-10-08 (exclusive)")
 
@@ -254,7 +254,7 @@ test("breakdown pagination uses named icon actions that keyboard-page and disabl
       expect(buttons.map((item) => item.disabled)).toEqual([true, false])
       await page.evaluate(`document.querySelector('[aria-label="Next breakdown page"]').focus()`)
       await page.pressKey("Enter", "Enter", 13, "\r")
-      await wait(page, `window.usageRequests().some((item) => item.operation === 'usage.report' && item.input.limit === 25 && item.input.offset === 25)`)
+      await wait(page, `window.usageRequests().some((item) => item.input?.breakdown?.limit === 25 && item.input.breakdown.offset === 25)`)
       expect(await overflow(page)).toBe(false)
     } finally { await page.close() }
   }

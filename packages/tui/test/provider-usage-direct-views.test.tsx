@@ -7,7 +7,7 @@ import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
 import { ProviderUsageScreenContent } from "../src/routes/session/provider-usage"
-import type { ProviderUsageView } from "../src/routes/session/provider-usage-reports"
+import type { ProviderUsageView, UsageStatsRead } from "../src/routes/session/provider-usage-reports"
 import { DialogProvider } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
@@ -104,12 +104,15 @@ async function renderUsage(input: {
   height?: number
   summary?: ProviderRequestSummary
   load: (query: ReportInput) => Promise<UsageReportOutput>
+  loadStats?: (query: ReportInput) => Promise<UsageStatsRead>
   onBack?: () => void
   initialTab?: ProviderUsageView
   forecast?: ProviderUsageForecastOutput["data"]
   snapshots?: ProviderUsageListOutput["data"]
   mode?: "dark" | "light"
   refreshing?: boolean
+  quotaPreparing?: boolean
+  quotaError?: string
 }) {
   const config = createTuiResolvedConfig()
   const app = await testRender(
@@ -125,10 +128,13 @@ async function renderUsage(input: {
                     backendUsage={() => input.summary ?? usage}
                     now={() => Date.UTC(2026, 8, 22, 12)}
                     loadReport={input.load}
+                    loadStats={input.loadStats}
                     onBack={input.onBack}
                     initialTab={input.initialTab}
                     forecast={() => input.forecast}
                     refreshing={() => input.refreshing ?? false}
+                    quotaPreparing={() => input.quotaPreparing ?? false}
+                    quotaError={() => input.quotaError}
                   />
                 </DialogProvider>
               </ToastProvider>
@@ -235,6 +241,10 @@ test("cycles ten direct views by arrows and tabs and opens views by mouse", asyn
     load: async (query) => {
       calls.push(query)
       return page(query.group, [{ key: query.group, label: `${query.group} row`, ...metrics({ logical: 2, tokens: 2_000, cost: 1, provenance: "recorded", cacheReadReported: true }) }])
+    },
+    loadStats: async (query) => {
+      calls.push(query)
+      return { report: page("day", []), stats: { sessions: 0 } }
     },
   })
   try {
@@ -370,29 +380,25 @@ test("requests server sorting before bounded pagination and gives selection, det
   }
 }, 30_000)
 
-test("derives a full-width colored Stats graph and summary from daily, model, and session reports", async () => {
-  const calls: ReportInput[] = []
+test("derives a full-width colored Stats graph and summary from one prepared Stats read", async () => {
+  const statsCalls: ReportInput[] = []
   const app = await renderUsage({
-    load: async (query) => {
-      calls.push(query)
-      if (query.group === "model")
-        return page("model", [{ key: "openai/gpt-6-luna", label: "openai/gpt-6-luna", ...metrics({ logical: 7, tokens: 7_000, cacheReadReported: true }) }], 3)
-      if (query.group === "session") return page("session", [], 7)
-      if ((query.offset ?? 0) === 0)
-        return page(
-          query.group,
-          [
-            { key: "2026-09-16", label: "2026-09-16", ...metrics({ logical: 1, tokens: 1_000, cost: 0.5, provenance: "recorded", cacheReadReported: true }) },
-            { key: "2026-09-21", label: "2026-09-21", ...metrics({ logical: 2, tokens: 2_000, cost: 1, provenance: "recorded", cacheReadReported: true }) },
-          ],
-          201,
-          200,
-        )
-      return page(
-        query.group,
-        [{ key: "2026-09-22", label: "2026-09-22", ...metrics({ logical: 4, tokens: 4_000, cacheReadReported: false }) }],
+    load: async (query) => page(query.group, []),
+    loadStats: async (query) => {
+      statsCalls.push(query)
+      const first = page(
+        "day",
+        [
+          { key: "2026-09-16", label: "2026-09-16", ...metrics({ logical: 1, tokens: 1_000, cost: 0.5, provenance: "recorded", cacheReadReported: true }) },
+          { key: "2026-09-21", label: "2026-09-21", ...metrics({ logical: 2, tokens: 2_000, cost: 1, provenance: "recorded", cacheReadReported: true }) },
+        ],
         201,
       )
+      const last = { key: "2026-09-22", label: "2026-09-22", ...metrics({ logical: 4, tokens: 4_000, cacheReadReported: false }) }
+      return {
+        report: { ...first, rows: [...first.rows, last] },
+        stats: { favoriteModel: "openai/gpt-6-luna", sessions: 7 },
+      }
     },
   })
   try {
@@ -434,13 +440,8 @@ test("derives a full-width colored Stats graph and summary from daily, model, an
     expect(frame).toContain("Busiest day: 2026-09-22 · ≥5,500 tokens")
     expect(frame).not.toContain("Usage before 2026-09-16")
     expect(frame).not.toContain("est.")
-    expect(calls.filter((call) => call.limit === 200).map((call) => ({ group: call.group, offset: call.offset, limit: call.limit }))).toEqual([
-      { group: "day", offset: 0, limit: 200 },
-      { group: "day", offset: 200, limit: 200 },
-    ])
-    expect(calls.filter((call) => call.limit === 1).map((call) => ({ group: call.group, sort: call.sort, order: call.order }))).toEqual([
-      { group: "model", sort: "tokens", order: "desc" },
-      { group: "session", sort: "key", order: "asc" },
+    expect(statsCalls.map((call) => ({ group: call.group, offset: call.offset, limit: call.limit, sort: call.sort, order: call.order }))).toEqual([
+      { group: "day", offset: 0, limit: 200, sort: "key", order: "asc" },
     ])
   } finally {
     app.renderer.destroy()
@@ -669,4 +670,31 @@ test("grouped quota windows render one heading before their pivoted rows and ung
     expect(lines.filter((line) => line.startsWith("Weekly limit"))).toHaveLength(3)
     expect(lines[overall]).not.toContain("Gemini")
   } finally { app.renderer.destroy() }
+}, 30_000)
+
+test("a preparing quota labels the quota and consumption sections while the accounting overview stays rendered", async () => {
+  const app = await renderUsage({ load: async (query) => page(query.group, []), quotaPreparing: true, snapshots: [] })
+  try {
+    const overview = await waitFor(app, (value) => value.includes("Total") && value.includes("12,000"), "accounting overview")
+    expect(overview).not.toContain("Preparing usage")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    const usage = await waitFor(app, (value) => value.includes("Preparing provider quotas..."), "quota preparing label")
+    expect(usage).toContain("Preparing recorded consumption...")
+    expect(usage).not.toContain("Quota forecasts unavailable")
+    expect(usage).not.toContain("No provider quotas are reported.")
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
+
+test("a quota error shows its message in place of provider and consumption content while accounting stays rendered", async () => {
+  const app = await renderUsage({ load: async (query) => page(query.group, []), quotaError: "Provider quotas are unavailable right now.", snapshots: [] })
+  try {
+    await waitFor(app, (value) => value.includes("Total") && value.includes("12,000"), "accounting overview")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    const usage = await waitFor(app, (value) => value.includes("Provider quotas are unavailable right now."), "quota error")
+    for (const absent of ["Preparing provider quotas...", "Preparing recorded consumption...", "No provider quotas are reported.", "Quota forecasts unavailable"]) expect(usage).not.toContain(absent)
+  } finally {
+    app.renderer.destroy()
+  }
 }, 30_000)

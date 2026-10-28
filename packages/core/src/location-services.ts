@@ -35,6 +35,7 @@ import { PluginSupervisor } from "./plugin/supervisor"
 import { CatalogContributions } from "./plugin/catalog-contributions"
 import { ProjectCopy } from "./project/copy"
 import { ProviderUsageRuntime } from "./provider-usage"
+import { UsageDashboardRuntime } from "./usage-dashboard"
 import { ProjectArtifactSource } from "./project-artifact/source"
 import { Pty } from "./pty"
 import { Question } from "./question"
@@ -84,6 +85,7 @@ const locationServiceNodes = [
   PluginRegistry.node,
   ProviderUsageRuntime.node,
   CatalogContributions.node,
+  UsageDashboardRuntime.node,
   PluginSupervisor.node,
   ProjectCopy.node,
   ProjectCopy.refreshNode,
@@ -165,11 +167,12 @@ export function buildLocationServiceMap(
       const rcMap: RcMap.RcMap<Location.Ref, Entry> = yield* RcMap.make({
         lookup: (ref: Location.Ref) =>
           Effect.gen(function* () {
-            const scope = yield* Scope.Scope
+            const root = yield* Scope.Scope
+            const scope = yield* Scope.fork(root)
             const entry = makeEntry(ref, scope)
             entries.set(identity(ref), entry)
             yield* Scope.addFinalizer(
-              scope,
+              root,
               Effect.sync(() => {
                 if (entries.get(identity(ref)) === entry) entries.delete(identity(ref))
               }),

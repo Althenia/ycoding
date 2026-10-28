@@ -2555,7 +2555,31 @@ const Endpoint32_1 = (raw: RawClient["server.usage"]) => (input: Endpoint32_1Inp
     Effect.map((value) => value.data),
   )
 
-const adaptGroup32 = (raw: RawClient["server.usage"]) => ({ get: Endpoint32_0(raw), report: Endpoint32_1(raw) })
+type Endpoint32_2Request = Parameters<RawClient["server.usage"]["usage.dashboard"]>[0]
+type Endpoint32_2Input = {
+  readonly daily?: Endpoint32_2Request["payload"]["daily"]
+  readonly monthly?: Endpoint32_2Request["payload"]["monthly"]
+  readonly breakdown?: Endpoint32_2Request["payload"]["breakdown"]
+  readonly refresh?: Endpoint32_2Request["payload"]["refresh"]
+}
+const Endpoint32_2 = (raw: RawClient["server.usage"]) => (input?: Endpoint32_2Input) =>
+  raw["usage.dashboard"]({
+    payload: {
+      daily: input?.["daily"],
+      monthly: input?.["monthly"],
+      breakdown: input?.["breakdown"],
+      refresh: input?.["refresh"],
+    },
+  }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
+
+const adaptGroup32 = (raw: RawClient["server.usage"]) => ({
+  get: Endpoint32_0(raw),
+  report: Endpoint32_1(raw),
+  dashboard: Endpoint32_2(raw),
+})
 
 type Endpoint33_0Request = Parameters<RawClient["server.incident"]["incident.report"]>[0]
 type Endpoint33_0Input = {

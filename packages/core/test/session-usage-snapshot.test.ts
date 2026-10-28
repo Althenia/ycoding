@@ -13,6 +13,7 @@ import { Session } from "../src/session"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
 import { SessionExecution } from "../src/session/execution"
 import { Catalog } from "../src/catalog"
 import { CatalogModel } from "../src/model"
@@ -53,8 +54,8 @@ for (const mode of ["summary", "report", "shared", "cancel"] as const)
                     Effect.gen(function* () {
                       const selected =
                         mode === "summary"
-                          ? /cost["`]?\s+is\s+null/i.test(query)
-                          : mode === "report" && query.includes("firstOutputMs")
+                          ? /\bunpriced\s*>\s*0/i.test(query)
+                          : mode === "report" && query.includes("sum(r.first_output)")
                       if (!armed || !selected || !db) return
                       armed = false
                       yield* Deferred.succeed(start, undefined)
@@ -162,7 +163,7 @@ for (const mode of ["summary", "report", "shared", "cancel"] as const)
                 time_created: id === "old" ? 0 : 1,
               })
               .run()
-              .pipe(Effect.andThen(db.transaction(() => UsageAnalytics.backfill(db))), Effect.orDie)
+              .pipe(Effect.andThen(db.transaction(() => UsageAnalytics.backfill(db).pipe(Effect.andThen(UsageStage.backfill(db))))), Effect.orDie)
           yield* Effect.gen(function* () {
             const database = yield* Database.Service
             const session = yield* Session.Service

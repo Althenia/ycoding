@@ -112,8 +112,8 @@ export function estimatedCost(
   costs: CatalogModel.Info["cost"],
   usage: TokenUsage.Info,
   oneHourWrites?: number,
+  context = usage.input + usage.cache.read + usage.cache.write,
 ): Money.USD | undefined {
-  const context = usage.input + usage.cache.read + usage.cache.write
   const tier = costs
     .filter((cost) => cost.tier?.type === "context" && context > cost.tier.size)
     .toSorted((a, b) => (b.tier?.size ?? 0) - (a.tier?.size ?? 0))[0]
@@ -139,10 +139,11 @@ export function estimatedCatalogCost(
   costs: CatalogModel.Info["cost"],
   openRouterCosts: CatalogModel.Info["cost"],
   usage: TokenUsage.Info,
+  context?: number,
 ) {
-  const provider = estimatedCost(costs, usage)
+  const provider = estimatedCost(costs, usage, undefined, context)
   if (provider !== undefined) return { cost: provider, source: "provider" as const }
-  const openrouter = estimatedCost(openRouterCosts, usage)
+  const openrouter = estimatedCost(openRouterCosts, usage, undefined, context)
   if (openrouter !== undefined) return { cost: openrouter, source: "openrouter" as const }
 }
 

@@ -2,8 +2,8 @@ import { type Duration, Effect, type Layer, LayerMap, RcMap } from "effect"
 import type { Location } from "../../src/location"
 import { LocationServiceMap } from "../../src/location-service-map"
 
-export const fixedLocations = <A, E>(
-  lookup: (ref: Location.Ref) => Layer.Layer<A, E>,
+export const fixedLocations = <A, E, R = never>(
+  lookup: (ref: Location.Ref) => Layer.Layer<A, E, R>,
   options?: { readonly idleTimeToLive?: Duration.Input },
 ) =>
   Effect.gen(function* () {

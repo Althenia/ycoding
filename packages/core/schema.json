@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "fbcfe45e-751f-418f-bbd1-e9c9969878b2",
+  "id": "44b8fa06-8dd3-4c90-b465-9795c963641d",
   "prevIds": [
-    "1f135a31-cca2-44e8-b0fa-82ef1941cc76"
+    "fbcfe45e-751f-418f-bbd1-e9c9969878b2"
   ],
   "ddl": [
     {
@@ -16,6 +16,70 @@
     },
     {
       "name": "usage_analytics_request",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_usage_cell_leaf",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_usage_cell_sample",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_usage_cell",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_usage_cell_unpriced",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_analytics_cell_leaf",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_analytics_cell_sample",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_analytics_cell",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_analytics_cell_unpriced",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_change",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_journal",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_presentation",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_rank",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_ref",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_row",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_sample",
+      "entityType": "tables"
+    },
+    {
+      "name": "usage_view_state",
       "entityType": "tables"
     },
     {
@@ -531,6 +595,1946 @@
       "name": "time_created",
       "entityType": "columns",
       "table": "usage_analytics_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cell",
+      "entityType": "columns",
+      "table": "session_usage_cell_leaf"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated",
+      "entityType": "columns",
+      "table": "session_usage_cell_leaf"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request",
+      "entityType": "columns",
+      "table": "session_usage_cell_leaf"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "session_usage_cell_leaf"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cell",
+      "entityType": "columns",
+      "table": "session_usage_cell_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "metric",
+      "entityType": "columns",
+      "table": "session_usage_cell_sample"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "session_usage_cell_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "count",
+      "entityType": "columns",
+      "table": "session_usage_cell_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "span",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "bucket",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_anchor",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "logical",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "physical",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "helpers",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continued",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fallback",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "output",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reasoning",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_write",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read_reported",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cost",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "priced",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "spend",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "spend_priced",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "unpriced",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_output",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "total_output",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_samples",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_timed",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "observed",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_tokens",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_duration",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_updated",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_request",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_updated",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_request",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_invalidation",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_namespace",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_timing",
+      "entityType": "columns",
+      "table": "session_usage_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cell",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "requests",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "output",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reasoning",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_write",
+      "entityType": "columns",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cell",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_leaf"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_leaf"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_leaf"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_leaf"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cell",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "metric",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_sample"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "count",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "span",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "bucket",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_anchor",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "task_path",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "logical",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "physical",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "helpers",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continued",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fallback",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "output",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reasoning",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_write",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read_reported",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cost",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "priced",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "spend",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "spend_priced",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "unpriced",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_output",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "total_output",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_samples",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_timed",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "observed",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_tokens",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_duration",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_updated",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_request",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_updated",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_request",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_invalidation",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_namespace",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_timing",
+      "entityType": "columns",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cell",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "requests",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "output",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reasoning",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_write",
+      "entityType": "columns",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": true,
+      "default": null,
+      "generated": null,
+      "name": "seq",
+      "entityType": "columns",
+      "table": "usage_view_change"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "usage_view_change"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "usage_view_change"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "through",
+      "entityType": "columns",
+      "table": "usage_view_change"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "usage_view_journal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "pruned",
+      "entityType": "columns",
+      "table": "usage_view_journal"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recipe",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "payload",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "labels",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_published",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_used",
+      "entityType": "columns",
+      "table": "usage_view_presentation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "usage_view_rank"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "usage_view_rank"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "usage_view_rank"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "quantile",
+      "entityType": "columns",
+      "table": "usage_view_rank"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "usage_view_rank"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "below",
+      "entityType": "columns",
+      "table": "usage_view_rank"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "usage_view_ref"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "usage_view_ref"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "location",
+      "entityType": "columns",
+      "table": "usage_view_ref"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ref",
+      "entityType": "columns",
+      "table": "usage_view_ref"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "price",
+      "entityType": "columns",
+      "table": "usage_view_ref"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "rep_updated",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "rep_session",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "rep_request",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "logical",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "physical",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "helpers",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continued",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fallback",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "output",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reasoning",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_write",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reported",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cost",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "priced",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "catalog_cost",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "catalog_requests",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "total_cost",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "total_tokens",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_output",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "total_output",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_samples",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_timed",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "observed",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_tokens",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_duration",
+      "entityType": "columns",
+      "table": "usage_view_row"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "usage_view_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "usage_view_sample"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "usage_view_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "metric",
+      "entityType": "columns",
+      "table": "usage_view_sample"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "usage_view_sample"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "count",
+      "entityType": "columns",
+      "table": "usage_view_sample"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "recipe",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "applied_seq",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "rows",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "latest",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "epoch",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "refs",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner",
+      "entityType": "columns",
+      "table": "usage_view_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_used",
+      "entityType": "columns",
+      "table": "usage_view_state"
     },
     {
       "type": "text",
@@ -5725,6 +7729,126 @@
     },
     {
       "columns": [
+        "cell"
+      ],
+      "tableTo": "session_usage_cell",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_usage_cell_leaf_cell_session_usage_cell_id_fk",
+      "entityType": "fks",
+      "table": "session_usage_cell_leaf"
+    },
+    {
+      "columns": [
+        "cell"
+      ],
+      "tableTo": "session_usage_cell",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_usage_cell_sample_cell_session_usage_cell_id_fk",
+      "entityType": "fks",
+      "table": "session_usage_cell_sample"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_usage_cell_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_usage_cell"
+    },
+    {
+      "columns": [
+        "cell"
+      ],
+      "tableTo": "session_usage_cell",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_usage_cell_unpriced_cell_session_usage_cell_id_fk",
+      "entityType": "fks",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "columns": [
+        "cell"
+      ],
+      "tableTo": "usage_analytics_cell",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_usage_analytics_cell_leaf_cell_usage_analytics_cell_id_fk",
+      "entityType": "fks",
+      "table": "usage_analytics_cell_leaf"
+    },
+    {
+      "columns": [
+        "cell"
+      ],
+      "tableTo": "usage_analytics_cell",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_usage_analytics_cell_sample_cell_usage_analytics_cell_id_fk",
+      "entityType": "fks",
+      "table": "usage_analytics_cell_sample"
+    },
+    {
+      "columns": [
+        "cell"
+      ],
+      "tableTo": "usage_analytics_cell",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_usage_analytics_cell_unpriced_cell_usage_analytics_cell_id_fk",
+      "entityType": "fks",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "columns": [
+        "state"
+      ],
+      "tableTo": "usage_view_state",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_usage_view_presentation_state_usage_view_state_id_fk",
+      "entityType": "fks",
+      "table": "usage_view_presentation"
+    },
+    {
+      "columns": [
         "master_session_id"
       ],
       "tableTo": "session",
@@ -6757,6 +8881,120 @@
     },
     {
       "columns": [
+        "cell",
+        "updated",
+        "request",
+        "source"
+      ],
+      "nameExplicit": false,
+      "name": "session_usage_cell_leaf_pk",
+      "entityType": "pks",
+      "table": "session_usage_cell_leaf"
+    },
+    {
+      "columns": [
+        "cell",
+        "metric",
+        "value"
+      ],
+      "nameExplicit": false,
+      "name": "session_usage_cell_sample_pk",
+      "entityType": "pks",
+      "table": "session_usage_cell_sample"
+    },
+    {
+      "columns": [
+        "cell",
+        "context"
+      ],
+      "nameExplicit": false,
+      "name": "session_usage_cell_unpriced_pk",
+      "entityType": "pks",
+      "table": "session_usage_cell_unpriced"
+    },
+    {
+      "columns": [
+        "cell",
+        "updated",
+        "request",
+        "source"
+      ],
+      "nameExplicit": false,
+      "name": "usage_analytics_cell_leaf_pk",
+      "entityType": "pks",
+      "table": "usage_analytics_cell_leaf"
+    },
+    {
+      "columns": [
+        "cell",
+        "metric",
+        "value"
+      ],
+      "nameExplicit": false,
+      "name": "usage_analytics_cell_sample_pk",
+      "entityType": "pks",
+      "table": "usage_analytics_cell_sample"
+    },
+    {
+      "columns": [
+        "cell",
+        "context"
+      ],
+      "nameExplicit": false,
+      "name": "usage_analytics_cell_unpriced_pk",
+      "entityType": "pks",
+      "table": "usage_analytics_cell_unpriced"
+    },
+    {
+      "columns": [
+        "state",
+        "generation",
+        "key",
+        "quantile"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_rank_pk",
+      "entityType": "pks",
+      "table": "usage_view_rank"
+    },
+    {
+      "columns": [
+        "state",
+        "generation",
+        "location",
+        "ref"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_ref_pk",
+      "entityType": "pks",
+      "table": "usage_view_ref"
+    },
+    {
+      "columns": [
+        "state",
+        "generation",
+        "key"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_row_pk",
+      "entityType": "pks",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        "state",
+        "generation",
+        "key",
+        "metric",
+        "value"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_sample_pk",
+      "entityType": "pks",
+      "table": "usage_view_sample"
+    },
+    {
+      "columns": [
         "group_id",
         "session_id"
       ],
@@ -6905,6 +9143,60 @@
       "nameExplicit": false,
       "name": "usage_analytics_request_pk",
       "table": "usage_analytics_request",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_usage_cell_pk",
+      "table": "session_usage_cell",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "usage_analytics_cell_pk",
+      "table": "usage_analytics_cell",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "seq"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_change_pk",
+      "table": "usage_view_change",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_journal_pk",
+      "table": "usage_view_journal",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_presentation_pk",
+      "table": "usage_view_presentation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "usage_view_state_pk",
+      "table": "usage_view_state",
       "entityType": "pks"
     },
     {
@@ -7415,6 +9707,406 @@
       "name": "usage_analytics_request_metrics_idx",
       "entityType": "indexes",
       "table": "usage_analytics_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "span",
+          "isExpression": false
+        },
+        {
+          "value": "bucket",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_usage_cell_session_span_bucket_key_idx",
+      "entityType": "indexes",
+      "table": "session_usage_cell"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "span",
+          "isExpression": false
+        },
+        {
+          "value": "bucket",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "unpriced > 0",
+      "origin": "manual",
+      "name": "session_usage_cell_unpriced_idx",
+      "entityType": "indexes",
+      "table": "session_usage_cell"
+    },
+    {
+      "columns": [
+        {
+          "value": "span",
+          "isExpression": false
+        },
+        {
+          "value": "bucket",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_analytics_cell_span_bucket_key_idx",
+      "entityType": "indexes",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "columns": [
+        {
+          "value": "span",
+          "isExpression": false
+        },
+        {
+          "value": "bucket",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "unpriced > 0",
+      "origin": "manual",
+      "name": "usage_analytics_cell_unpriced_idx",
+      "entityType": "indexes",
+      "table": "usage_analytics_cell"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_presentation_state_idx",
+      "entityType": "indexes",
+      "table": "usage_view_presentation"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_used",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_presentation_time_used_idx",
+      "entityType": "indexes",
+      "table": "usage_view_presentation"
+    },
+    {
+      "columns": [
+        {
+          "value": "location",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_ref_location_idx",
+      "entityType": "indexes",
+      "table": "usage_view_ref"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "total_cost",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_cost_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "total_tokens",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_tokens_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "logical",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_steps_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "input",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_input_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "output",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_output_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "reasoning",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_reasoning_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "cache_read",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_cache_read_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "cache_write",
+          "isExpression": false
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_cache_write_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "generation",
+          "isExpression": false
+        },
+        {
+          "value": "strftime('%s', \"key\")",
+          "isExpression": true
+        },
+        {
+          "value": "key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_row_hour_idx",
+      "entityType": "indexes",
+      "table": "usage_view_row"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_state_status_idx",
+      "entityType": "indexes",
+      "table": "usage_view_state"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_used",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "usage_view_state_time_used_idx",
+      "entityType": "indexes",
+      "table": "usage_view_state"
     },
     {
       "columns": [

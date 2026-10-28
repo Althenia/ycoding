@@ -15,6 +15,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
 
 test("quota listing and local forecasts use reader snapshots and bounded indexed slices across timestamp ties", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-quota-local-read-"))
@@ -58,7 +59,7 @@ test("quota listing and local forecasts use reader snapshots and bounded indexed
           'fixture', 'cache', 'system', 'tools', ${30_000 + index}, 1, 'first-request', 'full', 500,
           '{"input":999999,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}', ${at})
       `)
-        yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
+        yield* database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))
         const context = yield* Layer.build(
           sqliteLayer({ filename: file, readonly: true, readwrite: false, create: false, disableWAL: true }),
         )
@@ -70,7 +71,7 @@ test("quota listing and local forecasts use reader snapshots and bounded indexed
             logQuery: (query, params) =>
               Effect.gen(function* () {
                 queries.push({ sql: query, params })
-                if (query.includes("FROM usage_analytics_request"))
+                if (query.includes("FROM usage_analytics_cell AS r"))
                   expect((yield* Effect.serviceOption(reader.$client.transactionService))._tag).toBe("Some")
               }),
           }),
@@ -100,10 +101,10 @@ test("quota listing and local forecasts use reader snapshots and bounded indexed
         const location = yield* service.forecast({ localScope: "location" })
         expect(location.localRates).toHaveLength(1)
         expect(location.localRates![0]).toMatchObject({ profile: "Work", tokensPerMinute60: (10_003 * 15) / 60 })
-        const reads = queries.filter((query) => query.sql.includes("FROM usage_analytics_request"))
+        const reads = queries.filter((query) => query.sql.includes("FROM usage_analytics_cell AS r"))
         expect(reads.length).toBeGreaterThan(3)
         const populations = reads.map((query) => {
-          const start = query.sql.indexOf("FROM usage_analytics_request")
+          const start = query.sql.indexOf("FROM usage_analytics_cell AS r")
           const source = query.sql.slice(start).replace(/GROUP BY[\s\S]*$/i, "")
           const offset = (query.sql.slice(0, start).match(/\?/g) ?? []).length
           const params = query.params.slice(
@@ -111,7 +112,7 @@ test("quota listing and local forecasts use reader snapshots and bounded indexed
             offset + (source.match(/\?/g) ?? []).length,
           ) as import("bun:sqlite").SQLQueryBindings[]
           const plan = native.query(`EXPLAIN QUERY PLAN SELECT r.id ${source}`).all(...params) as { detail: string }[]
-          expect(plan.some((row) => row.detail.includes("usage_analytics_request_time_created_id_idx"))).toBe(true)
+          expect(plan.some((row) => row.detail.includes("usage_analytics_cell_span_bucket_key_idx"))).toBe(true)
           const row = native.query(`SELECT count(*) AS population FROM (SELECT r.id ${source})`).get(...params) as {
             population: number
           }

@@ -675,6 +675,65 @@ try {
   expect(localReport.status === "ok" && isRecord(localReport.value) && isRecord(localReport.value.data) && localReport.value.data.group === "day",
     `local-time usage report failed: ${JSON.stringify(localReport)}`)
   checks.push("normalized provider quotas, retained summary, and grouped report crossed the real relay")
+  const dashboardRead = async (input: Record<string, unknown>) => {
+    const outcome = await probeRequest("usage.dashboard", { input })
+    expect(outcome.status === "ok" && isRecord(outcome.value) && !("location" in outcome.value) && isRecord(outcome.value.data) &&
+      typeof outcome.value.data.status === "string", `usage dashboard failed: ${JSON.stringify(outcome)}`)
+    const data = outcome.status === "ok" && isRecord(outcome.value) && isRecord(outcome.value.data) ? outcome.value.data : {}
+    expect(data.status !== "error", `usage dashboard reported an error: ${JSON.stringify(data)}`)
+    return data
+  }
+  const dashboardReady = (input: Record<string, unknown>) =>
+    waitFor(async () => {
+      const data = await dashboardRead(input)
+      return data.status === "ready" ? data : undefined
+    }, 10_000, `usage dashboard did not become ready for ${JSON.stringify(input)}`)
+  const dashboardHeaderKeys = ["asOf", "quota", "revision", "status", "summary"]
+  const dashboardKeys = (data: Record<string, unknown>) => Object.keys(data).sort()
+  const standaloneUsage = async () => {
+    const [summaryRead, reportRead] = [await probeRequest("usage.summary"), await probeRequest("usage.report", { input: { group: "model", limit: 2 } })]
+    return {
+      summary: summaryRead.status === "ok" && isRecord(summaryRead.value) ? JSON.stringify(summaryRead.value.data) : undefined,
+      report: reportRead.status === "ok" && isRecord(reportRead.value) && isRecord(reportRead.value.data) ? reportRead.value.data : undefined,
+    }
+  }
+  await waitFor(() => {
+    const status = store.state().sessionStatus
+    return status === undefined || status.running.size === 0 ? true : undefined
+  }, 30_000, "a Session stayed running before the dashboard accounting comparison")
+  const dashboardMatched = await waitFor(async () => {
+    const before = await standaloneUsage()
+    const none = await dashboardReady({})
+    const breakdown = await dashboardReady({ breakdown: { group: "model", limit: 2 } })
+    const after = await standaloneUsage()
+    if (before.summary === undefined || before.report === undefined || JSON.stringify(before) !== JSON.stringify(after)) return undefined
+    return { none, breakdown, standalone: { summary: before.summary, report: before.report } }
+  }, 10_000, "the dashboard never matched the standalone summary and report over a stable accounting window")
+  const { none: dashboardNone, breakdown: dashboardBreakdown, standalone } = dashboardMatched
+  expect(JSON.stringify(dashboardKeys(dashboardNone)) === JSON.stringify(dashboardHeaderKeys),
+    `an empty dashboard request carried defaults or lacked required fields: ${JSON.stringify(dashboardKeys(dashboardNone))}`)
+  expect(typeof dashboardNone.asOf === "number" && Number.isSafeInteger(dashboardNone.asOf) && dashboardNone.asOf >= 0 &&
+    typeof dashboardNone.revision === "string" && isRecord(dashboardNone.quota) &&
+    (dashboardNone.quota.status === "preparing" ? Object.keys(dashboardNone.quota).length === 1
+      : dashboardNone.quota.status === "error" ? Object.keys(dashboardNone.quota).sort().join() === "message,status" && typeof dashboardNone.quota.message === "string"
+      : dashboardNone.quota.status === "ready" && Array.isArray(dashboardNone.quota.providers) &&
+        isRecord(dashboardNone.quota.forecast) && dashboardNone.quota.forecast.localScope === "backend"),
+    `dashboard header fields were invalid: ${JSON.stringify(dashboardNone)}`)
+  expect(JSON.stringify(dashboardNone.summary) === standalone.summary && JSON.stringify(dashboardBreakdown.summary) === standalone.summary,
+    `dashboard summary differs from the standalone summary: ${JSON.stringify(dashboardNone.summary)}`)
+  expect(JSON.stringify(dashboardKeys(dashboardBreakdown)) === JSON.stringify([...dashboardHeaderKeys, "breakdown"].sort()),
+    `a breakdown-only dashboard request returned unrequested slots: ${JSON.stringify(dashboardKeys(dashboardBreakdown))}`)
+  const dashboardReport = isRecord(dashboardBreakdown.breakdown) ? dashboardBreakdown.breakdown : undefined
+  expect(dashboardReport?.group === "model" && Array.isArray(dashboardReport.rows) && dashboardReport.rows.length <= 2 &&
+    JSON.stringify(dashboardReport.total) === JSON.stringify(standalone.report.total) && dashboardReport.rowCount === standalone.report.rowCount,
+    `dashboard breakdown differs from the standalone report: ${JSON.stringify(dashboardReport)}`)
+  for (const input of [{}, { breakdown: { group: "model", limit: 2 } }])
+    expect((await dashboardRead(input)).status === "ready", `a warm dashboard read was not already ready for ${JSON.stringify(input)}`)
+  const dashboardInvalid = await probeRequest("usage.dashboard", { input: { daily: { group: "not-a-group" } } })
+  expect(dashboardInvalid.status === "failed" && dashboardInvalid.error.code === "invalid_message", `invalid dashboard input was not rejected: ${JSON.stringify(dashboardInvalid)}`)
+  const dashboardScoped = await probeRequest("usage.dashboard", { sessionID, input: {} })
+  expect(dashboardScoped.status === "failed" && dashboardScoped.error.code === "invalid_message", `a Session-scoped dashboard request was not rejected: ${JSON.stringify(dashboardScoped)}`)
+  checks.push("the composed usage dashboard read an empty and a breakdown-only request to ready, matched the standalone summary and report, stayed warm, and rejected invalid and Session-scoped input over the real relay")
   const beforeCreate = providerRequests.length
   const createdID = await store.createSession({ workspaceID: candidate.id })
   if (!createdID) throw new Error(`remote creation failed: ${JSON.stringify(store.state().sessionCreation)}`)

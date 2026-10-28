@@ -980,6 +980,36 @@ describe("operation mapping", () => {
     expect(test.calls.some((call) => call.method === "usageReport")).toBe(false)
   })
 
+  test("maps usage.dashboard to one composed local call and never to the separate usage reads", async () => {
+    const info = { status: "ready", asOf: 5, revision: "r1", summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+      quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } } }
+    const test = await harness({ results: { usageDashboard: info } })
+    const run = (input?: Record<string, unknown>, sessionID?: string) => executeRemoteOperation({
+      request: { ...request("usage.dashboard", input), ...(sessionID ? { sessionID } : {}) }, local: test.local, sessions: test.registry, subscriptions: test.subscriptions,
+    })
+    const reports = { daily: { group: "day", timeZone: "UTC", from: 0, to: 10 }, monthly: { group: "month" }, breakdown: { group: "provider-model", limit: 25 } }
+    expect(valueOf(await run(reports))).toEqual({ data: info })
+    expect(valueOf(await run({ ...reports, refresh: true }))).toEqual({ data: info })
+    expect(valueOf(await run({}))).toEqual({ data: info })
+    expect(valueOf(await run({ refresh: true }))).toEqual({ data: info })
+    expect(valueOf(await run({ breakdown: reports.breakdown }))).toEqual({ data: info })
+    expect(test.calls.filter((call) => call.method.startsWith("usage") || call.method.startsWith("providerUsage"))).toEqual([
+      { method: "usageDashboard", args: [reports] },
+      { method: "usageDashboard", args: [{ ...reports, refresh: true }] },
+      { method: "usageDashboard", args: [{}] },
+      { method: "usageDashboard", args: [{ refresh: true }] },
+      { method: "usageDashboard", args: [{ breakdown: reports.breakdown }] },
+    ])
+    test.calls.length = 0
+    for (const bad of [
+      { daily: null }, { daily: "day" }, { ...reports, refresh: "yes" }, { ...reports, extra: 1 },
+      { ...reports, daily: { group: "day", from: 5, to: 5 } }, { ...reports, monthly: { group: "month", limit: 201 } },
+      { ...reports, breakdown: { group: "nope" } }, { ...reports, breakdown: { group: "provider-model", directory: "/private" } },
+    ]) expect(errorOf(await run(bad)).code).toBe("invalid_message")
+    expect(errorOf(await run(reports, "ses_1")).code).toBe("invalid_message")
+    expect(test.calls.some((call) => call.method.startsWith("usage"))).toBe(false)
+  })
+
   test("maps global incident reads to exact local calls without a Session or browser Location", async () => {
     const report = { rows: [{ providerID: "p", modelID: "m", fallbacks: 1, escalated: 0, rejected: 0, last: 5 }], groups: 1 }
     const recent = { items: [{ id: "inc_1", time: 5, kind: "fallback", category: "rate_limit", ruleIDs: [], agent: "build" }] }

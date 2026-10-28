@@ -59,6 +59,21 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Credential") {}
 
+export const identities = (db: Database.Interface["db"]) =>
+  db
+    .select({
+      id: CredentialTable.id,
+      integrationID: CredentialTable.integration_id,
+      label: CredentialTable.label,
+      active: CredentialTable.active,
+      generation: CredentialTable.generation,
+      accountGeneration: CredentialTable.account_generation,
+    })
+    .from(CredentialTable)
+    .orderBy(asc(CredentialTable.id))
+    .all()
+    .pipe(Effect.orDie)
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {

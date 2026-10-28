@@ -106,6 +106,7 @@ export const remoteOperations = [
   "session.promptCosts",
   "session.taskCosts",
   "usage.forecast",
+  "usage.dashboard",
   "incident.report",
   "incident.recent",
   "incident.guidance",
@@ -298,6 +299,7 @@ export const remoteOperationAccess: Record<RemoteOperation, "read" | "mutation">
   "session.promptCosts": "read",
   "session.taskCosts": "read",
   "usage.forecast": "read",
+  "usage.dashboard": "read",
   "incident.report": "read",
   "incident.recent": "read",
   "incident.guidance": "read",
@@ -849,7 +851,7 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
     (frame.input.localScope === "location") !== (frame.sessionID !== undefined)))
     return failRequest("invalid_message", "Forecast scope requires a backend-resolved Session Location or an unscoped backend")
   if ((operation.startsWith("provider.auth.") || operation.startsWith("coordination.") || operation === "dots.get" || operation === "dots.set" || operation === "session.status" || operation === "workspace.catalog" || operation === "workspace.file.find" ||
-    operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" ||
+    operation === "usage.providers" || operation === "usage.summary" || operation === "usage.report" || operation === "usage.dashboard" ||
     operation === "incident.report" || operation === "incident.recent" ||
     operation === "machine.keepAwake.get" || operation === "machine.keepAwake.set" ||
     operation === "machine.telemetry.consent.get" || operation === "machine.telemetry.consent.set" ||
@@ -872,6 +874,20 @@ function parseRequest(frame: Record<string, unknown>): ParseResult<RemoteRequest
             input: frame.input,
           },
   }
+}
+
+function validUsageReportInput(input: unknown): boolean {
+  if (!isRecord(input) || typeof input.group !== "string" || !["model", "hour", "day", "month", "session", "project", "agent", "provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(input.group) ||
+    Object.keys(input).some((key) => !["group", "timeZone", "from", "to", "offset", "limit", "sort", "order", "providerID", "profile", "modelID", "selectedEffort"].includes(key))) return false
+  const integer = (value: unknown, minimum: number, maximum: number) => value === undefined ||
+    (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
+  return integer(input.from, 0, Number.MAX_SAFE_INTEGER) && integer(input.to, 0, Number.MAX_SAFE_INTEGER) &&
+    [input.providerID, input.profile, input.modelID, input.selectedEffort].every((value) => value === undefined || validName(value)) &&
+    (input.timeZone === undefined || typeof input.timeZone === "string" && input.timeZone.length > 0 && input.timeZone.length <= 128) &&
+    integer(input.offset, 0, Number.MAX_SAFE_INTEGER) && integer(input.limit, 1, 200) &&
+    (input.from === undefined || input.to === undefined || (typeof input.from === "number" && typeof input.to === "number" && input.from < input.to)) &&
+    (input.sort === undefined || (typeof input.sort === "string" && ["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"].includes(input.sort))) &&
+    (input.order === undefined || input.order === "asc" || input.order === "desc")
 }
 
 function validOperationInput(operation: RemoteOperation, input: unknown): boolean {
@@ -945,19 +961,11 @@ function validOperationInput(operation: RemoteOperation, input: unknown): boolea
       ids.every((id) => typeof id === "string" && id.length <= 128 &&
         (operation === "session.promptCosts" ? /^msg_[A-Za-z0-9_-]+$/.test(id) : isSessionID(id)))
   }
-  if (operation === "usage.report" || operation === "session.usageReport") {
-    if (!isRecord(input) || typeof input.group !== "string" || !["model", "hour", "day", "month", "session", "project", "agent", "provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"].includes(input.group) ||
-      Object.keys(input).some((key) => !["group", "timeZone", "from", "to", "offset", "limit", "sort", "order", "providerID", "profile", "modelID", "selectedEffort"].includes(key))) return false
-    const integer = (value: unknown, minimum: number, maximum: number) => value === undefined ||
-      (typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum)
-    return integer(input.from, 0, Number.MAX_SAFE_INTEGER) && integer(input.to, 0, Number.MAX_SAFE_INTEGER) &&
-      [input.providerID, input.profile, input.modelID, input.selectedEffort].every((value) => value === undefined || validName(value)) &&
-      (input.timeZone === undefined || typeof input.timeZone === "string" && input.timeZone.length > 0 && input.timeZone.length <= 128) &&
-      integer(input.offset, 0, Number.MAX_SAFE_INTEGER) && integer(input.limit, 1, 200) &&
-      (input.from === undefined || input.to === undefined || (typeof input.from === "number" && typeof input.to === "number" && input.from < input.to)) &&
-      (input.sort === undefined || (typeof input.sort === "string" && ["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"].includes(input.sort))) &&
-      (input.order === undefined || input.order === "asc" || input.order === "desc")
-  }
+  if (operation === "usage.dashboard") return isRecord(input) &&
+    Object.keys(input).every((key) => key === "daily" || key === "monthly" || key === "breakdown" || key === "refresh") &&
+    (input.refresh === undefined || typeof input.refresh === "boolean") &&
+    [input.daily, input.monthly, input.breakdown].every((report) => report === undefined || validUsageReportInput(report))
+  if (operation === "usage.report" || operation === "session.usageReport") return validUsageReportInput(input)
   if (operation === "workspace.list") return input === undefined || (isRecord(input) && input.sessionsOnly === true && Object.keys(input).length === 1)
   if (operation === "session.subagent.list") return input === undefined || (isRecord(input) && typeof input.cursor === "string" && input.cursor.length > 0 && input.cursor.length <= 1_024 && Object.keys(input).length === 1)
   if (operation === "session.pin" || operation === "session.unpin") return input === undefined
@@ -1667,6 +1675,17 @@ export type RemoteUsageForecast = { readonly asOf: number; readonly localScope: 
     readonly reason?: string; readonly observedFrom?: number; readonly observedTo?: number; readonly ratePerHour?: number;
     readonly exhaustionAt?: number; readonly projectedUsedAtReset?: number; readonly pace?: RemoteQuotaPace }[] }
 export type RemoteUsageForecastValue = { readonly data: RemoteUsageForecast }
+export type RemoteUsageDashboardInput = { readonly daily?: RemoteUsageReportInput; readonly monthly?: RemoteUsageReportInput; readonly breakdown?: RemoteUsageReportInput; readonly refresh?: boolean }
+export type RemoteUsageDashboardQuota =
+  | { readonly status: "preparing" }
+  | { readonly status: "ready"; readonly providers: readonly RemoteUsageProvider[]; readonly forecast: RemoteUsageForecast }
+  | { readonly status: "error"; readonly message: string }
+export type RemoteUsageDashboard =
+  | { readonly status: "preparing" }
+  | { readonly status: "error"; readonly message: string }
+  | { readonly status: "ready"; readonly asOf: number; readonly revision: string; readonly summary: RemoteUsageSummaryValue["data"]; readonly quota: RemoteUsageDashboardQuota;
+    readonly daily?: RemoteUsageReportValue["data"]; readonly monthly?: RemoteUsageReportValue["data"]; readonly breakdown?: RemoteUsageReportValue["data"] }
+export type RemoteUsageDashboardValue = { readonly data: RemoteUsageDashboard }
 
 export type RemoteIncidentKind = "fallback" | "guardrail-escalated" | "guardrail-rejected"
 export type RemoteIncidentModelRef = { readonly id: string; readonly providerID: string; readonly variant?: string; readonly profile?: string }

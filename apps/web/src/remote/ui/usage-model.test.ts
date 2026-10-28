@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { compactUsageTotal, reportNeedsNewerConnector, unsupportedReportMessage, dailySpend, donutGeometry, matchingQuotaForecast, modelIdentity, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, reportKey, reportCostText, reportIdentity, reportLabel, spendCostText, spendMetrics, tooltipPosition, usageBounds, usageReportInputs, visibleProviders, type UsageProvider } from "./usage-model"
+import { compactUsageTotal, reportNeedsNewerConnector, unsupportedReportMessage, dailySpend, donutGeometry, matchingQuotaForecast, modelIdentity, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, reportKey, reportCostText, reportIdentity, reportLabel, spendCostText, spendMetrics, tooltipPosition, usageBounds, usageDashboardView, usageQuotaView, usageReportInputs, visibleProviders, type UsageDashboardReady, type UsageProvider } from "./usage-model"
 
 const tokens = { input: 900, output: 100, reasoning: 20, cache: { read: 300, write: 40 } }
 const row = (label: string, cost?: number, costProvenance?: "recorded" | "current_catalog") => ({
@@ -267,4 +267,66 @@ test("a quota group heading appears once before its consecutive pivoted windows"
   ]
   expect(windows.map((_, index) => quotaGroupHeading(windows, index))).toEqual([undefined, "Gemini Models", undefined, "Claude and GPT models", "Gemini 4 Argon"])
   expect(quotaGroupHeading([], 0)).toBeUndefined()
+})
+
+const ready = (asOf: number) =>
+  ({ status: "ready", asOf, revision: `r${asOf}`, summary: {}, quota: { status: "ready", providers: [], forecast: { asOf, localScope: "backend" } } }) as unknown as UsageDashboardReady
+
+test("a dashboard view separates preparing, error, unsupported, loading, and ready", () => {
+  const current = ready(2)
+  expect(usageDashboardView({ status: "idle" })).toEqual({ kind: "idle" })
+  expect(usageDashboardView({ status: "loading" })).toEqual({ kind: "loading" })
+  expect(usageDashboardView({ status: "unsupported" })).toEqual({ kind: "unsupported" })
+  expect(usageDashboardView({ status: "ready", data: current })).toEqual({ kind: "ready", info: current, refreshing: false, stale: false })
+  expect(usageDashboardView({ status: "loading", data: current })).toEqual({ kind: "ready", info: current, refreshing: true, stale: false })
+  expect(usageDashboardView({ status: "ready", data: { status: "preparing" } })).toEqual({ kind: "preparing" })
+  expect(usageDashboardView({ status: "ready", data: { status: "error", message: "Prepared read failed" } })).toEqual({ kind: "error", message: "Prepared read failed" })
+})
+
+test("a ready dashboard that goes Preparing or fails exposes no data from the invalidated envelope", () => {
+  const cached = ready(1)
+  const preparing = usageDashboardView({ status: "ready", data: { status: "preparing" } })
+  expect("info" in preparing).toBe(false)
+  const failed = usageDashboardView({ status: "error", data: cached, message: "Transport failed" })
+  expect(failed).toEqual({ kind: "error", message: "Transport failed" })
+  expect("info" in failed).toBe(false)
+  const unsupported = usageDashboardView({ status: "unsupported", data: cached })
+  expect("info" in unsupported).toBe(false)
+  const switched = usageDashboardView({ status: "loading" })
+  expect(switched).toEqual({ kind: "loading" })
+})
+
+test("a pending or failed different recipe keeps the last displayed accounting under its old identity, never the quota envelope after a failure", () => {
+  const envelope = ready(1)
+  const accounting = { daily: envelope.daily, monthly: envelope.monthly, breakdown: envelope.breakdown }
+  expect(usageDashboardView({ status: "loading" }, { sameRecipe: false, accounting, envelope })).toEqual({ kind: "ready", info: envelope, refreshing: true, stale: true })
+  expect(usageDashboardView({ status: "loading" }, { sameRecipe: false, accounting })).toEqual({ kind: "loading", retained: accounting })
+  expect(usageDashboardView({ status: "error", message: "Page failed" }, { sameRecipe: false, accounting, envelope })).toEqual({ kind: "error", message: "Page failed", retained: accounting })
+  expect(usageDashboardView({ status: "error", message: "Refresh failed" }, { sameRecipe: true, accounting, envelope })).toEqual({ kind: "error", message: "Refresh failed" })
+  expect(usageDashboardView({ status: "ready", data: { status: "preparing" } }, { sameRecipe: false, accounting, envelope })).toEqual({ kind: "preparing" })
+  expect(usageDashboardView({ status: "ready", data: { status: "error", message: "Envelope failed" } }, { sameRecipe: false, accounting, envelope })).toEqual({ kind: "error", message: "Envelope failed" })
+  expect(usageDashboardView({ status: "unsupported" }, { sameRecipe: false, accounting, envelope })).toEqual({ kind: "unsupported" })
+  expect(usageDashboardView({ status: "idle" }, { sameRecipe: false, accounting, envelope })).toEqual({ kind: "idle" })
+})
+
+test("accounting stays readable while quota is preparing, and quota arrival adds providers and forecast without changing the accounting sections", () => {
+  const accounting = { daily: { group: "day", rows: [], total: {}, rowCount: 0 }, monthly: { group: "model", rows: [], total: {}, rowCount: 0 }, breakdown: { group: "model", rows: [], total: {}, rowCount: 0 } }
+  const pending = { ...ready(1), ...accounting, quota: { status: "preparing" } } as unknown as UsageDashboardReady
+  const arrived = { ...pending, quota: { status: "ready", providers: [], forecast: { asOf: 2, localScope: "backend" } } } as unknown as UsageDashboardReady
+  const first = usageDashboardView({ status: "ready", data: pending })
+  const second = usageDashboardView({ status: "ready", data: arrived })
+  expect(first).toMatchObject({ kind: "ready", refreshing: false, stale: false })
+  expect(usageQuotaView(pending)).toEqual({ kind: "preparing" })
+  expect(usageQuotaView(arrived)).toEqual({ kind: "ready", providers: [], forecast: { asOf: 2, localScope: "backend" } })
+  expect(usageQuotaView(undefined)).toEqual({ kind: "none" })
+  if (first.kind !== "ready" || second.kind !== "ready") throw new Error("expected ready views")
+  expect(second.info.daily).toBe(first.info.daily)
+  expect(second.info.monthly).toBe(first.info.monthly)
+  expect(second.info.breakdown).toBe(first.info.breakdown)
+})
+
+test("a quota error is its own quota state with the server message while accounting stays readable", () => {
+  const failed = { ...ready(1), quota: { status: "error", message: "Provider quotas are unavailable right now." } } as unknown as UsageDashboardReady
+  expect(usageQuotaView(failed)).toEqual({ kind: "error", message: "Provider quotas are unavailable right now." })
+  expect(usageDashboardView({ status: "ready", data: failed })).toEqual({ kind: "ready", info: failed, refreshing: false, stale: false })
 })

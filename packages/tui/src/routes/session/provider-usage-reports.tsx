@@ -50,10 +50,14 @@ export type DateRange =
 type ReportMetrics = UsageReportOutput["total"] | UsageReportOutput["rows"][number]
 type Sort = NonNullable<ProviderUsageReportInput["sort"]>
 type Order = NonNullable<ProviderUsageReportInput["order"]>
-type StatsSummary = {
+export type StatsSummary = {
   favoriteModel?: string
   sessions: number
 }
+export type UsagePreparing = { readonly status: "preparing" }
+export type UsageReportRead = UsageReportOutput | UsagePreparing
+export type UsageStatsRead = { readonly report: UsageReportOutput; readonly stats: StatsSummary } | UsagePreparing
+export const usagePreparingDelay = (attempt: number) => Math.min(4_000, 500 * 2 ** attempt)
 type ReportState = {
   queryKey: string
   report?: UsageReportOutput
@@ -61,6 +65,7 @@ type ReportState = {
   loading: boolean
   failed: boolean
   stale: boolean
+  preparing: boolean
 }
 
 export const PAGE_SIZE = 100
@@ -90,7 +95,9 @@ export function ProviderUsageReports(props: {
   view: ProviderUsageReportView
   refresh: number
   now?: () => number
-  load?: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>
+  load?: (input: ProviderUsageReportInput) => Promise<UsageReportRead>
+  loadStats?: (input: ProviderUsageReportInput) => Promise<UsageStatsRead>
+  pollDelay?: (attempt: number) => number
 }) {
   const [range, setRange] = createSignal<DateRange>({ type: "all" })
   const [grouping, setGrouping] = createSignal<{ view: ProviderUsageReportView; group: UsageReportOutput["group"] }>()
@@ -99,8 +106,9 @@ export function ProviderUsageReports(props: {
   const [page, setPage] = createSignal({ view: props.view, offset: 0 })
   const [selected, setSelected] = createSignal<string>()
   const [rangeError, setRangeError] = createSignal<string>()
-  const [state, setState] = createSignal<ReportState>({ queryKey: "", loading: false, failed: false, stale: false })
+  const [state, setState] = createSignal<ReportState>({ queryKey: "", loading: false, failed: false, stale: false, preparing: false })
   let generation = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
 
   const stats = createMemo(() => props.view === "stats")
   const tableView = createMemo(() => props.view === "stats" ? undefined : props.view)
@@ -123,6 +131,7 @@ export function ProviderUsageReports(props: {
 
   createEffect(() => {
     const loader = props.load
+    const statsLoader = props.loadStats
     void props.refresh
     const currentStats = stats()
     const currentGroup = group()
@@ -141,34 +150,61 @@ export function ProviderUsageReports(props: {
       order: currentOrder,
     }
     const queryKey = JSON.stringify([props.view, query])
+    if (timer !== undefined) clearTimeout(timer)
+    timer = undefined
     const token = ++generation
-    if (!loader) return
+    if (currentStats ? !statsLoader : !loader) return
 
     const previous = untrack(state)
     const sameQuery = previous.queryKey === queryKey && previous.report !== undefined
-    if (sameQuery) setState({ ...previous, loading: true, failed: false, stale: true })
+    if (sameQuery) setState({ ...previous, loading: true, failed: false, stale: true, preparing: false })
     else {
-      setState({ queryKey, loading: true, failed: false, stale: false })
+      setState({ queryKey, loading: true, failed: false, stale: false, preparing: false })
       setSelected(undefined)
     }
 
-    void loadReport(loader, query, currentStats).then(
-      (result) => {
-        if (token !== generation) return
-        const current = untrack(selected)
-        setState({ queryKey, report: result.report, stats: result.stats, loading: false, failed: false, stale: false })
-        setSelected(result.report.rows.some((row) => row.key === current) ? current : result.report.rows[0]?.key)
-      },
-      () => {
-        if (token !== generation) return
-        const current = untrack(state)
-        setState({ ...current, queryKey, loading: false, failed: true, stale: current.report !== undefined })
-      },
-    )
+    const read = async (): Promise<UsageStatsRead> => {
+      if (currentStats) return statsLoader!(query)
+      const result = await loader!(query)
+      return "rows" in result ? { report: result, stats: { sessions: 0 } } : result
+    }
+    const run = (attempt: number) => {
+      void read().then(
+        (result) => {
+          if (token !== generation) return
+          if (!("report" in result)) {
+            setState({ queryKey, loading: false, failed: false, stale: false, preparing: true })
+            setSelected(undefined)
+            timer = setTimeout(() => {
+              if (token === generation) run(attempt + 1)
+            }, (props.pollDelay ?? usagePreparingDelay)(attempt))
+            return
+          }
+          const current = untrack(selected)
+          setState({
+            queryKey,
+            report: result.report,
+            stats: currentStats ? result.stats : undefined,
+            loading: false,
+            failed: false,
+            stale: false,
+            preparing: false,
+          })
+          setSelected(result.report.rows.some((row) => row.key === current) ? current : result.report.rows[0]?.key)
+        },
+        () => {
+          if (token !== generation) return
+          const current = untrack(state)
+          setState({ ...current, queryKey, loading: false, failed: true, stale: current.report !== undefined, preparing: false })
+        },
+      )
+    }
+    run(0)
   })
 
   onCleanup(() => {
     generation += 1
+    if (timer !== undefined) clearTimeout(timer)
   })
 
   return (
@@ -204,30 +240,6 @@ export function ProviderUsageReports(props: {
       )}
     </Show>
   )
-}
-
-async function loadReport(
-  loader: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>,
-  query: ProviderUsageReportInput,
-  stats: boolean,
-): Promise<{ report: UsageReportOutput; stats?: StatsSummary }> {
-  if (!stats) return { report: await loader(query) }
-  const [models, sessions, report] = await Promise.all([
-    loader({ ...query, group: "model", offset: 0, limit: 1, sort: "tokens", order: "desc" }),
-    loader({ ...query, group: "session", offset: 0, limit: 1 }),
-    loadDays(loader, query),
-  ])
-  return { report, stats: { favoriteModel: models.rows[0]?.label, sessions: sessions.rowCount } }
-}
-
-async function loadDays(
-  loader: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>,
-  query: ProviderUsageReportInput,
-) {
-  const first = await loader(query)
-  if (first.nextOffset === undefined) return first
-  const second = await loader({ ...query, offset: first.nextOffset })
-  return { ...first, rows: [...first.rows, ...second.rows], nextOffset: undefined }
 }
 
 function defaultSorting(view: ProviderUsageReportView): { sort: Sort; order: Order } {
@@ -331,6 +343,11 @@ function ProviderUsageTable(props: {
     <box flexGrow={1} minHeight={0} flexDirection="column">
       <Show when={props.rangeError}>
         {(error) => <text flexShrink={0} fg={theme.text.feedback.error.default}>{error()}</text>}
+      </Show>
+      <Show when={props.state.preparing}>
+        <text flexShrink={0} fg={theme.text.feedback.warning.default}>
+          Preparing usage...
+        </text>
       </Show>
       <Show when={props.state.loading && props.state.report}>
         <text flexShrink={0} fg={theme.text.feedback.warning.default}>Refreshing · showing previous data</text>
@@ -572,6 +589,11 @@ function ProviderUsageStats(props: {
       <text attributes={TextAttributes.BOLD} fg={theme.text.feedback.info.default}>
         Activity graph · last {layout().weeks} weeks
       </text>
+      <Show when={props.state.preparing}>
+        <text fg={theme.text.feedback.warning.default}>
+          Preparing usage...
+        </text>
+      </Show>
       <Show when={props.state.loading && !props.state.report}>
         <text fg={theme.text.subdued}>Loading daily usage...</text>
       </Show>

@@ -17,6 +17,8 @@ import {
   type ProviderUsageListOutput,
   type UsageGetOutput,
   type UsageReportOutput,
+  type UsageDashboardInput,
+  type UsageDashboardOutput,
   type KeepAwakeStatus,
   type Project,
   type ProjectDirectory,
@@ -124,6 +126,7 @@ export type LocalServer = {
   readonly providerUsageList: (refresh?: boolean) => Promise<ProviderUsageListOutput>
   readonly usageSummary: () => Promise<UsageGetOutput>
   readonly usageReport: (input: RemoteUsageReportInput) => Promise<UsageReportOutput>
+  readonly usageDashboard: (input: UsageDashboardInput) => Promise<UsageDashboardOutput>
   readonly sessionUsageReport: (sessionID: string, location: LocalLocation, input: RemoteUsageReportInput) => ReturnType<YCodingClient["session"]["usageReport"]>
   readonly promptCosts: (sessionID: string, location: LocalLocation, inputIDs: readonly [string, ...string[]]) => ReturnType<YCodingClient["session"]["promptCosts"]>
   readonly taskCosts: (sessionID: string, location: LocalLocation, sessionIDs: readonly [string, ...string[]]) => ReturnType<YCodingClient["session"]["taskCosts"]>
@@ -308,6 +311,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
     providerUsageList: (refresh) => call(() => client.providerUsage.list({ ...(refresh === undefined ? {} : { refresh }) }, { signal: AbortSignal.timeout(timeoutMs) })),
     usageSummary: () => call(() => client.usage.get({ signal: AbortSignal.timeout(timeoutMs) })),
     usageReport: (input) => call(() => client.usage.report(input, { signal: AbortSignal.timeout(timeoutMs) })),
+    usageDashboard: (input) => call(() => client.usage.dashboard(input, { signal: AbortSignal.timeout(timeoutMs) })),
     sessionUsageReport: (sessionID, location, input) => call(() => client.session.usageReport({ sessionID, ...input }, request(location, timeoutMs))),
     promptCosts: (sessionID, location, inputIDs) => call(() => client.session.promptCosts({ sessionID, inputIDs }, request(location, timeoutMs))),
     taskCosts: (sessionID, location, sessionIDs) => call(() => client.session.taskCosts({ sessionID, sessionIDs }, request(location, timeoutMs))),

@@ -6,10 +6,11 @@ import { DatabaseMigration } from "../src/database/migration"
 import { Sqlite } from "../src/database/sqlite"
 import { sqliteLayer } from "../src/database/sqlite.bun"
 import { SessionUsageRead } from "../src/session/usage-read"
+import { UsageStage } from "../src/usage-stage"
 
 type Shape = { kind: "partial" | "sample"; plan: string[]; functions: string[] }
 
-test("global stage and sample reads are served from the covering metrics index with no JSON function calls", () =>
+test("global stage and sample reads seek prepared cells by span and bucket with no JSON function calls", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const native = (yield* Sqlite.Native) as import("bun:sqlite").Database
@@ -51,12 +52,12 @@ test("global stage and sample reads are served from the covering metrics index w
           '{"firstOutputMs":5,"totalMs":9,"generatedTokens":3,"generationDurationNs":1000000000}', value
         FROM n
       `)
+      yield* UsageStage.backfill(db)
       for (const group of ["model", "day"] as const)
         yield* SessionUsageRead.report(db, {
           where: sql`1`,
           group,
-          from: 0,
-          to: 1_000,
+          plan: { pieces: SessionUsageRead.pieces({ from: 0, to: 1_000 }), offsets: [] },
           order: sql`key ASC`,
           offset: 0,
           limit: 100,
@@ -64,7 +65,9 @@ test("global stage and sample reads are served from the covering metrics index w
         })
       expect(shapes.map((shape) => shape.kind)).toEqual(["partial", "sample", "partial", "sample"])
       for (const shape of shapes)
-        expect(shape.plan.some((row) => row.includes("COVERING INDEX usage_analytics_request_metrics_idx"))).toBe(true)
+        expect(shape.plan.some((row) => /SEARCH r USING (?:COVERING )?INDEX usage_analytics_cell_span_bucket_key_idx \(span=\?/.test(row))).toBe(true)
+      for (const shape of shapes.filter((shape) => shape.kind === "sample"))
+        expect(shape.plan.some((row) => /TEMP B-TREE/.test(row))).toBe(false)
       for (const shape of shapes.slice(0, 2)) expect(shape.functions).toEqual([])
       for (const shape of shapes.slice(2)) expect(shape.functions).toEqual(["strftime(-1)"])
     }).pipe(Effect.provide(sqliteLayer({ filename: ":memory:" })), Effect.scoped),

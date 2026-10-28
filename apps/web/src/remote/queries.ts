@@ -8,6 +8,8 @@ import type {
   RemoteIncidentReportInput,
   RemoteOperation,
   RemoteWorkspaceInfo,
+  RemoteUsageDashboard,
+  RemoteUsageDashboardInput,
   RemoteUsageForecast,
 } from "@ycoding-ai/remote"
 import { readCentralPolicy, readProject, readProjects, readSessionCandidates, type CentralPolicy, type ProjectBundle, type SessionCandidate } from "./coordination"
@@ -41,6 +43,8 @@ export const remoteKeys = {
   usageProviders: (scope: QueryScope) => [...remoteKeys.usage(scope), "providers"] as const,
   usageSummary: (scope: QueryScope) => [...remoteKeys.usage(scope), "summary"] as const,
   usageForecast: (scope: QueryScope) => [...remoteKeys.usage(scope), "forecast", "backend"] as const,
+  usageDashboard: (scope: QueryScope, input: DashboardInput) =>
+    [...remoteKeys.usage(scope), "dashboard", ...dashboardSlots.flatMap((slot) => { const report = input[slot]; return report === undefined ? [] : [slot, reportKey(report)] })] as const,
   usageReport: (scope: QueryScope, input: UsageReportInput) => [...remoteKeys.usage(scope), "report", reportKey(input)] as const,
   incident: (scope: QueryScope) => [...remoteKeys.scope(scope), "incident"] as const,
   incidentReport: (scope: QueryScope, input: RemoteIncidentReportInput) =>
@@ -66,6 +70,10 @@ export type CoordinationFailure = { readonly reached: false; readonly message: s
 export type CoordinationChange = { readonly reached: true } | CoordinationFailure
 
 export type IncidentGuidanceQueryInput = RemoteIncidentGuidanceInput & { readonly sessionID?: string }
+
+type DashboardInput = RemoteUsageDashboardInput
+const dashboardSlots = ["daily", "monthly", "breakdown"] as const
+const dashboardPollMs = 1_000
 
 export type UsageResult<T> = { readonly status: "ready"; readonly data: T } | { readonly status: "unsupported" }
 
@@ -107,13 +115,20 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     readonly unsupported: (outcome: RemoteRequestOutcome) => boolean
     readonly label: string
     readonly unreadable: string
+    readonly settled?: (data: T) => boolean
+    readonly poll?: (data: T) => number | false
   }) => {
     const scope = input.scope ?? idleScope
     const queryKey = input.key(scope)
+    const settled = input.settled
+    const poll = input.poll
     return queryOptions({
       queryKey,
       enabled: input.scope !== undefined && input.enabled,
-      staleTime: 60_000,
+      staleTime: settled === undefined ? 60_000 : (query: { readonly state: { readonly data: UsageResult<T> | undefined } }) =>
+        query.state.data?.status === "ready" && !settled(query.state.data.data) ? 0 : 60_000,
+      refetchInterval: poll === undefined ? undefined : (query: { readonly state: { readonly status: string; readonly data: UsageResult<T> | undefined } }) =>
+        query.state.status === "success" && query.state.data?.status === "ready" ? poll(query.state.data.data) : false,
       retry: false,
       queryFn: async (): Promise<UsageResult<T>> => {
         const refresh = refreshing.delete(JSON.stringify(queryKey))
@@ -166,6 +181,18 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
     label: "Usage report", unreadable: "The device returned an unreadable usage report.",
   })
 
+  const usageDashboard = (scope: QueryScope | undefined, enabled: boolean, dashboard: DashboardInput) => usageQuery<RemoteUsageDashboard>({
+    scope, enabled: enabled && dashboardSlots.every((slot) => {
+      const limit = dashboard[slot]?.limit
+      return limit === undefined || Number.isInteger(limit) && limit >= 1 && limit <= 200
+    }),
+    key: (current) => remoteKeys.usageDashboard(current, dashboard), operation: "usage.dashboard",
+    request: (refresh) => ({ input: { ...Object.fromEntries(dashboardSlots.flatMap((slot) => dashboard[slot] === undefined ? [] : [[slot, dashboard[slot]]])), ...(refresh ? { refresh: true } : {}) } }),
+    read: (raw) => readUsageDashboard(raw, dashboard), settled: (data) => data.status === "ready" && data.quota.status !== "preparing",
+    poll: (data) => data.status === "preparing" || data.status === "ready" && data.quota.status === "preparing" ? dashboardPollMs : false,
+    unsupported: unknownOperation, label: "Usage", unreadable: "The device returned unreadable usage data.",
+  })
+
   const incidentReport = (scope: QueryScope | undefined, enabled: boolean, input: RemoteIncidentReportInput) => usageQuery<RemoteIncidentReport["data"]>({
     scope, enabled: enabled && validIncidentReport(input), key: (current) => remoteKeys.incidentReport(current, input),
     operation: "incident.report", request: () => ({ input: reportInput(input) }),
@@ -209,6 +236,8 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
       refetchFresh([remoteKeys.usageProviders(scope)]).then(() => refetchFresh([remoteKeys.usageForecast(scope)])),
     ])
   }
+
+  const refreshUsageDashboard = (scope: QueryScope, input: DashboardInput) => refetchFresh([remoteKeys.usageDashboard(scope, input)])
 
   const retryUsageReport = (scope: QueryScope, input: UsageReportInput) => refetchFresh([remoteKeys.usageReport(scope, input)])
   const retryIncidentReport = (scope: QueryScope, input: RemoteIncidentReportInput) => refetchFresh([remoteKeys.incidentReport(scope, input)])
@@ -407,7 +436,7 @@ export function createRemoteQueries(link: RemoteLink, client: QueryClient) {
 
   return {
     coordination, refreshCoordination, changeCoordination, deleteProjectSession, createProjectSession, projectCandidates,
-    usageProviders, usageSummary, usageForecast, usageReport, refreshUsage, retryUsageReport,
+    usageProviders, usageSummary, usageForecast, usageReport, usageDashboard, refreshUsage, refreshUsageDashboard, retryUsageReport,
     incidentReport, incidentRecent, incidentGuidance, clearIncidentGuidance, retryIncidentReport, retryIncidentRecent, retryIncidentGuidance,
     keepAwake, keepAwakeMutation, toggleKeepAwake, workspaces,
   }
@@ -545,6 +574,49 @@ function readUsageMetrics(value: unknown): UsageSummary | undefined {
     (Reflect.get(value, "cost") !== undefined && (!Number.isFinite(Reflect.get(value, "cost")) || Reflect.get(value, "cost") < 0)) ||
     (Reflect.get(value, "costProvenance") !== undefined && !["recorded", "current_catalog"].includes(Reflect.get(value, "costProvenance")))) return undefined
   return value as UsageSummary
+}
+
+function readUsageDashboard(value: unknown, input: DashboardInput): RemoteUsageDashboard | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const status = Reflect.get(value, "status")
+  if (status === "preparing") return { status }
+  if (status === "error") {
+    const message = Reflect.get(value, "message")
+    return typeof message === "string" ? { status, message } : undefined
+  }
+  const asOf = Reflect.get(value, "asOf")
+  const revision = Reflect.get(value, "revision")
+  if (status !== "ready" || !count(asOf) || typeof revision !== "string") return undefined
+  const summary = readUsageMetrics(Reflect.get(value, "summary"))
+  const quota = readDashboardQuota(Reflect.get(value, "quota"))
+  if (summary === undefined || quota === undefined) return undefined
+  const reports: Partial<Record<(typeof dashboardSlots)[number], UsageReport>> = {}
+  for (const slot of dashboardSlots) {
+    const raw = Reflect.get(value, slot)
+    const requested = input[slot]
+    if (requested === undefined) {
+      if (raw !== undefined) return undefined
+      continue
+    }
+    const report = readUsageReport(raw, requested.group)
+    if (report === undefined) return undefined
+    reports[slot] = report
+  }
+  return { status, asOf, revision, summary, quota, ...reports }
+}
+
+function readDashboardQuota(value: unknown): Extract<RemoteUsageDashboard, { readonly status: "ready" }>["quota"] | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const status = Reflect.get(value, "status")
+  if (status === "preparing") return { status }
+  if (status === "error") {
+    const message = Reflect.get(value, "message")
+    return typeof message === "string" ? { status, message } : undefined
+  }
+  if (status !== "ready") return undefined
+  const providers = readUsageProviders(Reflect.get(value, "providers"))
+  const forecast = readUsageForecast(Reflect.get(value, "forecast"))
+  return providers === undefined || forecast === undefined ? undefined : { status, providers, forecast }
 }
 
 export function readUsageReport(value: unknown, group: UsageReportInput["group"]): UsageReport | undefined {

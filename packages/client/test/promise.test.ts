@@ -406,6 +406,50 @@ test("global usage methods use the local-runtime HTTP contract without a Session
   ])
 })
 
+test("usage dashboard posts the composed input and decodes preparing, error, and ready", async () => {
+  const requests: { path: string; method: string; body: unknown }[] = []
+  const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  const metrics = { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens }
+  const report = (group: "day" | "month" | "provider-model") => ({ group, rows: [], total: metrics, rowCount: 0 })
+  const ready = {
+    status: "ready" as const,
+    asOf: 5,
+    revision: "r1",
+    summary: metrics,
+    quota: { status: "ready" as const, providers: [], forecast: { asOf: 4, localScope: "backend" as const } },
+    daily: report("day"),
+    monthly: report("month"),
+    breakdown: report("provider-model"),
+  }
+  const answers: unknown[] = [{ status: "preparing" }, { status: "error", message: "failed" }, ready]
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push({ path: new URL(request.url).pathname, method: request.method, body: await request.json() })
+      return Response.json({ data: answers.shift() })
+    },
+  })
+  const input = {
+    daily: { group: "day" as const, from: 0, to: 10, timeZone: "UTC" },
+    monthly: { group: "month" as const },
+    breakdown: { group: "provider-model" as const, limit: 25 },
+    refresh: true,
+  }
+
+  expect(await client.usage.dashboard(input)).toEqual({ status: "preparing" })
+  expect(await client.usage.dashboard(input)).toEqual({ status: "error", message: "failed" })
+  expect(await client.usage.dashboard(input)).toEqual(ready)
+  expect(requests).toEqual(Array.from({ length: 3 }, () => ({ path: "/api/usage/dashboard", method: "POST", body: input })))
+
+  const { daily: _daily, monthly: _monthly, breakdown: _breakdown, ...bare } = ready
+  answers.push({ ...bare }, { ...bare, breakdown: ready.breakdown })
+  requests.length = 0
+  expect(await client.usage.dashboard({})).toEqual(bare)
+  expect(await client.usage.dashboard({ breakdown: input.breakdown })).toEqual({ ...bare, breakdown: ready.breakdown })
+  expect(requests.map((request) => request.body)).toEqual([{}, { breakdown: input.breakdown }])
+})
+
 test("guardrail methods use the public HTTP contract", async () => {
   const requests: Request[] = []
   const status = {

@@ -32,15 +32,56 @@ const session = {
 }
 
 const prompts: string[] = []
-let quotaReads = 0
 let quotaGetReads = 0
-let usageReads = 0
 const reportCalls: URLSearchParams[] = []
+type Slot = Record<string, unknown>
+type DashboardRequest = { daily?: Slot; monthly?: Slot; breakdown?: Slot; refresh?: boolean }
+const dashboardInputs: DashboardRequest[] = []
+const dashboardMode = { preparing: 0, quotaPreparing: 0, quotaError: undefined as string | undefined, forecast: undefined as unknown }
 
-async function route(url: URL, request: Request) {
+async function route(url: URL, request: Request): Promise<Response | undefined> {
   if (url.pathname.endsWith("/prompt") && request.method === "POST") prompts.push(await request.text())
+  if (url.pathname === "/api/usage/dashboard" && request.method === "POST") {
+    const input: DashboardRequest = await request.clone().json()
+    dashboardInputs.push(input)
+    const stats = input.daily?.group === "day" && input.daily.limit === 200
+    const primary = stats ? input.daily : input.breakdown
+    if (primary) reportCalls.push(new URLSearchParams(Object.entries(primary).map(([key, value]) => [key, String(value)])))
+    if (dashboardMode.preparing > 0) {
+      dashboardMode.preparing -= 1
+      return json({ data: { status: "preparing" } })
+    }
+    const part = async (path: string, search: Slot = {}): Promise<unknown> => {
+      const target = new URL(path, url)
+      for (const [key, value] of Object.entries(search)) if (value !== undefined) target.searchParams.set(key, String(value))
+      const response = await route(target, request)
+      if (!response) throw new Error(`No fixture for ${path}`)
+      const body: { data: unknown } = await response.json()
+      return body.data
+    }
+    return json({
+      data: {
+        status: "ready",
+        asOf: Date.now(),
+        revision: "interaction",
+        summary: await part("/api/usage"),
+        quota:
+          dashboardMode.quotaError !== undefined
+            ? { status: "error", message: dashboardMode.quotaError }
+            : dashboardMode.quotaPreparing-- > 0
+            ? { status: "preparing" }
+            : {
+                status: "ready",
+                providers: await part("/api/provider/usage"),
+                forecast: dashboardMode.forecast ?? { asOf: Date.now(), localScope: "backend", quotas: [], localRates: [] },
+              },
+        ...(input.daily ? { daily: await part("/api/usage/report", input.daily) } : {}),
+        ...(input.monthly ? { monthly: await part("/api/usage/report", input.monthly) } : {}),
+        ...(input.breakdown ? { breakdown: await part("/api/usage/report", input.breakdown) } : {}),
+      },
+    })
+  }
   if (url.pathname === "/api/usage") {
-    usageReads++
     const tokens = { input: 3_000, output: 600, reasoning: 300, cache: { read: 900, write: 150 } }
     return json({
       data: {
@@ -66,7 +107,6 @@ async function route(url: URL, request: Request) {
     })
   }
   if (url.pathname === "/api/usage/report") {
-    reportCalls.push(new URLSearchParams(url.searchParams))
     const group = url.searchParams.get("group") ?? "model"
     const metrics = {
       logical: 1,
@@ -109,7 +149,6 @@ async function route(url: URL, request: Request) {
     })
   }
   if (url.pathname === "/api/provider/usage") {
-    quotaReads++
     return json({
       location,
       data: [
@@ -231,37 +270,91 @@ async function until(predicate: () => boolean) {
 }
 
 async function waitFor(screen: Awaited<ReturnType<typeof renderScreen>>, text: string) {
-  await until(() => screen.frame().includes(text))
+  await until(() => screen.frame().includes(text)).catch((error) => {
+    throw new Error(`${error.message} while waiting for ${JSON.stringify(text)}\n${screen.lines().filter((line) => line.trim()).slice(0, 14).join("\n")}`)
+  })
   expect(screen.frame()).toContain(text)
 }
 
-test("backend, report, and recorded-consumption sections settle before a quota refresh", async () => {
-  const quotaGate = Promise.withResolvers<void>()
-  let quotaPending = false
-  let forecastReads = 0
-  const screen = await renderScreen({ width: 189, height: 69, args: { sessionID }, settle: "Message YCoding…", route: async (url, request) => {
-    if (url.pathname === "/api/provider/usage") { quotaPending = true; await quotaGate.promise; quotaPending = false }
-    if (url.pathname === "/api/provider/usage/forecast") {
-      forecastReads++
-      return json({ location, data: { asOf: Date.now(), localScope: "backend", quotas: [], localRates: [{ providerID: "openai", modelID: "independent-consumption", observedFrom: 1, observedTo: 60_001, tokensPerMinute: 456, coverage: { pricedRequests: 0, unpricedRequests: 1 } }] } })
-    }
-    return route(url, request)
-  } })
+test("opens Usage with a normal composed read, labels Preparing, and polls without a refresh flag", async () => {
+  dashboardInputs.length = 0
+  dashboardMode.preparing = 2
+  dashboardMode.forecast = { asOf: Date.now(), localScope: "backend", quotas: [], localRates: [{ providerID: "openai", modelID: "independent-consumption", observedFrom: 1, observedTo: 60_001, tokensPerMinute: 456, coverage: { pricedRequests: 0, unpricedRequests: 1 } }] }
+  const screen = await renderScreen({ width: 189, height: 69, args: { sessionID }, settle: "Message YCoding…", route })
+  try {
+    await screen.input.pressKey("x", { ctrl: true })
+    await screen.input.pressKey("u", { shift: true })
+    await waitFor(screen, "Preparing usage...")
+    expect(screen.frame()).not.toContain("Backend-wide model")
+    await waitFor(screen, "Backend-wide model")
+    expect(screen.frame()).not.toContain("Preparing usage")
+    await screen.input.pressKey("ARROW_RIGHT")
+    await waitFor(screen, "Quota window 01")
+    await screen.input.pressKey("END")
+    await waitFor(screen, "independent-consumption")
+    expect(screen.frame()).not.toContain("Recorded consumption unreported")
+    expect(dashboardInputs).toEqual([{}, {}, {}])
+    expect(new Set(dashboardInputs.map((input) => JSON.stringify({ ...input, refresh: undefined }))).size).toBe(1)
+    await screen.input.pressKey("ARROW_RIGHT")
+    await waitFor(screen, "Keyboard Model 01")
+    expect(dashboardInputs.at(-1)?.refresh).toBeUndefined()
+    expect(dashboardInputs.at(-1)?.breakdown?.group).toBe("model")
+  } finally {
+    dashboardMode.preparing = 0
+    dashboardMode.forecast = undefined
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("shows accounting at once while quota is preparing, fills quota without a refresh flag, and stops polling when both are ready", async () => {
+  dashboardInputs.length = 0
+  dashboardMode.quotaPreparing = 2
+  const screen = await renderScreen({ width: 189, height: 69, args: { sessionID }, settle: "Message YCoding…", route })
   try {
     await screen.input.pressKey("x", { ctrl: true })
     await screen.input.pressKey("u", { shift: true })
     await waitFor(screen, "Backend-wide model")
-    await until(() => quotaPending)
+    expect(screen.frame()).not.toContain("Preparing usage...")
     await screen.input.pressKey("ARROW_RIGHT")
-    await waitFor(screen, "independent-consumption")
-    expect(forecastReads).toBeGreaterThan(0)
-    expect(screen.frame()).not.toContain("Recorded consumption unreported")
-    expect(quotaPending).toBe(true)
-    await screen.input.pressKey("ARROW_RIGHT")
-    await waitFor(screen, "Keyboard Model 01")
-    expect(quotaPending).toBe(true)
+    await waitFor(screen, "Preparing provider quotas...")
+    expect(screen.frame()).not.toContain("Quota window 01")
+    await waitFor(screen, "Quota window 01")
+    expect(screen.frame()).not.toContain("Preparing provider quotas...")
+    expect(dashboardInputs).toEqual([{}, {}, {}])
+    await Bun.sleep(1_300)
+    expect(dashboardInputs).toHaveLength(3)
+    await screen.input.pressKey("ARROW_LEFT")
+    await waitFor(screen, "Backend-wide model")
   } finally {
-    quotaGate.resolve()
+    dashboardMode.quotaPreparing = 0
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("a quota error replaces only the quota and consumption content, leaves accounting, stops polling, and keeps Refresh working", async () => {
+  dashboardInputs.length = 0
+  dashboardMode.quotaError = "Provider quotas are unavailable right now."
+  const screen = await renderScreen({ width: 189, height: 69, args: { sessionID }, settle: "Message YCoding…", route })
+  try {
+    await screen.input.pressKey("x", { ctrl: true })
+    await screen.input.pressKey("u", { shift: true })
+    await waitFor(screen, "Backend-wide model")
+    await screen.input.pressKey("ARROW_RIGHT")
+    await waitFor(screen, "Provider quotas are unavailable right now.")
+    expect(screen.frame()).not.toContain("Quota window 01")
+    expect(screen.frame()).not.toContain("Preparing provider quotas...")
+    expect(screen.frame()).not.toContain("Recorded consumption")
+    expect(screen.frame()).not.toContain("No provider quotas are reported.")
+    await Bun.sleep(1_300)
+    expect(dashboardInputs).toEqual([{}])
+    dashboardMode.quotaError = undefined
+    await screen.input.pressKey("r")
+    await until(() => dashboardInputs.length === 2)
+    expect(dashboardInputs[1]).toEqual({ refresh: true })
+    await waitFor(screen, "Quota window 01")
+    expect(screen.frame()).not.toContain("Provider quotas are unavailable right now.")
+  } finally {
+    dashboardMode.quotaError = undefined
     await screen.dispose()
   }
 }, 30_000)
@@ -280,11 +373,10 @@ test("opens provider usage without submitting a draft and returns by keyboard or
     await screen.input.pressKey("u", { shift: true })
     await waitFor(screen, "Overview")
     await waitFor(screen, "Backend-wide model")
-    const reads = { quota: quotaReads, usage: usageReads }
+    const reads = dashboardInputs.length
     await screen.input.pressKey("r")
-    await until(() => quotaReads > reads.quota && usageReads > reads.usage)
-    expect(quotaReads).toBeGreaterThan(reads.quota)
-    expect(usageReads).toBeGreaterThan(reads.usage)
+    await until(() => dashboardInputs.length > reads)
+    expect(dashboardInputs.at(-1)?.refresh).toBe(true)
     await screen.input.pressKey("ESCAPE")
     await waitFor(screen, "keep this draft")
     const usageRow = screen.lines().findLastIndex((line) => line.includes("usage"))
@@ -321,7 +413,7 @@ test("keeps the failed Overview free of scrollbar strips and makes padded naviga
     args: { sessionID },
     settle: "Message YCoding…",
     route: (url, request) =>
-      url.pathname === "/api/usage" ? new Response("Usage unavailable", { status: 500 }) : route(url, request),
+      url.pathname === "/api/usage/dashboard" ? new Response("Usage unavailable", { status: 500 }) : route(url, request),
   })
   try {
     screen.input.pressKey("x", { ctrl: true })
@@ -336,13 +428,9 @@ test("keeps the failed Overview free of scrollbar strips and makes padded naviga
     expect(navigation).toMatch(/Overview {2,}│ {2,}Usage/)
     await screen.renderer.idle()
     await screen.mouse.click(navigation.indexOf("Usage") - 1, navigationRow)
-    await waitFor(screen, "Quota window 01")
+    await waitFor(screen, "Provider quotas could not be loaded.")
     expect(quotaGetReads).toBe(0)
-    expect(screen.scrollbox()?.horizontalScrollBar.visible).toBe(false)
-    expect(screen.scrollbox()?.verticalScrollBar.visible).toBe(true)
-    screen.input.pressKey("END")
-    await waitFor(screen, "Quota window 40")
-    expect(screen.frame()).not.toContain("OpenRouter")
+    expect(screen.frame()).not.toContain("Quota window 01")
   } finally {
     await screen.dispose()
   }
@@ -352,6 +440,7 @@ test.each([80, 189])(
   "uses Tokscale-style keyboard navigation through the real Usage route at %i columns",
   async (width) => {
     reportCalls.length = 0
+    dashboardInputs.length = 0
     const releaseStats = Promise.withResolvers<void>()
     const statsRecorded = Promise.withResolvers<void>()
     let statsVisits = 0
@@ -361,11 +450,13 @@ test.each([80, 189])(
       height: width === 80 ? 24 : 69,
       args: { sessionID },
       route: async (url, request) => {
-        if (url.pathname !== "/api/usage/report") return route(url, request)
-        const group = url.searchParams.get("group")
-        // On the return to Stats, deliver its daily request after the next Projects request.
+        if (url.pathname !== "/api/usage/dashboard") return route(url, request)
+        const input: DashboardRequest = await request.clone().json()
+        const stats = input.daily?.group === "day" && input.daily.limit === 200
+        const group = stats ? "day" : String(input.breakdown?.group)
+        // On the return to Stats, deliver its composed request after the next Projects request.
         // Concurrent requests from the previous view need not reach the fixture in view order.
-        if (group === "day" && url.searchParams.get("limit") === "200" && ++statsVisits === 2) {
+        if (stats && ++statsVisits === 2) {
           statsPending = true
           await releaseStats.promise
           const response = await route(url, request)

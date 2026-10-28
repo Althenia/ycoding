@@ -7,6 +7,7 @@ import { sqliteLayer } from "../src/database/sqlite.bun"
 import { CatalogModel } from "../src/model"
 import { SessionSchema } from "../src/session/schema"
 import { SessionUsageRead } from "../src/session/usage-read"
+import { UsageStage } from "../src/usage-stage"
 
 const first = '{"providerID":"p","id":"m"}'
 const second = '{"id":"m","providerID":"p"}'
@@ -25,15 +26,16 @@ const database = Effect.gen(function* () {
 })
 
 const report = (db: Effect.Success<typeof database>, sessions?: ReadonlyArray<SessionSchema.ID>) =>
-  SessionUsageRead.report(db, {
+  Effect.andThen(UsageStage.backfill(db), SessionUsageRead.report(db, {
     where: sessions ? sql`r.session_id IN (SELECT value FROM json_each(${JSON.stringify(sessions)}))` : sql`1`,
     sessions,
     group: "model",
+    plan: { pieces: SessionUsageRead.pieces({}), offsets: [] },
     order: sql`key ASC`,
     offset: 0,
     limit: 100,
     corrections: {},
-  })
+  }))
 
 test("a model group decodes to one ModelRef and counts every sample across slices for either raw JSON key order", () =>
   Effect.runPromise(

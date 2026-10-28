@@ -67,6 +67,7 @@ const fixtureGrades = [
   { choice: "reject", confidence: 0.07, evidence: "No blocking evidence was found." },
   { choice: "escalate", confidence: 0.61, evidence: "Confirm the remaining scope. " + "x".repeat(471) },
 ]
+let dashboardCalls = 0
 const requestLog: { readonly at: number; readonly operation: string; readonly input?: unknown }[] = []
 Object.assign(window, { requestLog })
 const deviceRequests: { readonly deviceID: string; readonly operation: string; readonly sessionID?: string; readonly sent?: boolean }[] = []
@@ -965,18 +966,24 @@ function createFixtureStore(): Fixture {
       failed: [...statusFailed],
       lost: [...statusLost],
     } }
-    if (operation === "usage.providers") return { status: "ok", value: { data: fixtureUsageProviders(Date.now()) } }
-    if (operation === "usage.forecast" && accountParams.get("usageForecast") === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
-    if (operation === "usage.forecast" && accountParams.get("usageForecast") === "error") return { status: "failed", error: { code: "internal_error", message: "Synthetic forecast failure" } }
-    if (operation === "usage.forecast" && accountParams.get("usageForecast") === "empty") return { status: "ok", value: { data: { asOf: Date.now(), localScope: "backend", localRates: [], quotas: [] } } }
-    if (operation === "usage.forecast" && paceFixture) return { status: "ok", value: { data: { asOf: paceFixtureNow, localScope: "backend", localRates: [], quotas: paceWindows.map((window, index) => ({
+    if (operation === "usage.dashboard") {
+      const mode = accountParams.get("usageForecast")
+      if (mode === "unsupported") return { status: "failed", error: { code: "unknown_operation", message: "Update YCoding on this machine" } }
+      dashboardCalls += 1
+      if (accountParams.get("usageDashboard") === "error") return { status: "ok", value: { data: { status: "error", message: "Synthetic dashboard failure" } } }
+      if (accountParams.get("usageDashboard") === "preparing" && dashboardCalls <= 2) return { status: "ok", value: { data: { status: "preparing" } } }
+      const forecast = paceFixture ? { asOf: paceFixtureNow, localScope: "backend", localRates: [], quotas: paceWindows.map((window, index) => ({
       providerID: "anthropic", windowID: window.id, unit: "percent", source: "provider_internal_api", stability: "best_effort", updatedAt: paceProviderUpdatedAt,
       state: "estimated", method: "quota-delta-ema", evidence: "medium", ratePerHour: 12,
       ...(index === 0 ? { exhaustionAt: paceFixtureNow + 300_000 } : {}),
       pace: { ...window.pace, ...(window.pace.verdict === "will-run-out" ? { exhaustionAt: paceFixtureNow + 36 * 3_600_000 } : {}) },
-    })) } } }
-    if (operation === "usage.summary") return { status: "ok", value: { data: usageMetrics(10, 26.3) } }
-    if (operation === "usage.report") return { status: "ok", value: fixtureUsageReport(input) }
+    })) }
+        : mode === "error" ? { asOf: Date.now(), localScope: "backend" } : { asOf: Date.now(), localScope: "backend", localRates: [], quotas: [] }
+      const slots = input as Partial<Readonly<Record<"daily" | "monthly" | "breakdown", Readonly<Record<string, unknown>>>>> | undefined
+      return { status: "ok", value: { data: { status: "ready", asOf: Date.now(), revision: "fixture", summary: usageMetrics(10, 26.3), quota: { status: "ready", providers: fixtureUsageProviders(Date.now()), forecast },
+        ...(slots?.daily ? { daily: fixtureUsageReport(slots.daily).data } : {}), ...(slots?.monthly ? { monthly: fixtureUsageReport(slots.monthly).data } : {}),
+        ...(slots?.breakdown ? { breakdown: fixtureUsageReport(slots.breakdown).data } : {}) } } }
+    }
     if (operation === "session.command") return { status: "ok", value: { data: { ...input, admittedSeq: 44 } } }
     if (operation === "session.skill" || operation === "session.switchModel" || operation === "session.switchAgent") return { status: "ok", value: null }
     if (operation === "workspace.list") {

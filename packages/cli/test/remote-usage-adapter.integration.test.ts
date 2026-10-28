@@ -1,6 +1,26 @@
 import { expect, test } from "bun:test"
 import { createLocalServer } from "../src/remote-local"
 
+test("local dashboard adapter posts the composed input once and returns every status unchanged", async () => {
+  const requests: { path: string; method: string; body: unknown; directory: string | null }[] = []
+  const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  const readyWithQuota = { status: "ready" as const, asOf: 5, revision: "r1", summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens }, quota: { status: "preparing" as const } }
+  const answers: unknown[] = [{ status: "preparing" }, { status: "error", message: "failed" }, readyWithQuota]
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests.push({ path: new URL(request.url).pathname, method: request.method, body: await request.json(), directory: request.headers.get("x-ycoding-directory") })
+    return Response.json({ data: answers.shift() })
+  } })
+  try {
+    const local = createLocalServer({ url: server.url.href, auth: { type: "basic", username: "ycoding", password: "fixture" } })
+    const input = { daily: { group: "day" as const, timeZone: "UTC" }, monthly: { group: "month" as const }, breakdown: { group: "provider-model" as const, limit: 25 }, refresh: true }
+    expect(await local.usageDashboard(input)).toEqual({ status: "preparing" })
+    expect(await local.usageDashboard(input)).toEqual({ status: "error", message: "failed" })
+    expect(await local.usageDashboard({ breakdown: input.breakdown })).toEqual(readyWithQuota)
+    expect(requests.map((request) => request.body)).toEqual([input, input, { breakdown: input.breakdown }])
+    expect(requests.every((request) => request.path === "/api/usage/dashboard" && request.method === "POST" && request.directory === null)).toBe(true)
+  } finally { await server.stop(true) }
+})
+
 test("local accounting adapter preserves generated query arrays, filters and backend-resolved Locations", async () => {
   const requests: { path: string; query: Record<string, string[]>; directory: string | null }[] = []
   const empty = { requests: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: { pricedRequests: 0, unpricedRequests: 0 } }

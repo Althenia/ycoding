@@ -623,6 +623,7 @@ grouping and Session-list filters are derived from backend metadata.
 | `usage.providers` | no | `providerUsage.list` | `GET /api/provider/usage` | `refresh?` boolean |
 | `usage.summary` | no | `usage.get` | `GET /api/usage` | — |
 | `usage.report` | no | `usage.report` | `GET /api/usage/report` | `group`, `timeZone?`, `from?`, `to?`, `offset?`, `limit?`, `sort?`, `order?` |
+| `usage.dashboard` | no | `usage.dashboard` | `POST /api/usage/dashboard` | `daily?`, `monthly?`, `breakdown?` (each a `usage.report` input), `refresh?` boolean |
 | `machine.keepAwake.get` | no | `keepAwake.get` | `GET /api/keep-awake` | — |
 | `machine.keepAwake.set` | no | `keepAwake.set` | `PUT /api/keep-awake` | `enabled` boolean |
 | `machine.telemetry.consent.get` | no | `telemetry.consent.get` | `GET /api/server/telemetry/consent` | — |
@@ -845,6 +846,28 @@ optional validated IANA `timeZone` for local hour/day/month buckets (omission gr
 nonnegative `offset`, `limit` 1–200, and the Protocol sort/order values. It
 returns `{ data: ProviderRequest.Report }`; no browser-selected Location is
 accepted.
+
+`usage.dashboard` is the composed Usage page read. It takes no Session and no
+browser-selected Location. The input is any subset of `daily`, `monthly`, and
+`breakdown`, each validated as a `usage.report` input when present, plus an
+optional boolean `refresh`; `{}` is valid and any other field is rejected. It
+returns `{ data: UsageDashboard.Info }`, a `status` union: `preparing`; `error`
+with a `message`; or `ready` with `asOf`, `revision`, `summary`, `quota`, and
+exactly the requested report slots. `asOf` and `revision` cover accounting only.
+`quota` is `{ status: "preparing" }`, `{ status: "ready", providers, forecast }`,
+or `{ status: "error", message }` when the whole provider list failed: provider
+quota snapshots and the forecast are a separate live overlay that can arrive
+after the accounting is ready, and `message` is a fixed sanitized sentence. A response that omits a
+requested slot or carries an unrequested one is unreadable. No slot has a
+default. `preparing` and `error` are
+successful responses, not Protocol errors, and a client never treats
+`preparing` as ready data. `refresh` is a one-shot request to schedule a
+provider and forecast refresh; it is not part of the view's identity, so a client
+that polls a preparing view does not resend it. The connector issues one local
+`usage.dashboard` call; it never splits it into `usage.providers`,
+`usage.summary`, `usage.forecast`, or `usage.report` reads. A connector that does
+not know the operation answers `unknown_operation`, which the browser reports as
+unsupported without falling back to the separate reads.
 
 File search accepts a nonempty query of at most 200 characters and a limit 1–50
 (default 20). It returns `{ files: [{ path, uri, kind }] }` with Location-relative

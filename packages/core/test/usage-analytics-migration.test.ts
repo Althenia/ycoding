@@ -9,6 +9,7 @@ import metricsIndex from "../src/database/migration/20261017232507_usage-analyti
 import { sqliteLayer } from "../src/database/sqlite.bun"
 import { Sqlite } from "../src/database/sqlite"
 import { SessionUsageRead } from "../src/session/usage-read"
+import { UsageStage } from "../src/usage-stage"
 
 test(
   "the additive migration backfills equal analytics measures and current ancestry through bounded Session-indexed slices",
@@ -83,10 +84,12 @@ test(
         expect(Math.max(...population)).toBe(10_000)
         yield* db.transaction(unpricedIndex.up)
         yield* db.transaction(metricsIndex.up)
+        yield* UsageStage.backfill(db)
         queries.length = 0
         const report = yield* SessionUsageRead.report(db, {
           where: sql`1`,
           group: "model",
+          plan: { pieces: SessionUsageRead.pieces({}), offsets: [] },
           order: sql`key ASC`,
           offset: 0,
           limit: 100,

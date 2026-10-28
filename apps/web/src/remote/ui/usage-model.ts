@@ -1,4 +1,4 @@
-import type { RemoteUsageForecast, RemoteUsageProvider, RemoteUsageReportInput, RemoteUsageReportValue, RemoteUsageSummaryValue, RemoteUsageTokens } from "@ycoding-ai/remote"
+import type { RemoteUsageDashboard, RemoteUsageDashboardInput, RemoteUsageForecast, RemoteUsageProvider, RemoteUsageReportInput, RemoteUsageReportValue, RemoteUsageSummaryValue, RemoteUsageTokens } from "@ycoding-ai/remote"
 import type { ModelRefView } from "../projection"
 import { costText, type CostPresentation } from "./usage-accounting"
 import type { UsageFiltersPresentation, UsageGroupPresentation } from "./usage-filter-model"
@@ -10,6 +10,49 @@ export type UsageSummary = RemoteUsageSummaryValue["data"]
 export type UsageReport = RemoteUsageReportValue["data"]
 export type UsageReportRow = UsageReport["rows"][number]
 export type UsageReportInput = RemoteUsageReportInput
+
+export type UsageDashboardInput = RemoteUsageDashboardInput
+export type UsageDashboardReady = Extract<RemoteUsageDashboard, { readonly status: "ready" }>
+export type UsageDashboardSlots = Pick<UsageDashboardReady, "daily" | "monthly" | "breakdown">
+export type UsageDashboardHeld = { readonly sameRecipe: boolean; readonly accounting: UsageDashboardSlots; readonly envelope?: UsageDashboardReady }
+export type UsageDashboardView =
+  | { readonly kind: "idle" | "unsupported" | "preparing" }
+  | { readonly kind: "loading"; readonly retained?: UsageDashboardSlots }
+  | { readonly kind: "error"; readonly message: string; readonly retained?: UsageDashboardSlots }
+  | { readonly kind: "ready"; readonly info: UsageDashboardReady; readonly refreshing: boolean; readonly stale: boolean }
+
+export function usageDashboardView(
+  read: {
+    readonly status: "idle" | "loading" | "ready" | "unsupported" | "error"
+    readonly data?: RemoteUsageDashboard | undefined
+    readonly message?: string | undefined
+  },
+  held?: UsageDashboardHeld,
+): UsageDashboardView {
+  if (read.status === "unsupported") return { kind: "unsupported" }
+  if (read.status === "error") {
+    const message = read.message ?? "Usage could not be loaded."
+    return held !== undefined && !held.sameRecipe ? { kind: "error", message, retained: held.accounting } : { kind: "error", message }
+  }
+  const data = read.data
+  if (data?.status === "error") return { kind: "error", message: data.message }
+  if (data?.status === "preparing") return { kind: "preparing" }
+  if (data?.status === "ready") return { kind: "ready", info: data, refreshing: read.status === "loading", stale: false }
+  if (read.status !== "loading") return { kind: "idle" }
+  if (held === undefined) return { kind: "loading" }
+  return held.envelope === undefined ? { kind: "loading", retained: held.accounting } : { kind: "ready", info: held.envelope, refreshing: true, stale: true }
+}
+
+export type UsageQuotaView =
+  | { readonly kind: "none" | "preparing" }
+  | { readonly kind: "error"; readonly message: string }
+  | { readonly kind: "ready"; readonly providers: readonly UsageProvider[]; readonly forecast: RemoteUsageForecast }
+
+export function usageQuotaView(info: UsageDashboardReady | undefined): UsageQuotaView {
+  if (info === undefined) return { kind: "none" }
+  if (info.quota.status === "error") return { kind: "error", message: info.quota.message }
+  return info.quota.status === "ready" ? { kind: "ready", providers: info.quota.providers, forecast: info.quota.forecast } : { kind: "preparing" }
+}
 
 export function matchingQuotaForecast(provider: UsageProvider, window: UsageWindow, forecasts: RemoteUsageForecast["quotas"] | undefined) {
   return forecasts?.find((quota) => quota.providerID === provider.providerID && quota.profile === provider.profile && quota.windowID === window.id && quota.unit === window.unit && quota.updatedAt === provider.updatedAt)

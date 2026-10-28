@@ -115,6 +115,7 @@ export const Operation = Schema.Literals([
   "session.promptCosts",
   "session.taskCosts",
   "usage.forecast",
+  "usage.dashboard",
   "incident.report",
   "incident.recent",
   "incident.guidance",

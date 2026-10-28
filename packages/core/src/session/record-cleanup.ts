@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { sql } from "drizzle-orm"
 import { Session } from "@ycoding-ai/schema/session"
 import { Database } from "../database/database"
+import { UsageStage } from "../usage-stage"
 
 const keys = {
   session_provider_request: ["request"],
@@ -56,6 +57,15 @@ export const cleanup = Effect.fn("SessionRecordCleanup.cleanup")(function* (
             ORDER BY ${first} ${second ? sql`, ${second}` : sql``} LIMIT 100
           `)
               if (rows.length === 0) return { deleted: 0, cursor }
+              if (table === "session_provider_request")
+                yield* UsageStage.remove(
+                  db,
+                  "session",
+                  sql`r.session_id = ${session.id} AND r.rowid IN (${sql.join(
+                    rows.map((row) => sql`${row.id}`),
+                    sql`, `,
+                  )})`,
+                )
               yield* db.run(sql`
             DELETE FROM ${sql.raw(table)} WHERE rowid IN (${sql.join(
               rows.map((row) => sql`${row.id}`),

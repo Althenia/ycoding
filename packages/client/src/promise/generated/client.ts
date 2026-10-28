@@ -383,6 +383,8 @@ import type {
   UsageGetOutput,
   UsageReportInput,
   UsageReportOutput,
+  UsageDashboardInput,
+  UsageDashboardOutput,
   IncidentReportInput,
   IncidentReportOutput,
   IncidentRecentInput,
@@ -3140,6 +3142,23 @@ export function make(options: ClientOptions) {
               limit: input["limit"],
               sort: input["sort"],
               order: input["order"],
+            },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      dashboard: (input?: UsageDashboardInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: UsageDashboardOutput }>(
+          {
+            method: "POST",
+            path: `/api/usage/dashboard`,
+            body: {
+              daily: input?.["daily"],
+              monthly: input?.["monthly"],
+              breakdown: input?.["breakdown"],
+              refresh: input?.["refresh"],
             },
             successStatus: 200,
             declaredStatuses: [401, 400],

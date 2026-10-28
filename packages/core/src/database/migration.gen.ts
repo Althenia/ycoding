@@ -48,5 +48,6 @@ export const migrations = (
     import("./migration/20261024192410_coordination-member-owner"),
     import("./migration/20261025113826_mcp-event-attention"),
     import("./migration/20261026223924_client-decision-provenance"),
+    import("./migration/20261028041559_prepared-usage"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

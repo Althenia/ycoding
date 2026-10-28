@@ -149,7 +149,7 @@ const child = (parentID: Session.ID, anchor: UsageAnchor.Ref, name: string) =>
     const sessions = yield* Session.Service
     const events = yield* EventRuntime.Service
     const database = yield* Database.Service
-    const session = yield* sessions.create({ parentID })
+    const session = yield* sessions.create({ parentID, model })
     const inputID = SessionMessage.ID.make(`msg_child_${name}`)
     yield* events.publish(SessionEvent.Task.Updated, {
       sessionID: session.id,

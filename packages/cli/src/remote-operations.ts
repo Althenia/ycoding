@@ -31,6 +31,7 @@ import {
   type RemoteWorkspaceInfo,
   type RemoteFamilyActivity,
   type RemoteUsageReportInput,
+  type RemoteUsageDashboardInput,
   type RemoteIncidentGuidanceInput,
   type RemoteIncidentRecentInput,
   type RemoteIncidentReportInput,
@@ -64,6 +65,7 @@ const unscopedOperations: ReadonlySet<RemoteOperation> = new Set([
   "usage.providers",
   "usage.summary",
   "usage.report",
+  "usage.dashboard",
   "incident.report",
   "incident.recent",
   "session.create",
@@ -846,6 +848,7 @@ async function run(input: OperationInput) {
   if (validated.kind === "usage.providers") return { data: (await input.local.providerUsageList(validated.refresh)).data }
   if (validated.kind === "usage.summary") return { data: await input.local.usageSummary() }
   if (validated.kind === "usage.report") return { data: await input.local.usageReport(validated.input) }
+  if (validated.kind === "usage.dashboard") return { data: await input.local.usageDashboard(validated.input) }
   if (validated.kind === "usage.forecast" && validated.localScope === "backend") return { data: (await input.local.usageForecast("backend")).data }
   if (validated.kind === "incident.report") return { data: await input.local.incidentReport(validated.input) }
   if (validated.kind === "incident.recent") return { data: await input.local.incidentRecent(validated.input) }
@@ -1157,6 +1160,7 @@ type Validated =
   | { readonly kind: "usage.providers"; readonly refresh?: boolean }
   | { readonly kind: "usage.summary" }
   | { readonly kind: "usage.report"; readonly input: RemoteUsageReportInput }
+  | { readonly kind: "usage.dashboard"; readonly input: RemoteUsageDashboardInput }
   | { readonly kind: "session.usageReport"; readonly input: RemoteUsageReportInput }
   | { readonly kind: "session.promptCosts" | "session.taskCosts"; readonly ids: readonly [string, ...string[]] }
   | { readonly kind: "usage.forecast"; readonly localScope: "backend" | "location" }
@@ -1333,6 +1337,32 @@ export async function coordinationCoordinatorMap(local: LocalServer): Promise<Re
   return map
 }
 
+function parseUsageReportInput(fields: Readonly<Record<string, unknown>>): RemoteUsageReportInput {
+  const group = literal(fields.group, ["model", "hour", "day", "month", "session", "project", "agent", "provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"], "group")
+  const from = optionalInteger(fields.from, "from", 0, Number.MAX_SAFE_INTEGER)
+  const to = optionalInteger(fields.to, "to", 0, Number.MAX_SAFE_INTEGER)
+  if (from !== undefined && to !== undefined && from >= to) throw new OperationError("invalid_message", "Usage report from must precede to")
+  return { group,
+    ...(fields.providerID === undefined ? {} : { providerID: requireString(fields.providerID, "providerID", 128) }),
+    ...(fields.profile === undefined ? {} : { profile: requireString(fields.profile, "profile", 128) }),
+    ...(fields.modelID === undefined ? {} : { modelID: requireString(fields.modelID, "modelID", 128) }),
+    ...(fields.selectedEffort === undefined ? {} : { selectedEffort: requireString(fields.selectedEffort, "selectedEffort", 128) }),
+    ...(fields.timeZone === undefined ? {} : { timeZone: requireString(fields.timeZone, "timeZone", 128) }),
+    ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }),
+    ...(fields.offset === undefined ? {} : { offset: optionalInteger(fields.offset, "offset", 0, Number.MAX_SAFE_INTEGER)! }),
+    ...(fields.limit === undefined ? {} : { limit: optionalInteger(fields.limit, "limit", 1, 200)! }),
+    ...(fields.sort === undefined ? {} : { sort: literal(fields.sort, ["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"], "sort") }),
+    ...(fields.order === undefined ? {} : { order: literal(fields.order, ["asc", "desc"], "order") }),
+  }
+}
+
+function dashboardReport(value: unknown, field: string): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new OperationError("invalid_message", `Usage dashboard ${field} must be a report input`)
+  for (const key of Object.keys(value))
+    if (!allowedFields["usage.report"]!.includes(key)) throw new OperationError("invalid_message", `Unknown input field "${field}.${key}"`)
+  return value as Readonly<Record<string, unknown>>
+}
+
 function validate(request: RemoteRequest): Validated {
   const fields = validateFields(request)
   if (request.operation === "dots.get" || request.operation === "dots.set") {
@@ -1416,22 +1446,15 @@ function validate(request: RemoteRequest): Validated {
     if (first === undefined) throw new OperationError("invalid_message", "Accounting lookup requires an ID")
     return { kind: request.operation, ids: [first, ...parsed.slice(1)] }
   }
-  if (request.operation === "usage.report" || request.operation === "session.usageReport") {
-    const group = literal(fields.group, ["model", "hour", "day", "month", "session", "project", "agent", "provider", "provider-profile-model", "provider-model", "model-id", "profile", "prompt", "task"], "group")
-    const from = optionalInteger(fields.from, "from", 0, Number.MAX_SAFE_INTEGER)
-    const to = optionalInteger(fields.to, "to", 0, Number.MAX_SAFE_INTEGER)
-    if (from !== undefined && to !== undefined && from >= to) throw new OperationError("invalid_message", "Usage report from must precede to")
-    return { kind: request.operation, input: { group,
-      ...(fields.providerID === undefined ? {} : { providerID: requireString(fields.providerID, "providerID", 128) }),
-      ...(fields.profile === undefined ? {} : { profile: requireString(fields.profile, "profile", 128) }),
-      ...(fields.modelID === undefined ? {} : { modelID: requireString(fields.modelID, "modelID", 128) }),
-      ...(fields.selectedEffort === undefined ? {} : { selectedEffort: requireString(fields.selectedEffort, "selectedEffort", 128) }),
-      ...(fields.timeZone === undefined ? {} : { timeZone: requireString(fields.timeZone, "timeZone", 128) }),
-      ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }),
-      ...(fields.offset === undefined ? {} : { offset: optionalInteger(fields.offset, "offset", 0, Number.MAX_SAFE_INTEGER)! }),
-      ...(fields.limit === undefined ? {} : { limit: optionalInteger(fields.limit, "limit", 1, 200)! }),
-      ...(fields.sort === undefined ? {} : { sort: literal(fields.sort, ["key", "tokens", "cost", "steps", "input", "output", "reasoning", "cacheRead", "cacheWrite"], "sort") }),
-      ...(fields.order === undefined ? {} : { order: literal(fields.order, ["asc", "desc"], "order") }),
+  if (request.operation === "usage.report" || request.operation === "session.usageReport")
+    return { kind: request.operation, input: parseUsageReportInput(fields) }
+  if (request.operation === "usage.dashboard") {
+    if (request.sessionID !== undefined) throw new OperationError("invalid_message", "Usage dashboard does not accept a Session")
+    return { kind: "usage.dashboard", input: {
+      ...(fields.daily === undefined ? {} : { daily: parseUsageReportInput(dashboardReport(fields.daily, "daily")) }),
+      ...(fields.monthly === undefined ? {} : { monthly: parseUsageReportInput(dashboardReport(fields.monthly, "monthly")) }),
+      ...(fields.breakdown === undefined ? {} : { breakdown: parseUsageReportInput(dashboardReport(fields.breakdown, "breakdown")) }),
+      ...(fields.refresh === undefined ? {} : { refresh: requireBoolean(fields.refresh, "refresh") }),
     } }
   }
   if (request.operation === "incident.report") {
@@ -2146,6 +2169,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.active": [],
   "usage.providers": ["refresh"],
   "usage.summary": [],
+  "usage.dashboard": ["daily", "monthly", "breakdown", "refresh"],
   "usage.report": ["group", "timeZone", "from", "to", "offset", "limit", "sort", "order", "providerID", "profile", "modelID", "selectedEffort"],
   "session.usageReport": ["group", "timeZone", "from", "to", "offset", "limit", "sort", "order", "providerID", "profile", "modelID", "selectedEffort"],
   "session.promptCosts": ["inputIDs"],

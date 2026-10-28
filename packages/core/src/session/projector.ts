@@ -29,6 +29,7 @@ import {
   SessionTaskTable,
   SessionContextStateTable,
 } from "./sql"
+import { UsageStage } from "../usage-stage"
 import { EventTable } from "../event/sql"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
@@ -1037,6 +1038,7 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!stored) return
+        yield* UsageStage.append(db, "session", stored.id)
         yield* db
           .insert(SessionUsageTable)
           .values({

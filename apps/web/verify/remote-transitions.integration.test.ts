@@ -80,8 +80,9 @@ describe("remote route transitions with a slow relay", () => {
       })()`)
       const hoveredAt = await page.evaluate<number>("performance.now()")
       await page.mouse("mouseMoved", link.x, link.y)
-      await until(page, `window.requestLog.filter((entry) => entry.operation === "usage.report").length === 3 && window.requestLog.some((entry) => entry.operation === "usage.providers")`)
+      await until(page, `window.requestLog.some((entry) => entry.operation === "usage.dashboard")`)
       const preloaded = await drain(page)
+      expect(preloaded.map((entry) => entry.operation).filter((operation) => operation.startsWith("usage.")), "hover preload reads Usage through one composed operation").toEqual(["usage.dashboard"])
       expect(Math.max(...preloaded.map((entry) => entry.at)) - hoveredAt, "the hover, not the idle warm-up, issued the reads").toBeLessThan(1_000)
       const frames = await follow(page, usage)
       expect(frames[0]?.content, `preloaded usage paints on the first frame: ${JSON.stringify(frames.slice(0, 3))}`).toBe(true)
@@ -113,24 +114,26 @@ describe("remote route transitions with a slow relay", () => {
     const page = await requireBrowser().openPage()
     try {
       await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=chat&latency=50`)
-      await until(page, `document.querySelector(".transcript-message") && window.requestLog.some((entry) => entry.operation === "usage.summary")`)
+      await until(page, `document.querySelector(".transcript-message") && window.requestLog.filter((entry) => entry.operation === "workspace.list").length >= 2`)
       await Bun.sleep(1_000)
       const cold = await drain(page)
       const keys = cold.map((entry) => `${entry.operation} ${JSON.stringify(entry.input ?? null)}`)
       expect(keys.filter((key, index) => keys.indexOf(key) !== index), "no read repeats with the same input").toEqual([])
       expect(cold.map((entry) => entry.operation).filter((operation) => operation.startsWith("usage.") || operation === "machine.keepAwake.get").sort(),
-        "the idle warm-up read Usage and keep-awake once").toEqual(["machine.keepAwake.get", "usage.providers", "usage.report", "usage.report", "usage.report", "usage.summary"])
+        "the idle warm-up reads keep-awake once and never reads Usage").toEqual(["machine.keepAwake.get"])
       const tour = []
       for (const route of [usage, settings, { href: "/remote/session?session_id=ses_fixture&device_id=dev_studio", frame: `${panel}?.querySelector(".transcript-message")`, content: `${panel}?.querySelector(".transcript-message")` }, usage]) {
         await follow(page, route)
         await Bun.sleep(700)
         tour.push(...await drain(page))
       }
-      expect(tour.map((entry) => entry.operation).filter((operation) => operation.startsWith("usage.") || operation === "workspace.list"),
-        "warmed Usage and workspace reads are not read again during the tour").toEqual([])
+      expect(tour.map((entry) => entry.operation).filter((operation) => operation.startsWith("usage.")),
+        "Usage reads through one composed operation when its page first opens, and the second visit reuses it").toEqual(["usage.dashboard"])
+      expect(tour.map((entry) => entry.operation).filter((operation) => operation === "workspace.list"),
+        "warmed workspace reads are not read again during the tour").toEqual([])
       expect(tour.map((entry) => entry.operation).filter((operation) => operation === "machine.keepAwake.get"),
         "opening Settings re-reads keep-awake once because the machine can change it outside the browser").toEqual(["machine.keepAwake.get"])
-      // 20 reads open the workspace and Session, 7 warm Usage, keep-awake and workspaces, and the tour adds one keep-awake re-read
+      // 20 reads open the workspace and Session, 1 warms keep-awake and workspaces, and the tour adds one keep-awake re-read
       // plus the two per-Session list reads Conversation refreshes: well inside the relay's 117-per-window budget.
       expect(cold.length + tour.length, `requests: ${JSON.stringify([...cold, ...tour].map((entry) => entry.operation))}`).toBeLessThanOrEqual(30)
     } finally { await page.close() }

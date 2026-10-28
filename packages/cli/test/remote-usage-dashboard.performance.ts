@@ -1,23 +1,27 @@
 import { afterAll, expect, test } from "bun:test"
 import { Config } from "@ycoding-ai/core/config"
 import { Database } from "@ycoding-ai/core/database/database"
+import { UsageStage } from "@ycoding-ai/core/usage-stage"
 import { ServerProcess } from "@ycoding-ai/server/process"
 import { Effect, Exit, Logger, Schema, Scope } from "effect"
 import { mkdir, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { RemoteUsageDashboard } from "@ycoding-ai/remote"
+import { UsageDashboard } from "@ycoding-ai/schema/usage-dashboard"
 import { RemoteAgent, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
 import { createLocalServer, type LocalServer } from "../src/remote-local"
 import { createRemoteQueries, createRemoteQueryClient, type QueryScope, type RemoteLink } from "../../../apps/web/src/remote/queries"
 import { createRemoteTransport } from "../../../apps/web/src/remote/transport"
 import { usageReportInputs } from "../../../apps/web/src/remote/ui/usage-model"
-import { availablePort, password } from "./remote-harness"
+import { auth, availablePort, password } from "./remote-harness"
 
 const rows = 200_000
 const locations = 2_500
 const unpricedLocations = 100
 const day = 86_400_000
-const budget = { first: 10_000, warm: 2_000 }
+const budget = { first: 10_000, warm: 2_000, local: 100, cold: 250 }
+const pollMs = 50
 const scope: QueryScope = { deviceID: "dev_usage_perf", generation: 1 }
 const directories: string[] = []
 
@@ -52,11 +56,12 @@ function seed(file: string, locationRoot: string) {
         CASE WHEN unpriced THEN NULL ELSE (i % 17) * 0.0001 END,
         json_object('firstOutputMs', 200 + i % 3000, 'totalMs', 1000 + i % 60000, 'generatedTokens', 100 + i % 900,
           'generationDurationNs', 1000000000 + (i % 9) * 100000000),
-        ${now} - CAST((i * 1.0 * ${30 * day - 1}) / ${rows} AS INTEGER)
+        ${now} - CAST((i * 1.0 * ${30 * day - 3_600_000}) / ${rows} AS INTEGER)
       FROM shaped
     `)
     const count = yield* database.db.get<{ count: number }>("SELECT count(*) AS count FROM usage_analytics_request")
     expect(count?.count).toBe(rows)
+    yield* database.db.transaction(() => UsageStage.backfill(database.db))
   }).pipe(Effect.provide(Database.layer({ path: file })), Effect.scoped)
 }
 
@@ -142,7 +147,7 @@ function loopbackRelay(spans: Map<string, Span>) {
       if (frame.type === "ping") return queueMicrotask(() => emit("message", { data: JSON.stringify({ type: "pong" }) }))
       if (frame.type === "priority") return
       if (frame.type === "request" && frame.id !== undefined) {
-        const label = frame.operation === "usage.report" ? `usage.report:${frame.input?.limit}` : frame.operation!
+        const label = frame.operation!
         labels.set(frame.id, label)
         spans.set(frame.id, { start: performance.now() })
       }
@@ -186,10 +191,11 @@ function loopbackRelay(spans: Map<string, Span>) {
   }
 }
 
-type Read = { readonly label: string; readonly ms: number }
+type Attempt = { readonly ms: number; readonly status: string }
+type Read = { readonly label: string; readonly ms: number; readonly status: string; readonly attempts: readonly Attempt[] }
 
 test(
-  "six simultaneous dashboard Usage reads settle through the real server and connector over a synthetic loopback relay within the first-read and warm budgets",
+  "the composed dashboard read reaches ready through the real server and connector over a synthetic loopback relay within the first-ready and warm budgets",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "ycoding-usage-dashboard-"))
     directories.push(root)
@@ -251,10 +257,7 @@ test(
       }
     const local: LocalServer = {
       ...base,
-      providerUsageList: timed(() => "usage.providers", base.providerUsageList),
-      usageSummary: timed(() => "usage.summary", base.usageSummary),
-      usageForecast: timed((_scope: Parameters<LocalServer["usageForecast"]>[0]) => "usage.forecast", base.usageForecast),
-      usageReport: timed((input) => `usage.report:${input.limit}`, base.usageReport),
+      usageDashboard: timed((_input: Parameters<LocalServer["usageDashboard"]>[0]) => "usage.dashboard", base.usageDashboard),
     }
 
     const spans = new Map<string, Span>()
@@ -291,23 +294,31 @@ test(
       const client = createRemoteQueryClient()
       const queries = createRemoteQueries(link, client)
       const inputs = usageReportInputs(Date.now(), undefined)
-      const read = async (label: string, run: () => Promise<{ readonly status: string }>): Promise<Read & { status: string }> => {
+      const read = async () => {
         const begin = performance.now()
-        const status = await run().then(
-          (value) => value.status,
-          (error: unknown) => `error:${error instanceof Error ? error.message : String(error)}`,
-        )
-        return { label, ms: round(performance.now() - begin), status }
+        const attempts: Attempt[] = []
+        let status = "unsettled"
+        let info: RemoteUsageDashboard | undefined
+        while (true) {
+          const attemptBegin = performance.now()
+          info = await client.fetchQuery(queries.usageDashboard(scope, true, inputs)).then(
+            (value) => (value.status === "ready" ? value.data : undefined),
+            (error: unknown) => {
+              status = `error:${error instanceof Error ? error.message : String(error)}`
+              return undefined
+            },
+          )
+          if (info !== undefined) status = info.status === "error" ? `error:${info.message}` : info.status
+          attempts.push({ ms: round(performance.now() - attemptBegin), status })
+          if (status !== "preparing" || performance.now() - begin > budget.first) break
+          await Bun.sleep(pollMs)
+        }
+        const result: Read = { label: "usage.dashboard", ms: round(performance.now() - begin), status, attempts }
+        return { result, info }
       }
       const started = performance.now()
-      const settled = await Promise.all([
-        read("usage.providers", () => client.fetchQuery(queries.usageProviders(scope, true))),
-        read("usage.summary", () => client.fetchQuery(queries.usageSummary(scope, true))),
-        read("usage.forecast", () => client.fetchQuery(queries.usageForecast(scope, true))),
-        read("usage.report:30", () => client.fetchQuery(queries.usageReport(scope, true, inputs.daily))),
-        read("usage.report:200", () => client.fetchQuery(queries.usageReport(scope, true, inputs.monthly))),
-        read("usage.report:25", () => client.fetchQuery(queries.usageReport(scope, true, inputs.breakdown))),
-      ])
+      const { result, info } = await read()
+      const settled = [result]
       const wallMs = round(performance.now() - started)
       client.clear()
       const connector = [...spans.entries()].map(([id, span]) => ({
@@ -317,6 +328,7 @@ test(
       }))
       return {
         wallMs,
+        info,
         reads: settled,
         connector,
         localServer: localCalls.map((call) => ({ label: call.label, ms: round(call.end - call.start) })),
@@ -325,31 +337,76 @@ test(
       }
     }
 
+    const settleProducer = async () => {
+      const { Database } = await import("bun:sqlite")
+      const connection = new Database(file, { readonly: true })
+      const begin = performance.now()
+      try {
+        for (;;) {
+          const state = connection
+            .query<{ open: number; total: number }, []>(
+              "SELECT count(*) FILTER (WHERE status IN ('pending', 'building')) AS open, count(*) AS total FROM usage_view_state",
+            )
+            .get()
+          if (state !== null && state.total > 0 && state.open === 0) return round(performance.now() - begin)
+          if (performance.now() - begin > budget.first * 3) throw new Error(`The startup producer did not settle: ${JSON.stringify(state)}`)
+          await Bun.sleep(pollMs)
+        }
+      } finally {
+        connection.close()
+      }
+    }
+
     try {
       await bridge.connect()
       transport.connect()
       await Bun.sleep(0)
       expect(transport.status().kind).toBe("open")
+      const producerMs = await settleProducer()
+      const bootBegin = performance.now()
+      await base.projectCurrent({ directory: process.cwd() })
+      const locationBootMs = round(performance.now() - bootBegin)
+      const quotaBegin = performance.now()
+      for (;;) {
+        const info = await base.usageDashboard(usageReportInputs(Date.now(), undefined))
+        if (info.status === "ready" && info.quota.status !== "preparing") break
+        if (performance.now() - quotaBegin > budget.first) throw new Error(`The request Location quota did not settle: ${JSON.stringify(info.status)}`)
+        await Bun.sleep(pollMs)
+      }
+      const quotaSettleMs = round(performance.now() - quotaBegin)
       const first = await readRound()
       const warm1 = await readRound()
       const warm2 = await readRound()
       const inputs = usageReportInputs(Date.now(), undefined)
-      const direct = await Promise.all(
-        (
-          [
-            ["usage.providers", () => base.providerUsageList()],
-            ["usage.summary", () => base.usageSummary()],
-            ["usage.forecast", () => base.usageForecast("backend")],
-            ["usage.report:30", () => base.usageReport(inputs.daily)],
-            ["usage.report:200", () => base.usageReport(inputs.monthly)],
-            ["usage.report:25", () => base.usageReport(inputs.breakdown)],
-          ] satisfies [string, () => Promise<unknown>][]
-        ).map(async ([label, run]) => {
-          const begin = performance.now()
-          await run()
-          return { label, ms: round(performance.now() - begin) }
-        }),
-      )
+      const directBegin = performance.now()
+      await base.usageDashboard(inputs)
+      const direct = [{ label: "usage.dashboard", ms: round(performance.now() - directBegin) }]
+      const coldDirectory = join(root, "cold-location")
+      await mkdir(coldDirectory)
+      const coldRead = async () => {
+        const begin = performance.now()
+        const response = await fetch(`http://127.0.0.1:${port}/api/usage/dashboard`, {
+          method: "POST",
+          headers: { authorization: auth, "content-type": "application/json", "x-ycoding-directory": encodeURIComponent(coldDirectory) },
+          body: JSON.stringify(usageReportInputs(Date.now(), undefined)),
+        })
+        const body = Schema.decodeUnknownSync(Schema.Struct({ data: UsageDashboard.Info }))(await response.json())
+        return { ms: round(performance.now() - begin), info: body.data }
+      }
+      const coldBegin = performance.now()
+      const coldFirst = await coldRead()
+      let coldSettled = coldFirst
+      while (coldSettled.info.status === "ready" && coldSettled.info.quota.status === "preparing" && performance.now() - coldBegin < budget.first) {
+        await Bun.sleep(pollMs)
+        coldSettled = await coldRead()
+      }
+      const cold = {
+        localServerMs: coldFirst.ms,
+        status: coldFirst.info.status,
+        quota: coldFirst.info.status === "ready" ? coldFirst.info.quota.status : undefined,
+        overlappingBootMs: round(performance.now() - coldBegin),
+        settledQuota: coldSettled.info.status === "ready" ? coldSettled.info.quota.status : undefined,
+      }
       const everything = usageReportInputs(Date.now(), undefined, { group: "model", offset: 0, sort: "cost", order: "desc", range: "all" }).breakdown
       const total = (await base.usageReport(everything)).total
       const summary = await base.usageSummary()
@@ -367,7 +424,11 @@ test(
         expected,
         observed: { logical: total.logical, costCoverage: total.costCoverage, cost: total.cost, costProvenance: total.costProvenance, summaryCost: summary.cost },
       }
-      const report = { seedMs, serverStartMs, rows, locations, unpricedLocations, pricing: pricingEvidence, first, warm1, warm2, serverDirectWarm: direct }
+      const evidence = (value: typeof first) => {
+        const { info, ...rest } = value
+        return { ...rest, quota: info?.status === "ready" ? info.quota.status : undefined }
+      }
+      const report = { seedMs, serverStartMs, producerMs, locationBootMs, quotaSettleMs, cold, rows, locations, unpricedLocations, pricing: pricingEvidence, first: evidence(first), warm1: evidence(warm1), warm2: evidence(warm2), serverDirectWarm: direct }
       console.log(`usage-dashboard-performance ${JSON.stringify(report)}`)
       const evidenceDirectory = join(import.meta.dir, "..", "tmp")
       await mkdir(evidenceDirectory, { recursive: true })
@@ -380,16 +441,37 @@ test(
       near(total.cost, expected.cost)
       expect(summary.logical).toBe(expected.logical)
       near(summary.cost, expected.cost)
+      expect({
+        over: [first, warm1, warm2].flatMap((value) =>
+          value.localServer.filter((call) => call.ms > budget.local).map((call) => `${call.label}=${call.ms}ms`),
+        ),
+      }).toEqual({ over: [] })
+      expect({ status: cold.status, quota: cold.quota, slow: cold.localServerMs > budget.cold }).toEqual({ status: "ready", quota: "preparing", slow: false })
+      expect(cold.settledQuota).not.toBe("preparing")
       for (const [name, value, limit] of [["first", first, budget.first], ["warm1", warm1, budget.warm], ["warm2", warm2, budget.warm]] as const) {
-        expect({ name, statuses: value.reads.map((read) => `${read.label}:${read.status}`) }).toEqual({
+        const attempts = value.reads.flatMap((read) => read.attempts.map((attempt) => attempt.status))
+        expect({ name, final: value.reads.map((read) => `${read.label}:${read.status}`), info: value.info?.status }).toEqual({
           name,
-          statuses: ["usage.providers", "usage.summary", "usage.forecast", "usage.report:30", "usage.report:200", "usage.report:25"].map((label) => `${label}:ready`),
+          final: ["usage.dashboard:ready"],
+          info: "ready",
         })
-        expect({ name, outcomes: [...value.outcomes].sort() }).toEqual({
-          name,
-          outcomes: ["usage.forecast:ok", "usage.providers:ok", "usage.report:ok", "usage.report:ok", "usage.report:ok", "usage.summary:ok"].sort(),
-        })
+        expect({ name, attempts: attempts.slice(0, -1).every((status) => status === "preparing"), last: attempts.at(-1) }).toEqual({ name, attempts: true, last: "ready" })
+        if (name !== "first") expect({ name, attempts }).toEqual({ name, attempts: ["ready"] })
+        expect({ name, outcomes: [...value.outcomes] }).toEqual({ name, outcomes: attempts.map(() => "usage.dashboard:ok") })
+        expect({ name, local: value.localServer.map((call) => call.label) }).toEqual({ name, local: attempts.map(() => "usage.dashboard") })
         expect({ name, over: value.reads.filter((read) => read.ms > limit).map((read) => `${read.label}=${read.ms}ms`) }).toEqual({ name, over: [] })
+        const info = value.info
+        if (info?.status !== "ready") throw new Error(`${name} dashboard is not ready`)
+        expect(info.summary.logical).toBe(expected.logical)
+        near(info.summary.cost, expected.cost)
+        expect({ daily: info.daily?.group, monthly: info.monthly?.group, breakdown: info.breakdown?.group }).toEqual({
+          daily: inputs.daily.group,
+          monthly: inputs.monthly.group,
+          breakdown: inputs.breakdown.group,
+        })
+        expect(["preparing", "ready", "error"]).toContain(info.quota.status)
+        if (info.quota.status === "ready") expect(info.quota.forecast.localScope).toBe("backend")
+        expect(info.asOf).toBeGreaterThan(0)
       }
     } finally {
       transport.close()

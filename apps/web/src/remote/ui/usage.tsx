@@ -1,4 +1,4 @@
-import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js"
 import { useRemote } from "../context"
 import { createRemoteQuery } from "../query"
 import { usageRead } from "../queries"
@@ -12,7 +12,7 @@ import { ModelIncidents } from "./model-incidents"
 import { ProviderLogo } from "./provider-logo"
 import { QuotaForecastStatus, UsageDetails, UsageStatisticsDetails } from "./usage-cost"
 import { consumptionNeedsProfile, consumptionRow, forecastDetails, providerProvenanceLines } from "./usage-accounting"
-import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, unsupportedReportMessage, usageZoneKey, visibleProviders, type SpendDay, type UsageProvider, type UsageReport, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
+import { compactUsageTotal, dailySpend, donutGeometry, matchingQuotaForecast, reportIdentity, reportLabel, reportCost, reportCostText, money, providerDistribution, providerHeading, quotaGroupHeading, quotaWindow, relativeFreshness, spendMetrics, spendCostText, tokenCount, tooltipPosition, usageReportInputs, usageZoneKey, visibleProviders, type SpendDay, usageDashboardView, usageQuotaView, type UsageDashboardInput, type UsageDashboardReady, type UsageDashboardSlots, type UsageProvider, type UsageReportInput, type UsageBreakdown, type UsageReportRow, type UsageWindow } from "./usage-model"
 import "./usage.css"
 
 const groups = usageGroups.map((group) => group.value)
@@ -44,7 +44,7 @@ export function UsagePage() {
   const [breakdownTableOpen, setBreakdownTableOpen] = createSignal(false)
   const [distributionMetric, setDistributionMetric] = createSignal<"spend" | "tokens">("spend")
   const [compactTotal, setCompactTotal] = createSignal(true)
-  const [shownBreakdown, setShownBreakdown] = createSignal<{ readonly deviceID: string; readonly report: UsageReport; readonly input: BreakdownInput }>()
+  const [held, setHeld] = createSignal<{ readonly scope: string; readonly zone: string | undefined; readonly recipe: string; readonly input: BreakdownInput; readonly accounting: UsageDashboardSlots; readonly envelope?: UsageDashboardReady }>()
   const [minimumRowsHeight, setMinimumRowsHeight] = createSignal(0)
   const [activeDay, setActiveDay] = createSignal<SpendDay>()
   const [activeProvider, setActiveProvider] = createSignal<string>()
@@ -64,31 +64,83 @@ export function UsagePage() {
   const selectedZone = () => zoneMode() === "local" ? localZone : undefined
   const zoneLabel = () => zoneMode() === "local" ? `Local · ${localZone}` : "UTC"
   const reports = createMemo(() => usageReportInputs(openedAt, selectedZone(), { group: group(), offset: offset(), sort: sort(), order: order(), providerID: filters().provider, profile: filters().profile, modelID: filters().model, selectedEffort: filters().effort, range: filters().range, from: filters().from, to: filters().to }))
-  const dailyInput = createMemo<UsageReportInput>(() => reports().daily)
-  const monthlyInput = createMemo<UsageReportInput>(() => reports().monthly)
+  const dashboardInput = createMemo<UsageDashboardInput>(() => reports())
   const breakdownInput = createMemo<BreakdownInput>(() => reports().breakdown)
-  const providersQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageProviders(remote.scope(), connected()))
-  const forecastQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageForecast(remote.scope(), connected()))
-  const forecast = () => usageRead(forecastQuery())
-  const forecastData = () => forecast().status === "error" ? undefined : forecast().data
-  const quotaForecastState = () => forecast().status === "ready" && forecastData()?.quotas === undefined ? "error" : forecast().status
-  createRemoteQuery(remote.store.queryClient, () => remote.queries.usageSummary(remote.scope(), connected()))
-  const dailyQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), dailyInput()))
-  const monthlyQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), monthlyInput()))
-  const breakdownQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageReport(remote.scope(), connected(), breakdownInput()))
-  const providerRead = () => usageRead(providersQuery())
-  const daily = () => usageRead(dailyQuery())
-  const monthly = () => usageRead(monthlyQuery())
-  const breakdown = () => usageRead(breakdownQuery())
-  const retryReport = (input: UsageReportInput) => {
-    const scope = remote.scope()
-    if (scope !== undefined) void remote.queries.retryUsageReport(scope, input)
+  const dashboardQuery = createRemoteQuery(remote.store.queryClient, () => remote.queries.usageDashboard(remote.scope(), connected(), dashboardInput()))
+  const scopeKey = () => `${remote.state().activeDeviceID}:${remote.state().generation}`
+  const recipeKey = createMemo(() => JSON.stringify(dashboardInput()))
+  const heldValue = () => {
+    const value = held()
+    return value !== undefined && value.scope === scopeKey() && value.zone === selectedZone() ? value : undefined
   }
-  const providerData = () => providerRead().data
-  const dailyData = () => daily().data
-  const monthlyData = () => monthly().data
-  const displayed = () => breakdown().status !== "unsupported" && shownBreakdown()?.deviceID === remote.state().activeDeviceID && shownBreakdown()?.input.timeZone === selectedZone() ? shownBreakdown()?.report : undefined
-  const updating = () => shownBreakdown() !== undefined && (breakdown().status === "idle" || breakdown().status === "loading")
+  const view = createMemo(() => {
+    const value = heldValue()
+    return usageDashboardView(usageRead(dashboardQuery()), value === undefined ? undefined : { sameRecipe: value.recipe === recipeKey(), accounting: value.accounting, ...(value.envelope === undefined ? {} : { envelope: value.envelope }) })
+  })
+  const info = () => {
+    const current = view()
+    return current.kind === "ready" ? current.info : undefined
+  }
+  const slots = () => {
+    const current = view()
+    return current.kind === "ready" ? current.info : current.kind === "loading" || current.kind === "error" ? current.retained : undefined
+  }
+  const stale = () => {
+    const current = view()
+    return current.kind === "ready" ? current.stale : current.kind === "loading" || current.kind === "error"
+  }
+  const busy = () => {
+    const current = view()
+    return current.kind === "loading" || current.kind === "preparing" || current.kind === "ready" && current.refreshing
+  }
+  const waiting = () => view().kind === "loading" || view().kind === "preparing"
+  const retry = () => {
+    const scope = remote.scope()
+    if (scope !== undefined) void remote.queries.refreshUsageDashboard(scope, dashboardInput())
+  }
+  const quota = createMemo(() => usageQuotaView(info()))
+  const quotaPreparing = () => quota().kind === "preparing"
+  const quotaError = () => {
+    const current = quota()
+    return current.kind === "error" ? current.message : undefined
+  }
+  const forecastData = () => {
+    const current = quota()
+    return current.kind === "ready" ? current.forecast : undefined
+  }
+  const quotaForecastState = () => {
+    const current = view().kind
+    return current === "ready" ? quotaPreparing() ? "loading" : quotaError() !== undefined || forecastData()?.quotas === undefined ? "error" : "ready" : current
+  }
+  const providerData = () => {
+    const current = quota()
+    return current.kind === "ready" ? current.providers : undefined
+  }
+  const dailyData = () => slots()?.daily
+  const monthlyData = () => slots()?.monthly
+  const shownInput = (): BreakdownInput => (stale() ? heldValue()?.input ?? breakdownInput() : breakdownInput())
+  const displayed = () => slots()?.breakdown
+  const updating = () => displayed() !== undefined && busy()
+  createEffect(() => {
+    const current = view()
+    const result = usageRead(dashboardQuery())
+    const previous = untrack(held)
+    if (current.kind === "ready" && !current.refreshing && result.status === "ready" && result.data?.status === "ready") {
+      const scope = scopeKey()
+      const zone = selectedZone()
+      const recipe = recipeKey()
+      if (previous !== undefined && previous.envelope === current.info && previous.scope === scope && previous.zone === zone && previous.recipe === recipe) return
+      setHeld({ scope, zone, recipe, input: breakdownInput(), envelope: current.info, accounting: { daily: current.info.daily, monthly: current.info.monthly, breakdown: current.info.breakdown } })
+      return
+    }
+    if (current.kind === "error") {
+      if (previous === undefined) return
+      if (previous.recipe === recipeKey()) setHeld(undefined)
+      else if (previous.envelope !== undefined) setHeld({ scope: previous.scope, zone: previous.zone, recipe: previous.recipe, input: previous.input, accounting: previous.accounting })
+      return
+    }
+    if (current.kind === "preparing" || current.kind === "unsupported") setHeld(undefined)
+  })
   const holdRows = () => setMinimumRowsHeight(Math.max(minimumRowsHeight(), mobileRows?.offsetHeight ?? 0))
   const providers = createMemo(() => visibleProviders(providerData() ?? []))
   const providerKeys = createMemo(() => providers().map(providerKey))
@@ -153,7 +205,7 @@ export function UsagePage() {
       setOffset(0)
     })
   }
-  const filterProviders = createMemo(() => [...new Map((providerRead().data ?? []).map((provider) => [provider.providerID, { id: provider.providerID, label: providerHeading(provider).name }])).values()])
+  const filterProviders = createMemo(() => [...new Map((providerData() ?? []).map((provider) => [provider.providerID, { id: provider.providerID, label: providerHeading(provider).name }])).values()])
   const setSorting = (next: NonNullable<UsageReportInput["sort"]>) => {
     holdRows()
     const direction = sort() === next && order() === "desc" ? "asc" : "desc"
@@ -172,7 +224,7 @@ export function UsagePage() {
   const previousPage = () => {
     if (updating()) return
     holdRows()
-    const next = Math.max(0, (shownBreakdown()?.input.offset ?? 0) - 25)
+    const next = Math.max(0, (shownInput().offset ?? 0) - 25)
     setOffset(next)
   }
   createEffect(() => localStorage.setItem(usageZoneKey, zoneMode()))
@@ -187,13 +239,8 @@ export function UsagePage() {
     const current = remote.state().activeDeviceID
     if (current !== deviceID || current === undefined || remote.state().connection.kind === "signed-out") {
       deviceID = current
-      setShownBreakdown(undefined)
       setMinimumRowsHeight(0)
-      return
     }
-    const result = breakdown()
-    if (result.status === "ready" && result.data && (shownBreakdown()?.report !== result.data || shownBreakdown()?.input !== breakdownInput()))
-      setShownBreakdown({ deviceID: current, report: result.data, input: breakdownInput() })
   })
   onMount(() => {
     const clock = setInterval(() => setNow(Date.now()), 60_000)
@@ -216,9 +263,11 @@ export function UsagePage() {
           <button type="button" aria-pressed={zoneMode() === "utc"} onClick={() => setZoneMode("utc")}>UTC</button>
           <button type="button" aria-pressed={zoneMode() === "local"} onClick={() => setZoneMode("local")}>Local</button>
         </div>
-        <button class="usage-refresh" type="button" aria-label="Refresh quotas" title="Refresh quotas" aria-busy={providerRead().status === "loading" ? "true" : "false"} disabled={providerRead().status === "loading" || remote.state().transport.kind !== "open"} onClick={() => { const scope = remote.scope(); if (scope !== undefined) void remote.queries.refreshUsage(scope) }}><Icon name="refresh" /></button>
+        <button class="usage-refresh" type="button" aria-label="Refresh quotas" title="Refresh quotas" aria-busy={busy() || quotaPreparing() ? "true" : "false"} disabled={busy() || quotaPreparing() || remote.state().transport.kind !== "open"} onClick={retry}><Icon name="refresh" /></button>
       </div>
     </header>
+    <Show when={view().kind === "error" && displayed() === undefined}>{(() => { const current = view(); return <p class="usage-message" role="alert">{current.kind === "error" ? current.message : ""} <button type="button" onClick={retry}>Retry</button></p> })()}</Show>
+    <Show when={view().kind === "preparing"}><p class="usage-message" role="status">Preparing usage…</p></Show>
 
     <section class="usage-spend" aria-labelledby="usage-spend-title">
       <h2 class="visually-hidden" id="usage-spend-title">Estimated spend overview</h2>
@@ -233,12 +282,11 @@ export function UsagePage() {
 
     <section class="usage-quotas" aria-labelledby="usage-allowances">
       <div class="usage-section-head"><h2 id="usage-allowances"><Icon name="usage" />Provider quotas</h2><p>Account-reported limits · separate from this backend's consumption</p></div>
-      <Show when={!providerData() && providerRead().status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
-      <Show when={!providerData() && providerRead().status === "error"}><p class="usage-message" role="alert">{providerRead().message ?? "Usage could not be loaded."}</p></Show>
-      <Show when={providerData() && providerRead().status === "error"}><p class="usage-message" role="alert">{providerRead().message ?? "Usage could not be loaded."}</p></Show>
-      <Show when={!providerData() && remote.state().transport.kind !== "open" && providerRead().status === "idle"}><p class="usage-message" role="status">Connect to a machine to see usage.</p></Show>
-      <Show when={!providerData() && providerRead().status === "loading"}><LoadingPlaceholder kind="usage" label="Loading provider quotas…" /></Show>
-      <Show when={providerData() && providerRead().status === "ready" && providers().length === 0}><p class="usage-message">No connected provider reports quotas.</p></Show>
+      <Show when={!providerData() && view().kind === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
+      <Show when={!providerData() && remote.state().transport.kind !== "open" && view().kind === "idle"}><p class="usage-message" role="status">Connect to a machine to see usage.</p></Show>
+      <Show when={!providerData() && (waiting() || quotaPreparing())}><LoadingPlaceholder kind="usage" label={view().kind === "preparing" || quotaPreparing() ? "Preparing provider quotas…" : "Loading provider quotas…"} /></Show>
+      <Show when={quotaError()}>{(message) => <p class="usage-message" role="alert">{message()}</p>}</Show>
+      <Show when={providerData() && view().kind === "ready" && providers().length === 0}><p class="usage-message">No connected provider reports quotas.</p></Show>
       <div class="usage-providers"><For each={providerKeys()}>{(key) => {
         const initial = providers().find((provider) => providerKey(provider) === key)!
         return <ProviderCard provider={() => providers().find((provider) => providerKey(provider) === key) ?? initial} now={now()} forecasts={forecastData()?.quotas} forecastAsOf={forecastData()?.asOf} forecastState={quotaForecastState()} />
@@ -248,9 +296,8 @@ export function UsagePage() {
     <section class="usage-visuals" aria-label="Usage charts">
         <div class="usage-chart" ref={dayCard}>
           <div class="usage-chart__head"><div><h3><Icon name="usage" />Daily spend (last 30 {zoneLabel()} days)</h3><p>{zoneLabel()} day boundary · Today highlighted</p></div><button type="button" aria-expanded={tableOpen()} aria-controls="usage-daily-table" onClick={() => setTableOpen(!tableOpen())}><Icon name="sessions" />{tableOpen() ? "Hide table" : "View table"}</button></div>
-          <Show when={dailyData() && daily()?.status === "error"}><p class="usage-message" role="alert">{daily()?.message ?? "Daily usage could not be loaded."} <button type="button" onClick={() => retryReport(dailyInput())}>Retry</button></p></Show>
-          <Show when={dailyData()} fallback={<Show when={daily()?.status === "unsupported" || daily()?.status === "error"} fallback={<Show when={connected()}><LoadingPlaceholder kind="chart" label="Loading daily spend…" /></Show>}>
-            <p class="usage-message" role={daily()?.status === "error" ? "alert" : "status"}>{daily()?.status === "unsupported" ? zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see usage." : daily()?.message}<Show when={daily()?.status === "error"}> <button type="button" onClick={() => retryReport(dailyInput())}>Retry</button></Show></p>
+          <Show when={dailyData()} fallback={<Show when={view().kind === "unsupported"} fallback={<Show when={connected() && waiting()}><LoadingPlaceholder kind="chart" label={view().kind === "preparing" ? "Preparing daily spend…" : "Loading daily spend…"} /></Show>}>
+            <p class="usage-message" role="status">Update YCoding on this machine to see usage.</p>
           </Show>}>
             <p class="usage-chart__today">Today: {spendCostText(tileValue("today"))} · {count(days().at(-1)?.requests ?? 0)} requests</p>
             <svg viewBox="0 0 900 180" role="img" aria-label="Daily cost over the last 30 days, with exact values in the table" preserveAspectRatio="none">
@@ -279,10 +326,8 @@ export function UsagePage() {
             </div></div>
           </div>
           <Show when={monthlyData()}>{(value) => <p class="usage-distribution__pricing">Pricing: {reportCostText(value().total)}</p>}</Show>
-          <Show when={monthlyData() && monthly()?.status === "error"}><p class="usage-message" role="alert">{monthly()?.message ?? "Monthly usage could not be loaded."} <button type="button" onClick={() => retryReport(monthlyInput())}>Retry</button></p></Show>
-          <Show when={!monthlyData() && connected() && (monthly()?.status === "loading" || monthly() === undefined)}><LoadingPlaceholder kind="chart" label="Loading monthly usage…" /></Show>
-          <Show when={!monthlyData() && monthly()?.status === "unsupported"}><p class="usage-distribution__empty">{zoneMode() === "local" ? "Update YCoding on this machine to see Local usage. Switch to UTC to continue." : "Update YCoding on this machine to see monthly usage."}</p></Show>
-          <Show when={!monthlyData() && monthly()?.status === "error"}><p class="usage-distribution__empty" role="alert">{monthly()?.message} <button type="button" onClick={() => retryReport(monthlyInput())}>Retry</button></p></Show>
+          <Show when={!monthlyData() && connected() && waiting()}><LoadingPlaceholder kind="chart" label={view().kind === "preparing" ? "Preparing monthly usage…" : "Loading monthly usage…"} /></Show>
+          <Show when={!monthlyData() && view().kind === "unsupported"}><p class="usage-distribution__empty">Update YCoding on this machine to see monthly usage.</p></Show>
           <Show when={monthlyData()}><Show when={distribution().total > 0} fallback={<p class="usage-distribution__empty">{distributionMetric() === "spend" ? `Cost ${reportCostText(monthlyData()!.total)} · no positive known spend this month.` : "No recorded tokens this month."}</p>}>
             <div class="usage-distribution__body">
               <div class="usage-distribution__chart" ref={distributionChart}>
@@ -322,10 +367,10 @@ export function UsagePage() {
 
     <section class="usage-breakdown-section usage-consumption" aria-label="Recorded token consumption"><div class="usage-section-head"><h2><Icon name="zap" />Recorded consumption · Backend</h2></div>
       <Show when={forecastData()} fallback={<>
-        <Show when={forecast().status === "loading" || forecast().status === "idle" && connected()}><LoadingPlaceholder kind="usage" label="Loading recorded consumption…" /></Show>
-        <Show when={forecast().status === "idle" && !connected()}><p class="usage-message" role="status">Connect to a machine to see recorded consumption.</p></Show>
-        <Show when={forecast().status === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see recorded consumption.</p></Show>
-        <Show when={forecast().status === "error"}><p class="usage-message" role="alert">{forecast().message ?? "Recorded consumption could not be loaded."} Refresh quotas to retry.</p></Show>
+        <Show when={waiting() || quotaPreparing() || view().kind === "idle" && connected()}><LoadingPlaceholder kind="usage" label={view().kind === "preparing" || quotaPreparing() ? "Preparing recorded consumption…" : "Loading recorded consumption…"} /></Show>
+        <Show when={quotaError()}>{(message) => <p class="usage-message" role="alert">{message()}</p>}</Show>
+        <Show when={view().kind === "idle" && !connected()}><p class="usage-message" role="status">Connect to a machine to see recorded consumption.</p></Show>
+        <Show when={view().kind === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see recorded consumption.</p></Show>
       </>}>
       <Show when={forecastData()?.localRates?.length}><ul class="usage-consumption__list"><For each={forecastData()?.localRates}>{(rate) => {
         const row = consumptionRow(rate)
@@ -338,31 +383,30 @@ export function UsagePage() {
     </section>
 
     <section class="usage-breakdown-section" aria-labelledby="usage-breakdown-title">
-      <div class="usage-breakdown__head"><h2 id="usage-breakdown-title"><Icon name="sessions" />Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownBreakdown()?.input.group ?? group()].toLowerCase()}s</span></Show>
+      <div class="usage-breakdown__head"><h2 id="usage-breakdown-title"><Icon name="sessions" />Breakdown</h2><Show when={displayed()?.rows.length}><span class="usage-breakdown__summary">Showing {(shownInput().offset ?? 0) + 1}–{(shownInput().offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)} {names[shownInput().group].toLowerCase()}s</span></Show>
       <Show when={!usagePhone.phone()}><UsageGroupControl value={group()} onChange={selectGroup} /></Show></div>
       <Show when={usagePhone.phone()} fallback={<UsageFilterControls value={filters()} providers={filterProviders()} onChange={(value) => { holdRows(); batch(() => { setFilters(value); setOffset(0) }) }} />}>
         <UsageFilterSummary group={group()} filters={filters()} providers={filterProviders()} onApply={applyFilters} />
       </Show>
       <Show when={group() === "task"}><p class="usage-message">Inclusive task rows overlap; do not add them for a family total.</p></Show>
       <div id="usage-breakdown-panel" role="region" aria-label={`${names[group()]} usage breakdown`} class="usage-breakdown" aria-busy={updating() ? "true" : "false"}>
-        <Show when={!displayed() && remote.state().transport.kind === "open" && (breakdown().status === "loading" || breakdown().status === "idle")}><LoadingPlaceholder kind="usage" label="Loading breakdown…" /></Show>
-        <Show when={!displayed() && breakdown()?.status === "unsupported"}><p class="usage-message" role="status">{unsupportedReportMessage(breakdownInput())}</p></Show>
-        <Show when={!displayed() && breakdown()?.status === "error"}><p class="usage-message" role="alert">{breakdown()?.message}</p></Show>
+        <Show when={!displayed() && remote.state().transport.kind === "open" && waiting()}><LoadingPlaceholder kind="usage" label={view().kind === "preparing" ? "Preparing breakdown…" : "Loading breakdown…"} /></Show>
+        <Show when={!displayed() && view().kind === "unsupported"}><p class="usage-message" role="status">Update YCoding on this machine to see usage.</p></Show>
         <Show when={displayed()}><Show when={(displayed()?.rows.length ?? 0) > 0} fallback={<p class="usage-message">No requests in this period.</p>}>
           <div class="usage-breakdown__mobile" ref={mobileRows} style={{ "min-height": `${minimumRowsHeight()}px` }}><For each={displayed()?.rows}>{(row: UsageReportRow) => {
-            const identity = () => shownBreakdown()?.input.group === "model" || row.dimensions ? reportIdentity(row, providerRead().data ?? []) : undefined
-            return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{reportCostText(row)}</b></div>
+            const identity = () => shownInput().group === "model" || row.dimensions ? reportIdentity(row, providerData() ?? []) : undefined
+            return <article class="usage-mobile-row"><div class="usage-mobile-row__top"><div><strong>{identity()?.model ?? reportLabel(row, shownInput().group)}</strong><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show></div><b>{reportCostText(row)}</b></div>
               <p>{count(row.physical)} requests · {count(row.tokens.input)} in / {count(row.tokens.output)} out<Show when={row.tokens.cache.read > 0}> · {count(row.tokens.cache.read)} cache read</Show></p>
               <UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} />
             </article>
           }}</For></div>
           <button class="usage-breakdown__table-toggle" type="button" aria-expanded={breakdownTableOpen()} aria-controls="usage-breakdown-table" onClick={() => setBreakdownTableOpen(!breakdownTableOpen())}><Icon name="sessions" />{breakdownTableOpen() ? "Hide table" : "View table"}</button>
-          <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownBreakdown()?.input.group ?? group()]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
-            const identity = () => shownBreakdown()?.input.group === "model" || row.dimensions ? reportIdentity(row, providerRead().data ?? []) : undefined
-            return <tr><th scope="row"><span>{identity()?.model ?? reportLabel(row, shownBreakdown()?.input.group ?? group())}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show><UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} /></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td>{count(row.tokens.cache.write)}</td><td class="usage-table__cost">{reportCostText(row)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
+          <div id="usage-breakdown-table" class="usage-table-wrap usage-breakdown__table" classList={{ "usage-breakdown__table--open": breakdownTableOpen() }}><table><caption>{names[shownInput().group]} by usage</caption><thead><tr><th scope="col"><button type="button" aria-label={`Sort by ${names[group()]}`} onClick={() => setSorting("key")}>{names[group()]} {sort() === "key" ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th><For each={columns}>{(column) => <th scope="col"><button type="button" aria-label={`Sort by ${column.label}`} onClick={() => setSorting(column.key)}>{column.label} {sort() === column.key ? order() === "asc" ? "↑" : "↓" : "↕"}</button></th>}</For></tr></thead><tbody><For each={displayed()?.rows}>{(row: UsageReportRow) => {
+            const identity = () => shownInput().group === "model" || row.dimensions ? reportIdentity(row, providerData() ?? []) : undefined
+            return <tr><th scope="row"><span>{identity()?.model ?? reportLabel(row, shownInput().group)}</span><Show when={identity()}><span class="usage-provider-chip">{identity()?.provider}</span></Show><UsageStatisticsDetails tokens={row.tokens} speed={row.speed} cost={reportCost(row)} /></th><td>{count(row.logical)}</td><td>{count(tokenCount(row.tokens))}</td><td>{count(row.tokens.input)}</td><td>{count(row.tokens.output)}</td><td>{count(row.tokens.reasoning)}</td><td>{count(row.tokens.cache.read)}</td><td>{count(row.tokens.cache.write)}</td><td class="usage-table__cost">{reportCostText(row)}<Show when={row.costProvenance === "current_catalog"}><small>estimate</small></Show></td></tr>
           }}</For></tbody></table></div>
-          <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">Loading {names[group()].toLowerCase()} report…</span></Show><Show when={breakdown()?.status === "error"}><span role="alert">{breakdown()?.message} <button type="button" onClick={() => retryReport(breakdownInput())}>Retry</button></span></Show></div>
-          <div class="usage-pagination"><span>Showing {(shownBreakdown()?.input.offset ?? 0) + 1}–{(shownBreakdown()?.input.offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" aria-label="Previous breakdown page" title="Previous page" disabled={updating() || (shownBreakdown()?.input.offset ?? 0) === 0} onClick={previousPage}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button><button type="button" aria-label="Next breakdown page" title="Next page" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>
+          <div class="usage-breakdown__feedback" aria-live="polite"><Show when={updating()}><span role="status">{view().kind === "preparing" ? "Preparing" : "Loading"} {names[group()].toLowerCase()} report…</span></Show><Show when={view().kind === "error"}>{(() => { const current = view(); return <span role="alert">{current.kind === "error" ? current.message : ""} <button type="button" onClick={retry}>Retry</button></span> })()}</Show></div>
+          <div class="usage-pagination"><span>Showing {(shownInput().offset ?? 0) + 1}–{(shownInput().offset ?? 0) + (displayed()?.rows.length ?? 0)} of {count(displayed()?.rowCount ?? 0)}</span><div><button type="button" aria-label="Previous breakdown page" title="Previous page" disabled={updating() || (shownInput().offset ?? 0) === 0} onClick={previousPage}><Icon name="arrow-left" /><span class="usage-action-label">Previous</span></button><button type="button" aria-label="Next breakdown page" title="Next page" disabled={updating() || displayed()?.nextOffset === undefined} onClick={nextPage}><span class="usage-action-label">Next</span><Icon name="arrow-right" /></button></div></div>
           <p class="usage-scope-total">Full scope: {displayed() ? reportCostText(displayed()!.total) : "unreported"}</p>
         </Show></Show>
       </div>

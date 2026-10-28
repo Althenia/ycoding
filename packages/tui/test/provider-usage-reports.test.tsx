@@ -6,7 +6,7 @@ import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
 import { ProviderUsageScreenContent } from "../src/routes/session/provider-usage"
-import type { ProviderUsageView } from "../src/routes/session/provider-usage-reports"
+import type { ProviderUsageView, UsageReportRead, UsageStatsRead } from "../src/routes/session/provider-usage-reports"
 import { DialogProvider } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
 import { TestTuiContexts } from "./fixture/tui-environment"
@@ -80,7 +80,8 @@ function deferred<T>() {
 async function renderReports(input: {
   width?: number
   height?: number
-  load: (query: ReportInput) => Promise<UsageReportOutput>
+  load: (query: ReportInput) => Promise<UsageReportRead>
+  loadStats?: (query: ReportInput) => Promise<UsageStatsRead>
   onRefresh?: () => void
   tab?: ProviderUsageView
 }) {
@@ -98,6 +99,8 @@ async function renderReports(input: {
                     now={() => now}
                     initialTab={input.tab ?? "models"}
                     loadReport={input.load}
+                    loadStats={input.loadStats}
+                    pollDelay={() => 5}
                     onRefresh={input.onRefresh}
                   />
                 </DialogProvider>
@@ -271,7 +274,11 @@ test("sorts every report metric from its column header and keyboard bindings", a
 }, 30_000)
 
 test("removes the retention remark while preserving the empty-window message", async () => {
-  const empty = await renderReports({ tab: "stats", load: async (query) => report(query.group, []) })
+  const empty = await renderReports({
+    tab: "stats",
+    load: async (query) => report(query.group, []),
+    loadStats: async () => ({ report: report("day", []), stats: { sessions: 0 } }),
+  })
   try {
     const frame = await waitFor(empty, (value) => value.includes("No usage recorded in the last 52 weeks."), "empty stats")
     expect(frame).not.toContain("Usage before")
@@ -282,11 +289,12 @@ test("removes the retention remark while preserving the empty-window message", a
 
   const populated = await renderReports({
     tab: "stats",
-    load: async (query) => {
-      const result = report(query.group, [{ key: "2026-09-20", label: "2026-09-20", logical: 1 }])
+    load: async (query) => report(query.group, []),
+    loadStats: async () => {
+      const result = report("day", [{ key: "2026-09-20", label: "2026-09-20", logical: 1 }])
       result.total = { ...result.total, cost: undefined, costProvenance: undefined }
       result.rows = result.rows.map((row) => ({ ...row, cost: undefined, costProvenance: undefined }))
-      return result
+      return { report: result, stats: { sessions: 1 } }
     },
   })
   try {
@@ -391,6 +399,117 @@ test("keeps large-value rows on one line with compact token columns", async () =
     expect(lines.every((line) => line.length <= 189)).toBe(true)
     for (const value of ["295", "2,773", "271.4K", "103.6M", "553.3K", "104.4M", "$1711.29"]) expect(row).toContain(value)
     expect(lines[lines.indexOf(row) + 1].trim()).not.toMatch(/^\d/)
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
+
+test("labels Preparing, polls the same recipe without a force flag, and replaces it with the ready report", async () => {
+  const calls: ReportInput[] = []
+  const gate = deferred<UsageReportRead>()
+  const app = await renderReports({
+    load: async (query) => {
+      calls.push(query)
+      if (calls.length === 1) return { status: "preparing" }
+      if (calls.length === 2) return gate.promise
+      return report(query.group, [{ key: "ready", label: "Ready row", logical: 2 }])
+    },
+  })
+  try {
+    await waitFor(app, (value) => value.includes("Preparing usage..."), "Preparing label")
+    await waitFor(app, () => calls.length === 2, "poll of the same recipe")
+    expect(app.captureCharFrame()).not.toContain("Ready row")
+    gate.resolve({ status: "preparing" })
+    await waitFor(app, () => calls.length === 3, "second poll")
+    const frame = await waitFor(app, (value) => value.includes("Ready row") && !value.includes("Preparing usage"), "ready report")
+    expect(frame).not.toContain("Refresh failed")
+    expect(new Set(calls.map((query) => JSON.stringify(query))).size).toBe(1)
+    await Bun.sleep(40)
+    expect(calls).toHaveLength(3)
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
+
+test("drops ready rows as soon as the same recipe goes Preparing, and shows nothing for another recipe", async () => {
+  let phase = 0
+  const calls: ReportInput[] = []
+  const app = await renderReports({
+    load: async (query) => {
+      calls.push(query)
+      if (query.group === "model" && phase === 0) return report("model", [{ key: "old", label: "Old model row", logical: 2 }])
+      return { status: "preparing" }
+    },
+  })
+  try {
+    await waitFor(app, (value) => value.includes("Old model row"), "initial rows")
+    phase = 1
+    app.mockInput.pressKey("r")
+    const invalidated = await waitFor(app, (value) => value.includes("Preparing usage..."), "invalidated label")
+    expect(invalidated).not.toContain("Old model row")
+    expect(invalidated).not.toContain("showing previous data")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    await waitFor(app, () => calls.at(-1)?.group === "day", "other recipe")
+    const other = await waitFor(app, (value) => value.includes("Preparing usage..."), "other recipe label")
+    expect(other).not.toContain("Old model row")
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30_000)
+
+test("a failed read after Preparing is a distinct failure, and late work after unmount is ignored", async () => {
+  let reads = 0
+  const failing = await renderReports({
+    load: async () => {
+      reads += 1
+      if (reads === 1) return { status: "preparing" }
+      throw new Error("Prepared read failed")
+    },
+  })
+  try {
+    const frame = await waitFor(failing, (value) => value.includes("Usage report could not be loaded."), "failure")
+    expect(frame).not.toContain("Preparing usage")
+  } finally {
+    failing.renderer.destroy()
+  }
+
+  const pending: Array<ReturnType<typeof deferred<UsageReportRead>>> = []
+  const unmounted = await renderReports({
+    load: () => {
+      const result = deferred<UsageReportRead>()
+      pending.push(result)
+      return result.promise
+    },
+  })
+  await waitFor(unmounted, () => pending.length === 1, "pending read")
+  unmounted.renderer.destroy()
+  pending[0].resolve({ status: "preparing" })
+  await Bun.sleep(40)
+  expect(pending).toHaveLength(1)
+}, 30_000)
+
+test("Stats uses one composed read per page and keeps its Preparing state separate from the ready graph", async () => {
+  const queries: ReportInput[] = []
+  const gate = deferred<UsageStatsRead>()
+  const app = await renderReports({
+    tab: "stats",
+    load: async () => ({ status: "preparing" }),
+    loadStats: async (query) => {
+      queries.push(query)
+      if (queries.length === 1) return { status: "preparing" }
+      if (queries.length === 2) return gate.promise
+      return { report: report("day", [{ key: "2026-09-20", label: "2026-09-20", logical: 1 }]), stats: { favoriteModel: "Prepared model", sessions: 9 } }
+    },
+  })
+  try {
+    await waitFor(app, (value) => value.includes("Preparing usage..."), "stats preparing")
+    await waitFor(app, () => queries.length === 2, "stats poll")
+    expect(app.captureCharFrame()).not.toContain("Prepared model")
+    gate.resolve({ status: "preparing" })
+    const frame = await waitFor(app, (value) => value.includes("Prepared model") && !value.includes("Preparing usage"), "stats ready")
+    expect(frame).toContain("Sessions")
+    expect(queries.length).toBe(3)
+    expect(queries.every((query) => query.group === "day" && query.limit === 200)).toBe(true)
   } finally {
     app.renderer.destroy()
   }

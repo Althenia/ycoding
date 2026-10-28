@@ -21,6 +21,7 @@ import { SessionExecution } from "../src/session/execution"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 
 const sessionID = SessionSchema.ID.make("ses_usage_concurrency")
@@ -115,7 +116,7 @@ const seed = Effect.gen(function* () {
       .insert(SessionProviderRequestTable)
       .values(Array.from({ length: 500 }, (_, offset) => row(start + offset)))
       .run()
-  yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
+  yield* database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))
   return database
 }).pipe(Effect.orDie)
 
@@ -186,7 +187,7 @@ test("a write committed while a usage report reads is excluded from that report 
         .values(row(requests))
         .run()
         .pipe(
-          Effect.andThen(database.db.transaction(() => UsageAnalytics.backfill(database.db))),
+          Effect.andThen(database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))),
           Effect.tap(() => Effect.sync(() => written.push(requests))),
           Effect.andThen(Deferred.succeed(proceed, undefined)),
         )

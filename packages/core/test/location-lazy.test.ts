@@ -35,6 +35,11 @@ import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
 import { Shell } from "../src/shell"
 import { ToolRegistry } from "../src/tool/registry"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageDashboardRead } from "../src/usage-dashboard-read"
+import { UsageDashboardRuntime } from "../src/usage-dashboard"
+import { UsageStage } from "../src/usage-stage"
+import { UsageViews } from "../src/usage-view"
+import { UsageViewStart } from "../src/usage-view-start"
 import { testEffect } from "./lib/effect"
 
 const pricedModels = [
@@ -101,7 +106,7 @@ const seeded = Layer.effect(
           agent: Agent.defaultID,
           model: CatalogModel.Ref.make({ providerID: acme, id: priced }),
           route_id: "test",
-          prompt_cache_key: "key",
+          prompt_cache_key: "lazy-cache-key",
           system_digest: "system",
           tool_digest: "tools",
           request: 1,
@@ -114,6 +119,7 @@ const seeded = Layer.effect(
       )
       .run()
     yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
+    yield* database.db.transaction(() => UsageStage.backfill(database.db))
     return database
   }),
 ).pipe(Layer.provide(Database.layer({ path: ":memory:" })))
@@ -125,6 +131,20 @@ const usage = testEffect(
     [Database.node, seeded],
     [SessionExecution.node, SessionExecution.noopLayer],
   ]),
+)
+
+const producer = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      EventRuntime.node,
+      LocationServiceMap.node,
+      UsageViews.node,
+      UsageViewStart.node,
+      UsageDashboardRead.node,
+    ]),
+    [pricedModels, [UsageAnalytics.node, Layer.mock(UsageAnalytics.Service, {})], [Database.node, seeded]],
+  ),
 )
 
 type Boot = { readonly stages: Record<string, number> }
@@ -405,6 +425,43 @@ describe("lazy Location services", () => {
       yield* unsubscribe
       expect(yield* loadedFor(ref)).toBeUndefined()
       expect(capture.boots).toHaveLength(2)
+    }),
+  )
+
+  producer.effect("prices startup views from the catalog slice, holds no Location, and ignores teardown updates", () =>
+    Effect.gen(function* () {
+      const views = yield* UsageViews.Service
+      const refs = directories.slice(0, 2).map(refOf)
+      for (let attempt = 0; attempt < 2_000 && (yield* views.read([])).status !== "ready"; attempt++)
+        yield* TestClock.adjust("50 millis")
+      expect((yield* views.read([])).status).toBe("ready")
+      for (const ref of refs) {
+        const built = (yield* loadedFor(ref))?.built ?? []
+        expect(built).toContain(Catalog.node.name)
+        heavy.forEach((name) => expect(built).not.toContain(name))
+      }
+      yield* TestClock.adjust("61 minutes")
+      for (let attempt = 0; attempt < 20; attempt++) {
+        yield* Effect.yieldNow
+        yield* TestClock.adjust("2 seconds")
+      }
+      for (const ref of refs) expect(yield* loadedFor(ref)).toBeUndefined()
+      expect((yield* views.read([])).status).toBe("ready")
+    }),
+  )
+
+  producer.live("builds only the quota closure for a dashboard read and never MCP", () =>
+    Effect.gen(function* () {
+      const dashboard = yield* UsageDashboardRead.Service
+      const ref = refOf(directories[2]!)
+      expect((yield* dashboard.read(ref, {})).status).not.toBe("error")
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if ((yield* loadedFor(ref))?.built.includes(UsageDashboardRuntime.node.name)) break
+        yield* Effect.sleep("20 millis")
+      }
+      const built = (yield* loadedFor(ref))?.built ?? []
+      expect(built).toContain(UsageDashboardRuntime.node.name)
+      heavy.forEach((name) => expect(built).not.toContain(name))
     }),
   )
 })

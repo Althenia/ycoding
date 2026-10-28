@@ -21,3 +21,14 @@ test("declares local-runtime global usage summary and report operations", () => 
     ),
   ).toEqual(["group", "providerID", "profile", "modelID", "selectedEffort", "timeZone", "from", "to", "offset", "limit", "sort", "order"])
 })
+
+test("declares one composed dashboard operation", () => {
+  const dashboard = UsageGroup.endpoints["usage.dashboard"]
+  const document = OpenApi.fromApi(HttpApi.make("usage-test").add(UsageGroup))
+
+  expect(dashboard.path).toBe("/api/usage/dashboard")
+  expect(dashboard.method).toBe("POST")
+  expect(dashboard.middlewares.size).toBe(0)
+  expect(document.paths["/api/usage/dashboard"]?.post?.operationId).toBe("usage.dashboard")
+  expect(Object.keys(UsageGroup.endpoints)).toEqual(["usage.get", "usage.report", "usage.dashboard"])
+})

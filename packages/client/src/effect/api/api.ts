@@ -2030,9 +2030,20 @@ export type Endpoint32_1Input = {
 export type Endpoint32_1Output = EffectValue<ReturnType<RawClient["server.usage"]["usage.report"]>>["data"]
 export type UsageReportOperation<E = never> = (input: Endpoint32_1Input) => Effect.Effect<Endpoint32_1Output, E>
 
+type Endpoint32_2Request = Parameters<RawClient["server.usage"]["usage.dashboard"]>[0]
+export type Endpoint32_2Input = {
+  readonly daily?: Endpoint32_2Request["payload"]["daily"]
+  readonly monthly?: Endpoint32_2Request["payload"]["monthly"]
+  readonly breakdown?: Endpoint32_2Request["payload"]["breakdown"]
+  readonly refresh?: Endpoint32_2Request["payload"]["refresh"]
+}
+export type Endpoint32_2Output = EffectValue<ReturnType<RawClient["server.usage"]["usage.dashboard"]>>["data"]
+export type UsageDashboardOperation<E = never> = (input?: Endpoint32_2Input) => Effect.Effect<Endpoint32_2Output, E>
+
 export interface UsageApi<E = never> {
   readonly get: UsageGetOperation<E>
   readonly report: UsageReportOperation<E>
+  readonly dashboard: UsageDashboardOperation<E>
 }
 
 type Endpoint33_0Request = Parameters<RawClient["server.incident"]["incident.report"]>[0]

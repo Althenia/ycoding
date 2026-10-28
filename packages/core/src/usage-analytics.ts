@@ -8,6 +8,8 @@ import { makeGlobalNode } from "./effect/app-node"
 import { SessionEvent } from "./session/event"
 import { UsageAnalyticsRequestTable } from "./usage-analytics.sql"
 import { RetentionSettings } from "./retention-settings"
+import { UsageStage } from "./usage-stage"
+import { UsageViewChange } from "./usage-view-change"
 
 export interface Interface {
   readonly cleanup: (now?: number) => Effect.Effect<number>
@@ -110,7 +112,7 @@ export const layer = Layer.effect(
         const session = current ?? (yield* capture(database.db, event.data.sessionID))
         if (session.sessionID !== event.data.sessionID)
           return yield* Effect.die(new Error("Usage analytics request scope mismatch"))
-        yield* database.db
+        const stored = yield* database.db
           .insert(UsageAnalyticsRequestTable)
           .values({
             id: event.data.id,
@@ -136,29 +138,56 @@ export const layer = Layer.effect(
             time_created: DateTime.toEpochMillis(event.data.time),
           })
           .onConflictDoNothing()
-          .run()
+          .returning({ id: UsageAnalyticsRequestTable.id })
+          .get()
           .pipe(Effect.orDie)
+        if (!stored) return
+        yield* UsageStage.append(database.db, "backend", stored.id)
+        yield* UsageViewChange.append(database.db, stored.id)
       }),
     )
     return Service.of({
       cleanup: Effect.fn("UsageAnalytics.cleanup")(function* (now = Date.now()) {
         const days = (yield* settings.read()).usageDays
+        const cutoff = now - Duration.toMillis(Duration.days(days))
         let deleted = 0
         while (true) {
-          const rows = yield* database.db
-            .all<{ id: string }>(
-              sql`
-          DELETE FROM usage_analytics_request WHERE id IN (
-            SELECT id FROM usage_analytics_request INDEXED BY usage_analytics_request_time_created_id_idx
-            WHERE time_created < ${now - Duration.toMillis(Duration.days(days))}
-            ORDER BY time_created, id LIMIT 1000
-          ) RETURNING id
+          const removed = yield* database.db
+            .transaction(() =>
+              Effect.gen(function* () {
+                const expired = yield* database.db
+                  .get<{ id: string }>(
+                    sql`
+          SELECT id FROM usage_analytics_request INDEXED BY usage_analytics_request_time_created_id_idx
+          WHERE time_created < ${cutoff} LIMIT 1
         `,
+                  )
+                  .pipe(Effect.orDie)
+                if (!expired) return 0
+                const last = yield* database.db
+                  .get<{ time: number; id: string }>(
+                    sql`
+          SELECT time_created AS time, id FROM usage_analytics_request INDEXED BY usage_analytics_request_time_created_id_idx
+          WHERE time_created < ${cutoff} ORDER BY time_created, id LIMIT 1 OFFSET 999
+        `,
+                  )
+                  .pipe(Effect.orDie)
+                const batch = sql`r.time_created < ${cutoff} ${last ? sql`AND (r.time_created, r.id) <= (${last.time}, ${last.id})` : sql``}`
+                yield* UsageViewChange.remove(database.db, batch)
+                yield* UsageStage.remove(database.db, "backend", batch)
+                const rows = yield* database.db
+                  .all<{ id: string }>(sql`DELETE FROM usage_analytics_request AS r WHERE ${batch} RETURNING id`)
+                  .pipe(Effect.orDie)
+                return rows.length
+              }),
             )
             .pipe(Effect.orDie)
-          deleted += rows.length
+          deleted += removed
           yield* Effect.yieldNow
-          if (rows.length < 1000) return deleted
+          if (removed < 1000) {
+            yield* UsageViewChange.collect(database.db, Date.now())
+            return deleted
+          }
         }
       }),
     })

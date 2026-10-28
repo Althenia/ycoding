@@ -1,5 +1,4 @@
 import type {
-  UsageReportOutput,
   ProviderRequestSummary,
   ProviderUsageListOutput,
   ProviderUsageForecastOutput,
@@ -29,9 +28,13 @@ import {
   PROVIDER_USAGE_VIEWS,
   ProviderUsageReports,
   providerUsageViewLabel,
+  usagePreparingDelay,
   type ProviderUsageReportInput,
   type ProviderUsageView,
+  type UsageReportRead,
+  type UsageStatsRead,
 } from "./provider-usage-reports"
+import { readBreakdown, readStats, type DashboardLoader } from "./usage-dashboard"
 
 export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 const NAV_CELL_WIDTH = 12
@@ -72,68 +75,94 @@ export function ProviderUsageScreen() {
   const router = useRoute()
   const client = useClient()
   const guard = createProviderUsageGenerationGuard()
-  const backendUsageGuard = createProviderUsageGenerationGuard()
-  const forecastGuard = createProviderUsageGenerationGuard()
   const [snapshots, setSnapshots] = createSignal<ProviderUsageSnapshot[]>([])
   const [refreshing, setRefreshing] = createSignal(true)
+  const [summaryLoading, setSummaryLoading] = createSignal(true)
+  const [preparing, setPreparing] = createSignal(false)
+  const [quotaPreparing, setQuotaPreparing] = createSignal(false)
+  const [quotaError, setQuotaError] = createSignal<string>()
   const [failed, setFailed] = createSignal(false)
   const [forecast, setForecast] = createSignal<ProviderUsageForecastOutput["data"]>()
-  const [forecastFailed, setForecastFailed] = createSignal(false)
   const [backendUsage, setBackendUsage] = createSignal<ProviderRequestSummary>()
-  const [backendUsageRefreshing, setBackendUsageRefreshing] = createSignal(true)
-  const [backendUsageFailed, setBackendUsageFailed] = createSignal(false)
-  const refresh = () => {
-    const backendToken = backendUsageGuard.next()
-    setBackendUsageRefreshing(true)
-    setBackendUsageFailed(false)
-    void client.api.usage
-      .get()
-      .then((summary) => {
-        if (backendUsageGuard.current(backendToken)) setBackendUsage(summary)
-      })
-      .catch(() => {
-        if (backendUsageGuard.current(backendToken)) setBackendUsageFailed(true)
-      })
-      .finally(() => {
-        if (backendUsageGuard.current(backendToken)) setBackendUsageRefreshing(false)
-      })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const loadDashboard: DashboardLoader = (input) => client.api.usage.dashboard(input)
+  const refresh = (force: boolean, attempt = 0) => {
+    if (timer !== undefined) clearTimeout(timer)
+    timer = undefined
     const token = guard.next()
-    setRefreshing(true)
-    setFailed(false)
-    void client.api.providerUsage
-      .list({ refresh: true })
-      .then((result) => {
+    if (attempt === 0) {
+      setRefreshing(true)
+      setSummaryLoading(true)
+      setFailed(false)
+    }
+    const poll = () => {
+      timer = setTimeout(() => {
+        if (guard.current(token)) refresh(false, attempt + 1)
+      }, usagePreparingDelay(attempt))
+    }
+    void loadDashboard(force ? { refresh: true } : {}).then(
+      (info) => {
         if (!guard.current(token)) return
-        setSnapshots(visibleProviderSnapshots(result.data))
-      })
-      .catch(() => {
-        if (guard.current(token)) setFailed(true)
-      })
-      .finally(() => {
-        if (!guard.current(token)) return
+        if (info.status === "preparing") {
+          setSnapshots([])
+          setBackendUsage(undefined)
+          setForecast(undefined)
+          setQuotaPreparing(false)
+          setQuotaError(undefined)
+          setPreparing(true)
+          poll()
+          return
+        }
+        setPreparing(false)
+        setSummaryLoading(false)
+        if (info.status === "error") {
+          setSnapshots([])
+          setBackendUsage(undefined)
+          setForecast(undefined)
+          setQuotaPreparing(false)
+          setQuotaError(undefined)
+          setRefreshing(false)
+          setFailed(true)
+          return
+        }
+        setBackendUsage(info.summary)
+        setQuotaError(undefined)
+        if (info.quota.status === "error") {
+          setSnapshots([])
+          setForecast(undefined)
+          setQuotaPreparing(false)
+          setRefreshing(false)
+          setQuotaError(info.quota.message)
+          return
+        }
+        if (info.quota.status === "preparing") {
+          setSnapshots([])
+          setForecast(undefined)
+          setQuotaPreparing(true)
+          setRefreshing(false)
+          poll()
+          return
+        }
+        setQuotaPreparing(false)
         setRefreshing(false)
-        readForecast()
-      })
-    readForecast()
-  }
-  const readForecast = () => {
-    const token = forecastGuard.next()
-    void client.api.providerUsage.forecast({ localScope: "backend" }).then(
-      (result) => {
-        if (!forecastGuard.current(token)) return
-        setForecastFailed(false)
-        setForecast(result.data)
+        setSnapshots(visibleProviderSnapshots(info.quota.providers))
+        setForecast(info.quota.forecast)
       },
       () => {
-        if (forecastGuard.current(token)) setForecastFailed(true)
+        if (!guard.current(token)) return
+        setPreparing(false)
+        setQuotaPreparing(false)
+        setQuotaError(undefined)
+        setSummaryLoading(false)
+        setRefreshing(false)
+        setFailed(true)
       },
     )
   }
-  onMount(refresh)
+  onMount(() => refresh(false))
   onCleanup(() => {
     guard.invalidate()
-    forecastGuard.invalidate()
-    backendUsageGuard.invalidate()
+    if (timer !== undefined) clearTimeout(timer)
   })
 
   const back = () => router.navigate(route.sessionID ? { type: "session", sessionID: route.sessionID } : { type: "home" })
@@ -141,15 +170,19 @@ export function ProviderUsageScreen() {
     <ProviderUsageScreenContent
       snapshots={snapshots}
       backendUsage={backendUsage}
-      backendUsageRefreshing={backendUsageRefreshing}
-      backendUsageFailed={backendUsageFailed}
+      backendUsageRefreshing={summaryLoading}
+      backendUsageFailed={failed}
       refreshing={refreshing}
+      preparing={preparing}
+      quotaPreparing={quotaPreparing}
+      quotaError={quotaError}
       failed={failed}
-      forecast={() => forecastFailed() ? undefined : forecast()}
-      forecastFailed={forecastFailed}
+      forecast={() => (failed() ? undefined : forecast())}
+      forecastFailed={failed}
       onBack={back}
-      onRefresh={refresh}
-      loadReport={(input) => client.api.usage.report(input)}
+      onRefresh={() => refresh(true)}
+      loadReport={(input) => readBreakdown(loadDashboard, input)}
+      loadStats={(input) => readStats(loadDashboard, input)}
       incidents={{
         report: (input) => client.api.incident.report(input),
         recent: (input) => client.api.incident.recent(input),
@@ -167,13 +200,18 @@ export function ProviderUsageScreenContent(props: {
   backendUsageFailed?: Accessor<boolean>
   now?: Accessor<number>
   refreshing?: Accessor<boolean>
+  preparing?: Accessor<boolean>
+  quotaPreparing?: Accessor<boolean>
+  quotaError?: Accessor<string | undefined>
   failed?: Accessor<boolean>
   forecast?: Accessor<ProviderUsageForecastOutput["data"] | undefined>
   forecastFailed?: Accessor<boolean>
   onBack?: () => void
   onRefresh?: () => void
   initialTab?: ProviderUsageView
-  loadReport?: (input: ProviderUsageReportInput) => Promise<UsageReportOutput>
+  loadReport?: (input: ProviderUsageReportInput) => Promise<UsageReportRead>
+  loadStats?: (input: ProviderUsageReportInput) => Promise<UsageStatsRead>
+  pollDelay?: (attempt: number) => number
   incidents?: ModelIncidentLoaders
 }) {
   const { theme } = useTheme()
@@ -299,7 +337,10 @@ export function ProviderUsageScreenContent(props: {
         }}
         paddingBottom={1}
       >
-        <Show when={view() === "overview" && props.backendUsageRefreshing?.() && props.backendUsage?.()}>
+        <Show when={(view() === "overview" || view() === "usage") && props.preparing?.()}>
+          <text fg={theme.text.feedback.warning.default}>Preparing usage...</text>
+        </Show>
+        <Show when={view() === "overview" && !props.preparing?.() && props.backendUsageRefreshing?.() && props.backendUsage?.()}>
           <text fg={theme.text.feedback.warning.default}>Refreshing YCoding backend usage · showing previous data</text>
         </Show>
         <Show when={view() === "overview" && props.backendUsageFailed?.() && props.backendUsage?.()}>
@@ -314,13 +355,18 @@ export function ProviderUsageScreenContent(props: {
         <Show when={view() === "usage"}>
           <box flexDirection="column" flexShrink={0} width={scrollColumnWidth()}>
             <text fg={theme.text.feedback.info.default} onMouseUp={() => setDetailsOpen((open) => !open)}>{detailsOpen() ? "Hide details" : "Details"} · d</text>
-            <Show when={props.forecast?.()?.quotas === undefined}><text fg={theme.text.subdued}>Quota forecasts unavailable</text></Show>
+            <Show when={!props.quotaPreparing?.() && !props.quotaError?.() && props.forecast?.()?.quotas === undefined}><text fg={theme.text.subdued}>Quota forecasts unavailable</text></Show>
             <For each={visibleProviderSnapshots(props.snapshots())}>
               {(snapshot) => <QuotaSection snapshot={snapshot} now={props.now?.() ?? Date.now()} asOf={props.forecast?.()?.asOf} forecasts={props.forecastFailed?.() ? undefined : props.forecast?.()?.quotas} forecastFailed={props.forecastFailed?.()} details={detailsOpen()} />}
             </For>
-            <RecordedConsumption rates={props.forecast?.()?.localRates} width={scrollColumnWidth()} details={detailsOpen()} />
-            <Show when={visibleProviderSnapshots(props.snapshots()).length === 0}>
-              <text fg={theme.text.subdued}>{props.refreshing?.() ? "Loading provider quotas..." : props.failed?.() ? "Provider quotas could not be loaded." : "No provider quotas are reported."}</text>
+            <Show when={props.quotaError?.()}>{(message) => <text fg={theme.text.feedback.error.default} wrapMode="word">{message()}</text>}</Show>
+            <Show when={!props.quotaError?.()}>
+              <Show when={props.quotaPreparing?.()} fallback={<RecordedConsumption rates={props.forecast?.()?.localRates} width={scrollColumnWidth()} details={detailsOpen()} />}>
+                <text fg={theme.text.subdued}>Preparing recorded consumption...</text>
+              </Show>
+            </Show>
+            <Show when={!props.quotaError?.() && visibleProviderSnapshots(props.snapshots()).length === 0}>
+              <text fg={theme.text.subdued}>{props.quotaPreparing?.() ? "Preparing provider quotas..." : props.refreshing?.() ? "Loading provider quotas..." : props.failed?.() ? "Provider quotas could not be loaded." : "No provider quotas are reported."}</text>
             </Show>
           </box>
         </Show>
@@ -330,7 +376,7 @@ export function ProviderUsageScreenContent(props: {
           <text fg={theme.text.subdued}>
             {props.backendUsageFailed?.()
               ? "YCoding backend usage could not be loaded."
-              : props.backendUsageRefreshing?.()
+              : props.preparing?.() ? "Preparing usage..." : props.backendUsageRefreshing?.()
                 ? "Loading YCoding backend usage..."
                 : "No retained usage is reported across the YCoding backend."}
           </text>
@@ -343,6 +389,8 @@ export function ProviderUsageScreenContent(props: {
           refresh={reportRefresh()}
           now={props.now}
           load={props.loadReport}
+          loadStats={props.loadStats}
+          pollDelay={props.pollDelay}
         />
       )}</Show>
       <Show when={view() === "incidents"}>

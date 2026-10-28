@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { sql } from "drizzle-orm"
 import { EffectDrizzleSqlite } from "@ycoding-ai/effect-drizzle-sqlite"
-import { Context, Effect, Layer, Option, Tracer } from "effect"
+import { Context, Effect, Layer, Option, type Scope, Tracer } from "effect"
 import { Catalog } from "../src/catalog"
 import { Database } from "../src/database/database"
 import { sqliteLayer } from "../src/database/sqlite.bun"
@@ -21,8 +21,14 @@ import { AbsolutePath } from "../src/schema"
 import { Session } from "../src/session"
 import { SessionExecution } from "../src/session/execution"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
+import { UsageDashboardRuntime } from "../src/usage-dashboard"
+import { UsageDashboardRead } from "../src/usage-dashboard-read"
+import { UsageViewRecipe } from "../src/usage-view-recipe"
+import { UsageViews } from "../src/usage-view"
+import { UsageViewStart } from "../src/usage-view-start"
+import type { UsageDashboard } from "@ycoding-ai/schema/usage-dashboard"
 import { Money } from "@ycoding-ai/schema/money"
-import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { fixedLocations } from "./fixture/location-map"
 
 const rows = 200_000
@@ -30,7 +36,8 @@ const locations = 2_500
 const unpricedLocations = 100
 const day = 86_400_000
 const now = Date.now()
-const budget = { cold: 10_000, warm: 2_000 }
+const budget = { producer: 10_000, first: 100, warm: 2_000, during: 100 }
+const contexts = { active: 0, peak: 0 }
 const directories: string[] = []
 
 afterAll(() => Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true }))))
@@ -104,6 +111,7 @@ function seed(file: string) {
     `)
     const count = yield* database.db.get<{ count: number }>(sql`SELECT count(*) AS count FROM usage_analytics_request`)
     expect(count?.count).toBe(rows)
+    yield* database.db.transaction(() => UsageStage.backfill(database.db))
   }).pipe(Effect.provide(Database.layer({ path: file })), Effect.scoped)
 }
 
@@ -134,7 +142,17 @@ function locationMap() {
           Layer.effectContext(Effect.succeed(catalog).pipe(Effect.withSpan("perf.location.boot", { attributes: { directory: ref.directory } }))),
         { idleTimeToLive: "60 minutes" },
       )
-      return { ...map, contextEffect: (ref, nodes) => map.contextEffect(ref, nodes).pipe(Effect.withSpan("perf.location.context")) }
+      return LocationServiceMap.Service.of({
+        ...map,
+        contextEffect: (ref, nodes) =>
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              contexts.active += 1
+              contexts.peak = Math.max(contexts.peak, contexts.active)
+            }),
+            () => Effect.sync(() => void (contexts.active -= 1)),
+          ).pipe(Effect.andThen(map.contextEffect(ref, nodes)), Effect.withSpan("perf.location.context")),
+      })
     }),
   )
 }
@@ -175,72 +193,108 @@ function runtime(file: string, probe: Probe) {
       return { ...database, reader }
     }),
   ).pipe(Layer.provide(Database.layer({ path: file })))
-  return AppNodeBuilder.build(LayerNode.group([Database.node, Session.node, LocationServiceMap.node, EventRuntime.node]), [
+  return AppNodeBuilder.build(
+    LayerNode.group([Database.node, Session.node, LocationServiceMap.node, EventRuntime.node, UsageViews.node, UsageViewStart.node]),
+    [
     [UsageAnalytics.node, Layer.mock(UsageAnalytics.Service, {})],
     [Database.node, database],
     [SessionExecution.node, SessionExecution.noopLayer],
     [LocationServiceMap.node, locationMap()],
-  ])
+    ],
+  )
 }
 
-const today = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate())
-const range = { from: today - 29 * day, to: today + day }
-const reports = {
-  daily: { group: "day", ...range, limit: 30, sort: "key", order: "asc" },
-  monthly: {
-    group: "model",
-    from: Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1),
-    to: range.to,
-    limit: 200,
-    sort: "cost",
-    order: "desc",
+const reports = UsageViewRecipe.standard(now, undefined)
+const input: UsageDashboard.Input = { daily: reports[0]!, monthly: reports[1]!, breakdown: reports[2]! }
+
+const providers = Layer.succeed(ProviderUsageRuntime.Service, {
+  get: () => Effect.die("unused"),
+  observe: () => Effect.void,
+  list: () => Effect.succeed([]),
+  forecast: (request: { readonly localScope: "backend" | "location" }) =>
+    Effect.sync(() => ({ asOf: Date.now(), localScope: request.localScope })),
+} as ProviderUsageRuntime.Interface)
+
+const here = Location.Ref.make({ directory: AbsolutePath.make("/perf/dashboard"), workspaceID: undefined })
+
+const facade = UsageDashboardRuntime.layer.pipe(Layer.provide(providers))
+
+const dashboard = Effect.map(
+  Layer.build(
+    UsageDashboardRead.layer.pipe(
+      Layer.provide(
+        Layer.effect(
+          LocationServiceMap.Service,
+          fixedLocations(() => facade),
+        ),
+      ),
+    ),
+  ),
+  (context) => {
+    const service = Context.get(context, UsageDashboardRead.Service)
+    return { read: (request: UsageDashboard.Input) => service.read(here, request) }
   },
-  breakdown: { group: "model", ...range, offset: 0, limit: 25, sort: "cost", order: "desc" },
-} satisfies Record<string, ProviderRequest.ReportInput>
+)
 
-const operations = {
-  summary: Effect.gen(function* () {
-    const session = yield* Session.Service
-    return (yield* session.usageAll()).logical
-  }),
-  daily: Effect.gen(function* () {
-    const session = yield* Session.Service
-    return (yield* session.usageReportAll(reports.daily)).total.logical
-  }),
-  monthly: Effect.gen(function* () {
-    const session = yield* Session.Service
-    return (yield* session.usageReportAll(reports.monthly)).total.logical
-  }),
-  breakdown: Effect.gen(function* () {
-    const session = yield* Session.Service
-    return (yield* session.usageReportAll(reports.breakdown)).total.logical
-  }),
-  localSpend: Effect.gen(function* () {
-    const database = yield* Database.Service
-    const reads = ProviderUsageRuntime.localReads(
-      database,
-      Location.Ref.make({ directory: AbsolutePath.make("/perf/location-0000"), workspaceID: undefined }),
-    )
-    return (yield* reads.localSpend()).reduce((total, row) => total + row.pricedRequests + row.unpricedRequests, 0)
-  }),
-  localUsage: Effect.gen(function* () {
-    const database = yield* Database.Service
-    const reads = ProviderUsageRuntime.localReads(
-      database,
-      Location.Ref.make({ directory: AbsolutePath.make("/perf/location-0000"), workspaceID: undefined }),
-    )
-    return (yield* reads.localUsage("backend", Date.now())).reduce((total, bin) => total + bin.requests, 0)
-  }),
-}
-type Name = keyof typeof operations
-const names = Object.keys(operations) as Name[]
-
-const timed = (name: string, effect: Effect.Effect<number, unknown, Session.Service | Database.Service>) =>
+const until = (name: string, read: Effect.Effect<UsageDashboard.Info>) =>
   Effect.gen(function* () {
     const started = performance.now()
-    const value = yield* effect.pipe(Effect.withSpan(`perf.op.${name}`))
-    return { name, value, ms: performance.now() - started }
-  })
+    let reads = 0
+    while (true) {
+      reads += 1
+      const value = yield* read.pipe(Effect.withSpan(`perf.read.${name}`))
+      if (value.status === "error") return yield* Effect.die(new Error(`Dashboard preparation failed: ${value.message}`))
+      if (value.status === "ready") return { name, ms: performance.now() - started, reads, value }
+      if (performance.now() - started > budget.producer * 3) return { name, ms: performance.now() - started, reads, value }
+      yield* Effect.sleep("25 millis")
+    }
+  }).pipe(Effect.withSpan(`perf.op.${name}`))
+
+const pending = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  return (yield* db
+    .get<{ open: number; total: number }>(
+      sql`SELECT count(*) FILTER (WHERE status IN ('pending', 'building')) AS open, count(*) AS total FROM usage_view_state`,
+    )
+    .pipe(Effect.orDie)) ?? { open: 0, total: 0 }
+})
+
+const produced = Effect.gen(function* () {
+  const started = performance.now()
+  while (true) {
+    const state = yield* pending
+    if (state.total > 0 && state.open === 0) break
+    if (performance.now() - started > budget.producer * 3) break
+    yield* Effect.sleep("25 millis")
+  }
+  const views = yield* UsageViews.Service
+  while ((yield* views.read(reports)).status !== "ready" && performance.now() - started < budget.producer * 3)
+    yield* Effect.sleep("25 millis")
+  return round(performance.now() - started)
+}).pipe(Effect.withSpan("perf.op.producer"))
+
+const generations = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  return yield* db
+    .all<{ id: string; generation: number }>(sql`SELECT id, generation FROM usage_view_state ORDER BY id`)
+    .pipe(Effect.orDie)
+})
+
+const pricing = (probe: Probe) => ({
+  locationContexts: probe.spans.filter((span) => span.name === "perf.location.context").length,
+  locationBoots: probe.spans.filter((span) => span.name === "perf.location.boot").length,
+  catalogLookups: probe.spans.filter((span) => span.name === "perf.catalog.get").length,
+})
+
+const builds = (probe: Probe) =>
+  probe.spans.filter((span) => span.name === "sql.execute" && /SET status = 'building'/.test(span.text ?? "")).length
+
+const once = (name: string, read: Effect.Effect<UsageDashboard.Info>) =>
+  Effect.gen(function* () {
+    const started = performance.now()
+    const value = yield* read
+    return { name, ms: performance.now() - started, value }
+  }).pipe(Effect.withSpan(`perf.op.${name}`))
 
 function analyze(probe: Probe, root: string) {
   const byID = new Map(probe.spans.map((span) => [span.id, span]))
@@ -309,7 +363,16 @@ async function fixture() {
   return { file, seedMs: round(performance.now() - started) }
 }
 
-async function measure(file: string, run: (probe: Probe) => Effect.Effect<unknown, unknown, Session.Service | Database.Service>) {
+async function measure<A>(
+  file: string,
+  run: (
+    probe: Probe,
+  ) => Effect.Effect<
+    A,
+    unknown,
+    Session.Service | Database.Service | UsageViews.Service | LocationServiceMap.Service | EventRuntime.Service | Scope.Scope
+  >,
+) {
   const probe: Probe = { spans: [], statements: [], explain: false }
   const result = await Effect.runPromise(
     run(probe).pipe(Effect.provide(runtime(file, probe)), Effect.scoped, Effect.withTracer(tracer(probe))),
@@ -325,129 +388,171 @@ afterAll(async () => {
   await writeFile(join(directory, "usage-dashboard-performance.json"), JSON.stringify(evidence, (_, value) => typeof value === "bigint" ? Number(value) : value, 2))
 })
 
+const readyMs = (result: { readonly ms: number; readonly value: UsageDashboard.Info }) =>
+  result.value.status === "ready" ? result.ms : Number.POSITIVE_INFINITY
+
 test(
-  "each dashboard Usage read meets its cold and warm budget",
+  "the producer prepares standard views before any client opens the dashboard, and the first dashboard reads are READY within budget",
   async () => {
     const seeded = await fixture()
     evidence.seed = { rows, locations, unpricedLocations, seedMs: seeded.seedMs }
-    const sequential: Record<string, unknown> = {}
-    for (const name of names) {
-      const measured = await measure(seeded.file, () =>
-        Effect.gen(function* () {
-          const cold = yield* timed(`${name}.cold`, operations[name])
-          const warm = yield* timed(`${name}.warm.1`, operations[name])
-          const again = yield* timed(`${name}.warm.2`, operations[name])
-          return { cold, warm, again }
-        }),
-      )
-      const result = measured.result as Record<"cold" | "warm" | "again", { value: number; ms: number }>
-      sequential[name] = {
-        value: result.cold.value,
-        cold: analyze(measured.probe, `perf.op.${name}.cold`),
-        warm: analyze(measured.probe, `perf.op.${name}.warm.1`),
-        warm2: analyze(measured.probe, `perf.op.${name}.warm.2`),
-      }
+    contexts.peak = 0
+    const measured = await measure(seeded.file, () =>
+      Effect.gen(function* () {
+        const producerMs = yield* produced
+        const service = yield* dashboard
+        const first = yield* once("first", service.read(input))
+        const warm = yield* once("warm.1", service.read(input))
+        const services = yield* Effect.all(Array.from({ length: 6 }, () => dashboard))
+        const concurrent = yield* Effect.all(
+          services.map((client, index) => once(`first.${index}`, client.read(input))),
+          { concurrency: "unbounded" },
+        )
+        return { producerMs, first, warm, concurrent }
+      }),
+    )
+    const result = measured.result
+    evidence.startup = {
+      producerMs: result.producerMs,
+      producer: pricing(measured.probe),
+      peakLocationContexts: contexts.peak,
+      builds: builds(measured.probe),
+      first: { ms: result.first.ms, status: result.first.value.status, ...analyze(measured.probe, "perf.op.first") },
+      warm: { ms: result.warm.ms, ...analyze(measured.probe, "perf.op.warm.1") },
+      concurrent: result.concurrent.map((item) => ({ ms: item.ms, status: item.value.status })),
     }
-    evidence.sequential = sequential
-    console.log(table("sequential", sequential))
-    for (const name of names) {
-      const value = sequential[name] as Record<"cold" | "warm" | "warm2", { totalMs: number }>
-      expect({ name, cold: value.cold.totalMs <= budget.cold }).toEqual({ name, cold: true })
-      expect({ name, warm: Math.max(value.warm.totalMs, value.warm2.totalMs) <= budget.warm }).toEqual({ name, warm: true })
-    }
+    console.log(JSON.stringify(evidence.startup, null, 1))
+    expect(result.producerMs).toBeLessThanOrEqual(budget.producer)
+    expect(readyMs(result.first)).toBeLessThanOrEqual(budget.first)
+    expect(readyMs(result.warm)).toBeLessThanOrEqual(budget.first)
+    for (const item of result.concurrent) expect(readyMs(item)).toBeLessThanOrEqual(budget.first)
   },
   { timeout: 1_200_000 },
 )
 
 test(
-  "six simultaneous dashboard Usage reads each meet the cold and warm budget",
+  "a restart with an unchanged catalog serves the first dashboard read READY without rebuilding any view",
+  async () => {
+    const seeded = await fixture()
+    const before = await measure(seeded.file, () =>
+      Effect.gen(function* () {
+        yield* produced
+        return yield* generations
+      }),
+    )
+    contexts.peak = 0
+    const measured = await measure(seeded.file, () =>
+      Effect.gen(function* () {
+        const verifyMs = yield* produced
+        const service = yield* dashboard
+        const first = yield* once("restart.first", service.read(input))
+        const services = yield* Effect.all(Array.from({ length: 6 }, () => dashboard))
+        const concurrent = yield* Effect.all(
+          services.map((client, index) => once(`restart.${index}`, client.read(input))),
+          { concurrency: "unbounded" },
+        )
+        return { verifyMs, first, concurrent, generations: yield* generations }
+      }),
+    )
+    const result = measured.result
+    evidence.restart = {
+      verifyMs: result.verifyMs,
+      producer: pricing(measured.probe),
+      peakLocationContexts: contexts.peak,
+      builds: builds(measured.probe),
+      first: { ms: result.first.ms, status: result.first.value.status, ...analyze(measured.probe, "perf.op.restart.first") },
+      concurrent: result.concurrent.map((item) => ({ ms: item.ms, status: item.value.status })),
+    }
+    console.log(JSON.stringify(evidence.restart, null, 1))
+    expect(builds(measured.probe)).toBe(0)
+    expect(result.generations).toEqual(before.result)
+    expect(readyMs(result.first)).toBeLessThanOrEqual(budget.first)
+    for (const item of result.concurrent) expect(readyMs(item)).toBeLessThanOrEqual(budget.first)
+  },
+  { timeout: 1_200_000 },
+)
+
+test(
+  "a warm READY dashboard read answers within budget while a different custom-range view is building",
   async () => {
     const seeded = await fixture()
     const measured = await measure(seeded.file, () =>
       Effect.gen(function* () {
-        yield* Effect.all(
-          names.map((name) => timed(`${name}.cold`, operations[name])),
-          { concurrency: "unbounded" },
+        yield* produced
+        const service = yield* dashboard
+        const custom: UsageDashboard.Input = { breakdown: { ...input.breakdown!, from: input.breakdown!.from! + 1 } }
+        expect((yield* service.read(custom)).status).toBe("preparing")
+        const { db } = yield* Database.Service
+        const state = JSON.stringify(UsageViewRecipe.state(custom.breakdown!))
+        const started = performance.now()
+        while (
+          (yield* db.get<{ status: string }>(sql`SELECT status FROM usage_view_state WHERE id = ${state}`).pipe(Effect.orDie))?.status !==
+            "building" &&
+          performance.now() - started < budget.producer
         )
-        yield* Effect.all(
-          names.map((name) => timed(`${name}.warm`, operations[name])),
-          { concurrency: "unbounded" },
-        )
+          yield* Effect.sleep("1 millis")
+        const reads = []
+        for (let index = 0; index < 10; index++) {
+          const building = (yield* db.get<{ status: string }>(sql`SELECT status FROM usage_view_state WHERE id = ${state}`).pipe(Effect.orDie))?.status === "building"
+          if (!building) break
+          reads.push(yield* once(`during.${index}`, service.read(input)))
+          yield* Effect.sleep("20 millis")
+        }
+        const finished = yield* until("custom", service.read(custom))
+        return { reads, finished }
       }),
     )
-    const concurrent = Object.fromEntries(
-      names.map((name) => [
-        name,
-        { cold: analyze(measured.probe, `perf.op.${name}.cold`), warm: analyze(measured.probe, `perf.op.${name}.warm`) },
-      ]),
-    )
-    evidence.concurrent = concurrent
-    console.log(table("concurrent", concurrent))
-    for (const name of names) {
-      expect({ name, cold: concurrent[name]!.cold.totalMs <= budget.cold }).toEqual({ name, cold: true })
-      expect({ name, warm: concurrent[name]!.warm.totalMs <= budget.warm }).toEqual({ name, warm: true })
+    const result = measured.result
+    evidence.during = {
+      reads: result.reads.map((item) => ({ ms: round(item.ms), status: item.value.status })),
+      maxMs: round(Math.max(...result.reads.map((item) => item.ms))),
+      customReadyMs: round(result.finished.ms),
     }
+    console.log(JSON.stringify(evidence.during))
+    expect(result.reads.length).toBeGreaterThan(0)
+    for (const item of result.reads) expect(readyMs(item)).toBeLessThanOrEqual(budget.during)
+    expect(result.finished.value.status).toBe("ready")
   },
   { timeout: 1_200_000 },
 )
 
 test(
-  "captures the query plan of every dashboard Usage statement",
+  "a warm READY dashboard read touches only prepared view storage, and its payload equals the standalone Usage reads",
   async () => {
     const seeded = await fixture()
     const measured = await measure(seeded.file, (probe) =>
       Effect.gen(function* () {
+        const service = yield* dashboard
+        const ready = yield* until("prepare", service.read(input))
+        probe.statements.length = 0
         probe.explain = true
-        for (const name of names) yield* operations[name]
+        const warm = yield* service.read(input)
+        probe.explain = false
+        const session = yield* Session.Service
+        const standalone = {
+          summary: yield* session.usageAll(),
+          daily: yield* session.usageReportAll(input.daily!),
+          monthly: yield* session.usageReportAll(input.monthly!),
+          breakdown: yield* session.usageReportAll(input.breakdown!),
+        }
+        return { ready, warm, standalone }
       }),
     )
-    const sqlite = await import("bun:sqlite")
-    const connection = new sqlite.Database(seeded.file, { readonly: true })
-    const plans = new Map<string, { count: number; plan: string[] }>()
-    for (const statement of measured.probe.statements) {
-      if (/^\s*(CREATE|DROP)/i.test(statement.query)) {
-        connection.run(statement.query)
-        continue
-      }
-      const text = normalize(statement.query)
-      const known = plans.get(text)
-      if (known) {
-        known.count++
-        continue
-      }
-      const prepared = connection.prepare<{ detail: string }, never[]>(`EXPLAIN QUERY PLAN ${statement.query}`)
-      plans.set(text, { count: 1, plan: prepared.all(...(statement.params as never[])).map((row) => row.detail) })
-      prepared.finalize()
+    const statements = measured.probe.statements
+    evidence.plans = statements.map((statement) => normalize(statement.query))
+    expect(statements.length).toBeGreaterThan(0)
+    for (const statement of statements) {
+      expect(statement.query).not.toMatch(/\b(?:usage_analytics_request|session_provider_request|usage_analytics_cell\w*|temp\.)/i)
+      expect(statement.query).not.toMatch(/\bGROUP BY\b|\bOVER\s*\(/i)
     }
-    connection.close()
-    evidence.plans = Object.fromEntries([...plans].map(([text, value]) => [text, value]))
-    expect(plans.size).toBeGreaterThan(0)
+    const warm = measured.result.warm
+    expect(warm.status).toBe("ready")
+    if (warm.status !== "ready") return
+    const round = (value: unknown) =>
+      JSON.parse(JSON.stringify(value, (_, item) => (typeof item === "number" && !Number.isInteger(item) ? Number(item.toPrecision(12)) : item)))
+    expect(round({ summary: warm.summary, daily: warm.daily, monthly: warm.monthly, breakdown: warm.breakdown })).toEqual(
+      round(measured.result.standalone),
+    )
   },
   { timeout: 1_200_000 },
 )
-
-function table(mode: string, values: Record<string, unknown>) {
-  return Object.entries(values)
-    .flatMap(([name, value]) =>
-      Object.entries(value as Record<string, unknown>).flatMap(([phase, item]) => {
-        if (typeof item !== "object" || item === null) return []
-        const data = item as ReturnType<typeof analyze>
-        return [
-          [
-            mode.padEnd(10),
-            name.padEnd(10),
-            phase.padEnd(5),
-            `total=${data.totalMs}`,
-            `sql=${data.readerSqlMs}`,
-            `stmts=${data.readerStatements}`,
-            `wait=${data.transactions.map((transaction) => transaction.waitMs).join("+")}`,
-            `txn=${data.transactions.length}`,
-            `contexts=${data.pricing.locationContexts}`,
-            `boots=${data.pricing.locationBoots}`,
-            `lookups=${data.pricing.catalogLookups}`,
-          ].join(" "),
-        ]
-      }),
-    )
-    .join("\n")
-}

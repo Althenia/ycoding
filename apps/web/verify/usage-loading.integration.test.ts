@@ -17,7 +17,7 @@ beforeAll(async () => {
 })
 afterAll(async () => { await browser?.close(); server?.kill(); if (server) await server.exited })
 
-for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Synthetic forecast failure"], ["empty", "No recorded consumption"]]) test(`Usage settles every region when the forecast is ${outcome}`, async () => {
+for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Recorded consumption unreported"], ["empty", "No recorded consumption"]]) test(`Usage settles every region when the forecast is ${outcome}`, async () => {
   const page = await browser!.openPage()
   try {
     const started = performance.now()
@@ -28,7 +28,7 @@ for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Syn
       const inspect = () => {
         const page = document.querySelector('.route-panel:not([inert]) .usage-page');
         const consumption = page?.querySelector('[aria-label="Recorded token consumption"]');
-        if (!consumption?.textContent.includes(${JSON.stringify(copy)}) || !page.querySelector('.usage-provider') || !page.querySelector('.usage-tile')) return;
+        if (!consumption?.textContent.includes(${JSON.stringify(copy)}) || (${JSON.stringify(outcome)} !== 'unsupported' && (!page.querySelector('.usage-provider') || !page.querySelector('.usage-tile')))) return;
         const placeholders = page.querySelectorAll('.loading-placeholder').length;
         if (placeholders > 0) return;
         clearTimeout(timer); observer.disconnect(); resolve({ text: consumption.textContent, elapsed: performance.now() - start, placeholders });
@@ -41,6 +41,47 @@ for (const [outcome, copy] of [["unsupported", "Update YCoding"], ["error", "Syn
     expect(settled.text).toContain(copy!)
   } finally { await page.close() }
 }, 30_000)
+
+test("Usage reports a failed dashboard envelope as one distinct error with a retry and no loading regions", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&usageDashboard=error`)
+    const shown = await page.evaluate<{ alert: string; placeholders: number; retry: boolean; tiles: number }>(`new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Usage error did not render: ' + document.body.innerText.slice(-600))); }, 10000);
+      const inspect = () => {
+        const page = document.querySelector('.route-panel:not([inert]) .usage-page');
+        const alert = page?.querySelector('[role="alert"]');
+        if (!alert?.textContent.includes('Synthetic dashboard failure') || page.querySelectorAll('.loading-placeholder').length > 0) return;
+        clearTimeout(timer); observer.disconnect();
+        resolve({ alert: alert.textContent, placeholders: 0, retry: [...alert.querySelectorAll('button')].some((button) => button.textContent === 'Retry'), tiles: page.querySelectorAll('.usage-tile').length });
+      };
+      const observer = new MutationObserver(inspect); observer.observe(document.body, { childList: true, subtree: true, characterData: true }); inspect();
+    })`)
+    expect(shown.retry).toBe(true)
+    expect(shown.tiles).toBe(0)
+  } finally { await page.close() }
+}, 30_000)
+
+test("Usage labels Preparing visibly, then replaces it with the ready dashboard from one composed operation", async () => {
+  const page = await browser!.openPage()
+  try {
+    await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?view=usage&usageDashboard=preparing`)
+    const shown = await page.evaluate<{ sawPreparing: boolean; usageOperations: string[] }>(`new Promise((resolve, reject) => {
+      let sawPreparing = false;
+      const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Usage did not become ready: ' + document.body.innerText.slice(-600))); }, 20000);
+      const inspect = () => {
+        const page = document.querySelector('.route-panel:not([inert]) .usage-page');
+        if (page?.textContent.includes('Preparing')) sawPreparing = true;
+        if (!page?.querySelector('.usage-provider') || !page.querySelector('.usage-tile') || page.textContent.includes('Preparing usage')) return;
+        clearTimeout(timer); observer.disconnect();
+        resolve({ sawPreparing, usageOperations: window.requestLog.map((entry) => entry.operation).filter((operation) => operation.startsWith('usage.')) });
+      };
+      const observer = new MutationObserver(inspect); observer.observe(document.body, { childList: true, subtree: true, characterData: true }); inspect();
+    })`)
+    expect(shown.sawPreparing).toBe(true)
+    expect(new Set(shown.usageOperations)).toEqual(new Set(["usage.dashboard"]))
+  } finally { await page.close() }
+}, 40_000)
 
 for (const scheme of ["dark", "light"] as const) for (const width of [390, 1440]) test(`Usage shows whole-window pace beside the recent forecast at ${width}px in ${scheme}`, async () => {
   const page = await browser!.openPage()

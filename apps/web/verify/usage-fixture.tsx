@@ -10,8 +10,10 @@ import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 
 const today = Math.floor(Date.now() / 86_400_000) * 86_400_000
-const old = new URLSearchParams(location.search).has("old")
-let oldZone = new URLSearchParams(location.search).has("old-zone")
+let old = new URLSearchParams(location.search).has("old")
+const invalid = new URLSearchParams(location.search).has("invalid")
+const quotaError = new URLSearchParams(location.search).has("quota-error")
+let quotaReleased = !new URLSearchParams(location.search).has("quota-preparing")
 const offline = new URLSearchParams(location.search).has("offline")
 const none = new URLSearchParams(location.search).has("none")
 const paged = new URLSearchParams(location.search).has("paged")
@@ -20,7 +22,6 @@ const refreshCycle = new URLSearchParams(location.search).has("refresh-cycle")
 const initialLoading = new URLSearchParams(location.search).has("initial-loading")
 const largeValues = new URLSearchParams(location.search).has("large-values")
 const unknownUsage = new URLSearchParams(location.search).has("unknown-usage")
-const oldGroups = new URLSearchParams(location.search).has("old-groups")
 const forecastMode = new URLSearchParams(location.search).get("forecast")
 const longDistribution = new URLSearchParams(location.search).has("distribution-long-values")
 const musePendingMode = new URLSearchParams(location.search).get("provider") === "muse-pending"
@@ -110,7 +111,7 @@ const localRates = [
   { providerID: "anthropic", profile: "Max · Personal", modelID: "claude-opus", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 0, tokensPerMinute5: 0, estimatedUSDPerHour: 0.0042, coverage: { pricedRequests: 3, unpricedRequests: 2 } },
 ]
 const museRate = [{ providerID: "muse", profile: "Muse", modelID: "muse-model", observedFrom: 1_700_000_000_000, observedTo: 1_700_003_600_000, tokensPerMinute: 120, tokensPerMinute5: 180, tokensPerMinute60: 120, coverage: { pricedRequests: 0, unpricedRequests: 3 } }]
-const requests: { operation: string; input?: UsageReportInput | { refresh: boolean } }[] = []
+const requests: { operation: string; input?: unknown }[] = []
 let releasePage: (() => void) | undefined
 let releaseReload: (() => void) | undefined
 let pendingReload: Promise<void> | undefined
@@ -129,12 +130,26 @@ const failure = (code: "unknown_operation" | "invalid_message" | "internal_error
 const ok = (data: unknown): RemoteRequestOutcome => ({ status: "ok", value: { data } })
 const unknown: RemoteRequestOutcome = { status: "unknown", error: { code: "outcome_unknown", message: "Agent disconnected before settling this request" } }
 
+const dimensionsFor = (group: UsageReportInput["group"], index: number) => {
+  const providerID = ["openai", "anthropic", "openrouter", "github-copilot"][index % 4]!
+  const modelID = `model-${index + 1}`
+  const profile = index % 2 === 0 ? "Personal" : undefined
+  const state = profile === undefined ? { profileState: "provider-default" as const } : { profile, profileState: "recorded" as const }
+  if (group === "provider") return { dimensions: { group, providerID } }
+  if (group === "provider-model") return { dimensions: { group, providerID, modelID } }
+  if (group === "provider-profile-model") return { dimensions: { group, providerID, modelID, ...state } }
+  if (group === "model-id") return { dimensions: { group, modelID } }
+  if (group === "profile") return { dimensions: { group, providerID, ...state } }
+  if (group === "prompt" || group === "task") return { dimensions: { group, attribution: "unattributed" as const } }
+  return {}
+}
+
 const report = (input: UsageReportInput) => {
   if (input.group === "model" && input.limit === 200) return { group: "model", rows: refreshCycle ? monthlyRows.map((row) => ({ ...row, cost: row.cost === undefined ? undefined : row.cost + revision })) : monthlyRows,
     total: { logical: 10, physical: 14, helpers: 0, continued: 0, fallback: 0, costCoverage: { pricedRequests: 9, unpricedRequests: 1 },
       cost: (longDistribution ? 20_000_000 : 15) + (refreshCycle ? 3 * revision : 0), costProvenance: "current_catalog", tokens: { input: tokens.input * 4, output: tokens.output * 4, reasoning: tokens.reasoning * 4, cache: { read: tokens.cache.read * 4, write: tokens.cache.write * 4 } } },
     rowCount: monthlyRows.length }
-  const all = entries(input).map((row, index) => ({ ...row,
+  const all = entries(input).map((row, index) => ({ ...row, ...dimensionsFor(input.group, index),
     ...(refreshCycle && revision > 0 && input.group === "day" ? { cost: (row.cost ?? 0) + revision, costProvenance: "current_catalog" as const, costCoverage: { pricedRequests: row.logical, unpricedRequests: 0 } } : {}),
     ...(largeValues && input.group === "day" && index === 29 ? { physical: 7_720, tokens: { input: 2_267_963_225, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } : {}),
   }))
@@ -153,40 +168,54 @@ const report = (input: UsageReportInput) => {
   }, rowCount: all.length, ...((offset + (input.limit ?? 25)) < all.length ? { nextOffset: offset + (input.limit ?? 25) } : {}) }
 }
 
+type DashboardRequest = { readonly daily?: UsageReportInput; readonly monthly?: UsageReportInput; readonly breakdown?: UsageReportInput; readonly refresh?: boolean }
+
+const providerSnapshot = (refresh: boolean) => {
+  if (musePendingMode && refresh) museRefreshed = true
+  quotaSnapshots = musePendingMode ? [museRefreshed ? museObservedProvider : musePendingProvider, ...providers] : museMode ? [museProvider, ...providers] : none ? providers.filter((provider) => provider.providerID === "other" || provider.providerID === "empty") : refreshCycle ? refreshedProviders() : providers
+  return quotaSnapshots
+}
+
+const forecastSnapshot = () => {
+  const asOf = Date.now()
+  const quotas = quotaSnapshots.flatMap((provider) => provider.windows.map((window) => ({
+    providerID: provider.providerID, ...(provider.profile === undefined ? {} : { profile: provider.profile }), windowID: window.id, unit: window.unit,
+    source: provider.source, stability: provider.stability, updatedAt: provider.updatedAt,
+    ...(museMode && provider.providerID === "muse" ? { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Muse quota observations are warming up" }
+      : forecastMode === "past" ? { state: "estimated" as const, evidence: "medium" as const, method: "quota-delta-ema" as const, ratePerHour: 10, exhaustionAt: asOf - 60_000 }
+      : states ? stateFor(provider.providerID, window.id, asOf)
+      : { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Warming up after restart" }),
+  })))
+  return { asOf, localScope: "backend", ...(forecastMode === "rates-absent" ? {} : { localRates: museMode ? [...museRate, ...localRates] : states ? localRates : [] }), ...(forecastMode === "quotas-absent" ? {} : { quotas }) }
+}
+
 const answer = async (operation: string, request?: RemoteTransportRequest): Promise<RemoteRequestOutcome> => {
   if (operation === "incident.report") return ok({ rows: [], groups: 0 })
   if (!operation.startsWith("usage.")) return ok([])
-  const input = request?.input as UsageReportInput | undefined
-  if (operation === "usage.providers" && refreshCycle && input && "refresh" in input && !pendingReload) beginReload()
-  requests.push({ operation, ...(operation === "usage.summary" || input === undefined ? {} : { input }) })
+  const input = request?.input as DashboardRequest | undefined
+  if (operation !== "usage.dashboard") return failure("unknown_operation", "Unknown operation")
+  const refresh = input?.refresh === true
+  if (refreshCycle && refresh && !pendingReload) beginReload()
+  requests.push({ operation, ...(input === undefined ? {} : { input }) })
   if (releaseInitial && pendingInitial) await pendingInitial
   if (outage) return unknown
   if (old) return failure("unknown_operation", "Unknown operation")
-  if (unknownUsage && retryFailure) return failure("internal_error", operation === "usage.providers" ? "Quota retry failed." : operation === "usage.summary" ? "Summary retry failed." : "Report retry failed.")
-  if (operation === "usage.report" && oldZone && input?.timeZone !== undefined) return failure("invalid_message", "Unknown usage report field")
-  if (operation === "usage.report" && oldGroups && input && !["model", "hour", "day", "month", "session", "project", "agent"].includes(input.group)) return failure("invalid_message", "Unknown usage report group")
+  if (unknownUsage && retryFailure) return failure("internal_error", "Usage retry failed.")
+  if (invalid) return failure("invalid_message", "The usage request was rejected.")
   if (refreshCycle && pendingReload) await pendingReload
-  if (operation === "usage.providers") { if (musePendingMode && input && "refresh" in input && input.refresh === true) museRefreshed = true; quotaSnapshots = musePendingMode ? [museRefreshed ? museObservedProvider : musePendingProvider, ...providers] : museMode ? [museProvider, ...providers] : none ? providers.filter((provider) => provider.providerID === "other" || provider.providerID === "empty") : refreshCycle ? refreshedProviders() : providers; return ok(quotaSnapshots) }
-  if (operation === "usage.summary") return ok({ logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 })
-  if (operation === "usage.forecast") {
-    const asOf = Date.now()
-    const quotas = quotaSnapshots.flatMap((provider) => provider.windows.map((window) => ({
-      providerID: provider.providerID, ...(provider.profile === undefined ? {} : { profile: provider.profile }), windowID: window.id, unit: window.unit,
-      source: provider.source, stability: provider.stability, updatedAt: provider.updatedAt,
-      ...(museMode && provider.providerID === "muse" ? { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Muse quota observations are warming up" }
-        : forecastMode === "past" ? { state: "estimated" as const, evidence: "medium" as const, method: "quota-delta-ema" as const, ratePerHour: 10, exhaustionAt: asOf - 60_000 }
-        : states ? stateFor(provider.providerID, window.id, asOf)
-        : { state: "insufficient" as const, evidence: "insufficient" as const, reason: "Warming up after restart" }),
-    })))
-    return ok({ asOf, localScope: "backend", ...(forecastMode === "rates-absent" ? {} : { localRates: museMode ? [...museRate, ...localRates] : states ? localRates : [] }), ...(forecastMode === "quotas-absent" ? {} : { quotas }) })
-  }
-  if (input === undefined) return failure("internal_error", "Missing report input")
-  if (paged && input.group !== "day" && input.limit !== 200 && ((input.offset ?? 0) > 0 || input.group !== "model" || input.order === "asc")) {
+  const breakdown = input?.breakdown
+  if (paged && breakdown && breakdown.group !== "day" && breakdown.limit !== 200 && ((breakdown.offset ?? 0) > 0 || breakdown.group !== "model" || breakdown.order === "asc")) {
     await new Promise<void>((resolve) => { releasePage = resolve })
     releasePage = undefined
     if (pageError) return failure("internal_error", "The usage page could not be loaded.")
   }
-  return ok(report(input))
+  const snapshots = providerSnapshot(refresh)
+  return ok({
+    status: "ready", asOf: Date.now(), revision: `fixture-${revision}`,
+    summary: { logical: 980, physical: 1084, helpers: 0, continued: 0, fallback: 0, tokens, cost: 104.32 },
+    quota: quotaError ? { status: "error", message: "Provider quotas are unavailable right now." } : quotaReleased ? { status: "ready", providers: snapshots, forecast: forecastSnapshot() } : { status: "preparing" },
+    ...(input?.daily ? { daily: report(input.daily) } : {}), ...(input?.monthly ? { monthly: report(input.monthly) } : {}), ...(breakdown ? { breakdown: report(breakdown) } : {}),
+  })
 }
 
 const devices = [{ id: "dev_fixture", name: "Studio Mac", createdAt: 1, status: "active" as const, online: true }]
@@ -221,7 +250,7 @@ const refetchAll = () => {
   const scope = { deviceID: store.state().activeDeviceID ?? "", generation: store.state().generation }
   void store.queryClient.refetchQueries({ queryKey: remoteKeys.usage(scope), type: "all" })
 }
-Object.assign(window, { usageRequests: () => requests, usageReleaseInitial: () => { releaseInitial?.(); releaseInitial = undefined }, usageReleasePage: () => releasePage?.(), usageReleaseReload: () => {
+Object.assign(window, { usageRequests: () => requests, usageReleaseQuota: () => { quotaReleased = true }, usageReleaseInitial: () => { releaseInitial?.(); releaseInitial = undefined }, usageReleasePage: () => releasePage?.(), usageReleaseReload: () => {
   const release = releaseReload
   pendingReload = undefined
   releaseReload = undefined
@@ -237,7 +266,7 @@ Object.assign(window, { usageRequests: () => requests, usageReleaseInitial: () =
   beginReload()
   reopen("reconnecting")
 }, usageDowngrade: () => {
-  oldZone = true
+  old = true
   reopen("reconnecting")
 }, usageSwitchDevice: () => {
   store.connect("dev_other")

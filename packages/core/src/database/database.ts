@@ -2,7 +2,7 @@ export * as Database from "./database"
 
 import { EffectDrizzleSqlite } from "@ycoding-ai/effect-drizzle-sqlite"
 import { sqliteLayer } from "#sqlite"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, type Scope } from "effect"
 import { Global } from "../global"
 import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
@@ -16,6 +16,8 @@ export interface Interface {
   db: DatabaseShape
   /** Read-only connection for long reads; absent for in-memory databases, which cannot be opened twice. */
   reader?: DatabaseShape
+  /** Opens another read-only connection owned by the caller's scope; absent for in-memory databases. */
+  connect?: Effect.Effect<DatabaseShape, never, Scope.Scope>
 }
 
 export const Options = Schema.Struct({
@@ -45,7 +47,7 @@ const makeService = (file: string) =>
     yield* db.run("PRAGMA optimize=0x10002")
 
     if (file === ":memory:") return { db }
-    const reader = yield* Layer.build(
+    const connect = Layer.build(
       sqliteLayer({ filename: file, readonly: true, readwrite: false, create: false, disableWAL: true }),
     ).pipe(
       Effect.flatMap((context) => makeDatabase.pipe(Effect.provide(context))),
@@ -56,8 +58,10 @@ const makeService = (file: string) =>
           reader.run("PRAGMA temp_store = MEMORY"),
         ]),
       ),
+      Effect.orDie,
     )
-    return { db, reader }
+    const reader = yield* connect
+    return { db, reader, connect }
   }).pipe(Effect.orDie)
 
 export const reclaim = Effect.fn("Database.reclaim")(function* (db: DatabaseShape) {

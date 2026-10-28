@@ -20,6 +20,7 @@ import { SessionUsagePricing } from "../src/session/usage-pricing"
 import { SessionSchema } from "../src/session/schema"
 import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { fixedLocations } from "./fixture/location-map"
@@ -127,7 +128,7 @@ function harness() {
           })),
         )
         .run()
-      yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
+      yield* database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))
       return database
     }),
   ).pipe(Layer.provide(Database.layer({ path: ":memory:" })))

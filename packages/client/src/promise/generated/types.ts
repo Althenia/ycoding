@@ -87,6 +87,7 @@ export type TelemetryRequestSample = {
     | "session.promptCosts"
     | "session.taskCosts"
     | "usage.forecast"
+    | "usage.dashboard"
     | "incident.report"
     | "incident.recent"
     | "incident.guidance"
@@ -803,6 +804,14 @@ export type BrowserPage = { origin: string; path: string }
 export type BrowserPairing = { secret: string; expiresAt: number }
 
 export type BrowserCaptureOutput = { mediaType: "image/png"; data: string; bytes: number }
+
+export type UsageDashboardPreparing = { status: "preparing" }
+
+export type UsageDashboardError = { status: "error"; message: string }
+
+export type UsageDashboardQuotaPreparing = { status: "preparing" }
+
+export type UsageDashboardQuotaFailed = { status: "error"; message: string }
 
 export type ModelIncidentReportRow = {
   providerID: string
@@ -3714,6 +3723,33 @@ export type SessionReviewDecided = {
   data: { sessionID: string; itemID: SessionReviewID; decision: SessionReviewDecision; source?: FormClientReplySource }
 }
 
+export type UsageDashboardQuotaReady = {
+  status: "ready"
+  providers: Array<{
+    providerID: string
+    label: string
+    profile?: string
+    status: ProviderUsageStatus
+    source: ProviderUsageSource
+    stability: ProviderUsageStability
+    updatedAt: number
+    windows: Array<{
+      id: string
+      label: string
+      group?: string
+      unit: ProviderUsageUnit
+      used?: number
+      limit?: number
+      remaining?: number
+      unlimited?: boolean
+      resetAt?: number
+      periodSeconds?: number
+    }>
+    message?: string
+  }>
+  forecast: UsageForecastInfo
+}
+
 export type IntegrationMethod =
   | IntegrationOAuthMethod
   | IntegrationCommandMethod
@@ -3982,6 +4018,8 @@ export type SessionTaskUpdated = {
   }
 }
 
+export type UsageDashboardQuota = UsageDashboardQuotaPreparing | UsageDashboardQuotaReady | UsageDashboardQuotaFailed
+
 export type IntegrationInfo = {
   id: string
   name: string
@@ -4188,6 +4226,158 @@ export type FormReplied = {
   type: "form.replied"
   location?: LocationRef
   data: { id: string; sessionID: string; answer: FormAnswer; source?: FormReplySource }
+}
+
+export type UsageDashboardReady = {
+  status: "ready"
+  asOf: number
+  revision: string
+  summary: ProviderRequestSummary
+  quota: UsageDashboardQuota
+  daily?: {
+    group:
+      | "model"
+      | "hour"
+      | "day"
+      | "month"
+      | "session"
+      | "project"
+      | "agent"
+      | "provider"
+      | "provider-profile-model"
+      | "provider-model"
+      | "model-id"
+      | "profile"
+      | "prompt"
+      | "task"
+    rows: Array<{
+      key: string
+      label: string
+      model?: ModelRef
+      dimensions?: ProviderRequestReportDimensions
+      logical: number
+      physical: number
+      helpers: number
+      continued: number
+      fallback: number
+      costCoverage?: ProviderRequestCostCoverage
+      tokens: TokenUsageInfo
+      cost?: MoneyUSD
+      costProvenance?: "recorded" | "current_catalog"
+      cacheReadReported?: boolean
+      speed?: ProviderRequestSpeed
+    }>
+    total: {
+      logical: number
+      physical: number
+      helpers: number
+      continued: number
+      fallback: number
+      costCoverage?: ProviderRequestCostCoverage
+      tokens: TokenUsageInfo
+      cost?: MoneyUSD
+      costProvenance?: "recorded" | "current_catalog"
+      cacheReadReported?: boolean
+    }
+    rowCount: number
+    nextOffset?: number
+  }
+  monthly?: {
+    group:
+      | "model"
+      | "hour"
+      | "day"
+      | "month"
+      | "session"
+      | "project"
+      | "agent"
+      | "provider"
+      | "provider-profile-model"
+      | "provider-model"
+      | "model-id"
+      | "profile"
+      | "prompt"
+      | "task"
+    rows: Array<{
+      key: string
+      label: string
+      model?: ModelRef
+      dimensions?: ProviderRequestReportDimensions
+      logical: number
+      physical: number
+      helpers: number
+      continued: number
+      fallback: number
+      costCoverage?: ProviderRequestCostCoverage
+      tokens: TokenUsageInfo
+      cost?: MoneyUSD
+      costProvenance?: "recorded" | "current_catalog"
+      cacheReadReported?: boolean
+      speed?: ProviderRequestSpeed
+    }>
+    total: {
+      logical: number
+      physical: number
+      helpers: number
+      continued: number
+      fallback: number
+      costCoverage?: ProviderRequestCostCoverage
+      tokens: TokenUsageInfo
+      cost?: MoneyUSD
+      costProvenance?: "recorded" | "current_catalog"
+      cacheReadReported?: boolean
+    }
+    rowCount: number
+    nextOffset?: number
+  }
+  breakdown?: {
+    group:
+      | "model"
+      | "hour"
+      | "day"
+      | "month"
+      | "session"
+      | "project"
+      | "agent"
+      | "provider"
+      | "provider-profile-model"
+      | "provider-model"
+      | "model-id"
+      | "profile"
+      | "prompt"
+      | "task"
+    rows: Array<{
+      key: string
+      label: string
+      model?: ModelRef
+      dimensions?: ProviderRequestReportDimensions
+      logical: number
+      physical: number
+      helpers: number
+      continued: number
+      fallback: number
+      costCoverage?: ProviderRequestCostCoverage
+      tokens: TokenUsageInfo
+      cost?: MoneyUSD
+      costProvenance?: "recorded" | "current_catalog"
+      cacheReadReported?: boolean
+      speed?: ProviderRequestSpeed
+    }>
+    total: {
+      logical: number
+      physical: number
+      helpers: number
+      continued: number
+      fallback: number
+      costCoverage?: ProviderRequestCostCoverage
+      tokens: TokenUsageInfo
+      cost?: MoneyUSD
+      costProvenance?: "recorded" | "current_catalog"
+      cacheReadReported?: boolean
+    }
+    rowCount: number
+    nextOffset?: number
+  }
 }
 
 export type ProjectArtifactApiListItem = ProjectArtifactArtifactSummary | ProjectArtifactApiTrashSummary
@@ -5213,6 +5403,8 @@ export type SessionContextObserved = {
   }
 }
 
+export type UsageDashboardInfo = UsageDashboardPreparing | UsageDashboardError | UsageDashboardReady
+
 export type ServerEvent =
   | ModelsDevRefreshed
   | IntegrationUpdated
@@ -5757,6 +5949,7 @@ export type ServerTelemetryAppendInput = {
             | "session.promptCosts"
             | "session.taskCosts"
             | "usage.forecast"
+            | "usage.dashboard"
             | "incident.report"
             | "incident.recent"
             | "incident.guidance"
@@ -11167,6 +11360,467 @@ export type UsageReportOutput = {
     nextOffset?: number
   }
 }["data"]
+
+export type UsageDashboardInput = {
+  readonly daily?: {
+    readonly daily?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly monthly?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly breakdown?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly refresh?: boolean
+  }["daily"]
+  readonly monthly?: {
+    readonly daily?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly monthly?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly breakdown?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly refresh?: boolean
+  }["monthly"]
+  readonly breakdown?: {
+    readonly daily?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly monthly?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly breakdown?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly refresh?: boolean
+  }["breakdown"]
+  readonly refresh?: {
+    readonly daily?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly monthly?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly breakdown?: {
+      readonly group:
+        | "model"
+        | "hour"
+        | "day"
+        | "month"
+        | "session"
+        | "project"
+        | "agent"
+        | "provider"
+        | "provider-profile-model"
+        | "provider-model"
+        | "model-id"
+        | "profile"
+        | "prompt"
+        | "task"
+      readonly providerID?: string
+      readonly profile?: string
+      readonly modelID?: string
+      readonly selectedEffort?: string
+      readonly timeZone?: string
+      readonly from?: number
+      readonly to?: number
+      readonly offset?: number
+      readonly limit?: number
+      readonly sort?:
+        | "key"
+        | "tokens"
+        | "cost"
+        | "steps"
+        | "input"
+        | "output"
+        | "reasoning"
+        | "cacheRead"
+        | "cacheWrite"
+      readonly order?: "asc" | "desc"
+    }
+    readonly refresh?: boolean
+  }["refresh"]
+}
+
+export type UsageDashboardOutput = { data: UsageDashboardInfo }["data"]
 
 export type IncidentReportInput = {
   readonly group: {

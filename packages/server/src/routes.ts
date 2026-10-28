@@ -31,6 +31,8 @@ import { Job } from "@ycoding-ai/core/job"
 import { Global } from "@ycoding-ai/core/global"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import { UsageViewStart } from "@ycoding-ai/core/usage-view-start"
+import { UsageDashboardRead } from "@ycoding-ai/core/usage-dashboard-read"
 import { ModelsDev } from "@ycoding-ai/core/models-dev"
 import { ModelIncident } from "@ycoding-ai/core/model-incident/index"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
@@ -93,6 +95,8 @@ const applicationServices = LayerNode.group([
   WellKnown.node,
   PtyEnvironment.node,
   LocationServiceMap.node,
+  UsageViewStart.node,
+  UsageDashboardRead.node,
   SessionRestart.node,
   SessionExecution.node,
   SessionOrchestration.node,

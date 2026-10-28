@@ -12,6 +12,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
 
 const seed = (db: Database.Interface["db"]) => Effect.gen(function* () {
   yield* db.run("INSERT INTO project (id, worktree, sandboxes, time_created, time_updated) VALUES ('global', '/local', '[]', 0, 0)")
@@ -47,7 +48,7 @@ test("local bins align to the lower bound, isolate Location and profile, and exc
           'route', 'cache', 'system', 'tools', ${100 + index}, 1, 'first-request', 'full', 7,
           '{"input":10,"output":20,"reasoning":30,"cache":{"read":40,"write":50}}', ${at})
       `)
-    yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
+    yield* database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))
     const bins = yield* SessionUsageRead.localUsage(database, {
       from, to, scope: { type: "location", location: Location.Ref.make({ directory: AbsolutePath.make("/local") }) },
     })
@@ -75,6 +76,33 @@ test("local bins align to the lower bound, isolate Location and profile, and exc
   }).pipe(Effect.provide(Database.layer({ path: ":memory:" })), Effect.scoped)),
 )
 
+test("local reads reject a non-ordered or non-safe-integer range with a typed error", () =>
+  Effect.runPromise(Effect.gen(function* () {
+    const database = yield* Database.Service
+    const ranges = [
+      [-Infinity, 1_000],
+      [0, Infinity],
+      [-Infinity, Infinity],
+      [0, 2 ** 60],
+      [NaN, 1_000],
+      [0, NaN],
+      [1_000, 0],
+      [1_000, 1_000],
+      [0.5, 600_000.5],
+    ] as const
+    for (const [from, to] of ranges) {
+      const usage = yield* Effect.flip(SessionUsageRead.localUsage(database, { from, to, scope: { type: "backend" } }))
+      expect(usage).toBeInstanceOf(Error)
+      expect(usage).not.toBeInstanceOf(RangeError)
+      expect(usage.message).toBe("Local usage requires an ordered finite millisecond range")
+      const spend = yield* Effect.flip(SessionUsageRead.localSpend(database, { dayStart: from, dayEnd: to }))
+      expect(spend).toBeInstanceOf(Error)
+      expect(spend).not.toBeInstanceOf(RangeError)
+      expect(spend.message).toBe("Local usage requires an ordered finite millisecond range")
+    }
+  }).pipe(Effect.provide(Database.layer({ path: ":memory:" })), Effect.scoped)),
+)
+
 for (const mode of ["snapshot", "cancel"] as const)
   test(`local reads ${mode} release the shared reader while main-connection work stays available`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "ycoding-local-read-"))
@@ -93,7 +121,7 @@ for (const mode of ["snapshot", "cancel"] as const)
             '{"input":1,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}', 100
           FROM n
         `)
-        yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
+        yield* database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))
         const held = yield* Deferred.make<void>()
         const proceed = yield* Deferred.make<void>()
         const context = yield* Layer.build(sqliteLayer({ filename: file, readonly: true, readwrite: false, create: false, disableWAL: true }))
@@ -101,7 +129,7 @@ for (const mode of ["snapshot", "cancel"] as const)
         const reader: Database.Interface["db"] = yield* EffectDrizzleSqlite.make().pipe(
           Effect.provideService(EffectDrizzleSqlite.EffectLogger, {
             logQuery: (query) => Effect.gen(function* () {
-              if (!query.includes("FROM usage_analytics_request")) return
+              if (!query.includes("FROM usage_analytics_cell AS r")) return
               expect((yield* Effect.serviceOption(reader.$client.transactionService))._tag).toBe("Some")
               count += 1
               if (count !== 2) return
@@ -129,7 +157,7 @@ for (const mode of ["snapshot", "cancel"] as const)
             'route', 'cache', 'system', 'tools', 10006, 1, 'first-request', 'full', 1,
             '{"input":1,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}', 100)
         `)
-        yield* database.db.transaction(() => UsageAnalytics.backfill(database.db))
+        yield* database.db.transaction(() => UsageAnalytics.backfill(database.db).pipe(Effect.andThen(UsageStage.backfill(database.db))))
         yield* Deferred.succeed(proceed, undefined)
         expect((yield* Fiber.join(fiber))[0]?.knownUSD).toBe(10_005)
         const [spend, bins] = yield* Effect.all([

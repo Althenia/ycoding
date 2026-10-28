@@ -42,6 +42,7 @@ import {
   SessionTable,
 } from "@ycoding-ai/core/session/sql"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
+import { UsageStage } from "../src/usage-stage"
 import { testEffect } from "./lib/effect"
 import { fixedLocations } from "./fixture/location-map"
 
@@ -446,6 +447,7 @@ describe("compacted history pruning", () => {
         sql`INSERT INTO session_provider_request (id, session_id, input_id, assistant_message_id, source, agent, model, route_id, prompt_cache_key, system_digest, tool_digest, request, attempts, invalidation, continuation, tokens, cost, time_created)
           VALUES ('preq_covered', ${fixture.sessionID}, ${fixture.ids.firstUser}, ${fixture.ids.firstAnswer}, 'step', 'build', ${JSON.stringify(ref)}, 'openai-chat', 'key', 'system', 'tools', 1, 1, 'none', 'full', ${JSON.stringify(usage)}, 0.5, 0)`,
       )
+      yield* UsageStage.backfill(db)
       const ledger = () =>
         db.all(sql`SELECT * FROM session_provider_request WHERE session_id = ${fixture.sessionID}`).pipe(Effect.orDie)
       const usageBefore = yield* totals()

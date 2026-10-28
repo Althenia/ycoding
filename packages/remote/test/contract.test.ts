@@ -309,6 +309,23 @@ test("usage operations are global and validate refresh and bounded ReportInput",
     expect(parseClientMessage(JSON.stringify({ type: "request", id: "r", operation, sessionID: "ses_1", input: operation === "usage.report" ? { group: "model" } : undefined })).ok).toBe(false)
 })
 
+test("usage.dashboard is one global read that validates each provided bounded report and a one-shot refresh", () => {
+  const input = { daily: { group: "day", timeZone: "UTC", from: 0, to: 10 }, monthly: { group: "month" }, breakdown: { group: "provider-model", limit: 25 } }
+  const parse = (value: unknown, sessionID?: string) => parseClientMessage(JSON.stringify({ type: "request", id: "r", operation: "usage.dashboard", ...(sessionID ? { sessionID } : {}), ...(value === undefined ? {} : { input: value }) }))
+  expect(parse(input)).toMatchObject({ ok: true })
+  expect(parse({ ...input, refresh: true })).toMatchObject({ ok: true })
+  expect(parse({ ...input, refresh: false })).toMatchObject({ ok: true })
+  for (const slots of [{}, { refresh: true }, { breakdown: input.breakdown }, { daily: input.daily, monthly: input.monthly }]) expect(parse(slots)).toMatchObject({ ok: true })
+  for (const bad of [
+    undefined, [], { ...input, extra: 1 }, { daily: "day" }, { breakdown: { group: "provider-model", limit: 201 } }, { ...input, refresh: "true" },
+    { ...input, daily: { group: "day", from: 10, to: 10 } }, { ...input, monthly: { group: "month", limit: 201 } },
+    { ...input, breakdown: { group: "secret" } }, { ...input, daily: { group: "day", timeZone: "" } },
+    { ...input, breakdown: { group: "provider-model", directory: "/private" } }, { ...input, daily: "day" },
+  ]) expect(parse(bad)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
+  expect(parse(input, "ses_1").ok).toBe(false)
+  expect(remoteOperationAccess["usage.dashboard"]).toBe("read")
+})
+
 test("incident operations classify as read except guidance clear, and none requires a Session", () => {
   expect(remoteOperationAccess["incident.report"]).toBe("read")
   expect(remoteOperationAccess["incident.recent"]).toBe("read")
@@ -860,6 +877,7 @@ describe("remote operations", () => {
       "session.promptCosts",
       "session.taskCosts",
       "usage.forecast",
+      "usage.dashboard",
       "incident.report",
       "incident.recent",
       "incident.guidance",

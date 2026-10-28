@@ -11,6 +11,7 @@ import { SessionUsageCleanup } from "../src/session/usage-cleanup"
 import { SessionFileChangeCleanup } from "../src/session/file-change-cleanup"
 import { SessionContextExclusionCleanup } from "../src/session/context-exclusion-cleanup"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
 import { TelemetryConsent } from "../src/telemetry-consent"
 import { WebLatency } from "../src/web-latency"
 import { Telemetry } from "@ycoding-ai/schema/telemetry"
@@ -75,7 +76,7 @@ it.effect(
         (id,session_id,source,agent,model,route_id,prompt_cache_key,system_digest,tool_digest,request,attempts,invalidation,continuation,tokens,time_created)
         VALUES (${"prq_" + name},${id},'step','build','{"providerID":"p","id":"m"}','route','cache','system','tools',1,1,'first-request','full','{"input":1,"output":0,"reasoning":0,"cache":{"read":0,"write":0}}',${updated})`)
       }
-      yield* UsageAnalytics.backfill(db)
+      yield* UsageAnalytics.backfill(db).pipe(Effect.andThen(UsageStage.backfill(db)))
       const cleanups = [
         yield* SessionUsageCleanup.Service,
         yield* SessionFileChangeCleanup.Service,

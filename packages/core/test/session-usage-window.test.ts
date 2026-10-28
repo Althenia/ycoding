@@ -7,6 +7,7 @@ import { sqliteLayer } from "../src/database/sqlite.bun"
 import { SessionSchema } from "../src/session/schema"
 import { SessionUsageRead } from "../src/session/usage-read"
 import { UsageAnalytics } from "../src/usage-analytics"
+import { UsageStage } from "../src/usage-stage"
 
 const requests = 24_000
 const tie = 4
@@ -62,7 +63,7 @@ const fixture = Effect.gen(function* () {
         '{"firstOutputMs":7,"totalMs":13}', CASE WHEN value % ${sparse} < 2 THEN NULL ELSE 0.5 END, value / ${tie}
       FROM n
     `)
-  yield* db.transaction(() => UsageAnalytics.backfill(db))
+  yield* db.transaction(() => UsageAnalytics.backfill(db).pipe(Effect.andThen(UsageStage.backfill(db))))
   yield* db.run(`ANALYZE`)
   return { db, queries }
 })
@@ -71,14 +72,15 @@ type Db = Effect.Success<typeof fixture>["db"]
 
 const readAll = Effect.fnUntraced(function* (db: Db, range: Range, sessions?: typeof family) {
   const where = SessionUsageRead.usageWhere(range, sessions)
+  const pieces = SessionUsageRead.pieces(range)
   const scopes = sessions ?? [undefined]
   let unpriced = 0
   const refs = new Set<string>()
   for (const sessionID of scopes) {
     let after: string | undefined
     while (true) {
-      const page = yield* SessionUsageRead.unpriced(db, where, after, sessionID, range)
-      unpriced += page.rows.length
+      const page = yield* SessionUsageRead.unpriced(db, where, after, sessionID, pieces)
+      unpriced += page.rows.reduce((total, row) => total + row.requests, 0)
       if (page.after === undefined) break
       after = page.after
     }
@@ -94,7 +96,7 @@ const readAll = Effect.fnUntraced(function* (db: Db, range: Range, sessions?: ty
     where,
     sessions,
     group: "model",
-    ...range,
+    plan: { pieces, offsets: [] },
     order: sql`key ASC`,
     offset: 0,
     limit: 100,
@@ -133,7 +135,7 @@ for (const [name, range] of ranges)
     ),
   )
 
-test("dated usage pages seek by the (time_created, id) cursor instead of rescanning the date range", () =>
+test("dated usage pages seek prepared cells by span, bucket and cell cursor instead of rescanning the date range", () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const { db, queries } = yield* fixture
@@ -142,32 +144,28 @@ test("dated usage pages seek by the (time_created, id) cursor instead of rescann
       yield* readAll(db, range)
 
       const dated = queries.filter(
-        (query) => query.sql.includes("FROM usage_analytics_request AS r") && /r\.time_created >= \?/.test(query.sql),
+        (query) => query.sql.includes("FROM usage_analytics_cell AS r") && !query.sql.includes("temp.usage_slot"),
       )
       expect(dated.length).toBeGreaterThan(5)
+      expect(queries.some((query) => /\b(?:from|join)\s+usage_analytics_request\b/i.test(query.sql))).toBe(false)
       const kinds = new Set<string>()
       for (const query of dated) {
-        const from = query.sql.indexOf("FROM usage_analytics_request")
-        const source = query.sql
-          .slice(from)
-          .replace(/GROUP BY 1\s*$/, "")
-          .replace(/JOIN temp\.usage_slot ON[^\n]+\n/, "")
-        const offset = (query.sql.slice(0, from).match(/\?/g) ?? []).length
-        const params = query.params.slice(offset, offset + (source.match(/\?/g) ?? []).length)
-        const plan = yield* db.$client.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN SELECT r.id ${source}`, params)
-        const search = plan.find((row) => /usage_analytics_request_(unpriced_|metrics_)?(time_created_id_)?idx/.test(row.detail))!.detail
-        const kind = query.sql.includes("DISTINCT") ? "pricing" : query.sql.includes("INSERT") ? "stage" : "unpriced"
+        const plan = yield* db.$client.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query.sql.replace(/^\s*INSERT INTO temp\.usage_partial/, "")}`, query.params)
+        const search = plan.find((row) => /SEARCH r USING (?:COVERING )?INDEX usage_analytics_cell_/.test(row.detail))!.detail
+        const kind = query.sql.includes("DISTINCT")
+          ? "pricing"
+          : query.sql.includes("INSERT INTO temp.usage_partial")
+            ? "stage"
+            : query.sql.includes("r.unpriced > 0")
+              ? "unpriced"
+              : "other"
         kinds.add(kind)
         expect(search).toContain(
-          kind === "stage"
-            ? "COVERING INDEX usage_analytics_request_metrics_idx"
-            : "usage_analytics_request_unpriced_time_created_id_idx",
+          kind === "pricing" || kind === "unpriced" ? "usage_analytics_cell_unpriced_idx" : "usage_analytics_cell_",
         )
-        expect(search).toContain("(time_created,id)>(?,?)")
-        expect(search).toContain("(time_created,id)<")
-        expect(search).not.toContain("time_created>? AND time_created<?")
-        expect(search).toContain("(time_created,id)")
+        expect(search).toContain("span=?")
+        expect(search).toMatch(/bucket>\?|\(bucket,key\)>\(\?,\?\)/)
       }
-      expect([...kinds].toSorted()).toEqual(["pricing", "stage", "unpriced"])
+      expect([...kinds].filter((kind) => kind !== "other").toSorted()).toEqual(["pricing", "stage", "unpriced"])
     }).pipe(Effect.provide(sqliteLayer({ filename: ":memory:" })), Effect.scoped),
   ), 120_000)

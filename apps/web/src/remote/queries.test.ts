@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { RemoteUsageDashboard, RemoteUsageGroup } from "@ycoding-ai/remote"
 import { createRemoteQueries, createRemoteQueryClient, keepAwakeState, remoteKeys, usageRead, type QueryScope, type RemoteLink } from "./queries"
 import type { RemoteRequestOutcome, RemoteTransportRequest } from "./transport"
 
@@ -379,5 +380,176 @@ describe("Projects reads and changes", () => {
     await queries.changeCoordination(scope, "coordination.update", { groupID: "cgrp_1", revision: 4 })
     expect(client.getQueryState(queries.coordination(next, true).queryKey)?.isInvalidated).toBe(false)
     expect(queries.coordination(scope, true).queryKey).not.toEqual(queries.coordination(next, true).queryKey)
+  })
+})
+
+describe("usage dashboard query", () => {
+  const tokens = { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } }
+  const metrics = { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens }
+  const reportOf = (group: RemoteUsageGroup) => ({ group, rows: [], total: metrics, rowCount: 0 })
+  const input = {
+    daily: { group: "day", from: 0, to: 10, timeZone: "UTC", limit: 30, sort: "key", order: "asc" },
+    monthly: { group: "model", from: 0, to: 10, timeZone: "UTC", limit: 200, sort: "cost", order: "desc" },
+    breakdown: { group: "provider-model", from: 0, to: 10, timeZone: "UTC", limit: 25 },
+  } as const
+  const ready = {
+    status: "ready", asOf: 5, revision: "r1", summary: metrics, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } },
+    daily: reportOf("day"), monthly: reportOf("model"), breakdown: reportOf("provider-model"),
+  } satisfies Extract<RemoteUsageDashboard, { readonly status: "ready" }>
+  const dashboard = (answers: (call: number) => RemoteRequestOutcome) => {
+    const calls: { operation: string; request: RemoteTransportRequest | undefined; scope: QueryScope }[] = []
+    const client = createRemoteQueryClient()
+    const queries = createRemoteQueries({
+      recoveries: () => 0,
+      recovered: async () => false,
+      request: async (requestScope, operation, request) => {
+        calls.push({ operation, request, scope: requestScope })
+        return answers(calls.length)
+      },
+    }, client)
+    return { calls, client, queries }
+  }
+  const data = (value: unknown): RemoteRequestOutcome => ({ status: "ok", value: { data: value } })
+
+  test("sends one composed request without a Session and returns ready, preparing, and error unchanged", async () => {
+    const answers = [ready, { status: "preparing" }, { status: "error", message: "failed" }]
+    const { calls, client, queries } = dashboard((call) => data(answers[call - 1]))
+    expect(await client.fetchQuery(queries.usageDashboard(scope, true, input))).toEqual({ status: "ready", data: ready })
+    client.clear()
+    expect(await client.fetchQuery(queries.usageDashboard(scope, true, input))).toEqual({ status: "ready", data: { status: "preparing" } })
+    client.clear()
+    expect(await client.fetchQuery(queries.usageDashboard(scope, true, input))).toEqual({ status: "ready", data: { status: "error", message: "failed" } })
+    expect(calls.map((call) => call.operation)).toEqual(["usage.dashboard", "usage.dashboard", "usage.dashboard"])
+    expect(calls.every((call) => call.request?.sessionID === undefined && JSON.stringify(call.request?.input) === JSON.stringify(input))).toBe(true)
+  })
+
+  test("caches only a ready answer and keys on every report but not on refresh", async () => {
+    const { calls, client, queries } = dashboard((call) => data(call === 1 ? { status: "preparing" } : ready))
+    await client.fetchQuery(queries.usageDashboard(scope, true, input))
+    await client.fetchQuery(queries.usageDashboard(scope, true, input))
+    await client.fetchQuery(queries.usageDashboard(scope, true, input))
+    expect(calls).toHaveLength(2)
+    expect(remoteKeys.usageDashboard(scope, { ...input, refresh: true })).toEqual(remoteKeys.usageDashboard(scope, input))
+    for (const changed of [{ ...input, daily: { ...input.daily, from: 1 } }, { ...input, monthly: { ...input.monthly, limit: 100 } }, { ...input, breakdown: { ...input.breakdown, group: "model" } }] as const)
+      expect(remoteKeys.usageDashboard(scope, changed)).not.toEqual(remoteKeys.usageDashboard(scope, input))
+    expect(remoteKeys.usageDashboard({ ...scope, generation: 2 }, input)).not.toEqual(remoteKeys.usageDashboard(scope, input))
+  })
+
+  test("an input with fewer slots sends and keys only those slots and expects exactly those slots back", async () => {
+    const { daily: _daily, monthly: _monthly, breakdown: _breakdown, ...bare } = ready
+    const single = { breakdown: input.breakdown } as const
+    const { calls, client, queries } = dashboard(() => data({ ...bare, breakdown: ready.breakdown }))
+    expect(await client.fetchQuery(queries.usageDashboard(scope, true, single))).toEqual({ status: "ready", data: { ...bare, breakdown: ready.breakdown } })
+    expect(calls.map((call) => call.request?.input)).toEqual([single])
+    const none = dashboard(() => data(bare))
+    expect(await none.client.fetchQuery(none.queries.usageDashboard(scope, true, {}))).toEqual({ status: "ready", data: bare })
+    expect(none.calls.map((call) => call.request?.input)).toEqual([{}])
+    expect(remoteKeys.usageDashboard(scope, single)).not.toEqual(remoteKeys.usageDashboard(scope, {}))
+    expect(remoteKeys.usageDashboard(scope, single)).not.toEqual(remoteKeys.usageDashboard(scope, input))
+    expect(remoteKeys.usageDashboard(scope, { daily: input.daily })).not.toEqual(remoteKeys.usageDashboard(scope, { monthly: input.daily }))
+    for (const [requested, answer] of [
+      [single, bare], [single, { ...bare, daily: ready.daily }], [single, { ...bare, breakdown: ready.daily }], [{}, { ...bare, breakdown: ready.breakdown }],
+    ] as const) {
+      const mismatched = dashboard(() => data(answer))
+      await expect(mismatched.client.fetchQuery(mismatched.queries.usageDashboard(scope, true, requested))).rejects.toThrow()
+    }
+  })
+
+  test("refresh is a one-shot request flag that later reads never resend", async () => {
+    const { calls, client, queries } = dashboard(() => data({ status: "preparing" }))
+    await client.fetchQuery(queries.usageDashboard(scope, true, input))
+    await queries.refreshUsageDashboard(scope, input)
+    await client.fetchQuery(queries.usageDashboard(scope, true, input))
+    await client.refetchQueries({ queryKey: remoteKeys.usageDashboard(scope, input), type: "all" })
+    expect(calls.map((call) => call.request?.input)).toEqual([input, { ...input, refresh: true }, input, input])
+    expect(calls.every((call) => call.operation === "usage.dashboard")).toBe(true)
+  })
+
+  test("an old connector is unsupported without any fallback read, and unreadable answers fail", async () => {
+    const old = dashboard(() => ({ status: "failed", error: { code: "unknown_operation", message: "Unknown operation" } }) as RemoteRequestOutcome)
+    expect(await old.client.fetchQuery(old.queries.usageDashboard(scope, true, input))).toEqual({ status: "unsupported" })
+    expect(old.calls.map((call) => call.operation)).toEqual(["usage.dashboard"])
+    const { breakdown: _breakdown, ...incomplete } = ready
+    for (const value of [incomplete, { ...ready, status: "stale" }, { status: "error" }, { ...ready, daily: reportOf("month") }, { ...ready, asOf: -1 }, { ...ready, revision: 1 }]) {
+      const unreadable = dashboard(() => data(value))
+      await expect(unreadable.client.fetchQuery(unreadable.queries.usageDashboard(scope, true, input))).rejects.toThrow()
+    }
+    const gated = dashboard(() => data(ready))
+    expect([gated.queries.usageDashboard(undefined, true, input).enabled, gated.queries.usageDashboard(scope, false, input).enabled,
+      gated.queries.usageDashboard(scope, true, { ...input, daily: { ...input.daily, limit: 201 } }).enabled,
+      gated.queries.usageDashboard(scope, true, input).enabled]).toEqual([false, false, false, true])
+  })
+})
+
+describe("usage dashboard preparing progression", () => {
+  const input = { breakdown: { group: "model", from: 0, to: 10, limit: 25 } } as const
+  const bare = { status: "ready", asOf: 5, revision: "r1", summary: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } } } satisfies Extract<RemoteUsageDashboard, { readonly status: "ready" }>
+  const interval = (state: { status: string; data: unknown }) => {
+    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => ({ status: "ok", value: { data: bare } }) }, createRemoteQueryClient())
+    const options = queries.usageDashboard(scope, true, input) as unknown as { refetchInterval: (query: { state: typeof state }) => number | false }
+    return options.refetchInterval({ state })
+  }
+  const received = (data: unknown) => ({ status: "success", data: { status: "ready", data } })
+
+  test("polls only a received preparing answer", () => {
+    expect(interval(received({ status: "preparing" }))).toBe(1_000)
+    expect(interval(received({ status: "error", message: "failed" }))).toBe(false)
+    expect(interval(received(bare))).toBe(false)
+    expect(interval(received({ ...bare, quota: { status: "preparing" } }))).toBe(1_000)
+    expect(interval(received({ ...bare, quota: { status: "error", message: "Provider quotas are unavailable right now." } }))).toBe(false)
+    expect(interval(received({ ...bare, quota: { status: "ready", providers: [], forecast: { asOf: 4, localScope: "backend" } } }))).toBe(false)
+    expect(interval({ status: "success", data: { status: "unsupported" } })).toBe(false)
+    expect(interval({ status: "pending", data: undefined })).toBe(false)
+    expect(interval({ status: "error", data: { status: "ready", data: { status: "preparing" } } })).toBe(false)
+  })
+
+  test("quota preparing is read as a ready accounting answer and polls until quota arrives, then stops", async () => {
+    const pending = { ...bare, quota: { status: "preparing" } } as const
+    let calls = 0
+    const client = createRemoteQueryClient()
+    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => ({ status: "ok", value: { data: ++calls === 1 ? pending : bare } }) }, client)
+    const first = await client.fetchQuery(queries.usageDashboard(scope, true, {}))
+    expect(first).toEqual({ status: "ready", data: pending })
+    const options = queries.usageDashboard(scope, true, {}) as unknown as { refetchInterval: (query: { state: { status: string; data: unknown } }) => number | false }
+    expect(options.refetchInterval({ state: { status: "success", data: first } })).toBe(1_000)
+    const second = await client.fetchQuery({ ...queries.usageDashboard(scope, true, {}), staleTime: 0 })
+    expect(second).toEqual({ status: "ready", data: bare })
+    expect(options.refetchInterval({ state: { status: "success", data: second } })).toBe(false)
+    expect(calls).toBe(2)
+    client.clear()
+  })
+
+  test("a quota error is a readable settled quota state that is never polled", async () => {
+    const failed = { ...bare, quota: { status: "error", message: "Provider quotas are unavailable right now." } } as const
+    const client = createRemoteQueryClient()
+    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => ({ status: "ok", value: { data: failed } }) }, client)
+    expect(await client.fetchQuery(queries.usageDashboard(scope, true, {}))).toEqual({ status: "ready", data: failed })
+    const options = queries.usageDashboard(scope, true, {}) as unknown as { staleTime: (query: { state: { data: unknown } }) => number }
+    expect(options.staleTime({ state: { data: { status: "ready", data: failed } } })).toBe(60_000)
+    expect(options.staleTime({ state: { data: { status: "ready", data: { ...bare, quota: { status: "preparing" } } } } })).toBe(0)
+    client.clear()
+  })
+
+  test("a quota error without a message is unreadable", async () => {
+    const client = createRemoteQueryClient()
+    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => ({ status: "ok", value: { data: { ...bare, quota: { status: "error" } } } }) }, client)
+    await expect(client.fetchQuery(queries.usageDashboard(scope, true, {}))).rejects.toThrow()
+  })
+
+  test("a ready answer without a readable quota section is unreadable", async () => {
+    const { quota: _quota, ...withoutQuota } = bare
+    for (const value of [withoutQuota, { ...bare, quota: { status: "stale" } }, { ...bare, quota: { status: "ready", providers: [] } }, { ...bare, quota: { status: "ready", providers: "none", forecast: bare.quota.forecast } }]) {
+      const client = createRemoteQueryClient()
+      const unreadable = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => ({ status: "ok", value: { data: value } }) }, client)
+      await expect(client.fetchQuery(unreadable.usageDashboard(scope, true, {}))).rejects.toThrow()
+    }
+  })
+
+  test("a preload-only read leaves no observer and therefore no poller", async () => {
+    const client = createRemoteQueryClient()
+    const queries = createRemoteQueries({ recoveries: () => 0, recovered: async () => false, request: async () => ({ status: "ok", value: { data: { status: "preparing" } } }) }, client)
+    await client.fetchQuery(queries.usageDashboard(scope, true, input))
+    expect(client.getQueryCache().find({ queryKey: remoteKeys.usageDashboard(scope, input) })?.getObserversCount()).toBe(0)
+    client.clear()
   })
 })
