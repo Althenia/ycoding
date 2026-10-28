@@ -403,7 +403,7 @@ describe("lazy Location services", () => {
     }),
   )
 
-  usage.live("does not acquire a Location again when its teardown publishes catalog updates", () =>
+  usage.live("does not acquire a released Location again when a catalog update names it", () =>
     Effect.gen(function* () {
       const capture = captureBoots()
       const session = yield* Session.Service
@@ -411,18 +411,9 @@ describe("lazy Location services", () => {
       const locations = yield* LocationServiceMap.Service
       const ref = refOf(directories[0]!)
       yield* session.usageAll().pipe(Effect.provide(capture.layer))
-      const teardown = yield* Deferred.make<void>()
-      const unsubscribe = yield* events.listen((event) =>
-        Effect.suspend(() =>
-          event.type === Catalog.Event.Updated.type && event.location?.directory === ref.directory
-            ? Deferred.succeed(teardown, undefined)
-            : Effect.void,
-        ).pipe(Effect.asVoid),
-      )
       yield* locations.invalidate(ref).pipe(Effect.provide(capture.layer))
-      yield* Deferred.await(teardown)
+      yield* events.publish(Catalog.Event.Updated, {}, { location: ref })
       yield* Effect.sleep("200 millis")
-      yield* unsubscribe
       expect(yield* loadedFor(ref)).toBeUndefined()
       expect(capture.boots).toHaveLength(2)
     }),

@@ -869,6 +869,7 @@ const pluginSupervisor = Layer.succeed(
   PluginSupervisor.Service,
   PluginSupervisor.Service.of({
     flush: Effect.suspend(() => pluginFlushHook),
+    settled: Effect.void,
   }),
 )
 let defaultSelectionRef: CatalogModel.Ref | undefined

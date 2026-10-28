@@ -152,9 +152,10 @@ describe("LocationServiceMap", () => {
             Effect.forkChild({ startImmediately: true }),
           )
           expect(flushFiber.pollUnsafe()).toBeUndefined()
-          const activated = yield* EventRuntime.Service.use((events) =>
-            events.subscribe(Plugin.Event.Updated).pipe(Stream.runHead),
-          ).pipe(Effect.provide(context), Effect.forkChild({ startImmediately: true }))
+          const activated = yield* PluginSupervisor.Service.use((supervisor) => supervisor.settled).pipe(
+            Effect.provide(context),
+            Effect.forkChild({ startImmediately: true }),
+          )
           yield* Deferred.succeed(release, undefined)
           yield* Fiber.join(activated)
           yield* TestClock.adjust("50 millis")

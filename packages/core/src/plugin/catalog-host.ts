@@ -17,6 +17,7 @@ import type { ModelsDev } from "../models-dev"
 import type { Npm } from "../npm"
 import { Provider } from "../provider"
 import type { ProviderUsageRuntime } from "../provider-usage"
+import type { ProviderModelDiscovery } from "../config/plugin/provider-discovery"
 import type { DeepMutable } from "../schema"
 import type { WellKnown } from "../wellknown"
 import type { PluginRuntime } from "./runtime"
@@ -37,6 +38,7 @@ export type Requirements =
   | Npm.Service
   | PluginRuntime.Service
   | ProviderUsageRuntime.Service
+  | ProviderModelDiscovery.Service
   | WellKnown.Service
   | Scope.Scope
 

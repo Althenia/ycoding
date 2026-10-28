@@ -392,7 +392,7 @@ export const MusePlugin = define({
       .reload()
       .pipe(
         Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced("60 seconds")), Effect.ignore)),
-        Effect.forkScoped,
+        Effect.forkScoped({ startImmediately: true }),
       )
     yield* aisdk.hook.sdk(
       Effect.fn(function* (evt) {

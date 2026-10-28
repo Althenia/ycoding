@@ -808,7 +808,7 @@ export const AntigravityPlugin = define({
       .reload()
       .pipe(
         Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced("60 seconds")), Effect.ignore)),
-        Effect.forkScoped,
+        Effect.forkScoped({ startImmediately: true }),
       )
     yield* aisdk.hook.language((evt) => {
       if (evt.model.providerID === providerID && evt.model.package === Provider.aisdk("@ai-sdk/google"))

@@ -55,6 +55,7 @@ import { ToolRegistry } from "../tool/registry"
 import { WebSearchTool } from "../tool/websearch"
 import { WellKnown } from "../wellknown"
 import { CatalogContributions } from "./catalog-contributions"
+import { LocationAnnouncements } from "../location-announcements"
 import { PluginInternal } from "./internal"
 import { PluginOperations } from "./operations"
 import { PluginRuntime } from "./runtime"
@@ -117,6 +118,7 @@ const load = Effect.fn("PluginSupervisor.load")(function* (operation: Extract<Pl
 export interface Interface {
   /** Wait for the initial plugin generation and startup updates to settle. */
   readonly flush: Effect.Effect<void>
+  readonly settled: Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/PluginSupervisor") {}
@@ -132,6 +134,9 @@ const layer = Layer.effect(
     yield* registry.surround(contributions.list)
     const lock = Semaphore.makeUnsafe(1)
     const ready = yield* Deferred.make<void>()
+    const initial = yield* Deferred.make<void>()
+    const release = (yield* LocationAnnouncements.Current).hold()
+    const settle = Effect.sync(release).pipe(Effect.andThen(Deferred.succeed(initial, undefined)))
     let observed = 0
     let applied = -1
 
@@ -173,7 +178,12 @@ const layer = Layer.effect(
     const attempt = (target: number) =>
       activate(target).pipe(
         Effect.map(() => observed === target),
-        Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause }).pipe(Effect.as(false))),
+        Effect.catchCause((cause) =>
+          Effect.logError("failed to reload plugins", { cause }).pipe(
+            Effect.andThen(settle),
+            Effect.as(false),
+          ),
+        ),
       )
 
     yield* signals.pipe(
@@ -182,6 +192,7 @@ const layer = Layer.effect(
       Stream.take(1),
       Stream.runDrain,
       Effect.andThen(Deferred.succeed(ready, undefined)),
+      Effect.ensuring(settle),
       Effect.forkScoped({ startImmediately: true }),
     )
     yield* signals.pipe(
@@ -192,7 +203,7 @@ const layer = Layer.effect(
       ),
       Effect.forkScoped({ startImmediately: true }),
     )
-    return Service.of({ flush: Deferred.await(ready) })
+    return Service.of({ flush: Deferred.await(ready), settled: Deferred.await(initial) })
   }),
 )
 

@@ -8,10 +8,12 @@ import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { ConfigPolicyPlugin } from "../config/plugin/policy"
 import { ConfigProviderPlugin } from "../config/plugin/provider"
+import { ProviderModelDiscovery } from "../config/plugin/provider-discovery"
 import { Credential } from "../credential"
 import { makeLocationNode } from "../effect/app-node"
 import { httpClient } from "../effect/app-node-platform"
 import { EventRuntime } from "../event"
+import { LocationAnnouncements } from "../location-announcements"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Integration } from "../integration"
@@ -48,6 +50,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* Config.Service
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const host = yield* PluginCatalogHost.make()
     const root = yield* Scope.make()
     const lock = Semaphore.makeUnsafe(1)
@@ -78,7 +81,7 @@ const layer = Layer.effect(
       }
       const id = Plugin.ID.make(plugin.id)
       active.push({ id, phase, scope: child })
-      yield* events.publish(Plugin.Event.Added, { id })
+      yield* announcements.when(events.publish(Plugin.Event.Added, { id }))
     })
 
     const activate = lock.withPermit(
@@ -96,7 +99,7 @@ const layer = Layer.effect(
             yield* Effect.forEach(enabled, load, { discard: true })
           }),
         )
-        yield* events.publish(Plugin.Event.Updated, {})
+        yield* announcements.when(events.publish(Plugin.Event.Updated, {}))
       }),
     )
 
@@ -139,6 +142,7 @@ export const node = makeLocationNode({
     Npm.node,
     PluginRuntime.node,
     ProviderUsageRuntime.node,
+    ProviderModelDiscovery.node,
     WellKnown.node,
   ],
 })

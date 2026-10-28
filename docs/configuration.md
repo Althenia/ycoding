@@ -1392,7 +1392,10 @@ A provider with `catalog.source: "openai-models"` discovers models from its auth
 `limit`, and `variants`; those values are imported directly and override matching standard
 catalog metadata for that provider model. This lets self-hosted OpenAI-compatible endpoints
 report their real context/input/output limits and named request variants without duplicating
-every model in YCoding configuration.
+every model in YCoding configuration. One discovery result is shared by every Location for five
+minutes per provider ID, endpoint, request headers, and credential; a failed discovery logs one
+warning for that shared result and leaves its models undiscovered. A configuration change, a
+connection change, or `POST /api/provider/refresh` discovers again.
 
 ### Runpod Serverless Jobs workers
 
@@ -1860,7 +1863,7 @@ CLI/TUI `cli.json` updates are serialized, written atomically through a temporar
 - `tui.json`, `kv.json`, `config.json`, and project `.ycoding/tui.json` are not read.
 - A managed-service port conflict is not fixed by deleting session data. Change the channel service config port or use `ycoding --standalone`.
 - Run with `--log-level all` and `YCODING_PRINT_LOGS=1` when investigating configuration discovery.
-- A Location builds its services lazily, per request, and a later request that needs more services extends the same Location. Each build step writes one `location services booted` log line with the Location `directory`, `workspaceID`, that step's `durationMs`, and a `stages` map of construction milliseconds for only the services that step built; use it to identify a slow Location build stage. A request whose services are already built writes no line.
+- A Location builds its services lazily, per request, and a later request that needs more services extends the same Location. Each build step writes one `location services booted` log line with the Location `directory`, `workspaceID`, that step's `durationMs`, and a `stages` map of construction milliseconds for only the services that step built; use it to identify a slow Location build stage. A request whose services are already built writes no line. Building or releasing a Location publishes no `catalog.updated`, `agent.updated`, `command.updated`, `skill.updated`, `reference.updated`, `integration.updated`, or `plugin.*` events, including changes made by the Location's first plugin generation; changes after that publish as usual, and a catalog rebuild that leaves the catalog unchanged publishes nothing. The agent, command, skill, and reference lists wait for the first plugin generation attempt to finish.
 
 ## Inbound task MCP
 

@@ -1,6 +1,7 @@
 export * as State from "./state"
 
 import { Clock, Context, Deferred, Effect, Scope, Semaphore } from "effect"
+import type { LocationAnnouncements } from "./location-announcements"
 
 /**
  * A replayable transform applied to a draft during reload.
@@ -65,6 +66,11 @@ export interface Options<State, DraftApi> {
   readonly draft: MakeDraft<State, DraftApi>
   /** Runs after all active transforms and before the rebuilt state becomes visible. */
   readonly finalize?: (draft: DraftApi) => Effect.Effect<void>
+  readonly announce?: {
+    readonly gate: LocationAnnouncements.Gate
+    readonly publish: Effect.Effect<unknown>
+    readonly changed?: (previous: State, next: State) => boolean
+  }
 }
 
 export interface Interface<State, DraftApi> extends Transformable<DraftApi> {
@@ -81,13 +87,18 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
   let generation = 0
   let requestedAt = 0
   let running = false
-  let waiters: { generation: number; done: Deferred.Deferred<void> }[] = []
+  let waiters: { generation: number; done: Deferred.Deferred<void>; announce: boolean }[] = []
+  const open = () => options.announce?.gate.open ?? false
   const semaphore = Semaphore.makeUnsafe(1)
 
-  const commit = Effect.fn("State.commit")(function* (next: State) {
+  const commit = Effect.fn("State.commit")(function* (next: State, announce: boolean) {
     const api = options.draft(next)
     if (options.finalize) yield* options.finalize(api)
+    const previous = state
     state = next
+    if (!announce || !options.announce) return
+    if (options.announce.changed && !options.announce.changed(previous, next)) return
+    yield* options.announce.publish
   })
 
   const apply = (transform: TransformCallback<DraftApi>, draft: DraftApi) =>
@@ -95,17 +106,19 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
       transform(draft)
     })
 
-  const materialize = Effect.fnUntraced(function* () {
+  const materialize = Effect.fnUntraced(function* (announce: boolean) {
     const next = options.initial()
     const api = options.draft(next)
     for (const transform of transforms)
       yield* apply(transform.run, api).pipe(
         Effect.withSpan("State.reload.update", { attributes: { state: options.name ?? "anonymous" } }),
       )
-    yield* commit(next)
+    yield* commit(next, announce)
   })
 
-  const materializeReload = () => semaphore.withPermit(materialize())
+  const materializeReload = (announce = open()) => semaphore.withPermit(materialize(announce))
+
+  const batchReload = () => materializeReload()
 
   const rebuild = (): Effect.Effect<void> =>
     Effect.gen(function* () {
@@ -115,7 +128,8 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
       if (clock.currentTimeMillisUnsafe() < requestedAt + reloadDebounce) return yield* rebuild()
 
       const target = generation
-      const exit = yield* materializeReload().pipe(Effect.exit)
+      const announce = waiters.some((waiter) => waiter.generation <= target && waiter.announce)
+      const exit = yield* materializeReload(announce).pipe(Effect.exit)
       const completed = waiters.filter((waiter) => waiter.generation <= target)
       waiters = waiters.filter((waiter) => waiter.generation > target)
       yield* Effect.forEach(completed, (waiter) => Deferred.done(waiter.done, exit), {
@@ -131,7 +145,7 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
     const clock = yield* Clock.Clock
     generation++
     requestedAt = clock.currentTimeMillisUnsafe()
-    waiters.push({ generation, done })
+    waiters.push({ generation, done, announce: open() })
     if (!running) {
       running = true
       yield* rebuild().pipe(Effect.forkDetach)
@@ -157,10 +171,10 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
                 return Effect.gen(function* () {
                   const batch = yield* CurrentBatch
                   if (batch?.active) {
-                    batch.reloads.add(materializeReload)
+                    batch.reloads.add(batchReload)
                     return
                   }
-                  yield* materialize()
+                  yield* materialize(open())
                 })
               }),
             ),
@@ -172,7 +186,7 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
           )
           yield* Scope.addFinalizer(scope, dispose)
           const batch = yield* CurrentBatch
-          if (batch?.active) batch.reloads.add(materializeReload)
+          if (batch?.active) batch.reloads.add(batchReload)
           else yield* materializeReload()
           return { dispose }
         }),

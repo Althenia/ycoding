@@ -26,6 +26,7 @@ import { InstructionBuiltIns } from "./instructions/builtins"
 import { Location } from "./location"
 import { LocationMutation } from "./location-mutation"
 import { Policy } from "./policy"
+import { LocationAnnouncements } from "./location-announcements"
 import { LocationServiceMap } from "./location-service-map"
 import { MCP } from "./mcp/index"
 import { Memory } from "./memory"
@@ -187,6 +188,7 @@ export function buildLocationServiceMap(
         const requested = new Set<LayerNode.AnyNode>()
         const globals = new Set<LayerNode.AnyNode>()
         const built = new Set<string>()
+        const gates: LocationAnnouncements.Gate[] = []
         const semaphore = Semaphore.makeUnsafe(1)
         let stages: Record<string, number> = {}
         let context = Context.empty() as Context.Context<unknown>
@@ -227,10 +229,17 @@ export function buildLocationServiceMap(
                 yield* Layer.buildWithMemoMap(shareable.layer(unshared), shared, scope),
               )
             unshared.forEach((node) => globals.add(node))
+            const gate = new LocationAnnouncements.Gate(false)
             const output = yield* Layer.buildWithMemoMap(
               nodes.layer(missing).pipe(Layer.provide(Layer.succeedContext(globalContext))),
               memoMap,
               scope,
+            ).pipe(Effect.provideService(LocationAnnouncements.Current, gate))
+            gates.push(gate)
+            gate.settle()
+            yield* Scope.addFinalizer(
+              scope,
+              Effect.sync(() => gates.forEach((item) => item.close())),
             )
             missing.forEach((node) => requested.add(node))
             closure

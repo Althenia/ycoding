@@ -10,80 +10,15 @@ import { Integration } from "../../integration"
 import type { DeepMutable } from "../../schema"
 import { CatalogModel } from "../../model"
 import { Provider } from "../../provider"
-
-type DiscoveredModel = {
-  readonly id: string
-  readonly name?: string
-  readonly capabilities?: { readonly tools?: boolean; readonly input?: string[]; readonly output?: string[] }
-  readonly limit?: { readonly context?: number; readonly input?: number; readonly output?: number }
-  readonly variants?: Array<{
-    readonly id: string
-    readonly settings?: Record<string, unknown>
-    readonly headers?: Record<string, string>
-    readonly body?: Record<string, unknown>
-  }>
-}
-
-const record = (value: unknown): Record<string, unknown> | undefined =>
-  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
-
-function parseModels(value: unknown): DiscoveredModel[] {
-  const root = record(value)
-  if (root?.object !== "list" || !Array.isArray(root.data)) throw new Error("invalid OpenAI model catalog")
-  return root.data.map((candidate) => {
-    const item = record(candidate)
-    if (!item || typeof item.id !== "string" || !item.id) throw new Error("invalid OpenAI model record")
-    const capabilities = record(item.capabilities)
-    const limit = record(item.limit)
-    const variants = Array.isArray(item.variants)
-      ? item.variants.flatMap((candidate) => {
-          const variant = record(candidate)
-          if (!variant || typeof variant.id !== "string" || !variant.id) return []
-          return [
-            {
-              id: variant.id,
-              ...(record(variant.settings) ? { settings: variant.settings as Record<string, unknown> } : {}),
-              ...(record(variant.headers) ? { headers: variant.headers as Record<string, string> } : {}),
-              ...(record(variant.body) ? { body: variant.body as Record<string, unknown> } : {}),
-            },
-          ]
-        })
-      : undefined
-    return {
-      id: item.id,
-      ...(typeof item.name === "string" ? { name: item.name } : {}),
-      ...(capabilities
-        ? {
-            capabilities: {
-              ...(typeof capabilities.tools === "boolean" ? { tools: capabilities.tools } : {}),
-              ...(Array.isArray(capabilities.input) && capabilities.input.every((item) => typeof item === "string")
-                ? { input: capabilities.input as string[] }
-                : {}),
-              ...(Array.isArray(capabilities.output) && capabilities.output.every((item) => typeof item === "string")
-                ? { output: capabilities.output as string[] }
-                : {}),
-            },
-          }
-        : {}),
-      ...(limit
-        ? {
-            limit: {
-              ...(typeof limit.context === "number" ? { context: limit.context } : {}),
-              ...(typeof limit.input === "number" ? { input: limit.input } : {}),
-              ...(typeof limit.output === "number" ? { output: limit.output } : {}),
-            },
-          }
-        : {}),
-      ...(variants ? { variants } : {}),
-    }
-  })
-}
+import { ProviderModelDiscovery } from "./provider-discovery"
 
 const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (
   entries: readonly Config.Entry[],
   integrations: Integration.Interface,
   credentials: Credential.Interface,
   catalog: Catalog.Interface,
+  discovery: ProviderModelDiscovery.Interface,
+  refresh: boolean,
   selectedID?: Integration.ID,
 ) {
   const configured = new Map<
@@ -103,7 +38,7 @@ const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (
   }
   const result = new Map<
     string,
-    Array<{ readonly snapshot?: Integration.Snapshot; readonly models: DiscoveredModel[] }>
+    Array<{ readonly snapshot?: Integration.Snapshot; readonly models: readonly ProviderModelDiscovery.Model[] }>
   >()
   yield* Effect.forEach(
     [...configured.entries()].filter(([, provider]) => provider.source === "openai-models"),
@@ -131,41 +66,20 @@ const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (
               if (connection?.type === "credential" && !snapshot?.credential) return { snapshot, models: [] }
               const credential = snapshot?.value
               const managed = connection?.type === "credential"
-              const models = yield* Effect.tryPromise({
-                try: async () => {
-                  const baseURL = provider.settings.baseURL
-                  if (typeof baseURL !== "string" || !baseURL) throw new Error("provider baseURL is required")
-                  const endpoint = `${baseURL.replace(/\/$/, "")}/models`
-                  if (managed) {
-                    const url = new URL(endpoint)
-                    if (url.username || url.password) throw new Error("model discovery URL cannot contain credentials")
-                    if (
-                      url.protocol !== "https:" &&
-                      !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
-                    )
-                      throw new Error("managed model discovery requires HTTPS or local HTTP")
-                  }
-                  const headers = new Headers(provider.headers)
-                  const apiKey = provider.settings.apiKey
-                  const selectedKey = credential?.type === "key" ? credential.key : credential?.access
-                  if (selectedKey !== undefined) headers.set("authorization", `Bearer ${selectedKey}`)
-                  else if (!headers.has("authorization") && typeof apiKey === "string" && apiKey)
-                    headers.set("authorization", `Bearer ${apiKey}`)
-                  const response = await fetch(endpoint, {
-                    headers,
-                    ...(managed ? { redirect: "manual" as const } : {}),
-                    signal: AbortSignal.timeout(5_000),
-                  })
-                  if (!response.ok) throw new Error(`model discovery failed with HTTP ${response.status}`)
-                  return parseModels(await response.json())
+              const headers = new Headers(provider.headers)
+              const apiKey = provider.settings.apiKey
+              const selectedKey = credential?.type === "key" ? credential.key : credential?.access
+              if (selectedKey !== undefined) headers.set("authorization", `Bearer ${selectedKey}`)
+              else if (!headers.has("authorization") && typeof apiKey === "string" && apiKey)
+                headers.set("authorization", `Bearer ${apiKey}`)
+              const models = yield* discovery.models(
+                {
+                  providerID: id,
+                  baseURL: provider.settings.baseURL,
+                  headers: [...headers.entries()],
+                  managed,
                 },
-                catch: () => new Error("OpenAI model discovery failed"),
-              }).pipe(
-                Effect.catch(() =>
-                  Effect.logWarning("OpenAI model discovery failed", { providerID: id }).pipe(
-                    Effect.as([] as DiscoveredModel[]),
-                  ),
-                ),
+                { refresh },
               )
               const current = snapshot?.credential ? yield* credentials.get(snapshot.credential.id) : undefined
               return {
@@ -176,7 +90,7 @@ const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (
                     ? []
                     : models,
               }
-            }).pipe(Effect.catch(() => Effect.succeed({ models: [] as DiscoveredModel[] }))),
+            }).pipe(Effect.catch(() => Effect.succeed({ models: [] as readonly ProviderModelDiscovery.Model[] }))),
           { concurrency: "unbounded" },
         )
         result.set(id, scopes)
@@ -195,12 +109,13 @@ export const Plugin = define({
     const catalogService = yield* Catalog.Service
     const integrations = yield* Integration.Service
     const credentials = yield* Credential.Service
+    const discovery = yield* ProviderModelDiscovery.Service
     const initial = yield* config.entries()
     const loaded = {
       entries: initial,
       discovered: new Map<
         string,
-        Array<{ readonly snapshot?: Integration.Snapshot; readonly models: DiscoveredModel[] }>
+        Array<{ readonly snapshot?: Integration.Snapshot; readonly models: readonly ProviderModelDiscovery.Model[] }>
       >(),
     }
     yield* ctx.integration.transform((integrations) => {
@@ -245,7 +160,7 @@ export const Plugin = define({
       }
     })
 
-    loaded.discovered = yield* discover(initial, integrations, credentials, catalogService)
+    loaded.discovered = yield* discover(initial, integrations, credentials, catalogService, discovery, false)
     yield* catalogService.transform((catalog) => {
       const base = new Map(
         catalog.provider.list().map((record) => [record.provider.id, structuredClone(record.models)]),
@@ -339,6 +254,8 @@ export const Plugin = define({
               integrations,
               credentials,
               catalogService,
+              discovery,
+              true,
               Integration.ID.make(event.data.integrationID),
             ).pipe(
               Effect.tap((discovered) =>
@@ -354,7 +271,7 @@ export const Plugin = define({
                   loaded.entries = entries
                 }).pipe(
                   Effect.andThen(ctx.integration.reload()),
-                  Effect.andThen(discover(entries, integrations, credentials, catalogService)),
+                  Effect.andThen(discover(entries, integrations, credentials, catalogService, discovery, true)),
                   Effect.tap((discovered) =>
                     Effect.sync(() => {
                       loaded.entries = entries
@@ -379,7 +296,7 @@ function applyDiscovered(
   catalog: Catalog.Draft,
   providerID: Provider.ID,
   model: CatalogModel.MutableInfo,
-  discovered: DiscoveredModel,
+  discovered: ProviderModelDiscovery.Model,
 ) {
   const candidates = catalog.provider
     .list()

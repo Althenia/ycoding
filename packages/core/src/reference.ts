@@ -5,6 +5,7 @@ import { Context, Effect, Layer, Scope, Types } from "effect"
 import { Reference } from "@ycoding-ai/schema/reference"
 import { Global } from "./global"
 import { EventRuntime } from "./event"
+import { LocationAnnouncements } from "./location-announcements"
 import { Repository } from "./repository"
 import { RepositoryCache } from "./repository-cache"
 import { AbsolutePath } from "./schema"
@@ -45,6 +46,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const global = yield* Global.Service
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const cache = yield* RepositoryCache.Service
     const scope = yield* Scope.Scope
     const materialized = new Map<string, Info>()
@@ -56,6 +58,7 @@ const layer = Layer.effect(
         remove: (name) => draft.sources.delete(name),
         list: () => Array.from(draft.sources.entries()) as [string, Source][],
       }),
+      announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
       finalize: (draft) =>
         Effect.gen(function* () {
           materialized.clear()
@@ -107,7 +110,6 @@ const layer = Layer.effect(
               Effect.forkIn(scope),
             )
           }
-          yield* events.publish(Event.Updated, {})
         }),
     })
 

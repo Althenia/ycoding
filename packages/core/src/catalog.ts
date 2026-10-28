@@ -1,11 +1,13 @@
 export * as Catalog from "./catalog"
 
 import { makeLocationNode } from "./effect/app-node"
+import { isDeepStrictEqual } from "node:util"
 import { Array, Context, Effect, Layer, Option, Order, pipe } from "effect"
 import { Catalog } from "@ycoding-ai/schema/catalog"
 import { CatalogModel } from "./model"
 import { Provider } from "./provider"
 import { EventRuntime } from "./event"
+import { LocationAnnouncements } from "./location-announcements"
 import { Policy } from "./policy"
 import { State } from "./state"
 import { Integration } from "./integration"
@@ -92,6 +94,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const integrations = yield* Integration.Service
     const policy = yield* Policy.Service
     const credentials = yield* Credential.Service
@@ -194,9 +197,11 @@ const layer = Layer.effect(
         }
         return result
       },
-      finalize: Effect.fn("Catalog.finalize")(function* (catalog) {
-        yield* events.publish(Event.Updated, {})
-      }),
+      announce: {
+        gate: announcements,
+        publish: events.publish(Event.Updated, {}),
+        changed: (previous, next) => !isDeepStrictEqual(previous, next),
+      },
     })
     const accountModels = (credential: Credential.Info, providerID: Provider.ID) => {
       const account = state.get().accounts.get(credential.id)

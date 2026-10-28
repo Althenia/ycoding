@@ -211,7 +211,7 @@ const snapshotLayer = Layer.succeed(
 )
 const pluginSupervisor = Layer.succeed(
   PluginSupervisor.Service,
-  PluginSupervisor.Service.of({ flush: Effect.void }),
+  PluginSupervisor.Service.of({ flush: Effect.void, settled: Effect.void }),
 )
 const compactionExecution = Layer.succeed(
   SessionCompactionExecution.Service,

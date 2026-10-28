@@ -221,7 +221,7 @@ const permission = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
-const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))
+const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void, settled: Effect.void }))
 // A switch reaches compaction only through a target-budget admission, so the switch suite needs
 // the real job/execution/context-state path. The worker activates one deterministic reducing
 // canonical checkpoint; it never calls a provider.

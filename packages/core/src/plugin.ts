@@ -9,6 +9,7 @@ import { AISDK } from "./aisdk"
 import { Catalog } from "./catalog"
 import { Command } from "./command"
 import { EventRuntime } from "./event"
+import { LocationAnnouncements } from "./location-announcements"
 import { Integration } from "./integration"
 import { Location } from "./location"
 import { MCP } from "./mcp"
@@ -42,6 +43,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const scope = yield* Scope.make()
     const active = new Map<typeof ID.Type, { readonly plugin: Versioned; readonly scope: Scope.Closeable }>()
     const lock = Semaphore.makeUnsafe(1)
@@ -56,7 +58,7 @@ const layer = Layer.effect(
           Context.make(Scope.Scope, child).pipe(Context.add(State.Phase, State.phases.plugin)),
         ),
         Effect.withSpan("Plugin.load", { attributes: { "plugin.id": plugin.id } }),
-        Effect.andThen(events.publish(Event.Added, { id: ID.make(plugin.id) })),
+        Effect.andThen(announcements.when(events.publish(Event.Added, { id: ID.make(plugin.id) }))),
         Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(child, exit) : Effect.void)),
         Effect.exit,
       )
@@ -125,7 +127,7 @@ const layer = Layer.effect(
               })
             }),
           )
-          yield* events.publish(Event.Updated, {})
+          yield* announcements.when(events.publish(Event.Updated, {}))
         }),
       )
     })

@@ -17,6 +17,7 @@ import { Npm } from "@ycoding-ai/core/npm"
 import { PluginRegistry } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
+import { ProviderModelDiscovery } from "@ycoding-ai/core/config/plugin/provider-discovery"
 import { ProviderUsageRuntime } from "@ycoding-ai/core/provider-usage"
 import { Reference } from "@ycoding-ai/core/reference"
 import { Skill } from "@ycoding-ai/core/skill"
@@ -62,6 +63,7 @@ export const PluginTestLayer = AppNodeBuilder.build(
     MCP.node,
     PluginRuntime.node,
     ProviderUsageRuntime.node,
+    ProviderModelDiscovery.node,
     PluginHooks.node,
     Reference.node,
     Skill.node,

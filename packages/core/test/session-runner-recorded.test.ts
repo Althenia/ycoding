@@ -137,7 +137,7 @@ const config = Layer.succeed(
   Config.Service,
   Config.Service.of({ diagnostics: () => Effect.succeed([]), reload: () => Effect.void, entries: () => Effect.succeed([]) }),
 )
-const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))
+const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void, settled: Effect.void }))
 const promptCatalog = Layer.mock(Catalog.Service, {
   provider: {
     get: () => Effect.succeed(undefined),

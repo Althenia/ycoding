@@ -180,7 +180,7 @@ export const CursorPlugin = define({
       .reload()
       .pipe(
         Effect.andThen(reconcile().pipe(Effect.repeat(Schedule.spaced(reconcileInterval)), Effect.ignore)),
-        Effect.forkScoped,
+        Effect.forkScoped({ startImmediately: true }),
       )
     yield* aisdk.hook.sdk(
       Effect.fn(function* (evt) {

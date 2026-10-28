@@ -6,6 +6,7 @@ import { Command } from "@ycoding-ai/schema/command"
 import { State } from "./state"
 import { MCP } from "./mcp/index"
 import { EventRuntime } from "./event"
+import { LocationAnnouncements } from "./location-announcements"
 import { AppProcess } from "./process"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "./config"
@@ -57,6 +58,7 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const processes = yield* AppProcess.Service
     const config = yield* Config.Service
     const location = yield* Location.Service
@@ -76,7 +78,7 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
           draft.commands.delete(name)
         },
       }),
-      finalize: () => events.publish(Event.Updated, {}).pipe(Effect.asVoid),
+      announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
     })
     const staticCommand = (name: string) => state.get().commands.get(name) as Info | undefined
     const mcpCommands = Effect.fnUntraced(function* () {

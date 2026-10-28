@@ -13,6 +13,7 @@ import { ConfigCapabilities } from "../config/capabilities"
 import { ConfigMCP } from "../config/mcp"
 import { Credential } from "../credential"
 import { EventRuntime } from "../event"
+import { LocationAnnouncements } from "../location-announcements"
 import { Form } from "../form"
 import { Integration } from "../integration"
 import { IntegrationConnection } from "../integration/connection"
@@ -224,6 +225,7 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const location = yield* Location.Service
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const forms = yield* Form.Service
     const integration = yield* Integration.Service
     const credentials = yield* Credential.Service
@@ -516,15 +518,15 @@ export const layer = Layer.effect(
         }),
       )
 
+    const commandsChanged = announcements.when(events.publish(Command.Event.Updated, {}))
+
     const refreshPrompts = (name: ServerName, entry: ServerEntry, connection: MCPClient.Connection) =>
       connection.prompts().pipe(
         Effect.map((defs) => {
           entry.prompts = defs.map((def) => toPrompt(name, def))
         }),
-        Effect.andThen(events.publish(Command.Event.Updated, {})),
-        Effect.catch(() =>
-          Effect.sync(() => (entry.prompts = [])).pipe(Effect.andThen(events.publish(Command.Event.Updated, {}))),
-        ),
+        Effect.andThen(commandsChanged),
+        Effect.catch(() => Effect.sync(() => (entry.prompts = [])).pipe(Effect.andThen(commandsChanged))),
       )
 
     // Runs a connection callback under the server lock, dropping it if the connection is no longer
@@ -550,7 +552,7 @@ export const layer = Layer.effect(
             entry.status = { status: "failed", error: "Connection closed" }
             yield* events.publish(McpEvent.ToolsChanged, { server: name }).pipe(Effect.ignore)
             yield* events.publish(McpEvent.ResourcesChanged, { server: name }).pipe(Effect.ignore)
-            yield* events.publish(Command.Event.Updated, {}).pipe(Effect.ignore)
+            yield* commandsChanged.pipe(Effect.ignore)
             yield* events.publish(McpEvent.StatusChanged, { server: name }).pipe(Effect.ignore)
           }),
         ),
@@ -650,7 +652,7 @@ export const layer = Layer.effect(
       yield* Scope.close(scope, Exit.void)
       yield* events.publish(McpEvent.ToolsChanged, { server: name }).pipe(Effect.ignore)
       yield* events.publish(McpEvent.ResourcesChanged, { server: name }).pipe(Effect.ignore)
-      yield* events.publish(Command.Event.Updated, {}).pipe(Effect.ignore)
+      yield* commandsChanged.pipe(Effect.ignore)
     })
 
     // Disabled servers settle their startup immediately so queries never block on them.

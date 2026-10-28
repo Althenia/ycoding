@@ -10,6 +10,7 @@ import { Config } from "./config"
 import { ConfigCapabilities } from "./config/capabilities"
 import { ConfigMarkdown } from "./config/markdown"
 import { EventRuntime } from "./event"
+import { LocationAnnouncements } from "./location-announcements"
 import { FSUtil } from "./fs-util"
 import { MCP } from "./mcp"
 import { MCPSkills } from "./mcp/skills"
@@ -136,6 +137,7 @@ const layer = Layer.effect(
     const discovery = yield* SkillDiscovery.Service
     const fs = yield* FSUtil.Service
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const mcp = yield* MCP.Service
     const config = yield* Config.Service
     const permitted = Effect.fnUntraced(function* <A extends { readonly id: ID }>(skills: ReadonlyArray<A>) {
@@ -153,7 +155,7 @@ const layer = Layer.effect(
         },
         list: () => draft.sources as Source[],
       }),
-      finalize: () => events.publish(Event.Updated, {}).pipe(Effect.asVoid),
+      announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
     })
 
     // Only the network pull is memoized. Skill files are re-read on every list because the

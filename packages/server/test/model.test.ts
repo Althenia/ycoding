@@ -22,7 +22,7 @@ function fixture(model: CatalogModel.Info | undefined, selection?: CatalogModel.
       project: { id: Project.ID.global, directory: AbsolutePath.make("/fixture") },
     }),
   ).pipe(
-    Context.add(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void })),
+    Context.add(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void, settled: Effect.void })),
     Context.add(
       Catalog.Service,
       Catalog.Service.of({

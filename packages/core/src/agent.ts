@@ -4,6 +4,7 @@ import { makeLocationNode } from "./effect/app-node"
 import { Array, Context, Effect, Layer, Types } from "effect"
 import { Agent } from "@ycoding-ai/schema/agent"
 import { EventRuntime } from "./event"
+import { LocationAnnouncements } from "./location-announcements"
 import { State } from "./state"
 
 export const ID = Agent.ID
@@ -59,6 +60,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const state = State.create<Data, Draft>({
       name: "agent",
       initial: () => ({ agents: new Map() }),
@@ -78,7 +80,7 @@ const layer = Layer.effect(
           draft.agents.delete(id)
         },
       }),
-      finalize: () => events.publish(Event.Updated, {}).pipe(Effect.asVoid),
+      announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
     })
     const selectable = (agent: Info | undefined) =>
       agent && isSelectable(agent) ? agent : undefined

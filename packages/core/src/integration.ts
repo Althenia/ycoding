@@ -21,6 +21,7 @@ import { Integration } from "@ycoding-ai/schema/integration"
 import { Credential } from "./credential"
 import { State } from "./state"
 import { EventRuntime } from "./event"
+import { LocationAnnouncements } from "./location-announcements"
 import { IntegrationConnection } from "./integration/connection"
 import { AppProcess } from "./process"
 import { ChildProcess } from "effect/unstable/process"
@@ -285,6 +286,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const credentials = yield* Credential.Service
     const events = yield* EventRuntime.Service
+    const announcements = yield* LocationAnnouncements.Current
     const processes = yield* AppProcess.Service
     const scope = yield* Scope.Scope
     const attempts = SynchronizedRef.makeUnsafe(new Map<AttemptID, AttemptEntry>())
@@ -351,7 +353,7 @@ const layer = Layer.effect(
           },
         },
       }),
-      finalize: () => events.publish(Event.Updated, {}).pipe(Effect.asVoid),
+      announce: { gate: announcements, publish: events.publish(Event.Updated, {}) },
     })
 
     const resolveConnections = (entry: Entry | undefined, saved: readonly Credential.Info[]) => {
