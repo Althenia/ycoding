@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { pathToFileURL } from "url"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { Npm } from "../../npm"
 import { importModule } from "#runtime-import"
 

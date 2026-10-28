@@ -86,7 +86,7 @@ const fixture = Effect.fn(function* () {
         item.limit = { context: 5000, output: 512 }
       })
     })
-  }).pipe(Effect.provide(locations.get(location)))
+  }).pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
   const parent = yield* sessions.create({ location, model: old })
   const child = yield* sessions.create({ parentID: parent.id, model: old, agent: Agent.ID.make("omoikane") })
   const assistant = SessionMessage.ID.create()
@@ -148,7 +148,7 @@ for (const origin of ["plugin", "coordination", undefined] as const) it.live(`al
   yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
   const messageID = SessionMessage.ID.create()
   yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: Agent.ID.make("build"), model: old })
-  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location, [LocationServiceMap.full])))
   yield* agents.transform(draft => draft.update(Agent.ID.make("build"), agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
   expect((yield* f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: target, source: { type: "tool", agent: Agent.ID.make("build"), messageID, callID: "select" } })).model).toEqual(target)
   expect((yield* f.sessions.get(f.child.id)).model).toEqual(target)
@@ -163,7 +163,7 @@ for (const source of ["subagent_notification", "form_answer"] as const) it.live(
   yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
   const messageID = SessionMessage.ID.create()
   yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: Agent.ID.make("gsd"), model: old })
-  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location, [LocationServiceMap.full])))
   yield* agents.transform(draft => draft.update(Agent.ID.make("gsd"), agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
   const select = (childID = f.child.id, expectedModel = old) => f.orchestration.switchModel({ parentID: f.parent.id, childID, expectedModel, model: target,
     source: { type: "tool", agent: Agent.ID.make("gsd"), messageID, callID: "select" } })
@@ -182,7 +182,7 @@ for (const reply of ["once", "reject", "deny"] as const) it.live(`feature model 
   const messageID = SessionMessage.ID.create()
   const caller = Agent.ID.make("gsd")
   yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: caller, model: old })
-  const located = f.locations.get(f.parent.location)
+  const located = f.locations.get(f.parent.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   yield* agents.transform(draft => draft.update(caller, agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: reply === "deny" ? "deny" : "ask" }] }))
   const permission = yield* Permission.Service.pipe(Effect.provide(located))
@@ -276,7 +276,7 @@ it.live("the real runner settles the current tool before its next provider Step 
   const f = yield* fixture()
   const entered = yield* Deferred.make<void>()
   const release = yield* Deferred.make<void>()
-  const registry = yield* ToolRegistry.Service.pipe(Effect.provide(f.locations.get(f.child.location)))
+  const registry = yield* ToolRegistry.Service.pipe(Effect.provide(f.locations.get(f.child.location, [LocationServiceMap.full])))
   yield* registry.register({ selection_hold: Tool.make({
       description: "Hold a test Step", input: Schema.Struct({}), output: Schema.String,
       execute: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as("settled")),
@@ -284,7 +284,7 @@ it.live("the real runner settles the current tool before its next provider Step 
   yield* Effect.gen(function* () {
     const agents = yield* Agent.Service
     yield* agents.transform(draft => draft.update(Agent.ID.make("omoikane"), agent => { agent.permissions = [{ action: "*", resource: "*", effect: "allow" }] }))
-  }).pipe(Effect.provide(f.locations.get(f.child.location)))
+  }).pipe(Effect.provide(f.locations.get(f.child.location, [LocationServiceMap.full])))
   const original = response
   const state = { first: true }
   const sent: string[] = []
@@ -335,7 +335,7 @@ it.live("physical retries retain the Step model while child selection waits", ()
 it.live("named selection keeps its private binding through activation and explicitly rebinds replaced accounts", () => Effect.gen(function* () {
   const f = yield* fixture()
   const credentials = yield* Credential.Service
-  const integrations = yield* Integration.Service.pipe(Effect.provide(f.locations.get(f.child.location)))
+  const integrations = yield* Integration.Service.pipe(Effect.provide(f.locations.get(f.child.location, [LocationServiceMap.full])))
   yield* integrations.transform(draft => draft.update(Integration.ID.make(provider), info => { info.name = "Fixture provider" }))
   const work = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Work", value: Credential.Key.make({ type: "key", key: "synthetic-work-key" }) })
   const personal = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Personal", value: Credential.Key.make({ type: "key", key: "synthetic-personal-key" }) })
@@ -354,7 +354,7 @@ it.live("named selection keeps its private binding through activation and explic
 it.live("switches complete targets across provider defaults and named profiles without transferring bindings", () => Effect.gen(function* () {
   const f = yield* fixture()
   const credentials = yield* Credential.Service
-  const integrations = yield* Integration.Service.pipe(Effect.provide(f.locations.get(f.child.location)))
+  const integrations = yield* Integration.Service.pipe(Effect.provide(f.locations.get(f.child.location, [LocationServiceMap.full])))
   for (const id of [provider, otherProvider]) yield* integrations.transform(draft => draft.update(Integration.ID.make(id), info => { info.name = `Fixture ${id}` }))
   const first = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Shared", value: Credential.Key.make({ type: "key", key: "synthetic-first" }) })
   const alternate = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Alternate", value: Credential.Key.make({ type: "key", key: "synthetic-alternate" }) })
@@ -411,7 +411,7 @@ it.live("switches complete targets across provider defaults and named profiles w
 it.live("child model and binding remain atomic to listeners and survive durable replay", () => Effect.gen(function* () {
   const f = yield* fixture()
   const credentials = yield* Credential.Service
-  const located = f.locations.get(f.child.location)
+  const located = f.locations.get(f.child.location, [LocationServiceMap.full])
   const integrations = yield* Integration.Service.pipe(Effect.provide(located))
   yield* integrations.transform(draft => draft.update(Integration.ID.make(provider), info => { info.name = "Fixture provider" }))
   const account = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "Named", value: Credential.Key.make({ type: "key", key: "synthetic-named" }) })
@@ -472,7 +472,7 @@ it.live("child model and binding remain atomic to listeners and survive durable 
 for (const named of [true, false]) it.live(`target ${named ? "credential replacement" : "default activation"} after preflight cannot commit`, () => Effect.gen(function* () {
   const f = yield* fixture()
   const credentials = yield* Credential.Service
-  const located = f.locations.get(f.child.location)
+  const located = f.locations.get(f.child.location, [LocationServiceMap.full])
   const integrations = yield* Integration.Service.pipe(Effect.provide(located))
   yield* integrations.transform(draft => draft.update(Integration.ID.make(provider), info => { info.name = "Fixture provider" }))
   const first = yield* credentials.create({ integrationID: Integration.ID.make(provider), label: "One", value: Credential.Key.make({ type: "key", key: "synthetic-one" }) })
@@ -536,7 +536,7 @@ it.live("verified native tool input can select a child under current delegation 
   yield* SessionPending.promoteSteers(f.db, f.events, f.parent.id)
   const messageID = SessionMessage.ID.create()
   yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: Agent.ID.make("gsd"), model: old })
-  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location, [LocationServiceMap.full])))
   yield* agents.transform(draft => draft.update(Agent.ID.make("gsd"), agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
   expect((yield* f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: target,
     source: { type: "tool", agent: Agent.ID.make("gsd"), messageID, callID: "select" } })).model).toEqual(target)
@@ -550,7 +550,7 @@ for (const canonical of [true, false]) it.live(`allowed feature model selection 
   if (!canonical) yield* f.events.publish(SessionEvent.Synthetic, { sessionID: f.parent.id, text: "TeamView fixture", metadata: { contextSource: "team-view" } })
   const messageID = SessionMessage.ID.create()
   yield* f.events.publish(SessionEvent.Step.Started, { sessionID: f.parent.id, assistantMessageID: messageID, agent: Agent.ID.make("gsd"), model: old })
-  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.parent.location, [LocationServiceMap.full])))
   yield* agents.transform(draft => draft.update(Agent.ID.make("gsd"), agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
   const selected = yield* Effect.exit(f.orchestration.switchModel({ parentID: f.parent.id, childID: f.child.id, expectedModel: old, model: target,
     source: { type: "tool", agent: Agent.ID.make("gsd"), messageID, callID: "select" } }))
@@ -585,7 +585,7 @@ it.live("an actual later send permits model selection for the child's own manage
   expect(messages.find(message => message.id === sentID)).toMatchObject({ type: "synthetic", text: expect.stringContaining("Later untrusted send") })
   const assistant = [...messages].reverse().find(message => message.type === "assistant")
   if (!assistant) return yield* Effect.die("Expected the send to produce a real assistant Step")
-  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.child.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.child.location, [LocationServiceMap.full])))
   yield* agents.transform(draft => draft.update(assistant.agent, agent => { agent.permissions = [{ action: "subagent", resource: "*", effect: "allow" }] }))
   const result = yield* Effect.exit(f.orchestration.switchModel({ parentID: f.child.id, childID: grandchild.id, expectedModel: old, model: target,
     source: { type: "tool", agent: assistant.agent, messageID: assistant.id, callID: "select-after-send" } }))

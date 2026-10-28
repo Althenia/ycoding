@@ -6,7 +6,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { eq, sql } from "drizzle-orm"
-import { Clock, DateTime, Duration, Effect, Exit, Layer, LayerMap, Schema } from "effect"
+import { Clock, DateTime, Duration, Effect, Exit, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
@@ -43,6 +43,7 @@ import {
 } from "@ycoding-ai/core/session/sql"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const model = Model.make({
@@ -78,7 +79,7 @@ const projects = Layer.succeed(
 )
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       Layer.mergeAll(

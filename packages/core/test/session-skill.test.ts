@@ -1,6 +1,6 @@
 import path from "path"
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Layer, LayerMap, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -27,6 +27,7 @@ import { SessionContext } from "@ycoding-ai/core/session/context"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { InstructionState } from "@ycoding-ai/core/session/instruction-state"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const projects = Layer.mock(Project.Service, {
@@ -78,7 +79,7 @@ const sessionContext = Layer.mock(SessionContext.Service, {
 })
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       Layer.mergeAll(

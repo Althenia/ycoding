@@ -1,7 +1,7 @@
 export * as VariantPlugin from "./variant"
 
 import { Effect } from "effect"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "./catalog-host"
 import { CatalogModel } from "../model"
 import { Provider } from "../provider"
 

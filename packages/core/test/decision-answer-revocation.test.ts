@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer, LayerMap, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { Config } from "@ycoding-ai/core/config"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -26,6 +26,7 @@ import type { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionReviewFold } from "@ycoding-ai/core/session/review-fold"
 import { SessionTable, SessionTaskTable } from "@ycoding-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const directory = AbsolutePath.make("/tmp/ycoding-decision-answer-revocation")
 const location = Location.Ref.make({ directory })
@@ -99,7 +100,7 @@ const harness = AppNodeBuilder.build(
     ],
     [
       LocationServiceMap.node,
-      Layer.effect(LocationServiceMap.Service, LayerMap.make((_location: Location.Ref) =>
+      Layer.effect(LocationServiceMap.Service, fixedLocations((_location: Location.Ref) =>
         Layer.mergeAll(config, decision) as Layer.Layer<LocationServices, LocationError>,
       )),
     ],

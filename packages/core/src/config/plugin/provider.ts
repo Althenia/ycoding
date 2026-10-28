@@ -1,6 +1,6 @@
 export * as ConfigProviderPlugin from "./provider"
 
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../../plugin/catalog-host"
 import { Money } from "@ycoding-ai/schema/money"
 import { Effect, Stream } from "effect"
 import { Config } from "../../config"

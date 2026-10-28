@@ -10,11 +10,12 @@ export type Snapshot = ReadonlyMap<string, Entry | undefined>
 export type Cache = ReturnType<typeof make>
 
 export function make() {
-  const locations = new Map<string, { catalog: Catalog.Interface; entries: Map<string, Entry> }>()
+  const locations = new Map<string, { catalog: WeakRef<Catalog.Interface>; entries: Map<string, Entry> }>()
   return {
     location(identity: string, catalog: Catalog.Interface) {
       const current = locations.get(identity)
-      const value = current?.catalog === catalog ? current : { catalog, entries: new Map<string, Entry>() }
+      const value =
+        current?.catalog.deref() === catalog ? current : { catalog: new WeakRef(catalog), entries: new Map<string, Entry>() }
       locations.delete(identity)
       locations.set(identity, value)
       if (locations.size > 128) locations.delete(locations.keys().next().value!)

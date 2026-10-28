@@ -911,7 +911,7 @@ const layer = Layer.effect(
     const projectArtifactSource = Effect.fnUntraced(function* (location: Location.Ref) {
       return yield* ProjectArtifactSource.Service.pipe(
         Effect.map((source): ProjectArtifactSource.Interface | undefined => source),
-        Effect.provide(locations.get(location)),
+        Effect.provide(locations.get(location, [LocationServiceMap.full])),
         Effect.catchCause(() => Effect.succeed(undefined)),
       )
     })
@@ -922,7 +922,7 @@ const layer = Layer.effect(
       current.profile === target.profile
     const compactionPolicy = Effect.fnUntraced(function* (session: SessionSchema.Info) {
       return yield* Config.Service.pipe(
-        Effect.provide(locations.get(session.location)),
+        Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
         Effect.flatMap((config) => config.entries()),
         Effect.map((entries) =>
           ConfigCompaction.resolve(
@@ -937,9 +937,9 @@ const layer = Layer.effect(
     // Location-scoped registry. The transcript read below is durable database work.
     const checkModelSwitch = Effect.fnUntraced(function* (session: SessionSchema.Info, targetModel: CatalogModel.Ref) {
       const resolution = yield* Effect.gen(function* () {
-        const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+        const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         const compactions = (yield* Config.Service.pipe(
-          Effect.provide(locations.get(session.location)),
+          Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
           Effect.flatMap((config) => config.entries()),
         ))
           .filter((entry): entry is Config.Document => entry.type === "document")
@@ -979,7 +979,7 @@ const layer = Layer.effect(
       targetModel: CatalogModel.Ref,
     ) {
       return yield* SessionRunnerModel.Service.pipe(
-        Effect.provide(locations.get(session.location)),
+        Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
         Effect.flatMap((models) => models.resolve({ ...session, model: targetModel }, { rebind: true })),
       )
     })
@@ -990,7 +990,7 @@ const layer = Layer.effect(
       targetModel: CatalogModel.Ref,
     ) {
       const policy = yield* compactionPolicy(session)
-      const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+      const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
       const target = SessionContextBudget.resolveCapabilities(
         yield* catalog.model.available(),
         targetModel.providerID,
@@ -1003,7 +1003,7 @@ const layer = Layer.effect(
       Effect.gen(function* () {
         const compaction = yield* SessionCompaction.Service
         return yield* compaction.manifest(job)
-      }).pipe(Effect.provide(locations.get(session.location)))
+      }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
     // Compaction to fit a smaller switch target. It joins an already-admitted compaction, then
     // admits at most one `mandatory` job at the target safe budget. A mandatory job protects no
     // recent tail, so a first-time switch needs no prior summary. Compaction reduces the context;
@@ -1181,12 +1181,16 @@ const layer = Layer.effect(
             ([identity, refs]) =>
               Effect.gen(function* () {
                 if (!catalogs.has(identity)) {
+                  const { CatalogContributions } = yield* Effect.promise<
+                    typeof import("../plugin/catalog-contributions")
+                  >(() => import("../plugin/catalog-contributions"))
                   const context = yield* locations
                     .contextEffect(
                       Location.Ref.make({
                         directory: AbsolutePath.make(refs[0].directory),
                         workspaceID: refs[0].workspaceID ? Workspace.ID.make(refs[0].workspaceID) : undefined,
                       }),
+                      CatalogContributions.nodes,
                     )
                     .pipe(
                       Effect.catchCause((cause) =>
@@ -1679,7 +1683,7 @@ const layer = Layer.effect(
     ): Effect.fn.Return<void> {
       if (asleep) yield* Effect.gen(function* () {
         const session = yield* result.get(sessionID)
-        const located = locations.get(session.location)
+        const located = locations.get(session.location, [LocationServiceMap.full])
         const convert = <E>(kind: string, effect: Effect.Effect<void, E>) => effect.pipe(
           Effect.catchCause(() => Effect.logWarning("Unable to defer pending requests for sleeping Session", { sessionID, kind })),
         )
@@ -1782,7 +1786,7 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       stale: ReadonlyArray<SessionReviewFold.ID>,
     ): Effect.fn.Return<void> {
-      const located = locations.get(session.location)
+      const located = locations.get(session.location, [LocationServiceMap.full])
       const forms = yield* Form.Service.pipe(Effect.provide(located))
       yield* forms.cancelPending(sessionID)
       const questions = yield* Question.Service.pipe(Effect.provide(located))
@@ -1828,7 +1832,7 @@ const layer = Layer.effect(
         const selection =
           chosen ??
           (yield* Catalog.Service.pipe(
-            Effect.provide(locations.get(location)),
+            Effect.provide(locations.get(location, [LocationServiceMap.full])),
             Effect.flatMap((catalog) => catalog.model.defaultSelection()),
           ))
         const inheritedBinding =
@@ -1848,7 +1852,7 @@ const layer = Layer.effect(
           selection?.profile === undefined
             ? undefined
             : yield* SessionRunnerModel.Service.pipe(
-                Effect.provide(locations.get(location)),
+                Effect.provide(locations.get(location, [LocationServiceMap.full])),
                 Effect.flatMap((models) =>
                   models.resolve(
                     SessionSchema.Info.make({
@@ -2154,7 +2158,7 @@ const layer = Layer.effect(
             )
           const decisions = yield* autonomy.effectiveDecisions(sessionID).pipe(notFound)
           const asleep = yield* autonomy.isAsleep(sessionID).pipe(notFound)
-          const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location)))
+          const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
           return { ...decisions, asleep, guardrailsEnabled: guardrail.reviewPolicy.enabled }
         }),
         set: Effect.fn("Session.autonomy.set")(function* (input) {
@@ -2171,7 +2175,7 @@ const layer = Layer.effect(
             // Capture the durable revision before the paid calculation. A concurrent user stop or
             // replacement must win over this late result instead of being overwritten by it.
             const snapshot = yield* autonomy.snapshot(input.sessionID).pipe(notFound)
-            const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+            const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
             const synthesized = yield* goals.synthesize({ session, text: rawText })
             const candidate = SessionAutonomy.makeGoal({
               text: synthesized,
@@ -2194,7 +2198,7 @@ const layer = Layer.effect(
           if (goal === true) {
             const snapshot = yield* autonomy.snapshot(input.sessionID).pipe(notFound)
             if (!snapshot.state.goal) return yield* new SessionGoal.Error({ code: "goal.no_retained_goal" })
-            const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+            const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
             const steer = yield* goals.steer({
               session,
               goal: { ...snapshot.state.goal, status: "active" },
@@ -2419,7 +2423,7 @@ const layer = Layer.effect(
         const session = yield* result.get(sessionID)
         const contextModule = yield* Effect.promise<typeof import("./context")>(() => import("./" + "context"))
         const context = yield* contextModule.SessionContext.Service.pipe(
-          Effect.provide(locations.get(session.location)),
+          Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
         )
         const selection = yield* context.select(sessionID)
         const keys = yield* InstructionState.activeKeys(db, selection.instructions, sessionID)
@@ -2471,7 +2475,7 @@ const layer = Layer.effect(
                 : yield* Effect.gen(function* () {
                     // Resolved lazily so prompt admission only boots location services when an
                     // image attachment actually needs the resizer.
-                    const image = Image.Service.pipe(Effect.provide(locations.get(session.location)))
+                    const image = Image.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
                     const prompt = yield* resolvePrompt(
                       { text: input.text, files: input.files, agents: input.agents },
                       image,
@@ -2484,10 +2488,10 @@ const layer = Layer.effect(
                             () => import("../plugin/supervisor"),
                           )
                           const plugins = yield* pluginModule.PluginSupervisor.Service.pipe(
-                            Effect.provide(locations.get(session.location)),
+                            Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
                           )
                           yield* plugins.flush
-                          const skills = yield* Skill.Service.pipe(Effect.provide(locations.get(session.location)))
+                          const skills = yield* Skill.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
                           return SessionSkill.mentions(input.text, yield* skills.list())
                         })
                       : []
@@ -2573,7 +2577,7 @@ const layer = Layer.effect(
       ),
       generate: Effect.fn("Session.generate")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        const generate = yield* SessionGenerate.Service.pipe(Effect.provide(locations.get(session.location)))
+        const generate = yield* SessionGenerate.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         return yield* generate.generate(input)
       }),
       command: Effect.fn("Session.command")(
@@ -2599,7 +2603,7 @@ const layer = Layer.effect(
               })
             }
           }
-          const commands = yield* Command.Service.pipe(Effect.provide(locations.get(session.location)))
+          const commands = yield* Command.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
           const source = yield* projectArtifactSource(session.location)
           const command = yield* commands.get(input.command)
           if (!command)
@@ -2617,7 +2621,7 @@ const layer = Layer.effect(
           const evaluated = yield* commands.evaluate({ name: input.command, arguments: input.arguments })
           const commandAgent = yield* Effect.gen(function* () {
             if (!command.agent) return undefined
-            const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(session.location)))
+            const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
             return yield* agents.get(Agent.ID.make(command.agent))
           })
           const model = command.model ?? commandAgent?.model ?? input.model
@@ -2708,7 +2712,7 @@ const layer = Layer.effect(
               })
               const info = yield* shell.create(prepared).pipe(Effect.onError(() => reservation.release))
               return { info, warnings: prepared.warnings, reservation }
-            }).pipe(Effect.provide(locations.get(session.location)))
+            }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
             yield* Effect.gen(function* () {
               yield* events.publish(
                 SessionEvent.Shell.Started,
@@ -2735,7 +2739,7 @@ const layer = Layer.effect(
                       .pipe(Effect.catchTag("Shell.NotFoundError", () => Effect.succeed(missingShellOutput())))
                   : missingShellOutput()
                 return { shell: terminal.info, output }
-              }).pipe(Effect.provide(locations.get(session.location)))
+              }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
               yield* events.publish(SessionEvent.Shell.Ended, {
                 sessionID: input.sessionID,
                 shell: completed.shell,
@@ -2754,7 +2758,7 @@ const layer = Layer.effect(
       }),
       skill: Effect.fn("Session.skill")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(session.location)))
+        const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         const access = yield* permission.evaluateEffective({
           sessionID: session.id,
           agent: session.agent,
@@ -2762,7 +2766,7 @@ const layer = Layer.effect(
           resource: input.skill,
         })
         if (access === "deny") return yield* new SkillNotFoundError({ skill: input.skill })
-        const skills = yield* Skill.Service.pipe(Effect.provide(locations.get(session.location)))
+        const skills = yield* Skill.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         const source = yield* projectArtifactSource(session.location)
         const skill = (yield* skills.list()).find((item) => item.id === input.skill)
         if (!skill) return yield* new SkillNotFoundError({ skill: input.skill })
@@ -2840,10 +2844,10 @@ const layer = Layer.effect(
         if (!sameModel(session.model, input.expectedModel)) return { status: "conflict" } as const
         if (input.model.profile !== undefined && (!input.targetBinding || input.targetBinding.providerID !== input.model.providerID || input.targetBinding.profile !== input.model.profile))
           return yield* new SessionRunnerModel.ProfileUnavailableError({ providerID: input.model.providerID, profile: input.model.profile })
-        const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(session.location)))
+        const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         const resolved = yield* models.resolve({ ...session, model: input.model }, { binding: input.targetBinding, refresh: false })
         if (resolved.connectionIdentityDigest !== input.connectionIdentityDigest) return { status: "conflict" } as const
-        const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+        const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         const target = yield* catalog.model.get(input.model.providerID, input.model.id, input.model.profile)
         const policy = yield* compactionPolicy(session)
         const capabilities = SessionContextBudget.resolveCapabilities(target ? [target] : [], input.model.providerID, input.model.id, { safetyMarginTokens: policy.contextSafetyMarginTokens })
@@ -2986,7 +2990,7 @@ const layer = Layer.effect(
         if (current.projectID !== project.id) {
           const destination = Location.Ref.make({ directory, workspaceID: input.workspaceID })
           yield* locations.invalidate(destination)
-          const destinationServices = locations.get(destination)
+          const destinationServices = locations.get(destination, [LocationServiceMap.full])
           const oldSource = yield* projectArtifactSource(current.location)
           const oldAgent = current.agent && oldSource ? yield* oldSource.provenance("agent", current.agent) : undefined
           const destinationAgent = yield* Agent.Service.pipe(
@@ -3038,7 +3042,7 @@ const layer = Layer.effect(
             message: "Session has no completed message boundary to compact",
           })
         const policy = yield* Config.Service.pipe(
-          Effect.provide(locations.get(session.location)),
+          Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
           Effect.flatMap((config) => config.entries()),
           Effect.map((entries) =>
             ConfigCompaction.resolve(
@@ -3049,7 +3053,7 @@ const layer = Layer.effect(
           ),
         )
         const resolved = yield* SessionRunnerModel.Service.pipe(
-          Effect.provide(locations.get(session.location)),
+          Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
           Effect.flatMap((models) => models.resolve(session)),
           Effect.mapError(
             (error) => new CompactionConflictError({ sessionID: input.sessionID, jobID, message: error.message }),
@@ -3073,7 +3077,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const compaction = yield* SessionCompaction.Service
             return yield* compaction.manifest(job)
-          }).pipe(Effect.provide(locations.get(session.location)))
+          }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
         return yield* compactionJobs
           .withAdmissionGate(input.sessionID, (admit) =>
             Effect.gen(function* () {
@@ -3301,7 +3305,7 @@ const layer = Layer.effect(
           return yield* SessionRevert.stage({ session, messageID: input.messageID, files: input.files }).pipe(
             Effect.provideService(Database.Service, database),
             Effect.provideService(EventRuntime.Service, events),
-            Effect.provide(locations.get(session.location)),
+            Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
           )
         }),
         clear: Effect.fn("Session.revert.clear")(function* (sessionID) {
@@ -3309,7 +3313,7 @@ const layer = Layer.effect(
           if ((yield* execution.active).has(sessionID)) return yield* new BusyError({ sessionID })
           const revert = yield* SessionRevert.clear(session).pipe(
             Effect.provideService(EventRuntime.Service, events),
-            Effect.provide(locations.get(session.location)),
+            Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
           )
           yield* execution.wake(sessionID)
           return revert

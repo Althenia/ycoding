@@ -1,5 +1,5 @@
 import { afterAll, describe, expect } from "bun:test"
-import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { chmod, mkdtemp, rm, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import path from "path"
@@ -31,6 +31,7 @@ import { imagePassthrough } from "./lib/image"
 import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
 import { Global } from "@ycoding-ai/core/global"
 import { Hash } from "@ycoding-ai/core/util/hash"
+import { fixedLocations } from "./fixture/location-map"
 
 const attachmentRoot = await mkdtemp(path.join(tmpdir(), "ycoding-session-prompt-store-"))
 afterAll(() => rm(attachmentRoot, { recursive: true, force: true }))
@@ -56,7 +57,7 @@ const execution = Layer.succeed(
 )
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // Attachment admission only needs the location-scoped Image service.
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion

@@ -1,6 +1,6 @@
 import path from "path"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import {
   buildLoginUrl,
   decodeJwtExpiryMs,
@@ -24,7 +24,7 @@ import { Integration } from "../../integration"
 import { Location } from "../../location"
 import type { CatalogModel } from "../../model"
 import { Provider } from "../../provider"
-import type { PluginInternal } from "../internal"
+import type { PluginCatalogHost } from "../catalog-host"
 
 const integrationID = Integration.ID.make("cursor")
 const methodID = Integration.MethodID.make("browser")
@@ -198,7 +198,7 @@ export const CursorPlugin = define({
       }),
     )
   }),
-} satisfies PluginInternal.InternalPlugin)
+} satisfies PluginCatalogHost.Contribution)
 
 export function syncCatalog(catalog: CursorCatalog, models: readonly CatalogModel.Info[]) {
   catalog.provider.update(CursorModels.providerID, (provider) => {

@@ -43,6 +43,10 @@ export const layerWith = (getLocation: (location: Location.Ref) => Layer.Layer<P
 
 export const node: Node.GlobalNode<CoordinationDecisions.Service> = makeGlobalNode({
   service: CoordinationDecisions.Service,
-  layer: Layer.unwrap(Effect.map(LocationServiceMap.Service, (locations) => layerWith(locations.get))),
+  layer: Layer.unwrap(
+    Effect.map(LocationServiceMap.Service, (locations) =>
+      layerWith((location) => locations.get(location, [Permission.node, Form.node, SessionGuardrail.node])),
+    ),
+  ),
   deps: [CoordinationService.node, CoordinationSettings.node, SessionStore.node, LocationServiceMap.node],
 })

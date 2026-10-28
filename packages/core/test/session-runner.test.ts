@@ -134,7 +134,6 @@ import {
   Fiber,
   Layer,
   Option,
-  LayerMap,
   Schema,
   Scope,
   Stream,
@@ -151,6 +150,7 @@ import { observationMessageData } from "./fixture/session-observations"
 import { registerToolPlugin } from "./lib/tool"
 import { agentHost, catalogHost, host } from "./plugin/host"
 import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
+import { fixedLocations } from "./fixture/location-map"
 
 const requests: LLMRequest[] = []
 const runnerDirectory = AbsolutePath.make(import.meta.dir)
@@ -606,7 +606,7 @@ const registerExplicitSkill = (id: string, content: string, location = `${runner
     const skills = yield* Skill.Service
     const locations = yield* LocationServiceMap.Service
     const local = yield* Skill.Service.pipe(
-      Effect.provide(locations.get(Location.Ref.make({ directory: runnerDirectory }))),
+      Effect.provide(locations.get(Location.Ref.make({ directory: runnerDirectory }), [LocationServiceMap.full])),
     )
     yield* Effect.forEach(
       [skills, local],
@@ -714,7 +714,7 @@ const contextState = makeGlobalNode({
     const database = yield* Database.Service
     const events = yield* EventRuntime.Service
     const guardrails = yield* SessionGuardrail.Service
-    const locations = yield* LayerMap.make(
+    const locations = yield* fixedLocations(
       (_location: Location.Ref) => Layer.succeed(SessionGuardrail.Service, guardrails) as unknown as Layer.Layer<LocationServices>,
     )
     return AppNodeBuilder.build(SessionContextState.node, [
@@ -1109,7 +1109,7 @@ const realExecution = Effect.gen(function* () {
   const compaction = yield* SessionCompactionExecution.Service
   const runner = yield* SessionRunner.Service
   const scope = yield* Scope.Scope
-  const locations = yield* LayerMap.make(
+  const locations = yield* fixedLocations(
     (_ref: Location.Ref) => Layer.succeed(SessionRunner.Service, runner) as unknown as Layer.Layer<LocationServices>,
   )
   const context = yield* Layer.buildWithScope(

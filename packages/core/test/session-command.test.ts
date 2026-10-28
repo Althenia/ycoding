@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, LayerMap } from "effect"
+import { Effect, Layer } from "effect"
 import path from "node:path"
 import { Agent } from "@ycoding-ai/core/agent"
 import { Command } from "@ycoding-ai/core/command"
@@ -26,12 +26,13 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { emptyConfigLayer, emptyMcpLayer, testLocationLayer } from "./fixture/mcp"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()), workspaceID: undefined })
 const wakes: Session.ID[] = []
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       AppNodeBuilder.build(LayerNode.group([Command.node, Agent.node, Catalog.node]), [
         [Config.node, emptyConfigLayer],
@@ -89,7 +90,7 @@ const fixture = Effect.gen(function* () {
   const sessions = yield* Session.Service
   const session = yield* sessions.create({ location })
   const locations = yield* LocationServiceMap.Service
-  const commands = yield* Command.Service.pipe(Effect.provide(locations.get(location)))
+  const commands = yield* Command.Service.pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
   yield* commands.transform((draft) =>
     draft.update("counted", (command) => {
       command.template = `Result: !\`printf 'evaluation\\n' >> ${JSON.stringify(counter)}; printf once\``

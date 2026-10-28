@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 
 export const GooglePlugin = define({
   id: "ycoding.provider.google",

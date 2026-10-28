@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { Provider } from "../../provider"
 
 type MantleSDK = {

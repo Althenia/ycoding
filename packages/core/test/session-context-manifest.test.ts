@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import { describe, expect, test } from "bun:test"
-import { DateTime, Effect, Layer, LayerMap, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { Event, SessionMessage } from "@ycoding-ai/schema"
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { AppNodeBuilder } from "../src/effect/app-node-builder"
@@ -34,6 +34,7 @@ import { ContextManifest } from "../src/session/context-manifest"
 import { SessionGuardrail } from "../src/session/guardrail"
 import { SessionLiveState } from "../src/session/live-state"
 import { asc, eq } from "drizzle-orm"
+import { fixedLocations } from "./fixture/location-map"
 
 /** Task 5 owns this service; dynamic loading keeps Stage A executable until its implementation lands. */
 const contextStateModule = () => import("../src/session/context-state")
@@ -51,7 +52,7 @@ const guardrails = Layer.mock(SessionGuardrail.Service, {
 })
 const contextLocations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       guardrails as unknown as Layer.Layer<LocationServices>,

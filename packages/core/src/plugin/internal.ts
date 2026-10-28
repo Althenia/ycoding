@@ -18,8 +18,6 @@ import { CoordinationRuntime } from "../session/coordination-runtime"
 import { CoordinationTool } from "../tool/coordination"
 import { ConfigAgentPlugin } from "../config/plugin/agent"
 import { ConfigCommandPlugin } from "../config/plugin/command"
-import { ConfigProviderPlugin } from "../config/plugin/provider"
-import { ConfigPolicyPlugin } from "../config/plugin/policy"
 import { ConfigReferencePlugin } from "../config/plugin/reference"
 import { ConfigSkillPlugin } from "../config/plugin/skill"
 import { EventRuntime } from "../event"
@@ -80,13 +78,9 @@ import { WorktreeTool } from "../tool/worktree"
 import { ProjectCopy } from "../project/copy"
 import { AgentPlugin } from "./agent"
 import { CommandPlugin } from "./command"
-import { ModelsDevPlugin } from "./models-dev"
-import { ProviderPlugins } from "./provider"
 import { PluginRuntime } from "./runtime"
 import { SkillPlugin } from "./skill"
 import { SystemPromptPlugin } from "./system-prompt"
-import { VariantPlugin } from "./variant"
-import { WellKnownPlugin } from "../wellknown/plugin"
 import { ProjectArtifactSource } from "../project-artifact/source"
 
 const services = Effect.fn("PluginInternal.services")(function* () {
@@ -197,15 +191,12 @@ export type Requirements = ContextServices<Effect.Success<ReturnType<typeof serv
 export type InternalPlugin = Plugin<Requirements | Scope.Scope>
 
 const pre = [
-  WellKnownPlugin.Plugin,
   AgentPlugin.Plugin,
   CommandPlugin.Plugin,
   SkillPlugin.Plugin,
   ConversationCompactTool.Plugin,
   ComputerTool.Plugin,
   ...SystemPromptPlugin.Plugins,
-  ModelsDevPlugin,
-  ...ProviderPlugins,
   PatchTool.Plugin,
   EditTool.Plugin,
   GlobTool.Plugin,
@@ -236,9 +227,6 @@ const post = [
   ConfigAgentPlugin.Plugin,
   ConfigCommandPlugin.Plugin,
   ConfigSkillPlugin.Plugin,
-  ConfigProviderPlugin.Plugin,
-  VariantPlugin.Plugin,
-  ConfigPolicyPlugin.Plugin,
   ProjectArtifactSource.Plugin,
 ] as const satisfies readonly InternalPlugin[]
 

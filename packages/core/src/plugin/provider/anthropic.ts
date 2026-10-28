@@ -1,4 +1,4 @@
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 import { Effect, Semaphore, Stream } from "effect"
 import { join } from "node:path"

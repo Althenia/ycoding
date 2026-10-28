@@ -4,7 +4,7 @@ import { describe, expect } from "bun:test"
 import { Config } from "@ycoding-ai/schema/config"
 import { Plugin } from "@ycoding-ai/schema/plugin"
 import { Money } from "@ycoding-ai/schema/money"
-import { DateTime, Deferred, Effect, Equal, Fiber, Hash, Logger, RcMap, Schema, Stream } from "effect"
+import { DateTime, Deferred, Effect, Equal, Fiber, Hash, Logger, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { Plugin as EffectPlugin } from "@ycoding-ai/plugin/effect"
 import { Agent } from "@ycoding-ai/core/agent"
@@ -47,7 +47,7 @@ describe("LocationServiceMap", () => {
     Effect.acquireRelease(Effect.promise(() => tmpdir()), (dir) => Effect.promise(() => dir[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((dir) => Effect.gen(function* () {
         const locations = yield* LocationServiceMap.Service
-        const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+        const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
         const supervisor = yield* PluginSupervisor.Service.pipe(Effect.provide(context))
         yield* supervisor.flush
         const agents = yield* Agent.Service.pipe(Effect.provide(context))
@@ -73,7 +73,7 @@ describe("LocationServiceMap", () => {
         const messages: unknown[] = []
         return Effect.gen(function* () {
           const locations = yield* LocationServiceMap.Service
-          yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           const boot = messages.flatMap((message) =>
             Array.isArray(message) && message[0] === "location services booted" ? [message[1]] : [],
           )[0]
@@ -116,9 +116,9 @@ describe("LocationServiceMap", () => {
             return yield* agents.get(id)
           })
 
-          expect(yield* read.pipe(Effect.scoped, Effect.provide(locations.get(ref)))).toBeDefined()
+          expect(yield* read.pipe(Effect.scoped, Effect.provide(locations.get(ref, [LocationServiceMap.full])))).toBeDefined()
           yield* locations.invalidate(ref)
-          expect(yield* read.pipe(Effect.scoped, Effect.provide(locations.get(ref)))).toBeDefined()
+          expect(yield* read.pipe(Effect.scoped, Effect.provide(locations.get(ref, [LocationServiceMap.full])))).toBeDefined()
         }),
       ),
     ),
@@ -142,7 +142,7 @@ describe("LocationServiceMap", () => {
           )
 
           const locations = yield* LocationServiceMap.Service
-          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           yield* Deferred.await(started)
 
           const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
@@ -185,7 +185,7 @@ describe("LocationServiceMap", () => {
     ).pipe(
       Effect.flatMap((dir) => Effect.gen(function* () {
         const locations = yield* LocationServiceMap.Service
-        const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+        const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
         yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context))
         const activated = yield* EventRuntime.Service.use((events) =>
           events.subscribe(Plugin.Event.Updated).pipe(Stream.runHead),
@@ -228,7 +228,7 @@ describe("LocationServiceMap", () => {
           )
 
           const locations = yield* LocationServiceMap.Service
-          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           yield* Deferred.await(firstStarted)
 
           const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
@@ -285,7 +285,7 @@ describe("LocationServiceMap", () => {
           )
 
           const locations = yield* LocationServiceMap.Service
-          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           yield* Deferred.await(firstStarted)
 
           const events = yield* EventRuntime.Service
@@ -325,7 +325,7 @@ describe("LocationServiceMap", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const locations = yield* LocationServiceMap.Service
-          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
             Effect.provide(context),
             Effect.forkChild({ startImmediately: true }),
@@ -362,7 +362,7 @@ describe("LocationServiceMap", () => {
           )
 
           const locations = yield* LocationServiceMap.Service
-          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context))
           expect(activations.count).toBe(1)
 
@@ -383,7 +383,7 @@ describe("LocationServiceMap", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           const locations = yield* LocationServiceMap.Service
-          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(context))
 
           const started = yield* Deferred.make<void>()
@@ -436,7 +436,7 @@ describe("LocationServiceMap", () => {
           )
 
           const locations = yield* LocationServiceMap.Service
-          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))
+          const context = yield* locations.contextEffect(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])
           yield* Deferred.await(started)
           const flushFiber = yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
             Effect.provide(context),
@@ -472,7 +472,7 @@ describe("LocationServiceMap", () => {
           }).pipe(
             Effect.scoped,
             Effect.provide(
-              LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+              LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full]),
             ),
           )
 
@@ -520,7 +520,7 @@ describe("LocationServiceMap", () => {
           }).pipe(
             Effect.scoped,
             Effect.provide(
-              LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) })),
+              LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full]),
             ),
           )
         }),
@@ -540,8 +540,8 @@ describe("LocationServiceMap", () => {
             const events = yield* EventRuntime.Service
             const firstRef = Location.Ref.make({ directory: AbsolutePath.make(first.path) })
             const secondRef = Location.Ref.make({ directory: AbsolutePath.make(second.path) })
-            const firstContext = yield* locations.contextEffect(firstRef)
-            const secondContext = yield* locations.contextEffect(secondRef)
+            const firstContext = yield* locations.contextEffect(firstRef, [LocationServiceMap.full])
+            const secondContext = yield* locations.contextEffect(secondRef, [LocationServiceMap.full])
             const firstEvents = yield* events
               .subscribe(Config.Event.Updated)
               .pipe(
@@ -591,7 +591,7 @@ describe("LocationServiceMap", () => {
             expect(decoded).toEqual(constructed)
             expect(Equal.equals(constructed, decoded)).toBe(true)
             expect(Hash.hash(constructed)).toBe(Hash.hash(decoded))
-            expect(yield* locations.contextEffect(constructed)).toBe(yield* locations.contextEffect(decoded))
+            expect(yield* locations.contextEffect(constructed, [LocationServiceMap.full])).toBe(yield* locations.contextEffect(decoded, [LocationServiceMap.full]))
           }),
         ),
       ),
@@ -615,13 +615,13 @@ describe("LocationServiceMap", () => {
             expect(Object.keys(present)).toEqual(["directory", "workspaceID"])
             expect(Equal.equals(absent, present)).toBe(false)
 
-            const first = yield* locations.contextEffect(absent)
-            expect(yield* locations.contextEffect(present)).toBe(first)
-            expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(1)
+            const first = yield* locations.contextEffect(absent, [LocationServiceMap.full])
+            expect(yield* locations.contextEffect(present, [LocationServiceMap.full])).toBe(first)
+            expect((yield* locations.loaded())).toHaveLength(1)
 
             // Invalidating with the shape opposite to the one that booted must evict.
             yield* locations.invalidate(present)
-            expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(0)
+            expect((yield* locations.loaded())).toHaveLength(0)
           }),
         ),
       ),
@@ -641,13 +641,13 @@ describe("LocationServiceMap", () => {
             const directory = AbsolutePath.make(dir.path)
             const refs = [directory, AbsolutePath.make(`${directory}/./`), AbsolutePath.make(`${directory}/nested/..`)]
               .map((directory) => Location.Ref.make({ directory }))
-            const contexts = yield* Effect.all(refs.map((ref) => locations.contextEffect(ref)), { concurrency: "unbounded" })
+            const contexts = yield* Effect.all(refs.map((ref) => locations.contextEffect(ref, [LocationServiceMap.full])), { concurrency: "unbounded" })
             expect(contexts[1]).toBe(contexts[0])
             expect(contexts[2]).toBe(contexts[0])
             expect(yield* Location.Service.pipe(Effect.provide(contexts[0]))).toMatchObject({ directory })
-            expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(1)
+            expect((yield* locations.loaded())).toHaveLength(1)
             yield* locations.invalidate(refs[2])
-            expect(Array.from(yield* RcMap.keys(locations.rcMap))).toHaveLength(0)
+            expect((yield* locations.loaded())).toHaveLength(0)
           }),
         ),
       ),
@@ -704,7 +704,7 @@ describe("LocationServiceMap", () => {
             }).pipe(
               Effect.scoped,
               Effect.provide(
-                LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(directory) })),
+                LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }), [LocationServiceMap.full]),
               ),
             )
 
@@ -761,7 +761,7 @@ describe("LocationServiceMap", () => {
                 location,
               }),
             ),
-          ).pipe(Effect.provide(LocationServiceMap.Service.get(location)), Effect.flip)
+          ).pipe(Effect.provide(LocationServiceMap.Service.get(location, [LocationServiceMap.full])), Effect.flip)
 
           expect(failure).toMatchObject({
             _tag: "SessionRunnerModel.ModelUnavailableError",
@@ -810,7 +810,7 @@ describe("LocationServiceMap", () => {
                 location,
               }),
             )
-          }).pipe(Effect.provide(LocationServiceMap.Service.get(location)))
+          }).pipe(Effect.provide(LocationServiceMap.Service.get(location, [LocationServiceMap.full])))
 
           expect(resolved.ref).toEqual(
             CatalogModel.Ref.make({
@@ -853,7 +853,7 @@ describe("LocationServiceMap", () => {
           })
         }).pipe(
           Effect.scoped,
-          Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }), [LocationServiceMap.full])),
         ),
       ),
     ),

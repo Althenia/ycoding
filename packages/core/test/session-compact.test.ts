@@ -28,9 +28,10 @@ import { SessionCompactionJobTable, SessionMessageTable } from "@ycoding-ai/core
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { eq } from "drizzle-orm"
-import { Clock, Deferred, Effect, Exit, Fiber, Layer, LayerMap } from "effect"
+import { Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const model = Model.make({
@@ -105,7 +106,7 @@ const worker = Layer.mock(SessionCompactionService)({
 })
 const integratedLocations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       Layer.mergeAll(config, catalog, models, worker) as unknown as Layer.Layer<LocationServices>,

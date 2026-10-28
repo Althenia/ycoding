@@ -115,8 +115,8 @@ it.effect("deferred remembered permission stays with the same Session and resour
   const root = yield* sessions.create({ location: yield* reviewLocation })
   const other = yield* sessions.create({ location: root.location })
   const locations = yield* LocationServiceMap.Service
-  const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(root.location)))
-  const permissions = yield* Permission.Service.pipe(Effect.provide(locations.get(root.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
+  const permissions = yield* Permission.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   yield* agents.transform((draft) => draft.update(Agent.ID.make("grant-test"), (agent) => {
     agent.permissions = [{ action: "read", resource: "*", effect: "ask" }]
   }))
@@ -155,7 +155,7 @@ it.effect("sleep conversion settles waiting forms but does not consume create-on
   const reviews = yield* SessionReview.Service
   const root = yield* session.create({ location: yield* reviewLocation })
   const locations = yield* LocationServiceMap.Service
-  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location)))
+  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const created = yield* forms.create({ sessionID: root.id, title: "External creator", fields: payload.fields })
   const waiting = yield* forms.ask({ sessionID: root.id, title: "Waiting caller", fields: payload.fields }).pipe(Effect.forkScoped)
   yield* Effect.yieldNow
@@ -191,7 +191,7 @@ it.effect("a later guardrail deny blocks an identical granted request without co
   const reviews = yield* SessionReview.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
   const locations = yield* LocationServiceMap.Service
-  const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
+  const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const input = { sessionID: root.id, action: "shell", resources: ["rm -rf /"] }
   const result = yield* guardrail.evaluate(input)
   const fingerprint = SessionReview.fingerprint({ ...input, workdir: root.location.directory, ruleIDs: result.ruleIDs, hardReview: result.hardReview })
@@ -245,7 +245,7 @@ it.effect("a deferred guardrail action runs once after approval and is reviewed 
   const root = yield* session.create({ location: yield* reviewLocation })
   yield* session.autonomy.set({ sessionID: root.id, sleep: true })
   const locations = yield* LocationServiceMap.Service
-  const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
+  const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const messageID = SessionMessage.ID.make("msg_review_guardrail_call")
   const input = { sessionID: root.id, action: "shell", resources: ["TOKEN=synthetic-secret git reset --hard"], source: { messageID, callID: "call_guardrail" } }
   const deferred = yield* guardrail.assert(input).pipe(Effect.flip)
@@ -273,13 +273,13 @@ it.effect("a deferred permission ask runs once after approval and defers again o
   const root = yield* session.create({ location: yield* reviewLocation })
   yield* session.autonomy.set({ sessionID: root.id, sleep: true })
   const locations = yield* LocationServiceMap.Service
-  const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(root.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   yield* agents.transform((editor) =>
     editor.update(Agent.ID.make("test"), (agent) => {
       agent.permissions = []
     }),
   )
-  const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(root.location)))
+  const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const input = {
     sessionID: root.id, agent: Agent.ID.make("test"), action: "edit", resources: ["outside.txt"], save: ["outside.txt"],
     source: { type: "tool" as const, messageID: "msg_review_permission_call", callID: "call_permission" },

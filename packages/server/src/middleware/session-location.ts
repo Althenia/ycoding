@@ -37,7 +37,9 @@ export const sessionLocationLayer = Layer.effect(
         const request = yield* HttpServerRequest.HttpServerRequest
         if (isBrowserConnectURL(new URL(request.url, "http://localhost")))
           return yield* effect.pipe(
-            Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
+            Effect.provide(
+              locations.get(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }), [LocationServiceMap.full]),
+            ),
           )
         const sessionID = yield* decodeSessionID(sessionLocationID(route.params)).pipe(
           Effect.mapError(
@@ -67,6 +69,7 @@ export const sessionLocationLayer = Layer.effect(
                 directory: AbsolutePath.make(row.directory),
                 workspaceID: row.workspaceID ? Workspace.ID.make(row.workspaceID) : undefined,
               }),
+              [LocationServiceMap.full],
             ),
           ),
         )

@@ -145,7 +145,7 @@ function withLocation<A, E, R>(config: unknown, effect: Effect.Effect<A, E, R>) 
     Effect.flatMap((directory) =>
       effect.pipe(
         Effect.scoped,
-        Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+        Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), [LocationServiceMap.full])),
       ),
     ),
   )

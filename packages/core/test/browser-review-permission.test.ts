@@ -35,7 +35,7 @@ it.live(`a browser approval survives execution end and fresh refs only for the $
   const database = yield* Database.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   yield* agents.transform((draft) => draft.update(toolIdentity.agent, (agent) => { agent.permissions = [
     { action: "*", resource: "*", effect: "allow" }, { action: "browser_interact", resource: "*", effect: target === "allow" ? "allow" : "ask" },

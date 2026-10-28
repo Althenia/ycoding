@@ -115,14 +115,14 @@ export const layer = Layer.effect(
       const activeShell = yield* Effect.gen(function* () {
         const shell = yield* Shell.Service
         return (yield* shell.list()).some((info) => info.metadata.sessionID === sessionID)
-      }).pipe(Effect.provide(locations.get(session.location)))
+      }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
       if (activeShell) return undefined
       const assistant = yield* SessionHistory.latest(db, sessionID, "assistant")
       const latestAssistantText = assistant?.content
         .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
         .map((part) => part.text)
         .join("")
-      const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+      const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
       const continuation = yield* goals.continuation({
         session,
         goal: snapshot.state.goal,
@@ -248,7 +248,7 @@ export const layer = Layer.effect(
           return
         }
         return yield* SessionRunner.Service.use((runner) => runner.drain({ sessionID, force })).pipe(
-          Effect.provide(locations.get(session.location)),
+          Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
           SessionCompactionExecution.bind(compactionExecution),
           Effect.tapCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.void

@@ -1,4 +1,4 @@
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "./catalog-host"
 import { Effect, Stream } from "effect"
 import { EventRuntime } from "../event"
 import { ModelsDev } from "../models-dev"
@@ -8,7 +8,7 @@ export const ModelsDevPlugin = define({
   effect: Effect.fn(function* (ctx) {
     const modelsDev = yield* ModelsDev.Service
     const events = yield* EventRuntime.Service
-    const loaded = { data: structuredClone(yield* modelsDev.get()) }
+    const loaded = { data: yield* modelsDev.get() }
     yield* ctx.integration.transform((integrations) => {
       for (const provider of loaded.data) {
         if (provider.environment.length === 0) continue
@@ -38,7 +38,7 @@ export const ModelsDevPlugin = define({
     yield* events.subscribe(ModelsDev.Event.Refreshed).pipe(
       Stream.runForEach(() =>
         modelsDev.get().pipe(
-          Effect.tap((data) => Effect.sync(() => (loaded.data = structuredClone(data)))),
+          Effect.tap((data) => Effect.sync(() => (loaded.data = data))),
           Effect.andThen(ctx.integration.reload()),
           Effect.andThen(ctx.catalog.reload()),
         ),

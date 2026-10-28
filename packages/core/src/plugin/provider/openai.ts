@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { Deferred, Effect, FileSystem, Option, Schema, Semaphore, Stream } from "effect"
 import {
   FetchHttpClient,
@@ -16,7 +16,7 @@ import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
 import { Provider } from "../../provider"
-import type { PluginInternal } from "../internal"
+import type { PluginCatalogHost } from "../catalog-host"
 import { OpenAICodex } from "./openai-codex"
 
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -328,7 +328,7 @@ export const OpenAIPlugin = define({
       }),
     )
   }),
-} satisfies PluginInternal.InternalPlugin)
+} satisfies PluginCatalogHost.Contribution)
 
 function headers(contentType: string) {
   return { "Content-Type": contentType, ...OpenAICodex.headers() }

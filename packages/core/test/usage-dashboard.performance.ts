@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { sql } from "drizzle-orm"
 import { EffectDrizzleSqlite } from "@ycoding-ai/effect-drizzle-sqlite"
-import { Context, Effect, Layer, LayerMap, Option, Tracer } from "effect"
+import { Context, Effect, Layer, Option, Tracer } from "effect"
 import { Catalog } from "../src/catalog"
 import { Database } from "../src/database/database"
 import { sqliteLayer } from "../src/database/sqlite.bun"
@@ -23,6 +23,7 @@ import { SessionExecution } from "../src/session/execution"
 import { UsageAnalytics } from "../src/usage-analytics"
 import { Money } from "@ycoding-ai/schema/money"
 import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { fixedLocations } from "./fixture/location-map"
 
 const rows = 200_000
 const locations = 2_500
@@ -128,12 +129,12 @@ function locationMap() {
   return Layer.effect(
     LocationServiceMap.Service,
     Effect.gen(function* () {
-      const map = yield* LayerMap.make(
+      const map = yield* fixedLocations(
         (ref: Location.Ref) =>
           Layer.effectContext(Effect.succeed(catalog).pipe(Effect.withSpan("perf.location.boot", { attributes: { directory: ref.directory } }))),
         { idleTimeToLive: "60 minutes" },
       )
-      return { ...map, contextEffect: (ref: Location.Ref) => map.contextEffect(ref).pipe(Effect.withSpan("perf.location.context")) }
+      return { ...map, contextEffect: (ref, nodes) => map.contextEffect(ref, nodes).pipe(Effect.withSpan("perf.location.context")) }
     }),
   )
 }

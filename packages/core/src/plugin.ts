@@ -21,9 +21,15 @@ import { ToolRegistry } from "./tool/registry"
 import { ToolHooks } from "./tool/hooks"
 import { PluginHooks } from "./plugin/hooks"
 
+export interface Surrounding {
+  readonly pre: readonly Info[]
+  readonly post: readonly Info[]
+}
+
 export interface Interface {
   readonly activate: (plugins: readonly Versioned[]) => Effect.Effect<void>
   readonly list: () => Effect.Effect<Info[]>
+  readonly surround: (plugins: Effect.Effect<Surrounding>) => Effect.Effect<void, never, Scope.Scope>
 }
 
 export interface Versioned extends Plugin {
@@ -46,7 +52,9 @@ const layer = Layer.effect(
       const inherit = yield* State.inherit()
       const loaded = yield* Effect.suspend(() => plugin.effect(host)).pipe(
         inherit,
-        Effect.updateContext((_context: Context.Context<never>) => Context.make(Scope.Scope, child)),
+        Effect.updateContext((_context: Context.Context<never>) =>
+          Context.make(Scope.Scope, child).pipe(Context.add(State.Phase, State.phases.plugin)),
+        ),
         Effect.withSpan("Plugin.load", { attributes: { "plugin.id": plugin.id } }),
         Effect.andThen(events.publish(Event.Added, { id: ID.make(plugin.id) })),
         Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(child, exit) : Effect.void)),
@@ -129,11 +137,23 @@ const layer = Layer.effect(
       }),
     )
 
+    let surrounding: Effect.Effect<Surrounding> = Effect.succeed({ pre: [], post: [] })
     const service = Service.of({
       activate,
       list: Effect.fn("Plugin.list")(function* () {
-        return Array.from(active.keys()).map((id) => ({ id }))
+        const outer = yield* surrounding
+        return [...outer.pre, ...Array.from(active.keys(), (id) => ({ id })), ...outer.post]
       }),
+      surround: (plugins) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            surrounding = plugins
+          }),
+          () =>
+            Effect.sync(() => {
+              if (surrounding === plugins) surrounding = Effect.succeed({ pre: [], post: [] })
+            }),
+        ).pipe(Effect.asVoid),
     })
     host = yield* PluginHost.make(service)
     return service

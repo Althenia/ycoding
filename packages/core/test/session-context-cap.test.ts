@@ -35,8 +35,9 @@ import {
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { and, asc, eq } from "drizzle-orm"
-import { DateTime, Effect, Layer, LayerMap, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const model = Model.make({
   id: "cap-model",
@@ -73,7 +74,7 @@ const guardrails = Layer.mock(SessionGuardrail.Service)({
 const location = Layer.merge(compaction, guardrails)
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // The executor resolves only the compaction worker and guardrail snapshot in this focused harness.
       location as unknown as Layer.Layer<LocationServices>,

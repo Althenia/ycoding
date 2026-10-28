@@ -12,7 +12,7 @@ import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
 import { ModelHandler } from "../src/handlers/model"
 import { Api } from "../src/api"
-import { LocationMiddleware, type LocationServices } from "../src/location"
+import { CatalogLocationMiddleware, LocationMiddleware, type CatalogLocationServices, type LocationServices } from "../src/location"
 
 function fixture(model: CatalogModel.Info | undefined, selection?: CatalogModel.Ref) {
   const context = Context.make(
@@ -52,6 +52,9 @@ function fixture(model: CatalogModel.Info | undefined, selection?: CatalogModel.
         Layer.mergeAll(
           Layer.succeed(LocationMiddleware, (effect) =>
             Effect.provide(effect, Context.makeUnsafe<LocationServices>(context.mapUnsafe)),
+          ),
+          Layer.succeed(CatalogLocationMiddleware, (effect) =>
+            Effect.provide(effect, Context.makeUnsafe<CatalogLocationServices>(context.mapUnsafe)),
           ),
           Layer.succeed(Authorization, (effect) => effect),
           Layer.succeed(SchemaErrorMiddleware, (effect) => effect),

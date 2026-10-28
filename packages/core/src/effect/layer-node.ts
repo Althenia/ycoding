@@ -1,6 +1,6 @@
 import { Brand, Context, Layer } from "effect"
 
-type AnyNode = Node<unknown, unknown, any>
+export type AnyNode = Node<unknown, unknown, any>
 type RuntimeLayer = Layer.Layer<never, unknown, unknown>
 type NodeList<Item extends AnyNode = AnyNode> = readonly [] | readonly [Item, ...Item[]]
 export type Output<Item> = [Item] extends [never] ? never : Item extends Node<infer A, unknown, any> ? A : never
@@ -251,24 +251,66 @@ export function compile<A, E, const Items extends Replacements = readonly []>(
   root: Node<A, E, any>,
   replacements?: ValidReplacements<Items>,
 ): Layer.Layer<A, E> {
+  const nodes = compiler(replacements)
+  return nodes.layer(nodes.members(root)) as Layer.Layer<A, E>
+}
+
+export interface Compiler {
+  readonly members: (root: AnyNode) => readonly AnyNode[]
+  readonly closure: (members: readonly AnyNode[]) => readonly AnyNode[]
+  readonly layer: (members: readonly AnyNode[]) => Layer.Layer<unknown, unknown>
+}
+
+export function compiler(
+  replacements?: Replacements,
+  wrap?: (node: AnyNode, implementation: RuntimeLayer) => RuntimeLayer,
+  external?: (node: AnyNode) => boolean,
+): Compiler {
   const replacementMap = replacementMapFrom(replacements)
+  const resolve = (node: AnyNode) => replacementMap.get(node.name) ?? node
   const cache = new Map<AnyNode, RuntimeLayer>()
   const compileNode = (node: AnyNode) =>
     walk<RuntimeLayer>(
       node,
       (node, context) => {
         if (node.kind === "unbound") throw new Error(`Unbound layer node: ${node.name}`)
-        const dependencies = node.dependencies.flatMap(flatten).map(context.visit)
-        const implementation = node.implementation! as RuntimeLayer
+        const dependencies = node.dependencies
+          .flatMap(flatten)
+          .filter((dependency) => !external?.(resolve(dependency)))
+          .map(context.visit)
+        const implementation = wrap
+          ? wrap(node, node.implementation! as RuntimeLayer)
+          : (node.implementation! as RuntimeLayer)
         return dependencies.length === 0
           ? implementation
           : implementation.pipe(Layer.provide(dependencies as [RuntimeLayer, ...RuntimeLayer[]]))
       },
-      { cache, resolve: (node) => replacementMap.get(node.name) ?? node },
+      { cache, resolve },
     )
-  const layers = flatten(root).map((node) => compileNode(node))
-  const layer = layers.reduce<RuntimeLayer>((result, layer) => layer.pipe(Layer.provideMerge(result)), Layer.empty)
-  return layer as Layer.Layer<A, E>
+  return {
+    members: (root) => flatten(root).map(resolve),
+    closure: (members) => {
+      const seen = new Set<AnyNode>()
+      const visit = (node: AnyNode) => {
+        flatten(node)
+          .map(resolve)
+          .forEach((item) => {
+            if (seen.has(item)) return
+            seen.add(item)
+            item.dependencies.forEach(visit)
+          })
+      }
+      members.forEach(visit)
+      return Array.from(seen)
+    },
+    layer: (members) =>
+      members
+        .map(compileNode)
+        .reduce<RuntimeLayer>((result, layer) => layer.pipe(Layer.provideMerge(result)), Layer.empty) as Layer.Layer<
+        unknown,
+        unknown
+      >,
+  }
 }
 
 function replacementMapFrom(replacements?: Replacements) {

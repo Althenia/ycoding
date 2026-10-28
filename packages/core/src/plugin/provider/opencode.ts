@@ -1,7 +1,7 @@
 import { Duration, Effect, Schema, Semaphore, Stream } from "effect"
 import type { DeepMutable } from "../../schema"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EventRuntime } from "../../event"
 import { Credential } from "../../credential"

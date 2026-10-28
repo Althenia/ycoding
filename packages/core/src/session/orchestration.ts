@@ -491,7 +491,7 @@ const layer = Layer.effect(
         .get(input.childID)
         .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
       if (!child) return { type: "defer", reason: "error" }
-      const decision = yield* Decision.Service.pipe(Effect.provide(locations.get(child.location)), Effect.exit)
+      const decision = yield* Decision.Service.pipe(Effect.provide(locations.get(child.location, [LocationServiceMap.full])), Effect.exit)
       if (decision._tag === "Failure") return { type: "defer", reason: "error" }
       const call = {
         sessionID: input.childID,
@@ -595,7 +595,7 @@ const layer = Layer.effect(
           const child = yield* sessions.get(input.childID)
           const binding = (yield* db.select({ value: SessionTable.profile_binding }).from(SessionTable)
             .where(eq(SessionTable.id, child.id)).get().pipe(Effect.orDie))?.value
-          const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(child.location)))
+          const models = yield* SessionRunnerModel.Service.pipe(Effect.provide(locations.get(child.location, [LocationServiceMap.full])))
           const resolved = yield* models.resolve({ ...child, model: input.model }, { rebind: true, refresh: false })
           return yield* stepBoundary.atBoundary(input.childID, locks.withLock(input.childID)(Effect.gen(function* () {
             const row = yield* switchable(input)
@@ -603,7 +603,7 @@ const layer = Layer.effect(
               const parent = yield* sessions.get(input.parentID)
               yield* authorize(input.parentID, Agent.ID.make(row.agent), input.source, Hash.json({
                 action: "switch_model", sessionID: input.childID, expectedModel: input.expectedModel, model: input.model,
-              })).pipe(Effect.provide(locations.get(parent.location)))
+              })).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
             }
             const selected = yield* sessions.selectModelAtBoundary({
               sessionID: input.childID, expectedModel: input.expectedModel, model: input.model,
@@ -613,7 +613,7 @@ const layer = Layer.effect(
                 yield* switchable(input)
                 if (input.source.type !== "tool") return true
                 const parent = yield* sessions.get(input.parentID)
-                const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(parent.location)))
+                const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
                 return (yield* permission.evaluateEffective({ sessionID: input.parentID, agent: input.source.agent, action: "subagent", resource: row.agent })) !== "deny"
               }).pipe(Effect.catch(() => Effect.succeed(false))),
             })
@@ -1040,7 +1040,7 @@ const layer = Layer.effect(
               Effect.mapError(() => new TaskNotFoundError({ childID })),
             )
             const entries = yield* Config.Service.pipe(
-              Effect.provide(locations.get(child.location)),
+              Effect.provide(locations.get(child.location, [LocationServiceMap.full])),
               Effect.flatMap((config) => config.entries()),
             )
             const settled: SleepAnswerOutcome | undefined = autoAnswer || yolo

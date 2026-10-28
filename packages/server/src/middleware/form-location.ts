@@ -35,7 +35,7 @@ export const formLocationLayer = Layer.effect(
           // the session row lookup because some MCP elicitations cannot currently be attributed to
           // a real session. Keep this undocumented and remove once elicitations carry session ownership.
           const request = yield* HttpServerRequest.HttpServerRequest
-          return yield* effect.pipe(Effect.provide(locations.get(requestRef(request))))
+          return yield* effect.pipe(Effect.provide(locations.get(requestRef(request), [LocationServiceMap.full])))
         }
 
         const sessionID = yield* decodeSessionID(route.params.sessionID).pipe(
@@ -67,6 +67,7 @@ export const formLocationLayer = Layer.effect(
                 directory: AbsolutePath.make(row.directory),
                 workspaceID: row.workspaceID ? Workspace.ID.make(row.workspaceID) : undefined,
               }),
+              [LocationServiceMap.full],
             ),
           ),
         )

@@ -64,7 +64,7 @@ for (const flag of [false, true]) {
           }
         } else {
           const locations = yield* LocationServiceMap.Service
-          const located = locations.get(root.location)
+          const located = locations.get(root.location, [LocationServiceMap.full])
           const questions = yield* Question.Service.pipe(Effect.provide(located))
           const forms = yield* Form.Service.pipe(Effect.provide(located))
           const pending = yield* Deferred.make<string>()

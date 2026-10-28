@@ -38,11 +38,11 @@ it.effect("sleep entry converts questions, forms and permission asks across Loca
   const childLocation = yield* reviewLocation
   yield* events.publish(SessionEvent.Moved, { sessionID: child.id, location: childLocation })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const forms = yield* Form.Service.pipe(Effect.provide(located))
   const questions = yield* Question.Service.pipe(Effect.provide(located))
-  const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(childLocation)))
-  const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(childLocation)))
+  const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(childLocation, [LocationServiceMap.full])))
+  const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(childLocation, [LocationServiceMap.full])))
   yield* agents.transform((draft) => draft.update(Agent.ID.make("review-test"), (agent) => { agent.permissions = [] }))
   const ready = yield* Deferred.make<void>()
   const seen = new Set<string>()
@@ -76,7 +76,7 @@ it.effect("sleep entry converts questions, forms and permission asks across Loca
 for (const full of [false, true]) it.effect(`the registered question tool ${full ? "reports a full review box without inventing an answer" : "defers free text and admits a literal answer without waking"}`, () => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
-  const located = (yield* LocationServiceMap.Service).get(root.location)
+  const located = (yield* LocationServiceMap.Service).get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   yield* agents.transform((draft) => draft.update(toolIdentity.agent, (agent) => { agent.permissions = [{ action: "question", resource: "*", effect: "allow" }] }))
   yield* registerToolPlugin(QuestionTool.Plugin).pipe(Effect.provide(located))
@@ -170,7 +170,7 @@ it.effect("awake review-box state remains visible in instructions and goal repor
   const reviews = yield* SessionReview.Service
   const item = yield* reviews.open({ sessionID: root.id, kind: "question", reason: "free_text", limit: 16,
     origin: { requestID: "frm_waiting" }, payload: { type: "form", title: "Waiting", fields } })
-  const located = (yield* LocationServiceMap.Service).get(root.location)
+  const located = (yield* LocationServiceMap.Service).get(root.location, [LocationServiceMap.full])
   const live = yield* SessionLiveState.Service.pipe(Effect.provide(located))
   const current = yield* live.load(root.id)
   expect(current.text).toContain(item.itemID)
@@ -232,7 +232,7 @@ it.effect("an already-settled human review decision conflicts even when its answ
 it.effect("a failing Form conversion does not strand other pending producer kinds in a sleeping Session", () => Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
-  const located = (yield* LocationServiceMap.Service).get(root.location)
+  const located = (yield* LocationServiceMap.Service).get(root.location, [LocationServiceMap.full])
   const forms = yield* Form.Service.pipe(Effect.provide(located))
   const questions = yield* Question.Service.pipe(Effect.provide(located))
   const events = yield* EventRuntime.Service
@@ -258,7 +258,7 @@ it.effect("a required free-text Form defers while asleep even when it carries a 
   const root = yield* sessions.create({ location: yield* reviewLocation })
   yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
   const locations = yield* LocationServiceMap.Service
-  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location)))
+  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   expect(yield* forms.ask({ sessionID: root.id, title: "Literal evidence", fields: [{ key: "text", type: "string", required: true, default: "Suggested" }] })).toMatchObject({ status: "deferred" })
   const reviews = yield* SessionReview.Service
   expect(yield* reviews.list(root.id)).toHaveLength(1)

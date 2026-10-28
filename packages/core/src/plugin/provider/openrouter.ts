@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { CatalogModel } from "../../model"
 import { Provider } from "../../provider"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 
 export const OpenRouterPlugin = define({
   id: "ycoding.provider.openrouter",

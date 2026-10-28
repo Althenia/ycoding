@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { Provider } from "../../provider"
 
 type FetchLike = (url: string | URL | Request, init?: RequestInit) => Promise<Response>

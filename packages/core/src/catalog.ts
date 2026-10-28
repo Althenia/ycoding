@@ -130,7 +130,7 @@ const layer = Layer.effect(
                 }
                 draft.providers.set(providerID, current)
               }
-              fn(current.provider)
+              fn(thawing(current.provider))
             },
             remove: (providerID) => {
               draft.providers.delete(providerID)
@@ -177,7 +177,7 @@ const layer = Layer.effect(
               const model =
                 record.models.get(modelID) ?? (CatalogModel.Info.empty(providerID, modelID) as CatalogModel.MutableInfo)
               if (!record.models.has(modelID)) record.models.set(modelID, model)
-              fn(model)
+              fn(thawing(model))
               model.id = modelID
               model.providerID = providerID
             },
@@ -437,6 +437,18 @@ const layer = Layer.effect(
 )
 
 const SMALL_MODEL_RE = /\b(nano|flash|lite|mini|haiku|small|fast)\b/
+
+function thawing<T extends object>(target: T): T {
+  return new Proxy(target, {
+    get: (source, key) => {
+      const value: unknown = Reflect.get(source, key)
+      if (value === null || typeof value !== "object" || !Object.isFrozen(value)) return value
+      const copy = structuredClone(value)
+      Reflect.set(source, key, copy)
+      return copy
+    },
+  })
+}
 
 export const node = makeLocationNode({
   service: Service,

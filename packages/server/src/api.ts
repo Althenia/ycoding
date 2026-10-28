@@ -1,10 +1,11 @@
 import { makeDefaultApi } from "@ycoding-ai/protocol/api"
-import { LocationMiddleware } from "./location"
+import { CatalogLocationMiddleware, LocationMiddleware } from "./location"
 import { FormLocationMiddleware } from "./middleware/form-location"
 import { SessionLocationMiddleware } from "./middleware/session-location"
 
 export const Api = makeDefaultApi({
   locationMiddleware: LocationMiddleware,
+  catalogLocationMiddleware: CatalogLocationMiddleware,
   // FormLocationMiddleware contains the temporary `sessionID === "global"` MCP elicitation hack.
   // Do not use that sentinel with general session APIs.
   formLocationMiddleware: FormLocationMiddleware,

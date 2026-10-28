@@ -81,7 +81,7 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
   const root = yield* sessions.create({ location })
   const other = yield* sessions.create({ location })
   const child = yield* sessions.create({ parentID: root.id })
-  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location)))
+  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location, [Form.node])))
   const access = DotsAccess.make({ db, kv, configuration: () => Effect.succeed({ ready: true, profile: "synthetic-native-flow" }) })
   yield* access.set({ enabled: true, expectedRevision: 0 })
   const credential = new Credential.Info({
@@ -108,7 +108,7 @@ it.live("local native WebSocket composition admits prompts, settles real Forms a
       const forms = yield* Form.Service
       const questions = yield* Question.Service
       return NativeDecisions.make({ permission, guardrail, forms, questions, reviews, orchestration, sessions })
-    }).pipe(Effect.provide(locations.get(session.location))),
+    }).pipe(Effect.provide(locations.get(session.location, [Permission.node, SessionGuardrail.node, Form.node, Question.node]))),
   })
   const baselineSubscriptions = subscriptions
   const frames: Frame[] = []

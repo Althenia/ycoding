@@ -64,7 +64,7 @@ const setup = Effect.gen(function* () {
     const forms = yield* Form.Service
     const questions = yield* Question.Service
     return NativeDecisions.make({ permission, guardrail, forms, questions, reviews, orchestration, sessions })
-  }).pipe(Effect.provide(locations.get(session.location)))
+  }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])))
   const modelReads: string[] = []
   let modelRead = () => Effect.void
   let storeRead = (_id: Session.ID) => Effect.void
@@ -104,7 +104,7 @@ const setup = Effect.gen(function* () {
   const pins: NativeDots.Pins = { accessRevision: 1, profile: "trusted", credentialID: credential.id, accountID: "synthetic-account", accountGeneration: 0, environmentID: "environment", connectionID: "connection", isCurrent: () => true }
   const connection = yield* Effect.promise(() => host.attach(pins))
   const channel = connection.channel({ clientID: "client", streamID: "stream" })
-  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location)))
+  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   return { root, access, sessions, store, events, forms, host, pins, connection, channel, modelReads, db, kv, reviews, orchestration, locations,
     historyReads: () => historyReads,
     interruptions: () => interruptions,
@@ -518,7 +518,7 @@ it.live("native root snapshots share configured model and live activity without 
 it.live("native root snapshot waits follow permission and family input owners rather than question wording", () => Effect.gen(function* () {
   const f = yield* setup
   const agent = Agent.ID.make("native-snapshot")
-  const services = yield* Effect.gen(function* () { return { agents: yield* Agent.Service, permissions: yield* Permission.Service } }).pipe(Effect.provide(f.locations.get(f.root.location)))
+  const services = yield* Effect.gen(function* () { return { agents: yield* Agent.Service, permissions: yield* Permission.Service } }).pipe(Effect.provide(f.locations.get(f.root.location, [LocationServiceMap.full])))
   yield* services.agents.transform((draft) => draft.update(agent, (entry) => { entry.permissions = [{ action: "*", resource: "*", effect: "ask" }] }))
   const approval = yield* services.permissions.ask({ sessionID: f.root.id, agent, action: "edit", resources: ["Which option?"], requireExplicitDecision: true })
   expect(approval.effect).toBe("ask")
@@ -571,12 +571,12 @@ it.live("native root metadata preserves known model-selection failures", () => E
 for (const boundary of ["permission", "guardrail"] as const) it.live(`missing Session during deferred ${boundary} validation fails closed without settlement`, () => Effect.gen(function* () {
   const f = yield* setup
   const agent = Agent.ID.make("native-validation")
-  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.root.location)))
+  const agents = yield* Agent.Service.pipe(Effect.provide(f.locations.get(f.root.location, [LocationServiceMap.full])))
   yield* agents.transform((draft) => draft.update(agent, (entry) => { entry.permissions = [{ action: "*", resource: "*", effect: "allow" }] }))
   const root = yield* f.sessions.create({ location: f.root.location, agent })
   const services = yield* Effect.gen(function* () {
     return { permission: yield* Permission.Service, guardrail: yield* SessionGuardrail.Service, questions: yield* Question.Service }
-  }).pipe(Effect.provide(f.locations.get(f.root.location)))
+  }).pipe(Effect.provide(f.locations.get(f.root.location, [LocationServiceMap.full])))
   const requestID = Guardrail.RequestID.make("grq_missing_session")
   const item = yield* f.reviews.open({ sessionID: root.id, kind: "guardrail", reason: "sleep_entry", origin: { requestID }, limit: 10,
     payload: { type: "guardrail", action: "shell", resources: ["synthetic command"], ruleIDs: [], reason: "Synthetic review", hardReview: false, directories: [], fingerprint: "a".repeat(64), requestID },

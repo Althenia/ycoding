@@ -1,6 +1,6 @@
 import { createServer } from "node:http"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { Clock, Deferred, Effect, Option, Schema } from "effect"
 import { Credential } from "../../credential"
 import { InstallationVersion } from "../../installation/version"

@@ -8,9 +8,9 @@ import { CopilotModels } from "../../github-copilot/models"
 import { InstallationVersion } from "../../installation/version"
 import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { Provider } from "../../provider"
-import type { PluginInternal } from "../internal"
+import type { PluginCatalogHost } from "../catalog-host"
 
 const clientID = "Iv23liQxejUrCuRKOtA0"
 const apiVersion = "2026-06-01"
@@ -234,7 +234,7 @@ export const GithubCopilotPlugin = define({
       }),
     )
   }),
-} satisfies PluginInternal.InternalPlugin)
+} satisfies PluginCatalogHost.Contribution)
 
 function withoutMaxOutputTokens(language: LanguageModelV3): LanguageModelV3 {
   return new Proxy(language, {

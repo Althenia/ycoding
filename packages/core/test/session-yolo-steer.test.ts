@@ -111,7 +111,7 @@ const setup = Effect.fnUntraced(function* (options: { readonly yolo?: boolean } 
   const root = yield* session.create({ location: yield* tmpLocation })
   if (options.yolo !== false) yield* session.autonomy.set({ sessionID: root.id, permissions: "yolo", guardrails: "yolo", answers: "yolo" })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const forms = yield* Form.Service.pipe(Effect.provide(located))
   const questions = yield* Question.Service.pipe(Effect.provide(located))
   const events = yield* EventRuntime.Service

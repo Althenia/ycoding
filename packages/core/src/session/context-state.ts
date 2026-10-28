@@ -383,6 +383,7 @@ const layer = Layer.effect(
                     directory: AbsolutePath.make(session.directory),
                     workspaceID: session.workspaceID ?? undefined,
                   }),
+                  [guardrail.node],
                 )
                 .pipe(Layer.orDie),
             ),

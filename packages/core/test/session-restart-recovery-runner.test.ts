@@ -65,8 +65,9 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { Tool } from "@ycoding-ai/core/tool/tool"
 import { eq } from "drizzle-orm"
-import { Effect, Layer, LayerMap, Schema, Stream } from "effect"
+import { Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const requests: LLMRequest[] = []
 const responses: LLMEvent[][] = []
@@ -202,7 +203,7 @@ const execution = Layer.unwrap(
       Layer.provide(
         Layer.effect(
           LocationServiceMap.Service,
-          LayerMap.make(
+          fixedLocations(
             () =>
               // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
               Layer.mergeAll(

@@ -1,4 +1,4 @@
-import { Effect, Layer, LayerMap } from "effect"
+import { Cause, Context, Effect, Fiber, Layer, RcMap, Scope, Semaphore } from "effect"
 import path from "node:path"
 import { Agent } from "./agent"
 import { AISDK } from "./aisdk"
@@ -32,6 +32,7 @@ import { Memory } from "./memory"
 import { Permission } from "./permission"
 import { PluginRegistry } from "./plugin"
 import { PluginSupervisor } from "./plugin/supervisor"
+import { CatalogContributions } from "./plugin/catalog-contributions"
 import { ProjectCopy } from "./project/copy"
 import { ProviderUsageRuntime } from "./provider-usage"
 import { ProjectArtifactSource } from "./project-artifact/source"
@@ -82,6 +83,7 @@ const locationServiceNodes = [
   AISDK.node,
   PluginRegistry.node,
   ProviderUsageRuntime.node,
+  CatalogContributions.node,
   PluginSupervisor.node,
   ProjectCopy.node,
   ProjectCopy.refreshNode,
@@ -154,72 +156,133 @@ export function buildLocationServiceMap(
       directory: AbsolutePath.make(path.resolve(ref.directory)),
       workspaceID: ref.workspaceID,
     })
-  const map = Layer.effect(
+  const identity = (ref: Location.Ref) => JSON.stringify([ref.directory, ref.workspaceID ?? null])
+  return Layer.effect(
     LocationServiceMap.Service,
     Effect.gen(function* () {
-      const inner: LayerMap.LayerMap<Location.Ref, LocationServices, LocationError> = yield* LayerMap.make(
-        (ref: Location.Ref) => {
-          const startedAt = performance.now()
-          const allReplacements = replacements.concat([
-            [Location.node, Location.boundNode(ref)],
-            [LocationServiceMap.node, Layer.succeed(LocationServiceMap.Service, mapped)],
-          ])
-          // Apply replacements during hoist, not afterward: replacements can
-          // introduce new tagged dependencies (Location.boundNode depends on
-          // Project), and the hoist walk is the only pass that can still slice
-          // those back out.
-          const location = LayerNode.hoist(locationServices, Node.tags.values.global, allReplacements)
-          const stages: Record<string, number> = {}
-          const timed: LayerNode.Replacement[] = []
-          const visited = new Set<LayerNode.Node<unknown, unknown, LayerNode.Tag | undefined>>()
-          const visit = (node: LayerNode.Node<unknown, unknown, LayerNode.Tag | undefined>) => {
-            if (visited.has(node)) return
-            visited.add(node)
-            node.dependencies.forEach(visit)
-            const implementation = node.implementation
-            if (!implementation) return
-            timed.push([
-              node,
-              {
-                ...node,
-                implementation: Layer.suspend(() => {
+      const shared = Layer.CurrentMemoMap.forkOrCreate(yield* Effect.context<never>())
+      const entries = new Map<string, Entry>()
+      const rcMap: RcMap.RcMap<Location.Ref, Entry> = yield* RcMap.make({
+        lookup: (ref: Location.Ref) =>
+          Effect.gen(function* () {
+            const scope = yield* Scope.Scope
+            const entry = makeEntry(ref, scope)
+            entries.set(identity(ref), entry)
+            yield* Scope.addFinalizer(
+              scope,
+              Effect.sync(() => {
+                if (entries.get(identity(ref)) === entry) entries.delete(identity(ref))
+              }),
+            )
+            return entry
+          }),
+        idleTimeToLive: "60 minutes",
+      })
+
+      const makeEntry = (ref: Location.Ref, scope: Scope.Scope): Entry => {
+        const memoMap = Layer.forkMemoMapUnsafe(shared)
+        const requested = new Set<LayerNode.AnyNode>()
+        const globals = new Set<LayerNode.AnyNode>()
+        const built = new Set<string>()
+        const semaphore = Semaphore.makeUnsafe(1)
+        let stages: Record<string, number> = {}
+        let context = Context.empty() as Context.Context<unknown>
+        let globalContext = Context.empty() as Context.Context<unknown>
+        const bound = replacements.concat([
+          [Location.node, Location.boundNode(ref)],
+          [LocationServiceMap.node, Layer.succeed(LocationServiceMap.Service, service)],
+        ])
+        const shareable = LayerNode.compiler(bound)
+        const nodes = LayerNode.compiler(
+          bound,
+          (node, implementation) =>
+            node.tag !== Node.tags.values.location
+              ? implementation
+              : Layer.suspend(() => {
                   const started = performance.now()
-                  return Layer.tap(implementation as Layer.Layer<unknown, unknown, unknown>, () =>
+                  return Layer.tap(implementation, () =>
                     Effect.sync(() => {
                       stages[node.name] = Math.round(performance.now() - started)
                     }),
                   )
                 }),
-              },
-            ])
-          }
-          visit(location.node)
-
-          return LayerNode.compile(location.node, timed).pipe(
-            Layer.fresh,
-            Layer.tap(() =>
-              Effect.logInfo("location services booted", {
-                directory: ref.directory,
-                workspaceID: ref.workspaceID,
-                durationMs: Math.round(performance.now() - startedAt),
-                stages,
-              }),
-            ),
-            Layer.provide(LayerNode.compile(location.hoisted)),
-          )
-        },
-        { idleTimeToLive: "60 minutes" },
-      )
-      const mapped: LayerMap.LayerMap<Location.Ref, LocationServices, LocationError> = {
-        ...inner,
-        get: (ref: Location.Ref) => inner.get(canonical(ref)),
-        contextEffect: (ref: Location.Ref) => inner.contextEffect(canonical(ref)),
-        invalidate: (ref: Location.Ref) => inner.invalidate(canonical(ref)),
+          (node) => node.tag === Node.tags.values.global,
+        )
+        const build = (requests: LocationServiceMap.Nodes) =>
+          Effect.gen(function* () {
+            const missing = requests
+              .flatMap((node) => nodes.members(node === LocationServiceMap.full ? locationServices : node))
+              .filter((node, index, all) => !requested.has(node) && all.indexOf(node) === index)
+            if (missing.length === 0) return context
+            const startedAt = performance.now()
+            stages = {}
+            const closure = nodes.closure(missing)
+            const unshared = closure.filter((node) => node.tag === Node.tags.values.global && !globals.has(node))
+            if (unshared.length > 0)
+              globalContext = Context.merge(
+                globalContext,
+                yield* Layer.buildWithMemoMap(shareable.layer(unshared), shared, scope),
+              )
+            unshared.forEach((node) => globals.add(node))
+            const output = yield* Layer.buildWithMemoMap(
+              nodes.layer(missing).pipe(Layer.provide(Layer.succeedContext(globalContext))),
+              memoMap,
+              scope,
+            )
+            missing.forEach((node) => requested.add(node))
+            closure
+              .filter((node) => node.tag === Node.tags.values.location)
+              .forEach((node) => built.add(node.name))
+            context = Context.merge(context, output)
+            yield* Effect.logInfo("location services booted", {
+              directory: ref.directory,
+              workspaceID: ref.workspaceID,
+              durationMs: Math.round(performance.now() - startedAt),
+              stages,
+            })
+            return context
+          })
+        return {
+          ref,
+          built,
+          extend: (requests) =>
+            semaphore.withPermit(build(requests)).pipe(Effect.forkIn(scope), Effect.flatMap(Fiber.join)),
+        }
       }
-      return mapped
+
+      const retire = (key: Location.Ref) =>
+        Effect.suspend(() => {
+          entries.delete(identity(key))
+          return RcMap.invalidate(rcMap, key)
+        })
+      const contextEffect = <const Items extends LocationServiceMap.Nodes>(ref: Location.Ref, requests: Items) =>
+        Effect.gen(function* () {
+          const key = canonical(ref)
+          const entry = yield* RcMap.get(rcMap, key)
+          return yield* entry
+            .extend(requests)
+            .pipe(Effect.tapCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : retire(key))))
+        }) as Effect.Effect<
+          Context.Context<LayerNode.Output<Items[number]>>,
+          LayerNode.Error<Items[number]>,
+          Scope.Scope
+        >
+      const service: LocationServiceMap.Interface = {
+        contextEffect,
+        get: (ref, requests) => Layer.effectContext(service.contextEffect(ref, requests)),
+        invalidate: (ref) => retire(canonical(ref)),
+        loaded: () =>
+          Effect.sync(() => Array.from(entries.values(), (entry) => ({ ref: entry.ref, built: Array.from(entry.built) }))),
+      }
+      return service
     }),
   )
-  return map
+}
+
+type Entry = {
+  readonly ref: Location.Ref
+  readonly built: ReadonlySet<string>
+  readonly extend: (requests: LocationServiceMap.Nodes) => Effect.Effect<Context.Context<unknown>, unknown>
 }
 
 // This is temporary for backwards compatibility

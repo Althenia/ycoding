@@ -36,6 +36,10 @@ const CurrentBatch = Context.Reference<Batch | undefined>("@ycoding/State/Curren
 })
 const reloadDebounce = 500
 
+export const phases = { pre: 0, plugin: 1, post: 2, runtime: 3 } as const
+
+export const Phase = Context.Reference<number>("@ycoding/State/Phase", { defaultValue: () => phases.runtime })
+
 export function batch<A, E, R>(effect: Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
     const current = yield* CurrentBatch
@@ -73,7 +77,7 @@ export interface Interface<State, DraftApi> extends Transformable<DraftApi> {
 
 export function create<State, DraftApi>(options: Options<State, DraftApi>): Interface<State, DraftApi> {
   let state = options.initial()
-  let transforms: { run: TransformCallback<DraftApi> }[] = []
+  let transforms: { run: TransformCallback<DraftApi>; phase: number }[] = []
   let generation = 0
   let requestedAt = 0
   let running = false
@@ -142,7 +146,7 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
       const scope = yield* Scope.Scope
       return yield* Effect.uninterruptible(
         Effect.gen(function* () {
-          const transform = { run: update }
+          const transform = { run: update, phase: yield* Phase }
           let active = true
           const dispose = Effect.uninterruptible(
             semaphore.withPermit(
@@ -163,7 +167,7 @@ export function create<State, DraftApi>(options: Options<State, DraftApi>): Inte
           )
           yield* semaphore.withPermit(
             Effect.sync(() => {
-              transforms = [...transforms, transform]
+              transforms = [...transforms, transform].toSorted((left, right) => left.phase - right.phase)
             }),
           )
           yield* Scope.addFinalizer(scope, dispose)

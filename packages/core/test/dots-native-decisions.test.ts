@@ -44,7 +44,7 @@ const setup = Effect.gen(function* () {
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
   const locations = yield* LocationServiceMap.Service
-  return { root, sessions, located: locations.get(root.location) }
+  return { root, sessions, located: locations.get(root.location, [LocationServiceMap.full]) }
 })
 const receipts = Effect.gen(function* () {
   const events = yield* EventRuntime.Service
@@ -173,7 +173,7 @@ const nativeSetup = (customRule = false) => Effect.gen(function* () {
     description: "Native acceptance child", agent: Agent.ID.make("build"), model: managed.model!, promptDigest: "native-fixture", background: true, delivery: "steer",
   } })
   yield* events.publish(SessionEvent.Task.Updated, { sessionID: managed.id, change: { type: "started" } })
-  const f = { root, child: managed, sessions, located: locations.get(location) }
+  const f = { root, child: managed, sessions, located: locations.get(location, [LocationServiceMap.full]) }
   const credential = new Credential.Info({ id: Credential.ID.make("cred_native_acceptance"), integrationID: Integration.ID.make("openai"), label: "native-acceptance", value: {
     type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"), access: "synthetic", refresh: "synthetic", expires: 0, metadata: { accountID: "synthetic-native-account" },
   } })
@@ -189,7 +189,7 @@ const nativeSetup = (customRule = false) => Effect.gen(function* () {
       const forms = yield* Form.Service
       const questions = yield* Question.Service
       return NativeDecisions.make({ permission, guardrail, forms, questions, reviews, orchestration, sessions: f.sessions })
-    }).pipe(Effect.provide(locations.get(session.location))),
+    }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
   })
   const pins: NativeDots.Pins = { accessRevision: 1, profile: credential.label, credentialID: credential.id, accountID: "synthetic-native-account", accountGeneration: 0,
     environmentID: "synthetic-environment", connectionID: "synthetic-connection", isCurrent: () => true }
@@ -462,7 +462,7 @@ for (const transport of ["native", "delegated"] as const) it.effect(`${transport
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location })
   const locations = yield* LocationServiceMap.Service
-  const guardrails = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(location)))
+  const guardrails = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
   const events = yield* EventRuntime.Service
   const asked = yield* Deferred.make<Guardrail.Request>()
   const stop = yield* events.listen((event) => event.type === Guardrail.Event.Asked.type ? Deferred.succeed(asked, event.data as Guardrail.Request).pipe(Effect.asVoid) : Effect.void)

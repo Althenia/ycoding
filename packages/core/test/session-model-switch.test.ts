@@ -270,7 +270,7 @@ const compactionExecution = makeGlobalNode({
         const guardrail = yield* Effect.gen(function* () {
           const guardrails = yield* SessionGuardrail.Service
           return yield* guardrails.snapshot(job.sessionID)
-        }).pipe(Effect.provide(locations.get(session.location)), Effect.orDie)
+        }).pipe(Effect.provide(locations.get(session.location, [LocationServiceMap.full])), Effect.orDie)
         const capture = yield* SessionLiveState.captureDatabase(db, job.sessionID).pipe(Effect.orDie)
         const boundary = yield* db
           .select({ data: SessionMessageTable.data })

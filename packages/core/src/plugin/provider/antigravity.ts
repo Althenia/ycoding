@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { ToolSchemaProjection } from "@ycoding-ai/ai"
 import { createServer } from "node:http"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
 import { Clock, Deferred, Effect, Option, Redacted, Schedule, Schema, Semaphore, Stream } from "effect"
 import { Sse } from "effect/unstable/encoding"
@@ -15,7 +15,7 @@ import { Integration } from "../../integration"
 import { CatalogModel } from "../../model"
 import { OauthCallbackPage } from "../../oauth/page"
 import { Provider } from "../../provider"
-import type { PluginInternal } from "../internal"
+import type { PluginCatalogHost } from "../catalog-host"
 
 declare const YCODING_ANTIGRAVITY_OAUTH: unknown
 
@@ -837,4 +837,4 @@ export const AntigravityPlugin = define({
       }),
     )
   }),
-} satisfies PluginInternal.InternalPlugin)
+} satisfies PluginCatalogHost.Contribution)

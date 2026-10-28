@@ -1,5 +1,5 @@
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
-import { Effect, Option, RcMap } from "effect"
+import { Effect, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { requestRef } from "../location"
@@ -10,7 +10,7 @@ export const DebugHandler = HttpApiBuilder.group(Api, "server.debug", (handlers)
       "debug.location",
       Effect.fn(function* () {
         const locations = Option.getOrThrow(yield* Effect.serviceOption(LocationServiceMap.Service))
-        return Array.from(yield* RcMap.keys(locations.rcMap))
+        return (yield* locations.loaded()).map((entry) => entry.ref)
       }),
     )
     .handle(

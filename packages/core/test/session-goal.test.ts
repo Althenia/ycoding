@@ -29,9 +29,10 @@ import { SessionMessageTable, SessionProviderRequestTable, SessionTable } from "
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Session } from "@ycoding-ai/core/session"
 import { Money } from "@ycoding-ai/schema/money"
-import { DateTime, Deferred, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const model = Model.make({
   id: "goal-model",
@@ -183,7 +184,7 @@ const calculationEntered = Deferred.makeUnsafe<void>()
 const calculationRelease = Deferred.makeUnsafe<void>()
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       Layer.mergeAll(
         Layer.mock(Catalog.Service, {

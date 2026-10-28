@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Context, DateTime, Deferred, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { Context, DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import path from "path"
 import { LLMEvent, Message, SystemPart } from "@ycoding-ai/ai"
@@ -67,6 +67,7 @@ import { testEffect } from "./lib/effect"
 import { executeTool, settleTool, toolIdentity, waitForTool } from "./lib/tool"
 import { fixtureModels } from "./lib/models"
 import { eq, sql } from "drizzle-orm"
+import { fixedLocations } from "./fixture/location-map"
 
 const childText = "child final response"
 const childModel = CatalogModel.Ref.make({ id: CatalogModel.ID.make("child"), providerID: Provider.ID.make("test") })
@@ -197,7 +198,7 @@ it.live("agent delegation while asleep preserves family sleep and its hold", () 
         const prepared = yield* SessionOrchestration.preflight(parent, {
           agent: Agent.ID.make("reviewer"),
           caller: toolIdentity.agent,
-        }).pipe(Effect.provide(locations.get(parent.location)))
+        }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
         const runtime = yield* PluginRuntime.Service
         const child = yield* runtime.orchestration.launch({
           parentID: parent.id,
@@ -243,7 +244,7 @@ it.live("rejects missing, foreign, and oversized shared-context sources before c
         const prepared = yield* SessionOrchestration.preflight(parent, {
           agent: Agent.ID.make("reviewer"),
           caller: toolIdentity.agent,
-        }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+        }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
         const orchestration = (yield* PluginRuntime.Service).orchestration
         for (const [messageID, suffix] of [
           [SessionMessage.ID.make("msg_missing_shared_source"), "missing"],
@@ -293,7 +294,7 @@ it.live("reuses admitted shared context after its parent source is unavailable a
         const prepared = yield* SessionOrchestration.preflight(parent, {
           agent: Agent.ID.make("reviewer"),
           caller: toolIdentity.agent,
-        }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+        }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
         const orchestration = (yield* PluginRuntime.Service).orchestration
         const launch = {
           parentID: parent.id,
@@ -373,7 +374,7 @@ const startupFailureIt = testEffect(
 const withSubagent = (location: Location.Ref) =>
   Effect.gen(function* () {
     const locations = yield* LocationServiceMap.Service
-    yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(locations.get(location)))
+    yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
     yield* Agent.Service.use((agents) =>
       agents.transform((draft) => {
         // The caller identity used by executeTool; subagent permission asserts against it.
@@ -392,7 +393,7 @@ const withSubagent = (location: Location.Ref) =>
           agent.mode = "primary"
         })
       }),
-    ).pipe(Effect.provide(locations.get(location)))
+    ).pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
     yield* Catalog.Service.use((catalog) =>
       catalog.transform((draft) => {
         draft.provider.update(Provider.ID.make("test"), (provider) => {
@@ -403,7 +404,7 @@ const withSubagent = (location: Location.Ref) =>
         })
         draft.model.update(Provider.ID.make("test"), parentModel.id, () => {})
       }),
-    ).pipe(Effect.provide(locations.get(location)))
+    ).pipe(Effect.provide(locations.get(location, [LocationServiceMap.full])))
   })
 
 describe("SubagentTool", () => {
@@ -414,7 +415,7 @@ describe("SubagentTool", () => {
     const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
     yield* withSubagent(parent.location)
     const locations = yield* LocationServiceMap.Service
-    const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+    const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
     const events = yield* EventRuntime.Service
     const publisher = createLLMEventPublisher(events, { sessionID: parent.id, agent: toolIdentity.agent, model: parentModel, providerMetadataKey: "fixture" })
     yield* publisher.publish(LLMEvent.toolCall({ id: "outer", name: "execute", input: {} }))
@@ -466,7 +467,7 @@ describe("SubagentTool", () => {
         const parent = yield* sessions.create({ location: Location.Ref.make({ directory: AbsolutePath.make(directory.path) }), model: parentModel })
         yield* withSubagent(parent.location)
         const locations = yield* LocationServiceMap.Service
-        const located = locations.get(parent.location)
+        const located = locations.get(parent.location, [LocationServiceMap.full])
         const agents = yield* Agent.Service.pipe(Effect.provide(located))
         yield* agents.transform((draft) => draft.update(toolIdentity.agent, (agent) => { agent.permissions = [
           { action: "*", resource: "*", effect: "allow" }, { action: "subagent", resource: "*", effect: "ask" },
@@ -499,7 +500,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(dir.path) }, model: parentModel })
           yield* withSubagent(parent.location)
           const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
-            .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+            .pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const launched = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_restart_parent"),
             toolCallID: "restart", agent: Agent.ID.make("reviewer"), description: "restart child", prompt: "initial", background: true, prepared })
@@ -540,7 +541,7 @@ describe("SubagentTool", () => {
           yield* withSubagent(parent.location)
           expect((yield* orchestration.get(parent.id, child.sessionID)).state).toBe("running")
           const prepared = yield* SessionOrchestration.preflight(parent, { agent: Agent.ID.make("reviewer"), caller: toolIdentity.agent })
-            .pipe(Effect.provide(locations.get(parent.location)))
+            .pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const fresh = yield* orchestration.launch({ parentID: parent.id, parentAssistantMessageID: SessionMessage.ID.make("msg_restart_fresh"),
             toolCallID: "fresh", agent: Agent.ID.make("reviewer"), description: "fresh child", prompt: "new", background: true, prepared })
           yield* SessionTask.reconcileStaleTasks(db, yield* AppProcess.Service)
@@ -553,7 +554,7 @@ describe("SubagentTool", () => {
             yield* events.publish(SessionEvent.Step.Started, { sessionID, assistantMessageID: declarationID, agent: Agent.ID.make("reviewer"), model: childModel })
             yield* events.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID: declarationID, callID: "complete", name: "task_complete" })
             yield* events.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID: declarationID, callID: "complete", input: {}, executed: false })
-            const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+            const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
             const result = yield* settleTool(registry, { sessionID, ...toolIdentity,
               call: { type: "tool-call", id: "complete", name: "task_complete", input: {} } })
             expect(result.output?.structured).toEqual({ recorded: true })
@@ -565,7 +566,7 @@ describe("SubagentTool", () => {
             yield* events.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID, ordinal: 0, text: childText })
             yield* events.publish(SessionEvent.Step.Ended, { sessionID, assistantMessageID, finish: "stop", tokens, cost: Money.USD.zero })
           }) }))
-          const local = Layer.effect(LocationServiceMap.Service, LayerMap.make((ref: Location.Ref) => Layer.mergeAll(locations.get(ref), runner,
+          const local = Layer.effect(LocationServiceMap.Service, fixedLocations((ref: Location.Ref) => Layer.mergeAll(locations.get(ref, [LocationServiceMap.full]), runner,
             Layer.mock(Shell.Service, { list: () => Effect.succeed([]) }),
             Layer.mock(SessionGoal.Service, { continuation: () => Effect.die("no goal") }))))
           const context = yield* Layer.build(SessionExecution.layer.pipe(
@@ -694,7 +695,7 @@ describe("SubagentTool", () => {
           yield* withSubagent(parent.location)
 
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           yield* waitForTool(registry, SubagentControlTool.name)
           yield* waitForTool(registry, SubagentReportTool.name)
@@ -743,7 +744,7 @@ describe("SubagentTool", () => {
               agent: toolIdentity.agent,
               candidates: yield* agents.list(),
             })
-          }).pipe(Effect.provide(locations.get(parent.location)))
+          }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
 
           expect(available.map((agent) => agent.id)).toContain(Agent.ID.make("fallback"))
           expect(available.map((agent) => agent.id)).not.toContain(Agent.ID.make("reviewer"))
@@ -786,7 +787,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ parentID: root.id, title: "parent" })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
 
           expect(
@@ -823,7 +824,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ parentID: root.id, title: "parent", model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
 
           const settled = yield* settleTool(registry, {
@@ -856,7 +857,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           const progress: ToolRegistry.Progress[] = []
 
@@ -917,7 +918,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
 
           const settled = yield* settleTool(registry, {
@@ -967,7 +968,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           const events = yield* EventRuntime.Service
           const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
@@ -1017,7 +1018,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
 
           expect(
@@ -1070,7 +1071,7 @@ describe("SubagentTool", () => {
             agent: Agent.ID.make("reviewer"),
             model: { ...childModel, variant: CatalogModel.VariantID.make("high") },
             caller: source.agent,
-          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
           expect(valid.resolved.ref.variant).toBe(CatalogModel.VariantID.make("high"))
 
           const invalid = yield* Effect.exit(
@@ -1078,7 +1079,7 @@ describe("SubagentTool", () => {
               agent: Agent.ID.make("reviewer"),
               model: { ...childModel, variant: CatalogModel.VariantID.make("unknown") },
               caller: source.agent,
-            }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location))),
+            }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full]))),
           )
           expect(invalid).toMatchObject({ _tag: "Failure" })
           expect((yield* sessions.list({ parentID: parent.id })).data).toEqual([])
@@ -1107,7 +1108,7 @@ describe("SubagentTool", () => {
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: source.agent,
-          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const input = {
             parentID: parent.id,
@@ -1207,7 +1208,7 @@ describe("SubagentTool", () => {
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
-          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
           const ids = SessionOrchestrationIdentity.launch(parent.id, source.messageID, source.callID)
           yield* sessions.create({
             id: ids.childID,
@@ -1276,7 +1277,7 @@ describe("SubagentTool", () => {
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: source.agent,
-          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const child = yield* orchestration.launch({
             parentID: parent.id,
@@ -1466,7 +1467,7 @@ describe("SubagentTool", () => {
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: source.agent,
-          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location, [LocationServiceMap.full])))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const child = yield* orchestration.launch({
             parentID: parent.id,
@@ -1523,7 +1524,7 @@ describe("SubagentTool", () => {
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
-          }).pipe(Effect.provide(locations.get(parent.location)))
+          }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const child = yield* orchestration.launch({
             parentID: parent.id,
             parentAssistantMessageID: SessionMessage.ID.make("msg_retry_parent"),
@@ -1582,7 +1583,7 @@ describe("SubagentTool", () => {
             SessionOrchestration.preflight(parent, {
               agent: Agent.ID.make("reviewer"),
               caller: toolIdentity.agent,
-            }).pipe(Effect.provide(locations.get(parent.location)))
+            }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const launch = Effect.fnUntraced(function* (callID: string) {
             return yield* orchestration.launch({
               parentID: parent.id,
@@ -1708,8 +1709,8 @@ describe("SubagentTool", () => {
                 agent.permissions = [{ action: "*", resource: "*", effect: "allow" }]
               })
             }),
-          ).pipe(Effect.provide(locations.get(parent.location)))
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          ).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
 
           const settled = yield* settleTool(registry, {
@@ -1728,7 +1729,7 @@ describe("SubagentTool", () => {
             { action: "shell", resource: "*", effect: "deny" },
           ])
 
-          const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(child.location)))
+          const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(child.location, [LocationServiceMap.full])))
           expect(
             yield* permission.ask({
               sessionID: child.id,
@@ -1781,12 +1782,12 @@ describe("SubagentTool", () => {
                 agent.permissions = [{ action: "*", resource: "*", effect: "ask" }]
               }),
             ),
-          ).pipe(Effect.provide(locations.get(parent.location)))
+          ).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
-          }).pipe(Effect.provide(locations.get(parent.location)))
+          }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const child = yield* orchestration.launch({
             parentID: parent.id,
             parentAssistantMessageID: SessionMessage.ID.make("msg_autonomous_parent"),
@@ -1797,13 +1798,13 @@ describe("SubagentTool", () => {
             background: true,
             prepared,
           })
-          const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(parent.location)))
-          const questions = yield* Question.Service.pipe(Effect.provide(locations.get(parent.location)))
-          const forms = yield* Form.Service.pipe(Effect.provide(locations.get(parent.location)))
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const permission = yield* Permission.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          const questions = yield* Question.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          const forms = yield* Form.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const db = (yield* Database.Service).db
 
-          const autonomy = yield* SessionAutonomy.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const autonomy = yield* SessionAutonomy.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           for (const mode of ["manual", "yolo"] as const) {
             yield* autonomy.set({ sessionID: parent.id, permissions: mode, guardrails: mode, answers: mode })
             expect(yield* autonomy.decisionMode(child.sessionID, "permissions")).toBe(mode)
@@ -1960,7 +1961,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           yield* waitForTool(registry, SubagentControlTool.name)
           yield* waitForTool(registry, SubagentReportTool.name)
@@ -1993,7 +1994,7 @@ describe("SubagentTool", () => {
                 agent.permissions = [{ action: "subagent", resource: "reviewer", effect: "deny" }]
               }),
             ),
-          ).pipe(Effect.provide(locations.get(parent.location)))
+          ).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
 
           expect(
             yield* executeTool(registry, {
@@ -2026,8 +2027,8 @@ describe("SubagentTool", () => {
           const locations = yield* LocationServiceMap.Service
           yield* Catalog.Service.use(catalog => catalog.transform(draft => draft.model.update(parentModel.providerID, parentModel.id, model => {
             model.limit = { context: 128_000, output: 4096 }
-          }))).pipe(Effect.provide(locations.get(parent.location)))
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          }))).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           yield* waitForTool(registry, SubagentControlTool.name)
           const launched = yield* settleTool(registry, {
@@ -2097,7 +2098,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           const settled = yield* settleTool(registry, {
             sessionID: parent.id,
@@ -2129,7 +2130,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location, model: parentModel })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           yield* waitForTool(registry, SubagentControlTool.name)
           const launched = yield* settleTool(registry, {
@@ -2180,7 +2181,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
 
           const launch = yield* executeTool(registry, {
@@ -2214,14 +2215,14 @@ describe("SubagentTool", () => {
           const locations = yield* LocationServiceMap.Service
           // PluginHooks is not part of LocationServices, so the plugin is hosted against the
           // ambient hooks instance the test can trigger directly.
-          const plugins = yield* PluginRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
-          const host = yield* PluginHost.make(plugins).pipe(Effect.provide(locations.get(parent.location)))
-          yield* SubagentTool.Plugin.effect(host).pipe(Effect.provide(locations.get(parent.location)))
+          const plugins = yield* PluginRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          const host = yield* PluginHost.make(plugins).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
+          yield* SubagentTool.Plugin.effect(host).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
-          }).pipe(Effect.provide(locations.get(parent.location)))
+          }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const child = yield* orchestration.launch({
             parentID: parent.id,
             parentAssistantMessageID: SessionMessage.ID.make("msg_team_view"),
@@ -2292,7 +2293,7 @@ describe("SubagentTool", () => {
           const parent = yield* sessions.create({ location })
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
-          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           yield* waitForTool(registry, SubagentTool.name)
           const events = yield* EventRuntime.Service
           const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
@@ -2358,7 +2359,7 @@ describe("SubagentTool", () => {
       const prepared = yield* SessionOrchestration.preflight(parent, {
         agent: Agent.ID.make("reviewer"),
         caller: toolIdentity.agent,
-      }).pipe(Effect.provide(locations.get(parent.location)))
+      }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
       const child = yield* orchestration.launch({
         parentID: parent.id,
         parentAssistantMessageID: SessionMessage.ID.make("msg_question_timeout_parent"),
@@ -2455,7 +2456,7 @@ describe("SubagentTool", () => {
           const prepared = yield* SessionOrchestration.preflight(parent, {
             agent: Agent.ID.make("reviewer"),
             caller: toolIdentity.agent,
-          }).pipe(Effect.provide(locations.get(parent.location)))
+          }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
           const orchestration = (yield* PluginRuntime.Service).orchestration
           const child = yield* orchestration.launch({
             parentID: parent.id,
@@ -2573,7 +2574,7 @@ const noticeExecutionNode = makeGlobalNode({
       const locations = Layer.effect(
         LocationServiceMap.Service,
         // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-        LayerMap.make(() => Layer.mergeAll(runner, shell, goals) as unknown as Layer.Layer<LocationServices>),
+        fixedLocations(() => Layer.mergeAll(runner, shell, goals) as unknown as Layer.Layer<LocationServices>),
       )
       const barriered = EventRuntime.Service.of({
         ...events,
@@ -2693,7 +2694,7 @@ const noticeSetup = (options: { hold?: boolean; barrier?: boolean } = {}) =>
     const prepared = yield* SessionOrchestration.preflight(parent, {
       agent: Agent.ID.make("reviewer"),
       caller: toolIdentity.agent,
-    }).pipe(Effect.provide(locations.get(parent.location)))
+    }).pipe(Effect.provide(locations.get(parent.location, [LocationServiceMap.full])))
     const runtime = yield* PluginRuntime.Service
     const sequence = noticeSequence++
     const assistantID = SessionMessage.ID.make(`msg_notice_launch_${sequence}`)

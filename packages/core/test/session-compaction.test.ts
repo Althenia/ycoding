@@ -51,11 +51,12 @@ import { Skill } from "@ycoding-ai/core/skill"
 import { Token } from "@ycoding-ai/core/util/token"
 import { ID } from "@ycoding-ai/schema/session-compaction"
 import { Money } from "@ycoding-ai/schema/money"
-import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
+import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
+import { fixedLocations } from "./fixture/location-map"
 
 const temporary = await tmpdir("ycoding-session-compaction-")
 afterAll(() => temporary[Symbol.asyncDispose]())
@@ -149,7 +150,7 @@ const guardrails = Layer.mock(SessionGuardrail.Service, {
 })
 const contextLocations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       guardrails as unknown as Layer.Layer<LocationServices>,

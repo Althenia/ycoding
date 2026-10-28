@@ -728,6 +728,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const [defaultLocation, setDefaultLocation] = createSignal<LocationRef>({
       directory: process.cwd(),
     })
+    let viewedLocation: string | undefined
+    function refreshLocation(
+      location: LocationRef | undefined,
+      invalidate: (ref: LocationRef) => void,
+      load: (ref: LocationRef) => Promise<unknown>,
+    ) {
+      const ref = location ?? defaultLocation()
+      const key = locationKey(ref)
+      const displayed = key === locationKey(defaultLocation()) || key === viewedLocation
+      if (!displayed && !store.location[key]) return
+      invalidate(ref)
+      if (displayed) void load(ref)
+    }
     const messageIndex = new Map<string, Map<string, number>>()
     const messageSyncLoad = new Map<string, object>()
     const messageVersion = new Map<string, number>()
@@ -1434,25 +1447,30 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           break
         }
         case "catalog.updated":
-          result.location.model.invalidate(event.location)
-          result.location.provider.invalidate(event.location)
-          void Promise.all([result.location.model.sync(event.location), result.location.provider.sync(event.location)])
+          refreshLocation(
+            event.location,
+            (ref) => {
+              result.location.model.invalidate(ref)
+              result.location.provider.invalidate(ref)
+            },
+            (ref) => Promise.all([result.location.model.sync(ref), result.location.provider.sync(ref)]),
+          )
           break
         case "agent.updated":
-          result.location.agent.invalidate(event.location)
-          void result.location.agent.sync(event.location)
+          refreshLocation(event.location, result.location.agent.invalidate, result.location.agent.sync)
           break
         case "command.updated":
-          result.location.command.invalidate(event.location)
-          void result.location.command.sync(event.location)
+          refreshLocation(event.location, result.location.command.invalidate, result.location.command.sync)
           break
         case "config.updated":
-          result.location.config.diagnostics.invalidate(event.location)
-          void result.location.config.diagnostics.sync(event.location)
+          refreshLocation(
+            event.location,
+            result.location.config.diagnostics.invalidate,
+            result.location.config.diagnostics.sync,
+          )
           break
         case "skill.updated":
-          result.location.skill.invalidate(event.location)
-          void result.location.skill.sync(event.location)
+          refreshLocation(event.location, result.location.skill.invalidate, result.location.skill.sync)
           break
         case "session.agent.selected":
           if (store.session.info[event.data.sessionID])
@@ -2779,6 +2797,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
         async sync(ref?: LocationRef) {
           const current = ref ?? defaultLocation()
+          viewedLocation = ref ? locationKey(ref) : undefined
           await sync.run(`location:${locationKey(current)}`, async (isCurrent) => {
             const location = await client.api.location.get({
               location: locationQuery(current),

@@ -10,6 +10,7 @@ import { Project } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { tmpdir } from "../../fixture/tmpdir"
 import { fixtureModels } from "../../lib/models"
+import { fixedLocations } from "../../fixture/location-map"
 
 class Value extends Context.Service<Value, { readonly value: string }>()("test/TagValue") {}
 class Result extends Context.Service<Result, { readonly value: string }>()("test/TagResult") {}
@@ -50,7 +51,7 @@ describe("node build", () => {
       LocationServiceMap.Service,
       Effect.gen(function* () {
         const service = yield* CycleB
-        return yield* LayerMap.make(
+        return yield* fixedLocations(
           (ref: Location.Ref) =>
             Layer.succeed(
               Location.Service,
@@ -62,7 +63,7 @@ describe("node build", () => {
             ),
           { idleTimeToLive: "1 minute" },
         )
-      }) as unknown as Effect.Effect<LayerMap.LayerMap<Location.Ref, LocationServices, LocationError>, never, CycleB>,
+      }) as unknown as Effect.Effect<LocationServiceMap.Interface, never, CycleB>,
     )
     const map = Node.makeGlobalNode({ service: LocationServiceMap.Service, layer: mapLayer, deps: [b] })
     expect(() => AppNodeBuilder.build(LayerNode.group([a]), [[LocationServiceMap.node, map]])).toThrow(
@@ -95,7 +96,7 @@ describe("node build", () => {
       yield* Project.Service
       const locations = yield* LocationServiceMap.Service
       expect(Option.isSome(yield* Effect.serviceOption(LocationServiceMap.Service))).toBe(true)
-      return yield* Location.Service.pipe(Effect.provide(locations.get(ref)))
+      return yield* Location.Service.pipe(Effect.provide(locations.get(ref, [LocationServiceMap.full])))
     }).pipe(Effect.provide(layer))
 
     expect((await Effect.runPromise(program)).directory).toBe(ref.directory)

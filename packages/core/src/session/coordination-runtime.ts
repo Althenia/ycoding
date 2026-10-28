@@ -738,7 +738,7 @@ const layer: Layer.Layer<
         const models = yield* SessionRunnerModel.Service
         yield* models.resolve({ ...session, model }, { rebind: model.profile !== undefined })
       }).pipe(
-        Effect.provide(locations.get(session.location)),
+        Effect.provide(locations.get(session.location, [LocationServiceMap.full])),
         Effect.catchCause((cause) =>
           Cause.hasInterrupts(cause)
             ? Effect.interrupt

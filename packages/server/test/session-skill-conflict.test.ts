@@ -19,7 +19,8 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Skill } from "@ycoding-ai/core/skill"
-import { DateTime, Effect, Layer, LayerMap, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
+import { fixedLocations } from "../../core/test/fixture/location-map"
 import { testEffect } from "../../core/test/lib/effect"
 import { resolveSkillConflict } from "../src/handlers/session"
 
@@ -70,7 +71,7 @@ const sessionContext = Layer.mock(SessionContext.Service, {
 })
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(
+  fixedLocations(
     () =>
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       Layer.mergeAll(

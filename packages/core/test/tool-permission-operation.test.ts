@@ -31,7 +31,7 @@ for (const name of ["read", "question", "decision", "todowrite", "goal"] as cons
   yield* Effect.promise(() => Bun.write(path.join(placement.directory, "page.txt"), "first\nsecond\n"))
   const root = yield* sessions.create({ location: placement })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   yield* agents.transform((draft) => draft.update(toolIdentity.agent, (agent) => { agent.permissions = [
     { action: "*", resource: "*", effect: "allow" }, { action: name, resource: "*", effect: "ask" },

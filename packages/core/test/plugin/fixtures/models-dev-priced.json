@@ -1,0 +1,23 @@
+{
+  "acme": {
+    "id": "acme",
+    "name": "Acme",
+    "env": ["ACME_API_KEY"],
+    "npm": "@ai-sdk/openai-compatible",
+    "api": "https://acme.example/v1",
+    "models": {
+      "priced": {
+        "id": "priced",
+        "name": "Priced",
+        "release_date": "2026-01-01",
+        "attachment": false,
+        "reasoning": false,
+        "temperature": true,
+        "tool_call": true,
+        "cost": { "input": 2, "output": 4 },
+        "limit": { "context": 100000, "output": 8000 },
+        "modalities": { "input": ["text"], "output": ["text"] }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 export * as WellKnownPlugin from "./plugin"
 
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../plugin/catalog-host"
 import { Effect, Stream } from "effect"
 import { EventRuntime } from "../event"
 import { WellKnown } from "../wellknown"

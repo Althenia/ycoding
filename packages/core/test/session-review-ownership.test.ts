@@ -45,7 +45,7 @@ for (const change of ["action", "child", "payload", "launch-prompt", "launch-mod
   const root = yield* sessions.create({ location: yield* reviewLocation })
   yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   const caller = Agent.ID.make("review-subagent")
   yield* agents.transform((draft) => draft.update(caller, (agent) => { agent.permissions = [] }))
@@ -75,7 +75,7 @@ for (const change of ["operation", "content", "arguments"] as const) it.effect(`
   const root = yield* sessions.create({ location: yield* reviewLocation })
   yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
   const locations = yield* LocationServiceMap.Service
-  const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
+  const guardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const input = { sessionID: root.id, action: "file_mutation", resources: ["/outside/review-operation"],
     metadata: { operation: "write", memoryAction: "write", operationDigest: "a".repeat(64) } }
   expect(yield* guardrail.assert(input).pipe(Effect.flip)).toBeInstanceOf(SessionGuardrail.DeferredError)
@@ -116,7 +116,7 @@ for (const change of ["cancel", "child", "text"] as const) it.effect(`the subage
   } }))
   yield* events.publish(SessionEvent.Task.Updated, { sessionID: child.id, change: { type: "started" } })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(fixture.root.location)
+  const located = locations.get(fixture.root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   yield* agents.transform((draft) => draft.update(toolIdentity.agent, (agent) => { agent.permissions = [
     { action: "*", resource: "*", effect: "allow" }, { action: "subagent", resource: "*", effect: "ask" },
@@ -152,7 +152,7 @@ it.effect("the subagent control tool never exposes an authorization cause throug
   const fixture = yield* childQuestion
   const sessions = yield* Session.Service
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(fixture.root.location)
+  const located = locations.get(fixture.root.location, [LocationServiceMap.full])
   const permission = yield* Permission.Service.pipe(Effect.provide(located))
   const orchestration = yield* SessionOrchestration.Service
   const sentinel = "SYNTHETIC_SECRET_SENTINEL"
@@ -180,7 +180,7 @@ it.effect("the subagent control tool reports bounded corrected permission feedba
   const fixture = yield* childQuestion
   const sessions = yield* Session.Service
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(fixture.root.location)
+  const located = locations.get(fixture.root.location, [LocationServiceMap.full])
   const permission = yield* Permission.Service.pipe(Effect.provide(located))
   const orchestration = yield* SessionOrchestration.Service
   const corrected = new Permission.CorrectedError({ feedback: "x".repeat(600) })
@@ -206,7 +206,7 @@ it.effect("permission grants normalize omitted metadata fields without changing 
   const root = yield* sessions.create({ location: yield* reviewLocation })
   yield* sessions.autonomy.set({ sessionID: root.id, sleep: true })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   yield* agents.transform((draft) => draft.update(Agent.ID.make("review-metadata"), (agent) => { agent.permissions = [] }))
   const permission = yield* Permission.Service.pipe(Effect.provide(located))
@@ -290,7 +290,7 @@ it.effect("permission shutdown and a concurrent reply settle the waiting caller 
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   const agent = Agent.ID.make("review-shutdown")
   yield* agents.transform((draft) => draft.update(agent, (entry) => { entry.permissions = [] }))
@@ -336,7 +336,7 @@ for (const winner of ["reply", "conversion"] as const) it.effect(`permission ${w
   const sessions = yield* Session.Service
   const root = yield* sessions.create({ location: yield* reviewLocation })
   const locations = yield* LocationServiceMap.Service
-  const located = locations.get(root.location)
+  const located = locations.get(root.location, [LocationServiceMap.full])
   const agents = yield* Agent.Service.pipe(Effect.provide(located))
   yield* agents.transform((draft) => draft.update(Agent.ID.make("review-permission"), (agent) => { agent.permissions = [] }))
   const permission = yield* Permission.Service.pipe(Effect.provide(located))

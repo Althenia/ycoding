@@ -1,6 +1,6 @@
 export * as ConfigPolicyPlugin from "./policy"
 
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../../plugin/catalog-host"
 import { Effect, Stream } from "effect"
 import { Config } from "../../config"
 import { Wildcard } from "../../util/wildcard"

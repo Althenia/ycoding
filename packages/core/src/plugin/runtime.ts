@@ -130,7 +130,7 @@ export const providerLayerWithCell = (cell: Cell) =>
                   }),
                   data: yield* agents.list(),
                 }
-              }).pipe(Effect.provide(locations.get(ref)), Effect.orDie),
+              }).pipe(Effect.provide(locations.get(ref, [LocationServiceMap.full])), Effect.orDie),
           },
         },
       }

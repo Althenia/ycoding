@@ -172,8 +172,8 @@ describe("Session sleep", () => {
     const childLocation = yield* tmpLocation
     yield* events.publish(SessionEvent.Moved, { sessionID: child.id, location: childLocation })
     const locations = yield* LocationServiceMap.Service
-    const rootGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
-    const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation)))
+    const rootGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
+    const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation, [LocationServiceMap.full])))
     const plain = yield* requestReview(rootGuardrail, root.id)
     const unrelated = yield* requestReview(rootGuardrail, other.id)
     const escalatedRoot = yield* requestReview(rootGuardrail, root.id)
@@ -205,8 +205,8 @@ describe("Session sleep", () => {
     yield* events.publish(SessionEvent.Moved, { sessionID: unavailable.id, location: locationFor(path.join(root.location.directory, "unavailable")) })
     yield* events.publish(SessionEvent.Moved, { sessionID: child.id, location: childLocation })
     const locations = yield* LocationServiceMap.Service
-    const rootGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location)))
-    const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation)))
+    const rootGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
+    const childGuardrail = yield* SessionGuardrail.Service.pipe(Effect.provide(locations.get(childLocation, [LocationServiceMap.full])))
     const waitingRoot = yield* requestReview(rootGuardrail, root.id)
     const waitingChild = yield* requestReview(childGuardrail, child.id)
     expect((yield* session.autonomy.set({ sessionID: root.id, sleep: true })).sleep).toBeDefined()
@@ -414,7 +414,7 @@ describe("Session sleep", () => {
       const root = yield* session.create({ location: locationFor(directory.path) })
       const locations = yield* LocationServiceMap.Service
       yield* PluginSupervisor.Service.use((supervisor) => supervisor.flush).pipe(
-        Effect.provide(locations.get(root.location)),
+        Effect.provide(locations.get(root.location, [LocationServiceMap.full])),
       )
       yield* session.autonomy.set({ sessionID: root.id, sleep: true })
       yield* session.command({ sessionID: root.id, command: "note", origin: "plugin", resume: false })

@@ -53,3 +53,12 @@ describe("built-in tool modules", () => {
     })
   }
 })
+
+describe("catalog contribution modules", () => {
+  for (const module of ["plugin/catalog-contributions.ts", "plugin/catalog-host.ts"]) {
+    test(`${module} has no value-import cycle back to itself`, () => {
+      const cycle = cycleBackTo(path.join(root, module))
+      expect(cycle?.map((file) => path.relative(root, file))).toBeUndefined()
+    })
+  }
+})

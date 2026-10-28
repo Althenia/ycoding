@@ -1,12 +1,24 @@
 import { Location } from "@ycoding-ai/core/location"
+import type { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { LocationServiceMap } from "@ycoding-ai/core/location-services"
+import type { LocationServices } from "@ycoding-ai/core/location-services"
+import { CatalogContributions } from "@ycoding-ai/core/plugin/catalog-contributions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Workspace } from "@ycoding-ai/core/workspace"
 import { Effect, Layer } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 
-export type LocationServices = Layer.Success<ReturnType<(typeof LocationServiceMap.Service)["get"]>>
+export type { LocationServices }
+
+export const catalogNodes = [Location.node, ...CatalogContributions.nodes] as const
+
+export type CatalogLocationServices = LayerNode.Output<(typeof catalogNodes)[number]>
+
+export class CatalogLocationMiddleware extends HttpApiMiddleware.Service<
+  CatalogLocationMiddleware,
+  { provides: CatalogLocationServices }
+>()("@ycoding/HttpApiCatalogLocation") {}
 
 export class LocationMiddleware extends HttpApiMiddleware.Service<LocationMiddleware, { provides: LocationServices }>()(
   "@ycoding/HttpApiLocation",
@@ -53,7 +65,20 @@ export const layer = Layer.effect(
     return LocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* effect.pipe(Effect.provide(locations.get(requestRef(request))))
+        return yield* effect.pipe(Effect.provide(locations.get(requestRef(request), [LocationServiceMap.full])))
+      }),
+    )
+  }),
+)
+
+export const catalogLayer = Layer.effect(
+  CatalogLocationMiddleware,
+  Effect.gen(function* () {
+    const locations = yield* LocationServiceMap.Service
+    return CatalogLocationMiddleware.of((effect) =>
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        return yield* effect.pipe(Effect.provide(locations.get(requestRef(request), catalogNodes)))
       }),
     )
   }),

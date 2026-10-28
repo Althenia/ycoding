@@ -1860,7 +1860,7 @@ CLI/TUI `cli.json` updates are serialized, written atomically through a temporar
 - `tui.json`, `kv.json`, `config.json`, and project `.ycoding/tui.json` are not read.
 - A managed-service port conflict is not fixed by deleting session data. Change the channel service config port or use `ycoding --standalone`.
 - Run with `--log-level all` and `YCODING_PRINT_LOGS=1` when investigating configuration discovery.
-- Each `location services booted` log line records the Location `directory`, total `durationMs`, and a `stages` map of per-service construction milliseconds; use it to identify a slow Location boot stage.
+- A Location builds its services lazily, per request, and a later request that needs more services extends the same Location. Each build step writes one `location services booted` log line with the Location `directory`, `workspaceID`, that step's `durationMs`, and a `stages` map of construction milliseconds for only the services that step built; use it to identify a slow Location build stage. A request whose services are already built writes no line.
 
 ## Inbound task MCP
 

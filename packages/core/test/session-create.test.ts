@@ -809,13 +809,14 @@ describe("Session.create", () => {
           catalog.transform((editor) => {
             editor.provider.update(model.providerID, (provider) => {
               provider.package = Provider.aisdk("@ai-sdk/anthropic")
+              provider.settings = { apiKey: "test-key" }
             })
             editor.model.update(model.providerID, model.id, (entry) => {
               entry.limit = { context: 128_000, output: 16_384 }
               entry.variants = [{ id: CatalogModel.VariantID.make("high") }]
             })
           }),
-        ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
+        ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location, [LocationServiceMap.full])))
 
         expect(yield* session.switchModel({ sessionID: created.id, model })).toEqual({ status: "switched" })
 
@@ -859,13 +860,14 @@ describe("Session.create", () => {
           catalog.transform((editor) => {
             editor.provider.update(base.providerID, (provider) => {
               provider.package = Provider.aisdk("@ai-sdk/anthropic")
+              provider.settings = { apiKey: "test-key" }
             })
             editor.model.update(base.providerID, base.id, (entry) => {
               entry.limit = { context: 128_000, output: 16_384 }
               entry.variants = [{ id: CatalogModel.VariantID.make("default") }]
             })
           }),
-        ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
+        ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location, [LocationServiceMap.full])))
 
         const selected = CatalogModel.Ref.make({ ...base, variant: CatalogModel.VariantID.make("default") })
         expect(yield* session.switchModel({ sessionID: created.id, model: selected })).toEqual({ status: "switched" })

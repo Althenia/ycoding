@@ -527,13 +527,13 @@ export const live = Effect.gen(function* () {
   const orchestration = yield* SessionOrchestration.Service
   return yield* make({ access, config, credentials, db, store, sessions, events, execution, projects,
     selectedModel: (session) => Catalog.Service.use((catalog) => SessionRunnerModel.selection(session, catalog.model)).pipe(
-      Effect.map((selection) => selection?.ref), Effect.provide(locations.get(session.location))),
+      Effect.map((selection) => selection?.ref), Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
     models: (session) => Catalog.Service.use((catalog) => catalog.model.available()).pipe(
       Effect.map((models) => models.map((model) => ({ id: model.id, providerID: model.providerID, name: model.name }))),
-      Effect.provide(locations.get(session.location))),
+      Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
     skills: (session) => Skill.Service.use((skills) => skills.list()).pipe(
       Effect.map((skills) => skills.map((skill) => ({ id: skill.id, name: skill.name }))),
-      Effect.provide(locations.get(session.location))),
+      Effect.provide(locations.get(session.location, [LocationServiceMap.full]))),
     credential: (profile, rejected) => RemoteControlCredential.resolveStored(credentials, profile, rejected),
     decisions: (session) => Effect.gen(function* () {
       const permission = yield* Permission.Service
@@ -541,6 +541,10 @@ export const live = Effect.gen(function* () {
       const forms = yield* Form.Service
       const questions = yield* Question.Service
       return NativeDecisions.make({ permission, guardrail, forms, questions, reviews, orchestration, sessions })
-    }).pipe(Effect.provide(locations.get(session.location))),
+    }).pipe(
+      Effect.provide(
+        locations.get(session.location, [Permission.node, SessionGuardrail.node, Form.node, Question.node]),
+      ),
+    ),
   })
 })

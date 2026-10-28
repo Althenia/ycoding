@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
+import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import { Model } from "@ycoding-ai/schema/model"
-import { ModelGroup } from "../src/groups/model.js"
+import { makeModelGroup } from "../src/groups/model.js"
+
+class Location extends HttpApiMiddleware.Service<Location>()("model-test-location") {}
+class CatalogLocation extends HttpApiMiddleware.Service<CatalogLocation>()("model-test-catalog-location") {}
+const ModelGroup = makeModelGroup(Location, CatalogLocation)
 
 test("default model responses preserve model info and explicit variant/profile selection", () => {
   const success = [...ModelGroup.endpoints["model.default"].success][0]

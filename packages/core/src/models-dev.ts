@@ -888,7 +888,7 @@ export const layer = (options?: Options) => Layer.effect(
         }),
       )
       return normalize(providers)
-    }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
+    }).pipe(Effect.map(freeze), Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
     const [cachedGet, invalidate] = yield* Effect.cachedInvalidateWithTTL(populate, Duration.infinity)
 
@@ -923,6 +923,12 @@ export const layer = (options?: Options) => Layer.effect(
 
 export function configured(options?: Options) {
   return makeGlobalNode({ service: Service, layer: layer(options), deps: [FSUtil.node, EventRuntime.node, httpClient] })
+}
+
+function freeze<T>(value: T): T {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value
+  Object.values(value).forEach(freeze)
+  return Object.freeze(value)
 }
 
 export const node = configured()

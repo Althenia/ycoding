@@ -68,8 +68,8 @@ it.live("Manual pending questions and forms survive direct task text and claimed
   const root = yield* sessions.create({ location: { directory: AbsolutePath.make(tmpdir()) } })
   expect((yield* sessions.autonomy.get(root.id)).answers).toBe("manual")
   const locations = yield* LocationServiceMap.Service
-  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location)))
-  const questions = yield* Question.Service.pipe(Effect.provide(locations.get(root.location)))
+  const forms = yield* Form.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
+  const questions = yield* Question.Service.pipe(Effect.provide(locations.get(root.location, [LocationServiceMap.full])))
   const events = yield* EventRuntime.Service
   const formID = Form.ID.create("frm_direct_task_pending")
   yield* forms.create({ id: formID, sessionID: root.id, title: "Choose a synthetic branch", fields: [{ type: "string", key: "branch", required: true }] })

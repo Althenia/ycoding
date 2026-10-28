@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { Context, Effect, Layer, LayerMap } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { Agent } from "../src/agent"
 import { Catalog } from "../src/catalog"
 import { Database } from "../src/database/database"
@@ -22,6 +22,7 @@ import { SessionProviderRequestTable, SessionTable } from "../src/session/sql"
 import { UsageAnalytics } from "../src/usage-analytics"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { fixedLocations } from "./fixture/location-map"
 
 const directories = ["/pricing-a", "/pricing-b", "/pricing-missing"]
 
@@ -56,7 +57,7 @@ function harness() {
   const locations = Layer.effect(
     LocationServiceMap.Service,
     Effect.gen(function* () {
-      const map = yield* LayerMap.make(
+      const map = yield* fixedLocations(
         (ref: Location.Ref) =>
           Layer.effectContext(
             Effect.gen(function* () {
@@ -72,12 +73,12 @@ function harness() {
       )
       return {
         ...map,
-        contextEffect: (ref: Location.Ref) =>
+        contextEffect: (ref, nodes) =>
           Effect.suspend(() => {
             acquired.push(ref.directory)
             return unavailable.has(ref.directory)
               ? Effect.die({ _tag: "PlatformError", reason: { _tag: "NotFound" } })
-              : map.contextEffect(ref)
+              : map.contextEffect(ref, nodes)
           }),
       }
     }),
@@ -273,4 +274,15 @@ test("pricing retention bounds Locations, entries, and invalidation tokens", () 
   const replaced = cache.location("active", catalog)
   replaced.store("price", entry)
   expect(cache.location("active", {} as Catalog.Interface).get("price")).toBeUndefined()
+})
+
+test("pricing retention does not keep a Location catalog reachable", () => {
+  const cache = SessionUsagePricing.make()
+  const released = (() => {
+    const catalog = {} as Catalog.Interface
+    cache.location("released", catalog).store("price", { provider: [], router: [] })
+    return new WeakRef(catalog)
+  })()
+  Bun.gc(true)
+  expect(released.deref()).toBeUndefined()
 })

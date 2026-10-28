@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { LLM, Message } from "@ycoding-ai/ai"
 import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
-import { Context, DateTime, Deferred, Effect, Fiber, Layer, LayerMap } from "effect"
+import { Context, DateTime, Deferred, Effect, Fiber, Layer } from "effect"
 import { HttpClientResponse } from "effect/unstable/http"
 import { Money } from "@ycoding-ai/schema/money"
 import { Catalog } from "@ycoding-ai/core/catalog"
@@ -41,6 +41,7 @@ import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
 import { Agent } from "@ycoding-ai/core/agent"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([SessionRunnerModel.node, Credential.node, Integration.node, Catalog.node, Agent.node]), [
@@ -59,7 +60,7 @@ const placements = makeGlobalNode({
       const credentials = yield* Credential.Service
       const database = yield* Database.Service
       const events = yield* EventRuntime.Service
-      return yield* LayerMap.make(
+      return yield* fixedLocations(
         (location: Location.Ref) =>
           AppNodeBuilder.build(
             LayerNode.group([SessionRunnerModel.node, Catalog.node, Config.node, Integration.node]),
@@ -163,7 +164,7 @@ const setup = Effect.gen(function* () {
 })
 const runtimeSetup = Effect.gen(function* () {
   const locations = yield* LocationServiceMap.Service
-  return yield* setup.pipe(Effect.provide(locations.get(session().location)))
+  return yield* setup.pipe(Effect.provide(locations.get(session().location, [LocationServiceMap.full])))
 })
 const namespace = (resolved: SessionRunnerModel.Resolved) =>
   SessionRunnerCache.promptCacheNamespace({
@@ -646,7 +647,7 @@ describe("per-session profiles", () => {
             })
           })
           return yield* (yield* SessionRunnerModel.Service).resolve(rehydrated!)
-        }).pipe(Effect.provide(locations.get(rehydrated!.location)))
+        }).pipe(Effect.provide(locations.get(rehydrated!.location, [LocationServiceMap.full])))
         expect(restarted.accountIdentityDigest).toBe(rebound.accountIdentityDigest)
         expect(restarted.profileBinding).toEqual(rebound.profileBinding)
         yield* sessions.switchModel({ sessionID: root.id, model: session().model! })

@@ -1,7 +1,7 @@
 import os from "os"
 import { InstallationVersion } from "../../installation/version"
 import { Effect } from "effect"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import { Provider } from "../../provider"
 
 export const GitLabPlugin = define({

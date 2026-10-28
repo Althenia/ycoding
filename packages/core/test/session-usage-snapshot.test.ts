@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { EffectDrizzleSqlite } from "@ycoding-ai/effect-drizzle-sqlite"
-import { Deferred, Duration, Effect, Fiber, Layer, LayerMap } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer } from "effect"
 import { Database } from "../src/database/database"
 import { DatabaseMigration } from "../src/database/migration"
 import { sqliteLayer } from "../src/database/sqlite.bun"
@@ -23,6 +23,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { Location } from "../src/location"
 import { LocationServiceMap } from "../src/location-service-map"
 import type { LocationServices } from "../src/location-services"
+import { fixedLocations } from "./fixture/location-map"
 
 for (const mode of ["summary", "report", "shared", "cancel"] as const)
   test(
@@ -123,19 +124,20 @@ for (const mode of ["summary", "report", "shared", "cancel"] as const)
           const locations = Layer.effect(
             LocationServiceMap.Service,
             Effect.gen(function* () {
-              const map = yield* LayerMap.make(
+              const map = yield* fixedLocations(
                 (_ref: Location.Ref) => cold as unknown as Layer.Layer<LocationServices>,
                 { idleTimeToLive: Duration.zero },
               )
               return {
                 ...map,
-                contextEffect: Effect.fn(function* (ref: Location.Ref) {
-                  acquisitions += 1
-                  if (acquisitions === 2) yield* Deferred.succeed(readerJoined, undefined)
-                  expect(ref.directory).toBe(location.directory)
-                  expect(ref.workspaceID).toBe(location.workspaceID)
-                  return yield* map.contextEffect(location)
-                }),
+                contextEffect: (ref, nodes) =>
+                  Effect.gen(function* () {
+                    acquisitions += 1
+                    if (acquisitions === 2) yield* Deferred.succeed(readerJoined, undefined)
+                    expect(ref.directory).toBe(location.directory)
+                    expect(ref.workspaceID).toBe(location.workspaceID)
+                    return yield* map.contextEffect(location, nodes)
+                  }),
               }
             }),
           ).pipe(Layer.provide(database))
@@ -170,6 +172,7 @@ for (const mode of ["summary", "report", "shared", "cancel"] as const)
               const outside = yield* locations
                 .contextEffect(
                   Location.Ref.make({ directory: AbsolutePath.make("/cold-pricing"), workspaceID: undefined }),
+                  [LocationServiceMap.full],
                 )
                 .pipe(Effect.andThen(Deferred.await(outsideHeld)), Effect.scoped, Effect.forkScoped)
               yield* Deferred.await(coldStarted)

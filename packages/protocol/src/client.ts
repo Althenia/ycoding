@@ -9,6 +9,10 @@ class LocationMiddleware extends HttpApiMiddleware.Service<LocationMiddleware>()
   "@ycoding-ai/client/LocationMiddleware",
 ) {}
 
+class CatalogLocationMiddleware extends HttpApiMiddleware.Service<CatalogLocationMiddleware>()(
+  "@ycoding-ai/client/CatalogLocationMiddleware",
+) {}
+
 class SessionLocationMiddleware extends HttpApiMiddleware.Service<SessionLocationMiddleware>()(
   "@ycoding-ai/client/SessionLocationMiddleware",
   { error: [InvalidRequestError, SessionNotFoundError] },
@@ -17,6 +21,8 @@ class SessionLocationMiddleware extends HttpApiMiddleware.Service<SessionLocatio
 type ClientApiShape = Api<
   Context.Service.Identifier<typeof LocationMiddleware>,
   Context.Service.Shape<typeof LocationMiddleware>,
+  Context.Service.Identifier<typeof CatalogLocationMiddleware>,
+  Context.Service.Shape<typeof CatalogLocationMiddleware>,
   Context.Service.Identifier<typeof SessionLocationMiddleware>,
   Context.Service.Shape<typeof SessionLocationMiddleware>,
   Context.Service.Identifier<typeof SessionLocationMiddleware>,
@@ -26,6 +32,7 @@ type ClientApiShape = Api<
 
 export const ClientApi: ClientApiShape = makeDefaultApi({
   locationMiddleware: LocationMiddleware,
+  catalogLocationMiddleware: CatalogLocationMiddleware,
   // The real server uses a form-specific middleware with an undocumented `global` sentinel branch.
   // The generated client only needs a middleware identity for API typing.
   formLocationMiddleware: SessionLocationMiddleware,

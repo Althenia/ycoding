@@ -5008,3 +5008,86 @@ test("retains settled execute receipts in live session messages", async () => {
     }
   } finally { app.renderer.destroy() }
 })
+
+const otherDirectory = "/tmp/ycoding-other-location"
+
+test("ignores location resource events for locations without cached data", async () => {
+  const events = createEventStream()
+  const requests: string[] = []
+  const calls = createFetch((url) => {
+    if (url.pathname.startsWith("/api/") && url.searchParams.get("location[directory]") === otherDirectory) requests.push(url.pathname)
+    return undefined
+  }, events)
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <box />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await Bun.sleep(100)
+    for (const type of ["catalog.updated", "agent.updated", "command.updated", "config.updated", "skill.updated"] as const)
+      events.emit({ id: `evt_${type}`, created: 0, type, data: {}, location: { directory: otherDirectory } } as YCodingEvent)
+    await Bun.sleep(200)
+    expect(requests).toEqual([])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("reloads a cached location only after it is displayed again", async () => {
+  const events = createEventStream()
+  const counts: Record<string, number> = {}
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/agent") return
+    const key = url.searchParams.get("location[directory]") ?? directory
+    counts[key] = (counts[key] ?? 0) + 1
+    return json({
+      location: { directory: key, project: { id: "proj_test", directory: key } },
+      data: [{ id: `agent-${counts[key]}`, request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => data.location.agent.list()?.[0]?.id === "agent-1")
+    await data.location.agent.sync({ directory: otherDirectory })
+    expect(counts[otherDirectory]).toBe(1)
+    events.emit({ id: "evt_other", created: 0, type: "agent.updated", data: {}, location: { directory: otherDirectory } } as YCodingEvent)
+    await Bun.sleep(200)
+    expect(counts[otherDirectory]).toBe(1)
+    emitEvent(events, { id: "evt_shown", created: 0, type: "agent.updated", data: {} })
+    await wait(() => data.location.agent.list()?.[0]?.id === "agent-2")
+    expect(counts[otherDirectory]).toBe(1)
+    await data.location.agent.sync({ directory: otherDirectory })
+    expect(counts[otherDirectory]).toBe(2)
+    await data.location.agent.sync({ directory: otherDirectory })
+    expect(counts[otherDirectory]).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})

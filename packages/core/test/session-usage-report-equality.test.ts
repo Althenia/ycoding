@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { Duration, Effect, Layer, LayerMap } from "effect"
+import { Duration, Effect, Layer } from "effect"
 import { Agent } from "../src/agent"
 import { Catalog } from "../src/catalog"
 import { Database } from "../src/database/database"
@@ -21,6 +21,7 @@ import { SessionProviderRequest } from "../src/session/provider-request"
 import { UsageAnalytics } from "../src/usage-analytics"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { fixedLocations } from "./fixture/location-map"
 
 const day = 86_400_000
 const start = Date.UTC(2026, 2, 1)
@@ -386,7 +387,7 @@ const catalogLayer = Layer.mock(Catalog.Service, {
 const locations = Layer.effect(
   LocationServiceMap.Service,
   Effect.gen(function* () {
-    const map = yield* LayerMap.make((_ref: Location.Ref) => catalogLayer as unknown as Layer.Layer<LocationServices>, {
+    const map = yield* fixedLocations((_ref: Location.Ref) => catalogLayer as unknown as Layer.Layer<LocationServices>, {
       idleTimeToLive: Duration.zero,
     })
     return map

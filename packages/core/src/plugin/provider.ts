@@ -33,9 +33,9 @@ import { VercelPlugin } from "./provider/vercel"
 import { VenicePlugin } from "./provider/venice"
 import { XAIPlugin } from "./provider/xai"
 import { ZenmuxPlugin } from "./provider/zenmux"
-import type { PluginInternal } from "./internal"
+import type { PluginCatalogHost } from "./catalog-host"
 
-export const ProviderPlugins: PluginInternal.InternalPlugin[] = [
+export const ProviderPlugins: PluginCatalogHost.Contribution[] = [
   AlibabaPlugin,
   AmazonBedrockPlugin,
   AnthropicPlugin,

@@ -526,7 +526,7 @@ const withSession = <A, E, R>(
       model: sessionModel,
     })
     const locations = yield* LocationServiceMap.Service
-    const locationLayer = locations.get(location)
+    const locationLayer = locations.get(location, [LocationServiceMap.full])
     return yield* Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       yield* waitForTool(registry, ShellTool.name)

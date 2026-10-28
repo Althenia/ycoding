@@ -39,10 +39,11 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "@ycoding-ai/core/shell"
 import { ID, Info } from "@ycoding-ai/schema/shell"
-import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logger, Schema, Scope } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
+import { fixedLocations } from "./fixture/location-map"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([AppProcess.node, Database.node, EventRuntime.node, SessionStore.node, Job.node])))
 const completionIt = testEffect(AppNodeBuilder.build(LayerNode.group([
@@ -1496,7 +1497,7 @@ function buildExecution(
     )
     const locations = Layer.effect(
       LocationServiceMap.Service,
-      LayerMap.make(
+      fixedLocations(
         () =>
           // The local execution test only needs the Session runner from the Location graph.
           // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion

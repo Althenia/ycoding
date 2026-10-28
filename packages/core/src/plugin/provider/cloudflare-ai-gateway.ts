@@ -1,7 +1,7 @@
 import os from "os"
 import { InstallationVersion } from "../../installation/version"
 import { Effect, Option, Schema } from "effect"
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 
 export const CloudflareAIGatewayPlugin = define({
   id: "ycoding.provider.cloudflare-ai-gateway",

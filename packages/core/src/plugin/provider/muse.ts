@@ -1,4 +1,4 @@
-import { define } from "@ycoding-ai/plugin/effect/plugin"
+import { define } from "../catalog-host"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
 import { Clock, Effect, Option, Schedule, Schema, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
@@ -13,7 +13,7 @@ import { Provider } from "../../provider"
 import { ProviderUsage, ProviderUsageRuntime } from "../../provider-usage"
 import { MuseUsage } from "../../provider-usage/muse"
 import { SessionRunnerModel } from "../../session/runner/model"
-import type { PluginInternal } from "../internal"
+import type { PluginCatalogHost } from "../catalog-host"
 
 const integrationID = Integration.ID.make("muse")
 const providerID = Provider.ID.make("muse")
@@ -447,4 +447,4 @@ export const MusePlugin = define({
         evt.language = evt.sdk.responses(evt.model.modelID ?? evt.model.id)
     })
   }),
-} satisfies PluginInternal.InternalPlugin)
+} satisfies PluginCatalogHost.Contribution)
