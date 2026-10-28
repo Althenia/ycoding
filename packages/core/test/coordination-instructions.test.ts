@@ -56,16 +56,22 @@ test("controller and executor guidance share one consolidated-verification pract
   for (const role of ["master", "supervisor"] as const) {
     const value = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)
     for (const text of [
-      "Require each assignment to plan and complete its coherent bounded work, including code, tests, contracts, docs and consumers, before one consolidated build and verification pass, with no repetitive micro-edit/build/test loops",
-      "Reuse valid evidence for unchanged relevant sources, contracts and environment, including at integration and merge",
-      "A rerun needs a concrete relevant source change, failed check, invalidated evidence or explicit acceptance requirement; state the trigger, run only affected checks, and batch corrections first",
+      "Require each assignment to complete its feature or cohesive milestone across all affected layers, including code, tests, contracts, docs and consumers, before one consolidated verification pass, never alternating tiny edits with repeated checks, builds or tests, and to preserve required boundary reproduction and pre-implementation tests.",
+      "Require batched corrections, reruns of only failed or invalidated checks, and reuse of valid evidence for unchanged sources, contracts and environment, including at integration and merge.",
     ]) expect(value.split(text)).toHaveLength(2)
     expect(value).not.toContain("Reuse valid check results and rerun only the scope whose inputs changed")
   }
   const executor = Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make("executor"))))[0]?.value)
   for (const text of [
-    "Plan and finish your coherent bounded scope, including code, tests, contracts, docs and consumers, before one consolidated build and verification pass; avoid repetitive micro-edit/build/test loops.",
-    "Reuse evidence still valid for unchanged relevant sources, contracts and environment; rerun only affected checks after a stated trigger: a relevant source change, failed check, invalidated evidence or explicit acceptance requirement.",
+    "Complete each feature or cohesive milestone in your scope across all affected layers, including code, tests, contracts, docs and consumers, before one consolidated verification pass; never alternate tiny edits with repeated checks, builds or tests.",
+    "Preserve required boundary reproduction and pre-implementation tests.",
+    "Batch corrections, rerun only failed or invalidated checks, and reuse valid evidence for unchanged sources, contracts and environment.",
+    "Stop only when the outcome and required checks are complete, or at a blocker or approval gate.",
   ]) expect(executor.split(text)).toHaveLength(2)
-  expect(executor).not.toContain("Require each assignment to plan")
+  expect(executor).not.toContain("Require each assignment")
+  for (const stale of ["micro-edit", "A rerun needs a concrete"]) {
+    expect(executor).not.toContain(stale)
+    for (const role of ["master", "supervisor"] as const)
+      expect(Schema.decodeUnknownSync(Schema.String)((await Effect.runPromise(Instructions.read(CoordinationInstructions.make(role))))[0]?.value)).not.toContain(stale)
+  }
 })

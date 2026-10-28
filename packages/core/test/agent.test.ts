@@ -25,13 +25,11 @@ const it = testEffect(
 )
 
 const workPractice = [
-  "Plan and complete each coherent bounded work unit, including its code, tests, contracts, docs and consumers, before one consolidated build and verification pass",
-  "Do not use repetitive micro-edit/build/test loops or rebuild after each small edit",
-  "Preserve required boundary reproduction, justified corrective iteration and complete acceptance",
-  "Reuse valid evidence for unchanged relevant sources, contracts and environment, including at integration and merge",
-  "Do not duplicate builds or recheck unchanged work",
-  "A rerun requires a concrete relevant source change, failed check, invalidated evidence or explicit acceptance requirement; state the trigger and select only affected checks",
-  "Batch corrections before one targeted rerun",
+  "Complete each feature or cohesive milestone across all affected layers, including its code, tests, contracts, docs and consumers, before one consolidated verification pass",
+  "never alternate tiny edits with repeated checks, builds or tests",
+  "Preserve required boundary reproduction and pre-implementation tests",
+  "Batch corrections, rerun only failed or invalidated checks, and reuse valid evidence for unchanged sources, contracts and environment, including at integration and merge",
+  "Stop only when the outcome and required checks are complete, or at a blocker or approval gate",
 ]
 
 describe("Agent", () => {
